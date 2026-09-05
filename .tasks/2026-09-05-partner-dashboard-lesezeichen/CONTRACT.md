@@ -114,3 +114,5 @@ Fehlermeldung in PLAN.md festgehalten.
 - keine
 
 ## Amendments
+
+- 2026-09-05, REQ3, alt: Karte oben links (Brave) bzw. oben rechts (andere) in der Ecke, ohne Hintergrund. Neu: Karte sitzt unter der tatsächlichen Symbolposition. Brave: Adressleiste liegt mittig, Stern an ihrem linken Ende, Karte daher bei `left: max(16px, calc(50% - 560px))`. Chrome, Edge, Firefox, Vivaldi, Opera: Stern bzw. Herz am rechten Ende der Adressleiste vor den Erweiterungssymbolen, Karte daher bei `right: 140px` (mindestens 16px). Safari: `right: 60px`. Der Pfeil sitzt an der jeweiligen Kartenseite. Dazu ein abgedunkelter Vollbild-Hintergrund (rgba(0,0,0,0.6)) hinter der Karte wie bei der WelcomeTour, Klick auf den Hintergrund schließt wie "Erledigt". Karte mit sichtbarem Gold-Rahmen (1px `#C5A059`), hellerem warmem Verlauf (`#2A2017` nach `#1D1611`) und goldenem Außenschein, damit sie sich vom Seitenhintergrund abhebt. Grund: Nutzer-Feedback nach Live-Prüfung ("Position nicht so geil und farblich hebt sich das nicht ab"), entschieden von User.

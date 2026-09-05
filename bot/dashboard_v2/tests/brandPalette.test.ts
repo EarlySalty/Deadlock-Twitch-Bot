@@ -25,6 +25,7 @@ const ALLOWED_HEX = new Set([
   // dunklen Toenen, deshalb bleiben beide Saetze erlaubt.)
   '#0d0806', '#140d0a', '#1a1210', '#16100d', '#1f1815', '#2a211b', '#3a2e25',
   '#1a1310', '#221a15', '#2a221c', '#362c23',
+  '#2a2017', '#1d1611',
   // Patch-Schwarz: /streamer-Flaechen (theme-v2.css) auf dashboard_v2 gespiegelt.
   // Nur die Flaechen wurden neutral-schwarz; der Gold-Akzent oben bleibt.
   '#0b0b0b', '#101010', '#0f0f0e', '#161616',

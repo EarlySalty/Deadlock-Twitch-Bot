@@ -85,6 +85,32 @@ export function erkenneBrowser(eingabe: BrowserEingabe): BrowserErkennung {
   };
 }
 
+export interface KartenPosition {
+  seite: 'links' | 'rechts' | 'menue';
+  top?: string;
+  left?: string;
+  right?: string;
+  pfeilLinks: boolean;
+}
+
+export function kartenPosition(anleitung: LesezeichenAnleitung): KartenPosition {
+  if (anleitung.position === 'menue') {
+    return { seite: 'menue', pfeilLinks: false };
+  }
+  if (anleitung.position === 'links') {
+    return {
+      seite: 'links',
+      top: '16px',
+      left: 'max(16px, calc(50% - 560px))',
+      pfeilLinks: true,
+    };
+  }
+  if (anleitung.position === 'rechts' && anleitung.symbol === 'teilen') {
+    return { seite: 'rechts', top: '16px', right: '60px', pfeilLinks: false };
+  }
+  return { seite: 'rechts', top: '16px', right: '140px', pfeilLinks: false };
+}
+
 export function lesezeichenAnleitung(erkennung: BrowserErkennung): LesezeichenAnleitung {
   const tastenkombi: Tastenkombi = erkennung.mac ? ['⌘', 'D'] : ['Strg', 'D'];
 

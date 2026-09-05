@@ -5,6 +5,7 @@ import { Heart, Lock, Share2, Star, X } from 'lucide-react';
 import { useT } from '@/context/LanguageContext';
 import {
   erkenneBrowser,
+  kartenPosition,
   lesezeichenAnleitung,
   type LesezeichenAnleitung,
 } from '@/utils/browserErkennung';
@@ -138,16 +139,20 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
   }, [link]);
 
   const effektiv = anleitung ?? FALLBACK_ANLEITUNG;
-  const istMobil = effektiv.position === 'menue';
+  const pos = kartenPosition(effektiv);
+  const istMobil = pos.seite === 'menue';
   const zeigeAdressleiste = effektiv.position === 'links' || effektiv.position === 'rechts';
   const symbolLinks = effektiv.position === 'links';
   const SymbolIcon = effektiv.symbol === 'herz' ? Heart : effektiv.symbol === 'teilen' ? Share2 : Star;
 
-  const positionClass = istMobil
-    ? 'bottom-4 left-1/2 -translate-x-1/2'
-    : symbolLinks
-      ? 'left-4 top-4'
-      : 'right-4 top-4';
+  const karteStyle = istMobil
+    ? { width: 'min(360px, calc(100vw - 32px))' }
+    : {
+        width: 'min(360px, calc(100vw - 32px))',
+        top: pos.top,
+        left: pos.left,
+        right: pos.right,
+      };
 
   const pulsSymbol = (
     <motion.span
@@ -163,23 +168,47 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
   return createPortal(
     <AnimatePresence>
       {sichtbar && (
-        <motion.div
-          role="dialog"
-          aria-live="polite"
-          initial={{ opacity: 0, y: -12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -12 }}
-          transition={{ duration: 0.24, ease: 'easeOut' }}
-          className={`fixed z-[103] ${positionClass}`}
-          style={{ width: 'min(360px, calc(100vw - 32px))' }}
-        >
-          <div className="panel-card relative rounded-[20px] border border-[color:rgba(197,160,89,0.3)] bg-[linear-gradient(160deg,#1F1815,#1A1210)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
+        <>
+          <motion.div
+            key="lesezeichen-backdrop"
+            aria-hidden="true"
+            onClick={abschliessen}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.24, ease: 'easeOut' }}
+            className="fixed inset-0 z-[102]"
+            style={{ background: 'rgba(0,0,0,0.6)' }}
+          />
+          <motion.div
+            key="lesezeichen-karte"
+            role="dialog"
+            aria-live="polite"
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.24, ease: 'easeOut' }}
+            className={`fixed z-[103] ${istMobil ? 'bottom-4 left-1/2 -translate-x-1/2' : ''}`}
+            style={karteStyle}
+          >
+          <div
+            className="panel-card relative rounded-[20px] p-4"
+            style={{
+              border: '1px solid #C5A059',
+              background: 'linear-gradient(160deg,#2A2017,#1D1611)',
+              boxShadow:
+                '0 0 0 1px rgba(197,160,89,0.35), 0 24px 70px -20px rgba(197,160,89,0.45)',
+            }}
+          >
             {zeigeAdressleiste && (
               <div
                 aria-hidden="true"
-                className={`absolute -top-1.5 h-3 w-3 rotate-45 border-l border-t border-[color:rgba(197,160,89,0.3)] bg-[#1F1815] ${
-                  symbolLinks ? 'left-6' : 'right-6'
-                }`}
+                className={`absolute -top-1.5 h-3 w-3 rotate-45 ${symbolLinks ? 'left-6' : 'right-6'}`}
+                style={{
+                  borderLeft: '1px solid #C5A059',
+                  borderTop: '1px solid #C5A059',
+                  background: '#2A2017',
+                }}
               />
             )}
 
@@ -203,7 +232,10 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
             </p>
 
             {zeigeAdressleiste && (
-              <div className="mb-3 flex items-center gap-2 rounded-xl border border-[color:var(--color-border)] bg-black/30 px-3 py-2">
+              <div
+                className="mb-3 flex items-center gap-2 rounded-xl border bg-black/40 px-3 py-2"
+                style={{ borderColor: 'rgba(197,160,89,0.35)' }}
+              >
                 {symbolLinks && pulsSymbol}
                 <Lock className="h-3.5 w-3.5 shrink-0 text-[color:var(--color-text-secondary)]" />
                 <span className="flex-1 truncate text-xs text-[color:var(--color-text-secondary)]">
@@ -252,7 +284,8 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
               </button>
             </div>
           </div>
-        </motion.div>
+          </motion.div>
+        </>
       )}
     </AnimatePresence>,
     document.body,
