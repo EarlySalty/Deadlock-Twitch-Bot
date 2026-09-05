@@ -441,6 +441,29 @@ const EN: Record<string, string> = {
   'Was kann der Bot für mich tun?': 'What can the bot do for me?',
   'Wie werde ich Partner?': 'How do I become a partner?',
   'Wo bekomme ich Hilfe, wenn ich nicht weiterkomme?': 'Where do I get help when I am stuck?',
+
+  'Speichere dir dein Partner Dashboard': 'Save your partner dashboard',
+  'Damit findest du dein Dashboard jederzeit mit einem Klick wieder.':
+    'That way you find your dashboard again anytime with one click.',
+  Tastenkombination: 'Keyboard shortcut',
+  'Link kopieren': 'Copy link',
+  Kopiert: 'Copied',
+  Erledigt: 'Done',
+  'Klicke auf den Stern links neben der Adresse.':
+    'Click the star to the left of the address.',
+  'Klicke auf den Stern rechts in der Adressleiste.':
+    'Click the star on the right of the address bar.',
+  'Klicke auf das Herz rechts in der Adressleiste.':
+    'Click the heart on the right of the address bar.',
+  'Klicke oben rechts auf den Teilen-Knopf und dann auf "Lesezeichen hinzufügen".':
+    'Use the share button at the top right, then choose "Add bookmark".',
+  'Öffne das Menü mit den drei Punkten oben rechts und tippe auf den Stern.':
+    'Open the three-dot menu at the top right and tap the star.',
+  'Tippe auf das Teilen-Symbol und dann auf "Zum Home-Bildschirm".':
+    'Tap the share icon, then choose "Add to Home Screen".',
+
+  'Partner Dashboard': 'Partner dashboard',
+  'Zur Analyse': 'To analytics',
 };
 
 const TRANSLATIONS: Record<Language, Record<string, string>> = {

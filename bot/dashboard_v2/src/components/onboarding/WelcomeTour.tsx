@@ -23,7 +23,10 @@ interface TourStep {
 interface WelcomeTourProps {
   onComplete?: () => void;
   completionLabel?: string;
+  startErlaubt?: boolean;
 }
+
+const HINWEIS_STORAGE_KEY = 'lesezeichen-hinweis-erledigt';
 
 interface SpotlightRect {
   top: number;
@@ -144,7 +147,7 @@ function getPopoverPosition(targetRect: SpotlightRect, popoverSize: PopoverSize)
   };
 }
 
-export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeTourProps) {
+export function WelcomeTour({ onComplete, completionLabel = 'Fertig', startErlaubt = true }: WelcomeTourProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [isExiting, setIsExiting] = useState(false);
@@ -191,6 +194,10 @@ export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeT
   };
 
   useEffect(() => {
+    if (!startErlaubt) {
+      return undefined;
+    }
+
     const dismissed = localStorage.getItem(STORAGE_KEY);
     if (dismissed) {
       return undefined;
@@ -203,7 +210,7 @@ export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeT
     return () => {
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [startErlaubt]);
 
   useEffect(() => {
     return () => {
@@ -526,4 +533,5 @@ export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeT
 // eslint-disable-next-line react-refresh/only-export-components
 export function resetWelcomeTour() {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(HINWEIS_STORAGE_KEY);
 }

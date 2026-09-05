@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
+import { LesezeichenHinweis } from '@/components/onboarding/LesezeichenHinweis';
 import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
 
 function MiniStat({
@@ -251,6 +252,7 @@ export function InternalHomeLanding() {
     initialInternalHomeStreamer
   );
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
+  const [hinweisErledigt, setHinweisErledigt] = useState(false);
 
   const partnerStreamers = useMemo(
     () =>
@@ -465,7 +467,9 @@ export function InternalHomeLanding() {
 
   return (
     <>
+      <LesezeichenHinweis onErledigt={() => setHinweisErledigt(true)} />
       <WelcomeTour
+        startErlaubt={hinweisErledigt}
         completionLabel="Zur Abo-Seite"
         onComplete={() => {
           localStorage.removeItem('pricing-tour-dismissed');
