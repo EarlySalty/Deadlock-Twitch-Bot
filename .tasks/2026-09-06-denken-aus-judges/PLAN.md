@@ -54,9 +54,32 @@ Regel REQ-1: `.json_object()` gesetzt oder `max_tokens` hoechstens 2000 fuehrt z
 | tb-stream-audit/src/main.rs:2887 | Audit-Klassifizierer | json_object | geändert: `.denken_aus()` |
 | tb-analytics/src/chat_typen.rs:352 | Chat-Klassifizierer | json_object + max_tokens | bereits `.denken_aus()` (Vorbild, live seit acd62f21) |
 | tb-analytics/src/post_stream.rs:366,375 | Post-Stream-Analyse | 16000 / 6000 Tokens Freitext | nicht geändert (Nicht-Ziel REQ-2) |
-| tb-dashboard-api/src/handlers/ai_chat.rs:95 | Dashboard-Assistent | max_tokens 4000 Freitext | nicht geändert (Nicht-Ziel, außerhalb Scope) |
-| tb-dashboard-api/src/handlers/ai_analysis.rs:144 | Dashboard-Analyse | max_tokens 60000 Freitext | nicht geändert (Nicht-Ziel, außerhalb Scope) |
+| tb-dashboard-api/src/handlers/ai_chat.rs:95 | Dashboard-Assistent (Freitext) | max_tokens 4000 Freitext | nicht geändert (Nicht-Ziel REQ-2, kein kleines Budget) |
+| tb-dashboard-api/src/handlers/ai_analysis.rs:144 | Dashboard-Analyse | max_tokens 60000 Freitext | nicht geändert (Nicht-Ziel REQ-2) |
+| tb-dashboard-api/src/handlers/dashboard_assistent.rs:595 | Assistent-Antwort (`Request::history`) | max_tokens 768 (ANSWER_TOKEN_CEILING), strip_think, accept nicht-leer | REQ-1-Klasse, aber nicht geändert: liegt außerhalb des erlaubten Bereichs (tb-dashboard-api). Folgeauftrag nötig (siehe unten). |
+| tb-dashboard-api/src/handlers/self_explainer.rs:339 | Self-Explainer (`Request::history`) | max_tokens 768 (ANSWER_TOKEN_CEILING), strip_think, accept nicht-leer | REQ-1-Klasse, aber nicht geändert: außerhalb des erlaubten Bereichs. Folgeauftrag nötig. |
 | tb-llm/src/hub.rs, lib.rs | Builder-Definition + Tests | n/a | nicht geändert (tb-llm, INV-2) |
+
+Der EVIDENCE-Grep suchte nach `tb_llm::Request::` und übersah die beiden
+Dashboard-Handler, weil sie `use tb_llm::Request` importieren und `Request::history(...)`
+ohne Pfad-Präfix bauen. Beide gehören formal in die REQ-1-Klasse (max_tokens 768) und
+tragen dasselbe gefährliche Muster wie der Chat-Klassifizierer vor acd62f21:
+`strip_think()` plus `accept(|text| !output_unusable(text))` heißt, dass ein
+budgetfressender Denktext zu leerer Antwort und damit `Unparsable` führt, der
+Assistent antwortet dem Streamer dann gar nicht.
+
+## Folgeauftrag (Kritiker-Runde 1)
+
+`tb-dashboard-api` steht nicht im erlaubten Bereich dieses Contracts; eine
+Scope-Erweiterung braucht laut Repo-Regeln eine vom Nutzer angelegte
+Freigabedatei. Deshalb bleiben beide Stellen hier unangetastet und brauchen einen
+eigenen Auftrag mit erweitertem Scope:
+
+- `rust/crates/tb-dashboard-api/src/handlers/dashboard_assistent.rs:595`: `.denken_aus()` ergänzen.
+- `rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs:339`: `.denken_aus()` ergänzen.
+
+Beide sind die letzten verbliebenen Live-Aufrufe der Zielklasse und sollten zeitnah
+denselben Fix bekommen.
 
 ## Grüner Lauf (nach dem Fix)
 
