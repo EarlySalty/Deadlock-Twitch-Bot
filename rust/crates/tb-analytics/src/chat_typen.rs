@@ -9,19 +9,6 @@ use crate::chat_analytics_lexicon::{
     FEEDBACK, GAME, GREETING, HYPE, QUESTION, REACTION, SOCIAL, TECHNICAL,
 };
 
-pub const BOT_LOGINS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
-
 pub const GAME_EXTRA: &[&str] = &[
     "initiate",
     "seeker",
@@ -211,8 +198,7 @@ pub fn klassifiziere_regel(content: &str, chatter_login: &str) -> Nachrichtentyp
     }
 
     let content_lower = content.to_lowercase();
-    let login = chatter_login.trim().to_lowercase();
-    if !login.is_empty() && BOT_LOGINS.contains(&login.as_str()) {
+    if crate::bekannte_bots::ist_ausgeschlossener_login(chatter_login) {
         return Nachrichtentyp::System;
     }
     if redeemed_bits_re().is_match(&content_lower)

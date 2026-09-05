@@ -108,6 +108,7 @@ async fn query_scope_presence(
                 "SELECT COUNT(*)::bigint, MIN(s.started_at) FROM twitch_stream_sessions s \
                   WHERE LOWER(s.streamer_login) = $1 AND s.id = ANY($2::bigint[]) \
                     AND s.started_at >= $3 \
+                    AND COALESCE(s.duration_seconds, EXTRACT(EPOCH FROM (s.ended_at - s.started_at))) >= 600 \
                     AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id) \
                     AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)",
             )
@@ -137,6 +138,7 @@ async fn query_scope_presence(
             let gap: (i64, Option<DateTime<Utc>>) = sqlx::query_as(
                 "SELECT COUNT(*)::bigint, MIN(s.started_at) FROM twitch_stream_sessions s \
                   WHERE LOWER(s.streamer_login) = $1 AND s.started_at >= $2 \
+                    AND COALESCE(s.duration_seconds, EXTRACT(EPOCH FROM (s.ended_at - s.started_at))) >= 600 \
                     AND EXISTS (SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id) \
                     AND NOT EXISTS (SELECT 1 FROM twitch_chat_messages m WHERE m.session_id = s.id)",
             )
@@ -304,19 +306,21 @@ pub async fn build_raw_chat_status(
         "not_needed".to_string()
     };
 
-    // Hinweistext (gleiche Kaskade wie Python).
     let mut note: Option<String> = None;
-    if suspected_issue && raw.raw_rows == 0 {
-        note = Some("Presence-/Rollup-Daten vorhanden, aber keine Roh-Chat-Nachrichten im gewählten Zeitraum.".to_string());
-    } else if suspected_issue {
-        note = Some("Roh-Chat-Nachrichten sind im gewählten Zeitraum nur teilweise vorhanden; message-basierte KPIs sind unvollständig.".to_string());
+    if suspected_issue {
+        note = Some(
+            "Für einige Streams in diesem Zeitraum liegen keine Chat-Nachrichten vor.".to_string(),
+        );
     } else if raw.raw_rows == 0 {
-        note = Some("Keine Roh-Chat-Nachrichten im gewählten Zeitraum.".to_string());
+        note = Some("Keine Chat-Nachrichten im gewählten Zeitraum.".to_string());
     }
     if note.is_none() {
         if let Some(err) = &health_last_error {
             if !health_last_insert_error_at.is_null() {
-                note = Some(format!("Letzter Roh-Chat-Insert-Fehler: {err}"));
+                tracing::debug!(streamer = %streamer, fehler = %err, "Roh-Chat-Speicherfehler zuletzt gemeldet");
+                note = Some(
+                    "Beim Speichern der Chat-Nachrichten gab es zuletzt einen Fehler.".to_string(),
+                );
             }
         }
     }
@@ -381,7 +385,7 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds BIGINT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         if with_diag {
@@ -428,7 +432,7 @@ mod tests {
         let Some(pool) = make_pool("t_rcs_multi_gap", true).await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '4 days'),(2,'nani',NOW()-INTERVAL '2 days'),(3,'nani',NOW()-INTERVAL '1 day')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, duration_seconds) VALUES (1,'nani',NOW()-INTERVAL '4 days',7200),(2,'nani',NOW()-INTERVAL '2 days',7200),(3,'nani',NOW()-INTERVAL '1 day',7200)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (1,'nani','viewer','hi',NOW()-INTERVAL '3 days')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login) VALUES (2,'nani','viewer'),(3,'nani','viewer')").execute(&pool).await.unwrap();
 
@@ -462,6 +466,29 @@ mod tests {
         assert_eq!(v["suspectedIngestionIssue"], false);
         assert_eq!(v["backfillState"], "not_needed");
         assert!(!v["lastMessageAt"].is_null());
+        assert!(v["gapStart"].is_null());
+    }
+
+    #[tokio::test]
+    async fn geistersessions_unter_10min_loesen_keine_luecke_aus() {
+        let Some(pool) = make_pool("t_rcs_ghost_gap", true).await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds) VALUES (3,'nani',NOW()-INTERVAL '10 days',NOW()-INTERVAL '10 days'+INTERVAL '2 hours',7200)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (3,'nani','viewer','hi',NOW()-INTERVAL '10 days')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds) VALUES (1,'nani',NOW()-INTERVAL '3 days',NOW()-INTERVAL '3 days'+INTERVAL '5 minutes',300),(2,'nani',NOW()-INTERVAL '2 days',NOW()-INTERVAL '2 days'+INTERVAL '5 minutes',300)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login) VALUES (1,'nani','viewer'),(2,'nani','viewer')").execute(&pool).await.unwrap();
+
+        let v = build_raw_chat_status(
+            &pool,
+            "nani",
+            Scope::Since(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(v["available"], true);
+        assert_eq!(v["suspectedIngestionIssue"], false);
         assert!(v["gapStart"].is_null());
     }
 

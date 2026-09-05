@@ -272,6 +272,7 @@ async fn start_session_leerer_titel_wird_null_und_adopt_fuellt_ihn() {
             Some("Deadlock"),
             true,
             Some("Ranked Grind Titel"),
+            None,
         )
         .await
         .expect("adopt_incomplete");
@@ -325,6 +326,7 @@ async fn adopt_incomplete_trifft_vollstaendige_session_nicht() {
             Some("Anderes Spiel"),
             false,
             Some("Anderer Titel"),
+            None,
         )
         .await
         .expect("adopt_incomplete");

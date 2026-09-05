@@ -18,6 +18,7 @@ tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "pr
 uuid       = { workspace = true }
 tb-crypto  = { workspace = true }
 tb-llm     = { workspace = true }
+tb-analytics = { workspace = true }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }

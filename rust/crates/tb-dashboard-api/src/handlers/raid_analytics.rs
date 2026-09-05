@@ -19,18 +19,7 @@ use std::collections::HashMap;
 
 use crate::auth::level::DashboardAuthLevel;
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 const CHATTERS_POLL_INTERVAL_SECONDS: i64 = 30;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,7 +92,7 @@ async fn recalculate_raid_chat_metrics(
               AND sc.first_message_at >= ri.executed_at
               AND sc.first_message_at <= ri.executed_at + INTERVAL '10 minutes'
               AND sc.last_seen_at >= ri.executed_at
-              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR (LOWER(sc.chatter_login) != ALL($2) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
            GROUP BY ri.raid_id, ri.executed_at_key"#,
         poll_seconds = CHATTERS_POLL_INTERVAL_SECONDS,
     );
@@ -144,12 +133,12 @@ async fn recalculate_raid_chat_metrics(
               AND ri.executed_at IS NOT NULL
               AND sc.last_seen_at >= ri.executed_at
               AND sc.chatter_login IS NOT NULL AND sc.chatter_login <> ''
-              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR (LOWER(sc.chatter_login) != ALL($2) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
            JOIN twitch_chatter_rollup cr
                ON LOWER(cr.chatter_login) = LOWER(sc.chatter_login)
               AND LOWER(cr.streamer_login) = ri.from_login
               AND cr.first_seen_at < ri.executed_at
-              AND (cr.chatter_login IS NULL OR cr.chatter_login = '' OR LOWER(cr.chatter_login) != ALL($2))
+              AND (cr.chatter_login IS NULL OR cr.chatter_login = '' OR (LOWER(cr.chatter_login) != ALL($2) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$'))
            GROUP BY ri.raid_id, ri.executed_at_key"#;
 
     let known_rows = sqlx::query(known_sql)
@@ -187,12 +176,12 @@ async fn recalculate_raid_chat_metrics(
               AND ri.executed_at IS NOT NULL
               AND sc.first_message_at >= ri.executed_at
               AND sc.messages > 0
-              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) != ALL($2))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR (LOWER(sc.chatter_login) != ALL($2) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
            LEFT JOIN twitch_chatter_rollup cr
                ON LOWER(cr.chatter_login) = LOWER(sc.chatter_login)
               AND LOWER(cr.streamer_login) = ri.to_login
               AND cr.first_seen_at < ri.executed_at
-              AND (cr.chatter_login IS NULL OR cr.chatter_login = '' OR LOWER(cr.chatter_login) != ALL($2))
+              AND (cr.chatter_login IS NULL OR cr.chatter_login = '' OR (LOWER(cr.chatter_login) != ALL($2) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$'))
            WHERE sc.chatter_login IS NULL OR sc.chatter_login = '' OR cr.chatter_login IS NULL
            GROUP BY ri.raid_id, ri.executed_at_key"#;
 

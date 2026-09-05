@@ -15,19 +15,7 @@ use sqlx::PgPool;
 
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
-/// Bekannte Chat-Bots (deckungsgleich mit `bot/core/chat_bots.py`).
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// Python `_MENTION_RE = r"(?<!\w)@([A-Za-z0-9_]{3,25})\b"`. Rusts `regex` kennt kein
 /// Lookbehind; `(?:^|\W)` ist das Unicode-treue Äquivalent zu `(?<!\w)` (regex-`\W`/`\b`
@@ -52,7 +40,7 @@ pub async fn load_chat_social_graph_payload(
         WHERE LOWER(s.streamer_login) = $1
           AND m.message_ts >= $2
           AND m.content LIKE '%@%'
-          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3))
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($3) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))
         "#,
         streamer,
         cutoff,
@@ -195,7 +183,7 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds BIGINT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_raw_chat_ingest_health (streamer_login TEXT PRIMARY KEY, last_raw_chat_message_at TEXT, last_raw_chat_insert_ok_at TEXT, last_raw_chat_insert_error_at TEXT, last_raw_chat_error TEXT)").execute(&pool).await.unwrap();

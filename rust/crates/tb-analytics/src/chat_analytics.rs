@@ -17,18 +17,7 @@ use sqlx::PgPool;
 use crate::engagement_metrics::{calculate_engagement, percentile_of, quantile, EngagementInputs};
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// Eine Roh-Chat-Nachricht aus dem Fenster (Python `all_messages`-Zeile).
 #[derive(sqlx::FromRow)]
@@ -150,7 +139,7 @@ pub async fn load_chat_analytics_snapshot(
             WHERE cm.message_ts >= $1
               AND LOWER(s.streamer_login) = $2
               AND s.ended_at IS NOT NULL
-              AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
+              AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR (LOWER(cm.chatter_login) <> ALL($3) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY cm.session_id
         ), session_viewer_samples AS (
             SELECT sv.session_id,
@@ -194,7 +183,7 @@ pub async fn load_chat_analytics_snapshot(
         LEFT JOIN twitch_chat_message_labels l ON l.message_id = cm.id
         WHERE cm.message_ts >= $1
           AND LOWER(cm.streamer_login) = $2
-          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
+          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR (LOWER(cm.chatter_login) <> ALL($3) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))
         "#,
     )
     .bind(effective_since)
@@ -222,7 +211,7 @@ pub async fn load_chat_analytics_snapshot(
                 WHERE s.started_at >= $1
                   AND LOWER(s.streamer_login) = $2
                   AND s.ended_at IS NOT NULL
-                  AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3))
+                  AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR (LOWER(sc.chatter_login) <> ALL($3) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
                 GROUP BY 1, 2
             ) grouped_chatters
             WHERE chatter_key IS NOT NULL
@@ -232,7 +221,7 @@ pub async fn load_chat_analytics_snapshot(
                    first_seen_at
             FROM twitch_chatter_rollup
             WHERE LOWER(streamer_login) = $2
-              AND (chatter_login IS NULL OR chatter_login = '' OR LOWER(chatter_login) <> ALL($3))
+              AND (chatter_login IS NULL OR chatter_login = '' OR (LOWER(chatter_login) <> ALL($3) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
         )
         SELECT pu.chatter_key,
                pu.chatter_login,
@@ -262,7 +251,7 @@ pub async fn load_chat_analytics_snapshot(
         WHERE s.started_at >= $1
           AND LOWER(s.streamer_login) = $2
           AND s.ended_at IS NOT NULL
-          AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3))
+          AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR (LOWER(sc.chatter_login) <> ALL($3) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
         "#,
         since,
         streamer,
@@ -283,7 +272,7 @@ pub async fn load_chat_analytics_snapshot(
         WHERE cm.message_ts >= $1
           AND LOWER(cm.streamer_login) = $2
           AND COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) IS NOT NULL
-          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR LOWER(cm.chatter_login) <> ALL($3))
+          AND (cm.chatter_login IS NULL OR cm.chatter_login = '' OR (LOWER(cm.chatter_login) <> ALL($3) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))
         GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id)
         ORDER BY COUNT(*) DESC
         LIMIT 20

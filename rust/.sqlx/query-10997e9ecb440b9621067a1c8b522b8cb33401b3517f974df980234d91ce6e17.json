@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT LOWER(COALESCE(NULLIF(language,''),'unknown')) AS \"lang!\",\n                COUNT(*) AS \"sessions!\",\n                AVG(avg_viewers) AS \"avg_v?\"\n         FROM twitch_stream_sessions\n         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL\n         GROUP BY 1 ORDER BY 2 DESC",
+  "query": "SELECT LOWER(language) AS \"lang!\",\n                COUNT(*) AS \"sessions!\",\n                AVG(avg_viewers) AS \"avg_v?\"\n         FROM twitch_stream_sessions\n         WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL\n           AND COALESCE(language,'') <> ''\n         GROUP BY 1 ORDER BY 2 DESC",
   "describe": {
     "columns": [
       {
@@ -31,5 +31,5 @@
       null
     ]
   },
-  "hash": "75a60e21d2bbae867749d9923951c5cc529f0a6b37df9964aa140fb9914d4173"
+  "hash": "10997e9ecb440b9621067a1c8b522b8cb33401b3517f974df980234d91ce6e17"
 }

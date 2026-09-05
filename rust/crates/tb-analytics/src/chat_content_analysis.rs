@@ -19,18 +19,7 @@ use sqlx::PgPool;
 use crate::chat_content_lexicon::*;
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use crate::bekannte_bots::KNOWN_CHAT_BOTS;
 
 /// topicBreakdown-Schlüssel in fester Reihenfolge (Python-Dict-Init-Reihenfolge).
 const TOPIC_BREAKDOWN_KEYS: &[&str] = &[
@@ -237,7 +226,7 @@ pub async fn load_chat_content_analysis_payload(
           AND m.message_ts >= $2
           AND m.content IS NOT NULL
           AND m.content != ''
-          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR LOWER(m.chatter_login) <> ALL($3))
+          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($3) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))
         ORDER BY m.message_ts
         "#,
         streamer,
@@ -569,7 +558,7 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds BIGINT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, streamer_login TEXT, chatter_login TEXT, messages INTEGER DEFAULT 0)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_raw_chat_ingest_health (streamer_login TEXT PRIMARY KEY, last_raw_chat_message_at TEXT, last_raw_chat_insert_ok_at TEXT, last_raw_chat_insert_error_at TEXT, last_raw_chat_error TEXT)").execute(&pool).await.unwrap();

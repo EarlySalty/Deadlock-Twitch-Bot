@@ -71,21 +71,8 @@ pub fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<Incomi
     })
 }
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
-
 fn is_known_chat_bot(login: &str) -> bool {
-    KNOWN_CHAT_BOTS.contains(&login)
+    tb_analytics::bekannte_bots::ist_ausgeschlossener_login(login)
 }
 
 #[cfg(test)]

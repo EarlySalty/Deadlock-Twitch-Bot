@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT m.content AS \"content!\"\n        FROM twitch_chat_messages m\n        WHERE m.session_id = $1::text::bigint\n          AND m.content IS NOT NULL\n          AND m.content != ''\n          AND (m.chatter_login IS NULL OR m.chatter_login = '' OR (LOWER(m.chatter_login) <> ALL($2) AND LOWER(m.chatter_login) !~ '^justinfan[0-9]+$'))\n        ORDER BY m.message_ts\n        LIMIT 1000\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c5d0f1d382d17ebad68d9e76dc1682bb382ea0be65d36d9bdd9d6707b9ac1c6f"
+}

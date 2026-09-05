@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_session_chatters sc\n              SET last_seen_at = agg.max_ts\n             FROM (\n               SELECT cm.session_id,\n                      LOWER(NULLIF(cm.chatter_login, '')) AS chatter_login,\n                      cm.chatter_id,\n                      MAX(cm.message_ts) AS max_ts\n                 FROM twitch_chat_messages cm\n                WHERE cm.session_id = ANY($1::bigint[])\n                  AND (cm.chatter_login IS NULL OR cm.chatter_login = ''\n                       OR (LOWER(cm.chatter_login) <> ALL($2::text[]) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))\n                GROUP BY cm.session_id, LOWER(NULLIF(cm.chatter_login, '')), cm.chatter_id\n             ) agg\n            WHERE sc.session_id = agg.session_id\n              AND agg.max_ts IS NOT NULL\n              AND (\n                (agg.chatter_login IS NOT NULL AND LOWER(sc.chatter_login) = agg.chatter_login)\n                OR (agg.chatter_login IS NULL AND agg.chatter_id IS NOT NULL\n                    AND sc.chatter_id = agg.chatter_id\n                    AND (sc.chatter_login IS NULL OR sc.chatter_login = ''))\n              )\n              AND (sc.last_seen_at IS NULL OR sc.last_seen_at < agg.max_ts)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "16a0e6a26a197cc76a539761b49267d4c9b93068a6580ec5f301b5c87ee62479"
+}

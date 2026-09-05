@@ -22,18 +22,7 @@ use tb_analytics::engagement_metrics::{calculate_engagement, quantile, Engagemen
 const PEAK_SESSION_WINDOW: i64 = 30;
 const PEAK_HALF_LIFE_SESSIONS: f64 = 8.0;
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 // Engagement-Berechnung + Quantile leben jetzt in tb_analytics::engagement_metrics
 // (geteilt mit chat-analytics; siehe `use` oben).
@@ -123,7 +112,7 @@ async fn compute_weighted_peak_hours(
          FROM twitch_chat_messages cm
          WHERE cm.session_id = ANY($2::bigint[])
            AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
-                OR LOWER(cm.chatter_login) <> ALL($3::text[]))
+                OR (LOWER(cm.chatter_login) <> ALL($3::text[]) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))
          GROUP BY cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int",
         tz_name,
         &session_ids[..],
@@ -270,11 +259,12 @@ async fn compute_demographics(
 
     // ── Q1: Sprach-Mix ────────────────────────────────────────────────────────
     let lang_rows = sqlx::query!(
-        "SELECT LOWER(COALESCE(NULLIF(language,''),'unknown')) AS \"lang!\",
+        "SELECT LOWER(language) AS \"lang!\",
                 COUNT(*) AS \"sessions!\",
                 AVG(avg_viewers) AS \"avg_v?\"
          FROM twitch_stream_sessions
          WHERE started_at >= $1 AND LOWER(streamer_login) = $2 AND ended_at IS NOT NULL
+           AND COALESCE(language,'') <> ''
          GROUP BY 1 ORDER BY 2 DESC",
         since,
         streamer
@@ -366,7 +356,7 @@ async fn compute_demographics(
             WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
               AND COALESCE(NULLIF(sc.chatter_login,''), sc.chatter_id) IS NOT NULL
               AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                   OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))
             GROUP BY user_id, chatter_login
         ),
         rollup AS (
@@ -374,7 +364,7 @@ async fn compute_demographics(
             FROM twitch_chatter_rollup
             WHERE LOWER(streamer_login) = $2
               AND (chatter_login IS NULL OR chatter_login = ''
-                   OR LOWER(chatter_login) <> ALL($3::text[]))
+                   OR (LOWER(chatter_login) <> ALL($3::text[]) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$'))
         )
         SELECT
             pu.user_id AS "user_id?", pu.chatter_login AS "chatter_login?", pu.session_count::bigint AS "session_count!",
@@ -484,7 +474,7 @@ async fn compute_demographics(
         "SELECT COUNT(*) AS \"cnt!\" FROM twitch_chat_messages cm
          WHERE cm.message_ts >= $1 AND LOWER(cm.streamer_login) = $2
            AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
-                OR LOWER(cm.chatter_login) <> ALL($3::text[]))",
+                OR (LOWER(cm.chatter_login) <> ALL($3::text[]) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))",
         since,
         streamer,
         &bots[..]
@@ -500,7 +490,7 @@ async fn compute_demographics(
          JOIN twitch_stream_sessions s ON s.id = sc.session_id
          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
            AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
-                OR LOWER(sc.chatter_login) <> ALL($3::text[]))",
+                OR (LOWER(sc.chatter_login) <> ALL($3::text[]) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$'))",
         since,
         streamer,
         &bots[..]

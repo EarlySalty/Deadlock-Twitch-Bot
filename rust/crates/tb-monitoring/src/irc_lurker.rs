@@ -19,22 +19,8 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-/// Known-Chat-Bots (chat_bots.py Z. 8–19). Lokale Kopie wie in den anderen Crates.
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
-
 fn is_known_chat_bot(login: &str) -> bool {
-    KNOWN_CHAT_BOTS.contains(&login)
+    tb_analytics::bekannte_bots::ist_ausgeschlossener_login(login)
 }
 
 // ---- IRC-Zeilen-Parser (pur, ohne Socket testbar) --------------------------

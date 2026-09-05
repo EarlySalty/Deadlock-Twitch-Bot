@@ -1,17 +1,6 @@
 use sqlx::PgPool;
 
-const KNOWN_CHAT_BOTS: &[&str] = &[
-    "botrix",
-    "deutschedeadlockcommunity",
-    "fossabot",
-    "moobot",
-    "nightbot",
-    "pretzelrocks",
-    "soundalerts",
-    "streamlabs",
-    "streamelements",
-    "wizebot",
-];
+use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
 const DYNAMIC_BOT_LOGIN_ENV_KEYS: &[&str] = &[
     "TWITCH_BOT_LOGIN",
