@@ -46,8 +46,8 @@ use tracing::{debug, info, warn};
 use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::promo_pitch::{
-    pitch_filter_reject, pitch_injection_reject, ChannelPromoContext, PitchJudge, PitchJudgeInput,
-    PitchTextGen, TargetedPitchContext,
+    pitch_filter_reject, pitch_injection_reject, ChannelPromoContext, PartnerPitchContext,
+    PartnerPitchGen, PitchJudge, PitchJudgeInput, PitchTextGen, TargetedPitchContext,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
@@ -519,6 +519,7 @@ pub struct PromoEngine {
     partner_check: Arc<dyn PartnerChannelCheck>,
     pitch_judge: Arc<dyn PitchJudge>,
     pitch_text_gen: Arc<dyn PitchTextGen>,
+    partner_pitch_gen: Arc<dyn PartnerPitchGen>,
     pitch_review_sink: Option<Arc<dyn PitchReviewSink>>,
     pitch_judge_last: DashMap<String, Instant>,
     pitch_judge_channel: DashMap<String, Vec<Instant>>,
@@ -562,6 +563,7 @@ impl PromoEngine {
             partner_check: Arc::new(AlwaysPartner),
             pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
             pitch_text_gen: Arc::new(crate::promo_pitch::FireworksPitchTextGen),
+            partner_pitch_gen: Arc::new(crate::promo_pitch::FireworksPartnerPitchGen),
             pitch_review_sink: None,
             pitch_judge_last: DashMap::new(),
             pitch_judge_channel: DashMap::new(),
@@ -640,6 +642,11 @@ impl PromoEngine {
 
     pub fn set_pitch_text_gen(mut self, g: Arc<dyn PitchTextGen>) -> Self {
         self.pitch_text_gen = g;
+        self
+    }
+
+    pub fn set_partner_pitch_gen(mut self, g: Arc<dyn PartnerPitchGen>) -> Self {
+        self.partner_pitch_gen = g;
         self
     }
 
@@ -3608,6 +3615,29 @@ mod db_tests {
         }
     }
 
+    struct MockPartnerPitchGen {
+        text: Option<String>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MockPartnerPitchGen {
+        fn new(text: Option<&str>) -> Self {
+            Self {
+                text: text.map(|t| t.to_string()),
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PartnerPitchGen for MockPartnerPitchGen {
+        async fn partner_pitch(&self, _ctx: &PartnerPitchContext) -> Option<String> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.text.clone()
+        }
+    }
+
     #[derive(Default, Clone)]
     struct RecordingReviewSink {
         cards: Arc<Mutex<Vec<(String, String, String, String)>>>,
@@ -3793,7 +3823,40 @@ mod db_tests {
                 streamer_login TEXT NOT NULL,
                 started_at TIMESTAMPTZ DEFAULT NOW(),
                 ended_at TIMESTAMPTZ,
+                game_name TEXT,
+                stream_title TEXT,
+                twitch_user_id TEXT,
                 avg_viewers DOUBLE PRECISION DEFAULT 0
+            )"#,
+            r#"CREATE TABLE twitch_partners (
+                id BIGSERIAL PRIMARY KEY,
+                twitch_login TEXT NOT NULL,
+                twitch_user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active'
+            )"#,
+            r#"CREATE TABLE twitch_scout_pitch_blacklist (
+                streamer_login TEXT PRIMARY KEY,
+                twitch_user_id TEXT,
+                reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )"#,
+            r#"CREATE TABLE twitch_partner_outreach (
+                streamer_login TEXT NOT NULL,
+                streamer_user_id TEXT,
+                twitch_user_id TEXT,
+                detected_at TEXT NOT NULL DEFAULT '',
+                cooldown_until TEXT,
+                status TEXT
+            )"#,
+            r#"CREATE TABLE twitch_scout_pitch_ledger (
+                id BIGSERIAL PRIMARY KEY,
+                streamer_login TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                judge_verdict TEXT NOT NULL,
+                action TEXT NOT NULL,
+                detail TEXT,
+                twitch_user_id TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
             // twitch_stats_tracked — viewer_count=integer, ts_utc=TIMESTAMPTZ, streamer=text
             r#"CREATE TABLE twitch_stats_tracked (
@@ -4714,6 +4777,60 @@ mod db_tests {
         assert_eq!(row.2.as_deref(), Some("game_unpopular"));
 
         assert_eq!(sink.cards.lock().await.len(), 1, "eine Review-Karte erwartet");
+    }
+
+    async fn seed_deadlock_candidate(pool: &PgPool, own_login: &str, chatter_id: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, game_name, twitch_user_id)
+             VALUES ($1, NOW(), 'Deadlock', $2)",
+        )
+        .bind(own_login)
+        .bind(chatter_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn partner_kandidat_bekommt_partner_pitch() {
+        let pool = pool_or_skip!("promo_partner_kandidat");
+        seed_partner_channel(&pool, "c-pk", "pkkanal").await;
+        seed_deadlock_candidate(&pool, "kandidatlogin", "u-pk").await;
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(None));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "stark gespielt gerade. wenn du öfter deadlock streamst, bei der deutschen deadlock community gibts ein partner netzwerk, das raidet dich wenn andere offline gehen und schützt deinen chat vor spam",
+        )));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_partner_pitch_gen(gen.clone());
+
+        let event = pitch_event(
+            "c-pk",
+            "pkkanal",
+            "u-pk",
+            "Kandidat",
+            "hey leute ich streame auch deadlock schaut gerne mal vorbei wenn ihr lust habt",
+        );
+        engine.on_message_pitch(&event).await;
+
+        let msgs = api.messages_sent().await;
+        assert_eq!(msgs.len(), 1, "genau ein Partner-Pitch erwartet");
+        assert!(
+            msgs[0].1.starts_with("@Kandidat "),
+            "Antwort muss die Person mit @login anreden: {}",
+            msgs[0].1
+        );
+
+        let row: (String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT pfad, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "partner");
+        assert!(row.1.is_some(), "sent_at muss gesetzt sein");
     }
 
     #[tokio::test]

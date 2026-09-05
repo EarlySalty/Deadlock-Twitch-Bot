@@ -152,3 +152,7 @@ Stop-Regel: neue Rotfärbung gegenüber der Baseline oder ein REQ/INV nicht bele
 3. Statuswechsel zwischen Erkennung und Send (Kandidat wird Partner) und Kosten pro Nachricht: Partner-Status wird unter dem Doppelsend-Lock erneut geprüft (analog dem doppelten Kanal-Limit im Anlass-Pfad). Der zusätzliche DB-Join läuft erst nach Judge-Drossel und Semaphore und nur für Nachrichten ab 25 Zeichen ohne Befehl, in Partnerkanälen; damit bleibt die Chat-Pipeline unbelastet.
 4. INV-03-Regression im Anlass-Pfad durch die Einhängung: Gegenmaßnahme: Partner-Zweig strikt vor `pitch_user_limit_ok` (L777) einsetzen und mit `return` beenden; der Anlass-Code ab L777 bleibt für Nicht-Kandidaten unverändert; die bestehenden Anlass-Tests laufen ungeändert weiter (INV-06).
 5. Doppelter Kontakt Partner-Pitch gegen Outreach-Kette: der eigene Ledger-Insert (action='posted') plus das Lifetime-Limit (pfad='partner') sperren jede zweite Ansprache derselben user_id; die Outreach-Kette schließt Personen mit Ledger-'posted' bereits über ihren Detector aus (Research), sodass beide Ketten dieselbe Person nur einmal treffen.
+
+## Umsetzungsstatus
+
+- M1 fertig: Gerüst (PARTNER_PITCH_SYSTEM_PROMPT, PartnerPitchContext, build_partner_pitch_text, Trait PartnerPitchGen plus FireworksPartnerPitchGen in promo_pitch.rs; Feld partner_pitch_gen, Default, Setter in promos.rs), Test-DDL erweitert, MockPartnerPitchGen und Regressionstest partner_kandidat_bekommt_partner_pitch angelegt. Roter Lauf bewiesen (siehe EVIDENCE, Abschnitt "Rote Baseline M1").

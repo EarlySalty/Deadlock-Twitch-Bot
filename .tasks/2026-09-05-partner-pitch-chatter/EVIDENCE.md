@@ -52,3 +52,10 @@ Kandidatenzahl:count  418 Nicht-Partner-Deadlock-Streamer (login, 30 Tage); 18 c
 1. Datenquelle fast leer und Login-User-ID-Bruch: twitch_scout_candidates und streamer_dim sind 0 Zeilen, twitch_stats_category.twitch_user_id ist NULL. Ohne Auflösung über twitch_stream_sessions liefert ein strikter user-id-Weg 0 Kandidaten; realistischer Kreis rund 17 Personen.
 2. Ledger und Blacklist identifizieren primär über streamer_login (PK bzw. Login-Index), twitch_user_id nur additiv: eine reine user-id-Prüfung "schon kontaktiert oder gesperrt" kann Personen durchlassen oder verfehlen, Verwechslung gleicher Login mit anderer ID.
 3. Statuswechsel zwischen Erkennung und Send und Kosten pro Nachricht: Partnerstatus kann sich vor dem Send ändern (erneute twitch_partners-Prüfung im Doppelsend-Lock nötig), und der zusätzliche DB-Join je qualifizierender Nachricht muss hinter Judge-Drossel und Semaphore bleiben.
+
+## Rote Baseline M1
+
+Test: promos::db_tests::partner_kandidat_bekommt_partner_pitch
+Lauf vor dem Partner-Zweig (nur Gerüst): FAILED.
+Meldung: assertion `left == right` failed: genau ein Partner-Pitch erwartet, left: 0, right: 1 (crates/tb-chat/src/promos.rs, msgs.len()).
+Grund: der Partner-Zweig fehlt, der Anlass-Judge liefert kein Anlass, also 0 Sends.
