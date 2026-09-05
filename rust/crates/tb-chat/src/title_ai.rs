@@ -519,6 +519,7 @@ async fn titel_completion(
         tb_llm::Request::prompt(prompt)
             .temperature(temperature)
             .max_tokens(max_tokens)
+            .denken_aus()
             .retry_on_429(2)
             .ledger_purpose(purpose)
             .endpoint(endpoint.clone()),

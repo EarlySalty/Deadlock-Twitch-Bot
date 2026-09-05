@@ -367,6 +367,7 @@ impl FireworksPitchJudge {
         let mut request = tb_llm::Request::simple(PITCH_SYSTEM_PROMPT, user)
             .temperature(0.0)
             .json_object()
+            .denken_aus()
             .timeout(PITCH_TIMEOUT);
         if let Some(endpoint) = endpoint {
             request = request.no_ledger().endpoint(endpoint);

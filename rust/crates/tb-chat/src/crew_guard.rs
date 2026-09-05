@@ -558,6 +558,7 @@ impl OpenAiCrewJudge {
             )
             .temperature(0.0)
             .json_object()
+            .denken_aus()
             .timeout(self.timeout)
             .no_ledger()
             .endpoint(endpoint.clone()),

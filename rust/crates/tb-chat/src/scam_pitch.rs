@@ -1943,9 +1943,7 @@ async fn call_judge(
     .max_tokens(i64::from(JUDGE_MAX_TOKENS))
     .temperature(0.0)
     .timeout(Duration::from_secs(20))
-    // Der Denktext denkender Modelle ist nicht das Urteil; liegt das Urteil
-    // aber nur in `reasoning_content`, darf der Judge es dort holen, weil
-    // `extract_verdict` ohnehin nur das letzte flache JSON-Objekt nimmt.
+    .denken_aus()
     .strip_think()
     .allow_reasoning_content()
     .accept(|text| extract_verdict(text).is_some());
