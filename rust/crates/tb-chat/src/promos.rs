@@ -109,6 +109,8 @@ const PITCH_JUDGE_CHATTER_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 const PITCH_JUDGE_CHANNEL_WINDOW: Duration = Duration::from_secs(60 * 60);
 const PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW: usize = 30;
 const PITCH_MAX_CONCURRENT: usize = 8;
+const PROMO_MAX_CONCURRENT: usize = 16;
+const PROMO_DUE_CONCURRENCY: usize = 4;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
 pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// Partner-Seite für Streamer-Pitches in den Promo-Texten.
@@ -521,6 +523,7 @@ pub struct PromoEngine {
     pitch_judge_last: DashMap<String, Instant>,
     pitch_judge_channel: DashMap<String, Vec<Instant>>,
     pitch_semaphore: Semaphore,
+    promo_semaphore: Arc<Semaphore>,
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
     targeted_state: Mutex<TargetedState>,
@@ -563,6 +566,7 @@ impl PromoEngine {
             pitch_judge_last: DashMap::new(),
             pitch_judge_channel: DashMap::new(),
             pitch_semaphore: Semaphore::new(PITCH_MAX_CONCURRENT),
+            promo_semaphore: Arc::new(Semaphore::new(PROMO_MAX_CONCURRENT)),
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
@@ -696,9 +700,14 @@ impl PromoEngine {
             self.record_promo_activity_inner(&mut state, &chatter, now);
         }
 
+        let Ok(promo_permit) = Arc::clone(&self.promo_semaphore).try_acquire_owned() else {
+            return;
+        };
+
         let channel_id = event.broadcaster_user_id.clone();
         let engine = Arc::clone(self);
         tokio::spawn(async move {
+            let _promo_permit = promo_permit;
             engine
                 .maybe_send_promo_with_stats(&login, &channel_id, now)
                 .await;
@@ -724,7 +733,7 @@ impl PromoEngine {
             return;
         };
 
-        if !self.pitch_judge_throttle_ok(&login, &target_user_id) {
+        if !self.pitch_judge_throttle_check(&login, &target_user_id) {
             tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: judge-drossel");
             return;
         }
@@ -760,6 +769,11 @@ impl PromoEngine {
         }
         if !self.pitch_channel_limit_ok(&login).await {
             tracing::debug!(channel = %login, "anlass-pitch: kanal-limit");
+            return;
+        }
+
+        if !self.pitch_judge_throttle_reserve(&login, &target_user_id) {
+            tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: judge-drossel-reserve");
             return;
         }
 
@@ -859,7 +873,27 @@ impl PromoEngine {
         }
     }
 
-    fn pitch_judge_throttle_ok(&self, login: &str, chatter_id: &str) -> bool {
+    fn pitch_judge_throttle_check(&self, login: &str, chatter_id: &str) -> bool {
+        let now = Instant::now();
+        let chatter_key = format!("{login}|{chatter_id}");
+        if let Some(last) = self.pitch_judge_last.get(&chatter_key) {
+            if now.duration_since(*last) < PITCH_JUDGE_CHATTER_COOLDOWN {
+                return false;
+            }
+        }
+        if let Some(entry) = self.pitch_judge_channel.get(login) {
+            let aktiv = entry
+                .iter()
+                .filter(|t| now.duration_since(**t) < PITCH_JUDGE_CHANNEL_WINDOW)
+                .count();
+            if aktiv >= PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn pitch_judge_throttle_reserve(&self, login: &str, chatter_id: &str) -> bool {
         let now = Instant::now();
         let chatter_key = format!("{login}|{chatter_id}");
         if let Some(last) = self.pitch_judge_last.get(&chatter_key) {
@@ -1074,7 +1108,7 @@ impl PromoEngine {
     }
 
     /// Periodischer Haupt-Loop-Body (promos.py:1466: `_send_promo_if_due`).
-    async fn send_promo_if_due(&self, now: Instant) {
+    async fn send_promo_if_due(self: &Arc<Self>, now: Instant) {
         // Lurker-Tax nutzt in Python eine eigene Channelquelle ohne Deadlock-,
         // promo_disabled- oder Plan-Filter.
         let lurker_tax_channels = match self.get_live_channels_for_lurker_tax().await {
@@ -1106,16 +1140,11 @@ impl PromoEngine {
             }
         };
 
+        let mut faellig: Vec<(String, String)> = Vec::new();
         for (login, channel_id) in &live_channels {
-            // Plan-Flag-Check (promos.py:1466: _promo_blocked_by_plan_or_flag).
             if self.promo_blocked_by_plan_or_flag(login).await {
                 continue;
             }
-
-            // Partner-Gate (promos.py:1524/1533: is_partner_channel_for_chat_tracking).
-            // Gilt für die periodische Promo-Iteration:
-            // Kanäle, die zwar live + promo_disabled=0 sind, im Chat-Tracking aber nicht als
-            // Partner gelten, dürfen KEINE periodischen Promos erhalten.
             if !self
                 .partner_check
                 .is_partner_channel_for_chat_tracking(login)
@@ -1123,14 +1152,10 @@ impl PromoEngine {
             {
                 continue;
             }
-
-            // Channel-Allowlist gilt für die gesamte Promo-Iteration inklusive
-            // Targeted-Promo, nicht aber für den separaten Lurker-Tax-Pfad.
             if !self.promo_channel_allowed_db(login).await {
                 continue;
             }
 
-            // Overall-Ready + Activity-Ready prüfen (promos.py:1466).
             let state_snapshot = {
                 let state_ref = self
                     .channel_states
@@ -1144,30 +1169,41 @@ impl PromoEngine {
                 .promo_activity_ready_inner(login, &state_snapshot, now)
                 .await;
 
-            // Scam+Targeted nur im fälligen Slot (promos.py:1466: activity_ready Pflicht).
             if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
-                let (invite, _is_specific) = self.invite_resolver.resolve_invite(login).await;
-
-                // Targeted-Promo-Slot (targeted_promo.py:198).
-                let active_chatters = self.get_active_chatters(login).await;
-                if self
-                    .maybe_send_targeted_promo(login, channel_id, &invite, &active_chatters, now)
-                    .await
-                {
-                    continue;
-                }
-
-                // Activity-Promo (promos.py:1466).
-                let sent = self
-                    .maybe_send_promo_with_stats(login, channel_id, now)
-                    .await;
-
-                // Viewer-Spike (promos.py:1466).
-                if !sent {
-                    self.maybe_send_viewer_spike_promo(login, channel_id, now)
-                        .await;
-                }
+                faellig.push((login.clone(), channel_id.clone()));
             }
+        }
+
+        let mut set = tokio::task::JoinSet::new();
+        let mut iter = faellig.into_iter();
+        for _ in 0..PROMO_DUE_CONCURRENCY {
+            let Some((login, channel_id)) = iter.next() else {
+                break;
+            };
+            set.spawn(Arc::clone(self).process_due_channel(login, channel_id, now));
+        }
+        while set.join_next().await.is_some() {
+            if let Some((login, channel_id)) = iter.next() {
+                set.spawn(Arc::clone(self).process_due_channel(login, channel_id, now));
+            }
+        }
+    }
+
+    async fn process_due_channel(self: Arc<Self>, login: String, channel_id: String, now: Instant) {
+        let (invite, _is_specific) = self.invite_resolver.resolve_invite(&login).await;
+        let active_chatters = self.get_active_chatters(&login).await;
+        if self
+            .maybe_send_targeted_promo(&login, &channel_id, &invite, &active_chatters, now)
+            .await
+        {
+            return;
+        }
+        let sent = self
+            .maybe_send_promo_with_stats(&login, &channel_id, now)
+            .await;
+        if !sent {
+            self.maybe_send_viewer_spike_promo(&login, &channel_id, now)
+                .await;
         }
     }
 
@@ -2677,16 +2713,21 @@ impl PromoEngine {
     }
 
     async fn load_recent_channel_messages(&self, login: &str, n: i64) -> Vec<String> {
+        let known_bots: Vec<&str> = tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS.to_vec();
         let rows = sqlx::query_scalar!(
             "SELECT content AS \"content?\" FROM twitch_chat_messages
               WHERE LOWER(streamer_login) = LOWER($1)
                 AND message_ts >= NOW() - INTERVAL '30 minutes'
                 AND COALESCE(is_command, FALSE) = FALSE
                 AND COALESCE(content, '') NOT LIKE '!%'
+                AND LOWER(COALESCE(chatter_login, '')) <> ALL($3::text[])
+                AND LOWER(COALESCE(chatter_login, '')) !~ $4
               ORDER BY message_ts DESC
               LIMIT $2",
             login,
             n,
+            &known_bots as &[&str],
+            tb_analytics::bekannte_bots::ANONYM_LOGIN_REGEX_SQL,
         )
         .fetch_all(&self.pool)
         .await
@@ -3826,6 +3867,40 @@ mod db_tests {
         )
     }
 
+    #[tokio::test]
+    async fn recent_messages_filtern_bots_und_anon() {
+        let pool = pool_or_skip!("promo_recent_bot_filter");
+        let engine = make_engine(pool.clone());
+        for (chatter, content) in [
+            ("nani_fan", "richtig cooler stream heute"),
+            ("nightbot", "nightbot meldet den timer"),
+            ("deutschedeadlockcommunity", "die community freut sich"),
+            ("justinfan12345", "lurker sagt hallo"),
+            ("nani_fan", "wann kommt der naechste patch"),
+        ] {
+            sqlx::query(
+                "INSERT INTO twitch_chat_messages \
+                 (streamer_login, chatter_login, message_ts, is_command, content) \
+                 VALUES ($1, $2, NOW(), FALSE, $3)",
+            )
+            .bind("nani")
+            .bind(chatter)
+            .bind(content)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let recent = engine.load_recent_channel_messages("nani", 8).await;
+
+        assert_eq!(recent.len(), 2, "nur echte Chatter erwartet: {recent:?}");
+        assert!(recent.iter().any(|m| m.contains("patch")));
+        assert!(recent.iter().any(|m| m.contains("cooler stream")));
+        assert!(recent.iter().all(|m| !m.contains("nightbot")));
+        assert!(recent.iter().all(|m| !m.contains("community freut")));
+        assert!(recent.iter().all(|m| !m.contains("lurker")));
+    }
+
     // -----------------------------------------------------------------------
     // save/restore Cooldown
     // -----------------------------------------------------------------------
@@ -4030,7 +4105,11 @@ mod db_tests {
     async fn targeted_promo_respektiert_promo_channel_allowed_gate() {
         let pool = pool_or_skip!("promo_targeted_allowed_gate");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine = Arc::new(PromoEngine::new(
+            pool.clone(),
+            api.clone(),
+            Arc::new(NoopSuppressionCheck),
+        ));
 
         sqlx::query(
             "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
@@ -4196,6 +4275,85 @@ mod db_tests {
         );
     }
 
+    #[tokio::test]
+    async fn on_message_spawnt_keinen_promo_bei_vollem_semaphore() {
+        let pool = pool_or_skip!("promo_on_message_semaphore");
+        seed_partner_channel(&pool, "c-ps", "pskanal").await;
+        let gen = Arc::new(CountingTextGen::new("bei uns gibts leute zum zocken"));
+        let engine = Arc::new(
+            PromoEngine::new(
+                pool.clone(),
+                Arc::new(super::tests::MockApi::default()),
+                Arc::new(NoopSuppressionCheck),
+            )
+            .set_pitch_text_gen(gen.clone()),
+        );
+
+        async fn setze_bereit(engine: &Arc<PromoEngine>, now: Instant) {
+            let state_ref = engine
+                .channel_states
+                .entry("pskanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_promo_attempt = None;
+            state.last_promo_sent = Some(now - Duration::from_secs(190 * 60));
+            state.raw_msg_count_since_promo = PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO;
+            state.activity.clear();
+            state.seen_chatters.clear();
+            for idx in 0..(PROMO_ACTIVITY_MIN_MSGS + PROMO_NEW_CHATTERS_MIN) {
+                state.activity.push_back((now, format!("chatter_{idx}")));
+            }
+        }
+
+        let now = Instant::now();
+        let event = pitch_event(
+            "c-ps",
+            "pskanal",
+            "u-ps",
+            "Ps",
+            "das ist eine ganz normale nachricht im chat",
+        );
+
+        setze_bereit(&engine, now).await;
+        let mut permits = Vec::new();
+        for _ in 0..PROMO_MAX_CONCURRENT {
+            permits.push(
+                Arc::clone(&engine.promo_semaphore)
+                    .try_acquire_owned()
+                    .expect("Promo-Semaphore-Slot muss anfangs frei sein"),
+            );
+        }
+
+        engine.on_message(&event).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            gen.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "bei vollem Promo-Semaphore darf kein Promo-Task starten"
+        );
+        assert_eq!(
+            engine.promo_semaphore.available_permits(),
+            0,
+            "on_message darf bei vollem Semaphore keinen weiteren Slot belegen"
+        );
+
+        drop(permits);
+        setze_bereit(&engine, Instant::now()).await;
+        engine.on_message(&event).await;
+
+        let mut versuche = 0;
+        while gen.calls.load(std::sync::atomic::Ordering::SeqCst) == 0 && versuche < 30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            versuche += 1;
+        }
+        assert_eq!(
+            gen.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "mit freiem Semaphore muss der Promo-Task genau einmal Text erzeugen"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attempt_reservierung_ist_atomar_ein_textgen_pro_runde() {
         let pool = pool_or_skip!("promo_attempt_atomar");
@@ -4286,6 +4444,56 @@ mod db_tests {
         );
         assert_eq!(api.message_count().await, 0);
         drop(permits);
+    }
+
+    #[tokio::test]
+    async fn anlass_pitch_bei_promo_disabled_verbraucht_kein_budget() {
+        let pool = pool_or_skip!("promo_anlass_disabled_budget");
+        seed_partner_channel(&pool, "c-dis", "diskanal").await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled) \
+             VALUES ('c-dis', 'diskanal', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
+            "deadlock ist echt unterschaetzt",
+        ))));
+        let engine = PromoEngine::new(
+            pool.clone(),
+            Arc::new(super::tests::MockApi::default()),
+            Arc::new(NoopSuppressionCheck),
+        )
+        .set_pitch_judge(judge.clone());
+
+        for i in 0..30 {
+            let event = pitch_event(
+                "c-dis",
+                "diskanal",
+                &format!("u-dis-{i}"),
+                "Dis",
+                "deadlock ist so unpopulaer, keine ahnung warum das keiner spielt",
+            );
+            engine.on_message_pitch(&event).await;
+        }
+
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "promo_disabled darf den Judge nie aufrufen"
+        );
+        let budget = engine
+            .pitch_judge_channel
+            .get("diskanal")
+            .map(|entry| entry.len())
+            .unwrap_or(0);
+        assert_eq!(
+            budget, 0,
+            "promo_disabled darf kein Judge-Budget reservieren, war {budget}"
+        );
     }
 
     #[tokio::test]

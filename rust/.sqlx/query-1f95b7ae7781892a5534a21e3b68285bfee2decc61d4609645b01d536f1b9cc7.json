@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content AS \"content?\" FROM twitch_chat_messages\n              WHERE LOWER(streamer_login) = LOWER($1)\n                AND message_ts >= NOW() - INTERVAL '30 minutes'\n                AND COALESCE(is_command, FALSE) = FALSE\n                AND COALESCE(content, '') NOT LIKE '!%'\n                AND LOWER(COALESCE(chatter_login, '')) <> ALL($3::text[])\n                AND LOWER(COALESCE(chatter_login, '')) !~ $4\n              ORDER BY message_ts DESC\n              LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "TextArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1f95b7ae7781892a5534a21e3b68285bfee2decc61d4609645b01d536f1b9cc7"
+}
