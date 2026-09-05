@@ -1154,6 +1154,12 @@ impl ChatPipeline {
                 },
             )
             .await;
+
+            let promos_pitch = Arc::clone(&p.promos);
+            let event_pitch = event.clone();
+            tokio::spawn(async move {
+                promos_pitch.on_message_pitch(&event_pitch).await;
+            });
         }
 
         // Schritt 15: Command-Processing — immer am Ende; Deadlock-Gate pro Command.

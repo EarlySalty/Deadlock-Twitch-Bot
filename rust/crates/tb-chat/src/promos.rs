@@ -45,7 +45,8 @@ use tracing::{debug, info, warn};
 use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::promo_pitch::{
-    ChannelPromoContext, PitchJudge, PitchTextGen, TargetedPitchContext,
+    pitch_filter_reject, ChannelPromoContext, PitchJudge, PitchJudgeInput, PitchTextGen,
+    TargetedPitchContext,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
@@ -692,6 +693,219 @@ impl PromoEngine {
         let channel_id = event.broadcaster_user_id.clone();
         self.maybe_send_promo_with_stats(&login, &channel_id, now)
             .await;
+    }
+
+    pub async fn on_message_pitch(&self, event: &ChatMessageEvent) {
+        let text = event.text();
+        if text.starts_with('!') || text.chars().count() < 25 {
+            return;
+        }
+        if event.chatter_user_id == event.broadcaster_user_id || event.chatter_user_id.is_empty() {
+            return;
+        }
+
+        let login = event.broadcaster_user_login.to_lowercase();
+        let target_user_id = event.chatter_user_id.clone();
+        let target_login = event.chatter_user_login.clone();
+        let channel_id = event.broadcaster_user_id.clone();
+
+        if !self
+            .partner_check
+            .is_partner_channel_for_chat_tracking(&login)
+            .await
+        {
+            return;
+        }
+        if !self.promo_channel_allowed_db(&login).await {
+            return;
+        }
+        if self.promo_blocked_by_plan_or_flag(&login).await {
+            self.log_anlass_reject(&login, &target_user_id, "promo_disabled", text, None)
+                .await;
+            return;
+        }
+        if self.suppression.is_muted(&login).await {
+            self.log_anlass_reject(&login, &target_user_id, "suppressed", text, None)
+                .await;
+            return;
+        }
+        if !self.stream_start_delay_ok(&login).await {
+            self.log_anlass_reject(&login, &target_user_id, "start_delay", text, None)
+                .await;
+            return;
+        }
+
+        if !self.pitch_user_limit_ok(&target_user_id).await {
+            self.log_anlass_reject(&login, &target_user_id, "limit_user", text, None)
+                .await;
+            return;
+        }
+        if !self.pitch_channel_limit_ok(&login).await {
+            self.log_anlass_reject(&login, &target_user_id, "limit_channel", text, None)
+                .await;
+            return;
+        }
+
+        let lock = self.get_send_lock(&login);
+        let _guard = lock.lock().await;
+
+        let (game, title) = self.load_live_context(&login).await;
+        let recent = self.load_recent_channel_messages(&login, 8).await;
+        let input = PitchJudgeInput {
+            trigger_text: text.to_string(),
+            game,
+            title,
+            recent_chat: recent,
+            target_login: target_login.clone(),
+        };
+        let Some(resp) = self.pitch_judge.decide(input).await else {
+            self.log_anlass_reject(&login, &target_user_id, "kein_anlass", text, None)
+                .await;
+            return;
+        };
+        let Some(occasion) = resp.occasion else {
+            self.log_anlass_reject(&login, &target_user_id, "kein_anlass", text, None)
+                .await;
+            return;
+        };
+
+        if let Some(reason) = pitch_filter_reject(&resp.reply) {
+            self.log_anlass_reject(
+                &login,
+                &target_user_id,
+                reason.as_str(),
+                text,
+                Some(resp.reply.clone()),
+            )
+            .await;
+            return;
+        }
+
+        let out_text = format!("@{target_login} {}", resp.reply);
+        let outcome = self
+            .guarded_api_for("promo", &login)
+            .send_message(&channel_id, &out_text)
+            .await;
+        self.record_suppression_on_drop(&login, &channel_id, "promo", &outcome)
+            .await;
+        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
+            self.log_anlass_reject(
+                &login,
+                &target_user_id,
+                "send_dropped",
+                text,
+                Some(out_text),
+            )
+            .await;
+            return;
+        }
+
+        self.record_pitch_log(PitchLogEntry {
+            channel_login: login.clone(),
+            target_user_id: Some(target_user_id),
+            pfad: "anlass",
+            occasion: Some(occasion.as_str().to_string()),
+            trigger_text: Some(text.to_string()),
+            generated_text: Some(out_text),
+            reject_reason: None,
+            sent_at: Some(Utc::now()),
+        })
+        .await;
+        self.mark_promo_sent(
+            &login,
+            Instant::now(),
+            "anlass_pitch",
+            Utc::now().timestamp() as f64,
+        )
+        .await;
+
+        if let Some(sink) = self.pitch_review_sink.as_ref() {
+            sink.send_card(&login, &target_login, text, &resp.reply).await;
+        }
+    }
+
+    async fn log_anlass_reject(
+        &self,
+        login: &str,
+        target_user_id: &str,
+        reason: &str,
+        trigger: &str,
+        generated: Option<String>,
+    ) {
+        self.record_pitch_log(PitchLogEntry {
+            channel_login: login.to_string(),
+            target_user_id: Some(target_user_id.to_string()),
+            pfad: "anlass",
+            occasion: None,
+            trigger_text: Some(trigger.to_string()),
+            generated_text: generated,
+            reject_reason: Some(reason.to_string()),
+            sent_at: None,
+        })
+        .await;
+    }
+
+    async fn pitch_user_limit_ok(&self, target_user_id: &str) -> bool {
+        let last = sqlx::query_scalar!(
+            "SELECT MAX(sent_at) FROM twitch_promo_pitch_log
+              WHERE target_user_id = $1 AND pfad = 'anlass' AND sent_at IS NOT NULL",
+            target_user_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .ok()
+        .flatten();
+        match last {
+            Some(ts) => (Utc::now() - ts).num_seconds() >= 7 * 86400,
+            None => true,
+        }
+    }
+
+    async fn pitch_channel_limit_ok(&self, login: &str) -> bool {
+        let stream_start = self
+            .load_stream_start(login)
+            .await
+            .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(3));
+        let row = sqlx::query!(
+            "SELECT COUNT(*) AS \"count!\", MAX(sent_at) AS last FROM twitch_promo_pitch_log
+              WHERE channel_login = $1 AND pfad = 'anlass' AND sent_at IS NOT NULL
+                AND sent_at >= $2",
+            login,
+            stream_start,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .ok();
+        let Some(row) = row else {
+            return true;
+        };
+        if row.count >= 3 {
+            return false;
+        }
+        if let Some(last) = row.last {
+            if (Utc::now() - last).num_seconds() < 600 {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn load_stream_start(&self, login: &str) -> Option<DateTime<Utc>> {
+        let row = sqlx::query_scalar!(
+            "SELECT last_started_at FROM twitch_live_state
+              WHERE LOWER(streamer_login) = LOWER($1) AND is_live = 1
+              LIMIT 1",
+            login,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()?;
+        let normalized = row.replace('Z', "+00:00");
+        chrono::DateTime::parse_from_rfc3339(&normalized)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
     }
 
     /// Raw-Chat-Aktivität aufzeichnen — Port von `_record_raw_chat_message`
@@ -2476,6 +2690,10 @@ mod tests {
             self.messages.lock().await.len()
         }
 
+        pub(super) async fn messages_sent(&self) -> Vec<(String, String)> {
+            self.messages.lock().await.clone()
+        }
+
         pub(super) async fn announcement_colors(&self) -> Vec<String> {
             self.announcements
                 .lock()
@@ -3053,6 +3271,109 @@ mod db_tests {
         }
     }
 
+    struct MockPitchJudge {
+        response: Option<crate::promo_pitch::PitchResponse>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MockPitchJudge {
+        fn new(response: Option<crate::promo_pitch::PitchResponse>) -> Self {
+            Self {
+                response,
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PitchJudge for MockPitchJudge {
+        async fn decide(
+            &self,
+            _input: PitchJudgeInput,
+        ) -> Option<crate::promo_pitch::PitchResponse> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.response.clone()
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct RecordingReviewSink {
+        cards: Arc<Mutex<Vec<(String, String, String, String)>>>,
+    }
+
+    #[async_trait]
+    impl PitchReviewSink for RecordingReviewSink {
+        async fn send_card(
+            &self,
+            channel_login: &str,
+            target_login: &str,
+            trigger: &str,
+            reply: &str,
+        ) {
+            self.cards.lock().await.push((
+                channel_login.to_string(),
+                target_login.to_string(),
+                trigger.to_string(),
+                reply.to_string(),
+            ));
+        }
+    }
+
+    fn pitch_event(channel_id: &str, channel_login: &str, chatter_id: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: channel_id.to_string(),
+            broadcaster_user_login: channel_login.to_string(),
+            chatter_user_id: chatter_id.to_string(),
+            chatter_user_login: chatter_login.to_string(),
+            message: crate::types::ChatMessageBody {
+                text: text.to_string(),
+                fragments: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn seed_partner_channel(pool: &PgPool, channel_id: &str, channel_login: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ($1, $2)",
+        )
+        .bind(channel_id)
+        .bind(channel_login)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active, archived_at)
+             VALUES ($1, $2, 1, NULL)",
+        )
+        .bind(channel_login)
+        .bind(channel_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game)
+             VALUES ($1, $2, 1, 'Deadlock')",
+        )
+        .bind(channel_id)
+        .bind(channel_login)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn pitch_response(
+        occasion: Option<crate::promo_pitch::PitchOccasion>,
+        reply: &str,
+    ) -> crate::promo_pitch::PitchResponse {
+        crate::promo_pitch::PitchResponse {
+            occasion,
+            reply: reply.to_string(),
+            confidence: 0.9,
+        }
+    }
+
     macro_rules! pool_or_skip {
         ($schema:expr) => {{
             let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
@@ -3542,6 +3863,160 @@ mod db_tests {
             1,
             "Allowed-Guard delegiert den Targeted-Global-Send"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Anlass-Pitch (REQ-01 bis REQ-07)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn anlass_pitch_symphooniee_wird_gesendet() {
+        let pool = pool_or_skip!("promo_anlass_symphooniee");
+        seed_partner_channel(&pool, "c-sym", "symkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
+            "deadlock ist echt unterschaetzt, das game macht suchtig",
+        ))));
+        let sink = RecordingReviewSink::default();
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_pitch_review_sink(Arc::new(sink.clone()));
+
+        let event = pitch_event(
+            "c-sym",
+            "symkanal",
+            "u-symphooniee",
+            "Symphooniee",
+            "yo wieso ist deadlock so unpopulaer wie haben die den anschluss verpasst",
+        );
+        engine.on_message_pitch(&event).await;
+
+        let msgs = api.messages_sent().await;
+        assert_eq!(msgs.len(), 1, "genau eine Anlass-Antwort erwartet");
+        assert!(
+            msgs[0].1.starts_with("@Symphooniee "),
+            "Antwort muss die Person mit @login anreden: {}",
+            msgs[0].1
+        );
+
+        let row: (String, Option<chrono::DateTime<Utc>>, Option<String>) = sqlx::query_as(
+            "SELECT pfad, sent_at, occasion FROM twitch_promo_pitch_log
+              WHERE pfad = 'anlass' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "anlass");
+        assert!(row.1.is_some(), "sent_at muss gesetzt sein");
+        assert_eq!(row.2.as_deref(), Some("game_unpopular"));
+
+        assert_eq!(sink.cards.lock().await.len(), 1, "eine Review-Karte erwartet");
+    }
+
+    #[tokio::test]
+    async fn anlass_pitch_bei_promo_disabled_sendet_nichts() {
+        let pool = pool_or_skip!("promo_anlass_disabled");
+        seed_partner_channel(&pool, "c-off", "offkanal").await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled)
+             VALUES ('c-off', 'offkanal', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
+            "deadlock ist stark",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone());
+
+        let event = pitch_event(
+            "c-off",
+            "offkanal",
+            "u-viewer",
+            "Viewer",
+            "deadlock ist so unpopulaer, keine ahnung warum das keiner spielt",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(api.message_count().await, 0, "Werbefrei: nichts senden");
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "bei promo_disabled darf der Judge gar nicht laufen"
+        );
+        let row: (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT reject_reason, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'anlass'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0.is_some(), "Verwerfungsgrund muss protokolliert sein");
+        assert!(row.1.is_none(), "sent_at muss NULL sein");
+    }
+
+    #[tokio::test]
+    async fn anlass_pitch_kurznachricht_ohne_llm() {
+        let pool = pool_or_skip!("promo_anlass_kurz");
+        seed_partner_channel(&pool, "c-kurz", "kurzkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NoMates),
+            "komm vorbei",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone());
+
+        let event = pitch_event("c-kurz", "kurzkanal", "u-kurz", "Kurz", "gg wp");
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(api.message_count().await, 0);
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "Kurznachricht darf das Modell nicht erreichen"
+        );
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'anlass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 0, "Vorfilter erzeugt keinen Log-Eintrag");
+    }
+
+    #[tokio::test]
+    async fn anlass_pitch_harter_filter_verwirft_link() {
+        let pool = pool_or_skip!("promo_anlass_filter");
+        seed_partner_channel(&pool, "c-filt", "filtkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::WantsHelp),
+            "klar helfen wir dir, schau auf https://discord.gg/abc vorbei",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone());
+
+        let event = pitch_event(
+            "c-filt",
+            "filtkanal",
+            "u-filt",
+            "Filt",
+            "kann mir jemand helfen ich bin neu und komme nicht weiter",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(api.message_count().await, 0, "Link-Antwort darf nicht raus");
+        let row: (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT reject_reason, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'anlass'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0.is_some(), "harter Filter muss den Grund protokollieren");
+        assert!(row.1.is_none());
     }
 
     // -----------------------------------------------------------------------

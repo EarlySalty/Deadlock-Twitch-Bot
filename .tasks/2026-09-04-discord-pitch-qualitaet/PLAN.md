@@ -157,6 +157,8 @@ Validierung: `/home/nathanael/.cargo/bin/cargo build -p tb-chat -p tb-bot` und `
 
 Stop-Regel: kein zweiter OAuth-Weg, kein neues Secret (INV-07). Keine Änderung an `commands.rs` (Verbotene Änderungen); `!discord`/`!invite` bleiben unberührt (INV-05).
 
+STATUS M5 erledigt 2026-09-05: `on_message_pitch` in promos.rs voll implementiert (Vorfilter 25 Zeichen/kein Befehl/kein Broadcaster, Gates Partner/Allowlist/Werbefrei/Suppression/Startverzögerung, Limits User 7 Tage und Kanal 3 pro Stream mit 10 min Abstand über `twitch_promo_pitch_log`, Doppelsend-Lock, Judge-Seam, harte Filter, `@login`-Send, Cooldown-Kopplung `mark_promo_sent("anlass_pitch")`, Review-Karte). Helfer `log_anlass_reject`, `pitch_user_limit_ok`, `pitch_channel_limit_ok`, `load_stream_start`. pipeline.rs: detached `tokio::spawn(on_message_pitch)` im `is_deadlock_live`-Block direkt nach `promos.on_message` (blockiert die Pipeline nicht). Logging-Politik siehe Contract-Amendment 2026-09-05 (Vorfilter/Partner/Allowlist/Suppression/Startverzögerung schweigen, um die Log-Tabelle nicht zu fluten; Werbefrei-Block, Limits und alle LLM-/Sende-Ausgänge werden protokolliert). M7-Regressionstests nach dem Rot-Lauf grün: `anlass_pitch_symphooniee_wird_gesendet`, `anlass_pitch_bei_promo_disabled_sendet_nichts`, `anlass_pitch_kurznachricht_ohne_llm`, `anlass_pitch_harter_filter_verwirft_link` = 5 passed (inkl. Parser). Guard-Test grün.
+
 ---
 
 ## M6 - Discord-Review-Karte für gesendete Anlass-Pitches
@@ -187,6 +189,14 @@ Erwarteter Zwischenzustand: neuer Pfad ist durch Tests abgedeckt, die alten Pres
 Validierung: `TB_TEST_DATABASE_URL=... /home/nathanael/.cargo/bin/cargo test -p tb-chat` (voll grün gegen die rote Baseline, keine neuen roten Tests außer dem bewusst zuerst roten Regressionstest, der nach M5 grün wird).
 
 Stop-Regel: Bestehende Tests nicht abschwächen (INV-06). Der Implementierer ändert den Regressionstest nach dem Rot-Lauf nicht mehr.
+
+STATUS M7 Rot-Lauf 2026-09-05 (Stub `on_message_pitch` leer, vor der M5-Implementierung), Befehl `TB_TEST_DATABASE_URL=... cargo test -p tb-chat db_tests::anlass_`:
+- `promos::db_tests::anlass_pitch_symphooniee_wird_gesendet` FAILED: `assertion left == right failed: genau eine Anlass-Antwort erwartet, left: 0, right: 1` (promos.rs:3685).
+- `promos::db_tests::anlass_pitch_bei_promo_disabled_sendet_nichts` FAILED: `called Result::unwrap() on an Err value: RowNotFound` (promos.rs:3745, keine Log-Zeile).
+- `promos::db_tests::anlass_pitch_harter_filter_verwirft_link` FAILED: `RowNotFound` (promos.rs:3806, keine Log-Zeile).
+- `promos::db_tests::anlass_pitch_kurznachricht_ohne_llm` passed (Vorfilter greift schon im Stub, kein Sende- oder Log-Versuch).
+- Gesamt: `test result: FAILED. 1 passed; 3 failed`.
+Guard-Test `promo_pitch::tests::promo_pitch_steht_in_der_nur_fireworks_liste` ist grün (Liste seit M1 gepflegt).
 
 ---
 

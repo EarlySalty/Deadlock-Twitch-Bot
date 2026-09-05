@@ -388,6 +388,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn promo_pitch_steht_in_der_nur_fireworks_liste() {
+        assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&USE_CASE));
+    }
+
+    #[test]
     fn parser_liest_anlass_und_reply() {
         let parsed = parse_pitch_response(
             r#"{"occasion":"game_unpopular","reply":"stimmt schon","confidence":0.8}"#,
