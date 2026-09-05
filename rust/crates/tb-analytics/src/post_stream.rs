@@ -320,7 +320,7 @@ pub fn normalize_word_groups(value: &serde_json::Value) -> Vec<WordGroup> {
 /// Zwei Namen bleiben für getrennte Ledger-Zwecke und historische DB-Daten.
 /// Beide Pfade verwenden dasselbe festgelegte Fireworks-Modell im zentralen
 /// Connector.
-const USE_CASE_MINIMAX: &str = "post_stream";
+const USE_CASE_LLM: &str = "post_stream";
 const USE_CASE_OPUS: &str = "post_stream_opus";
 
 /// Plan-basiertes KI-Modell.
@@ -330,12 +330,12 @@ pub enum AiModel {
     Opus,
     /// Historische Legacy-Reportstufe (kein Plan vergibt sie mehr; nur noch
     /// Code-Pfad/Rendering für bereits persistierte Reports).
-    Minimax,
+    Llm,
 }
 
 /// Wählt das KI-Modell anhand der Plan-Entitlements: das konsolidierte
 /// `analytics`-Flag → Opus, sonst `None` (kein KI-Zugang). Die frühere
-/// ai_mini→MiniMax-Stufe entfällt mit der Analytics-Konsolidierung.
+/// ai_mini→KI-Stufe entfällt mit der Analytics-Konsolidierung.
 pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<AiModel>, sqlx::Error> {
     // Nur Login (kein user_id) → der Trial-Auto-Grant in resolve_plan_snapshot
     // bleibt aus (braucht beides), reine Lese-Auflösung.
@@ -360,8 +360,8 @@ const LEDGER_PURPOSE_OPUS: &str = "post-stream-report-claude";
 /// Zeitbudgets; Anbieter und Modell sind für beide zentral festgelegt.
 pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
     let (use_case, purpose, request) = match model {
-        AiModel::Minimax => (
-            USE_CASE_MINIMAX,
+        AiModel::Llm => (
+            USE_CASE_LLM,
             LEDGER_PURPOSE,
             tb_llm::Request::prompt(prompt)
                 .temperature(0.3)
@@ -1831,11 +1831,11 @@ pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) ->
 
 impl AiModel {
     /// String-Repräsentation für die DB-Spalte `model` (Python `AI_MODEL_OPUS`/
-    /// `AI_MODEL_MINIMAX`).
+    /// `AI_MODEL_LLM`).
     pub fn as_str(self) -> &'static str {
         match self {
             AiModel::Opus => "opus",
-            AiModel::Minimax => "minimax",
+            AiModel::Llm => "llm",
         }
     }
 }
@@ -1998,7 +1998,7 @@ pub async fn trigger_post_stream_analysis(
     }
 
     // Plan-basiertes Modell: ohne das konsolidierte `analytics`-Flag gibt es
-    // KEINEN KI-Report mehr (kein MiniMax-Default-Fallback). Streamer ohne
+    // KEINEN KI-Report mehr (kein KI-Default-Fallback). Streamer ohne
     // Analytics-Zugang lösen also keinen Post-Stream-Report aus.
     let model = match plan_ai_model(pool, &streamer).await {
         Ok(Some(model)) => model,
@@ -2356,10 +2356,6 @@ mod tests {
             "FIREWORKS_BASE_URL",
             "FIREWORK_MODEL",
             "FIREWORKS_MODEL",
-            "MINIMAX_TOKEN_PLAN_KEY",
-            "MINIMAX_API_KEY",
-            "MINIMAX_BASE_URL",
-            "MINIMAX_MODEL",
             "MINMAX",
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_BASE_URL",
@@ -2400,17 +2396,16 @@ mod tests {
             "schema_version": "post_stream_report_v2",
             "report_variant": "compact",
         });
-        let report = generate_report_v2(AiModel::Minimax, &snapshot).await;
+        let report = generate_report_v2(AiModel::Llm, &snapshot).await;
         assert_eq!(report["snapshot"]["bewertung"], "Provider-Test");
 
         clear_provider_env();
-        std::env::set_var("MINIMAX_API_KEY", "minimax-key");
         let endpoint = tb_llm::endpoint_for("post_stream");
         assert_eq!(endpoint.provider, "fireworks");
         assert!(endpoint.api_key.is_none());
 
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
-        std::env::set_var("TB_LLM_PROVIDER_POST_STREAM", "minimax");
+        std::env::set_var("TB_LLM_PROVIDER_POST_STREAM", "llm");
         let endpoint = tb_llm::endpoint_for("post_stream");
         assert_eq!(endpoint.provider, "fireworks");
         assert_eq!(endpoint.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
@@ -2473,7 +2468,6 @@ mod tests {
         // damit der best-effort-`record()` keinen Pool baut und zum No-op wird.
         std::env::remove_var("TWITCH_ANALYTICS_DSN");
         std::env::remove_var("DATABASE_URL");
-        std::env::remove_var("MINIMAX_USAGE_DB");
         let server = MockServer::start().await;
         std::env::set_var("FIREWORK_API_KEY", "k");
         std::env::set_var("FIREWORK_BASE_URL", server.uri());
@@ -2488,7 +2482,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let out = call_ai(AiModel::Minimax, "prompt").await.unwrap();
+        let out = call_ai(AiModel::Llm, "prompt").await.unwrap();
         assert_eq!(out, "ANTWORT");
     }
 
@@ -3606,7 +3600,7 @@ mod tests {
              (2,'streamer','2026-06-09T18:00:00+00','2026-06-09T20:00:00+00',7200,10.0,30,5)",
         )
         .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant) VALUES (2,'streamer','minimax','done','compact')")
+        sqlx::query("INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant) VALUES (2,'streamer','llm','done','compact')")
             .execute(&pool).await.unwrap();
 
         backfill_post_stream_reports(&pool, 5).await;
@@ -3656,12 +3650,12 @@ mod tests {
         )
         .execute(&pool).await.unwrap();
         // failed Report (Partner aktiv) für Session 1, retry_count 0.
-        sqlx::query("INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant, retry_count) VALUES (1,'streamer','minimax','failed','compact',0)")
+        sqlx::query("INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant, retry_count) VALUES (1,'streamer','llm','failed','compact',0)")
             .execute(&pool).await.unwrap();
         // Stuck pending (>10 min) für 'ghost' (kein Partner) → wird nur gecleaned, nicht retried.
         sqlx::query(
             "INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant, started_at) \
-             VALUES (99,'ghost','minimax','pending','compact', NOW() - INTERVAL '20 minutes')",
+             VALUES (99,'ghost','llm','pending','compact', NOW() - INTERVAL '20 minutes')",
         )
         .execute(&pool).await.unwrap();
 

@@ -2,7 +2,7 @@
 //!
 //! Port der reinen Parser aus `bot/analytics/api_ai.py`. Die LLM-Antworten sind
 //! oft „schmutzig" (Markdown-Fences, Präambeln, abgeschnitten) — diese Funktionen
-//! bergen das strukturierte JSON-Array robust. Der eigentliche Anthropic-/MiniMax-
+//! bergen das strukturierte JSON-Array robust. Der eigentliche Anthropic-/KI-
 //! Call + In-Memory-State + Persistenz folgen in späteren Slices.
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
@@ -43,9 +43,9 @@ type GameSessionRow = (
     NaiveDate,
 );
 
-/// KI-Modell-Kennungen (Python `AI_MODEL_OPUS`/`AI_MODEL_MINIMAX`).
+/// KI-Modell-Kennungen (Python `AI_MODEL_OPUS`/`AI_MODEL_LLM`).
 pub const AI_MODEL_OPUS: &str = "opus";
-pub const AI_MODEL_MINIMAX: &str = "minimax";
+pub const AI_MODEL_LLM: &str = "llm";
 
 /// Wochentags-Kürzel (Python `_DOW_NAMES`, Index = EXTRACT(DOW), So=0).
 const DOW_NAMES: &[&str] = &["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
@@ -57,18 +57,18 @@ fn title60(s: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// Echte Modellnamen (Python `CLAUDE_MODEL`/`MINIMAX_MODEL`), wie sie in
+/// Echte Modellnamen (Python `CLAUDE_MODEL`/`LLM_MODEL`), wie sie in
 /// `ai_analyses.model` persistiert werden.
 pub const CLAUDE_MODEL: &str = "claude-opus-4-6";
-pub const MINIMAX_MODEL: &str = "MiniMax-M3";
+pub const LLM_MODEL: &str = "deepseek-v4-flash";
 
-/// Modellname für die Persistenz: `opus` → Claude, sonst MiniMax (1:1 Python
-/// `CLAUDE_MODEL if ai_model == AI_MODEL_OPUS else MINIMAX_MODEL`).
+/// Modellname für die Persistenz: `opus` → Claude, sonst KI (1:1 Python
+/// `CLAUDE_MODEL if ai_model == AI_MODEL_OPUS else LLM_MODEL`).
 pub fn model_name_for(ai_model: &str) -> &'static str {
     if ai_model == AI_MODEL_OPUS {
         CLAUDE_MODEL
     } else {
-        MINIMAX_MODEL
+        LLM_MODEL
     }
 }
 
@@ -826,12 +826,12 @@ mod tests {
         assert_eq!(model_for_entitlements(&[]), None);
         // Persistenz-Modellname.
         assert_eq!(model_name_for("opus"), "claude-opus-4-6");
-        assert_eq!(model_name_for("minimax"), "MiniMax-M3");
+        assert_eq!(model_name_for("llm"), "deepseek-v4-flash");
     }
 
     #[test]
     fn extract_text_response_faelle() {
-        // String → getrimmt (MiniMax-Content).
+        // String → getrimmt (KI-Content).
         assert_eq!(extract_text_response(&json!("  hallo  ")), "hallo");
         // Claude content-Blocks → text-Felder mit \n.
         assert_eq!(

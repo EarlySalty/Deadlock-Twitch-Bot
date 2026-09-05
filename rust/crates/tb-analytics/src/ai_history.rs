@@ -18,7 +18,7 @@ fn emit_iso(dt: DateTime<Utc>) -> String {
 
 /// Persistiert eine KI-Analyse (Python: `INSERT INTO ai_analyses … RETURNING id`,
 /// best-effort). `model_name` ist der echte Modellname (`claude-opus-4-6` /
-/// `MiniMax-M3`), NICHT die `opus`/`minimax`-Kennung. Bei jedem Fehler `None`
+/// `deepseek-v4-flash`), NICHT die `opus`/`llm`-Kennung. Bei jedem Fehler `None`
 /// (mirror Pythons `try/except` mit `log.warning` — blockiert die Antwort nie).
 #[allow(clippy::too_many_arguments)]
 pub async fn save_analysis(
@@ -110,11 +110,11 @@ pub async fn load_ai_history(
     let result: Vec<Value> = rows
         .into_iter()
         .map(|row| {
-            // model_alias: "claude" im Namen → opus, sonst minimax (Python AI_MODEL_*).
+            // model_alias: "claude" im Namen → opus, sonst llm (Python AI_MODEL_*).
             let model_alias = if row.model.contains("claude") {
                 "opus"
             } else {
-                "minimax"
+                "llm"
             };
             let snap: Value = serde_json::from_str(&row.data_snapshot).unwrap_or(Value::Null);
             let points: Value = serde_json::from_str(&row.points).unwrap_or(Value::Null);
@@ -213,15 +213,15 @@ mod tests {
         create_ai_analyses_fixture(&pool).await;
         sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES \
             ('nani', 30, 'claude-opus', NOW()-INTERVAL '1 hour', '{\"x\":1}'::jsonb, '[{\"priority\":\"kritisch\"},{\"priority\":\"hoch\"},{\"priority\":\"kritisch\"}]'::jsonb), \
-            ('nani', 7, 'minimax-m3', NOW(), '{}'::jsonb, '[{\"priority\":\"mittel\"}]'::jsonb), \
+            ('nani', 7, 'llm-m3', NOW(), '{}'::jsonb, '[{\"priority\":\"mittel\"}]'::jsonb), \
             ('other', 30, 'claude', NOW(), '{}'::jsonb, '[]'::jsonb)")
             .execute(&pool).await.unwrap();
 
         let v = load_ai_history(&pool, "nani", 20).await.unwrap();
         let arr = v.as_array().unwrap();
         assert_eq!(arr.len(), 2); // nur nani
-                                  // neueste zuerst: minimax-Eintrag (NOW) vor claude (NOW-1h).
-        assert_eq!(arr[0]["model"], "minimax");
+                                  // neueste zuerst: llm-Eintrag (NOW) vor claude (NOW-1h).
+        assert_eq!(arr[0]["model"], "llm");
         assert_eq!(arr[0]["mittelCount"], 1);
         assert_eq!(arr[1]["model"], "opus"); // claude → opus
         assert_eq!(arr[1]["kritischCount"], 2);
@@ -280,7 +280,7 @@ mod tests {
         };
         create_ai_analyses_fixture(&pool).await;
         for i in 0..5 {
-            sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES ('nani',30,'minimax', NOW()-($1 || ' minutes')::interval, '{}'::jsonb, '[]'::jsonb)")
+            sqlx::query("INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) VALUES ('nani',30,'llm', NOW()-($1 || ' minutes')::interval, '{}'::jsonb, '[]'::jsonb)")
                 .bind(i.to_string()).execute(&pool).await.unwrap();
         }
         let v = load_ai_history(&pool, "nani", 3).await.unwrap();

@@ -1,9 +1,9 @@
-//! Datenschicht + reine Helfer für `/twitch/api/v2/chat-deep-minimax`.
+//! Datenschicht + reine Helfer für `/twitch/api/v2/chat-deep-llm`.
 //!
-//! Port von `bot/analytics/api_chat_deep.py:_api_v2_chat_minimax_deep`.
+//! Port von `bot/analytics/api_chat_deep.py:_api_v2_chat_deep`.
 //! Holt die Chat-Nachrichten einer Session (Bot-gefiltert, max. 1000), baut den
-//! deutschen Analyse-Prompt und extrahiert das JSON-Objekt aus der MiniMax-
-//! Antwort. Der eigentliche MiniMax-Call lebt im Dashboard-Handler.
+//! deutschen Analyse-Prompt und extrahiert das JSON-Objekt aus der KI-
+//! Antwort. Der eigentliche KI-Call lebt im Dashboard-Handler.
 
 use sqlx::PgPool;
 
