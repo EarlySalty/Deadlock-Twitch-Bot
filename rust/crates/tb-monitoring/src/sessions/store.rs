@@ -428,8 +428,8 @@ impl SessionStore {
         game_name: Option<&str>,
         had_deadlock: bool,
         stream_title: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
             r#"
             UPDATE twitch_stream_sessions
                SET start_viewers = CASE
@@ -445,6 +445,9 @@ impl SessionStore {
                    game_name = COALESCE(NULLIF(game_name, ''), $3),
                    stream_title = COALESCE(NULLIF(stream_title, ''), $4)
              WHERE id = $5 AND ended_at IS NULL
+               AND (stream_title IS NULL OR stream_title = ''
+                    OR game_name IS NULL OR game_name = ''
+                    OR (samples = 0 AND start_viewers = 0))
             "#,
         )
         .bind(viewer_count)
@@ -454,7 +457,7 @@ impl SessionStore {
         .bind(session_id)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     /// Speichert den gesendeten Announcement-Text an der Session

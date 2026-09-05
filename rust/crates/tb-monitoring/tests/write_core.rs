@@ -288,6 +288,53 @@ async fn start_session_leerer_titel_wird_null_und_adopt_fuellt_ihn() {
 }
 
 #[tokio::test]
+async fn adopt_incomplete_trifft_vollstaendige_session_nicht() {
+    let pool = pool_or_skip!("t4b_adopt_vollstaendig");
+    let store = SessionStore::new(pool.clone());
+
+    let new = NewSession {
+        streamer_login: "voll".to_string(),
+        twitch_user_id: None,
+        stream_id: Some("s-voll".to_string()),
+        started_at: Utc::now(),
+        viewer_count: 20,
+        followers_start: None,
+        title: "Bereits gesetzter Titel".to_string(),
+        language: "de".to_string(),
+        is_mature: false,
+        tags: String::new(),
+        game_name: Some("Deadlock".to_string()),
+        had_deadlock: true,
+    };
+    let session_id = store
+        .start_session(&new)
+        .await
+        .expect("start_session")
+        .session_id();
+
+    let sampled = store
+        .record_sample(session_id, 20, Utc::now())
+        .await
+        .expect("record_sample");
+    assert!(sampled, "record_sample muss die Session finden");
+
+    let rows = store
+        .adopt_incomplete(
+            session_id,
+            99,
+            Some("Anderes Spiel"),
+            false,
+            Some("Anderer Titel"),
+        )
+        .await
+        .expect("adopt_incomplete");
+    assert_eq!(
+        rows, 0,
+        "vollstaendige Session darf pro Poll nicht neu geschrieben werden"
+    );
+}
+
+#[tokio::test]
 async fn session_lifecycle_start_sample_finalize() {
     let pool = pool_or_skip!("t4b_lifecycle");
     let followers = Arc::new(SeqFollowers {
