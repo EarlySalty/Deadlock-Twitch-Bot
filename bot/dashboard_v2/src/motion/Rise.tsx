@@ -9,7 +9,7 @@ type RiseProps = {
   as?: ElementType;
 } & Record<string, unknown>;
 
-export function Rise({ children, step = 0, className, style, as, ...rest }: RiseProps) {
+export function Rise({ children, step = 0, className, style, as, onAnimationEnd, ...rest }: RiseProps) {
   const Tag = (as ?? 'div') as ElementType;
   const [risen, setRisen] = useState(false);
   const delayStyle = riseStyle(step);
@@ -19,7 +19,12 @@ export function Rise({ children, step = 0, className, style, as, ...rest }: Rise
   const base = risen ? '' : 'rise-in';
   const classes = className ? (base ? `${base} ${className}` : className) : base || undefined;
 
+  const externerHandler = onAnimationEnd as
+    | ((event: AnimationEvent<HTMLElement>) => void)
+    | undefined;
+
   const handleAnimationEnd = (event: AnimationEvent<HTMLElement>) => {
+    externerHandler?.(event);
     if (event.target === event.currentTarget && event.animationName === 'ddc-rise-in') {
       setRisen(true);
     }

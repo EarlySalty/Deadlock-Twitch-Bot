@@ -30,6 +30,12 @@ import {
   Cell,
 } from 'recharts';
 import { useViewerDirectory, useViewerDetail, useViewerSegments } from '@/hooks/useAnalytics';
+import {
+  CHAT_LUECKE_TITEL,
+  CHAT_LUECKE_TEXT,
+  CHAT_KEINE_TITEL,
+  CHAT_KEINE_TEXT,
+} from '@/pages/chatAnalyticsShared';
 import type {
   RawChatStatus,
   TimeRange,
@@ -47,10 +53,10 @@ interface ViewersProps {
 // eslint-disable-next-line react-refresh/only-export-components
 export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
   dedicated: { label: 'Dedicated', color: 'var(--color-primary)', bgClass: 'bg-primary/10 text-primary border-primary/20' },
-  regular: { label: 'Regular', color: 'var(--color-accent)', bgClass: 'bg-accent/10 text-accent border-accent/20' },
+  regular: { label: 'Regular', color: 'var(--color-success)', bgClass: 'bg-success/10 text-success border-success/20' },
   casual: { label: 'Casual', color: 'var(--color-warning)', bgClass: 'bg-warning/10 text-warning border-warning/20' },
-  lurker: { label: 'Lurker', color: 'var(--color-success)', bgClass: 'bg-success/10 text-success border-success/20' },
-  new: { label: 'Neu', color: 'var(--color-secondary)', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  lurker: { label: 'Lurker', color: 'var(--color-secondary)', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  new: { label: 'Neu', color: 'var(--color-accent)', bgClass: 'bg-accent/10 text-accent border-accent/20' },
 };
 
 const FILTER_OPTIONS: { value: ViewerFilterType; label: string }[] = [
@@ -102,18 +108,19 @@ function CategoryBadge({ category }: { category: string }) {
   );
 }
 
+function chatLueckeSichtbar(status?: RawChatStatus): boolean {
+  return Boolean(status?.suspectedIngestionIssue) || status?.available === false;
+}
+
 function RawChatGapNotice({
   status,
-  note,
   compact = false,
 }: {
   status?: RawChatStatus;
-  note?: string | null;
   compact?: boolean;
 }) {
   const warnung = Boolean(status?.suspectedIngestionIssue);
-  const hatLuecke = warnung || Boolean(note) || status?.available === false;
-  if (!hatLuecke) {
+  if (!chatLueckeSichtbar(status)) {
     return null;
   }
 
@@ -129,12 +136,10 @@ function RawChatGapNotice({
         <AlertTriangle className={`${compact ? 'mt-0.5 h-3.5 w-3.5' : 'mt-0.5 h-4 w-4'} shrink-0`} />
         <div>
           <p className="font-medium text-white">
-            {warnung ? 'Chat-Nachrichten fehlen teilweise' : 'Keine Chat-Nachrichten im Zeitraum'}
+            {warnung ? CHAT_LUECKE_TITEL : CHAT_KEINE_TITEL}
           </p>
           <p className="mt-1 leading-5">
-            {warnung
-              ? 'Für einige Streams in diesem Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat können deshalb zu niedrig ausfallen.'
-              : 'Viewer-Daten bleiben sichtbar, Kennzahlen aus dem Chat sind für diesen Zeitraum eingeschränkt.'}
+            {warnung ? CHAT_LUECKE_TEXT : CHAT_KEINE_TEXT}
           </p>
         </div>
       </div>
@@ -290,13 +295,9 @@ function ViewerExpandedRow({
       exit={{ opacity: 0, height: 0 }}
       className="bg-background/30 border-t border-border/30 px-6 py-4"
     >
-      {(data.overview.presenceOnlyInWindow || data.overview.messageGapNote) && (
+      {chatLueckeSichtbar(data.rawChatStatus) && (
         <div className="mb-4">
-          <RawChatGapNotice
-            status={data.rawChatStatus}
-            note={data.overview.messageGapNote}
-            compact
-          />
+          <RawChatGapNotice status={data.rawChatStatus} compact />
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

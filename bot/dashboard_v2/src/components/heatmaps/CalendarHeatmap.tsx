@@ -160,7 +160,7 @@ export function CalendarHeatmap({
         <div>
           {data.length > 0 && (
             <span>
-              {data.reduce((sum, d) => sum + d.streamCount, 0)} Streams in {days} Tagen
+              {data.reduce((sum, d) => sum + d.streamCount, 0)} Streams in den letzten {days} Tagen
             </span>
           )}
         </div>

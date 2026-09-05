@@ -50,10 +50,10 @@ interface AudienceDemographicsProps {
 
 const VIEWER_COLORS = [
   'var(--color-primary)',
-  'var(--color-accent)',
-  'var(--color-warning)',
   'var(--color-success)',
+  'var(--color-warning)',
   'var(--color-secondary)',
+  'var(--color-accent)',
 ];
 
 export function AudienceDemographics({ data }: AudienceDemographicsProps) {

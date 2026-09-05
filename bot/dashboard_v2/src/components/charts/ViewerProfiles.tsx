@@ -9,10 +9,10 @@ interface ViewerProfilesProps {
 
 const PROFILE_COLORS = [
   'var(--color-primary)',
-  'var(--color-accent)',
-  'var(--color-warning)',
   'var(--color-success)',
+  'var(--color-warning)',
   'var(--color-secondary)',
+  'var(--color-accent)',
 ];
 const PROFILE_LABELS: Record<string, string> = {
   exclusive: 'Exklusiv',

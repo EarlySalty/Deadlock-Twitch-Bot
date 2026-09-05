@@ -3,6 +3,12 @@ import { AlertCircle, Info } from 'lucide-react';
 import type { RawChatStatus } from '@/types/analytics';
 import { formatDateFull } from '@/utils/formatters';
 
+export const CHAT_LUECKE_TITEL = 'Chat-Nachrichten fehlen teilweise';
+export const CHAT_LUECKE_TEXT =
+  'Für einige Streams in diesem Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat können deshalb zu niedrig ausfallen.';
+export const CHAT_KEINE_TITEL = 'Keine Chat-Nachrichten im Zeitraum';
+export const CHAT_KEINE_TEXT = 'Für diesen Zeitraum liegen keine Chat-Nachrichten vor.';
+
 export function RawChatStatusBanner({
   status,
   compact = false,
@@ -22,7 +28,7 @@ export function RawChatStatusBanner({
     !Number.isNaN(coverageStart.getTime()) &&
     windowStart !== undefined &&
     coverageStart > windowStart;
-  if (!partialCoverage && !status.suspectedIngestionIssue && status.available !== false && !status.note) {
+  if (!partialCoverage && !status.suspectedIngestionIssue && status.available !== false) {
     return null;
   }
   const date = partialCoverage ? formatDateFull(status.coverageStart as string) : null;
@@ -41,17 +47,17 @@ export function RawChatStatusBanner({
         <div>
           <p className="font-medium text-white">
             {status.suspectedIngestionIssue
-              ? 'Chat-Lücke erkannt'
+              ? CHAT_LUECKE_TITEL
               : partialCoverage
                 ? `Chat-Daten ab ${date}`
-                : 'Keine Chat-Nachrichten im Zeitraum'}
+                : CHAT_KEINE_TITEL}
           </p>
           <p className="mt-1 leading-5">
             {partialCoverage
               ? `Chat-Nachrichten werden erst seit ${date} erfasst. Kennzahlen aus dem Chat beziehen sich auf den Zeitraum ab diesem Datum.`
               : status.suspectedIngestionIssue
-                ? 'Für einige Streams in diesem Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat können deshalb zu niedrig ausfallen.'
-                : 'Für diesen Zeitraum liegen keine Chat-Nachrichten vor. Kennzahlen aus dem Chat sind eingeschränkt.'}
+                ? CHAT_LUECKE_TEXT
+                : CHAT_KEINE_TEXT}
           </p>
         </div>
       </div>

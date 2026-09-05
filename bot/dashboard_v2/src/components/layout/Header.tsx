@@ -75,7 +75,9 @@ export function Header({
       return;
     }
     const naechster = clampDays(parsed);
-    onDaysChange(naechster);
+    if (naechster !== days) {
+      onDaysChange(naechster);
+    }
     setTageInput(String(naechster));
   };
 
