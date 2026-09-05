@@ -1,6 +1,6 @@
 # Plan: Analyse-Dashboard Optik und Zeitraum
 
-status: überholt
+status: aktiv
 datum: 2026-09-05
 klasse: mittel
 research: EVIDENCE.md

@@ -1,9 +1,11 @@
 # Contract: Analyse-Dashboard Optik und Zeitraum
 
-status: überholt
+status: aktiv
 datum: 2026-09-05
 klasse: mittel
 repo: Deadlock-Twitch-Bot
+
+Ersetzt `.tasks/2026-09-05-analyse-optik-zeitraum/` (überholt: Scope ohne `chatAnalyticsContent.tsx`).
 
 Dieser Contract ist der Maßstab für Implementierung und Merge-Kritiker. Nach dem
 Anlegen ist er unveränderlich: der Hook lässt nur noch die `status:`-Zeile und
@@ -25,7 +27,7 @@ Auf `/analyse` wählt der Streamer den Zeitraum als Tageszahl oder ganzes Jahr; 
 - REQ-08: Donuts in "Zuschauer-Segmente" (`ViewerProfiles.tsx`) und "Viewer-Typen" (`AudienceDemographics.tsx`) sind scharf (kein Rasterisieren durch verbleibende CSS-Transformationen oder Filter am Chart-Container; Ursache im Code belegen), füllen ihre Spalte (Durchmesser mindestens 160px, höchstens 220px, Ring proportional), haben keine hellen Sektor-Ränder und nutzen die Markenfarben (primary, accent, warning, success, secondary) statt Cyan, Rot und Neongrün.
 - REQ-09: In "Audience Demographics" verschwindet die Zeile "Methode: weighted_chat_activity_…"; kein Methoden- oder Algorithmus-Name erscheint in der Oberfläche.
 - REQ-10: Der Reiter "Chat-Aktivitaet" heißt "Chat-Aktivität" (Publikum-Tabs und interne Startseite).
-- REQ-11: Der Hinweis "Roh-Chat-Lücke im Zeitraum" wird in Nutzersprache umformuliert: Überschrift "Chat-Nachrichten fehlen teilweise", Text ohne die Wörter Roh-Chat, KPI, message-basiert, Presence, Rollup, Ingestion; der Hinweis erscheint weiterhin nur, wenn das Backend `suspectedIngestionIssue` meldet, und die Backend-Notiz wird nicht mehr ungefiltert angezeigt, sondern durch den Frontend-Text ersetzt.
+- REQ-11: Der Hinweis "Roh-Chat-Lücke im Zeitraum" wird in Nutzersprache umformuliert: Überschrift "Chat-Nachrichten fehlen teilweise", Text ohne die Wörter Roh-Chat, KPI, message-basiert, Presence, Rollup, Ingestion; der Hinweis erscheint weiterhin nur, wenn das Backend `suspectedIngestionIssue` meldet, und die Backend-Notiz wird nicht mehr ungefiltert angezeigt, sondern durch den Frontend-Text ersetzt. Das Wort "Roh-Chat" verschwindet aus allen nutzersichtbaren Texten des Dashboards (auch `chatAnalyticsShared.tsx` und `chatAnalyticsContent.tsx`: "Chat-Nachrichten" statt "Roh-Chat-Nachrichten").
 - REQ-12: `npm run build`, `npm run lint` und `npm test` in `bot/dashboard_v2` sind grün; `tests/brandPalette.test.ts` und `tests/scoreColors.test.ts` bleiben unverändert grün.
 
 ## Invarianten (darf sich nicht ändern)
@@ -42,7 +44,7 @@ Auf `/analyse` wählt der Streamer den Zeitraum als Tageszahl oder ganzes Jahr; 
 - Kalender-Datumsauswahl oder Von-Bis-Bereiche.
 - Kategorie-Vergleichsserie im Radar.
 - Änderungen an KPI-Karten, Insights, Score-Gauges, Raid-Aktivität, Session-Tabelle.
-- Backend-Themen (Bot-Ausschluss, Sprachermittlung, Auslöser der Chat-Lücken-Warnung): eigener Contract `.tasks/2026-09-05-analyse-bots-sprache-chatluecke/`.
+- Backend-Themen (Bot-Ausschluss, Sprachermittlung, Auslöser der Chat-Lücken-Warnung): eigener Contract `.tasks/2026-09-05-analyse-backend-bots/`.
 
 ## Erlaubter Änderungsbereich
 
@@ -54,6 +56,7 @@ Auf `/analyse` wählt der Streamer den Zeitraum als Tageszahl oder ganzes Jahr; 
 - bot/dashboard_v2/src/pages/InternalHomeLanding.tsx
 - bot/dashboard_v2/src/pages/Viewers.tsx
 - bot/dashboard_v2/src/pages/chatAnalyticsShared.tsx
+- bot/dashboard_v2/src/pages/chatAnalyticsContent.tsx
 - bot/dashboard_v2/src/components/charts/RetentionRadar.tsx
 - bot/dashboard_v2/src/components/charts/ViewerProfiles.tsx
 - bot/dashboard_v2/src/components/charts/AudienceDemographics.tsx
@@ -67,7 +70,7 @@ Auf `/analyse` wählt der Streamer den Zeitraum als Tageszahl oder ganzes Jahr; 
 - bot/dashboard_v2/tests/zeitraum.test.ts
 - bot/dashboard_v2/tests/kalenderFenster.test.ts
 - bot/dashboard_v2/package.json
-- .tasks/2026-09-05-analyse-optik-zeitraum/
+- .tasks/2026-09-05-analyse-frontend-optik/
 
 ## Verbotene Änderungen
 

@@ -1,6 +1,6 @@
 # Plan: Analyse-Backend Bot-Ausschluss, Sessionsprache, Chat-Lücken-Warnung
 
-status: überholt
+status: aktiv
 datum: 2026-09-05
 klasse: mittel
 research: EVIDENCE.md
@@ -12,7 +12,7 @@ Siehe CONTRACT.md.
 ## Milestones
 
 ### M0: Baseline
-Validierung: `cargo test -p tb-dashboard-api -p tb-analytics -p tb-chat -p tb-monitoring` mit Toolchain 1.97 (`~/.rustup/toolchains`, siehe Memory tb-bot-build-toolchain), Ausgabe in Datei umleiten; rote Tests vor dem ersten Edit hier notieren.
+Validierung: `cargo test -p tb-dashboard-api -p tb-analytics -p tb-chat -p tb-monitoring -p tb-engagement` mit Toolchain 1.97 (`~/.rustup/toolchains`, siehe Memory tb-bot-build-toolchain), Ausgabe in Datei umleiten; rote Tests vor dem ersten Edit hier notieren.
 
 ### M1: Regressionstest Chat-Lücke (rot)
 Änderungen: Test in `rust/crates/tb-analytics` gegen `build_raw_chat_status` mit Fixture: zwei Sessions unter 10 Minuten ohne Chatter, eine echte Session mit Chat.
