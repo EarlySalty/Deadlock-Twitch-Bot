@@ -475,3 +475,62 @@ async fn raid_retention_ueberspringt_session_mit_fremder_id() {
         "der Raid muss als SkippedNoSession gezählt werden"
     );
 }
+
+#[tokio::test]
+async fn backfill_traegt_fehlende_sprache_nach_ohne_gesetzte_zu_ueberschreiben() {
+    let pool = pool_or_skip!("t_sess_lang_backfill");
+    let leer = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, language)
+         VALUES ('nani', '2026-08-01T10:00:00Z', '') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("leere Session anlegen");
+    let gesetzt = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at, language)
+         VALUES ('nani', '2026-08-01T12:00:00Z', 'en') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Session mit Sprache anlegen");
+
+    let store = SessionStore::new(pool.clone());
+    store
+        .adopt_incomplete(leer, 0, Some("Deadlock"), false, Some("Titel"), Some("de"))
+        .await
+        .expect("adopt leer");
+    store
+        .adopt_incomplete(
+            gesetzt,
+            0,
+            Some("Deadlock"),
+            false,
+            Some("Titel"),
+            Some("de"),
+        )
+        .await
+        .expect("adopt gesetzt");
+
+    let lang_leer: Option<String> =
+        sqlx::query_scalar("SELECT language FROM twitch_stream_sessions WHERE id = $1")
+            .bind(leer)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let lang_gesetzt: Option<String> =
+        sqlx::query_scalar("SELECT language FROM twitch_stream_sessions WHERE id = $1")
+            .bind(gesetzt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        lang_leer.as_deref(),
+        Some("de"),
+        "leere Sprache muss aus den Helix-Daten nachgetragen werden"
+    );
+    assert_eq!(
+        lang_gesetzt.as_deref(),
+        Some("en"),
+        "eine gesetzte Sprache darf der Backfill nicht überschreiben"
+    );
+}

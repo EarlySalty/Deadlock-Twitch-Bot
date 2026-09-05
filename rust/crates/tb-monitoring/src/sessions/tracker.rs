@@ -220,6 +220,7 @@ impl SessionTracker {
                     stream.game_name_opt().as_deref(),
                     stream.is_in_target_category(&self.target_game_lower),
                     stream.title_opt().as_deref(),
+                    Some(stream.language.trim()).filter(|l| !l.is_empty()),
                 )
                 .await
             {

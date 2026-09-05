@@ -428,6 +428,7 @@ impl SessionStore {
         game_name: Option<&str>,
         had_deadlock: bool,
         stream_title: Option<&str>,
+        language: Option<&str>,
     ) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
             r#"
@@ -443,10 +444,12 @@ impl SessionStore {
                        THEN COALESCE(had_deadlock_in_session, false) OR $2
                        ELSE had_deadlock_in_session END,
                    game_name = COALESCE(NULLIF(game_name, ''), $3),
-                   stream_title = COALESCE(NULLIF(stream_title, ''), $4)
+                   stream_title = COALESCE(NULLIF(stream_title, ''), $4),
+                   language = COALESCE(NULLIF(language, ''), $6)
              WHERE id = $5 AND ended_at IS NULL
                AND (stream_title IS NULL OR stream_title = ''
                     OR game_name IS NULL OR game_name = ''
+                    OR language IS NULL OR language = ''
                     OR (samples = 0 AND start_viewers = 0))
             "#,
         )
@@ -455,6 +458,7 @@ impl SessionStore {
         .bind(game_name)
         .bind(stream_title)
         .bind(session_id)
+        .bind(language)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
