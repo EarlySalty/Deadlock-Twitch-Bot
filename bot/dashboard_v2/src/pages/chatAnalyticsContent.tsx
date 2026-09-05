@@ -92,7 +92,8 @@ export function ChatTreueContent({
 
       {dataMethod !== 'real_samples' && (
         <div className="panel-card rounded-2xl p-4 text-sm text-text-secondary">
-          Datenqualität eingeschränkt: mindestens eine KPI basiert auf Low-Coverage/Fallback-Samples.
+          <p className="font-medium text-white">Zahlen nur eingeschränkt belastbar</p>
+          <p className="mt-1 leading-5">Für einige Werte liegen zu wenige Chat-Daten vor, sie können ungenau sein.</p>
         </div>
       )}
 

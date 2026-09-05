@@ -46,11 +46,11 @@ interface ViewersProps {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
-  dedicated: { label: 'Dedicated', color: '#C5A059', bgClass: 'bg-primary/10 text-primary border-primary/20' },
-  regular: { label: 'Regular', color: '#00D9FF', bgClass: 'bg-accent/10 text-accent border-accent/20' },
-  casual: { label: 'Casual', color: '#FF5A3C', bgClass: 'bg-danger/10 text-danger border-danger/20' },
-  lurker: { label: 'Lurker', color: '#00C46A', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
-  new: { label: 'Neu', color: '#B5A488', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
+  dedicated: { label: 'Dedicated', color: 'var(--color-primary)', bgClass: 'bg-primary/10 text-primary border-primary/20' },
+  regular: { label: 'Regular', color: 'var(--color-accent)', bgClass: 'bg-accent/10 text-accent border-accent/20' },
+  casual: { label: 'Casual', color: 'var(--color-warning)', bgClass: 'bg-warning/10 text-warning border-warning/20' },
+  lurker: { label: 'Lurker', color: 'var(--color-success)', bgClass: 'bg-success/10 text-success border-success/20' },
+  new: { label: 'Neu', color: 'var(--color-secondary)', bgClass: 'bg-secondary/10 text-secondary border-secondary/20' },
 };
 
 const FILTER_OPTIONS: { value: ViewerFilterType; label: string }[] = [

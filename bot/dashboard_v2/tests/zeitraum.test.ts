@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clampDays, parseDaysParam } from '../src/utils/zeitraum';
+import { clampDays, parseDaysParam, streamerAusUrlErlaubt } from '../src/utils/zeitraum';
 
 test('clampDays deckelt auf 7 bis 365', () => {
   assert.equal(clampDays(7), 7);
@@ -45,4 +45,18 @@ test('parseDaysParam faellt bei Unsinn auf 30', () => {
 
 test('parseDaysParam ignoriert umgebende Leerzeichen', () => {
   assert.equal(parseDaysParam('  45  '), 45);
+});
+
+test('streamerAusUrlErlaubt lässt ausserhalb der Demo-Shell jeden Streamer zu', () => {
+  assert.equal(streamerAusUrlErlaubt('foo', false, []), true);
+  assert.equal(streamerAusUrlErlaubt('foo', false, ['bar']), true);
+});
+
+test('streamerAusUrlErlaubt lässt in der Demo-Shell ohne Whitelist jeden zu', () => {
+  assert.equal(streamerAusUrlErlaubt('foo', true, []), true);
+});
+
+test('streamerAusUrlErlaubt prüft in der Demo-Shell gegen die Whitelist', () => {
+  assert.equal(streamerAusUrlErlaubt('foo', true, ['foo', 'bar']), true);
+  assert.equal(streamerAusUrlErlaubt('baz', true, ['foo', 'bar']), false);
 });

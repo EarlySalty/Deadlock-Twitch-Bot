@@ -52,8 +52,8 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  innerRadius="52%"
-                  outerRadius="80%"
+                  innerRadius="58%"
+                  outerRadius="90%"
                   paddingAngle={2}
                 >
                   {pieData.map((_, index) => (

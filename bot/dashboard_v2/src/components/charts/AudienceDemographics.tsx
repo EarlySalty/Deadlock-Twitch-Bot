@@ -83,10 +83,10 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
   );
   const methodLabel =
     chatMethod === 'no_data'
-      ? 'Keine Chat-Samples'
+      ? 'keine Daten'
       : chatMethod === 'low_coverage'
-        ? 'Low Coverage'
-        : 'Echt-Samples';
+        ? 'wenige Daten'
+        : 'echte Chat-Daten';
   const normalizedPeakHours = Array.from(
     new Set(
       (data.peakActivityHours ?? [])
@@ -121,7 +121,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
         </div>
         {data.dataQuality && confidenceLabel && (
           <span className="text-xs px-3 py-1 rounded-full border border-border text-text-secondary">
-            Chat-KPI: {methodLabel} · Vertrauen: {confidenceLabel}
+            Datenbasis: {methodLabel} · Verlässlichkeit: {confidenceLabel}
           </span>
         )}
       </div>
@@ -136,7 +136,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
               Viewer-Typen
             </h4>
             <div className="flex items-center gap-4">
-              <div className="w-44 h-44">
+              <div className="w-48 h-48">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -145,8 +145,8 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                       nameKey="label"
                       cx="50%"
                       cy="50%"
-                      innerRadius="52%"
-                      outerRadius="80%"
+                      innerRadius="58%"
+                      outerRadius="90%"
                       paddingAngle={2}
                     >
                       {data.viewerTypes.map((_, index) => (

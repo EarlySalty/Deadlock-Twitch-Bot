@@ -18,3 +18,13 @@ export function parseDaysParam(raw: string | null): number {
 export function kalenderFenster(days: number): number {
   return Math.max(days, 30);
 }
+
+export function streamerAusUrlErlaubt(
+  streamer: string,
+  isDemoShell: boolean,
+  allowedDemoProfiles: string[],
+): boolean {
+  if (!isDemoShell) return true;
+  if (allowedDemoProfiles.length === 0) return true;
+  return allowedDemoProfiles.includes(streamer);
+}

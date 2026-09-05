@@ -28,7 +28,7 @@ import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import { usePlan } from '@/context/PlanContext';
 import type { TimeRange } from '@/types/analytics';
-import { parseDaysParam } from '@/utils/zeitraum';
+import { parseDaysParam, streamerAusUrlErlaubt } from '@/utils/zeitraum';
 import {
   PREVIEW_ANALYTICS_ROUTE,
   PREVIEW_HOME_ROUTE,
@@ -203,15 +203,11 @@ function AnalyticsDashboard() {
     if (!wunschStreamer || hasAutoSetStreamer.current) {
       return;
     }
-    if (
-      !isDemoShell ||
-      dashboardRuntimeConfig.allowedDemoProfiles.length === 0 ||
-      dashboardRuntimeConfig.allowedDemoProfiles.includes(wunschStreamer)
-    ) {
+    if (streamerAusUrlErlaubt(wunschStreamer, isDemoShell, dashboardRuntimeConfig.allowedDemoProfiles)) {
       setStreamer(wunschStreamer);
       hasAutoSetStreamer.current = true;
-      pendingUrlStreamer.current = null;
     }
+    pendingUrlStreamer.current = null;
   }, [isDemoShell]);
 
   useEffect(() => {
