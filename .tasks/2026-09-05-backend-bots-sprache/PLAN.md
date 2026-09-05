@@ -53,3 +53,7 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 465 filtered out
 ```
 `suspectedIngestionIssue` steht vor dem Fix auf true, weil `gap_sessions` die beiden Geister-Sessions ohne Mindestdauer zählt.
 
+
+### M2 Fix + Notiztexte (2026-09-05)
+Gap-Query zaehlt Sessions nur mit `COALESCE(duration_seconds, EXTRACT(EPOCH FROM (ended_at - started_at))) >= 600`. Notiztexte in Nutzersprache ohne Roh-Chat/KPI/Presence/Rollup/Ingestion/Insert; Fehlerdetail nur ins Log (tracing::warn). Bestandstest `mehrere_luecken...` an die Regel angepasst (Gap-Sessions bekommen echte Dauer).
+Ergebnis: `cargo test -p tb-analytics --lib raw_chat_status::` = 6 passed, 0 failed. Rot-Gegenprobe: der M1-Lauf lieferte ohne den Fix true statt false.
