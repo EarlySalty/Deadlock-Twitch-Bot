@@ -706,6 +706,18 @@ impl TargetedState {
 // PromoEngine
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
+pub struct PitchLogEntry {
+    pub channel_login: String,
+    pub target_user_id: Option<String>,
+    pub pfad: &'static str,
+    pub occasion: Option<String>,
+    pub trigger_text: Option<String>,
+    pub generated_text: Option<String>,
+    pub reject_reason: Option<String>,
+    pub sent_at: Option<DateTime<Utc>>,
+}
+
 /// Die zentrale Promo-Engine.
 ///
 /// # Erzeugung
@@ -2446,6 +2458,47 @@ impl PromoEngine {
         }
     }
 
+    async fn record_pitch_log(&self, entry: PitchLogEntry) {
+        if let Err(e) = sqlx::query!(
+            "INSERT INTO twitch_promo_pitch_log
+                (channel_login, target_user_id, pfad, occasion, trigger_text,
+                 generated_text, reject_reason, sent_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            entry.channel_login,
+            entry.target_user_id,
+            entry.pfad,
+            entry.occasion,
+            entry.trigger_text,
+            entry.generated_text,
+            entry.reject_reason,
+            entry.sent_at,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            warn!(
+                login = %entry.channel_login,
+                pfad = entry.pfad,
+                "record_pitch_log fehlgeschlagen: {e}"
+            );
+        }
+    }
+
+    async fn load_recent_channel_messages(&self, login: &str, n: i64) -> Vec<String> {
+        let rows = sqlx::query_scalar!(
+            "SELECT content AS \"content?\" FROM twitch_chat_messages
+              WHERE LOWER(streamer_login) = LOWER($1)
+              ORDER BY message_ts DESC
+              LIMIT $2",
+            login,
+            n,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+        rows.into_iter().flatten().collect()
+    }
+
     /// Alte Cooldown-Einträge bereinigen (promos.py: `cleanup_stale_promo_cooldowns(24)`).
     pub async fn cleanup_stale_promo_cooldowns(&self) {
         let cutoff = (Utc::now().timestamp() as f64) - 86400.0;
@@ -3400,6 +3453,29 @@ mod db_tests {
             r#"CREATE TABLE twitch_raid_auth (
                 twitch_login TEXT PRIMARY KEY,
                 scopes TEXT
+            )"#,
+            r#"CREATE TABLE twitch_promo_pitch_log (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                target_user_id TEXT,
+                pfad TEXT NOT NULL,
+                occasion TEXT,
+                trigger_text TEXT,
+                generated_text TEXT,
+                reject_reason TEXT,
+                sent_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
+            r#"CREATE TABLE twitch_chat_messages (
+                id INTEGER,
+                session_id INTEGER,
+                streamer_login TEXT NOT NULL,
+                chatter_login TEXT,
+                chatter_id TEXT,
+                message_id TEXT,
+                message_ts TEXT NOT NULL,
+                is_command BOOLEAN DEFAULT FALSE,
+                content TEXT
             )"#,
         ] {
             sqlx::query(ddl).execute(pool).await.unwrap();

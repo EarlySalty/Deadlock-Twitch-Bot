@@ -97,6 +97,8 @@ Validierung (nach M5-Prepare): `/home/nathanael/.cargo/bin/cargo build -p tb-cha
 
 Stop-Regel: Kein GRANT ins Migrations-File. Kein `alter` an bestehenden Migrationen. Zeitstempel muss echt größer sein als `20260903090000`.
 
+STATUS M3 erledigt 2026-09-05: Migration `20260905090000_twitch_promo_pitch_log.sql` (additiv, ohne GRANT), `PitchLogEntry`-Struct, `record_pitch_log` und `load_recent_channel_messages` in promos.rs, DB-Test-DDL für `twitch_promo_pitch_log` und `twitch_chat_messages` in `apply_ddl`. Migration ist bereits im Testcontainer eingespielt (Port 33097). `cargo build -p tb-chat` (SQLX_OFFLINE=false gegen die migrierte Test-DB) EXIT=0, nur erwartete dead_code-Warnung für die noch ungenutzten Helfer (verschwindet in M4/M5). Der sqlx-Offline-Cache `.sqlx` folgt am Ende von M5, wenn alle `query!` stehen.
+
 ---
 
 ## M4 - Presets löschen, beide Timer-Pfade auf LLM-Text umstellen
