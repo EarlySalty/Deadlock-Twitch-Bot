@@ -101,5 +101,14 @@ Codepfad-Analyse:
 
 ## Migrationen (REQ-1)
 
-- `20260905130000_llm_usage_rename.sql` (jüngste Bestandsdatei: 20260905120000)
-- `20260905130001_llm_usage_drop_compat_view.sql`
+- `20260905130000_llm_usage_rename.sql` (jüngste Bestandsdatei: 20260905120000):
+  benennt Tabelle, Indizes und Sequenz auf `llm_usage` um und legt den
+  Kompat-View `public.minimax_usage` (SELECT * auf llm_usage, auto-updatable) an,
+  damit das noch laufende alte Binary bis zum Restart weiterschreibt. Grants an
+  twitchbot/twitchdash/twitchlegacy laufen rollen-gesichert (pg_roles-Check),
+  damit frische Test-DBs ohne diese Rollen nicht scheitern.
+- `20260905130001_llm_usage_drop_compat_view.sql`: droppt den Kompat-View, von
+  Hand als postgres NACH dem Restart anzuwenden.
+- Beide Dateien bewusst ohne SQL-Kommentare (Repo-Regel); Erklärung steht hier.
+  Reihenfolge: erste Migration vor dem Restart, zweite danach; der Bot migriert
+  nicht selbst.

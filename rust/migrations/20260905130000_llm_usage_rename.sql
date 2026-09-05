@@ -1,6 +1,3 @@
--- Ledger minimax_usage in llm_usage umbenennen. Der Kompat-View minimax_usage
--- laesst das noch laufende alte Binary bis zum Restart weiterschreiben; die
--- Folgemigration 20260905130001 entfernt ihn wieder.
 ALTER TABLE public.minimax_usage RENAME TO llm_usage;
 ALTER INDEX public.idx_mmu_ts RENAME TO idx_llm_usage_ts;
 ALTER INDEX public.idx_mmu_source RENAME TO idx_llm_usage_source;
