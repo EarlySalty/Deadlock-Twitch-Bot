@@ -245,10 +245,10 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
             <button
               key={tabId}
               onClick={() => setActiveTab(tabId as 'overview' | 'events' | 'viewer-timeline')}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+              className={`rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors ${
                 isActive
-                  ? 'bg-primary text-[#0D0806] shadow-lg shadow-primary/20'
-                  : 'border border-white/10 bg-card text-text-secondary hover:text-white'
+                  ? 'bg-primary/85 text-bg'
+                  : 'text-text-secondary hover:text-white'
               }`}
             >
               {label}
