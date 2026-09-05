@@ -44,6 +44,9 @@ use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
+use crate::promo_pitch::{
+    ChannelPromoContext, PitchJudge, PitchTextGen, TargetedPitchContext,
+};
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
 
@@ -290,89 +293,8 @@ const LURKER_TAX_MAX_MENTIONS: usize = 2;
 /// Mehr Kandidaten holen als am Ende erwähnt werden, damit nach dem Per-Session-
 /// Dedup die nächstrangigen Lurker nachrücken (promos.py: fetch > MAX, dann kappen).
 const LURKER_TAX_CANDIDATE_FETCH: i64 = 25;
-/// MiniMax-Timeout in Sekunden (targeted_promo.py:37: _MINIMAX_TIMEOUT_SEC).
-const MINIMAX_TIMEOUT_SEC: u64 = 5;
 /// Keine Promo in den ersten N Minuten nach Go-Live (constants.py: PROMO_STREAM_START_DELAY_MIN).
 const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
-
-// ---------------------------------------------------------------------------
-// Promo-Texte — Ursprung constants.py:114–152, seitdem erweitert
-// ---------------------------------------------------------------------------
-
-/// Standard-Promo-Texte, kategorisiert. Nur konkrete Angebote, kein
-/// „wir haben einen Discord". `{invite}` wird ersetzt, Partner-Texte tragen
-/// [`STREAMER_PARTNER_URL`].
-///
-/// Kategorie = Routing: `hype` nur bei Viewer-Spike
-/// (siehe [`activity_promo_messages`]).
-fn promo_messages_competitive() -> Vec<&'static str> {
-    vec![
-        "Solo Queue nervt? Duo und Stack findest du auf Discord: {invite}",
-        "Ranked Voice und Leute zum Duo liegen auf Discord: {invite}",
-    ]
-}
-
-fn promo_messages_community() -> Vec<&'static str> {
-    vec![
-        "Bei uns laufen Scrims. Wer mitmachen will: {invite}",
-        "Custom Games und eigene Lobbies gibt es auf Discord: {invite}",
-        "Mitspieler für Ranked oder Normals: Discord, Kanal Mitspieler Suche. {invite}",
-        "Nach dem Stream noch Voice und Leute zum Zocken: {invite}",
-    ]
-}
-
-fn promo_messages_growth() -> Vec<&'static str> {
-    vec![
-        "Neu in Deadlock? Paten und eine Neue Spieler Lane gibt es auf Discord: {invite}",
-        "Kein Game Invite? Auf Discord im Kanal frag die community hilft jemand: {invite}",
-    ]
-}
-
-fn promo_messages_coaching() -> Vec<&'static str> {
-    vec![
-        "Coaching bei uns ist kostenlos. Frag auf Discord nach einem Coach: {invite}",
-        "Kostenloses Deadlock Coaching gibt es auf Discord: {invite}",
-        "Coaching kostet bei uns nichts. Discord: {invite}",
-    ]
-}
-
-fn promo_messages_hype() -> Vec<&'static str> {
-    vec![
-        "Viele neue Gesichter. Kostenloses Coaching und Mitspieler auf Discord: {invite}",
-        "Willkommen. Game Invite und Neue Spieler Lane sind auf Discord: {invite}",
-    ]
-}
-
-fn promo_messages_partner() -> Vec<&'static str> {
-    vec![
-        "Du streamst Deadlock? Hier kannst du Partner werden: https://deutsche-deadlock-community.de/streamer",
-        "Streamer nehmen wir direkt auf. Infos: https://deutsche-deadlock-community.de/streamer",
-        "Live Posts und ein eigener Streamer Bereich. Partner werden: https://deutsche-deadlock-community.de/streamer",
-    ]
-}
-
-/// Alle Standard-Promo-Texte kombiniert.
-fn all_promo_messages() -> Vec<&'static str> {
-    let mut all = Vec::new();
-    all.extend(promo_messages_competitive());
-    all.extend(promo_messages_community());
-    all.extend(promo_messages_growth());
-    all.extend(promo_messages_coaching());
-    all.extend(promo_messages_hype());
-    all.extend(promo_messages_partner());
-    all
-}
-
-/// Texte für reason="chat_activity". Hype bleibt dem Spike vorbehalten.
-fn activity_promo_messages() -> Vec<&'static str> {
-    let mut pool = Vec::new();
-    pool.extend(promo_messages_competitive());
-    pool.extend(promo_messages_community());
-    pool.extend(promo_messages_growth());
-    pool.extend(promo_messages_coaching());
-    pool.extend(promo_messages_partner());
-    pool
-}
 
 // ---------------------------------------------------------------------------
 // Traits
@@ -459,150 +381,14 @@ pub trait PartnerChannelCheck: Send + Sync {
     async fn is_partner_channel_for_chat_tracking(&self, channel_login: &str) -> bool;
 }
 
-/// Preset-Picker für Targeted-Promos (MiniMax oder Random-Fallback).
-/// (targeted_promo.py:91: `_pick_preset_with_minimax`).
 #[async_trait]
-pub trait PresetPicker: Send + Sync {
-    /// Wählt das beste Preset aus `presets` anhand von `snippets` (User-Context) und
-    /// `target_login`. Bei Timeout/Fehler: random Fallback.
-    async fn pick_preset<'a>(
-        &self,
-        presets: &'a [PromoPreset],
-        snippets: &[String],
-        target_login: &str,
-    ) -> &'a PromoPreset;
-}
-
-// ---------------------------------------------------------------------------
-// Preset-Typen (promo_presets.py)
-// ---------------------------------------------------------------------------
-
-/// Typ eines Promo-Presets (targeted_promo.py: `type="global"` / `type="user"`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PresetType {
-    Global,
-    User,
-}
-
-/// Ein Promo-Preset (promo_presets.py). Text enthält `{invite}` und optional `{login}`.
-#[derive(Debug, Clone)]
-pub struct PromoPreset {
-    pub id: &'static str,
-    pub preset_type: PresetType,
-    pub text: &'static str,
-    pub tags: &'static str,
-}
-
-/// Globale Presets. IDs und Tags bleiben die MiniMax-Schlagwörter.
-pub fn global_presets() -> Vec<PromoPreset> {
-    vec![
-        PromoPreset {
-            id: "g_competitive",
-            preset_type: PresetType::Global,
-            text: "Solo Queue nervt? Duo und Stack findest du auf Discord: {invite}",
-            tags: "ranked, mmr, solo_queue, competitive, mates",
-        },
-        PromoPreset {
-            id: "g_community",
-            preset_type: PresetType::Global,
-            text: "Bei uns laufen Scrims. Wer mitmachen will: {invite}",
-            tags: "inhouse, events, tournament, community, fun",
-        },
-        PromoPreset {
-            id: "g_new_to_deadlock",
-            preset_type: PresetType::Global,
-            text: "Neu in Deadlock? Paten und eine Neue Spieler Lane: {invite}",
-            tags: "new_player, beginner, guide, help, learning",
-        },
-        PromoPreset {
-            id: "g_meta",
-            preset_type: PresetType::Global,
-            text: "Kein Game Invite? Auf Discord im Kanal frag die community hilft jemand: {invite}",
-            tags: "meta, patch, tierlist, discussion, build, invite",
-        },
-        PromoPreset {
-            id: "g_coaching",
-            preset_type: PresetType::Global,
-            text: "Coaching bei uns ist kostenlos: {invite}",
-            tags: "coaching, coach, help, learning, beginner",
-        },
-        PromoPreset {
-            id: "g_chill",
-            preset_type: PresetType::Global,
-            text: "Nach dem Stream Voice und Leute zum Zocken: {invite}",
-            tags: "chill, after_stream, looking_for_group, casual",
-        },
-        PromoPreset {
-            id: "g_partner",
-            preset_type: PresetType::Global,
-            text: "Du streamst? Partner werden: https://deutsche-deadlock-community.de/streamer",
-            tags: "streamer, partner, creator, live_post",
-        },
-    ]
-}
-
-/// User-Presets. Enthalten `{login}`.
-pub fn user_presets() -> Vec<PromoPreset> {
-    vec![
-        PromoPreset {
-            id: "u_welcome",
-            preset_type: PresetType::User,
-            text: "@{login} Neu hier? Auf Discord gibt es Paten und eine Neue Spieler Lane: {invite}",
-            tags: "new, first_time, welcome, lurker",
-        },
-        PromoPreset {
-            id: "u_mates",
-            preset_type: PresetType::User,
-            text: "@{login} Mitspieler für Ranked oder Normals sind auf Discord: {invite}",
-            tags: "looking_for_group, mates, team, duo, party",
-        },
-        PromoPreset {
-            id: "u_lurker_viewer",
-            preset_type: PresetType::User,
-            text: "@{login} Nach dem Stream ist auf Discord noch Voice: {invite}",
-            tags: "lurker, regular_viewer, silent, watcher",
-        },
-        PromoPreset {
-            id: "u_ranked_grind",
-            preset_type: PresetType::User,
-            text: "@{login} Ranked solo ist zäh. Duo Leute sind auf Discord: {invite}",
-            tags: "ranked, competitive, grind, duo, elo",
-        },
-        PromoPreset {
-            id: "u_new_player",
-            preset_type: PresetType::User,
-            text: "@{login} Neu in Deadlock? Paten und eine Neue Spieler Lane: {invite}",
-            tags: "new_player, beginner, help, learning, guide",
-        },
-        PromoPreset {
-            id: "u_coaching",
-            preset_type: PresetType::User,
-            text: "@{login} Coaching bei uns ist kostenlos. Frag auf Discord nach: {invite}",
-            tags: "coaching, coach, help, learning",
-        },
-    ]
+pub trait PitchReviewSink: Send + Sync {
+    async fn send_card(&self, channel_login: &str, target_login: &str, trigger: &str, reply: &str);
 }
 
 // ---------------------------------------------------------------------------
 // Default-Implementierungen
 // ---------------------------------------------------------------------------
-
-/// Random-Fallback PresetPicker (kein MiniMax — für Tests und ohne KI-Setup).
-/// Der Orchestrator injiziert die echte MiniMax-Implementierung.
-pub struct RandomPresetPicker;
-
-#[async_trait]
-impl PresetPicker for RandomPresetPicker {
-    async fn pick_preset<'a>(
-        &self,
-        presets: &'a [PromoPreset],
-        _snippets: &[String],
-        _target_login: &str,
-    ) -> &'a PromoPreset {
-        let mut rng = rand::thread_rng();
-        presets.choose(&mut rng).unwrap_or(&presets[0])
-    }
-}
 
 /// Fallback-InviteResolver: gibt immer den globalen Discord-Invite zurück.
 pub struct StaticInviteResolver;
@@ -638,8 +424,6 @@ struct ChannelState {
     activity: VecDeque<ActivityEntry>,
     /// Chatter-Dedup-Map: chatter_login → letzter dedup-Zeitstempel (30s) — promos.py:730.
     chatter_dedupe: HashMap<String, Instant>,
-    /// Letzter gesendeter Promo-Text (Anti-Repeat) — promos.py:975.
-    last_promo_text: Option<String>,
     /// Monotonic-Timestamp letzte Promo — promos.py:1046.
     last_promo_sent: Option<Instant>,
     /// Monotonic-Timestamp letzter Attempt — promos.py:1046.
@@ -665,7 +449,6 @@ impl ChannelState {
         Self {
             activity: VecDeque::with_capacity(64),
             chatter_dedupe: HashMap::new(),
-            last_promo_text: None,
             last_promo_sent: None,
             last_promo_attempt: None,
             last_promo_viewer_spike: None,
@@ -718,35 +501,19 @@ pub struct PitchLogEntry {
     pub sent_at: Option<DateTime<Utc>>,
 }
 
-/// Die zentrale Promo-Engine.
-///
-/// # Erzeugung
-/// ```ignore
-/// let engine = PromoEngine::new(pool, api, suppression);
-/// // optional: engine.set_invite_resolver(...)
-/// // optional: engine.set_partner_check(...)
-/// // optional: engine.set_preset_picker(...)
-/// let engine = Arc::new(engine);
-/// engine.clone().spawn_periodic_loop();
-/// ```
 pub struct PromoEngine {
     pool: PgPool,
     api: Arc<dyn ChatApi>,
     suppression: Arc<dyn OutboundSuppressionCheck>,
-    /// Schreibseite der Outbound-Suppression (channel_settings-Drop → Mute).
-    /// `None` = Schreiben deaktiviert (Verhalten wie vor P1.1).
     suppression_writer: Option<Arc<dyn OutboundSuppressionWriter>>,
-    /// Scope-Quelle des zentralen Bot-Tokens (P1.4). `None` = nur Streamer-Scope
-    /// zählt (Verhalten wie vor P1.4).
     bot_scope_provider: Option<Arc<dyn BotScopeProvider>>,
     invite_resolver: Arc<dyn InviteResolver>,
     partner_check: Arc<dyn PartnerChannelCheck>,
-    preset_picker: Arc<dyn PresetPicker>,
-    /// Doppelsend-Lock pro Kanal (promos.py:798 — DER Fix).
+    pitch_judge: Arc<dyn PitchJudge>,
+    pitch_text_gen: Arc<dyn PitchTextGen>,
+    pitch_review_sink: Option<Arc<dyn PitchReviewSink>>,
     send_locks: DashMap<String, Arc<Mutex<()>>>,
-    /// Kanal-State (Mutex pro Kanal).
     channel_states: DashMap<String, Mutex<ChannelState>>,
-    /// Targeted-State (globales Mutex).
     targeted_state: Mutex<TargetedState>,
 }
 
@@ -768,9 +535,6 @@ impl PartnerChannelCheck for AlwaysPartner {
 // weiterwirkten. Single Source of Truth ist jetzt `tb_analytics::plan`.
 
 impl PromoEngine {
-    /// Erzeugt eine neue PromoEngine. Default-Impls: StaticInviteResolver,
-    /// AlwaysPartner, RandomPresetPicker — Orchestrator setzt produktive Impls
-    /// via `set_*`-Methoden.
     pub fn new(
         pool: PgPool,
         api: Arc<dyn ChatApi>,
@@ -784,7 +548,9 @@ impl PromoEngine {
             bot_scope_provider: None,
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
-            preset_picker: Arc::new(RandomPresetPicker),
+            pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
+            pitch_text_gen: Arc::new(crate::promo_pitch::FireworksPitchTextGen),
+            pitch_review_sink: None,
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
@@ -851,9 +617,18 @@ impl PromoEngine {
         self
     }
 
-    /// Setzt den PresetPicker (Default: RandomPresetPicker).
-    pub fn set_preset_picker(mut self, p: Arc<dyn PresetPicker>) -> Self {
-        self.preset_picker = p;
+    pub fn set_pitch_judge(mut self, j: Arc<dyn PitchJudge>) -> Self {
+        self.pitch_judge = j;
+        self
+    }
+
+    pub fn set_pitch_text_gen(mut self, g: Arc<dyn PitchTextGen>) -> Self {
+        self.pitch_text_gen = g;
+        self
+    }
+
+    pub fn set_pitch_review_sink(mut self, s: Arc<dyn PitchReviewSink>) -> Self {
+        self.pitch_review_sink = Some(s);
         self
     }
 
@@ -1182,13 +957,23 @@ impl PromoEngine {
         if self.promo_blocked_by_plan_or_flag(login).await {
             return false;
         }
-        // Invite-Auflösung (promos.py:1096).
         let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
 
-        // Promo-Text bauen (promos.py:945).
-        let text = self.build_promo_text(login, &invite, reason).await;
+        let Some(text) = self.build_promo_text(login, &invite).await else {
+            self.record_pitch_log(PitchLogEntry {
+                channel_login: login.to_string(),
+                target_user_id: None,
+                pfad: "periodic",
+                occasion: None,
+                trigger_text: None,
+                generated_text: None,
+                reject_reason: Some("kein_text".to_string()),
+                sent_at: None,
+            })
+            .await;
+            return false;
+        };
 
-        // Announcement senden (promos.py:1096, color="purple").
         let sent = self
             .api
             .send_announcement(channel_id, &text, "purple")
@@ -1196,11 +981,32 @@ impl PromoEngine {
             .unwrap_or(false);
         if !sent {
             debug!(login, "Promo-Announcement nicht gesendet (Drop/Fehler)");
-            // Cooldown NICHT verbrauchen bei Failed-Send (promos.py:1096: if not ok: return False).
+            self.record_pitch_log(PitchLogEntry {
+                channel_login: login.to_string(),
+                target_user_id: None,
+                pfad: "periodic",
+                occasion: None,
+                trigger_text: None,
+                generated_text: Some(text),
+                reject_reason: Some("send_dropped".to_string()),
+                sent_at: None,
+            })
+            .await;
             return false;
         }
 
-        // Promo markieren (promos.py:879).
+        self.record_pitch_log(PitchLogEntry {
+            channel_login: login.to_string(),
+            target_user_id: None,
+            pfad: "periodic",
+            occasion: None,
+            trigger_text: None,
+            generated_text: Some(text),
+            reject_reason: None,
+            sent_at: Some(Utc::now()),
+        })
+        .await;
+
         self.mark_promo_sent(login, now, reason, Utc::now().timestamp() as f64)
             .await;
 
@@ -1248,66 +1054,39 @@ impl PromoEngine {
         true
     }
 
-    /// Promo-Text bauen (promos.py:945: `_build_promo_text`).
-    async fn build_promo_text(&self, login: &str, invite: &str, reason: &str) -> String {
-        // 1. Globalen Promo-Override aus DB prüfen (UNSICHER: promo_mode-Schema).
+    async fn build_promo_text(&self, login: &str, invite: &str) -> Option<String> {
         if let Some(text) = self.load_global_promo_message(invite).await {
-            return text;
+            return Some(text);
         }
 
-        // 2. Streamer-spezifische Promo aus DB (promos.py:945).
         if let Some(text) = self.load_streamer_promo_message(login, invite).await {
-            return text;
+            return Some(text);
         }
 
-        // 3. Kategorie-Pool (hardcoded).
-        let pool: Vec<&str> = match reason {
-            "viewer_spike" => promo_messages_hype(),
-            "chat_activity" => activity_promo_messages(),
-            _ => all_promo_messages(),
+        let (game, title) = self.load_live_context(login).await;
+        let ctx = ChannelPromoContext {
+            game,
+            title,
+            recent_chat: self.load_recent_channel_messages(login, 8).await,
         };
+        self.pitch_text_gen.channel_promo(&ctx, invite).await
+    }
 
-        // Anti-Repeat (promos.py:975).
-        let last_text = {
-            let state_ref = self
-                .channel_states
-                .entry(login.to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let state = state_ref.lock().await;
-            state.last_promo_text.clone()
-        };
-        let pool: Vec<&str> = if let Some(ref last) = last_text {
-            let filtered: Vec<&str> = pool
-                .iter()
-                .copied()
-                .filter(|t| *t != last.as_str())
-                .collect();
-            if filtered.is_empty() {
-                pool
-            } else {
-                filtered
-            }
-        } else {
-            pool
-        };
-
-        let template = {
-            let mut rng = rand::thread_rng();
-            pool.choose(&mut rng).copied().unwrap_or("{invite}")
-        };
-
-        // Anti-Repeat zurückschreiben (promos.py:975: last_map[login] = chosen).
-        {
-            let state_ref = self
-                .channel_states
-                .entry(login.to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_promo_text = Some(template.to_string());
+    async fn load_live_context(&self, login: &str) -> (Option<String>, Option<String>) {
+        let row = sqlx::query!(
+            "SELECT last_game, last_title FROM twitch_live_state
+              WHERE LOWER(streamer_login) = LOWER($1)
+              LIMIT 1",
+            login,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+        match row {
+            Some(row) => (row.last_game, row.last_title),
+            None => (None, None),
         }
-
-        render_promo_template(template, invite)
-            .unwrap_or_else(|| template.replace("{invite}", invite))
     }
 
     /// Globalen Promo-Override laden (promos.py `_load_global_promo_message` +
@@ -1959,17 +1738,14 @@ impl PromoEngine {
         )
     }
 
-    /// Targeted-Promo (targeted_promo.py:198: `maybe_send_targeted_promo`).
-    /// Gibt true zurück wenn gesendet.
     async fn maybe_send_targeted_promo(
         &self,
         login: &str,
         channel_id: &str,
-        invite: &str,
+        _invite: &str,
         active_chatters: &[String],
         now: Instant,
     ) -> bool {
-        // Kanal-Cooldown (targeted_promo.py:198).
         let (cd_ok, want_user) = {
             let ts_state = self.targeted_state.lock().await;
             let last = ts_state.channel_last_targeted.get(login).copied();
@@ -1980,7 +1756,7 @@ impl PromoEngine {
                 .get(login)
                 .map(|s| s.as_str())
                 .unwrap_or("global");
-            let want = last_type == "global"; // alternieren (targeted_promo.py)
+            let want = last_type == "global";
             (cd, want)
         };
 
@@ -1988,39 +1764,54 @@ impl PromoEngine {
             return false;
         }
 
-        // User-Targeted-Pfad (targeted_promo.py:198).
+        let (game, title) = self.load_live_context(login).await;
+        let recent = self.load_recent_channel_messages(login, 8).await;
+
         if want_user && !active_chatters.is_empty() {
             if let Some((target_login, target_id)) =
                 self.pick_user_target(active_chatters, login, now).await
             {
-                // User-Context laden (targeted_promo.py: _sync_user_context_snippets).
                 let snippets = self.load_user_context_snippets(&target_id, login).await;
-                let presets = user_presets();
-                let preset = tokio::time::timeout(
-                    Duration::from_secs(MINIMAX_TIMEOUT_SEC),
-                    self.preset_picker
-                        .pick_preset(&presets, &snippets, &target_login),
-                )
-                .await
-                .unwrap_or_else(|_| {
-                    let mut rng = rand::thread_rng();
-                    presets.choose(&mut rng).unwrap_or(&presets[0])
-                });
-
-                let text = preset
-                    .text
-                    .replace("{invite}", invite)
-                    .replace("{login}", &target_login);
-                // Python targeted_promo.py:264: `if not ok: return False` — bei nicht
-                // zugestelltem Send keine State-Mutation/keinen Cooldown verbrennen.
+                let ctx = TargetedPitchContext {
+                    target_login: target_login.clone(),
+                    target_messages: snippets,
+                    game: game.clone(),
+                    title: title.clone(),
+                    recent_chat: recent.clone(),
+                };
+                let Some(body) = self.pitch_text_gen.targeted_pitch(&ctx).await else {
+                    self.record_pitch_log(PitchLogEntry {
+                        channel_login: login.to_string(),
+                        target_user_id: Some(target_id),
+                        pfad: "targeted_user",
+                        occasion: None,
+                        trigger_text: None,
+                        generated_text: None,
+                        reject_reason: Some("kein_text".to_string()),
+                        sent_at: None,
+                    })
+                    .await;
+                    return false;
+                };
+                let text = format!("@{target_login} {body}");
                 let outcome = self
                     .guarded_api_for("promo", login)
                     .send_message(channel_id, &text)
                     .await;
-                // channel_settings-Drop → Kanal stummschalten (P1.1, source="promo").
                 self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
                     .await;
                 if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
+                    self.record_pitch_log(PitchLogEntry {
+                        channel_login: login.to_string(),
+                        target_user_id: Some(target_id),
+                        pfad: "targeted_user",
+                        occasion: None,
+                        trigger_text: None,
+                        generated_text: Some(text),
+                        reject_reason: Some("send_dropped".to_string()),
+                        sent_at: None,
+                    })
+                    .await;
                     return false;
                 }
 
@@ -2036,7 +1827,17 @@ impl PromoEngine {
                         .user_last_pitched
                         .insert((login.to_string(), target_login), now);
                 }
-                // Promo-Slot belegen — Python: mark(channel_login, now, reason="targeted_promo").
+                self.record_pitch_log(PitchLogEntry {
+                    channel_login: login.to_string(),
+                    target_user_id: Some(target_id),
+                    pfad: "targeted_user",
+                    occasion: None,
+                    trigger_text: None,
+                    generated_text: Some(text),
+                    reject_reason: None,
+                    sent_at: Some(Utc::now()),
+                })
+                .await;
                 self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64)
                     .await;
 
@@ -2044,27 +1845,44 @@ impl PromoEngine {
             }
         }
 
-        // Global-Preset-Pfad (targeted_promo.py:198).
-        let presets = global_presets();
-        let preset = tokio::time::timeout(
-            Duration::from_secs(MINIMAX_TIMEOUT_SEC),
-            self.preset_picker.pick_preset(&presets, &[], ""),
-        )
-        .await
-        .unwrap_or_else(|_| &presets[0]);
-
-        let text = preset
-            .text
-            .replace("{invite}", invite)
-            .replace("{login}", "");
-        // Global → Announcement, color="purple" (promo_presets.py).
-        // Python targeted_promo.py:264: `if not ok: return False` — Send-Ergebnis prüfen.
+        let ctx = TargetedPitchContext {
+            target_login: String::new(),
+            target_messages: Vec::new(),
+            game,
+            title,
+            recent_chat: recent,
+        };
+        let Some(text) = self.pitch_text_gen.targeted_pitch(&ctx).await else {
+            self.record_pitch_log(PitchLogEntry {
+                channel_login: login.to_string(),
+                target_user_id: None,
+                pfad: "targeted_global",
+                occasion: None,
+                trigger_text: None,
+                generated_text: None,
+                reject_reason: Some("kein_text".to_string()),
+                sent_at: None,
+            })
+            .await;
+            return false;
+        };
         let sent = self
             .guarded_api_for("promo", login)
             .send_announcement(channel_id, &text, "purple")
             .await
             .unwrap_or(false);
         if !sent {
+            self.record_pitch_log(PitchLogEntry {
+                channel_login: login.to_string(),
+                target_user_id: None,
+                pfad: "targeted_global",
+                occasion: None,
+                trigger_text: None,
+                generated_text: Some(text),
+                reject_reason: Some("send_dropped".to_string()),
+                sent_at: None,
+            })
+            .await;
             return false;
         }
 
@@ -2077,7 +1895,17 @@ impl PromoEngine {
                 .channel_last_type
                 .insert(login.to_string(), "global".to_string());
         }
-        // Promo-Slot belegen — Python: mark(channel_login, now, reason="targeted_promo").
+        self.record_pitch_log(PitchLogEntry {
+            channel_login: login.to_string(),
+            target_user_id: None,
+            pfad: "targeted_global",
+            occasion: None,
+            trigger_text: None,
+            generated_text: Some(text),
+            reject_reason: None,
+            sent_at: Some(Utc::now()),
+        })
+        .await;
         self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64)
             .await;
 
@@ -2224,10 +2052,6 @@ impl PromoEngine {
     /// Kanal-Allowlist + Partner-State-Check (promos.py:78: `_promo_channel_allowed`).
     /// twitch_streamers_partner_state.is_partner_active = integer, archived_at = text (prod schema)
     async fn promo_channel_allowed_db(&self, login: &str) -> bool {
-        if all_promo_messages().is_empty() {
-            return false;
-        }
-
         let row = sqlx::query!(
             "SELECT is_partner_active, archived_at
                FROM twitch_streamers_partner_state
@@ -2567,65 +2391,21 @@ mod tests {
             || text.contains(" - ")
     }
 
-    fn alle_sichtbaren_promo_texte() -> Vec<&'static str> {
-        let mut texts = all_promo_messages();
-        texts.extend(global_presets().into_iter().map(|p| p.text));
-        texts.extend(user_presets().into_iter().map(|p| p.text));
-        texts
-    }
-
-    /// Pool-Text braucht `{invite}` oder die Partner-URL. Doppelte Texte
-    /// verzerren die Zufallsauswahl und hebeln den Anti-Repeat-Filter aus.
     #[test]
-    fn jeder_promo_text_traegt_einen_link_und_ist_einzigartig() {
-        let alle = all_promo_messages();
-        for text in &alle {
-            let hat_link = text.contains("{invite}") || text.contains(STREAMER_PARTNER_URL);
-            assert!(hat_link, "Promo ohne Link: {text}");
-        }
-        let unique: std::collections::HashSet<_> = alle.iter().collect();
-        assert_eq!(unique.len(), alle.len(), "doppelter Promo-Text im Pool");
+    fn periodischer_promo_text_traegt_invite_am_ende_ohne_strich() {
+        let invite = "https://discord.gg/deadlock";
+        let out = crate::promo_pitch::finalize_channel_promo(
+            "komm vorbei und zock ne runde mit uns",
+            invite,
+        )
+        .unwrap();
+        assert!(out.ends_with(invite), "Invite muss am Ende stehen: {out}");
+        assert!(!hat_gedankenstrich(&out), "Gedankenstrich in: {out}");
     }
 
     #[test]
-    fn promo_texte_haben_keine_gedankenstriche() {
-        for text in alle_sichtbaren_promo_texte() {
-            assert!(!hat_gedankenstrich(text), "Gedankenstrich in: {text}");
-        }
-    }
-
-    #[test]
-    fn partner_texte_liegen_im_chat_activity_pool() {
-        let activity = activity_promo_messages();
-        for text in promo_messages_partner() {
-            assert!(activity.contains(&text), "partner-Text fehlt: {text}");
-        }
-    }
-
-    #[test]
-    fn coaching_texte_liegen_im_chat_activity_pool() {
-        let activity = activity_promo_messages();
-        for text in promo_messages_coaching() {
-            assert!(activity.contains(&text), "coaching-Text fehlt: {text}");
-        }
-    }
-
-    #[test]
-    fn promo_pools_sind_nicht_leer() {
-        assert!(!all_promo_messages().is_empty());
-        assert!(!activity_promo_messages().is_empty());
-        assert!(!promo_messages_hype().is_empty());
-        assert!(!promo_messages_coaching().is_empty());
-    }
-
-    /// Kategorie ist Routing: `community` muss im `chat_activity`-Pool landen,
-    /// sonst laufen die Texte nur bei generischen Anlässen.
-    #[test]
-    fn community_texte_liegen_im_chat_activity_pool() {
-        let activity = activity_promo_messages();
-        for text in promo_messages_community() {
-            assert!(activity.contains(&text), "community-Text fehlt: {text}");
-        }
+    fn periodischer_promo_text_leer_gibt_keinen_text() {
+        assert!(crate::promo_pitch::finalize_channel_promo("", "https://discord.gg/x").is_none());
     }
 
     #[test]
@@ -2986,46 +2766,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Anti-Repeat-Text
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn promo_text_rotiert_anti_repeat() {
-        // Testet, dass build_promo_text nicht zweimal denselben Text zurückgibt
-        // wenn der letzte gesetzt ist und Pool groß genug ist.
-        let engine = make_engine_no_db();
-        // Erster Aufruf: kein last_text.
-        let text1 = engine
-            .build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo")
-            .await;
-        // last_text setzen.
-        {
-            let state_ref = engine
-                .channel_states
-                .entry("kanal".to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_promo_text = Some(text1.clone());
-        }
-        // Zweiter Aufruf: muss sich unterscheiden (bei Pool-Größe 22 fast sicher).
-        // Wir wiederholen mehrmals um Flakiness zu minimieren.
-        let mut different = false;
-        for _ in 0..20 {
-            let text2 = engine
-                .build_promo_text("kanal", DEFAULT_PROMO_DISCORD_INVITE, "promo")
-                .await;
-            if text2 != text1 {
-                different = true;
-                break;
-            }
-        }
-        assert!(
-            different,
-            "Anti-Repeat: nach 20 Versuchen sollte ein anderer Text kommen"
-        );
-    }
-
-    // -----------------------------------------------------------------------
     // Hilfsfunktion: Engine ohne DB
     // -----------------------------------------------------------------------
 
@@ -3294,6 +3034,22 @@ mod db_tests {
     impl OutboundSuppressionCheck for FixedSuppression {
         async fn is_muted(&self, _channel_login: &str) -> bool {
             self.0
+        }
+    }
+
+    struct FixedTextGen(Option<String>);
+
+    #[async_trait]
+    impl PitchTextGen for FixedTextGen {
+        async fn channel_promo(
+            &self,
+            _ctx: &ChannelPromoContext,
+            invite: &str,
+        ) -> Option<String> {
+            self.0.as_ref().map(|body| format!("{body} {invite}"))
+        }
+        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
+            self.0.clone()
         }
     }
 
@@ -3738,7 +3494,10 @@ mod db_tests {
     async fn targeted_promo_suppression_guard_skippt_global_send() {
         let pool = pool_or_skip!("promo_targeted_guard_suppressed");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(true)));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(true)))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+                "mitspieler findest du bei uns".to_string(),
+            ))));
 
         let sent = engine
             .maybe_send_targeted_promo(
@@ -3762,7 +3521,10 @@ mod db_tests {
     async fn targeted_promo_suppression_guard_allowed_sendet_global() {
         let pool = pool_or_skip!("promo_targeted_guard_allowed");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(false)));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(false)))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+                "mitspieler findest du bei uns".to_string(),
+            ))));
 
         let sent = engine
             .maybe_send_targeted_promo(

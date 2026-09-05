@@ -101,12 +101,12 @@ pub use pipeline::{
 };
 pub use promo_pitch::{
     build_channel_promo_text, build_targeted_pitch_text, parse_pitch_response, pitch_filter_reject,
-    ChannelPromoContext, FireworksPitchJudge, PitchJudge, PitchJudgeInput, PitchOccasion,
-    PitchRejectReason, PitchResponse, TargetedPitchContext,
+    ChannelPromoContext, FireworksPitchJudge, FireworksPitchTextGen, PitchJudge, PitchJudgeInput,
+    PitchOccasion, PitchRejectReason, PitchResponse, PitchTextGen, TargetedPitchContext,
 };
 pub use promos::{
-    promo_invite_fallback, NoopSuppressionCheck, PartnerChannelCheck, PresetPicker, PromoEngine,
-    RandomPresetPicker, StaticInviteResolver, DEFAULT_PROMO_DISCORD_INVITE,
+    promo_invite_fallback, NoopSuppressionCheck, PartnerChannelCheck, PitchReviewSink, PromoEngine,
+    StaticInviteResolver, DEFAULT_PROMO_DISCORD_INVITE,
 };
 pub use safe_list::{is_safe as is_safe_account, SafeAccount, SAFE_ACCOUNTS};
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};

@@ -32,9 +32,7 @@ use tb_chat::conversation_scam::{
 use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
-use tb_chat::promos::{
-    InviteResolver, PartnerChannelCheck, PresetPicker, PromoEngine, PromoPreset, RandomPresetPicker,
-};
+use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::style_score::{build_centroid, Centroid};
@@ -53,7 +51,7 @@ use tb_chat::{
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
 use tb_engagement::learn_irc_reader::LearnIrcReader;
-use tb_engagement::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+use tb_engagement::minimax_chat::EngagementMinimaxClient;
 use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::reaction_learning::ReactionLearning;
 use tb_engagement::sender_auth::SenderAuthStore;
@@ -75,8 +73,6 @@ const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
-
-const MINIMAX_PRESET_SYSTEM_PROMPT: &str = "Du wählst für einen deutschen Twitch-Chat das am besten passende Discord-Einladungs-Preset aus. Du erhältst die verfügbaren Presets (jeweils im Format 'id: Text') und einige aktuelle Chat-Ausschnitte. Wähle das Preset, dessen Ton und Inhalt am besten zum Chat passen. Antworte ausschließlich mit der exakten Preset-id, ohne weitere Worte.";
 
 fn knowledge_dir() -> PathBuf {
     std::env::var("KNOWLEDGE_DIR")
@@ -735,10 +731,7 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
-            .set_preset_picker(Arc::new(MinimaxPresetPicker::new(
-                EngagementMinimaxClient::new(None, None, None, None),
-            ))),
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() })),
     );
 
     let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink { pool: pool.clone() });
@@ -1866,94 +1859,6 @@ impl AccountAgePort for HelixAccountAge {
             _ => None,
         }
     }
-}
-
-struct MinimaxPresetPicker {
-    client: EngagementMinimaxClient,
-}
-
-impl MinimaxPresetPicker {
-    fn new(client: EngagementMinimaxClient) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait::async_trait]
-impl PresetPicker for MinimaxPresetPicker {
-    async fn pick_preset<'a>(
-        &self,
-        presets: &'a [PromoPreset],
-        snippets: &[String],
-        target_login: &str,
-    ) -> &'a PromoPreset {
-        if presets.len() <= 1 || snippets.is_empty() {
-            return RandomPresetPicker
-                .pick_preset(presets, snippets, target_login)
-                .await;
-        }
-
-        let user_prompt = minimax_preset_user_prompt(presets, snippets, target_login);
-        let history = [ChatMessage {
-            role: "user".to_string(),
-            content: user_prompt,
-            name: None,
-        }];
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            self.client
-                .generate(MINIMAX_PRESET_SYSTEM_PROMPT, &history, 32, 128),
-        )
-        .await
-        {
-            Ok(Ok(response)) => {
-                if let Some(text) = response.text.as_deref() {
-                    if let Some(preset) = match_preset_id(presets, text) {
-                        return preset;
-                    }
-                }
-            }
-            Ok(Err(error)) => {
-                tracing::debug!(%error, "MiniMax preset picker failed");
-            }
-            Err(_) => {
-                tracing::debug!("MiniMax preset picker timeout");
-            }
-        }
-
-        RandomPresetPicker
-            .pick_preset(presets, snippets, target_login)
-            .await
-    }
-}
-
-fn minimax_preset_user_prompt(
-    presets: &[PromoPreset],
-    snippets: &[String],
-    target_login: &str,
-) -> String {
-    let mut prompt = format!("target_login: {target_login}\n\npresets:\n");
-    for preset in presets {
-        prompt.push_str(preset.id);
-        prompt.push_str(": ");
-        prompt.push_str(preset.text);
-        prompt.push('\n');
-    }
-    prompt.push_str("\nsnippets:\n");
-    for snippet in snippets {
-        prompt.push_str("- ");
-        prompt.push_str(snippet);
-        prompt.push('\n');
-    }
-    prompt.push_str("\nReturn exactly one preset id.");
-    prompt
-}
-
-fn match_preset_id<'a>(presets: &'a [PromoPreset], reply: &str) -> Option<&'a PromoPreset> {
-    let reply = reply.trim();
-    presets
-        .iter()
-        .find(|preset| reply == preset.id)
-        .or_else(|| presets.iter().find(|preset| reply.contains(preset.id)))
 }
 
 /// Raid-Commands: manueller Raid direkt über die tb-raid-Schicht

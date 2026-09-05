@@ -365,6 +365,24 @@ pub async fn build_targeted_pitch_text(ctx: &TargetedPitchContext) -> Option<Str
     finalize_targeted_pitch(&response.text)
 }
 
+#[async_trait]
+pub trait PitchTextGen: Send + Sync {
+    async fn channel_promo(&self, ctx: &ChannelPromoContext, invite: &str) -> Option<String>;
+    async fn targeted_pitch(&self, ctx: &TargetedPitchContext) -> Option<String>;
+}
+
+pub struct FireworksPitchTextGen;
+
+#[async_trait]
+impl PitchTextGen for FireworksPitchTextGen {
+    async fn channel_promo(&self, ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
+        build_channel_promo_text(ctx, invite).await
+    }
+    async fn targeted_pitch(&self, ctx: &TargetedPitchContext) -> Option<String> {
+        build_targeted_pitch_text(ctx).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
