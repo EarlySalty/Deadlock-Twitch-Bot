@@ -244,6 +244,22 @@ pub fn download_args(cfg: &VodArchiveConfig, ziel: &Path, twitch_id: &str) -> Ve
     args
 }
 
+pub const FFMPEG_FALLBACK_MELDUNG: &str = "Initialization fragment found after media fragments";
+
+pub fn download_ffmpeg_fallback_args(
+    cfg: &VodArchiveConfig,
+    ziel: &Path,
+    twitch_id: &str,
+) -> Vec<String> {
+    let mut args = download_args(cfg, ziel, twitch_id);
+    args.push("--downloader".to_string());
+    args.push("ffmpeg".to_string());
+    args.push("--hls-use-mpegts".to_string());
+    args.push("--ffmpeg-location".to_string());
+    args.push(cfg.ffmpeg.display().to_string());
+    args
+}
+
 /// Laedt ein VOD in das Verzeichnis des Streamers.
 pub async fn lade_vod(
     runner: &dyn CommandRunner,
@@ -253,7 +269,17 @@ pub async fn lade_vod(
 ) -> Result<Download, VodArchiveError> {
     tokio::fs::create_dir_all(verzeichnis).await?;
     let args = download_args(cfg, verzeichnis, twitch_id);
-    let output = runner.run(&cfg.yt_dlp, &args, cfg.download_timeout).await?;
+    let mut output = runner.run(&cfg.yt_dlp, &args, cfg.download_timeout).await?;
+    if !output.success && output.stderr.contains(FFMPEG_FALLBACK_MELDUNG) {
+        tracing::info!(
+            twitch_id = %twitch_id,
+            "yt-dlp bricht am zweiten EXT-X-MAP ab, zweiter Versuch mit ffmpeg-Downloader"
+        );
+        let fallback = download_ffmpeg_fallback_args(cfg, verzeichnis, twitch_id);
+        output = runner
+            .run(&cfg.yt_dlp, &fallback, cfg.download_timeout)
+            .await?;
+    }
     if !output.success {
         return Err(VodArchiveError::Werkzeug {
             schritt: "Download".to_string(),
@@ -630,6 +656,55 @@ mod tests {
             "ERROR: HTTP Error 403: Forbidden (caused by TransportError)"
         ));
         assert!(!meldet_offline(""));
+    }
+
+    #[test]
+    fn zweiter_ext_x_map_loest_ffmpeg_fallback_aus() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "vod-ffmpeg-fallback-{}-{}",
+            std::process::id(),
+            "v2862490204"
+        ));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let zaehler = tmp.join("aufrufe");
+        let skript = tmp.join("yt-dlp");
+        let inhalt = format!(
+            "#!/usr/bin/env bash\n\
+             n=$(cat {zaehler} 2>/dev/null || echo 0)\n\
+             n=$((n+1)); echo $n > {zaehler}\n\
+             if [ \"$n\" -eq 1 ]; then\n\
+               echo 'ERROR: Initialization fragment found after media fragments' >&2\n\
+               exit 1\n\
+             fi\n\
+             found=0; out=\"\"; prev=\"\"\n\
+             for a in \"$@\"; do\n\
+               if [ \"$a\" = ffmpeg ] && [ \"$prev\" = --downloader ]; then found=1; fi\n\
+               if [ \"$prev\" = -o ]; then out=\"$a\"; fi\n\
+               prev=\"$a\"\n\
+             done\n\
+             if [ \"$found\" -ne 1 ]; then echo 'kein ffmpeg-downloader' >&2; exit 2; fi\n\
+             ziel=$(echo \"$out\" | sed 's/%(ext)s/mp4/')\n\
+             : > \"$ziel\"\n\
+             exit 0\n",
+            zaehler = zaehler.display()
+        );
+        std::fs::write(&skript, inhalt).unwrap();
+        std::fs::set_permissions(&skript, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let cfg = VodArchiveConfig {
+            yt_dlp: skript.clone(),
+            ..VodArchiveConfig::default()
+        };
+        let runner = TokioCommandRunner;
+        let ergebnis = tokio_test_block(lade_vod(&runner, &cfg, &tmp, "v2862490204")).unwrap();
+
+        assert_eq!(ergebnis.pfad, tmp.join("v2862490204.mp4"));
+        assert_eq!(std::fs::read_to_string(&zaehler).unwrap().trim(), "2");
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// Kleiner Runtime-Helfer, damit die Tests ohne tokio-Attribut auskommen.
