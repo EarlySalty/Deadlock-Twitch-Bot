@@ -170,16 +170,16 @@ llm_model_cache|model_created|bigint|YES|
 llm_model_cache|model|text|NO|
 llm_model_cache|provider|text|NO|
 llm_model_cache|resolved_at|timestamp with time zone|NO|now()
-minimax_usage|id|bigint|NO|nextval('minimax_usage_id_seq'::regclass)
-minimax_usage|meta|text|YES|
-minimax_usage|model|text|YES|
-minimax_usage|purpose|text|YES|
-minimax_usage|source|text|NO|
-minimax_usage|success|bigint|YES|1
-minimax_usage|tokens_in|bigint|YES|0
-minimax_usage|tokens_out|bigint|YES|0
-minimax_usage|total|bigint|YES|0
-minimax_usage|ts|text|NO|
+llm_usage|id|bigint|NO|nextval('llm_usage_id_seq'::regclass)
+llm_usage|meta|text|YES|
+llm_usage|model|text|YES|
+llm_usage|purpose|text|YES|
+llm_usage|source|text|NO|
+llm_usage|success|bigint|YES|1
+llm_usage|tokens_in|bigint|YES|0
+llm_usage|tokens_out|bigint|YES|0
+llm_usage|total|bigint|YES|0
+llm_usage|ts|text|NO|
 oauth_state_tokens|consumed_at|timestamp with time zone|YES|
 oauth_state_tokens|created_at|timestamp with time zone|YES|CURRENT_TIMESTAMP
 oauth_state_tokens|expires_at|timestamp with time zone|NO|
