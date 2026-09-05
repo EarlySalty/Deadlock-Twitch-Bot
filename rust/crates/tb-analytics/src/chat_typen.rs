@@ -348,17 +348,26 @@ async fn klassifiziere_modell_intern(
     if pakete.is_empty() {
         return Ok((Vec::new(), String::new()));
     }
+    let max_tokens = (pakete.len() as i64) * 24 + 256;
     let mut request = tb_llm::Request::prompt(modell_prompt(pakete))
         .temperature(0.0)
-        .max_tokens((pakete.len() as i64) * 24 + 256)
+        .max_tokens(max_tokens)
         .timeout(Duration::from_secs(MODELL_TIMEOUT_SECS))
-        .json_object();
+        .json_object()
+        .denken_aus();
     if let Some(endpoint) = endpoint {
         request = request.no_ledger().endpoint(endpoint);
     }
     let response = tb_llm::complete(MODELL_USE_CASE, request).await?;
     let antwort: ModellAntwort = serde_json::from_str(response.text.trim()).map_err(|error| {
-        tb_llm::LlmError::Unparsable(format!("JSON nicht lesbar: {error}"))
+        if response.completion_tokens.is_some_and(|c| c >= max_tokens) {
+            tb_llm::LlmError::Unparsable(format!(
+                "Ausgabe-Budget erschöpft (max_tokens={max_tokens}, completion_tokens={})",
+                response.completion_tokens.unwrap_or(0)
+            ))
+        } else {
+            tb_llm::LlmError::Unparsable(format!("JSON nicht lesbar: {error}"))
+        }
     })?;
     let mut ergebnis: Vec<(i64, Nachrichtentyp)> = pakete
         .iter()
