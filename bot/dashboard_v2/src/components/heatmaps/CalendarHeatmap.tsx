@@ -73,10 +73,13 @@ export function CalendarHeatmap({
     >
       <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
 
-      <div className="flex-1 overflow-x-auto">
+      <div className="flex-1">
         <div
           className="mb-1 grid"
-          style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}
+          style={{
+            gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))`,
+            maxWidth: `${weeks.length * 26}px`,
+          }}
         >
           {monthLabels.map(({ month, weekIndex }) => (
             <div
@@ -95,6 +98,8 @@ export function CalendarHeatmap({
             gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))`,
             gridTemplateRows: 'repeat(7, auto)',
             gridAutoFlow: 'column',
+            maxWidth: `${weeks.length * 26}px`,
+            justifyContent: 'start',
           }}
         >
           {weeks.flatMap((week, weekIndex) =>
@@ -116,7 +121,6 @@ export function CalendarHeatmap({
                   className="rounded-sm relative group cursor-pointer"
                   style={{
                     aspectRatio: '1',
-                    minWidth: '12px',
                     maxWidth: '22px',
                     backgroundColor: getHeatmapColor(value, maxValue),
                   }}
