@@ -47,11 +47,12 @@ Befehl:
 Rot vor dem Fix:
 
 - `resume_abfrage_sendet_content_length_null`:
-  FAILED, assert `ResumeStand::Fertig` erwartet, tatsaechlich `Verfallen`
-  (Mock verlangt `content-length: 0`; ohne den Header liefert wiremock 404,
-  der Code liest das als verfallen).
+  FAILED, `ResumeStand::Fertig` erwartet, tatsaechlich
+  `Err(UploadError::Api("YouTube resume query failed (400): Content-Length: 0
+  fehlt an der Resume-Abfrage"))`. Der Catch-all-Mock benennt die Ursache: ohne
+  Content-Length matcht der spezifische Mock nicht.
 - `resume_offset_411_ist_verfallen`:
-  FAILED, assert `ResumeStand::Verfallen` erwartet, tatsaechlich
+  FAILED, `ResumeStand::Verfallen` erwartet, tatsaechlich
   `Err(UploadError::Api("YouTube resume query failed (411): ..."))`.
 
 Rot-Lauf siehe `rot-baseline.txt`.
