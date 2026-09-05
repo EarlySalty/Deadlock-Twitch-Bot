@@ -33,20 +33,10 @@ fn is_allowed_file(rel_path: &str) -> bool {
     ALLOWED_FILES.contains(&rel_path)
 }
 
-fn strip_allowed_token(line: &str) -> String {
-    let lower = line.to_lowercase();
-    let mut out = String::with_capacity(line.len());
-    let mut idx = 0usize;
-    while idx < line.len() {
-        if lower[idx..].starts_with(ALLOWED_TOKEN) {
-            idx += ALLOWED_TOKEN.len();
-        } else {
-            let ch = line[idx..].chars().next().unwrap();
-            out.push(ch);
-            idx += ch.len_utf8();
-        }
-    }
-    out
+fn line_hat_minimax(line: &str) -> bool {
+    line.to_lowercase()
+        .replace(ALLOWED_TOKEN, "")
+        .contains(NEEDLE)
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
@@ -104,7 +94,7 @@ fn kein_minimax_bezeichner_mehr_im_code() {
             Err(_) => continue,
         };
         for (i, line) in content.lines().enumerate() {
-            if strip_allowed_token(line).to_lowercase().contains(NEEDLE) {
+            if line_hat_minimax(line) {
                 hits.push(format!("{rel_path}:{}: {}", i + 1, line.trim()));
             }
         }

@@ -1042,8 +1042,6 @@ mod tests {
     fn fireworks_key_zieht_client_komplett_auf_deepseek() {
         let _g = PROVIDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_provider_env();
-        // Beide Keys gesetzt: der KI-Key darf NICHT an die
-        // Fireworks-Adresse geraten.
         std::env::set_var("FIREWORK_API_KEY", "fireworks-key");
 
         let client = EngagementLlmClient::new(None, None, None, None);

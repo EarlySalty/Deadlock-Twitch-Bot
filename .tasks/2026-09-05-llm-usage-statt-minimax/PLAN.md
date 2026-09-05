@@ -110,5 +110,13 @@ Codepfad-Analyse:
 - `20260905130001_llm_usage_drop_compat_view.sql`: droppt den Kompat-View, von
   Hand als postgres NACH dem Restart anzuwenden.
 - Beide Dateien bewusst ohne SQL-Kommentare (Repo-Regel); Erklärung steht hier.
-  Reihenfolge: erste Migration vor dem Restart, zweite danach; der Bot migriert
-  nicht selbst.
+  Reihenfolge: erste Migration vor dem Restart, zweite danach.
+- Beide Migrationen sind idempotent und guarded (to_regclass/relkind-Checks,
+  CREATE OR REPLACE VIEW, DROP nur wenn View), wie migrate.rs es vorschreibt.
+  Damit sind sie sowohl per Handanwendung als auch über den sqlx-Migrator
+  wiederholbar, ohne beim nächsten Boot mit 42P07 abzubrechen. Hintergrund:
+  tb-bot/tb-dashboard rufen `run_migrations` beim Start (Default `TB_DB_MIGRATE`
+  true), in Prod steht `TB_DB_MIGRATE=0` (Infra-Notiz), also migriert der Bot
+  dort nicht selbst; die Guards halten die Migration aber auch bei aktivem
+  Migrator sauber. Der Kompat-View-Zweck (altes Binary schreibt bis zum
+  Restart weiter) trägt nur im Prod-Handpfad, was der eingesetzte Modus ist.
