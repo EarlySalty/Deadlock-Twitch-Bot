@@ -136,7 +136,10 @@ pub async fn ist_live(runner: &dyn CommandRunner, cfg: &VodArchiveConfig, kanal:
         "--quiet".to_string(),
         format!("https://www.twitch.tv/{kanal}"),
     ];
-    match runner.run(&cfg.yt_dlp, &args, Duration::from_secs(120)).await {
+    match runner
+        .run(&cfg.yt_dlp, &args, Duration::from_secs(120))
+        .await
+    {
         Ok(output) if output.success => true,
         Ok(output) if meldet_offline(&output.stderr) => false,
         Ok(output) => {
@@ -648,7 +651,9 @@ mod tests {
             "ERROR: [twitch:stream] nani: The channel is not currently live"
         ));
         // Aeltere yt-dlp-Fassung.
-        assert!(meldet_offline("ERROR: [twitch:stream] nani: nani is offline"));
+        assert!(meldet_offline(
+            "ERROR: [twitch:stream] nani: nani is offline"
+        ));
         assert!(meldet_offline(
             "ERROR: [twitch:stream] nani: nani does not exist"
         ));
@@ -679,13 +684,17 @@ mod tests {
                echo 'ERROR: Initialization fragment found after media fragments' >&2\n\
                exit 1\n\
              fi\n\
-             found=0; out=\"\"; prev=\"\"\n\
+             downloader=0; mpegts=0; ort=0; out=\"\"; prev=\"\"\n\
              for a in \"$@\"; do\n\
-               if [ \"$a\" = ffmpeg ] && [ \"$prev\" = --downloader ]; then found=1; fi\n\
+               if [ \"$a\" = ffmpeg ] && [ \"$prev\" = --downloader ]; then downloader=1; fi\n\
+               if [ \"$a\" = --hls-use-mpegts ]; then mpegts=1; fi\n\
+               if [ \"$a\" = ffmpeg ] && [ \"$prev\" = --ffmpeg-location ]; then ort=1; fi\n\
                if [ \"$prev\" = -o ]; then out=\"$a\"; fi\n\
                prev=\"$a\"\n\
              done\n\
-             if [ \"$found\" -ne 1 ]; then echo 'kein ffmpeg-downloader' >&2; exit 2; fi\n\
+             if [ \"$downloader\" -ne 1 ]; then echo 'kein ffmpeg-downloader' >&2; exit 2; fi\n\
+             if [ \"$mpegts\" -ne 1 ]; then echo 'kein hls-use-mpegts' >&2; exit 3; fi\n\
+             if [ \"$ort\" -ne 1 ]; then echo 'keine ffmpeg-location' >&2; exit 4; fi\n\
              ziel=$(echo \"$out\" | sed 's/%(ext)s/mp4/')\n\
              : > \"$ziel\"\n\
              exit 0\n",
@@ -704,6 +713,18 @@ mod tests {
         assert_eq!(ergebnis.pfad, tmp.join("v2862490204.mp4"));
         assert_eq!(std::fs::read_to_string(&zaehler).unwrap().trim(), "2");
 
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn anderer_fehler_loest_keinen_zweiten_versuch_aus() {
+        let cfg = VodArchiveConfig::default();
+        let runner = TestRunner::neu(false, "", "ERROR: HTTP Error 403: Forbidden");
+        let tmp = std::env::temp_dir().join(format!("vod-req5-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let fehler = tokio_test_block(lade_vod(&runner, &cfg, &tmp, "v1")).unwrap_err();
+        assert!(fehler.to_string().contains("Download"));
+        assert_eq!(runner.aufrufe.lock().unwrap().len(), 1);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
