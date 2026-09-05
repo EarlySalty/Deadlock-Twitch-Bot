@@ -53,6 +53,12 @@ async fn queue_lease_idempotenz_und_state_sind_atomar() {
         .connect_with(options)
         .await
         .unwrap();
+    sqlx::query(
+        "CREATE TABLE twitch_raw_chat_ingest_health (streamer_login TEXT NOT NULL PRIMARY KEY, last_raw_chat_message_at TEXT, last_raw_chat_insert_ok_at TEXT, last_raw_chat_insert_error_at TEXT, last_raw_chat_error TEXT, raw_chat_lag_seconds INTEGER, twitch_user_id TEXT, updated_at TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(MIGRATION).execute(&pool).await.unwrap();
     let store = AdManagerStore::new(pool.clone());
 
