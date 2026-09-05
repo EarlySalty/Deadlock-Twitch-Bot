@@ -843,7 +843,12 @@ pub async fn viewer_detail_handler(
                 if typ == tb_analytics::chat_typen::Nachrichtentyp::System {
                     continue;
                 }
-                *counts.entry(typ.api_key()).or_insert(0) += 1;
+                let key = if typ == tb_analytics::chat_typen::Nachrichtentyp::Statement {
+                    tb_analytics::chat_typen::Nachrichtentyp::Other.api_key()
+                } else {
+                    typ.api_key()
+                };
+                *counts.entry(key).or_insert(0) += 1;
             }
             if counts.is_empty() {
                 json!(null)

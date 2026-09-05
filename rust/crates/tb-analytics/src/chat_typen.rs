@@ -216,9 +216,10 @@ pub fn klassifiziere_regel(content: &str, chatter_login: &str) -> Nachrichtentyp
         return Nachrichtentyp::System;
     }
     if redeemed_bits_re().is_match(&content_lower)
-        || content_lower.contains("truhe")
-        || content_lower.contains("abofalle")
         || (content_lower.contains("!loot") && content_lower.contains("!dodge"))
+        || (content_lower.contains("truhe") && content_lower.contains("!loot"))
+        || (content_lower.contains("abofalle")
+            && (content_lower.contains("schlägt zu") || content_lower.contains("vielen dank")))
     {
         return Nachrichtentyp::System;
     }

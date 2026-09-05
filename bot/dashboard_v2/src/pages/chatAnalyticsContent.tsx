@@ -267,7 +267,7 @@ export function ChatAktivitaetContent({
             {(!data.messageTypes || data.messageTypes.length === 0) && (
               <p className="py-4 text-center text-text-secondary">Keine Daten verfügbar</p>
             )}
-            {typeof data.labelCoverage === 'number' && data.labelCoverage < 0.95 && (
+            {data.messageTypes && data.messageTypes.length > 0 && typeof data.labelCoverage === 'number' && data.labelCoverage < 0.95 && (
               <p className="pt-2 text-center text-xs text-text-secondary">Ein Teil der Nachrichten wird noch zugeordnet.</p>
             )}
           </div>

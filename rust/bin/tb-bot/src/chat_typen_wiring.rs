@@ -9,6 +9,7 @@ const LAUF_INTERVALL_SEKUNDEN: u64 = 60 * 60;
 const MAX_NACHRICHTEN_PRO_LAUF: i64 = 20_000;
 const PAKET_GROESSE: usize = 40;
 const TAGES_KAPPE_MODELLAUFRUFE: u32 = 2_000;
+const MAX_FEHLER_SERIE: u32 = 5;
 
 struct TagesZaehler {
     tag: NaiveDate,
@@ -48,6 +49,10 @@ pub fn spawn(supervisor: &TaskSupervisor, pool: sqlx::PgPool) {
     });
 }
 
+fn ist_modellkandidat(typ: Nachrichtentyp, content: &str) -> bool {
+    typ == Nachrichtentyp::Other && !content.trim().is_empty()
+}
+
 async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sqlx::Error> {
     let unlabelte = lade_unlabelte(pool, MAX_NACHRICHTEN_PRO_LAUF).await?;
     let geladen = unlabelte.len();
@@ -56,7 +61,7 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
     let mut offen: Vec<(i64, String)> = Vec::new();
     for (id, content, login) in &unlabelte {
         let typ = klassifiziere_regel(content, login);
-        if typ == Nachrichtentyp::Other && !content.trim().is_empty() {
+        if ist_modellkandidat(typ, content) {
             offen.push((*id, content.clone()));
         } else {
             regel_rows.push((*id, typ, "regel", None));
@@ -69,14 +74,16 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
 
     let mut modell_anzahl = 0usize;
     let mut modell_aufrufe = 0u32;
+    let mut fehler_serie = 0u32;
     for paket in offen.chunks(PAKET_GROESSE) {
         if zaehler.rest(Utc::now().date_naive()) == 0 {
             break;
         }
+        zaehler.zaehle();
+        modell_aufrufe += 1;
         match klassifiziere_modell(paket).await {
             Ok((ergebnis, modell)) => {
-                zaehler.zaehle();
-                modell_aufrufe += 1;
+                fehler_serie = 0;
                 let rows: Vec<(i64, Nachrichtentyp, &str, Option<String>)> = ergebnis
                     .into_iter()
                     .map(|(id, typ)| (id, typ, "modell", Some(modell.clone())))
@@ -89,7 +96,12 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
                 }
             }
             Err(error) => {
-                tracing::warn!(%error, "Chat-Typen: Modell-Paket fehlgeschlagen, bleibt für den nächsten Lauf offen")
+                fehler_serie += 1;
+                tracing::warn!(%error, "Chat-Typen: Modell-Paket fehlgeschlagen, bleibt für den nächsten Lauf offen");
+                if fehler_serie >= MAX_FEHLER_SERIE {
+                    tracing::warn!(fehler_serie, "Chat-Typen: zu viele Modellfehler in Folge, Lauf wird abgebrochen");
+                    break;
+                }
             }
         }
     }
@@ -121,6 +133,15 @@ mod tests {
         assert_eq!(z.rest(heute), 0);
         let morgen = NaiveDate::from_ymd_opt(2026, 9, 6).unwrap();
         assert_eq!(z.rest(morgen), TAGES_KAPPE_MODELLAUFRUFE);
+    }
+
+    #[test]
+    fn nur_nichtleere_other_gehen_ans_modell() {
+        assert!(ist_modellkandidat(Nachrichtentyp::Other, "irgendein spam text"));
+        assert!(!ist_modellkandidat(Nachrichtentyp::Other, "   "));
+        assert!(!ist_modellkandidat(Nachrichtentyp::Question, "warum?"));
+        assert!(!ist_modellkandidat(Nachrichtentyp::GameRelated, "phantom 6"));
+        assert!(!ist_modellkandidat(Nachrichtentyp::System, "nightbot text"));
     }
 
     #[test]

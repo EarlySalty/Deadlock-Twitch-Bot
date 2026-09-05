@@ -30,10 +30,6 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "wizebot",
 ];
 
-pub fn classify_message(content: &str) -> &'static str {
-    crate::chat_typen::klassifiziere_regel(content, "").api_key()
-}
-
 /// Eine Roh-Chat-Nachricht aus dem Fenster (Python `all_messages`-Zeile).
 #[derive(sqlx::FromRow)]
 pub struct MessageRow {
@@ -716,6 +712,10 @@ pub async fn load_chat_analytics_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn classify_message(content: &str) -> &'static str {
+        crate::chat_typen::klassifiziere_regel(content, "").api_key()
+    }
 
     #[test]
     fn classify() {
