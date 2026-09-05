@@ -1343,6 +1343,18 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_chat_message_labels (
+                   message_id BIGINT PRIMARY KEY,
+                   label TEXT NOT NULL,
+                   quelle TEXT NOT NULL,
+                   modell TEXT,
+                   erstellt_am TIMESTAMPTZ NOT NULL DEFAULT now()
+               )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
