@@ -26,7 +26,7 @@ use tb_analytics::ai_analysis::{
     parse_ai_analysis_points_with_context, plan_ai_model,
 };
 use tb_analytics::ai_history::save_analysis;
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
 const MAX_USER_CONTEXT_CHARS: usize = 2000;
 
@@ -134,7 +134,7 @@ pub async fn ai_analysis_handler(
 }
 
 /// LLM-Dispatch (Python `_call_ai_analysis`): Opus ueber den zentralen Eingang
-/// `tb_llm::complete` mit Use-Case `ai_analysis` (max_tokens 60000), MiniMax
+/// `tb_llm::complete` mit Use-Case `ai_analysis` (max_tokens 60000), KI
 /// via raw_completion (temp 0.5, max_tokens 60000). Fehler als String
 /// (Aufrufer prüft „credit balance is too low").
 async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, String> {
@@ -153,7 +153,7 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
             "ai-analysis",
         ))
     } else {
-        let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
+        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         let raw = client
             .raw_completion("", prompt, 60000, 0.5)
             .await

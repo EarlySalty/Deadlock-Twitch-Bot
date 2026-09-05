@@ -62,7 +62,7 @@ use axum::{
 /// in der Praxis auftreten.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
-/// Analytics-Endpunkte können langsam sein (DB-Aggregationen, MiniMax-AI-Chat).
+/// Analytics-Endpunkte können langsam sein (DB-Aggregationen, KI-AI-Chat).
 /// 120 Sekunden ist bewusst sehr großzügig — der Rust-Proxy soll nie die engste
 /// Timeout-Schranke sein. Caddy hat einen eigenen, konfigurierbaren Timeout.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);

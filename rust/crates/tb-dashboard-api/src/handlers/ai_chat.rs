@@ -2,7 +2,7 @@
 //!
 //! Port von `api_ai.py:_api_v2_ai_chat`. Beantwortet Folgefragen zu einer bereits
 //! erstellten KI-Analyse (Session aus [`crate::ai_state`]) via Claude Opus, mit
-//! History-Kontext und Follow-up-Ratelimit. (Der MiniMax-Pfad bleibt im Dispatch
+//! History-Kontext und Follow-up-Ratelimit. (Der KI-Pfad bleibt im Dispatch
 //! für historische Sessions erhalten; neue Analysen nutzen ausschließlich Opus.)
 
 use std::time::Duration;
@@ -17,10 +17,10 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use crate::ai_state::{chat_session_key, ChatSession, AI_MODEL_MINIMAX, AI_MODEL_OPUS, AI_STATE};
+use crate::ai_state::{chat_session_key, ChatSession, AI_MODEL_LLM, AI_MODEL_OPUS, AI_STATE};
 use crate::auth::level::DashboardAuthLevel;
 use tb_analytics::ai_analysis::{extract_text_response, plan_ai_model};
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
 fn json_err(status: StatusCode, body: Value) -> Response {
     (status, Json(body)).into_response()
@@ -103,11 +103,11 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, St
         // haelt die Paritaet zur frueheren Auswertung des content-Arrays.
         Ok(extract_text_response(&Value::String(response.text)))
     } else {
-        // MiniMax: messages = [system] + History + neue User-Message.
+        // KI: messages = [system] + History + neue User-Message.
         let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
         messages.extend(history);
         messages.push(json!({ "role": "user", "content": message }));
-        let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
+        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         // raw_text bereits getrimmt (= extract_text_response auf String).
         client
             .messages_completion(Value::Array(messages), 4000, 0.5)
@@ -190,12 +190,12 @@ pub async fn ai_chat_handler(
         None => return json_err(StatusCode::NOT_FOUND, json!({ "error": "chat_session_not_found" })),
     };
 
-    // Ratelimit prüfen (mutiert ggf. MiniMax-Stundenfenster).
+    // Ratelimit prüfen (mutiert ggf. KI-Stundenfenster).
     let now = Utc::now();
     let (remaining_before, reset_ts) =
         AI_STATE.lock().unwrap().remaining_follow_ups(&streamer, &session.model, session.follow_up_count, now);
     if remaining_before <= 0 {
-        if session.model == AI_MODEL_MINIMAX {
+        if session.model == AI_MODEL_LLM {
             let retry_after = (reset_ts.unwrap_or(0) - Utc::now().timestamp()).max(0);
             return json_err(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -226,7 +226,7 @@ pub async fn ai_chat_handler(
         AI_STATE.lock().unwrap().record_and_consume(&session_key, &streamer, &message, &reply, now2);
 
     let mut response = json!({ "message": reply, "followUpsRemaining": remaining_after });
-    if session.model == AI_MODEL_MINIMAX {
+    if session.model == AI_MODEL_LLM {
         if let Some(reset) = reset_ts2 {
             response["rateLimitReset"] = json!(reset);
         }

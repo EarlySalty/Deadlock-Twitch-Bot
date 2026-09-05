@@ -43,7 +43,7 @@ pub mod category_timings;
 pub mod chat_analytics;
 pub mod chatter_verlauf;
 pub mod chat_content_analysis;
-pub mod chat_deep_minimax;
+pub mod chat_deep_llm;
 pub mod chat_hype_timeline;
 pub mod chat_social_graph;
 pub mod clip_command_settings;

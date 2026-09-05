@@ -2,7 +2,7 @@
 //!
 //! Port der Modul-Globals aus `bot/analytics/api_ai.py`: `_in_progress_analyses`
 //! (laufende Analysen), `_chat_sessions` (Folgechat-Sessions, 24h-Retention) und
-//! `_minimax_hourly_counts` (stündliches Follow-up-Ratelimit). Python nutzt
+//! `_hourly_counts` (stündliches Follow-up-Ratelimit). Python nutzt
 //! Modul-Dicts (single-threaded async) — das Rust-Pendant ist ein globaler
 //! `Mutex`. Die Methoden sind synchron; der Aufrufer hält den Lock NIE über den
 //! LLM-`await` (Guard vor dem Call droppen).
@@ -13,12 +13,12 @@ use std::sync::{LazyLock, Mutex};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
-pub const MINIMAX_HOURLY_FOLLOW_UP_LIMIT: i64 = 10;
+pub const LLM_HOURLY_FOLLOW_UP_LIMIT: i64 = 10;
 pub const OPUS_SESSION_FOLLOW_UP_LIMIT: i64 = 3;
 pub const CHAT_SESSION_RETENTION_HOURS: i64 = 24;
 
 pub const AI_MODEL_OPUS: &str = "opus";
-pub const AI_MODEL_MINIMAX: &str = "minimax";
+pub const AI_MODEL_LLM: &str = "llm";
 
 /// Pentest-Schalter (Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`): jeder Env-Wert
 /// außer den „aus"-Werten deaktiviert die Ratelimits. Default (unset) = aus.
@@ -88,7 +88,7 @@ impl AiState {
     }
 
     /// Verbleibende Follow-ups (+ optionaler Reset-Timestamp). Setzt das
-    /// MiniMax-Stundenfenster zurück, wenn abgelaufen (Python `_remaining_follow_ups`).
+    /// KI-Stundenfenster zurück, wenn abgelaufen (Python `_remaining_follow_ups`).
     pub fn remaining_follow_ups(
         &mut self,
         streamer: &str,
@@ -109,7 +109,7 @@ impl AiState {
             window_start = now;
             self.hourly_counts.insert(streamer.to_string(), (count, window_start));
         }
-        let remaining = (MINIMAX_HOURLY_FOLLOW_UP_LIMIT - count).max(0);
+        let remaining = (LLM_HOURLY_FOLLOW_UP_LIMIT - count).max(0);
         let reset_ts = (window_start + Duration::hours(1)).timestamp();
         (remaining, Some(reset_ts))
     }
@@ -143,7 +143,7 @@ impl AiState {
             let fc = self.sessions.get(key).map(|s| s.follow_up_count).unwrap_or(0);
             return self.remaining_follow_ups(streamer, &model, fc, now);
         }
-        // MiniMax: Stundenzähler erhöhen (Fenster ggf. zurücksetzen).
+        // KI: Stundenzähler erhöhen (Fenster ggf. zurücksetzen).
         let (mut count, mut window_start) =
             self.hourly_counts.get(streamer).copied().unwrap_or((0, now));
         if now - window_start >= Duration::hours(1) {
@@ -196,12 +196,12 @@ mod tests {
     }
 
     #[test]
-    fn minimax_consume_und_reset() {
+    fn llm_consume_und_reset() {
         let mut st = AiState::default();
         let now = Utc::now();
-        st.insert_session("nani_1".into(), session(AI_MODEL_MINIMAX, 0, now));
+        st.insert_session("nani_1".into(), session(AI_MODEL_LLM, 0, now));
         // Frisch: 10 übrig, reset_ts gesetzt.
-        let (rem, reset) = st.remaining_follow_ups("nani", AI_MODEL_MINIMAX, 0, now);
+        let (rem, reset) = st.remaining_follow_ups("nani", AI_MODEL_LLM, 0, now);
         assert_eq!(rem, 10);
         assert!(reset.is_some());
         // Ein Consume → 9 übrig.
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(s.history[1]["content"], "antwort");
         // Stunde später → Fenster-Reset → wieder 10.
         let later = now + Duration::hours(2);
-        assert_eq!(st.remaining_follow_ups("nani", AI_MODEL_MINIMAX, 0, later).0, 10);
+        assert_eq!(st.remaining_follow_ups("nani", AI_MODEL_LLM, 0, later).0, 10);
     }
 
     #[test]

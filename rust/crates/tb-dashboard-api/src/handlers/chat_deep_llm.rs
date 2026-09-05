@@ -1,9 +1,9 @@
-//! Handler für `/twitch/api/v2/chat-deep-minimax`.
+//! Handler für `/twitch/api/v2/chat-deep-llm`.
 //!
-//! Port von `bot/analytics/api_chat_deep.py:_api_v2_chat_minimax_deep`.
+//! Port von `bot/analytics/api_chat_deep.py:_api_v2_chat_deep`.
 //! Auth + Extended-Plan-Gate + Extern-LLM-Consent (403 ohne), `streamer` +
 //! `session_id` Pflicht (400). Holt die Session-Chat-Nachrichten und lässt sie
-//! von MiniMax (LLM) in Kategorien/Chat-Tiefe/Top-Themen klassifizieren.
+//! von KI (LLM) in Kategorien/Chat-Tiefe/Top-Themen klassifizieren.
 
 use std::time::Duration;
 
@@ -18,12 +18,12 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
-use tb_analytics::chat_deep_minimax::{
+use tb_analytics::chat_deep_llm::{
     build_deep_prompt, extract_json_object, fetch_session_messages,
 };
-use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::llm_chat::EngagementLlmClient;
 
-/// Python setzt kein `max_tokens` (MiniMax-Server-Default). Der Engagement-
+/// Python setzt kein `max_tokens` (KI-Server-Default). Der Engagement-
 /// Client verlangt einen Wert → großzügig, damit das kleine Antwort-JSON
 /// (Counts + kurze Begründung + 3 Themen) nicht abgeschnitten wird.
 const MAX_DEEP_TOKENS: i64 = 8192;
@@ -44,8 +44,8 @@ fn analytics_error(msg: String) -> axum::response::Response {
         .into_response()
 }
 
-/// `GET /twitch/api/v2/chat-deep-minimax?streamer=&session_id=`
-pub async fn chat_deep_minimax_handler(
+/// `GET /twitch/api/v2/chat-deep-llm?streamer=&session_id=`
+pub async fn chat_deep_llm_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<ChatDeepQuery>,
@@ -94,8 +94,8 @@ pub async fn chat_deep_minimax_handler(
     let messages = match fetch_session_messages(&pool, &session_id).await {
         Ok(m) => m,
         Err(e) => {
-            tracing::error!("chat-deep-minimax Fetch-Fehler: {e}");
-            return analytics_error(format!("MiniMax Analyse fehlgeschlagen: {e}"));
+            tracing::error!("chat-deep-llm Fetch-Fehler: {e}");
+            return analytics_error(format!("KI Analyse fehlgeschlagen: {e}"));
         }
     };
     if messages.is_empty() {
@@ -108,7 +108,7 @@ pub async fn chat_deep_minimax_handler(
 
     let prompt = build_deep_prompt(&messages);
     // Wie Python: einzelne User-Message, temperature 0.1, 240s-Timeout.
-    let client = EngagementMinimaxClient::new(None, None, None, Some(Duration::from_secs(240)));
+    let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
     match client
         .raw_completion("", &prompt, MAX_DEEP_TOKENS, 0.1)
         .await
@@ -117,10 +117,10 @@ pub async fn chat_deep_minimax_handler(
             let json_str = extract_json_object(&content);
             match serde_json::from_str::<serde_json::Value>(json_str) {
                 Ok(v) => Json(v).into_response(),
-                Err(e) => analytics_error(format!("MiniMax Analyse fehlgeschlagen: {e}")),
+                Err(e) => analytics_error(format!("KI Analyse fehlgeschlagen: {e}")),
             }
         }
-        Err(e) => analytics_error(format!("MiniMax Analyse fehlgeschlagen: {e}")),
+        Err(e) => analytics_error(format!("KI Analyse fehlgeschlagen: {e}")),
     }
 }
 
@@ -173,7 +173,7 @@ mod tests {
             return;
         };
         // Consent nicht gesetzt → false.
-        let resp = chat_deep_minimax_handler(
+        let resp = chat_deep_llm_handler(
             DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery {
@@ -206,7 +206,7 @@ mod tests {
             .execute(&pool)
             .await
             .ok();
-        let resp = chat_deep_minimax_handler(
+        let resp = chat_deep_llm_handler(
             partner("earlysalty"),
             State(pool),
             Query(ChatDeepQuery {
@@ -225,7 +225,7 @@ mod tests {
             return;
         };
         set_consent(&pool, true).await;
-        let resp = chat_deep_minimax_handler(
+        let resp = chat_deep_llm_handler(
             DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery {
@@ -244,7 +244,7 @@ mod tests {
             return;
         };
         set_consent(&pool, true).await;
-        let resp = chat_deep_minimax_handler(
+        let resp = chat_deep_llm_handler(
             DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery {
@@ -264,7 +264,7 @@ mod tests {
         };
         set_consent(&pool, true).await;
         // Consent ok, streamer+session da, aber keine Nachrichten → 404 (kein LLM-Call).
-        let resp = chat_deep_minimax_handler(
+        let resp = chat_deep_llm_handler(
             DashboardAuthLevel::admin(),
             State(pool),
             Query(ChatDeepQuery {

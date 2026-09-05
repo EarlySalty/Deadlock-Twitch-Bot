@@ -166,7 +166,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         dashboard_assistent,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
-        chat_deep_minimax, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
+        chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
         engagement_mode, engagement_settings, exp_analytics, follower_funnel, greeting_settings,
         internal_home, leaderboard, loyalty_curve, lurk_command_settings, lurker_analysis,
         lurker_tax_settings, moderation_settings, monetization, onboarding, overview, performance,
@@ -724,8 +724,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route("/twitch/api/v2/coaching", get(coaching::coaching_handler))
         .route(
-            "/twitch/api/v2/chat-deep-minimax",
-            get(chat_deep_minimax::chat_deep_minimax_handler),
+            "/twitch/api/v2/chat-deep-llm",
+            get(chat_deep_llm::chat_deep_llm_handler),
         )
         .route(
             "/twitch/api/v2/chat-analytics",
