@@ -195,7 +195,7 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
             className="panel-card relative rounded-[20px] p-4"
             style={{
               border: '1px solid #C5A059',
-              background: 'linear-gradient(160deg,#2A2017,#1D1611)',
+              background: 'linear-gradient(160deg,#2a211b,#1a1310)',
               boxShadow:
                 '0 0 0 1px rgba(197,160,89,0.35), 0 24px 70px -20px rgba(197,160,89,0.45)',
             }}
@@ -207,7 +207,7 @@ export function LesezeichenHinweis({ onErledigt }: LesezeichenHinweisProps) {
                 style={{
                   borderLeft: '1px solid #C5A059',
                   borderTop: '1px solid #C5A059',
-                  background: '#2A2017',
+                  background: '#2a211b',
                 }}
               />
             )}
