@@ -349,3 +349,63 @@ Rot-Test zuerst: `preview::tests::vorschau_zustandsmaschine` FAILED
 - `docs/funktionsweise/social-media-uploads.md`: Transkription/Untertitel sind nach
   M4 real, die bestehenden Aussagen stimmen jetzt mit dem Code (keine falschen
   Provider-Namen vorhanden).
+
+### M6 - REQ-05 Batch-Kommando: ERLEDIGT
+
+- `batch`-Modul: `select_clips_for_user(twitch_user_id)` (nur ueber Twitch-User-ID,
+  nie Login, INV-06), `render_all_for_user` (Layout+Blur+Untertitel je Clip, ohne Upload).
+- Bin `render_clips` (`[[bin]]`): `render_clips --twitch-user-id <id> --out <dir>
+  [--clips-dir <dir>]`, DSN aus DEADLOCK_CENTRAL_DSN/DATABASE_URL.
+Rot-Test zuerst: `batch::tests::auswahl_nur_ueber_twitch_user_id` FAILED
+(Stub -> leere Vec, left 0 right 2). Danach gruen.
+
+### M8 - Sichtpruefung: Dateien liegen bereit (Nutzer-Urteil offen)
+
+Echter earlysalty-Deadlock-Clip (StrangeClumsyHerringTheRinger) geladen, mit den
+exakten Filtergraphen des Codes gerendert. Unter `/home/nathanael/vod-archive/aufbereitung/`:
+- `layout-pip.mp4` + `standbild-pip.png`
+- `layout-stacked.mp4` + `standbild-stacked.png`
+- `layout-blur_pad.mp4` + `standbild-blur_pad.png` (16:9 zentriert, verschwommener Rand,
+  keine schwarzen Balken)
+- `untertitel-pip.mp4` + `standbild-untertitel.png` (Gold auf dunklem Balken, zweizeilig,
+  Stil exakt wie `subtitles::build_ass`)
+
+Hinweise fuer das Urteil:
+- Die Default-`cam_crop` (1500,50) trifft earlysaltys Facecam nicht (die liegt links);
+  im pip/stacked-Demo erscheint an der Cam-Kachel-Stelle ein schwarzer Ausschnitt. Das
+  ist eine Layout-Einstellung, die der Nutzer im Editor je Kanal setzt, kein Renderfehler.
+- Untertitel-Demo nutzt einen synthetischen Text: der STT-Server (127.0.0.1:8791) laeuft
+  in der Sandbox nicht, ein echtes transkript-basiertes Timing ist erst live pruefbar.
+  Stil, Position und Balken entsprechen dem Code.
+
+Stop-Regel bleibt: erst als fertig melden, wenn der Nutzer die Vorschauen freigegeben hat.
+
+### Verifikation
+
+- Tests (SQLX_OFFLINE per tb_bb_test): tb-social-media 234, tb-dashboard-api 1115+12+6,
+  gesamt 1367 passed, 0 failed (Baseline 1357, +10 neue Rot-dann-Gruen-Tests).
+- Offline-Build (SQLX_OFFLINE=true, echter Merge-/Deploy-Modus) fuer tb-social-media,
+  tb-dashboard-api, tb-bot: gruen. `.sqlx`-Cache regeneriert (docker sqlx prepare),
+  Schema-Snapshot regeneriert (nur die 5 neuen Spalten).
+- Selbstpruefung: burn_subtitles-Ausgabepfad-Bug beim Eigen-Review gefunden und gefixt.
+
+### Scope-Freigaben noetig (diff-policy P4, Contract-Pfade weichen von der Realitaet ab)
+
+Der Nutzer legt `~/.claude/.contract-approvals/2026-09-06-clip-aufbereitung-social` an
+(ein Pfad je Zeile) fuer:
+- bot/dashboard_v2/src/components/socialmedia/LayoutEditor.tsx  (Contract: social-media/)
+- bot/dashboard_v2/src/types/socialMedia.ts
+- rust/Cargo.lock
+- rust/crates/tb-dashboard-api/src/lib.rs  (Contract: routes.rs; Routen liegen in lib.rs)
+- rust/migrations/20260906120000_social_media_deadlock_game_id.sql  (Amendment rust/migrations/)
+- rust/migrations/20260906121000_social_media_subtitles_enabled.sql
+- rust/migrations/20260906122000_social_media_clip_preview.sql
+
+### Offene Schritte fuer den Nutzer (nicht Code)
+
+- Prod-Migrationen als `postgres` anwenden (siehe gates-und-merge.md), Rechte an
+  twitchbot/twitchdash, `_sqlx_migrations` eintragen: 20260906120000/121000/122000.
+- Backfill `.tasks/.../backfill-deadlock-clips.sql` einmalig gegen twitch_analytics.
+- `external_llm_consent=true` in `social_media_settings`; `TB_CLIP_FETCHER_ENABLED=1`;
+  DB_MASTER_KEY_V1 fuer Uploads; STT-Server (8791) live fuer Untertitel/Transkription.
+- Scope-Freigabe-Datei (oben) fuer den Merge-Gate.
