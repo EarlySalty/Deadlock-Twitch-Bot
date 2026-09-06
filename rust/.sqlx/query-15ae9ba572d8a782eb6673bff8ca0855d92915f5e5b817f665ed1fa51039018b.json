@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_media SET preview_status = 'rendering', preview_updated_at = NOW() WHERE id IN ( SELECT id FROM twitch_clips_social_media WHERE preview_status = 'pending' OR (preview_status = 'rendering' AND preview_updated_at < NOW() - INTERVAL '15 minutes') ORDER BY preview_updated_at ASC NULLS FIRST LIMIT $1 FOR UPDATE SKIP LOCKED) RETURNING id AS \"id!\", clip_url, local_file_path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "clip_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "local_file_path",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "15ae9ba572d8a782eb6673bff8ca0855d92915f5e5b817f665ed1fa51039018b"
+}

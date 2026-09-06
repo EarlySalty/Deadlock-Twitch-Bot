@@ -641,6 +641,7 @@ twitch_clips_social_media|created_at|timestamp with time zone|NO|now()
 twitch_clips_social_media|custom_description|text|YES|
 twitch_clips_social_media|custom_title|text|YES|
 twitch_clips_social_media|discarded_at|timestamp with time zone|YES|
+twitch_clips_social_media|download_failed_at|timestamp with time zone|YES|
 twitch_clips_social_media|downloaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|duration_seconds|double precision|YES|
 twitch_clips_social_media|game_id|text|YES|
