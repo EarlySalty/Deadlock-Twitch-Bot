@@ -1,14 +1,14 @@
 [gewichte]
-ocr_kill = 0.1667
-ocr_tod = 0.0417
-ocr_multikill = 0.0
-ocr_objective = 0.0417
-ocr_soul_sprung = 0.0
+ocr_kill = 0.0405
+ocr_tod = 0.0
+ocr_multikill = 0.0116
+ocr_objective = 0.0838
+ocr_soul_sprung = 0.1879
 sprache_pegel = 0.5
 sprache_lachen = 0.0
 sprache_schluesselwort = 0.0
 bild_szenenwechsel = 0.0
-bild_death_screen = 0.0833
+bild_death_screen = 0.1243
 bild_template = 0.0
 
 [signale_aktiv]
