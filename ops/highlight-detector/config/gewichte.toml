@@ -1,0 +1,30 @@
+[gewichte]
+ocr_kill = 0.5
+ocr_tod = 0.15
+ocr_multikill = 0.5
+ocr_objective = 0.25
+ocr_soul_sprung = 0.35
+sprache_pegel = 0.3
+sprache_lachen = 0.3
+sprache_schluesselwort = 0.2
+bild_szenenwechsel = 0.1
+bild_death_screen = 0.15
+bild_template = 0.2
+
+[signale_aktiv]
+ocr = true
+sprache = true
+bild = true
+
+[fenster]
+fenster_s = 8.0
+schritt_s = 2.0
+nms_abstand_s = 25.0
+schwelle = 0.6
+
+[schnitt]
+vorlauf_s = 20.0
+nachlauf_s = 10.0
+
+[schluesselwoerter]
+begriffe = ["was", "nein", "alter", "digga", "lol", "insane", "clip", "oh mein gott", "krass", "wie geil", "ez", "gg", "brudi", "boah", "hilfe", "nice"]
