@@ -55,6 +55,29 @@ export function RetentionRadar({
     },
   ];
 
+  const eckenWinkel = [90, 30, -30, -90, -150, -210];
+  const EckenLabel = (props: any) => {
+    const { x, y, index, value } = props;
+    if (x == null || y == null || index == null) return null;
+    const rad = ((eckenWinkel[index] ?? 90) * Math.PI) / 180;
+    const abstand = 14;
+    const lx = x + Math.cos(rad) * abstand;
+    const ly = y - Math.sin(rad) * abstand;
+    return (
+      <text
+        x={lx}
+        y={ly}
+        fill="var(--color-text-primary)"
+        fontSize={11}
+        fontWeight={600}
+        textAnchor="middle"
+        dominantBaseline="central"
+      >
+        {value}
+      </text>
+    );
+  };
+
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       return (
@@ -112,8 +135,11 @@ export function RetentionRadar({
               dataKey="you"
               stroke="var(--color-primary)"
               fill="var(--color-primary)"
-              fillOpacity={0.3}
+              fillOpacity={0.35}
               strokeWidth={2}
+              dot={{ r: 3, fill: 'var(--color-primary)', strokeWidth: 0 }}
+              label={<EckenLabel />}
+              isAnimationActive={false}
             />
             {categoryAvg && (
               <Radar
