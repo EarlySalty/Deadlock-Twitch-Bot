@@ -57,6 +57,41 @@ export interface WeekdayStats {
   totalFollowers: number;
 }
 
+export type RaidSortKey =
+  | 'toBroadcaster'
+  | 'viewersSent'
+  | 'chattersAt5m'
+  | 'chattersAt15m'
+  | 'chattersAt30m'
+  | 'retention30mPct'
+  | 'newChatters';
+
+export type RaidSortDirection = 'asc' | 'desc';
+
+export function filterAndSortRaids(
+  raids: RaidRetentionEntry[],
+  query: string,
+  sortKey: RaidSortKey,
+  direction: RaidSortDirection,
+): RaidRetentionEntry[] {
+  const q = query.trim().toLowerCase();
+  const gefiltert = q
+    ? raids.filter((raid) => raid.toBroadcaster.toLowerCase().includes(q))
+    : raids.slice();
+  const richtung = direction === 'asc' ? 1 : -1;
+  return gefiltert.sort((a, b) => {
+    if (sortKey === 'toBroadcaster') {
+      return a.toBroadcaster.localeCompare(b.toBroadcaster, 'de') * richtung;
+    }
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    const an = av === null ? Number.NEGATIVE_INFINITY : av;
+    const bn = bv === null ? Number.NEGATIVE_INFINITY : bv;
+    if (an === bn) return 0;
+    return (an < bn ? -1 : 1) * richtung;
+  });
+}
+
 export function wochentagBalkenHoehe(avgViewers: number, min: number, max: number): number {
   if (max <= min) {
     return 100;

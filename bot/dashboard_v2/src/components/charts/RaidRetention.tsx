@@ -2,45 +2,15 @@ import { useMemo, useState } from 'react';
 import { Rise } from '../../motion/Rise';
 import { ChevronDown, ChevronUp, Search, Target, UserPlus, TrendingUp } from 'lucide-react';
 import { NoDataCard } from '../cards/NoDataCard';
-import type { RaidRetention as RaidRetentionData, RaidRetentionEntry } from '@/types/analytics';
+import { filterAndSortRaids } from '@/types/analytics';
+import type {
+  RaidRetention as RaidRetentionData,
+  RaidSortDirection,
+  RaidSortKey,
+} from '@/types/analytics';
 
 interface RaidRetentionProps {
   data: RaidRetentionData | undefined;
-}
-
-export type RaidSortKey =
-  | 'toBroadcaster'
-  | 'viewersSent'
-  | 'chattersAt5m'
-  | 'chattersAt15m'
-  | 'chattersAt30m'
-  | 'retention30mPct'
-  | 'newChatters';
-
-export type RaidSortDirection = 'asc' | 'desc';
-
-export function filterAndSortRaids(
-  raids: RaidRetentionEntry[],
-  query: string,
-  sortKey: RaidSortKey,
-  direction: RaidSortDirection,
-): RaidRetentionEntry[] {
-  const q = query.trim().toLowerCase();
-  const gefiltert = q
-    ? raids.filter((raid) => raid.toBroadcaster.toLowerCase().includes(q))
-    : raids.slice();
-  const richtung = direction === 'asc' ? 1 : -1;
-  return gefiltert.sort((a, b) => {
-    if (sortKey === 'toBroadcaster') {
-      return a.toBroadcaster.localeCompare(b.toBroadcaster, 'de') * richtung;
-    }
-    const av = a[sortKey];
-    const bv = b[sortKey];
-    const an = av === null ? Number.NEGATIVE_INFINITY : av;
-    const bn = bv === null ? Number.NEGATIVE_INFINITY : bv;
-    if (an === bn) return 0;
-    return (an < bn ? -1 : 1) * richtung;
-  });
 }
 
 const RAID_SPALTEN: { key: RaidSortKey; label: string; align: 'left' | 'right' }[] = [
@@ -60,18 +30,13 @@ function retentionColor(pct: number): string {
 }
 
 export function RaidRetention({ data }: RaidRetentionProps) {
-  if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Raid-Retention-Daten vorhanden"} />;
-  }
-
-  const { summary, raids } = data;
   const [suche, setSuche] = useState('');
   const [sortKey, setSortKey] = useState<RaidSortKey>('viewersSent');
   const [richtung, setRichtung] = useState<RaidSortDirection>('desc');
 
   const sichtbareRaids = useMemo(
-    () => filterAndSortRaids(raids, suche, sortKey, richtung),
-    [raids, suche, sortKey, richtung],
+    () => filterAndSortRaids(data?.raids ?? [], suche, sortKey, richtung),
+    [data, suche, sortKey, richtung],
   );
 
   const spalteWechseln = (key: RaidSortKey) => {
@@ -82,6 +47,12 @@ export function RaidRetention({ data }: RaidRetentionProps) {
     setSortKey(key);
     setRichtung(key === 'toBroadcaster' ? 'asc' : 'desc');
   };
+
+  if (!data || !data.dataAvailable) {
+    return <NoDataCard message={data?.message || "Keine Raid-Retention-Daten vorhanden"} />;
+  }
+
+  const { summary, raids } = data;
 
   return (
     <div className="space-y-4">

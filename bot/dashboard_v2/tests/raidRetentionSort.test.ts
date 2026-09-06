@@ -2,7 +2,7 @@
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 
-import { filterAndSortRaids } from '../src/components/charts/RaidRetention';
+import { filterAndSortRaids } from '../src/types/analytics';
 import type { RaidRetentionEntry } from '../src/types/analytics';
 
 function raid(over: Partial<RaidRetentionEntry>): RaidRetentionEntry {
