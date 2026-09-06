@@ -84,13 +84,10 @@ pub struct HealthScores {
     pub network: i64,
 }
 
-/// Berechnet die Health-Scores exakt nach Python `_calculate_health_scores`.
-/// `int()`-Truncation = `as i64` (positive Werte); `min(100,..)`/`max(0,..)`
-/// wie Python. `category_percentile=None` → avg_viewers/5-Fallback (Reach).
 #[allow(clippy::too_many_arguments)]
 fn calculate_health_scores(
     avg_viewers: f64,
-    retention_10m_pct: f64,
+    bindung_pct: f64,
     retention_sample_count: i64,
     engagement_rate: f64,
     chat_sample_count: i64,
@@ -107,7 +104,7 @@ fn calculate_health_scores(
     let retention = if retention_sample_count < 3 {
         50
     } else {
-        ((retention_10m_pct * 1.5) as i64).min(100)
+        (bindung_pct as i64).min(100)
     };
     let engagement = if chat_sample_count < 3 {
         50
@@ -120,10 +117,13 @@ fn calculate_health_scores(
         let weighted = mon.sub_events * 3 + mon.bits_events + mon.hype_trains * 5;
         (((weighted as f64 / sc as f64) * 10.0) as i64).clamp(0, 100)
     };
-    let network = {
-        let total = net.sent + net.received;
-        let reciprocity = net.sent.min(net.received) * 10;
-        (total * 8 + reciprocity).clamp(0, 100)
+    let network = if session_count <= 0 {
+        0
+    } else {
+        let sessions = session_count as f64;
+        let sent = ((net.sent as f64 / sessions * 50.0).round() as i64).min(50);
+        let received = ((net.received as f64 / sessions * 50.0).round() as i64).min(50);
+        sent + received
     };
     let total = (reach as f64 * 0.2
         + retention as f64 * 0.25
@@ -572,7 +572,7 @@ pub async fn overview_handler(
 
     let scores = calculate_health_scores(
         metrics.avg_avg_viewers.unwrap_or(0.0),
-        curr_ret,
+        metrics.avg_bindung.unwrap_or(0.0) * 100.0,
         curr_ret_sample,
         chatter.engagement_rate,
         metrics.chat_sample_count.unwrap_or(0),
@@ -832,8 +832,12 @@ mod tests {
                 (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
                  duration_seconds, follower_delta, followers_start, followers_end, retention_10m)
             VALUES
-                (1, 'streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
-                 100.0, 200, 3600, 5, 1000, 1005, 0.6)
+                (1, 'streamer_x', NOW() - INTERVAL '1 day',
+                 NOW() - INTERVAL '1 day' + INTERVAL '1 hour', 120.0, 200, 3600, 5, 1000, 1005, 0.9),
+                (2, 'streamer_x', NOW() - INTERVAL '2 days',
+                 NOW() - INTERVAL '2 days' + INTERVAL '1 hour', 120.0, 200, 3600, 5, 1000, 1005, 0.9),
+                (3, 'streamer_x', NOW() - INTERVAL '3 days',
+                 NOW() - INTERVAL '3 days' + INTERVAL '1 hour', 120.0, 200, 3600, 5, 1000, 1005, 0.9)
             "#,
         )
         .execute(&pool)
@@ -851,8 +855,10 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_raid_history (from_broadcaster_login, to_broadcaster_login, viewer_count, success, executed_at)
-            VALUES ('streamer_x', 'p_a', 30, TRUE, NOW() - INTERVAL '1 hour'),
-                   ('p_b', 'streamer_x', 5, TRUE, NOW() - INTERVAL '2 hours')
+            VALUES ('streamer_x', 'p_a', 10, TRUE, NOW() - INTERVAL '1 hour'),
+                   ('streamer_x', 'p_b', 10, TRUE, NOW() - INTERVAL '2 hours'),
+                   ('streamer_x', 'p_c', 10, TRUE, NOW() - INTERVAL '3 hours'),
+                   ('p_x', 'streamer_x', 5, TRUE, NOW() - INTERVAL '4 hours')
             "#,
         )
         .execute(&pool)
@@ -870,49 +876,39 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 100.0).abs() < 0.001);
-        assert_eq!(v["summary"]["totalSessions"], 1);
-        // P1.27: streamCount-Alias muss identisch zu totalSessions emittiert werden.
-        assert_eq!(v["summary"]["streamCount"], 1);
+        assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 120.0).abs() < 0.001);
+        assert_eq!(v["summary"]["totalSessions"], 3);
+        assert_eq!(v["summary"]["streamCount"], 3);
         assert_eq!(v["summary"]["streamCount"], v["summary"]["totalSessions"]);
-        // B16-FIX-OVERVIEW-WINDOW: Admin-Token → volles Fenster, nicht limitiert.
         assert_eq!(v["window"], "full");
         assert_eq!(v["windowLimited"], false);
-        // Neue session-abgeleitete Summary-Felder.
-        assert_eq!(v["summary"]["followersGained"], 5);
-        assert!((v["summary"]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
-        assert_eq!(v["summary"]["retentionReliable"], false); // nur 1 Sample (<3)
-        // Chatter-Felder (nightbot=Bot raus, bob nur via API).
+        assert_eq!(v["summary"]["followersGained"], 15);
+        assert!((v["summary"]["retention10m"].as_f64().unwrap() - 90.0).abs() < 0.01);
+        assert_eq!(v["summary"]["retentionReliable"], true);
         assert_eq!(v["summary"]["activeChatters"], 1);
         assert_eq!(v["summary"]["uniqueViewers"], 2);
         assert_eq!(v["summary"]["uniqueChatters"], 1);
         assert!((v["summary"]["engagementRate"].as_f64().unwrap() - 50.0).abs() < 0.001);
-        // Netzwerk-Kachel.
-        assert_eq!(v["network"]["sent"], 1);
+        assert_eq!(v["network"]["sent"], 3);
         assert_eq!(v["network"]["sentViewers"], 30);
         assert_eq!(v["network"]["received"], 1);
-        // Health-Scores: reach=avg/5=20, retention/engagement=50 (sample<3),
-        // growth=min(100, fph*20)=100 (5 Follower / 1h), monetization=0 (keine
-        // Event-Tabellen), network: total=2*8 + recip=10 = 26.
-        assert_eq!(v["scores"]["reach"], 20);
-        assert_eq!(v["scores"]["retention"], 50);
+        assert_eq!(v["scores"]["reach"], 24);
+        assert_eq!(v["scores"]["retention"], 60);
         assert_eq!(v["scores"]["engagement"], 50);
         assert_eq!(v["scores"]["growth"], 100);
         assert_eq!(v["scores"]["monetization"], 0);
-        assert_eq!(v["scores"]["network"], 26);
-        assert_eq!(v["scores"]["total"], 44);
-        // Findings: Retention-Sample<3 (info), Chat-Sample<3 (info), fph=5>3 (pos).
+        assert_eq!(v["scores"]["network"], 67);
+        assert_eq!(v["scores"]["total"], 51);
         assert_eq!(v["findings"].as_array().unwrap().len(), 3);
+        assert_eq!(v["findings"][0]["type"], "pos");
+        assert_eq!(v["findings"][1]["type"], "info");
         assert_eq!(v["findings"][2]["type"], "pos");
-        // Actions: keine (Samples <3, fph nicht <1).
         assert_eq!(v["actions"].as_array().unwrap().len(), 0);
-        // Sessions-Liste: 1 Session, alice als einziger Nicht-Bot-Chatter (returning).
-        assert_eq!(v["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(v["sessions"].as_array().unwrap().len(), 3);
         assert_eq!(v["sessions"][0]["id"], 1);
-        assert!((v["sessions"][0]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
+        assert!((v["sessions"][0]["retention10m"].as_f64().unwrap() - 90.0).abs() < 0.01);
         assert_eq!(v["sessions"][0]["uniqueChatters"], 1);
         assert_eq!(v["sessions"][0]["peakViewers"], 200);
-        // Correlations: nur 1 Session (<3) → 0. dataQuality-Konstante.
         assert_eq!(v["correlations"]["durationVsViewers"], 0.0);
         assert_eq!(v["correlations"]["chatVsRetention"], 0.0);
         assert_eq!(v["dataQuality"]["botFilterApplied"], true);
@@ -981,23 +977,87 @@ mod tests {
 
     #[test]
     fn health_scores_formel_exakt() {
-        // category_percentile gesetzt → reach = 20 + 0.5*80 = 60.
         let s = calculate_health_scores(
-            100.0, 40.0, 5, 12.0, 5, 2.0, 4,
+            100.0,
+            58.5,
+            5,
+            12.0,
+            5,
+            2.0,
+            4,
             Some(0.5),
-            OverviewMonetization { sub_events: 2, bits_events: 0, hype_trains: 1 },
-            OverviewNetworkStats { sent: 3, received: 1, sent_viewers: 0 },
+            OverviewMonetization {
+                sub_events: 2,
+                bits_events: 0,
+                hype_trains: 1,
+            },
+            OverviewNetworkStats {
+                sent: 3,
+                received: 1,
+                sent_viewers: 0,
+            },
         );
         assert_eq!(s.reach, 60);
-        assert_eq!(s.retention, 60); // min(100, 40*1.5)
-        assert_eq!(s.engagement, 60); // min(100, 12*5)
-        assert_eq!(s.growth, 40); // min(100, 2*20)
-        // weighted = 2*3 + 0 + 1*5 = 11; sc=max(1,4)=4; (11/4)*10=27.5 -> 27.
+        assert_eq!(s.retention, 58);
+        assert_eq!(s.engagement, 60);
+        assert_eq!(s.growth, 40);
         assert_eq!(s.monetization, 27);
-        // total=3+1=4; recip=min(3,1)*10=10; 4*8+10=42.
-        assert_eq!(s.network, 42);
-        // total = 60*.2+60*.25+60*.2+40*.15+27*.1+42*.1 = 12+15+12+6+2.7+4.2=51.9 -> 51.
-        assert_eq!(s.total, 51);
+        assert_eq!(s.network, 51);
+        assert_eq!(s.total, 52);
+
+        let wenige_samples = calculate_health_scores(
+            100.0,
+            58.5,
+            2,
+            12.0,
+            5,
+            2.0,
+            4,
+            Some(0.5),
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 3,
+                received: 1,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(wenige_samples.retention, 50);
+
+        let ohne_sessions = calculate_health_scores(
+            100.0,
+            58.5,
+            5,
+            12.0,
+            5,
+            2.0,
+            0,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 5,
+                received: 5,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(ohne_sessions.network, 0);
+
+        let network_gedeckelt = calculate_health_scores(
+            100.0,
+            58.5,
+            5,
+            12.0,
+            5,
+            2.0,
+            2,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 10,
+                received: 10,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(network_gedeckelt.network, 100);
     }
 
     #[test]

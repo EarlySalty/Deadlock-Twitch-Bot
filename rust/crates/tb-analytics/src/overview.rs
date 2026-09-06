@@ -20,6 +20,7 @@ pub struct OverviewMetricsRow {
     pub total_followers: Option<i64>,
     pub gained_followers: Option<i64>,
     pub avg_retention_10m: Option<f64>,
+    pub avg_bindung: Option<f64>,
     pub retention_sample_count: Option<i64>,
     pub chat_sample_count: Option<i64>,
     pub follower_valid_count: Option<i64>,
@@ -90,6 +91,11 @@ pub async fn overview_metrics(
                     THEN LEAST(1.0, s.retention_10m)
                     ELSE NULL
                 END)::FLOAT8                                          AS avg_retention_10m,
+            AVG(CASE
+                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0
+                    THEN LEAST(1.0, s.avg_viewers / NULLIF(s.peak_viewers, 0))
+                    ELSE NULL
+                END)::FLOAT8                                          AS avg_bindung,
             COUNT(CASE
                     WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.retention_10m IS NOT NULL
                     THEN 1
@@ -879,6 +885,7 @@ mod tests {
         assert_eq!(metrics.follower_valid_count, Some(1));
         assert_eq!(metrics.retention_sample_count, Some(1));
         assert!((metrics.avg_retention_10m.unwrap() - 0.5).abs() < 0.001);
+        assert!((metrics.avg_bindung.unwrap() - 0.5).abs() < 0.001);
     }
 
     #[tokio::test]
