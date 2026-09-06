@@ -274,3 +274,18 @@ Live-Voraussetzungen (operativ, ausserhalb Code-Scope, durch Nutzer zu setzen):
   `skipped_no_key`; Download und Enrichment-Zeile entstehen trotzdem).
 - `TB_CLIP_FETCHER_ENABLED=1`, damit neue Clips ueberhaupt geholt werden (Gate steht aus).
 - `DB_MASTER_KEY_V1` fuer den Upload-Worker (nur fuer Uploads, nicht fuer Download/Enrichment).
+
+### M2 - REQ-01 gespeichertes Layout wirkt im Render: ERLEDIGT
+
+- `layout::get_clip_stored_layout` liefert Override > Streamer-Layout, `None` wenn keins
+  gespeichert (kein Fallback auf globalen Default, damit der Render entscheiden kann).
+- `video_processor::plan_vertical_render` + `VerticalRender`: Layout -> Compose (Overlay/
+  Stacked), sonst Center-Crop.
+- `video_processor::compose_and_trim`: schneidet auf Plattform-Laenge, dann `compose_vertical`.
+- `upload_worker::convert_to_vertical` nimmt jetzt `clip_db_id`, laedt das gespeicherte
+  Layout und komponiert; Center-Crop nur noch als Fallback.
+
+Rot-Test zuerst: `layout::tests::gespeichertes_layout_waehlt_compose_ohne_center_crop`
+FAILED - Panic "mit gespeichertem Layout darf NICHT Center-Crop gewaehlt werden"
+(Stub `get_clip_stored_layout -> None`). Nach der Verdrahtung gruen.
+Lib-Tests: 226 passed, 0 failed (Baseline 224 + M1-Prep + M2).

@@ -481,6 +481,49 @@ pub async fn get_clip_effective_layout(
     default_streamer_layout()
 }
 
+/// Gespeichertes Layout eines Clips: Override > Streamer-Default. Liefert `None`,
+/// wenn WEDER ein Clip-Override NOCH ein Streamer-Layout existiert. Anders als
+/// [`get_clip_effective_layout`] faellt es nicht auf den globalen Default zurueck,
+/// damit der Render zwischen "Layout vorhanden -> komponieren" und "kein Layout ->
+/// Center-Crop" unterscheiden kann.
+pub async fn get_clip_stored_layout(
+    pool: &PgPool,
+    clip_db_id: impl Into<i64>,
+) -> Option<StreamerLayout> {
+    let clip_db_id = clip_db_id.into();
+    let row = sqlx::query!(
+        "SELECT c.layout_override_json::text AS override_json, \
+                l.layout_json::text AS streamer_layout_json, l.cam_enabled AS \"cam_enabled?\", l.mode AS \"mode?\" \
+           FROM twitch_clips_social_media c \
+           LEFT JOIN social_media_streamer_layout l \
+             ON LOWER(l.streamer_login) = LOWER(c.streamer_login) \
+          WHERE c.id = $1 LIMIT 1",
+        clip_db_id
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+
+    if let Some(raw) = row.override_json.filter(|s| !s.is_empty()) {
+        if let Some(payload) = decode_layout_json(&raw) {
+            if let Ok(layout) = StreamerLayout::from_stored_value(&payload, None, None) {
+                return Some(layout);
+            }
+        }
+    }
+    if let Some(raw) = row.streamer_layout_json.filter(|s| !s.is_empty()) {
+        if let Some(payload) = decode_layout_json(&raw) {
+            let cam = row.cam_enabled.unwrap_or(true);
+            let mode = row.mode.as_deref().unwrap_or("pip");
+            if let Ok(layout) = StreamerLayout::from_stored_value(&payload, Some(cam), Some(mode)) {
+                return Some(layout);
+            }
+        }
+    }
+    None
+}
+
 /// Setzt (oder löscht mit `None`) das Clip-spezifische Layout-Override.
 pub async fn set_clip_layout_override(
     pool: &PgPool,
@@ -837,6 +880,47 @@ mod tests {
         let eff = get_clip_effective_layout(&pool, clip).await;
         assert_eq!(eff.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
         assert_ne!(eff, default_streamer_layout());
+    }
+
+    #[tokio::test]
+    async fn gespeichertes_layout_waehlt_compose_ohne_center_crop() {
+        use crate::video_processor::{plan_vertical_render, VerticalRender};
+        let Some(pool) = make_pool("t_sm_layout_render").await else {
+            return;
+        };
+        // Streamer mit gespeichertem pip-Layout.
+        upsert_streamer_layout(&pool, "nani", &default_streamer_layout(), None)
+            .await
+            .unwrap();
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Clip mit gespeichertem Layout -> Compose-Pfad (Overlay), kein Center-Crop.
+        let stored = get_clip_stored_layout(&pool, clip).await;
+        assert!(stored.is_some(), "gespeichertes Streamer-Layout muss gefunden werden");
+        match plan_vertical_render(stored.as_ref()) {
+            VerticalRender::Compose { filter, .. } => {
+                assert!(filter.contains("overlay"), "pip-Layout rendert per overlay: {filter}");
+            }
+            VerticalRender::CenterCrop => panic!("mit gespeichertem Layout darf NICHT Center-Crop gewaehlt werden"),
+        }
+
+        // Clip ohne Streamer-Layout und ohne Override -> Fallback Center-Crop.
+        let ghost: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('ghost') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(get_clip_stored_layout(&pool, ghost).await.is_none());
+        assert_eq!(
+            plan_vertical_render(get_clip_stored_layout(&pool, ghost).await.as_ref()),
+            VerticalRender::CenterCrop
+        );
     }
 
     #[tokio::test]

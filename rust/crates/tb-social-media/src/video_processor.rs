@@ -131,6 +131,27 @@ pub fn build_crop_filter(
     format!("crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_width}:{target_height}")
 }
 
+/// Wie ein Clip ins Hochformat gebracht wird. `Compose` traegt das
+/// Streamer-Layout (Facecam-Compositing), `CenterCrop` ist der Fallback ohne
+/// gespeichertes Layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerticalRender {
+    Compose { filter: String, cam_enabled: bool },
+    CenterCrop,
+}
+
+/// Waehlt den Render-Pfad: liegt ein Layout vor, wird komponiert (Overlay/
+/// Stacked), sonst faellt der Render auf Center-Crop zurueck.
+pub fn plan_vertical_render(layout: Option<&StreamerLayout>) -> VerticalRender {
+    match layout {
+        Some(l) => VerticalRender::Compose {
+            filter: build_compose_filter(l, l.mode.trim().to_lowercase().as_str(), l.cam_enabled),
+            cam_enabled: l.cam_enabled,
+        },
+        None => VerticalRender::CenterCrop,
+    }
+}
+
 /// FFmpeg/ffprobe-Wrapper.
 #[derive(Debug, Clone)]
 pub struct VideoProcessor {
@@ -270,6 +291,30 @@ impl VideoProcessor {
             self.trim_video(input_path, &temp_path, max_duration).await?;
         }
         self.convert_to_vertical(&temp_path, output_path, target_width, target_height, "center").await?;
+        if temp_path != input_path {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+        }
+        Ok(())
+    }
+
+    /// Wie [`Self::convert_and_trim`], aber layout-bewusst: erst auf
+    /// `max_duration` schneiden (falls nötig), dann per [`Self::compose_vertical`]
+    /// das Streamer-Layout (Game + optional Facecam) ins Hochformat rendern.
+    pub async fn compose_and_trim(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        max_duration: i64,
+        layout: &StreamerLayout,
+    ) -> Result<(), VideoProcessorError> {
+        let info = self.get_video_info(input_path).await?;
+        let mut temp_path = input_path.to_string();
+        if info.duration > max_duration as f64 {
+            temp_path = Path::new(output_path).with_extension("temp.mp4").to_string_lossy().into_owned();
+            self.trim_video(input_path, &temp_path, max_duration).await?;
+        }
+        self.compose_vertical(&temp_path, output_path, layout, &layout.mode, layout.cam_enabled)
+            .await?;
         if temp_path != input_path {
             let _ = tokio::fs::remove_file(&temp_path).await;
         }

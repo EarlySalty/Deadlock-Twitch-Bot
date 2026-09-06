@@ -19,6 +19,7 @@ use crate::clip_queue::{
     get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
+use crate::layout::get_clip_stored_layout;
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
 use crate::uploaders::youtube::{YouTubeRefreshCreds, YouTubeUploader, GOOGLE_TOKEN_URL};
@@ -303,7 +304,7 @@ impl UploadTask {
         }
 
         let converted_path = self
-            .convert_to_vertical(&local_path, &item.platform)
+            .convert_to_vertical(item.clip_db_id, &local_path, &item.platform)
             .await?;
         self.update_upload_status_logged(item, "processing", None, None, "processing_converted")
             .await;
@@ -562,6 +563,7 @@ impl UploadTask {
 
     async fn convert_to_vertical(
         &self,
+        clip_db_id: i64,
         input_path: &str,
         platform: &str,
     ) -> Result<String, WorkerError> {
@@ -569,15 +571,28 @@ impl UploadTask {
         if Path::new(&output_path).exists() {
             return Ok(output_path);
         }
-        self.video_processor
-            .convert_and_trim(
-                input_path,
-                &output_path,
-                max_duration_for(platform),
-                TARGET_WIDTH,
-                TARGET_HEIGHT,
-            )
-            .await?;
+        let max_duration = max_duration_for(platform);
+        // Liegt ein gespeichertes Layout vor (Clip-Override oder Streamer-Default),
+        // rendert der Upload es mit Facecam-Compositing; sonst faellt er auf
+        // Center-Crop zurueck.
+        match get_clip_stored_layout(&self.pool, clip_db_id).await {
+            Some(layout) => {
+                self.video_processor
+                    .compose_and_trim(input_path, &output_path, max_duration, &layout)
+                    .await?;
+            }
+            None => {
+                self.video_processor
+                    .convert_and_trim(
+                        input_path,
+                        &output_path,
+                        max_duration,
+                        TARGET_WIDTH,
+                        TARGET_HEIGHT,
+                    )
+                    .await?;
+            }
+        }
         Ok(output_path)
     }
 }
