@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT approval_mode, timezone FROM social_media_streamer_settings WHERE streamer_login = $1",
+  "query": "SELECT approval_mode, timezone, subtitles_enabled FROM social_media_streamer_settings WHERE streamer_login = $1",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "timezone",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "subtitles_enabled",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -21,8 +26,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "f19c5c98a4fcf939fbec18a1b5266e04e68b16d90490fd184f29ce68b307f87b"
+  "hash": "33c925d34e1a733eafa082c68962f60ce9b18d432e22213bd6a6e64be14a6e4e"
 }

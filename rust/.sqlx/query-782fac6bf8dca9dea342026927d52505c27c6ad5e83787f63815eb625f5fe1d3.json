@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.layout_override_json::text AS override_json, l.layout_json::text AS streamer_layout_json, l.cam_enabled AS \"cam_enabled?\", l.mode AS \"mode?\" FROM twitch_clips_social_media c LEFT JOIN social_media_streamer_layout l ON LOWER(l.streamer_login) = LOWER(c.streamer_login) WHERE c.id = $1 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "override_json",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_layout_json",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "cam_enabled?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "mode?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "782fac6bf8dca9dea342026927d52505c27c6ad5e83787f63815eb625f5fe1d3"
+}

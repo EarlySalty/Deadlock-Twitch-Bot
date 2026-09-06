@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_streamer_settings (streamer_login, approval_mode, timezone, subtitles_enabled, updated_at, updated_by) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, $5) ON CONFLICT (streamer_login) DO UPDATE SET approval_mode = EXCLUDED.approval_mode, timezone = EXCLUDED.timezone, subtitles_enabled = EXCLUDED.subtitles_enabled, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1e46b3720ed62dc7639f0ab325228ddd53c90be12a3a981fe8fe7fdaf0007723"
+}
