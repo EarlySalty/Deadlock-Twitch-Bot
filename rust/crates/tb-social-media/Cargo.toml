@@ -5,7 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 sqlx              = { workspace = true }
-tokio             = { workspace = true, features = ["process", "fs", "io-util"] }
+tokio             = { workspace = true, features = ["process", "fs", "io-util", "rt-multi-thread", "macros"] }
 tracing           = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
@@ -21,6 +21,10 @@ thiserror         = { workspace = true }
 reqwest           = { workspace = true, features = ["multipart"] }
 regex             = { workspace = true }
 async-trait       = { workspace = true }
+
+[[bin]]
+name = "korpus_ernte"
+path = "src/bin/korpus_ernte.rs"
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }

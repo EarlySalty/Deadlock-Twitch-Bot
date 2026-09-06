@@ -268,6 +268,11 @@ fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord>
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| broadcaster_id.to_string());
+    let broadcaster_name = v
+        .get("broadcaster_name")
+        .and_then(|b| b.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     Some(ClipRecord {
         clip_id,
@@ -276,6 +281,7 @@ fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord>
         thumbnail_url,
         streamer_login: String::new(),
         twitch_user_id,
+        broadcaster_name,
         created_at,
         duration_seconds,
         view_count,

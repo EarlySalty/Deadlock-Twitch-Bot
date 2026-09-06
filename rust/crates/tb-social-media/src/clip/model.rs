@@ -7,6 +7,7 @@ pub struct ClipRecord {
     pub thumbnail_url: Option<String>,
     pub streamer_login: String,
     pub twitch_user_id: String,
+    pub broadcaster_name: Option<String>,
     pub created_at: String,
     pub duration_seconds: f64,
     pub view_count: i64,
