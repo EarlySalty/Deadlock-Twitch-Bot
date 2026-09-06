@@ -1704,3 +1704,11 @@ twitch_vod_archive_vods|title|text|NO|
 twitch_vod_archive_vods|twitch_id|text|NO|
 twitch_vod_archive_vods|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_vod_archive_vods|uploaded_at|timestamp with time zone|YES|
+twitch_zuschauer_register|community_probability|double precision|NO|
+twitch_zuschauer_register|computed_at|timestamp with time zone|NO|now()
+twitch_zuschauer_register|discord_user_id|text|YES|
+twitch_zuschauer_register|first_partner_channel|text|YES|
+twitch_zuschauer_register|first_seen_at|timestamp with time zone|YES|
+twitch_zuschauer_register|signals|jsonb|NO|'{}'::jsonb
+twitch_zuschauer_register|twitch_login|text|YES|
+twitch_zuschauer_register|twitch_user_id|text|NO|
