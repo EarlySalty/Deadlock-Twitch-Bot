@@ -26,6 +26,7 @@ import {
   DownloadCloud,
   CalendarClock,
   XCircle,
+  Clapperboard,
 } from 'lucide-react';
 import { KpiCard } from '@/components/cards/KpiCard';
 import { useLanguage, useT } from '@/context/LanguageContext';
@@ -65,6 +66,10 @@ import {
   saveVodArchiveSettings,
   setClipLayoutOverride,
   uploadClip,
+  requestPreview,
+  getPreviewStatus,
+  previewFileUrl,
+  type ClipPreviewStatus,
 } from '@/api/socialMedia';
 import {
   APPROVAL_MODE_TEXTE,
@@ -300,7 +305,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   };
 
   const approvalModeMutation = useMutation({
-    mutationFn: (payload: { approval_mode?: ApprovalMode; timezone?: string }) =>
+    mutationFn: (payload: { approval_mode?: ApprovalMode; timezone?: string; subtitles_enabled?: boolean }) =>
       savePostingPlanSettings(streamer, payload),
     onSuccess: uebernehmePlan,
   });
@@ -481,6 +486,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
               isSaving={approvalModeMutation.isPending}
               error={approvalModeMutation.error}
               onChange={(mode) => approvalModeMutation.mutate({ approval_mode: mode })}
+              onSubtitlesChange={(enabled) =>
+                approvalModeMutation.mutate({ subtitles_enabled: enabled })
+              }
             />
             <CategoryCard
               plan={postingPlanQuery.data ?? null}
@@ -946,6 +954,7 @@ function ApprovalModeCard({
   isSaving,
   error,
   onChange,
+  onSubtitlesChange,
 }: {
   plan: PostingPlan | null;
   isLoading: boolean;
@@ -954,6 +963,7 @@ function ApprovalModeCard({
   isSaving: boolean;
   error: unknown;
   onChange: (mode: ApprovalMode) => void;
+  onSubtitlesChange: (enabled: boolean) => void;
 }) {
   const t = useT();
   // Ohne Plan zeigt die Karte 'manual' als aktiv an. Ein Kanal auf
@@ -1005,6 +1015,24 @@ function ApprovalModeCard({
             </button>
           );
         })}
+      </div>
+
+      <div className="rounded-xl border border-border bg-bg/40 px-4 py-3">
+        <label className="flex items-center justify-between gap-3">
+          <span>
+            <span className="block text-sm font-semibold text-white">{t('Untertitel einbrennen')}</span>
+            <span className="block text-xs text-text-secondary mt-0.5">
+              {t('Brennt gesprochene Wörter als Untertitel ins Hochformat-Video.')}
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            disabled={gesperrt}
+            checked={plan?.subtitles_enabled ?? true}
+            onChange={(event) => onSubtitlesChange(event.target.checked)}
+            className="h-4 w-4 accent-primary disabled:opacity-60"
+          />
+        </label>
       </div>
       {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
@@ -1892,6 +1920,59 @@ function ClipCard({
   }, [clip.thumbnail_url]);
   const vorschauSichtbar = Boolean(clip.thumbnail_url) && !vorschauFehlt;
 
+  const [previewStatus, setPreviewStatus] = useState<ClipPreviewStatus>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const previewLaeuft = previewStatus === 'pending' || previewStatus === 'rendering';
+  const previewBereit = previewStatus === 'ready';
+
+  const stopPreviewPolling = () => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  useEffect(() => stopPreviewPolling, []);
+
+  useEffect(() => {
+    stopPreviewPolling();
+    setPreviewStatus(null);
+    setPreviewError(null);
+  }, [clip.clip_db_id]);
+
+  const starteVorschau = () => {
+    setPreviewError(null);
+    setPreviewStatus('pending');
+    requestPreview(clip.clip_db_id)
+      .then((res) => {
+        setPreviewStatus(res.status ?? 'pending');
+        stopPreviewPolling();
+        pollRef.current = window.setInterval(() => {
+          getPreviewStatus(clip.clip_db_id)
+            .then((state) => {
+              setPreviewStatus(state.status);
+              if (state.status === 'ready') {
+                setPreviewError(null);
+                stopPreviewPolling();
+              } else if (state.status === 'error') {
+                setPreviewError(state.error ?? null);
+                stopPreviewPolling();
+              }
+            })
+            .catch(() => {
+              setPreviewStatus('error');
+              setPreviewError(null);
+              stopPreviewPolling();
+            });
+        }, 3000);
+      })
+      .catch((err) => {
+        setPreviewStatus('error');
+        setPreviewError(err instanceof Error ? err.message : null);
+      });
+  };
+
   useEffect(() => {
     setSelectedPlatforms(clip.approval?.approved_platforms ?? []);
   }, [clip.approval?.approved_platforms, clip.clip_db_id]);
@@ -1912,7 +1993,16 @@ function ClipCard({
       className="panel-card card-glow group rounded-2xl overflow-hidden flex flex-col"
     >
       <div className="relative aspect-video overflow-hidden bg-[radial-gradient(120%_120%_at_50%_0%,rgba(255,255,255,0.06),transparent_60%)] bg-black/50">
-        {vorschauSichtbar ? (
+        {previewBereit ? (
+          <video
+            key={clip.clip_db_id}
+            controls
+            src={previewFileUrl(clip.clip_db_id)}
+            className="w-full h-full object-contain bg-black"
+          />
+        ) : (
+          <>
+            {vorschauSichtbar ? (
           <img
             src={clip.thumbnail_url ?? ''}
             alt=""
@@ -1922,8 +2012,6 @@ function ClipCard({
             className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
           />
         ) : (
-          // Kein Alt-Text als Ersatzbild: eine tote URL malte sonst den vollen
-          // Clip-Titel ueber die schwarze Kachel.
           <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-text-secondary">
             <Film className="w-8 h-8 opacity-40" />
             <span className="text-[10px] uppercase tracking-[0.16em] opacity-60">
@@ -1965,9 +2053,51 @@ function ClipCard({
             <Clock className="w-3 h-3" /> {formatRetention(clip.retention_until, t)}
           </span>
         </div>
+
+            {previewLaeuft && (
+              <div className="absolute inset-0 grid place-items-center bg-black/55 backdrop-blur-sm">
+                <div className="flex flex-col items-center gap-2 text-white">
+                  <Loader2 className="w-7 h-7 animate-spin text-orange" />
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em]">
+                    {t('Vorschau wird gerendert…')}
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="p-4 flex flex-col gap-3 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={starteVorschau}
+            disabled={previewLaeuft}
+            className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-orange/30 bg-orange/10 text-orange hover:bg-orange/20 transition disabled:opacity-50"
+          >
+            {previewLaeuft ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Clapperboard className="w-3.5 h-3.5" />
+            )}
+            {previewBereit
+              ? t('Vorschau neu rendern')
+              : previewLaeuft
+              ? t('Rendert…')
+              : t('Vorschau rendern')}
+          </button>
+          {previewLaeuft && (
+            <span className="text-xs text-text-secondary">
+              {t('Das kann ein paar Minuten dauern.')}
+            </span>
+          )}
+          {previewStatus === 'error' && (
+            <span className="text-xs text-danger">
+              {previewError ? previewError : t('Vorschau konnte nicht gerendert werden.')}
+            </span>
+          )}
+        </div>
         <div className="space-y-1">
           <h4 className="font-bold text-white line-clamp-2">{clip.title}</h4>
           <p className="text-xs text-text-secondary">

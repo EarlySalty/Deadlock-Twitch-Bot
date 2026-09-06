@@ -179,6 +179,32 @@ export async function fetchClip(clipDbId: number): Promise<SocialClip> {
   return fetchJson<SocialClip>(`${ADMIN_PREFIX}/clips/${clipDbId}`);
 }
 
+export type ClipPreviewStatus = 'pending' | 'rendering' | 'ready' | 'error' | null;
+
+export interface ClipPreviewState {
+  clip_db_id: number;
+  status: ClipPreviewStatus;
+  error?: string | null;
+  ready: boolean;
+}
+
+export async function requestPreview(
+  clipDbId: number,
+): Promise<{ clip_db_id: number; status: ClipPreviewStatus }> {
+  return fetchJson<{ clip_db_id: number; status: ClipPreviewStatus }>(
+    `${ADMIN_PREFIX}/clips/${clipDbId}/preview`,
+    { method: 'POST' },
+  );
+}
+
+export async function getPreviewStatus(clipDbId: number): Promise<ClipPreviewState> {
+  return fetchJson<ClipPreviewState>(`${ADMIN_PREFIX}/clips/${clipDbId}/preview`);
+}
+
+export function previewFileUrl(clipDbId: number): string {
+  return `${ADMIN_PREFIX}/clips/${clipDbId}/preview/file`;
+}
+
 export interface ClipLayoutOverrideResponse {
   clip_db_id: number;
   layout_override: LayoutPayload | null;
@@ -340,7 +366,7 @@ export async function fetchPostingPlan(streamerLogin: string): Promise<PostingPl
 
 export async function savePostingPlanSettings(
   streamerLogin: string,
-  payload: { approval_mode?: ApprovalMode; timezone?: string },
+  payload: { approval_mode?: ApprovalMode; timezone?: string; subtitles_enabled?: boolean },
 ): Promise<PostingPlan> {
   const qs = buildQuery({ streamer_login: streamerLogin });
   return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`, {
