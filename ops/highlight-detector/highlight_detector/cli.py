@@ -54,6 +54,16 @@ def cmd_kalibrieren(args):
     print(f"{anzahl} Kalibrierungs-Frames in {ziel}")
 
 
+def _dsn():
+    dsn = os.environ.get("DEADLOCK_CENTRAL_DSN", "").strip()
+    if not dsn:
+        print("DEADLOCK_CENTRAL_DSN nicht gesetzt. Erst per Infisical eval'en:\n"
+              '  eval "$(python3 /home/nathanael/Documents/Infisical/export_gpt_secret.py '
+              '--secret DEADLOCK_CENTRAL_DSN)"', file=sys.stderr)
+        sys.exit(2)
+    return dsn
+
+
 def _lade_configs():
     return config.lade_regionen(), config.lade_gewichte()
 
@@ -94,11 +104,8 @@ def cmd_analyse(args):
         print(f"{len(geschnitten)} Clips geschnitten nach {schnitt.ausgabe_dir(vid)}")
 
     if args.persist:
-        if not args.dsn:
-            print("--persist braucht --dsn", file=sys.stderr)
-            return
         streamer_id = args.streamer_id
-        conn = db.verbinde(args.dsn)
+        conn = db.verbinde(_dsn())
         zeilen = [
             {"streamer_twitch_id": streamer_id, "vod_id": vid, "start_s": k["start_s"],
              "end_s": k["end_s"], "score": k["score"], "signale": k["signale"], "status": "neu"}
@@ -114,7 +121,7 @@ def cmd_analyse(args):
 
 def cmd_lernen(args):
     regionen_cfg, gewichte_cfg = _lade_configs()
-    conn = db.verbinde(args.dsn)
+    conn = db.verbinde(_dsn())
     clips = db.korpus_clips(conn, args.limit, nur_deadlock=not args.alle_spiele)
     print(f"{len(clips)} Korpus-Clips aus der DB")
     ergebnisse = []
@@ -147,7 +154,7 @@ def cmd_lernen(args):
 
 def cmd_messen(args):
     regionen_cfg, gewichte_cfg = _lade_configs()
-    conn = db.verbinde(args.dsn)
+    conn = db.verbinde(_dsn())
     streamer_id = db.aufloesen_streamer_id(conn, args.streamer)
     if not streamer_id:
         print(f"Streamer {args.streamer} nicht in twitch_streamers", file=sys.stderr)
@@ -217,12 +224,10 @@ def main(argv=None):
     a.add_argument("--kein-stt", action="store_true")
     a.add_argument("--worker", type=int, default=8)
     a.add_argument("--persist", action="store_true")
-    a.add_argument("--dsn", default="")
     a.add_argument("--streamer-id", default="")
     a.set_defaults(func=cmd_analyse)
 
     l = sub.add_parser("lernen")
-    l.add_argument("--dsn", required=True)
     l.add_argument("--limit", type=int, default=800)
     l.add_argument("--alle-spiele", action="store_true")
     l.add_argument("--tmp", default="/home/nathanael/vod-archive/highlights")
@@ -230,7 +235,6 @@ def main(argv=None):
     l.set_defaults(func=cmd_lernen)
 
     m = sub.add_parser("messen")
-    m.add_argument("--dsn", required=True)
     m.add_argument("--streamer", default="earlysalty")
     m.add_argument("--vod", nargs="*")
     m.add_argument("--vod-dir", default="/home/nathanael/vod-archive/downloads")
