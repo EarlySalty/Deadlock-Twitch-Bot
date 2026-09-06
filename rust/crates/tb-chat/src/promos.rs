@@ -38,7 +38,6 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use rand::seq::SliceRandom;
 use sqlx::PgPool;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, info, warn};
@@ -283,14 +282,8 @@ fn format_promo_invite(invite: &str, spec: &str) -> Option<String> {
     }
     Some(value)
 }
-/// Stammgast: mind. 10 Messages in 30 Tagen (targeted_promo.py:33–34).
-const STAMMGAST_MIN_MESSAGES: i64 = 10;
-const STAMMGAST_DAYS: i64 = 30;
 /// Kanal-Targeted-Cooldown in Sekunden (targeted_promo.py:37: _CHANNEL_TARGETED_COOLDOWN_SEC).
 const CHANNEL_TARGETED_COOLDOWN_SEC: u64 = 900;
-/// User-Pitch-Cooldown in Sekunden (targeted_promo.py:36: _USER_PITCH_COOLDOWN_SEC).
-const USER_PITCH_COOLDOWN_SEC: u64 = 86400;
-const TARGETED_USER_PITCH_AKTIV: bool = false;
 /// Lurker-Tax-Freshness in Minuten (promos.py:62: _LURKER_TAX_FRESHNESS_MINUTES).
 const LURKER_TAX_FRESHNESS_MINUTES: u64 = 5;
 /// Lurker-Tax: mind. 3 frühere Sessions (promos.py:63).
@@ -491,20 +484,14 @@ impl ChannelState {
 // ---------------------------------------------------------------------------
 
 struct TargetedState {
-    /// (channel_login, user_login) → monotonic ts — targeted_promo.py.
-    user_last_pitched: HashMap<(String, String), Instant>,
     /// channel_login → monotonic ts — targeted_promo.py.
     channel_last_targeted: HashMap<String, Instant>,
-    /// channel_login → "global" | "user" — Alternierung — targeted_promo.py.
-    channel_last_type: HashMap<String, String>,
 }
 
 impl TargetedState {
     fn new() -> Self {
         Self {
-            user_last_pitched: HashMap::new(),
             channel_last_targeted: HashMap::new(),
-            channel_last_type: HashMap::new(),
         }
     }
 }
@@ -2743,113 +2730,17 @@ impl PromoEngine {
         login: &str,
         channel_id: &str,
         invite: &str,
-        active_chatters: &[String],
+        _active_chatters: &[String],
         now: Instant,
     ) -> bool {
-        let (cd_ok, want_user) = {
+        let cd_ok = {
             let ts_state = self.targeted_state.lock().await;
             let last = ts_state.channel_last_targeted.get(login).copied();
-            let cd = last
-                .is_none_or(|t| now.duration_since(t).as_secs() >= CHANNEL_TARGETED_COOLDOWN_SEC);
-            let last_type = ts_state
-                .channel_last_type
-                .get(login)
-                .map(|s| s.as_str())
-                .unwrap_or("global");
-            let want = last_type == "global";
-            (cd, want)
+            last.is_none_or(|t| now.duration_since(t).as_secs() >= CHANNEL_TARGETED_COOLDOWN_SEC)
         };
 
         if !cd_ok {
             return false;
-        }
-
-        let (game, title) = self.load_live_context(login).await;
-        let recent = self.load_recent_channel_messages(login, 8).await;
-
-        if TARGETED_USER_PITCH_AKTIV && want_user && !active_chatters.is_empty() {
-            if let Some((target_login, target_id)) =
-                self.pick_user_target(active_chatters, login, now).await
-            {
-                let snippets = self.load_user_context_snippets(&target_id, login).await;
-                let ctx = TargetedPitchContext {
-                    target_login: target_login.clone(),
-                    target_messages: snippets,
-                    game: game.clone(),
-                    title: title.clone(),
-                    recent_chat: recent.clone(),
-                };
-                let Some(body) = self.pitch_text_gen.targeted_pitch(&ctx).await else {
-                    self.record_pitch_log(PitchLogEntry {
-                        channel_login: login.to_string(),
-                        target_user_id: Some(target_id),
-                        pfad: "targeted_user",
-                        occasion: None,
-                        trigger_text: None,
-                        generated_text: None,
-                        reject_reason: Some("kein_text".to_string()),
-                        sent_at: None,
-                    })
-                    .await;
-                    return false;
-                };
-                let text = format!("@{target_login} {body}");
-
-                let lock = self.get_send_lock(login);
-                let _guard = lock.lock().await;
-                if !self.overall_promo_ready_locked(login, now).await {
-                    return false;
-                }
-
-                let outcome = self
-                    .guarded_api_for("promo", login)
-                    .send_message(channel_id, &text)
-                    .await;
-                self.record_suppression_on_drop(login, channel_id, "promo", &outcome)
-                    .await;
-                if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
-                    self.record_pitch_log(PitchLogEntry {
-                        channel_login: login.to_string(),
-                        target_user_id: Some(target_id),
-                        pfad: "targeted_user",
-                        occasion: None,
-                        trigger_text: None,
-                        generated_text: Some(text),
-                        reject_reason: Some("send_dropped".to_string()),
-                        sent_at: None,
-                    })
-                    .await;
-                    return false;
-                }
-
-                {
-                    let mut ts_state = self.targeted_state.lock().await;
-                    ts_state
-                        .channel_last_targeted
-                        .insert(login.to_string(), now);
-                    ts_state
-                        .channel_last_type
-                        .insert(login.to_string(), "user".to_string());
-                    ts_state
-                        .user_last_pitched
-                        .insert((login.to_string(), target_login), now);
-                }
-                self.record_pitch_log(PitchLogEntry {
-                    channel_login: login.to_string(),
-                    target_user_id: Some(target_id),
-                    pfad: "targeted_user",
-                    occasion: None,
-                    trigger_text: None,
-                    generated_text: Some(text),
-                    reject_reason: None,
-                    sent_at: Some(Utc::now()),
-                })
-                .await;
-                self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64)
-                    .await;
-
-                return true;
-            }
         }
 
         let Some(text) = self.build_promo_text(login, invite).await else {
@@ -2898,9 +2789,6 @@ impl PromoEngine {
             ts_state
                 .channel_last_targeted
                 .insert(login.to_string(), now);
-            ts_state
-                .channel_last_type
-                .insert(login.to_string(), "global".to_string());
         }
         self.record_pitch_log(PitchLogEntry {
             channel_login: login.to_string(),
@@ -2917,93 +2805,6 @@ impl PromoEngine {
             .await;
 
         true
-    }
-
-    /// User-Target für Targeted-Promo auswählen (targeted_promo.py: `_pick_user_target`).
-    async fn pick_user_target(
-        &self,
-        active_chatters: &[String],
-        channel_login: &str,
-        now: Instant,
-    ) -> Option<(String, String)> {
-        let ts_state = self.targeted_state.lock().await;
-        let mut candidates: Vec<&String> = active_chatters
-            .iter()
-            .filter(|c| {
-                // Gepitchte User (< 24h) entfernen.
-                let key = (channel_login.to_string(), (*c).clone());
-                ts_state
-                    .user_last_pitched
-                    .get(&key)
-                    .is_none_or(|&t| now.duration_since(t).as_secs() >= USER_PITCH_COOLDOWN_SEC)
-            })
-            .collect();
-        drop(ts_state);
-
-        // Shuffle, max 6 DB-Checks.
-        {
-            let mut rng = rand::thread_rng();
-            candidates.shuffle(&mut rng);
-        }
-        candidates.truncate(6);
-
-        for chatter in candidates {
-            // chatter_id aus DB (targeted_promo.py: SELECT chatter_id FROM twitch_session_chatters).
-            // twitch_session_chatters.chatter_id = text (prod schema)
-            let row = sqlx::query_scalar!(
-                "SELECT chatter_id AS \"chatter_id!\" FROM twitch_session_chatters
-	                  WHERE LOWER(chatter_login) = LOWER($1)
-	                    AND LOWER(streamer_login) = LOWER($2)
-	                    AND chatter_id IS NOT NULL
-	                  ORDER BY last_seen_at DESC LIMIT 1",
-                chatter.as_str(),
-                channel_login,
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten();
-
-            let Some(chatter_id) = row else { continue };
-
-            // Stammgast-Check (targeted_promo.py: _sync_is_stammgast).
-            // twitch_engagement_conversation: role=text, ts=timestamptz, twitch_user_id=text (prod schema)
-            let count: i64 = sqlx::query_scalar!(
-                "SELECT COUNT(*) AS \"count!\" FROM twitch_engagement_conversation
-                  WHERE channel_login = $1 AND twitch_user_id = $2 AND role = 'user'
-                    AND ts > NOW() - ($3::int8 * INTERVAL '1 day')",
-                channel_login,
-                &chatter_id,
-                STAMMGAST_DAYS,
-            )
-            .fetch_one(&self.pool)
-            .await
-            .unwrap_or(0);
-
-            if count >= STAMMGAST_MIN_MESSAGES {
-                continue; // Stammgast → überspringen.
-            }
-
-            return Some((chatter.clone(), chatter_id));
-        }
-        None
-    }
-
-    /// User-Context-Snippets laden (targeted_promo.py: `_sync_user_context_snippets`).
-    async fn load_user_context_snippets(&self, user_id: &str, channel_login: &str) -> Vec<String> {
-        // twitch_engagement_conversation.content = text, ts = timestamptz (prod schema)
-        let rows = sqlx::query!(
-            "SELECT content AS \"content!\" FROM twitch_engagement_conversation
-              WHERE channel_login = $1 AND twitch_user_id = $2 AND role = 'user'
-              ORDER BY ts DESC LIMIT 5",
-            channel_login,
-            user_id,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
-
-        rows.into_iter().map(|row| row.content).collect()
     }
 
     /// Aktive Chatter aus dem Aktivitäts-Bucket (promos.py:1466).
@@ -4986,8 +4787,8 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn targeted_user_pitch_ist_abgeschaltet() {
-        let pool = pool_or_skip!("promo_targeted_user_aus");
+    async fn kein_timer_pitch_an_einzelpersonen() {
+        let pool = pool_or_skip!("promo_kein_timer_einzelpitch");
         sqlx::query(
             "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, chatter_id)
              VALUES (1, 'tukanal', 'zocker42', 'chatter-77')",
@@ -5007,7 +4808,7 @@ mod db_tests {
                 "tukanal",
                 "u-tu",
                 "https://discord.gg/deadlock",
-                &["zocker42".to_string()],
+                &["zocker42".to_string(), "noch_einer".to_string()],
                 Instant::now(),
             )
             .await;
@@ -5016,12 +4817,12 @@ mod db_tests {
         assert_eq!(
             api.message_count().await,
             0,
-            "kein Einzelzuschauer-Pitch mit @chatter senden"
+            "der Timer sendet nie einen @Einzelperson-Pitch"
         );
         assert_eq!(
             api.announcement_count().await,
             1,
-            "stattdessen läuft der targeted_global-Pfad"
+            "der einzige gesendete Pfad ist targeted_global"
         );
         let user_pitches: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'targeted_user'",
