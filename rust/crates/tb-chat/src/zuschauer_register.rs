@@ -25,6 +25,7 @@ const RATIO_MID: f64 = 0.82;
 
 const COMMUNITY_CHANNEL: &str = "dach_lock";
 const MEMBER_INDEX_TTL: Duration = Duration::from_secs(3600);
+const MEMBER_INDEX_NEGATIVE_TTL: Duration = Duration::from_secs(60);
 const REFRESH_AFTER: Duration = Duration::from_secs(7 * 86400);
 
 static AFFIXES: &[&str] = &[
@@ -245,7 +246,7 @@ pub struct RegisterEntry {
     pub p: f64,
     pub signals: serde_json::Value,
     pub first_partner_channel: Option<String>,
-    pub first_seen_at: DateTime<Utc>,
+    pub first_seen_at: Option<DateTime<Utc>>,
     pub computed_at: DateTime<Utc>,
 }
 
@@ -269,6 +270,7 @@ pub struct ZuschauerRegister {
     pool: PgPool,
     member_source: Arc<dyn MemberIndexSource>,
     cache: tokio::sync::Mutex<Option<MemberIndexCacheState>>,
+    fetch_fail_at: tokio::sync::Mutex<Option<Instant>>,
 }
 
 impl ZuschauerRegister {
@@ -277,6 +279,7 @@ impl ZuschauerRegister {
             pool,
             member_source,
             cache: tokio::sync::Mutex::new(None),
+            fetch_fail_at: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -289,24 +292,37 @@ impl ZuschauerRegister {
                 }
             }
         }
+        {
+            let fail_guard = self.fetch_fail_at.lock().await;
+            if let Some(failed_at) = fail_guard.as_ref() {
+                if failed_at.elapsed() < MEMBER_INDEX_NEGATIVE_TTL {
+                    let guard = self.cache.lock().await;
+                    return guard.as_ref().map(|s| s.index.clone());
+                }
+            }
+        }
         match self.member_source.fetch_members().await {
             Some(members) => {
                 let index = Arc::new(MemberIndex::build(&members));
-                let mut guard = self.cache.lock().await;
-                *guard = Some(MemberIndexCacheState {
-                    built_at: Instant::now(),
-                    index: index.clone(),
-                });
+                {
+                    let mut guard = self.cache.lock().await;
+                    *guard = Some(MemberIndexCacheState {
+                        built_at: Instant::now(),
+                        index: index.clone(),
+                    });
+                }
+                *self.fetch_fail_at.lock().await = None;
                 Some(index)
             }
             None => {
+                *self.fetch_fail_at.lock().await = Some(Instant::now());
                 let guard = self.cache.lock().await;
                 guard.as_ref().map(|s| s.index.clone())
             }
         }
     }
 
-    pub async fn load(&self, twitch_user_id: &str) -> Option<RegisterEntry> {
+    pub async fn load(&self, twitch_user_id: &str) -> Result<Option<RegisterEntry>, sqlx::Error> {
         let row = sqlx::query!(
             r#"SELECT twitch_user_id, twitch_login, discord_user_id,
                       community_probability, signals::text AS "signals!",
@@ -316,10 +332,8 @@ impl ZuschauerRegister {
             twitch_user_id,
         )
         .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten()?;
-        Some(RegisterEntry {
+        .await?;
+        Ok(row.map(|row| RegisterEntry {
             twitch_user_id: row.twitch_user_id,
             twitch_login: row.twitch_login,
             discord_user_id: row.discord_user_id,
@@ -327,9 +341,9 @@ impl ZuschauerRegister {
             signals: serde_json::from_str(&row.signals)
                 .unwrap_or_else(|_| serde_json::json!({})),
             first_partner_channel: row.first_partner_channel,
-            first_seen_at: row.first_seen_at.unwrap_or(row.computed_at),
+            first_seen_at: row.first_seen_at,
             computed_at: row.computed_at,
-        })
+        }))
     }
 
     pub async fn upsert(&self, entry: &RegisterEntry) -> bool {
@@ -402,24 +416,52 @@ impl ZuschauerRegister {
         twitch_login: &str,
         channel_login: &str,
     ) -> Option<RegisterEntry> {
-        if let Some(entry) = self.load(twitch_user_id).await {
-            let age = (Utc::now() - entry.computed_at).num_seconds();
-            if age >= 0 && (age as u64) < REFRESH_AFTER.as_secs() {
+        let existing = match self.load(twitch_user_id).await {
+            Ok(existing) => existing,
+            Err(error) => {
+                tracing::warn!(%error, "zuschauer-register: laden fehlgeschlagen, blockiere");
+                return None;
+            }
+        };
+
+        let now = Utc::now();
+
+        if let Some(entry) = existing {
+            let age = (now - entry.computed_at).num_seconds();
+            let fresh = age >= 0 && (age as u64) < REFRESH_AFTER.as_secs();
+            let erstes_auftauchen = entry.first_seen_at.is_none();
+
+            if fresh && !erstes_auftauchen {
                 return Some(entry);
             }
-            let index = self.member_index().await?;
-            let hard = self.hard_discord_id(twitch_user_id).await;
-            let prior = self.prior_for_channel(channel_login);
-            let (p, discord_id, signals) = score(twitch_login, &index, prior, hard.as_deref());
+
+            let (p, discord_id, signals, computed_at) = if fresh {
+                (
+                    entry.p,
+                    entry.discord_user_id.clone(),
+                    entry.signals.clone(),
+                    entry.computed_at,
+                )
+            } else {
+                let index = self.member_index().await?;
+                let hard = self.hard_discord_id(twitch_user_id).await;
+                let prior = self.prior_for_channel(channel_login);
+                let (p, discord_id, signals) = score(twitch_login, &index, prior, hard.as_deref());
+                (p, discord_id.or(entry.discord_user_id.clone()), signals, now)
+            };
+
             let updated = RegisterEntry {
                 twitch_user_id: entry.twitch_user_id.clone(),
                 twitch_login: Some(twitch_login.to_string()),
-                discord_user_id: discord_id.or(entry.discord_user_id.clone()),
+                discord_user_id: discord_id,
                 p,
                 signals,
-                first_partner_channel: entry.first_partner_channel.clone(),
-                first_seen_at: entry.first_seen_at,
-                computed_at: Utc::now(),
+                first_partner_channel: entry
+                    .first_partner_channel
+                    .clone()
+                    .or_else(|| Some(channel_login.to_string())),
+                first_seen_at: entry.first_seen_at.or(Some(now)),
+                computed_at,
             };
             self.upsert(&updated).await;
             return Some(updated);
@@ -429,7 +471,6 @@ impl ZuschauerRegister {
         let hard = self.hard_discord_id(twitch_user_id).await;
         let prior = self.prior_for_channel(channel_login);
         let (p, discord_id, signals) = score(twitch_login, &index, prior, hard.as_deref());
-        let now = Utc::now();
         let entry = RegisterEntry {
             twitch_user_id: twitch_user_id.to_string(),
             twitch_login: Some(twitch_login.to_string()),
@@ -437,7 +478,7 @@ impl ZuschauerRegister {
             p,
             signals,
             first_partner_channel: Some(channel_login.to_string()),
-            first_seen_at: now,
+            first_seen_at: Some(now),
             computed_at: now,
         };
         self.upsert(&entry).await;
@@ -496,12 +537,14 @@ impl ZuschauerRegister {
         }
 
         match self.session_start(channel_login).await {
-            Ok(Some(session_start)) => {
-                if entry.first_seen_at < session_start {
+            Ok(Some(session_start)) => match entry.first_seen_at {
+                Some(first_seen) if first_seen < session_start => {
                     return GateOutcome::Reject("kein_neuling");
                 }
-            }
-            Ok(None) => {}
+                None => return GateOutcome::Reject("kein_neuling"),
+                _ => {}
+            },
+            Ok(None) => return GateOutcome::Reject("kein_neuling"),
             Err(error) => {
                 tracing::warn!(%error, "zuschauer-register: session-start nicht lesbar, blockiere");
                 return GateOutcome::Reject("kein_neuling");
@@ -523,6 +566,8 @@ impl ZuschauerRegister {
     pub async fn signals_for(&self, twitch_user_id: &str) -> Option<serde_json::Value> {
         self.load(twitch_user_id)
             .await
+            .ok()
+            .flatten()
             .map(|entry| serde_json::json!({ "p": entry.p, "signals": entry.signals }))
     }
 }

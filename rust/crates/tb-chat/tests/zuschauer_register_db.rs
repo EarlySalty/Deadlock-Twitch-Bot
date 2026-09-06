@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -212,6 +213,7 @@ async fn gate_lehnt_partner_streamer_raid_denylist_blacklist_outreach_ab() {
         let uid = "u4";
         let now = Utc::now();
         insert_register(&pool, uid, 0.2, now, now).await;
+        seed_live_session(&pool, "somechannel", now - Duration::hours(2)).await;
         sqlx::query(insert_sql).bind(uid).execute(&pool).await.unwrap();
         let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
         let ev = event("somechannel", uid, "kandidat", false);
@@ -239,12 +241,140 @@ async fn gate_lehnt_mod_und_bot_ab() {
     );
 }
 
+async fn seed_live_session(pool: &PgPool, channel: &str, started_at: chrono::DateTime<Utc>) {
+    sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (501, $1, $2)")
+        .bind(channel)
+        .bind(started_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_live_state (streamer_login, active_session_id, is_live) VALUES ($1, 501, 1)")
+        .bind(channel)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn gate_laesst_frischen_neuling_durch() {
     let pool = pool_or_skip!("tb_zr_neuling_durch");
+    seed_live_session(&pool, "somechannel", Utc::now() - Duration::hours(2)).await;
     let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
     let ev = event("somechannel", "u7", "frischerneuling", false);
     assert_eq!(register.gate(&ev).await, GateOutcome::Pass);
+}
+
+#[tokio::test]
+async fn gate_lehnt_ohne_live_session_ab() {
+    let pool = pool_or_skip!("tb_zr_keine_session");
+    let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
+    let ev = event("somechannel", "u_ns", "keinesession", false);
+    assert_eq!(register.gate(&ev).await, GateOutcome::Reject("kein_neuling"));
+}
+
+#[tokio::test]
+async fn gate_neuling_ohne_first_seen_passiert_und_wird_persistiert() {
+    let pool = pool_or_skip!("tb_zr_null_first_seen");
+    seed_live_session(&pool, "somechannel", Utc::now() - Duration::hours(2)).await;
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO twitch_zuschauer_register
+            (twitch_user_id, twitch_login, discord_user_id, community_probability,
+             signals, first_partner_channel, first_seen_at, computed_at)
+         VALUES ('u_null', 'nullgast', NULL, 0.2, '{}'::jsonb, NULL, NULL, $1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
+    let ev = event("somechannel", "u_null", "nullgast", false);
+    assert_eq!(register.gate(&ev).await, GateOutcome::Pass);
+
+    let (first_seen, channel): (Option<chrono::DateTime<Utc>>, Option<String>) = sqlx::query_as(
+        "SELECT first_seen_at, first_partner_channel FROM twitch_zuschauer_register
+          WHERE twitch_user_id = 'u_null'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(first_seen.is_some(), "erstes Auftauchen wird gesetzt");
+    assert!((Utc::now() - first_seen.unwrap()).num_seconds() < 60);
+    assert_eq!(channel.as_deref(), Some("somechannel"));
+}
+
+#[tokio::test]
+async fn gate_lehnt_bei_ladefehler_ab_und_legt_nichts_an() {
+    let pool = pool_or_skip!("tb_zr_ladefehler");
+    sqlx::query("DROP TABLE twitch_zuschauer_register")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"CREATE TABLE twitch_zuschauer_register (
+            twitch_user_id TEXT PRIMARY KEY,
+            twitch_login TEXT,
+            discord_user_id TEXT,
+            community_probability DOUBLE PRECISION NOT NULL,
+            signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+            first_partner_channel TEXT,
+            first_seen_at TIMESTAMPTZ,
+            computed_at TEXT NOT NULL
+        )"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at)
+         VALUES ('u_err', 0.1, 'keindatum')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let vorher: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_zuschauer_register")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
+    let ev = event("somechannel", "u_err", "fehler", false);
+    assert_eq!(register.gate(&ev).await, GateOutcome::Reject("register_fehlt"));
+
+    let nachher: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_zuschauer_register")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(vorher, nachher, "Ladefehler darf keinen Eintrag anlegen");
+}
+
+struct CountingNoMembers {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl MemberIndexSource for CountingNoMembers {
+    async fn fetch_members(&self) -> Option<Vec<MemberLite>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        None
+    }
+}
+
+#[tokio::test]
+async fn member_index_negativ_cache_verhindert_zweiten_fetch() {
+    let pool = pool_or_skip!("tb_zr_negcache");
+    let src = Arc::new(CountingNoMembers {
+        calls: AtomicUsize::new(0),
+    });
+    let register = ZuschauerRegister::new(pool.clone(), src.clone());
+    assert!(register.member_index().await.is_none());
+    assert!(register.member_index().await.is_none());
+    assert_eq!(
+        src.calls.load(Ordering::SeqCst),
+        1,
+        "zweiter Aufruf innerhalb der TTL darf die Quelle nicht erneut fragen"
+    );
 }
 
 #[tokio::test]
@@ -258,6 +388,6 @@ async fn ensure_current_erneuert_nach_sieben_tagen_ohne_first_seen_zu_aendern() 
         .ensure_current("u8", "u8", "somechannel")
         .await
         .expect("entry");
-    assert!((entry.first_seen_at - first_seen).num_seconds().abs() <= 1);
+    assert!((entry.first_seen_at.unwrap() - first_seen).num_seconds().abs() <= 1);
     assert!((Utc::now() - entry.computed_at).num_seconds() < 60);
 }
