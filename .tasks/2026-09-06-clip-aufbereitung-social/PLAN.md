@@ -409,3 +409,33 @@ Der Nutzer legt `~/.claude/.contract-approvals/2026-09-06-clip-aufbereitung-soci
 - `external_llm_consent=true` in `social_media_settings`; `TB_CLIP_FETCHER_ENABLED=1`;
   DB_MASTER_KEY_V1 fuer Uploads; STT-Server (8791) live fuer Untertitel/Transkription.
 - Scope-Freigabe-Datei (oben) fuer den Merge-Gate.
+
+### Kritiker-Runde (gate_hook --review) + Fixes
+
+Der Selbst-Kritiker meldete 3 blockierende Befunde plus Nits; alle behoben:
+- BLOCK Race: Prep- und Vorschau-Worker luden dieselbe `data/clips/<id>.mp4` nur mit
+  exists-Pruefung -> geteilter `download_atomic` (Temp-Datei + atomarer rename).
+- BLOCK verwaiste Datei: der Vorschau-Download registrierte `local_file_path` nicht ->
+  `register_local_file` in Prep und Vorschau, Retention raeumt jetzt mit (INV-07).
+- BLOCK Head-of-Line: ein dauerhaft untauglicher Clip blockierte still den Vor-Download
+  -> Spalte `download_failed_at` (Migration 20260906123000) + 6h-Backoff in der Auswahl.
+- Nit Stale-Reclaim: `preview_status='rendering'` aelter als 15min wird neu beansprucht.
+- Nit Weichen-Test: `render_base` fuehrt jetzt ueber `plan_vertical_render`.
+- Nit parse_range gegen len==0; Frontend holt Vorschau-Status beim Mount und pollt weiter.
+
+Snapshot (nur `download_failed_at`) und `.sqlx` erneut regeneriert. Offline-Build
+(SQLX_OFFLINE=true) fuer alle drei Crates gruen.
+
+Selbst-Bug beim Eigen-Review davor: `burn_subtitles`-Ausgabepfad absolutiert.
+
+### Flake-Befund (geteilte Test-DB, Peer-Session)
+
+`upload_worker::tests::completed_write_failure_after_success_marks_failed` (ein
+bestehender, 180s langer TikTok-Bestaetigungstest) schlug unter Last mit `calls=2`
+fehl. Ursache ist NICHT der Code (der Upload-Pfad ist unveraendert, convert_to_vertical
+kehrt bei vorhandener konvertierter Datei frueh zurueck): eine parallele Peer-Session
+liess dieselbe tb-social-media-Suite gegen dieselbe `tb_bb_test`-DB laufen; beide nutzen
+den FESTEN Schema-Namen `t_sm_upload_completed_write_fail` und stoeren sich. Nachweis:
+gegen eine isolierte Wegwerf-Docker-DB (keine Peer-Kontamination) laeuft der Test gruen
+(calls=1). Empfehlung fuer den Merge-Lauf: Tests nicht parallel zweier Sessions gegen
+dieselbe `tb_bb_test` fahren (oder je Session eine eigene Test-DB).
