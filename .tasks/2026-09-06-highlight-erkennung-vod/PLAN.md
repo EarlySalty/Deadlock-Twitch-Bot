@@ -139,3 +139,17 @@ Reihenfolge fest: erst Lern-Korpus (REQ-09), dann Detektor mit gelernten Gewicht
 2. Contract-Scope-Freigabe fuer `rust/migrations/` anlegen (`~/.claude/.contract-approvals/2026-09-06-highlight-erkennung-vod`).
 3. Sichtpruefungen: Kalibrierungs-Frames (`kalibrierung/`), Korpus-Report (`korpus-report.md`), geschnittene mp4 (`/home/nathanael/vod-archive/highlights/v2853130679/`).
 4. Voller Skalenlauf: Korpus mit ~800 Clips MIT STT (`lernen --limit 800`), alle 16 VODs (`analyse --nur-signale`), volle Messung (`messen --streamer earlysalty`); je Streamer Kill-Feed-/Souls-Regionen kalibrieren.
+
+### Nachbesserung (Koordinator, 2026-09-06)
+- Migrationen umnummeriert auf 20260906130000ff (Kollision Strang B); vom Koordinator auf Prod twitch_analytics angewendet, Tabellen `twitch_clip_merkmale`/`twitch_vod_highlights` und Spalten `vod_id`/`vod_offset_s` existieren.
+- Korpus-Ernte als eigenes Bin `rust/crates/tb-social-media/src/bin/korpus_ernte.rs` (Aufruf `target/debug/korpus_ernte --game-id 2132205352 --limit 800`, App-Token aus Infisical). `register_corpus_clip` und die `corpus`-CHECK-Erweiterung zurueckgebaut (kein DB-Schreiben in twitch_clips_social_media). `lernen --korpus-datei <json>` vereint Partner-Clips mit der Ernte.
+- Deadlock Twitch-game_id = **2132205352** (nicht 1422200164, das war ein Testfixture-Wert).
+- Korpus-2: 241 Clips verarbeitet (125 Partner + 120 Top-Ernte, minus Download-Fehlschlaege), 1415 Merkmale in `twitch_clip_merkmale` (Prod, 205 Clips). Abgeleitete Gewichte: sprache_pegel 0.5 (72% der Clips), ocr_soul_sprung 0.19 (27%), bild_death_screen 0.12 (18%), ocr_objective 0.08 (12%), ocr_kill 0.04 (6%). Soul-Sprung und Death-Screen tragen jetzt echt bei.
+- M5 mit neuen Gewichten: **4/4 Treffer (1.0)** im Cluster 13000-13900, FP von 21 auf 18 gesunken; echte Clips heben sich besser ab (Scores 0.5-0.81). Betriebskurve: Schwelle 0.5 -> 4/4 Recall, 18 FP; Schwelle 0.55 -> 3/4 Recall, 10 FP. Schwelle auf 0.5 gesetzt (voller Recall). Der bei 0.55 verlorene Clip ist rein lautstaerkebasiert; nur STT-Lachen/Schluesselwoerter (im Massenlauf abgeschaltet) wuerden ihn korroborieren und eine hoehere Schwelle erlauben.
+- diff-policy: sauber ausser P4 fuer die 5 amendment-gedeckten Pfade. Nutzer-Freigabedatei `~/.claude/.contract-approvals/2026-09-06-highlight-erkennung-vod` mit diesen Zeilen anlegen:
+  rust/crates/tb-social-media/Cargo.toml
+  rust/crates/tb-social-media/src/bin/korpus_ernte.rs
+  rust/migrations/20260906130000_clip_vod_offset.sql
+  rust/migrations/20260906130001_twitch_clip_merkmale.sql
+  rust/migrations/20260906130002_twitch_vod_highlights.sql
+- Voller Skalenlauf offen: `korpus_ernte --limit 800` liegt als JSON vor; `lernen --korpus-datei` ueber alle ~800 plus Partner (nice 15, 8 Worker, ~2 h, schreibt Prod-Merkmale) fuer die endgueltigen Gewichte; danach alle 16 VODs `analyse --nur-signale` und volle Messung. STT im Massenlauf bewusst aus (schont den geteilten STT-Server); fuer die Praezision spaeter mit STT wiederholen.
