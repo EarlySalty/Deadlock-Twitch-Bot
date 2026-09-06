@@ -627,6 +627,7 @@ pub struct ChatRuntimePorts {
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
     pub review_relay: Option<BrokerRelay>,
+    pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
     pub raid_greeting: Option<Arc<RaidGreetingMonitor>>,
 }
@@ -644,6 +645,7 @@ pub async fn build_runtime(
         bot_ban_handler,
         invite_relay,
         review_relay,
+        member_relay,
         scam_notifier,
         raid_greeting,
     } = ports;
@@ -743,6 +745,14 @@ pub async fn build_runtime(
             .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
         if let Some(sink) = pitch_review_sink {
             engine = engine.set_pitch_review_sink(sink);
+        }
+        if let Some(relay) = member_relay {
+            engine = engine.set_zuschauer_register(Arc::new(
+                tb_chat::zuschauer_register::ZuschauerRegister::new(
+                    pool.clone(),
+                    Arc::new(BrokerMemberSource { relay }),
+                ),
+            ));
         }
         engine
     });
@@ -1982,6 +1992,35 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         };
         if let Err(error) = self.discord.send_rich_message(payload).await {
             tracing::warn!(%error, channel = channel_login, kind = title, "Pitch-Review-Karte fehlgeschlagen");
+        }
+    }
+}
+
+struct BrokerMemberSource {
+    relay: BrokerRelay,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::zuschauer_register::MemberIndexSource for BrokerMemberSource {
+    async fn fetch_members(
+        &self,
+    ) -> Option<Vec<tb_chat::zuschauer_register::MemberLite>> {
+        match self.relay.list_members().await {
+            Ok(members) => Some(
+                members
+                    .into_iter()
+                    .map(|m| tb_chat::zuschauer_register::MemberLite {
+                        id: m.id,
+                        name: m.name,
+                        global_name: m.global_name,
+                        nick: m.nick,
+                    })
+                    .collect(),
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "zuschauer-register: mitgliederliste nicht ladbar");
+                None
+            }
         }
     }
 }

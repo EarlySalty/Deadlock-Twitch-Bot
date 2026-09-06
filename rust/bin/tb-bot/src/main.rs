@@ -1313,6 +1313,7 @@ async fn main() {
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     review_relay: BrokerRelay::new(&settings.broker).ok(),
+                    member_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
                     raid_greeting: raid_greeting_monitor.clone(),
                 },

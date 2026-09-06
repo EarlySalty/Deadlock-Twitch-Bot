@@ -549,6 +549,7 @@ pub struct PromoEngine {
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
     targeted_state: Mutex<TargetedState>,
+    zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
 }
 
 /// Fallback-PartnerChannelCheck: immer true (für Tests).
@@ -593,7 +594,16 @@ impl PromoEngine {
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
+            zuschauer_register: None,
         }
+    }
+
+    pub fn set_zuschauer_register(
+        mut self,
+        register: Arc<crate::zuschauer_register::ZuschauerRegister>,
+    ) -> Self {
+        self.zuschauer_register = Some(register);
+        self
     }
 
     /// Verdrahtet die Schreibseite der Outbound-Suppression. Ohne Aufruf bleibt
@@ -750,7 +760,7 @@ impl PromoEngine {
 
     pub async fn on_message_pitch(&self, event: &ChatMessageEvent) {
         let text = event.text();
-        if text.starts_with('!') || text.chars().count() < 25 {
+        if text.starts_with('!') || text.chars().count() < 15 {
             return;
         }
         if event.chatter_user_id == event.broadcaster_user_id || event.chatter_user_id.is_empty() {
@@ -815,6 +825,22 @@ impl PromoEngine {
             return;
         }
 
+        let Some(register) = self.zuschauer_register.clone() else {
+            self.log_zuschauer_reject(&login, &target_user_id, "register_fehlt", text, "anlass")
+                .await;
+            self.pitch_judge_throttle_release(&login, &target_user_id);
+            return;
+        };
+        match register.gate(event).await {
+            crate::zuschauer_register::GateOutcome::Pass => {}
+            crate::zuschauer_register::GateOutcome::Reject(grund) => {
+                self.log_zuschauer_reject(&login, &target_user_id, grund, text, "anlass")
+                    .await;
+                self.pitch_judge_throttle_release(&login, &target_user_id);
+                return;
+            }
+        }
+
         if !self.pitch_user_limit_ok(&target_user_id).await {
             self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: user-limit");
@@ -828,41 +854,46 @@ impl PromoEngine {
 
         let (game, title) = self.load_live_context(&login).await;
         let recent = self.load_recent_channel_messages(&login, 8).await;
-        let input = PitchJudgeInput {
-            trigger_text: text.to_string(),
-            game,
-            title,
-            recent_chat: recent,
-            target_login: target_login.clone(),
+        let occasion = if text.chars().count() >= 25 {
+            let input = PitchJudgeInput {
+                trigger_text: text.to_string(),
+                game: game.clone(),
+                title: title.clone(),
+                recent_chat: recent.clone(),
+                target_login: target_login.clone(),
+            };
+            self.pitch_judge
+                .decide(input)
+                .await
+                .and_then(|resp| resp.occasion.map(|occ| (occ, resp.reply)))
+        } else {
+            None
         };
-        let Some(resp) = self.pitch_judge.decide(input).await else {
+        let Some((occasion, reply)) = occasion else {
             tracing::debug!(channel = %login, "anlass-pitch: kein anlass");
             return;
         };
-        let Some(occasion) = resp.occasion else {
-            tracing::debug!(channel = %login, "anlass-pitch: kein anlass");
-            return;
-        };
+        let resp_reply = reply;
 
-        if let Some(reason) = pitch_filter_reject(&resp.reply) {
+        if let Some(reason) = pitch_filter_reject(&resp_reply) {
             self.log_anlass_reject(
                 &login,
                 &target_user_id,
                 reason.as_str(),
                 text,
-                Some(resp.reply.clone()),
+                Some(resp_reply.clone()),
             )
             .await;
             return;
         }
 
-        if pitch_injection_reject(&resp.reply, &target_login) {
+        if pitch_injection_reject(&resp_reply, &target_login) {
             self.log_anlass_reject(
                 &login,
                 &target_user_id,
                 "injection",
                 text,
-                Some(resp.reply.clone()),
+                Some(resp_reply.clone()),
             )
             .await;
             return;
@@ -877,7 +908,7 @@ impl PromoEngine {
             return;
         }
 
-        let out_text = format!("@{target_login} {}", resp.reply);
+        let out_text = format!("@{target_login} {}", resp_reply);
 
         let Some(log_id) = self
             .insert_pitch_log_pending(PitchLogEntry {
@@ -922,7 +953,7 @@ impl PromoEngine {
                 &login,
                 &target_login,
                 text,
-                &resp.reply,
+                &resp_reply,
                 PitchCardKind::Anlass,
                 None,
             )
@@ -1118,6 +1149,27 @@ impl PromoEngine {
         }
         self.pitch_judge_last.insert(chatter_key, now);
         true
+    }
+
+    async fn log_zuschauer_reject(
+        &self,
+        login: &str,
+        target_user_id: &str,
+        reason: &str,
+        trigger: &str,
+        pfad: &'static str,
+    ) {
+        self.record_pitch_log(PitchLogEntry {
+            channel_login: login.to_string(),
+            target_user_id: Some(target_user_id.to_string()),
+            pfad,
+            occasion: None,
+            trigger_text: Some(trigger.to_string()),
+            generated_text: None,
+            reject_reason: Some(reason.to_string()),
+            sent_at: None,
+        })
+        .await;
     }
 
     async fn log_anlass_reject(
@@ -4149,8 +4201,21 @@ mod db_tests {
             // twitch_streamer_identities — twitch_user_id=text, twitch_login=text
             r#"CREATE TABLE twitch_streamer_identities (
                 twitch_user_id TEXT PRIMARY KEY,
-                twitch_login TEXT
+                twitch_login TEXT,
+                discord_user_id TEXT
             )"#,
+            r#"CREATE TABLE twitch_zuschauer_register (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT,
+                discord_user_id TEXT,
+                community_probability DOUBLE PRECISION NOT NULL,
+                signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+                first_partner_channel TEXT,
+                first_seen_at TIMESTAMPTZ,
+                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
+            r#"CREATE TABLE twitch_streamers (twitch_user_id TEXT)"#,
+            r#"CREATE TABLE twitch_partner_signup_denylist (twitch_user_id TEXT NOT NULL)"#,
             // twitch_live_state — is_live=integer, last_game=text, active_session_id=bigint, last_viewer_count=integer
             r#"CREATE TABLE twitch_live_state (
                 twitch_user_id TEXT PRIMARY KEY,
@@ -4190,6 +4255,7 @@ mod db_tests {
                 twitch_user_id TEXT,
                 detected_at TEXT NOT NULL DEFAULT '',
                 cooldown_until TEXT,
+                contacted_at TIMESTAMPTZ,
                 status TEXT
             )"#,
             r#"CREATE TABLE twitch_scout_pitch_ledger (
@@ -4247,6 +4313,7 @@ mod db_tests {
             // negatives from missing-table errors.
             r#"CREATE TABLE twitch_raid_auth (
                 twitch_login TEXT PRIMARY KEY,
+                twitch_user_id TEXT,
                 scopes TEXT
             )"#,
             r#"CREATE TABLE twitch_promo_pitch_log (
@@ -4283,6 +4350,24 @@ mod db_tests {
             Arc::new(super::tests::MockApi::default()),
             Arc::new(NoopSuppressionCheck),
         )
+    }
+
+    struct EmptyMembers;
+
+    #[async_trait::async_trait]
+    impl crate::zuschauer_register::MemberIndexSource for EmptyMembers {
+        async fn fetch_members(
+            &self,
+        ) -> Option<Vec<crate::zuschauer_register::MemberLite>> {
+            Some(Vec::new())
+        }
+    }
+
+    fn test_register(pool: PgPool) -> Arc<crate::zuschauer_register::ZuschauerRegister> {
+        Arc::new(crate::zuschauer_register::ZuschauerRegister::new(
+            pool,
+            Arc::new(EmptyMembers),
+        ))
     }
 
     #[tokio::test]
@@ -5107,7 +5192,8 @@ mod db_tests {
             "deadlock ist echt unterschaetzt",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone());
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-inserr",
@@ -5137,7 +5223,8 @@ mod db_tests {
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
-            .set_pitch_review_sink(Arc::new(sink.clone()));
+            .set_pitch_review_sink(Arc::new(sink.clone()))
+            .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-sym",
@@ -5285,7 +5372,8 @@ mod db_tests {
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
-            .set_partner_pitch_gen(gen.clone());
+            .set_partner_pitch_gen(gen.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-nk",
@@ -5592,7 +5680,8 @@ mod db_tests {
             "klar helfen wir dir, schau auf https://discord.gg/abc vorbei",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone());
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-filt",
@@ -5621,7 +5710,8 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(None, ""))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone());
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-dr",
