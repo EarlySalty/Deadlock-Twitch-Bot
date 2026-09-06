@@ -608,6 +608,16 @@ twitch_clip_form_submissions|http_status|integer|YES|
 twitch_clip_form_submissions|id|integer|NO|nextval('twitch_clip_form_submissions_id_seq'::regclass)
 twitch_clip_form_submissions|status|text|NO|'pending'::text
 twitch_clip_form_submissions|submitted_at|timestamp with time zone|YES|
+twitch_clip_merkmale|clip_id|text|NO|
+twitch_clip_merkmale|created_at|timestamp with time zone|NO|now()
+twitch_clip_merkmale|dauer_s|double precision|YES|
+twitch_clip_merkmale|ersteller|text|YES|
+twitch_clip_merkmale|id|bigint|NO|nextval('twitch_clip_merkmale_id_seq'::regclass)
+twitch_clip_merkmale|offset_vom_ende_s|double precision|YES|
+twitch_clip_merkmale|signal|text|NO|
+twitch_clip_merkmale|streamer_twitch_id|text|YES|
+twitch_clip_merkmale|views|integer|YES|
+twitch_clip_merkmale|wert|double precision|YES|
 twitch_clips_social_analytics|bucket|text|YES|
 twitch_clips_social_analytics|clip_id|bigint|NO|
 twitch_clips_social_analytics|comments|integer|YES|0
@@ -665,6 +675,8 @@ twitch_clips_social_media|uploaded_instagram|boolean|YES|false
 twitch_clips_social_media|uploaded_tiktok|boolean|YES|false
 twitch_clips_social_media|uploaded_youtube|boolean|YES|false
 twitch_clips_social_media|view_count|integer|YES|0
+twitch_clips_social_media|vod_id|text|YES|
+twitch_clips_social_media|vod_offset_s|integer|YES|
 twitch_clips_social_media|youtube_uploaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|youtube_video_id|text|YES|
 twitch_clips_upload_queue|attempts|integer|YES|0
@@ -1704,3 +1716,12 @@ twitch_vod_archive_vods|title|text|NO|
 twitch_vod_archive_vods|twitch_id|text|NO|
 twitch_vod_archive_vods|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_vod_archive_vods|uploaded_at|timestamp with time zone|YES|
+twitch_vod_highlights|created_at|timestamp with time zone|NO|now()
+twitch_vod_highlights|end_s|double precision|NO|
+twitch_vod_highlights|id|bigint|NO|nextval('twitch_vod_highlights_id_seq'::regclass)
+twitch_vod_highlights|score|double precision|NO|
+twitch_vod_highlights|signale|jsonb|NO|'{}'::jsonb
+twitch_vod_highlights|start_s|double precision|NO|
+twitch_vod_highlights|status|text|NO|'neu'::text
+twitch_vod_highlights|streamer_twitch_id|text|NO|
+twitch_vod_highlights|vod_id|text|NO|
