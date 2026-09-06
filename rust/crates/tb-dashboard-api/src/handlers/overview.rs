@@ -958,6 +958,28 @@ mod tests {
     }
 
     #[test]
+    fn retention_score_saettigt_nicht_bei_88_prozent() {
+        let s = calculate_health_scores(
+            50.0,
+            58.5,
+            44,
+            10.0,
+            44,
+            1.0,
+            44,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 25,
+                received: 15,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(s.retention, 58);
+        assert_eq!(s.network, 45);
+    }
+
+    #[test]
     fn health_scores_formel_exakt() {
         // category_percentile gesetzt → reach = 20 + 0.5*80 = 60.
         let s = calculate_health_scores(
