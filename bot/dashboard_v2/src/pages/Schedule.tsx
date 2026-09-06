@@ -4,6 +4,7 @@ import { Rise } from '../motion/Rise';
 import { Clock, Calendar, Zap, TrendingUp, AlertCircle, Loader2, Star, Crown, Users, Play } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchHourlyHeatmap, fetchWeekdayStats } from '@/api/analytics';
+import { wochentagBalkenHoehe } from '@/types/analytics';
 import type { HourlyHeatmapData, WeekdayStats, TimeRange } from '@/types/analytics';
 
 interface ScheduleProps {
@@ -350,15 +351,28 @@ function InsightCard({ type, title, text }: InsightCardProps) {
 }
 
 function WeekdayCards({ data }: { data: WeekdayStats[] }) {
-  const maxViewers = Math.max(...data.map(d => d.avgViewers), 1);
+  const aktiveWerte = data.filter(d => d.streamCount > 0).map(d => d.avgViewers);
+  const minViewers = aktiveWerte.length ? Math.min(...aktiveWerte) : 0;
+  const maxViewers = aktiveWerte.length ? Math.max(...aktiveWerte) : 0;
+  const wochenSchnitt = aktiveWerte.length
+    ? aktiveWerte.reduce((sum, v) => sum + v, 0) / aktiveWerte.length
+    : 0;
   const bestDay = data.reduce((a, b) => a.avgViewers > b.avgViewers ? a : b);
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
       {data.map((day, i) => {
-        const viewerPct = (day.avgViewers / maxViewers) * 100;
         const isBest = day.weekdayLabel === bestDay.weekdayLabel;
         const hasStreams = day.streamCount > 0;
+        const viewerPct = hasStreams ? wochentagBalkenHoehe(day.avgViewers, minViewers, maxViewers) : 0;
+        const abweichung =
+          hasStreams && wochenSchnitt > 0 ? ((day.avgViewers - wochenSchnitt) / wochenSchnitt) * 100 : null;
+        const abweichungFarbe =
+          abweichung === null || Math.abs(abweichung) < 5
+            ? 'text-text-secondary'
+            : abweichung > 0
+            ? 'text-success'
+            : 'text-danger';
 
         return (
           <motion.div
@@ -387,7 +401,7 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
             <div className="h-24 flex items-end justify-center mb-3">
               <motion.div
                 initial={{ height: 0 }}
-                animate={{ height: `${Math.max(hasStreams ? 8 : 0, viewerPct)}%` }}
+                animate={{ height: `${viewerPct}%` }}
                 transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5, ease: 'easeOut' }}
                 className={`w-8 rounded-t-lg ${
                   isBest
@@ -400,12 +414,20 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
             </div>
             <div className="text-center">
               <div className={`text-lg font-bold ${isBest ? 'text-white' : hasStreams ? 'text-white' : 'text-text-secondary'}`}>
-                {hasStreams ? Math.round(day.avgViewers) : '-'}
+                {hasStreams
+                  ? day.avgViewers.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+                  : '-'}
               </div>
               <div className="text-[10px] text-text-secondary uppercase tracking-wider">
                 <Users className="w-3 h-3 inline mr-0.5 -mt-0.5" />
                 Ø Viewer
               </div>
+              {abweichung !== null && (
+                <div className={`mt-1 text-xs font-semibold ${abweichungFarbe}`}>
+                  {abweichung >= 0 ? '+' : '-'}
+                  {Math.abs(abweichung).toFixed(0)}% ggü. Schnitt
+                </div>
+              )}
             </div>
             <div className="mt-3 pt-3 border-t border-border/50 space-y-1.5">
               <div className="flex items-center justify-between text-xs">

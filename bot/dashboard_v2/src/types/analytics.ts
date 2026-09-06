@@ -57,6 +57,15 @@ export interface WeekdayStats {
   totalFollowers: number;
 }
 
+export function wochentagBalkenHoehe(avgViewers: number, min: number, max: number): number {
+  if (max <= min) {
+    return 100;
+  }
+  const anteil = (avgViewers - min) / (max - min);
+  const hoehe = 15 + 85 * anteil;
+  return Math.max(15, Math.min(100, hoehe));
+}
+
 export interface HourlyHeatmapData {
   weekday: number;
   hour: number;
