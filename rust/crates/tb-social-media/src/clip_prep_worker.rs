@@ -59,6 +59,66 @@ impl ClipDownloader for YtDlpDownloader {
     }
 }
 
+/// Laedt einen Clip atomar nach `dest_path`: erst in eine eindeutige Temp-Datei
+/// im selben Ordner, dann `rename` auf das Ziel. So schreiben zwei nebenlaeufige
+/// Downloads (Prep- und Vorschau-Worker teilen `data/clips`) nie in dieselbe
+/// halbfertige Datei; das Ziel ist immer eine vollstaendige Datei.
+pub async fn download_atomic(
+    downloader: &dyn ClipDownloader,
+    clip_url: &str,
+    dest_path: &str,
+) -> Result<(), String> {
+    if Path::new(dest_path).exists() {
+        return Ok(());
+    }
+    if let Some(parent) = Path::new(dest_path).parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
+    let tmp = format!("{dest_path}.dl-{}.part", tb_crypto::random_hex_token(8));
+    downloader.download(clip_url, Path::new(&tmp)).await?;
+    if !Path::new(&tmp).exists() {
+        return Err(format!("Downloaded file not found: {tmp}"));
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, dest_path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+/// Traegt den lokalen Pfad in `twitch_clips_social_media` ein und loescht einen
+/// etwaigen frueheren Download-Fehler. Damit greift der Enrichment-Selektor und
+/// die Retention raeumt die Datei spaeter mit (INV-07).
+pub async fn register_local_file(
+    pool: &PgPool,
+    clip_db_id: i64,
+    path: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE twitch_clips_social_media \
+            SET local_file_path = $1, downloaded_at = $2::text::timestamptz, download_failed_at = NULL \
+          WHERE id = $3",
+        path,
+        Utc::now().to_rfc3339(),
+        clip_db_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_download_failed(pool: &PgPool, clip_db_id: i64) {
+    if let Err(error) = sqlx::query!(
+        "UPDATE twitch_clips_social_media SET download_failed_at = NOW() WHERE id = $1",
+        clip_db_id
+    )
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(%error, clip_db_id, "Clip-Prep: Download-Fehler konnte nicht vermerkt werden");
+    }
+}
+
 pub struct ClipPrepWorker {
     pool: PgPool,
     downloader: Arc<dyn ClipDownloader>,
@@ -97,6 +157,7 @@ impl ClipPrepWorker {
                 AND k.enrichment_enabled \
                 AND COALESCE(c.upload_local_path, c.local_file_path) IS NULL \
                 AND c.clip_url IS NOT NULL AND c.clip_url <> '' \
+                AND (c.download_failed_at IS NULL OR c.download_failed_at < NOW() - INTERVAL '6 hours') \
               ORDER BY c.created_at DESC LIMIT $1",
             limit.max(1)
         )
@@ -110,28 +171,11 @@ impl ClipPrepWorker {
     }
 
     async fn download_one(&self, clip_db_id: i64, clip_url: &str) -> Result<(), PrepError> {
-        tokio::fs::create_dir_all(&self.clips_dir).await?;
         let output_path = format!("{}/{}.mp4", self.clips_dir, clip_db_id);
-        if !Path::new(&output_path).exists() {
-            self.downloader
-                .download(clip_url, Path::new(&output_path))
-                .await
-                .map_err(PrepError::Download)?;
-            if !Path::new(&output_path).exists() {
-                return Err(PrepError::Download(format!(
-                    "Downloaded file not found: {output_path}"
-                )));
-            }
-        }
-        sqlx::query!(
-            "UPDATE twitch_clips_social_media \
-                SET local_file_path = $1, downloaded_at = $2::text::timestamptz WHERE id = $3",
-            &output_path,
-            Utc::now().to_rfc3339(),
-            clip_db_id
-        )
-        .execute(&self.pool)
-        .await?;
+        download_atomic(self.downloader.as_ref(), clip_url, &output_path)
+            .await
+            .map_err(PrepError::Download)?;
+        register_local_file(&self.pool, clip_db_id, &output_path).await?;
         Ok(())
     }
 
@@ -147,6 +191,9 @@ impl ClipPrepWorker {
                         clip_db_id,
                         "Clip-Prep: Vorab-Download fehlgeschlagen"
                     );
+                    // Fehlschlag festhalten, damit ein dauerhaft untauglicher Clip
+                    // nicht alle 120s erneut gezogen wird und den Batch blockiert.
+                    mark_download_failed(&self.pool, clip_db_id).await;
                 }
             }
         }
@@ -208,7 +255,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names JSONB NOT NULL DEFAULT '[]'::jsonb, enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 0)",
             "INSERT INTO social_media_category (category_key, display_name, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', TRUE, 0), ('other', 'Andere Spiele', FALSE, 1)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, streamer_login TEXT, game_id TEXT, upload_local_path TEXT, local_file_path TEXT, downloaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ, category_key TEXT NOT NULL DEFAULT 'deadlock' REFERENCES social_media_category (category_key), created_at TIMESTAMPTZ DEFAULT NOW())",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, streamer_login TEXT, game_id TEXT, upload_local_path TEXT, local_file_path TEXT, downloaded_at TIMESTAMPTZ, download_failed_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ, category_key TEXT NOT NULL DEFAULT 'deadlock' REFERENCES social_media_category (category_key), created_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, status TEXT DEFAULT 'pending')",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();

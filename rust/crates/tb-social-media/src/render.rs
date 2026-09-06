@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use crate::enrichment::get_enrichment;
 use crate::layout::{get_clip_stored_layout, StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
 use crate::subtitles::ass_from_segments;
-use crate::video_processor::{VideoProcessor, VideoProcessorError};
+use crate::video_processor::{plan_vertical_render, VerticalRender, VideoProcessor, VideoProcessorError};
 use crate::vocab::load_all_vocab;
 
 /// Untertitel-Schalter des Streamers zum Clip. Fehlt die Einstellung, ist der
@@ -43,9 +43,14 @@ async fn render_base(
     output_path: &str,
     max_duration: i64,
 ) -> Result<(), VideoProcessorError> {
-    match layout {
-        Some(l) => vp.compose_and_trim(input_path, output_path, max_duration, l).await,
-        None => {
+    // Dieselbe Weiche, die der REQ-01-Test bewacht: liegt ein Layout vor, wird
+    // komponiert, sonst Center-Crop.
+    match plan_vertical_render(layout.as_ref()) {
+        VerticalRender::Compose { .. } => {
+            let l = layout.as_ref().expect("Compose impliziert ein Layout");
+            vp.compose_and_trim(input_path, output_path, max_duration, l).await
+        }
+        VerticalRender::CenterCrop => {
             vp.convert_and_trim(input_path, output_path, max_duration, TARGET_WIDTH, TARGET_HEIGHT)
                 .await
         }

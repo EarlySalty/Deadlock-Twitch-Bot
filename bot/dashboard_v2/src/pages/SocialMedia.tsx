@@ -1933,12 +1933,49 @@ function ClipCard({
     }
   };
 
+  const beginnePolling = () => {
+    stopPreviewPolling();
+    pollRef.current = window.setInterval(() => {
+      getPreviewStatus(clip.clip_db_id)
+        .then((state) => {
+          setPreviewStatus(state.status);
+          if (state.status === 'ready') {
+            setPreviewError(null);
+            stopPreviewPolling();
+          } else if (state.status === 'error') {
+            setPreviewError(state.error ?? null);
+            stopPreviewPolling();
+          }
+        })
+        .catch(() => {
+          setPreviewStatus('error');
+          setPreviewError(null);
+          stopPreviewPolling();
+        });
+    }, 3000);
+  };
+
   useEffect(() => stopPreviewPolling, []);
 
   useEffect(() => {
     stopPreviewPolling();
     setPreviewStatus(null);
     setPreviewError(null);
+    let abgebrochen = false;
+    getPreviewStatus(clip.clip_db_id)
+      .then((state) => {
+        if (abgebrochen) return;
+        setPreviewStatus(state.status);
+        if (state.status === 'pending' || state.status === 'rendering') {
+          beginnePolling();
+        } else if (state.status === 'error') {
+          setPreviewError(state.error ?? null);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      abgebrochen = true;
+    };
   }, [clip.clip_db_id]);
 
   const starteVorschau = () => {
@@ -1947,25 +1984,7 @@ function ClipCard({
     requestPreview(clip.clip_db_id)
       .then((res) => {
         setPreviewStatus(res.status ?? 'pending');
-        stopPreviewPolling();
-        pollRef.current = window.setInterval(() => {
-          getPreviewStatus(clip.clip_db_id)
-            .then((state) => {
-              setPreviewStatus(state.status);
-              if (state.status === 'ready') {
-                setPreviewError(null);
-                stopPreviewPolling();
-              } else if (state.status === 'error') {
-                setPreviewError(state.error ?? null);
-                stopPreviewPolling();
-              }
-            })
-            .catch(() => {
-              setPreviewStatus('error');
-              setPreviewError(null);
-              stopPreviewPolling();
-            });
-        }, 3000);
+        beginnePolling();
       })
       .catch((err) => {
         setPreviewStatus('error');

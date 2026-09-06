@@ -3889,6 +3889,9 @@ fn preview_not_ready() -> Response {
 }
 
 fn parse_range(range: &str, len: u64) -> Option<(u64, u64)> {
+    if len == 0 {
+        return None;
+    }
     let spec = range.strip_prefix("bytes=")?;
     let (start_s, end_s) = spec.split_once('-')?;
     if start_s.is_empty() {

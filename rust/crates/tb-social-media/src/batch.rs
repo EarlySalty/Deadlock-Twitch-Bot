@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-use crate::clip_prep_worker::ClipDownloader;
+use crate::clip_prep_worker::{download_atomic, ClipDownloader};
 use crate::render::render_clip_vertical;
 use crate::video_processor::VideoProcessor;
 
@@ -93,12 +93,7 @@ async fn ensure_local(
         }
     }
     let dest = format!("{clips_dir}/{}.mp4", clip.clip_db_id);
-    if !Path::new(&dest).exists() {
-        downloader.download(&clip.clip_url, Path::new(&dest)).await?;
-        if !Path::new(&dest).exists() {
-            return Err(format!("Downloaded file not found: {dest}"));
-        }
-    }
+    download_atomic(downloader, &clip.clip_url, &dest).await?;
     Ok(dest)
 }
 

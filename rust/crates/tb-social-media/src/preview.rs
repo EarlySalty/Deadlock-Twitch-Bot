@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::Utc;
 use sqlx::PgPool;
 
-use crate::clip_prep_worker::{ClipDownloader, YtDlpDownloader};
+use crate::clip_prep_worker::{download_atomic, register_local_file, ClipDownloader, YtDlpDownloader};
 use crate::render::render_clip_vertical;
 use crate::video_processor::VideoProcessor;
 
@@ -98,6 +98,7 @@ async fn claim_pending(pool: &PgPool, limit: i64) -> Vec<PreviewJob> {
           WHERE id IN ( \
               SELECT id FROM twitch_clips_social_media \
                WHERE preview_status = 'pending' \
+                  OR (preview_status = 'rendering' AND preview_updated_at < NOW() - INTERVAL '15 minutes') \
                ORDER BY preview_updated_at ASC NULLS FIRST LIMIT $1 FOR UPDATE SKIP LOCKED) \
           RETURNING id AS \"id!\", clip_url, local_file_path",
         limit.max(1)
@@ -151,13 +152,13 @@ impl PreviewWorker {
                 return Ok(path.to_string());
             }
         }
-        tokio::fs::create_dir_all(&self.clips_dir).await.map_err(|e| e.to_string())?;
         let dest = format!("{}/{}.mp4", self.clips_dir, job.clip_db_id);
-        if !Path::new(&dest).exists() {
-            self.downloader.download(&job.clip_url, Path::new(&dest)).await?;
-            if !Path::new(&dest).exists() {
-                return Err(format!("Downloaded file not found: {dest}"));
-            }
+        download_atomic(self.downloader.as_ref(), &job.clip_url, &dest).await?;
+        // Auch der Vorschau-Download registriert die Quelldatei, sonst bliebe sie
+        // fuer einen Clip, den der Prep-Worker nie anfasst (Kategorie other), nach
+        // dem Retention-Lauf verwaist liegen (INV-07).
+        if let Err(e) = register_local_file(&self.pool, job.clip_db_id, &dest).await {
+            tracing::warn!(%e, clip_db_id = job.clip_db_id, "Vorschau: local_file_path nicht gespeichert");
         }
         Ok(dest)
     }
