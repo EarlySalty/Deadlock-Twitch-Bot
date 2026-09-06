@@ -121,11 +121,36 @@ def cmd_analyse(args):
             print(f"Tabelle {e} fehlt (Prod-Migration ausstehend); lokal abgelegt: {lokal}")
 
 
+def _lade_korpus_datei(pfad):
+    with open(pfad) as f:
+        roh = json.load(f)
+    clips = []
+    for e in roh:
+        clips.append(
+            {
+                "clip_id": e["clip_id"],
+                "clip_url": e.get("url") or e.get("clip_url"),
+                "views": int(e.get("views", 0)),
+                "dauer_s": float(e.get("dauer", e.get("dauer_s", 0)) or 0),
+                "streamer_login": e.get("ersteller") or e.get("streamer_login"),
+                "streamer_twitch_id": e.get("streamer_twitch_id"),
+                "game_name": "Deadlock",
+            }
+        )
+    return clips
+
+
 def cmd_lernen(args):
     regionen_cfg, gewichte_cfg = _lade_configs()
     conn = db.verbinde(_dsn())
     clips = db.korpus_clips(conn, args.limit, nur_deadlock=not args.alle_spiele)
-    print(f"{len(clips)} Korpus-Clips aus der DB")
+    print(f"{len(clips)} Partner-Clips aus der DB")
+    if args.korpus_datei:
+        geerntet = _lade_korpus_datei(args.korpus_datei)
+        bekannt = {c["clip_id"] for c in clips}
+        neu = [c for c in geerntet if c["clip_id"] not in bekannt and c["clip_url"]]
+        clips = clips + neu
+        print(f"{len(neu)} geerntete Deadlock-Clips aus {args.korpus_datei} dazu, {len(clips)} gesamt")
     alle_merkmale = []
     with tempfile.TemporaryDirectory(dir=args.tmp) as tmp:
         ergebnisse = corpus.verarbeite_korpus(clips, regionen_cfg, gewichte_cfg, tmp, worker=args.worker, kein_stt=args.kein_stt)
@@ -228,6 +253,7 @@ def main(argv=None):
     l.add_argument("--limit", type=int, default=800)
     l.add_argument("--worker", type=int, default=8)
     l.add_argument("--kein-stt", action="store_true")
+    l.add_argument("--korpus-datei", default="")
     l.add_argument("--alle-spiele", action="store_true")
     l.add_argument("--tmp", default="/home/nathanael/vod-archive/highlights")
     l.add_argument("--report", default=os.path.join(TASK_DIR, "korpus-report.md"))
