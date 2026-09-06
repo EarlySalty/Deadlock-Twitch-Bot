@@ -20,7 +20,7 @@
 //!   "cam_position": {"x":712,"y":48,"w":320,"h":320} }
 //! ```
 //! Validierung: version==1, x/y>=0, w/h>0, Crops innerhalb `source`,
-//! `cam_position` innerhalb des Zielframes, mode ∈ {pip, stacked}.
+//! `cam_position` innerhalb des Zielframes, mode ∈ {pip, stacked, blur_pad}.
 //!
 //! Kompatibilität: Layouts aus der Zeit, als `cam_position` im Quellraum
 //! validiert wurde, können Werte tragen, die im Zielframe nicht mehr passen.
@@ -273,8 +273,8 @@ impl StreamerLayout {
                 .to_string(),
         };
         let resolved_mode = resolved_mode.trim().to_lowercase();
-        if resolved_mode != "pip" && resolved_mode != "stacked" {
-            return Err(err("mode must be one of: pip, stacked"));
+        if resolved_mode != "pip" && resolved_mode != "stacked" && resolved_mode != "blur_pad" {
+            return Err(err("mode must be one of: pip, stacked, blur_pad"));
         }
         let resolved_cam_enabled = match cam_enabled {
             Some(c) => c,

@@ -55,6 +55,20 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     let top_height = p.h.clamp(2, TARGET_HEIGHT - 2);
     let game_height = TARGET_HEIGHT - top_height;
 
+    // Blur-Rand: das Game-Bild sitzt formatfuellend in der Breite mittig im
+    // Frame, oben und unten fuellt eine vergroesserte, verschwommene Kopie. Kein
+    // Cam-Compositing; cam_enabled ist hier wirkungslos.
+    if mode == "blur_pad" {
+        return format!(
+            "[0:v]crop={gw}:{gh}:{gx}:{gy},setsar=1,split=2[bg][fg];\
+             [bg]scale={tw}:{th}:force_original_aspect_ratio=increase,\
+             crop={tw}:{th},boxblur=20:1,setsar=1[bgb];\
+             [fg]scale={tw}:-2,setsar=1[fgs];\
+             [bgb][fgs]overlay=(W-w)/2:(H-h)/2[vout]",
+            gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, th = TARGET_HEIGHT
+        );
+    }
+
     let base_game = format!(
         "[0:v]crop={gw}:{gh}:{gx}:{gy},\
          scale={tw}:{th}:force_original_aspect_ratio=increase,\
@@ -411,6 +425,29 @@ mod tests {
         let f = build_compose_filter(&layout, "stacked", true);
         assert!(f.contains("scale=1080:540:"), "{f}");
         assert!(f.contains("scale=1080:1380:"), "{f}");
+    }
+
+    #[test]
+    fn compose_filter_blur_pad_hat_boxblur_und_zentriertes_overlay() {
+        // Blur-Rand: 16:9-Bild mittig, oben/unten eine verschwommene, vergroesserte
+        // Kopie. Kein separates Cam-Tile.
+        let f = build_compose_filter(&default_streamer_layout(), "blur_pad", true);
+        assert!(f.contains("boxblur"), "blur_pad braucht einen Blur-Hintergrund: {f}");
+        assert!(f.contains("split"), "Hintergrund und Vordergrund aus einer Quelle: {f}");
+        assert!(
+            f.contains("overlay=(W-w)/2:(H-h)/2"),
+            "16:9-Bild sitzt zentriert im Frame: {f}"
+        );
+        assert!(f.ends_with("[vout]"), "{f}");
+        assert!(
+            !f.contains("crop=380:380"),
+            "im Blur-Rand gibt es keine Cam-Kachel: {f}"
+        );
+        // cam_enabled darf am Ergebnis nichts aendern.
+        assert_eq!(
+            build_compose_filter(&default_streamer_layout(), "blur_pad", false),
+            f
+        );
     }
 
     #[test]

@@ -289,3 +289,14 @@ Rot-Test zuerst: `layout::tests::gespeichertes_layout_waehlt_compose_ohne_center
 FAILED - Panic "mit gespeichertem Layout darf NICHT Center-Crop gewaehlt werden"
 (Stub `get_clip_stored_layout -> None`). Nach der Verdrahtung gruen.
 Lib-Tests: 226 passed, 0 failed (Baseline 224 + M1-Prep + M2).
+
+### M3 - REQ-02 Layout-Variante Blur-Rand: ERLEDIGT
+
+- `build_compose_filter` hat einen `blur_pad`-Zweig: `split` in Hintergrund
+  (scale 1080x1920 fuellend + boxblur) und Vordergrund (breitenfuellend), zentriertes
+  `overlay=(W-w)/2:(H-h)/2`. Kein Cam-Tile; cam_enabled wirkungslos.
+- `layout.rs` akzeptiert mode `blur_pad` (Validierung + Modul-Doku).
+
+Rot-Test zuerst: `video_processor::tests::compose_filter_blur_pad_hat_boxblur_und_zentriertes_overlay`
+FAILED - "blur_pad braucht einen Blur-Hintergrund" (fiel in den pip-Zweig). Danach gruen.
+Lib-Tests: 227 passed, 0 failed.
