@@ -98,3 +98,11 @@ Reihenfolge fest: erst Lern-Korpus (REQ-09), dann Detektor mit gelernten Gewicht
 - Bild (ffmpeg scene/astats): ein Durchlauf je VOD, wenige Minuten.
 - Cache je Signal (M2) sorgt dafuer, dass ein Wiederholungslauf mit geaenderten Gewichten keine neue OCR/STT braucht (REQ-08).
 - Grenzen: `nice 15`, hoechstens 8 Prozesse, Ausgabe und Cache auf der grossen Partition.
+
+## Umsetzungsstatus (Implementierer)
+
+### Rote Baseline (vor M2/M4, Klasse hoch)
+- Befehl: `.venv/bin/python -m pytest tests/ -q` in `ops/highlight-detector/`.
+- `tests/test_ocr_parser.py`: `ImportError: cannot import name 'ocr' from 'highlight_detector'` (8 Parser-Tests, rot).
+- `tests/test_score.py`: `ImportError: cannot import name 'detector' from 'highlight_detector'` (4 Score-Tests, rot).
+- 2 errors during collection, festgehalten am 2026-09-06 vor Implementierung der Module.
