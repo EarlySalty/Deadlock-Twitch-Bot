@@ -7,6 +7,10 @@ edition.workspace = true
 name = "tb-bot"
 path = "src/main.rs"
 
+[[bin]]
+name = "zuschauer-register-backfill"
+path = "src/zuschauer_register_backfill.rs"
+
 [dependencies]
 tokio              = { workspace = true, features = ["signal"] }
 tracing            = { workspace = true }

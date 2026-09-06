@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id, discord_user_id AS \"discord_user_id!\"\n             FROM twitch_streamer_identities\n            WHERE discord_user_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "979ac3a3e29dc7a81d947b2fab7bdbf65be39a3990dec6865be7a4e8aa342a18"
+}
