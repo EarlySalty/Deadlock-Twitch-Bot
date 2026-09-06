@@ -4686,7 +4686,7 @@ mod db_tests {
         assert_eq!(
             api.announcement_count().await,
             1,
-            "stattdessen laeuft der targeted_global-Pfad"
+            "stattdessen läuft der targeted_global-Pfad"
         );
         let user_pitches: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'targeted_user'",
