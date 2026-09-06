@@ -91,8 +91,10 @@ impl Batch {
                              $5::text[], $6::text[], $7::text[], $8::timestamptz[])
                       AS t(u, l, d, p, s, fpc, fsa, ca)
                ON CONFLICT (twitch_user_id) DO UPDATE SET
-                 twitch_login = EXCLUDED.twitch_login,
-                 discord_user_id = EXCLUDED.discord_user_id,
+                 twitch_login = COALESCE(
+                     EXCLUDED.twitch_login, twitch_zuschauer_register.twitch_login),
+                 discord_user_id = COALESCE(
+                     EXCLUDED.discord_user_id, twitch_zuschauer_register.discord_user_id),
                  community_probability = EXCLUDED.community_probability,
                  signals = EXCLUDED.signals,
                  first_partner_channel = COALESCE(
@@ -120,7 +122,16 @@ impl Batch {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let trocken = std::env::args().any(|arg| arg == "--trocken");
+    let mut trocken = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--trocken" => trocken = true,
+            other => {
+                eprintln!("Unbekanntes Argument: {other}. Erlaubt ist nur --trocken.");
+                std::process::exit(2);
+            }
+        }
+    }
 
     let settings = Settings::from_env().unwrap_or_else(|error| {
         tracing::error!("Konfigurationsfehler: {error}");
@@ -269,13 +280,18 @@ async fn run(
             SELECT sc.chatter_id, sc.chatter_login FROM twitch_session_chatters sc
             UNION ALL
             SELECT cm.chatter_id, cm.chatter_login FROM twitch_chat_messages cm
+        ),
+        nur_login AS (
+            SELECT LOWER(chatter_login) AS login_l
+              FROM events
+             WHERE chatter_login IS NOT NULL
+             GROUP BY LOWER(chatter_login)
+            HAVING bool_and(chatter_id IS NULL)
         )
-        SELECT COUNT(DISTINCT LOWER(e.chatter_login)) AS "anzahl!"
-          FROM events e
-          LEFT JOIN alias a ON a.login_l = LOWER(e.chatter_login)
-         WHERE e.chatter_id IS NULL
-           AND a.twitch_user_id IS NULL
-           AND e.chatter_login IS NOT NULL
+        SELECT COUNT(*) AS "anzahl!"
+          FROM nur_login nl
+          LEFT JOIN alias a ON a.login_l = nl.login_l
+         WHERE a.twitch_user_id IS NULL
         "#
     )
     .fetch_one(pool)
@@ -332,7 +348,7 @@ mod tests {
 
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
-    async fn pool_in_schema(schema: &str) -> Option<PgPool> {
+    async fn pool_in_schema(name: &str) -> Option<PgPool> {
         let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
             Ok(dsn) => dsn,
             Err(_) => {
@@ -340,29 +356,30 @@ mod tests {
                 return None;
             }
         };
+        let schema = format!("{name}_{}", std::process::id());
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
             .await
-            .ok()?;
+            .unwrap();
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&admin)
             .await
-            .ok()?;
+            .unwrap();
         sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await
-            .ok()?;
+            .unwrap();
         admin.close().await;
 
         let opts = PgConnectOptions::from_str(&dsn)
-            .ok()?
-            .options([("search_path", schema)]);
+            .unwrap()
+            .options([("search_path", schema.as_str())]);
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .connect_with(opts)
             .await
-            .ok()?;
+            .unwrap();
         Some(pool)
     }
 
@@ -517,6 +534,10 @@ mod tests {
         .await
         .unwrap();
 
+        sqlx::query("DELETE FROM twitch_session_chatters WHERE chatter_id = 'u_new'")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO twitch_chat_messages (chatter_id, chatter_login, streamer_login, message_ts)
              VALUES ('u_new', 'earlysalty', 'partnera', '2026-09-01T10:00:00Z')",
@@ -525,7 +546,8 @@ mod tests {
         .await
         .unwrap();
 
-        run(&pool, &index, false).await.unwrap();
+        let leerer_index = MemberIndex::build(&[]);
+        run(&pool, &leerer_index, false).await.unwrap();
         assert_eq!(register_count(&pool).await, 6, "zweiter Lauf legt nichts doppelt an");
 
         let first_seen_2: DateTime<Utc> = sqlx::query_scalar(
@@ -534,7 +556,22 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(first_seen, first_seen_2, "erstes Auftauchen bleibt stehen");
+        assert_eq!(
+            first_seen, first_seen_2,
+            "erstes Auftauchen bleibt trotz spaeterem Ersatz-Event stehen"
+        );
+
+        let discord_2: Option<String> = sqlx::query_scalar(
+            "SELECT discord_user_id FROM twitch_zuschauer_register WHERE twitch_user_id = 'u_new'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            discord_2.as_deref(),
+            Some("disc-early"),
+            "bekannte Discord-Zuordnung bleibt, auch wenn der Index sie nicht mehr kennt"
+        );
 
         let offchan_seen: Option<DateTime<Utc>> = sqlx::query_scalar(
             "SELECT first_seen_at FROM twitch_zuschauer_register WHERE twitch_user_id = 'u_offchan'",

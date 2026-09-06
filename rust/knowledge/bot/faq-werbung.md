@@ -21,14 +21,16 @@ Zwei Dinge, beide nur rund um den Community-Discord, keine externen Sponsoren, k
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
-### Wen spricht der Bot mit der Community-Einladung an?
+### Wen spricht der Bot persönlich auf die Community an?
 
-Nur Zuschauer, die zum ersten Mal in einem der Partnerkanäle auftauchen und nach allem, was der Bot über sie weiß, noch nicht zur Community gehören. Wer schon länger dabei ist, im Discord bekannt ist oder in einem Partnerkanal schon einmal geschrieben hat, wird nicht angesprochen. Streamer und Partner der Community, die Kanalbetreiber selbst, Moderatoren und andere Bots bleiben ebenfalls außen vor.
+Wenn der Bot direkt auf einen einzelnen Zuschauer eingeht, also die Anlass-Antwort auf eine passende Situation, dann nur bei jemandem, der zum ersten Mal in einem der Partnerkanäle schreibt und nach allem, was der Bot über ihn weiß, noch nicht zur Community gehört. Wer im Discord bekannt ist oder in einem Partnerkanal schon einmal geschrieben hat, wird nicht persönlich angesprochen. Die Kanalbetreiber selbst, Moderatoren, andere Bots, Streamer und Partner der Community bleiben außen vor.
 
+- Gilt für die persönliche Anlass-Antwort an einen einzelnen Zuschauer.
 - Nur echte Neulinge, die frisch in einem Partnerkanal schreiben.
-- Wer im Discord dabei ist oder schon länger mitliest, bekommt nichts.
-- Kanalbetreiber, Moderatoren, andere Bots, Streamer und Partner werden nie angesprochen.
-- Erkennt der Bot jemanden nicht sicher als Neuling, schweigt er lieber.
+- Wer im Discord dabei ist oder schon länger mitliest, wird nicht persönlich angesprochen.
+- Kanalbetreiber, Moderatoren, andere Bots, Streamer und Partner nie.
+- Erkennt der Bot jemanden nicht sicher als Neuling, spricht er ihn nicht persönlich an.
+- Die periodische Einladung ist davon unabhängig: sie ist eine normale Nachricht an den ganzen Chat und richtet sich nicht an eine einzelne Person.
 
 ### Bekomme ich als streamender Zuschauer einen Hinweis aufs Partner-Netzwerk?
 

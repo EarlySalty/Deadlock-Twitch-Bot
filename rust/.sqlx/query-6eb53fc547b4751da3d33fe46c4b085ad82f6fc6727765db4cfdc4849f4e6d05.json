@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH alias AS (\n            SELECT DISTINCT ON (LOWER(login)) LOWER(login) AS login_l, twitch_user_id\n              FROM twitch_login_aliases\n             ORDER BY LOWER(login), is_current DESC, last_seen_at DESC\n        ),\n        events AS (\n            SELECT sc.chatter_id, sc.chatter_login FROM twitch_session_chatters sc\n            UNION ALL\n            SELECT cm.chatter_id, cm.chatter_login FROM twitch_chat_messages cm\n        ),\n        nur_login AS (\n            SELECT LOWER(chatter_login) AS login_l\n              FROM events\n             WHERE chatter_login IS NOT NULL\n             GROUP BY LOWER(chatter_login)\n            HAVING bool_and(chatter_id IS NULL)\n        )\n        SELECT COUNT(*) AS \"anzahl!\"\n          FROM nur_login nl\n          LEFT JOIN alias a ON a.login_l = nl.login_l\n         WHERE a.twitch_user_id IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anzahl!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6eb53fc547b4751da3d33fe46c4b085ad82f6fc6727765db4cfdc4849f4e6d05"
+}
