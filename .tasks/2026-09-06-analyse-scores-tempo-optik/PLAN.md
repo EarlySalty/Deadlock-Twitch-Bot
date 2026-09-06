@@ -86,6 +86,13 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 - Validierung: Unit-Test für die Skalenfunktion, Sichtprüfung Planning-Tab.
 - Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
+## Sichtprüfung Strang B (2026-09-06)
+
+- Build, Lint (0 Fehler, 16 Alt-Warnungen aus fremden Dateien) und `npm test` (274 Tests) grün; `tsc -b` sauber; `brandPalette.test.ts` und `scoreColors.test.ts` unverändert grün.
+- Headless-Chrome rendert in dieser Umgebung (kein SwiftShader-Stall): Screenshots je Route erfolgreich erzeugt (`screens/01-overview-1280.png` bis `05-planning-1280.png`).
+- Grenze der Sichtprüfung hier: Der Vite-Dev-Server im Preview-Mode fängt nur einen Teil der Endpunkte per Fixture ab; die Analyse-Chart-Endpunkte (overview, audience, growth, planning) laufen ins echte Backend und liefern 502 (kein Backend im Agenten-Kontext). Dadurch bleiben Radar, Score-Karten, Demographics-/Topic-Donut, Raid-Tabelle und Wochentags-Balken auf den Screenshots leer. Kein Crash durch die Änderungen: keine ErrorBoundary, keine JS-Exception aus dem eigenen Code (nur Netzwerk-502).
+- Datengetriebene Optik-Prüfung (Radar mit zwei Null-Werten als Fläche und Eck-Zahlen, Topic-Donut mit 15 Themen und Legende, Raid-Sortierung/Filter, Wochentags-Spreizung) an den Orchestrator/die Hauptsession übergeben, die gegen das Live-Backend bzw. vollständige Fixtures prüfen kann (Memory `dashboard-sichtpruefung-headless-chrome`).
+
 ## Abschluss (beide Stränge)
 
 - `gate_hook.py --review` gegen die eigene Arbeit vor der Fertigmeldung, dann frischer Reviewer (Diff plus Contract), Fixes als neue Commits.
