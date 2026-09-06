@@ -11,8 +11,9 @@ pub struct ClipRecord {
     pub duration_seconds: f64,
     pub view_count: i64,
     pub game_name: Option<String>,
-    /// Twitch-Kategorie-ID aus Helix; Grundlage der Kategorie-Zuordnung.
     pub game_id: Option<String>,
+    pub vod_id: Option<String>,
+    pub vod_offset_s: Option<i32>,
 }
 
 /// Ergebnis eines Fetch-Laufs für einen einzelnen Streamer.
