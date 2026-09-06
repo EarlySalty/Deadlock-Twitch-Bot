@@ -3,7 +3,7 @@ title: Chat-Werbung des Bots
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-09-05
+last_updated: 2026-09-06
 source: manual
 tip_eligible: false
 ---
@@ -20,6 +20,15 @@ Zwei Dinge, beide nur rund um den Community-Discord, keine externen Sponsoren, k
 - Den Text der periodischen Einladung kannst du im Dashboard durch deinen eigenen ersetzen.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
+
+### Wen spricht der Bot mit der Community-Einladung an?
+
+Nur Zuschauer, die zum ersten Mal in einem der Partnerkanäle auftauchen und nach allem, was der Bot über sie weiß, noch nicht zur Community gehören. Wer schon länger dabei ist, im Discord bekannt ist oder in einem Partnerkanal schon einmal geschrieben hat, wird nicht angesprochen. Streamer und Partner der Community, die Kanalbetreiber selbst, Moderatoren und andere Bots bleiben ebenfalls außen vor.
+
+- Nur echte Neulinge, die frisch in einem Partnerkanal schreiben.
+- Wer im Discord dabei ist oder schon länger mitliest, bekommt nichts.
+- Kanalbetreiber, Moderatoren, andere Bots, Streamer und Partner werden nie angesprochen.
+- Erkennt der Bot jemanden nicht sicher als Neuling, schweigt er lieber.
 
 ### Bekomme ich als streamender Zuschauer einen Hinweis aufs Partner-Netzwerk?
 
