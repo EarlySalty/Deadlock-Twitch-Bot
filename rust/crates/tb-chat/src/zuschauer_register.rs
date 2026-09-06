@@ -436,12 +436,22 @@ impl ZuschauerRegister {
             }
 
             let (p, discord_id, signals, computed_at) = if fresh {
-                (
-                    entry.p,
-                    entry.discord_user_id.clone(),
-                    entry.signals.clone(),
-                    entry.computed_at,
-                )
+                let prior = self.prior_for_channel(channel_login);
+                let namens_score = entry
+                    .signals
+                    .get("namens_score")
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(0.0);
+                let p = 1.0 - (1.0 - prior) * (1.0 - namens_score);
+                let mut signals = entry.signals.clone();
+                if let Some(obj) = signals.as_object_mut() {
+                    obj.insert("prior".to_string(), serde_json::json!(prior));
+                    obj.insert(
+                        "prior_quelle".to_string(),
+                        serde_json::json!(prior_quelle(prior)),
+                    );
+                }
+                (p, entry.discord_user_id.clone(), signals, entry.computed_at)
             } else {
                 let index = self.member_index().await?;
                 let hard = self.hard_discord_id(twitch_user_id).await;

@@ -377,6 +377,41 @@ async fn member_index_negativ_cache_verhindert_zweiten_fetch() {
 }
 
 #[tokio::test]
+async fn backfill_eintrag_erstes_auftauchen_in_dach_lock_wird_abgelehnt() {
+    let pool = pool_or_skip!("tb_zr_backfill_dach_lock");
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO twitch_zuschauer_register
+            (twitch_user_id, twitch_login, discord_user_id, community_probability,
+             signals, first_partner_channel, first_seen_at, computed_at)
+         VALUES ('u_backfill', 'backfillgast', NULL, 0.2,
+             '{\"namens_score\": 0.0, \"prior\": 0.2, \"prior_quelle\": \"partner\"}'::jsonb,
+             NULL, NULL, $1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
+    let entry = register
+        .ensure_current("u_backfill", "backfillgast", "dach_lock")
+        .await
+        .expect("entry");
+    assert!(
+        entry.p > 0.8 - 1e-9,
+        "Erstauftauchen in dach_lock muss den Prior 0,8 anwenden, war {}",
+        entry.p
+    );
+
+    let ev = event("dach_lock", "u_backfill", "backfillgast", false);
+    assert_eq!(
+        register.gate(&ev).await,
+        GateOutcome::Reject("register_community")
+    );
+}
+
+#[tokio::test]
 async fn ensure_current_erneuert_nach_sieben_tagen_ohne_first_seen_zu_aendern() {
     let pool = pool_or_skip!("tb_zr_erneuert");
     let first_seen = Utc::now() - Duration::days(40);
