@@ -4,6 +4,8 @@ import os
 import sys
 import tempfile
 
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
+
 import cv2
 
 from . import cache, config, corpus, db, detector, messen, report, schnitt, signals, video
@@ -124,16 +126,11 @@ def cmd_lernen(args):
     conn = db.verbinde(_dsn())
     clips = db.korpus_clips(conn, args.limit, nur_deadlock=not args.alle_spiele)
     print(f"{len(clips)} Korpus-Clips aus der DB")
-    ergebnisse = []
     alle_merkmale = []
     with tempfile.TemporaryDirectory(dir=args.tmp) as tmp:
-        for i, clip in enumerate(clips, 1):
-            print(f"[{i}/{len(clips)}] {clip['clip_id']} ({clip['views']} Views)...", flush=True)
-            erg = corpus.verarbeite_clip(clip, regionen_cfg, gewichte_cfg, tmp)
-            if erg is None:
-                continue
-            ergebnisse.append(erg)
-            alle_merkmale.extend(corpus.merkmal_zeilen(erg))
+        ergebnisse = corpus.verarbeite_korpus(clips, regionen_cfg, gewichte_cfg, tmp, worker=args.worker, kein_stt=args.kein_stt)
+    for erg in ergebnisse:
+        alle_merkmale.extend(corpus.merkmal_zeilen(erg))
 
     print(f"{len(ergebnisse)} Clips verarbeitet, {len(alle_merkmale)} Merkmalszeilen")
     cache.schreibe_jsonl("korpus", "merkmale.jsonl", alle_merkmale)
@@ -229,6 +226,8 @@ def main(argv=None):
 
     l = sub.add_parser("lernen")
     l.add_argument("--limit", type=int, default=800)
+    l.add_argument("--worker", type=int, default=8)
+    l.add_argument("--kein-stt", action="store_true")
     l.add_argument("--alle-spiele", action="store_true")
     l.add_argument("--tmp", default="/home/nathanael/vod-archive/highlights")
     l.add_argument("--report", default=os.path.join(TASK_DIR, "korpus-report.md"))

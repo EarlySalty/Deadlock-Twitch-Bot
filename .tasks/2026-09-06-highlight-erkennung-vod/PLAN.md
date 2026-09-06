@@ -106,3 +106,12 @@ Reihenfolge fest: erst Lern-Korpus (REQ-09), dann Detektor mit gelernten Gewicht
 - `tests/test_ocr_parser.py`: `ImportError: cannot import name 'ocr' from 'highlight_detector'` (8 Parser-Tests, rot).
 - `tests/test_score.py`: `ImportError: cannot import name 'detector' from 'highlight_detector'` (4 Score-Tests, rot).
 - 2 errors during collection, festgehalten am 2026-09-06 vor Implementierung der Module.
+
+### Milestone-Status (2026-09-06)
+- M0 Kalibrierung: ERLEDIGT. 37 markierte Frames aus 2 VODs unter `kalibrierung/` (Kill-Feed oben links mit Killer/Opfer-Trennlinie, Banner zentral, Souls unten links). OCR an echten Crops kalibriert (Kill-Feed skal 4x invertiert, Souls x0=0.058..0.132). Sichtpruefung Nutzer offen.
+- M1 Rust Clip-VOD-Felder + Korpus-Ernte: ERLEDIGT (Subagent). `vod_id`/`vod_offset_s` in parse_clip/model/INSERT, `fetch_top_game_clips`/`register_corpus_clip` als Bibliotheks-API. tb-social-media 224->228 gruen, fresh_migrations gruen, sqlx/snapshot nachgezogen. Migrationen NICHT auf Prod (offen: Nutzer).
+- M2 Signal-Extraktoren + Cache: ERLEDIGT. OCR (parallel bis 8 Prozesse), Lautstaerke, STT, Szenenwechsel, Death-Screen; Rohdaten-Cache getrennt vom Event-Bau (Gewichts-Rerun ohne neue OCR).
+- M3 Lern-Korpus + Gewichte + Report: Teilbeleg (limit 20) laeuft; voller 800er-Lauf als Hintergrund offen. Gewichte werden aus Praevalenz abgeleitet, Schwelle aus 25-Perzentil der Clip-Spitzenscores.
+- M4 Detektor: ERLEDIGT. Sliding-Window + NMS, Score mit Einzelbeitraegen, JSON+Tabelle. Kandidaten sitzen an echten Clip-Momenten (t=13787 eigener Kill, t=13799 eigener Tod).
+- M5 Messung: Real-Beleg ueber lokale VOD-.info.json-Verortung (created_at gegen VOD-Zeitfenster), 18/25 earlysalty-Clips in 4 lokalen VODs verortbar. Prod-Weg ueber vod_offset_s (Helix-Backfill) offen.
+- M6 Schnitt + Persistenz: Code fertig (ffmpeg-Reencode, twitch_vod_highlights). DB-Schreiben faellt bis zur Prod-Migration lokal zurueck.

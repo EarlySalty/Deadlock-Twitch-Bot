@@ -97,7 +97,7 @@ def _death_screen(bild_zeilen, faktor=0.55):
     return treffer
 
 
-def extrahiere_events_direkt(pfad, regionen_cfg, gewichte_cfg):
+def extrahiere_events_direkt(pfad, regionen_cfg, gewichte_cfg, kein_stt=False):
     ist_breite, ist_hoehe = video.aufloesung(pfad)
     fps = regionen_cfg["ocr"]["fps"]
     sprache = regionen_cfg["ocr"]["sprache"]
@@ -135,12 +135,13 @@ def extrahiere_events_direkt(pfad, regionen_cfg, gewichte_cfg):
         spitzen, _ = audio.pegel_spitzen(pfad)
         for t, w in spitzen:
             events.append((t, "sprache_pegel", w))
-        segmente = audio.transkribiere(pfad)
-        lachen, schluessel_tr = audio.sprach_signale(segmente, schluessel)
-        for t, w in lachen:
-            events.append((t, "sprache_lachen", w))
-        for t, w in schluessel_tr:
-            events.append((t, "sprache_schluesselwort", w))
+        if not kein_stt:
+            segmente = audio.transkribiere(pfad)
+            lachen, schluessel_tr = audio.sprach_signale(segmente, schluessel)
+            for t, w in lachen:
+                events.append((t, "sprache_lachen", w))
+            for t, w in schluessel_tr:
+                events.append((t, "sprache_schluesselwort", w))
 
     events.sort(key=lambda e: e[0])
     return events

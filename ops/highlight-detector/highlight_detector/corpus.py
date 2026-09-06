@@ -1,3 +1,4 @@
+import multiprocessing as mp
 import os
 import tempfile
 import traceback
@@ -12,9 +13,9 @@ SIGNAL_TYPEN = [
 ]
 
 
-def _clip_events(clip_pfad, regionen_cfg, gewichte_cfg):
+def _clip_events(clip_pfad, regionen_cfg, gewichte_cfg, kein_stt=False):
     dauer = video.dauer_s(clip_pfad)
-    events = signals.extrahiere_events_direkt(clip_pfad, regionen_cfg, gewichte_cfg)
+    events = signals.extrahiere_events_direkt(clip_pfad, regionen_cfg, gewichte_cfg, kein_stt=kein_stt)
     merkmale = []
     for t, typ, wert in events:
         offset_vom_ende = round(dauer - t, 2)
@@ -23,7 +24,7 @@ def _clip_events(clip_pfad, regionen_cfg, gewichte_cfg):
     return dauer, merkmale
 
 
-def verarbeite_clip(clip, regionen_cfg, gewichte_cfg, tmp_dir):
+def verarbeite_clip(clip, regionen_cfg, gewichte_cfg, tmp_dir, kein_stt=False):
     ziel = os.path.join(tmp_dir, f"{clip['clip_id']}.mp4")
     try:
         video.lade_clip_fenster(clip["clip_url"], ziel)
@@ -31,7 +32,7 @@ def verarbeite_clip(clip, regionen_cfg, gewichte_cfg, tmp_dir):
         if not dateien:
             return None
         pfad = os.path.join(tmp_dir, dateien[0])
-        dauer, merkmale = _clip_events(pfad, regionen_cfg, gewichte_cfg)
+        dauer, merkmale = _clip_events(pfad, regionen_cfg, gewichte_cfg, kein_stt=kein_stt)
         return {"clip": clip, "dauer_s": dauer, "merkmale": merkmale}
     except Exception:
         traceback.print_exc()
@@ -43,6 +44,30 @@ def verarbeite_clip(clip, regionen_cfg, gewichte_cfg, tmp_dir):
                     os.unlink(os.path.join(tmp_dir, p))
                 except OSError:
                     pass
+
+
+def _worker(auftrag):
+    os.environ["OMP_THREAD_LIMIT"] = "1"
+    clip, regionen_cfg, gewichte_cfg, tmp_dir, kein_stt = auftrag
+    return verarbeite_clip(clip, regionen_cfg, gewichte_cfg, tmp_dir, kein_stt=kein_stt)
+
+
+def verarbeite_korpus(clips, regionen_cfg, gewichte_cfg, tmp_dir, worker=8, kein_stt=False):
+    auftraege = [(clip, regionen_cfg, gewichte_cfg, tmp_dir, kein_stt) for clip in clips]
+    ergebnisse = []
+    if worker <= 1 or len(auftraege) <= 1:
+        for i, a in enumerate(auftraege, 1):
+            print(f"[{i}/{len(auftraege)}] {a[0]['clip_id']} ({a[0]['views']} Views)...", flush=True)
+            erg = _worker(a)
+            if erg is not None:
+                ergebnisse.append(erg)
+        return ergebnisse
+    with mp.Pool(worker) as pool:
+        for i, erg in enumerate(pool.imap_unordered(_worker, auftraege), 1):
+            print(f"[{i}/{len(auftraege)}] fertig", flush=True)
+            if erg is not None:
+                ergebnisse.append(erg)
+    return ergebnisse
 
 
 def merkmal_zeilen(ergebnis):
