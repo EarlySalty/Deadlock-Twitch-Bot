@@ -115,3 +115,12 @@ Reihenfolge fest: erst Lern-Korpus (REQ-09), dann Detektor mit gelernten Gewicht
 - M4 Detektor: ERLEDIGT. Sliding-Window + NMS, Score mit Einzelbeitraegen, JSON+Tabelle. Kandidaten sitzen an echten Clip-Momenten (t=13787 eigener Kill, t=13799 eigener Tod).
 - M5 Messung: Real-Beleg ueber lokale VOD-.info.json-Verortung (created_at gegen VOD-Zeitfenster), 18/25 earlysalty-Clips in 4 lokalen VODs verortbar. Prod-Weg ueber vod_offset_s (Helix-Backfill) offen.
 - M6 Schnitt + Persistenz: Code fertig (ffmpeg-Reencode, twitch_vod_highlights). DB-Schreiben faellt bis zur Prod-Migration lokal zurueck.
+
+### M5 Messergebnis (Real-Beleg, 2026-09-06)
+- Korpus-Teillauf: 20 Clips (Top-Views, gemischte Partner), OCR-only (STT im Massenlauf abgeschaltet, schont den geteilten STT-Server). 104 Merkmalszeilen. Abgeleitete Gewichte: sprache_pegel 0.5 (in 60% der Clips), ocr_kill 0.167 (20%), bild_death_screen 0.083 (10%), Rest niedrig/0.
+- Messung earlysalty VOD v2853130679, Cluster 13000-13900 s (4 echte Clips lokal verortet ueber created_at gegen VOD-.info.json):
+  - **Trefferquote 4/4 = 1.0** (Abstand je 0.0 s, Kandidatenfenster deckt Clipfenster).
+  - **21 Falsch-Positive** ueber 15 min. Ursache strukturell: 13 Kandidaten sind reine Lautstaerke-Spitzen (Score 0.5 = sprache_pegel), und ein echter Clip ist ebenfalls nur Lautstaerke (0.5). Lautstaerke allein trennt echte Highlights nicht von lautem Gameplay; eine Schwelle hilft nicht (echt und FP liegen bei 0.5).
+  - Die drei anderen echten Clips tragen zusaetzlich ocr_kill (Score 0.667) und heben sich sauber ab.
+- Schwelle gegen die Messung auf 0.5 gesetzt (niedrigster echter Clip-Score), Recall bleibt 1.0.
+- Praezisions-Fix (offen, braucht keinen Neubau): voller 800-Clip-Korpus MIT STT (Lachen/Schluesselwoerter trennen erregte von lauter Szene) und je Streamer kalibrierte Kill-Feed-/Souls-OCR, damit Lautstaerke weniger dominiert und diskriminierende Signale hinzukommen.

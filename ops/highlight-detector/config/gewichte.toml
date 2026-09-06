@@ -1,15 +1,15 @@
 [gewichte]
-ocr_kill = 0.5
-ocr_tod = 0.15
-ocr_multikill = 0.5
-ocr_objective = 0.25
-ocr_soul_sprung = 0.35
-sprache_pegel = 0.3
-sprache_lachen = 0.3
-sprache_schluesselwort = 0.2
-bild_szenenwechsel = 0.1
-bild_death_screen = 0.15
-bild_template = 0.2
+ocr_kill = 0.1667
+ocr_tod = 0.0417
+ocr_multikill = 0.0
+ocr_objective = 0.0417
+ocr_soul_sprung = 0.0
+sprache_pegel = 0.5
+sprache_lachen = 0.0
+sprache_schluesselwort = 0.0
+bild_szenenwechsel = 0.0
+bild_death_screen = 0.0833
+bild_template = 0.0
 
 [signale_aktiv]
 ocr = true
@@ -20,7 +20,7 @@ bild = true
 fenster_s = 8.0
 schritt_s = 2.0
 nms_abstand_s = 25.0
-schwelle = 0.6
+schwelle = 0.5
 
 [schnitt]
 vorlauf_s = 20.0
