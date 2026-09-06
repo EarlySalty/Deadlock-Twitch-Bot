@@ -545,6 +545,7 @@ pub struct PromoEngine {
 struct GezieltPersonState {
     session_id: i64,
     msgs: Vec<String>,
+    last_touched: Instant,
 }
 
 /// Fallback-PartnerChannelCheck: immer true (für Tests).
@@ -1201,11 +1202,13 @@ impl PromoEngine {
             .or_insert_with(|| GezieltPersonState {
                 session_id,
                 msgs: Vec::new(),
+                last_touched: Instant::now(),
             });
         if entry.session_id != session_id {
             entry.session_id = session_id;
             entry.msgs.clear();
         }
+        entry.last_touched = Instant::now();
         entry.msgs.push(text.to_string());
         if entry.msgs.len() > 8 {
             let drop_n = entry.msgs.len() - 8;
@@ -3226,6 +3229,8 @@ impl PromoEngine {
             stamps.retain(|t| now.duration_since(*t) < PITCH_JUDGE_CHANNEL_WINDOW);
             !stamps.is_empty()
         });
+        self.gezielt_state
+            .retain(|_, s| now.duration_since(s.last_touched) < max_age);
     }
 }
 
