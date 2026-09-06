@@ -539,6 +539,7 @@ pub struct PromoEngine {
     targeted_state: Mutex<TargetedState>,
     zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
     gezielt_state: DashMap<String, GezieltPersonState>,
+    gezielt_send_lock: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -592,6 +593,7 @@ impl PromoEngine {
             targeted_state: Mutex::new(TargetedState::new()),
             zuschauer_register: None,
             gezielt_state: DashMap::new(),
+            gezielt_send_lock: Mutex::new(()),
         }
     }
 
@@ -1348,6 +1350,7 @@ impl PromoEngine {
         }
 
         let out_text = format!("@{target_login} {body}");
+        let _gezielt_guard = self.gezielt_send_lock.lock().await;
         let lock = self.get_send_lock(&login);
         let _guard = lock.lock().await;
 
@@ -1356,6 +1359,8 @@ impl PromoEngine {
             .await
             .is_some()
         {
+            self.log_zuschauer_reject(&login, target_user_id, "limit_im_lock", &trigger, "gezielt")
+                .await;
             return true;
         }
 
@@ -1396,6 +1401,7 @@ impl PromoEngine {
         )
         .await;
         drop(_guard);
+        drop(_gezielt_guard);
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
             let hint = self.gezielt_signals_hint(target_user_id).await;
@@ -4154,6 +4160,21 @@ mod db_tests {
         .execute(pool)
         .await
         .unwrap();
+        let session_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, twitch_user_id)
+             VALUES ($1, NOW() - INTERVAL '2 hours', $2) RETURNING id",
+        )
+        .bind(channel_login)
+        .bind(channel_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE twitch_live_state SET active_session_id = $1 WHERE twitch_user_id = $2")
+            .bind(session_id)
+            .bind(channel_id)
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     fn pitch_response(
@@ -6027,6 +6048,110 @@ mod db_tests {
                 .await
                 .unwrap();
         assert_eq!(gezielt.0, 0, "kein gezielter Pitch fuer dieselbe Nachricht");
+    }
+
+    struct GatedTextGen {
+        body: String,
+        barrier: Arc<tokio::sync::Barrier>,
+    }
+
+    #[async_trait]
+    impl PitchTextGen for GatedTextGen {
+        async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
+            Some(format!("{} {invite}", self.body))
+        }
+        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
+            self.barrier.wait().await;
+            Some(self.body.clone())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn gezielter_pitch_gleicher_user_zwei_kanaele_genau_einer() {
+        let pool = pool_or_skip!("promo_gezielt_zwei_kanaele");
+        seed_partner_channel(&pool, "c-za", "zakanal").await;
+        seed_partner_channel(&pool, "c-zb", "zbkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let engine = Arc::new(
+            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_text_gen(Arc::new(GatedTextGen {
+                    body: "cooler run, sowas sieht man selten".to_string(),
+                    barrier: barrier.clone(),
+                }))
+                .set_zuschauer_register(test_register(pool.clone())),
+        );
+
+        let msgs = vec![
+            "hallo zusammen hier".to_string(),
+            "noch eine nachricht dazu".to_string(),
+        ];
+        let ev_a = pitch_event("c-za", "zakanal", "u-zz", "Zzler", "noch eine nachricht dazu");
+        let ev_b = pitch_event("c-zb", "zbkanal", "u-zz", "Zzler", "noch eine nachricht dazu");
+
+        let e1 = engine.clone();
+        let m1 = msgs.clone();
+        let t1 =
+            tokio::spawn(async move { e1.maybe_send_gezielt_pitch(&ev_a, m1, None, None, Vec::new()).await });
+        let e2 = engine.clone();
+        let m2 = msgs.clone();
+        let t2 =
+            tokio::spawn(async move { e2.maybe_send_gezielt_pitch(&ev_b, m2, None, None, Vec::new()).await });
+        let _ = tokio::join!(t1, t2);
+
+        assert_eq!(api.message_count().await, 1, "genau ein Pitch geht raus");
+
+        let sent: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log
+              WHERE pfad = 'gezielt' AND target_user_id = 'u-zz' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sent.0, 1, "genau ein gesendeter Ledger-Eintrag");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn gezielter_pitch_zweitpruefung_im_lock_wird_geloggt() {
+        let pool = pool_or_skip!("promo_gezielt_im_lock_log");
+        seed_partner_channel(&pool, "c-la", "lakanal").await;
+        seed_partner_channel(&pool, "c-lb", "lbkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let engine = Arc::new(
+            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_text_gen(Arc::new(GatedTextGen {
+                    body: "cooler run, sowas sieht man selten".to_string(),
+                    barrier: barrier.clone(),
+                }))
+                .set_zuschauer_register(test_register(pool.clone())),
+        );
+
+        let msgs = vec![
+            "hallo zusammen hier".to_string(),
+            "noch eine nachricht dazu".to_string(),
+        ];
+        let ev_a = pitch_event("c-la", "lakanal", "u-ll", "Lller", "noch eine nachricht dazu");
+        let ev_b = pitch_event("c-lb", "lbkanal", "u-ll", "Lller", "noch eine nachricht dazu");
+
+        let e1 = engine.clone();
+        let m1 = msgs.clone();
+        let t1 =
+            tokio::spawn(async move { e1.maybe_send_gezielt_pitch(&ev_a, m1, None, None, Vec::new()).await });
+        let e2 = engine.clone();
+        let m2 = msgs.clone();
+        let t2 =
+            tokio::spawn(async move { e2.maybe_send_gezielt_pitch(&ev_b, m2, None, None, Vec::new()).await });
+        let _ = tokio::join!(t1, t2);
+
+        let im_lock: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log
+              WHERE pfad = 'gezielt' AND reject_reason = 'limit_im_lock'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(im_lock.0, 1, "der im Lock unterlegene Versuch wird mit Grund geloggt");
     }
 
     // -----------------------------------------------------------------------
