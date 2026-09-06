@@ -60,7 +60,7 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 
 - Änderungen: `ScoreGauge.tsx` bekommt `hint?: string` unter dem Label; `Overview.tsx` übergibt die vier Texte aus REQ-04; `RetentionRadar.tsx` bekommt `label`-Renderer an den Ecken (Recharts `Radar` mit `dot` und `label`, Zahl in `--color-text-primary`, 11 px, versetzt nach außen), `fillOpacity` 0.35, Achsenticks mit größerem Abstand (`tickLine={false}`, Margin anpassen).
 - Validierung: `npm run build`, Sichtprüfung per Vite-Preview und Headless-Chrome (Memory `dashboard-sichtpruefung-headless-chrome`), Screenshot nach `.tasks/2026-09-06-analyse-scores-tempo-optik/screens/`.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
 ### M6: Tage-Feld Fix (REQ-06)
 
@@ -72,19 +72,19 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 
 - Änderungen: `index.css` bekommt `--color-chart-1` bis `--color-chart-5` (Bronze bis Messing, z. B. #7A5A2E, #9C7A3C, #C5A059, #DDBD7A, #F1D9A6; Luminanzabstand prüfen) plus Tailwind-Klassen, falls das Projekt Farben über `@theme` registriert; `brandPalette.test.ts` nur um diese Tokens erweitern, wenn er sonst blockt. `FollowerFunnel.tsx`: Conversion-Karte auf `bg-black/25 border border-primary/40 shadow-inner`, Stufenbalken `from-primary to-accent`, Skala `/70`. `AudienceDemographics.tsx`, `ViewerProfiles.tsx`: `VIEWER_COLORS` auf die Rampe. `chatAnalyticsDeepSections.tsx`: `TOPIC_COLORS` auf Rampe plus primary, accent, warning; Fallback `var(--color-chart-3)`; Donut-Box `h-[160px] w-[160px] shrink-0`, innen 45, außen 78.
 - Validierung: `npm test` (brandPalette), Sichtprüfung Audience-Tab und Chat-Aktivität.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
 ### M8: Raid-Details sortieren und filtern (REQ-11)
 
 - Änderungen: `RaidRetention.tsx` bekommt `useState` für Sortierspalte und Richtung (Default `viewersSent` absteigend), Suchfeld über der Tabelle, Zeile "N von M Raids", klickbare `th` mit Pfeil-Icon (lucide `ChevronUp`/`ChevronDown`), `useMemo` für die gefilterte, sortierte Liste.
 - Validierung: Unit-Test für die Sortier- und Filterfunktion (reine Funktion aus der Komponente exportieren), Sichtprüfung.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
 ### M9: Wochentags-Balken (REQ-12)
 
 - Änderungen: `Schedule.tsx:353-403`: Skala min bis max (`viewerPct = 15 + 85 * (avg - min) / (max - min)`, bei `max == min` 100), Zahl mit einer Nachkommastelle (`toLocaleString('de-DE', {maximumFractionDigits: 1})`), Abweichung vom Wochenschnitt als Chip unter der Zahl.
 - Validierung: Unit-Test für die Skalenfunktion, Sichtprüfung Planning-Tab.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
 ## Abschluss (beide Stränge)
 
