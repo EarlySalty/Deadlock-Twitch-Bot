@@ -58,21 +58,21 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       label: 'Unique Viewer',
       value: data.uniqueViewers,
       icon: Users,
-      color: 'from-primary to-primary',
+      color: 'from-primary to-accent',
       width: 100,
     },
     {
       label: 'Wiederkehrend',
       value: data.returningViewers,
       icon: Heart,
-      color: 'from-accent to-accent',
+      color: 'from-primary to-accent',
       width: data.uniqueViewers > 0 ? (data.returningViewers / data.uniqueViewers) * 100 : 0,
     },
     {
       label: 'Neue Follower',
       value: data.newFollowers,
       icon: UserPlus,
-      color: 'from-success to-success',
+      color: 'from-primary to-accent',
       width: data.uniqueViewers > 0 ? (data.newFollowers / data.uniqueViewers) * 100 : 0,
     },
   ];
@@ -103,7 +103,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       </div>
 
       {/* Conversion Rate Hero Section */}
-      <div className="bg-gradient-to-r from-primary/10 to-success/10 rounded-xl p-5 mb-6 border border-primary/20">
+      <div className="bg-black/25 rounded-xl p-5 mb-6 border border-primary/40 shadow-inner">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="text-sm text-text-secondary">Conversion Rate</span>
@@ -202,10 +202,10 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         {/* Benchmark Gauge */}
         <div className="mt-4">
           <div className="relative h-2 rounded-full overflow-hidden flex">
-            <div className="flex-1 bg-danger/40" />
-            <div className="flex-1 bg-warning/40" />
-            <div className="flex-1 bg-success/40" />
-            <div className="flex-1 bg-success/40" />
+            <div className="flex-1 bg-danger/70" />
+            <div className="flex-1 bg-warning/70" />
+            <div className="flex-1 bg-success/70" />
+            <div className="flex-1 bg-success/70" />
           </div>
           {rating.position > 0 && (
             <motion.div

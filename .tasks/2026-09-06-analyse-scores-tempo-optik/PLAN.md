@@ -60,37 +60,56 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 - Änderungen: neuer Test `bot/dashboard_v2/tests/headerTageEnter.test.tsx` (oder `.test.ts` nach Muster von `dashboardShell.test.ts`), der den Header rendert, "14" tippt, Enter sendet und `onDaysChange(14)` sowie Fokusverlust erwartet. Vorher am Live-Bundle prüfen, ob der Enter-Handler enthalten ist (`curl` der Asset-URLs aus `/analyse` mit Session-Cookie ist nicht möglich; stattdessen Datum des Live-Release gegen 62f041e0 und ff1a951a vergleichen: `readlink /opt/deadlock/twitch/current`, `git -C ~/repos/Deadlock-Twitch-Bot merge-base --is-ancestor ff1a951a <sha>`).
 - Erwartet: Test rot mit Meldung, oder Nachweis "Live-Bundle ist älter als der Fix" in dieser Datei. In beiden Fällen bleibt der Test.
 - Validierung: `npm test -- headerTageEnter` in `bot/dashboard_v2`.
-- Status: offen
+- Status: verifiziert (grün, kein Code-Fehler auf main)
+- Befund: Der Enter-Fehler ist auf main NICHT reproduzierbar. Live-Release ist `01454d056f402b936c4a49ac2a8c4b98321848f6` und enthält laut Orchestrator die Commits 62f041e0, ff1a951a und 48e9979e; der Live-Check per readlink/merge-base entfällt darum. Empirische Prüfung: Vite-Dev-Build dieses Worktrees, gesteuert per Chrome DevTools Protocol mit echten Tastatur-Events (`Input.dispatchKeyEvent` Enter), sechs Szenarien. Ergebnis in allen Fällen korrekt: "14" -> days=14, "90" -> 90, "200" -> 200, "3" -> clamp 7, leeres Feld -> behält 7, "45" per Blur -> 45; Header-Text, URL-Parameter `days` und Fokusverlust (`document.activeElement` = BODY) folgen. Ursache des ursprünglichen Fehlers waren die drei genannten Commits (Zahlenfeld, leeres Feld, Blur-Guard `if (naechster !== days)`); sie sind bereits in main und live. Kein globaler KeyDown-Handler schluckt Enter (nur Escape-Listener in AnalyticsTour/TrialExpiryModal/Header), der URL-Parse-Effekt in App.tsx läuft nur einmal (deps []). Der Test `tests/headerTageEnter.test.ts` bleibt als grüne Absicherung der Übernahme-Logik und der Enter/Blur-Verdrahtung (Muster wie `dashboardShell.test.ts`, da `npm test` ohne DOM-Bibliothek läuft und Header.tsx `@/`-Importe hat). Neue Testdatei in `package.json` (test-Skript) registriert; package.json steht nicht im Contract-Scope und braucht bei Gate-Block eine Freigabe-Datei.
 
 ### M5: Score-Karten und Radar (REQ-04, REQ-05)
 
 - Änderungen: `ScoreGauge.tsx` bekommt `hint?: string` unter dem Label; `Overview.tsx` übergibt die vier Texte aus REQ-04; `RetentionRadar.tsx` bekommt `label`-Renderer an den Ecken (Recharts `Radar` mit `dot` und `label`, Zahl in `--color-text-primary`, 11 px, versetzt nach außen), `fillOpacity` 0.35, Achsenticks mit größerem Abstand (`tickLine={false}`, Margin anpassen).
 - Validierung: `npm run build`, Sichtprüfung per Vite-Preview und Headless-Chrome (Memory `dashboard-sichtpruefung-headless-chrome`), Screenshot nach `.tasks/2026-09-06-analyse-scores-tempo-optik/screens/`.
-- Status: offen
+- Status: verifiziert (Unit/Typecheck grün, Radar und Erklärtexte per Screenshot belegt: screens/01-overview-mock-1280.png)
 
 ### M6: Tage-Feld Fix (REQ-06)
 
 - Änderungen: nach Befund aus M4 in `Header.tsx` (Reihenfolge `setTageInput` vor `blur()`, `preventDefault` auf Enter, kein doppelter Aufruf) oder nur Deploy.
 - Validierung: M4-Test grün.
-- Status: offen
+- Status: entfällt (kein Code-Fix nötig, siehe M4-Befund; Header.tsx bleibt unverändert)
 
 ### M7: Farben Funnel, Demographics, Segmente, Topic-Donut (REQ-08, REQ-09, REQ-10, INV-04)
 
 - Änderungen: `index.css` bekommt `--color-chart-1` bis `--color-chart-5` (Bronze bis Messing, z. B. #7A5A2E, #9C7A3C, #C5A059, #DDBD7A, #F1D9A6; Luminanzabstand prüfen) plus Tailwind-Klassen, falls das Projekt Farben über `@theme` registriert; `brandPalette.test.ts` nur um diese Tokens erweitern, wenn er sonst blockt. `FollowerFunnel.tsx`: Conversion-Karte auf `bg-black/25 border border-primary/40 shadow-inner`, Stufenbalken `from-primary to-accent`, Skala `/70`. `AudienceDemographics.tsx`, `ViewerProfiles.tsx`: `VIEWER_COLORS` auf die Rampe. `chatAnalyticsDeepSections.tsx`: `TOPIC_COLORS` auf Rampe plus primary, accent, warning; Fallback `var(--color-chart-3)`; Donut-Box `h-[160px] w-[160px] shrink-0`, innen 45, außen 78.
 - Validierung: `npm test` (brandPalette), Sichtprüfung Audience-Tab und Chat-Aktivität.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
 ### M8: Raid-Details sortieren und filtern (REQ-11)
 
 - Änderungen: `RaidRetention.tsx` bekommt `useState` für Sortierspalte und Richtung (Default `viewersSent` absteigend), Suchfeld über der Tabelle, Zeile "N von M Raids", klickbare `th` mit Pfeil-Icon (lucide `ChevronUp`/`ChevronDown`), `useMemo` für die gefilterte, sortierte Liste.
 - Validierung: Unit-Test für die Sortier- und Filterfunktion (reine Funktion aus der Komponente exportieren), Sichtprüfung.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
 
 ### M9: Wochentags-Balken (REQ-12)
 
 - Änderungen: `Schedule.tsx:353-403`: Skala min bis max (`viewerPct = 15 + 85 * (avg - min) / (max - min)`, bei `max == min` 100), Zahl mit einer Nachkommastelle (`toLocaleString('de-DE', {maximumFractionDigits: 1})`), Abweichung vom Wochenschnitt als Chip unter der Zahl.
 - Validierung: Unit-Test für die Skalenfunktion, Sichtprüfung Planning-Tab.
-- Status: offen
+- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
+
+## Sichtprüfung Strang B (2026-09-06)
+
+- Build, Lint (0 Fehler, 16 Alt-Warnungen aus fremden Dateien) und `npm test` (274 Tests) grün; `tsc -b` sauber; `brandPalette.test.ts` und `scoreColors.test.ts` unverändert grün.
+- Headless-Chrome rendert in dieser Umgebung (kein SwiftShader-Stall): Screenshots je Route erfolgreich erzeugt (`screens/01-overview-1280.png` bis `05-planning-1280.png`).
+- Grenze der Sichtprüfung hier: Der Vite-Dev-Server im Preview-Mode fängt nur einen Teil der Endpunkte per Fixture ab; die Analyse-Chart-Endpunkte (overview, audience, growth, planning) laufen ins echte Backend und liefern 502 (kein Backend im Agenten-Kontext). Dadurch bleiben Radar, Score-Karten, Demographics-/Topic-Donut, Raid-Tabelle und Wochentags-Balken auf den Screenshots leer. Kein Crash durch die Änderungen: keine ErrorBoundary, keine JS-Exception aus dem eigenen Code (nur Netzwerk-502).
+- Datengetriebene Optik-Prüfung (Radar mit zwei Null-Werten als Fläche und Eck-Zahlen, Topic-Donut mit 15 Themen und Legende, Raid-Sortierung/Filter, Wochentags-Spreizung) an den Orchestrator/die Hauptsession übergeben, die gegen das Live-Backend bzw. vollständige Fixtures prüfen kann (Memory `dashboard-sichtpruefung-headless-chrome`).
+
+## Kritiker-Runde Strang B (gate_hook --review, 2026-09-06)
+
+- BLOCKING (Score-Hint-Texte in `Overview.tsx:154-157`): Der Kritiker liest Strang B gegen origin/main, wo Strang A (neue Formeln, M2) noch nicht gemergt ist, und meldet die drei REQ-04-Texte als falsch. Bewertung: Die Texte sind wörtlich aus REQ-04 und beschreiben genau die neuen Formeln aus REQ-01/REQ-02 (Bindung Ø/Peak, Raids je Stream, Netto-Follower je Stunde). Sie stimmen mit dem beabsichtigten Endzustand (A und B gemeinsam gemergt, Live-Check erwartet Retention ~58, Network ~45). Sie auf die alten Formeln umzutexten würde REQ-04 verletzen und nach dem A-Merge wieder falsch sein. Auflösung: Texte bleiben, harte Merge-Abhängigkeit an den Orchestrator gemeldet: Strang B darf nicht vor/ohne Strang A live gehen (gemeinsamer Review und Merge, CLAUDE.md "zusammengehörige Branches zusammen reviewen").
+- NIT 4 (Chart-Rampe Kontrast): REQ-09 definiert "sichtbar voneinander ab" ausdrücklich als ">= 12 % Luminanzabstand"; die Rampe erfüllt das (benachbart 12,6/16,4/15,4/17,9 pp). Der Kritiker misst Kontrastverhältnis; bei einer reinen Gold-Rampe (REQ-09: ohne Grün/Grau/Orange) stehen konstanter Kontrast und 12 pp am dunklen Ende im Konflikt. Contract-Metrik erfüllt, Rampe bleibt.
+- NIT 8 (`-0 %`): behoben, Rundung vor Vorzeichen, `±0 %` statt `-0 %` (Commit 6d3215ae).
+- NIT 10 (leere Suche): behoben, Leerhinweis statt nur Kopfzeile (Commit 6d3215ae).
+- NIT 6 (Header-Test-Anker): behoben, Anker am Tage-Feld per `aria-label` (Commit 6d3215ae).
+- NIT 7 (Radar-Winkel): Positionierung nutzt jetzt den echten Eckpunkt, `index` nur als Fallback fürs Zentrum (Commit 6d3215ae); die sechs Winkel entsprechen dem sechselementigen `data`-Array.
+- NIT 9 (Wochenschnitt ungewichtet): bewusst das Mittel der Wochentags-Mittel ("durchschnittlicher Wochentag"), REQ-12 gibt keine Gewichtung vor; nicht geändert.
+- NIT 5 (Sichtprüfung): Radar und Score-Karten sind jetzt empirisch belegt (Overview-Endpunkt per CDP gemockt, Growth 0 und Monetization 0): alle sechs Eck-Zahlen erscheinen (70, 58, 65, 0, 0, 45), das Polygon ist als Gold-Fläche lesbar, alle vier Erklärtexte stehen unter den Karten, Fußzeile bleibt. Beleg: `screens/01-overview-mock-1280.png`. Donut-Größe/Farben, Raid-Sortierung/Filter und Wochentags-Spreizung bleiben zur Live-Prüfung beim Orchestrator (kein Fixture in dieser Umgebung).
 
 ## Abschluss (beide Stränge)
 

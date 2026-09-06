@@ -8,11 +8,11 @@ interface ViewerProfilesProps {
 }
 
 const PROFILE_COLORS = [
-  'var(--color-primary)',
-  'var(--color-success)',
-  'var(--color-warning)',
-  'var(--color-secondary)',
-  'var(--color-accent)',
+  'var(--color-chart-1)',
+  'var(--color-chart-2)',
+  'var(--color-chart-3)',
+  'var(--color-chart-4)',
+  'var(--color-chart-5)',
 ];
 const PROFILE_LABELS: Record<string, string> = {
   exclusive: 'Exklusiv',

@@ -34,6 +34,7 @@ const ALLOWED_HEX = new Set([
   // Vorher stand dort Plasma-Blau — Chrome und Status trugen dieselbe Farbe, und
   // das Neon brach neben dem Gold. Plasma ist jetzt ausschliesslich Status.
   '#c5a059', '#f1d299', '#9a7c42', '#e0be86', '#f3d9ae',
+  '#6b4e27', '#9c7a3c', '#ddbd7a', '#f1d9a6',
   // Tinte fuer Gold-/Messingflaechen (Weiss liegt dort bei 1.77:1, siehe Test unten)
   '#241a12',
   // Plasma (Status + Chart-Serien)
