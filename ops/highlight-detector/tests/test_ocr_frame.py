@@ -2,7 +2,6 @@ import os
 import sys
 
 import cv2
-import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -11,7 +10,6 @@ from highlight_detector import config, ocr
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "frame_eigener_kill.jpg")
 
 
-@pytest.mark.skipif(not os.path.exists(FIXTURE), reason="Fixture fehlt")
 def test_echter_frame_ergibt_eigenen_kill_und_souls():
     cfg = config.lade_regionen()
     frame = cv2.imread(FIXTURE)
