@@ -1,5 +1,5 @@
 [allgemein]
-spieler_namen = ["earlysalty", "salty"]
+spieler_namen = ["earlysalty"]
 frame_breite = 1920
 frame_hoehe = 1080
 
@@ -45,4 +45,4 @@ skalierung = 2.0
 multikill_woerter = ["double", "triple", "quadra", "penta", "rampage", "multikill", "killstreak", "doppelkill", "dreifachkill"]
 objective_woerter = ["guardian", "walker", "shrine", "patron", "weakened", "urn", "midboss", "rejuvenator", "wachter"]
 soul_sprung_min = 120
-name_aehnlichkeit = 0.6
+name_aehnlichkeit = 0.75
