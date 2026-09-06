@@ -1354,12 +1354,12 @@ impl PromoEngine {
         let lock = self.get_send_lock(&login);
         let _guard = lock.lock().await;
 
-        if self
+        if let Some(reason) = self
             .gezielt_limit_reject(target_user_id, &login, session_start)
             .await
-            .is_some()
         {
-            self.log_zuschauer_reject(&login, target_user_id, "limit_im_lock", &trigger, "gezielt")
+            let grund = format!("limit_im_lock:{reason}");
+            self.log_zuschauer_reject(&login, target_user_id, &grund, &trigger, "gezielt")
                 .await;
             return true;
         }
@@ -6061,7 +6061,7 @@ mod db_tests {
             Some(format!("{} {invite}", self.body))
         }
         async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.barrier.wait().await;
+            let _ = tokio::time::timeout(Duration::from_secs(10), self.barrier.wait()).await;
             Some(self.body.clone())
         }
     }
@@ -6146,7 +6146,7 @@ mod db_tests {
 
         let im_lock: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM twitch_promo_pitch_log
-              WHERE pfad = 'gezielt' AND reject_reason = 'limit_im_lock'",
+              WHERE pfad = 'gezielt' AND reject_reason LIKE 'limit_im_lock%'",
         )
         .fetch_one(&pool)
         .await

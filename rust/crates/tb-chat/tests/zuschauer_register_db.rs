@@ -317,18 +317,17 @@ async fn gate_lehnt_bei_ladefehler_ab_und_legt_nichts_an() {
             twitch_login TEXT,
             discord_user_id TEXT,
             community_probability DOUBLE PRECISION NOT NULL,
-            signals JSONB NOT NULL DEFAULT '{}'::jsonb,
             first_partner_channel TEXT,
             first_seen_at TIMESTAMPTZ,
-            computed_at TEXT NOT NULL
+            computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"#,
     )
     .execute(&pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at)
-         VALUES ('u_err', 0.1, 'keindatum')",
+        "INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability)
+         VALUES ('u_err', 0.1)",
     )
     .execute(&pool)
     .await
