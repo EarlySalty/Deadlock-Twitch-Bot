@@ -64,7 +64,8 @@ def cmd_analyse(args):
     dauer = video.dauer_s(args.vod)
     ende = args.ende if args.ende else None
 
-    signals.extrahiere_roh(args.vod, vid, regionen_cfg, start=args.start, ende=ende, force=args.force)
+    signals.extrahiere_roh(args.vod, vid, regionen_cfg, start=args.start, ende=ende,
+                           force=args.force, kein_stt=args.kein_stt, worker=args.worker)
     if args.nur_signale:
         print(f"Signale extrahiert und gecacht fuer {vid}")
         return
@@ -162,6 +163,9 @@ def cmd_messen(args):
         if not info:
             continue
         fenster = messen.verorte_clips(clips, info)
+        if args.span_ende:
+            fenster = [cf for cf in fenster
+                       if cf["start_s"] >= args.span_start and cf["end_s"] <= args.span_ende]
         if not fenster:
             continue
         vid = info["vod_id"]
@@ -210,6 +214,8 @@ def main(argv=None):
     a.add_argument("--json", action="store_true")
     a.add_argument("--schneiden", action="store_true")
     a.add_argument("--force", action="store_true")
+    a.add_argument("--kein-stt", action="store_true")
+    a.add_argument("--worker", type=int, default=8)
     a.add_argument("--persist", action="store_true")
     a.add_argument("--dsn", default="")
     a.add_argument("--streamer-id", default="")
@@ -228,6 +234,8 @@ def main(argv=None):
     m.add_argument("--streamer", default="earlysalty")
     m.add_argument("--vod", nargs="*")
     m.add_argument("--vod-dir", default="/home/nathanael/vod-archive/downloads")
+    m.add_argument("--span-start", type=float, default=0.0)
+    m.add_argument("--span-ende", type=float, default=0.0)
     m.set_defaults(func=cmd_messen)
 
     args = p.parse_args(argv)

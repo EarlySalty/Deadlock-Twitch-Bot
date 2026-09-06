@@ -1,3 +1,5 @@
+import multiprocessing as mp
+
 import cv2
 import numpy as np
 
@@ -9,32 +11,59 @@ def _mittel_saettigung(frame):
     return float(np.mean(hsv[:, :, 1]))
 
 
-def extrahiere_roh(vod_pfad, vod_id, regionen_cfg, start=0.0, ende=None, force=False):
-    breite = regionen_cfg["frame_breite"]
-    hoehe = regionen_cfg["frame_hoehe"]
+def _ocr_chunk(auftrag):
+    import os
+
+    os.environ["OMP_THREAD_LIMIT"] = "1"
+    vod_pfad, start, ende, regionen, sprache, fps, breite, hoehe = auftrag
+    ocr_zeilen = []
+    bild_zeilen = []
+    for t, frame in video.frame_strom(vod_pfad, fps, breite, hoehe, start=start, ende=ende):
+        gelesen = ocr.lies_regionen(frame, regionen["regionen"], sprache)
+        kf = gelesen.get("killfeed", {})
+        ocr_zeilen.append(
+            {
+                "t": round(t, 2),
+                "killer": kf.get("killer", ""),
+                "victim": kf.get("victim", ""),
+                "souls": ocr.parse_souls(gelesen.get("souls", {}).get("text", "")),
+                "banner": gelesen.get("banner", {}).get("text", ""),
+            }
+        )
+        bild_zeilen.append({"t": round(t, 2), "sat": round(_mittel_saettigung(frame), 2)})
+    return ocr_zeilen, bild_zeilen
+
+
+def extrahiere_roh(vod_pfad, vod_id, regionen_cfg, start=0.0, ende=None, force=False,
+                   kein_stt=False, worker=8):
     ist_breite, ist_hoehe = video.aufloesung(vod_pfad)
     breite, hoehe = ist_breite, ist_hoehe
     fps = regionen_cfg["ocr"]["fps"]
     sprache = regionen_cfg["ocr"]["sprache"]
+    ende_eff = ende if ende is not None else video.dauer_s(vod_pfad)
 
     if not force and cache.existiert(vod_id, "ocr.jsonl") and cache.existiert(vod_id, "bild.jsonl"):
         pass
     else:
-        ocr_zeilen = []
-        bild_zeilen = []
-        for t, frame in video.frame_strom(vod_pfad, fps, breite, hoehe, start=start, ende=ende):
-            gelesen = ocr.lies_regionen(frame, regionen_cfg["regionen"], sprache)
-            kf = gelesen.get("killfeed", {})
-            ocr_zeilen.append(
-                {
-                    "t": round(t, 2),
-                    "killer": kf.get("killer", ""),
-                    "victim": kf.get("victim", ""),
-                    "souls": ocr.parse_souls(gelesen.get("souls", {}).get("text", "")),
-                    "banner": gelesen.get("banner", {}).get("text", ""),
-                }
-            )
-            bild_zeilen.append({"t": round(t, 2), "sat": round(_mittel_saettigung(frame), 2)})
+        spanne = ende_eff - start
+        n = max(1, min(worker, int(spanne // 30) or 1))
+        chunk = spanne / n
+        auftraege = [
+            (vod_pfad, start + i * chunk, start + (i + 1) * chunk,
+             regionen_cfg, sprache, fps, breite, hoehe)
+            for i in range(n)
+        ]
+        ocr_zeilen, bild_zeilen = [], []
+        if n == 1:
+            o, b = _ocr_chunk(auftraege[0])
+            ocr_zeilen, bild_zeilen = o, b
+        else:
+            with mp.Pool(n) as pool:
+                for o, b in pool.map(_ocr_chunk, auftraege):
+                    ocr_zeilen.extend(o)
+                    bild_zeilen.extend(b)
+        ocr_zeilen.sort(key=lambda z: z["t"])
+        bild_zeilen.sort(key=lambda z: z["t"])
         cache.schreibe_jsonl(vod_id, "ocr.jsonl", ocr_zeilen)
         cache.schreibe_jsonl(vod_id, "bild.jsonl", bild_zeilen)
 
@@ -46,7 +75,10 @@ def extrahiere_roh(vod_pfad, vod_id, regionen_cfg, start=0.0, ende=None, force=F
         cache.schreibe_jsonl(vod_id, "audio.jsonl", [{"t": t, "rms": r} for t, r in reihe])
         cache.schreibe_json(vod_id, "audio_spitzen.json", spitzen)
 
-    if force or not cache.existiert(vod_id, "transcript.json"):
+    if kein_stt:
+        if force or not cache.existiert(vod_id, "transcript.json"):
+            cache.schreibe_json(vod_id, "transcript.json", [])
+    elif force or not cache.existiert(vod_id, "transcript.json"):
         cache.schreibe_json(
             vod_id, "transcript.json", audio.transkribiere(vod_pfad, start=start, ende=ende)
         )

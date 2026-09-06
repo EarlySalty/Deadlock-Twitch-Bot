@@ -43,7 +43,7 @@ def frame_strom(pfad, fps, breite, hoehe, start=0.0, ende=None):
     if start:
         cmd += ["-ss", str(start)]
     if ende is not None:
-        cmd += ["-to", str(ende - start if start else ende)]
+        cmd += ["-to", str(ende)]
     cmd += ["-i", pfad, "-vf", f"fps={fps}", "-pix_fmt", "bgr24", "-f", "rawvideo", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     frame_bytes = breite * hoehe * 3
@@ -67,7 +67,7 @@ def lautstaerke_reihe(pfad, start=0.0, ende=None, hz=1000, fenster_s=1.0):
     if start:
         cmd += ["-ss", str(start)]
     if ende is not None:
-        cmd += ["-to", str(ende - start if start else ende)]
+        cmd += ["-to", str(ende)]
     cmd += ["-i", pfad, "-ac", "1", "-ar", str(hz), "-f", "s16le", "-"]
     proc = subprocess.run(cmd, capture_output=True, check=True)
     pcm = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
@@ -88,7 +88,7 @@ def szenenwechsel(pfad, schwelle=0.4, start=0.0, ende=None):
     if start:
         cmd += ["-ss", str(start)]
     if ende is not None:
-        cmd += ["-to", str(ende - start if start else ende)]
+        cmd += ["-to", str(ende)]
     cmd += ["-i", pfad, "-vf", f"select='gt(scene,{schwelle})',metadata=print",
             "-an", "-f", "null", "-"]
     proc = subprocess.run(cmd, capture_output=True, text=True)
