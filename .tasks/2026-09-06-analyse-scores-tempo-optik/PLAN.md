@@ -28,17 +28,22 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 
 - Änderungen: `rust/crates/tb-analytics/src/overview.rs` bekommt in `overview_metrics` die Spalte `avg_bindung` (`AVG(LEAST(1.0, s.avg_viewers / NULLIF(s.peak_viewers, 0)))` über Sessions mit `avg_viewers >= 3 AND peak_viewers > 0`) und das Feld in `OverviewMetricsRow`; `calculate_health_scores` in `overview.rs` bekommt `bindung: Option<f64>` statt `retention_10m_pct` für den Retention-Score (Sample < 3 bleibt 50) und rechnet Network nach REQ-02 aus `net.sent`, `net.received`, `session_count`. Bestehende Tests `returns_metrics_for_known_streamer` und `health_scores_formel_exakt` auf die neuen Erwartungen umschreiben (Werte aus REQ-03), Testdaten in `returns_metrics_for_known_streamer` so wählen, dass Bindung und Raids je Stream prüfbar sind.
 - Erwartet: M1-Test grün, alle Overview-Tests grün, `summary.retention10m` unverändert.
-- Validierung: `rust/scripts/test_db.sh` starten, dann `cargo test -p tb-dashboard-api -p tb-analytics`; Formelprobe mit den Live-Zahlen aus EVIDENCE.md (0,585 ergibt 58; 25/15/44 ergibt 45).
+- Umsetzung: `avg_bindung` als runtime-Spalte in `OverviewMetricsRow` und `overview_metrics`; `calculate_health_scores` nimmt den zweiten Parameter jetzt als Bindungs-Prozentwert (`bindung_pct`, Typ bleibt `f64`, damit der M1-Test ohne Änderung von rot auf grün geht), Retention `= (bindung_pct as i64).min(100)` bei Sample >= 3 sonst 50, Network `= min(50, round(sent/sessions*50)) + min(50, round(received/sessions*50))`, 0 Sessions ergibt 0. Aufrufer übergibt `metrics.avg_bindung * 100`. `returns_metrics_for_known_streamer` auf drei Sessions umgeschrieben (avg 120, peak 200 -> Bindung 0,6 -> Retention 60; retention_10m 0,9 -> `summary.retention10m` bleibt 90; 3 gesendete / 1 erhaltener Raid bei 3 Sessions -> Network 67). `health_scores_formel_exakt` deckt Bindung 58,5 -> 58, Sample < 3 -> 50, 0 Sessions -> Network 0, Deckel -> 100. Analytics-Test um `avg_bindung`-Assertion ergänzt.
+- Beweisziel erfüllt: im Handler-Test ist `scores.retention` 60 (aus Bindung), `summary.retention10m` 90 (unverändert 10m-Retention), `scores.network` 67 (Raids je Stream).
+- Validierung: `cargo test -p tb-dashboard-api -p tb-analytics` grün (tb-analytics 488 passed, tb-dashboard-api 1116 passed, 1 ignored, 0 failed).
 - Stop-Regel: ändert sich ein anderer Score als Retention oder Network, zurück.
-- Status: offen
+- Status: verifiziert
 
 ### M3: Audience-Abfragen Hygiene (REQ-07 Teil, INV-02)
 
 - Änderungen: `rust/crates/tb-dashboard-api/src/handlers/audience_demographics.rs:322` bekommt `AND sv.ts_utc >= $1`; für `:473` prüfen, ob `twitch_chat_messages.streamer_login` beim Schreiben kleingeschrieben abgelegt wird (`SELECT COUNT(*) FROM twitch_chat_messages WHERE streamer_login <> LOWER(streamer_login)`; Zugang lesend über den Loader aus EVIDENCE.md-Muster): ist der Zähler 0, `LOWER()` entfernen, sonst Migration `rust/migrations/<zeit>_chat_messages_streamer_lower_ts.sql` mit `CREATE INDEX CONCURRENTLY idx_twitch_chat_messages_streamer_lower_ts ON twitch_chat_messages (lower(streamer_login), message_ts)` (Timescale: ohne CONCURRENTLY, falls die Hypertable es verlangt; in PLAN.md festhalten). `.sqlx`-Offline-Dateien nachziehen (`cargo sqlx prepare --workspace` gegen die Test-DB).
 - Erwartet: EXPLAIN von Q5 zeigt Chunk-Pruning (Chunks des Zeitfensters statt 240).
-- Validierung: `cargo test -p tb-dashboard-api audience_demographics`, `cargo build -p tb-dashboard`.
+- Q7-Entscheidung: Lese-Zähler `SELECT COUNT(*) FROM twitch_chat_messages WHERE streamer_login <> LOWER(streamer_login)` gegen die Live-DB ergab 0. `streamer_login` liegt bereits kleingeschrieben, also `LOWER(cm.streamer_login)` durch `cm.streamer_login = $2` ersetzt (der bestehende Index `(streamer_login, message_ts)` greift). Keine Migration nötig, kein Funktionsindex, `fresh_schema_snapshot.txt` unverändert.
+- Q5-EXPLAIN-Beleg (Live-DB, earlysalty): mit dem neuen `AND sv.ts_utc >= $1` prunt der Planner das Zeitfenster. Bei 30 Tagen (since 2026-08-07) fallen die gescannten `twitch_session_viewers`-Chunks von 447 (alt) auf 31 (neu); bei 365 Tagen bleibt es bei 447 (alt) und 447 (neu), weil das Jahresfenster ohnehin alle Chunks abdeckt. Chunk-Pruning ist damit belegt.
+- Validierung: `cargo test -p tb-dashboard-api audience_demographics`, `cargo build -p tb-dashboard`; `.sqlx` gegen frisches Migrations-Schema via `scripts/sqlx-prepare.sh`-Logik neu erzeugt (nur zwei Einträge geändert: alte Q5/Q7 entfernt, neue Q5/Q7 mit `sv.ts_utc >= $1` bzw. `cm.streamer_login = $2`).
+- Fixture-Anpassung: die Test-DDL für `twitch_session_viewers` in `audience_demographics.rs` bekam die fehlende Spalte `ts_utc TIMESTAMPTZ` (Prod-Hypertable hat sie), sonst brach Q5 zur Laufzeit gegen die Test-DB und `null_login_messages_counted` gab 500. Kein Test fügt dort Zeilen ein, daher keine Zählwert-Verschiebung.
 - Stop-Regel: ändert sich die Antwortform, zurück.
-- Status: offen
+- Status: verifiziert
 
 ### M3b: Broker-Cache und Timeout (REQ-07 Kern), erst nach User-Freigabe
 

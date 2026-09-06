@@ -323,7 +323,8 @@ async fn compute_demographics(
         "SELECT COUNT(*) AS \"cnt!\", COALESCE(SUM(GREATEST(sv.viewer_count,0)),0)::float8 AS \"vm!\"
          FROM twitch_session_viewers sv
          JOIN twitch_stream_sessions s ON s.id = sv.session_id
-         WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL",
+         WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
+           AND sv.ts_utc >= $1",
         since,
         streamer
     )
@@ -472,7 +473,7 @@ async fn compute_demographics(
     // ── Q7: Total Messages ────────────────────────────────────────────────────
     let msg_count: i64 = sqlx::query_scalar!(
         "SELECT COUNT(*) AS \"cnt!\" FROM twitch_chat_messages cm
-         WHERE cm.message_ts >= $1 AND LOWER(cm.streamer_login) = $2
+         WHERE cm.message_ts >= $1 AND cm.streamer_login = $2
            AND (cm.chatter_login IS NULL OR cm.chatter_login = ''
                 OR (LOWER(cm.chatter_login) <> ALL($3::text[]) AND LOWER(cm.chatter_login) !~ '^justinfan[0-9]+$'))",
         since,
@@ -729,7 +730,7 @@ mod tests {
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, chatter_login TEXT, chatter_id TEXT, messages INTEGER DEFAULT 0, seen_via_chatters_api BOOLEAN DEFAULT FALSE, is_first_time_streamer BOOLEAN)")
             .execute(&pool).await.unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_session_viewers (session_id BIGINT, viewer_count INTEGER)",
+            "CREATE TABLE twitch_session_viewers (session_id BIGINT, viewer_count INTEGER, ts_utc TIMESTAMPTZ)",
         )
         .execute(&pool)
         .await
