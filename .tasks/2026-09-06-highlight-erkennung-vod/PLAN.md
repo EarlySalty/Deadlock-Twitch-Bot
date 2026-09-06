@@ -124,3 +124,18 @@ Reihenfolge fest: erst Lern-Korpus (REQ-09), dann Detektor mit gelernten Gewicht
   - Die drei anderen echten Clips tragen zusaetzlich ocr_kill (Score 0.667) und heben sich sauber ab.
 - Schwelle gegen die Messung auf 0.5 gesetzt (niedrigster echter Clip-Score), Recall bleibt 1.0.
 - Praezisions-Fix (offen, braucht keinen Neubau): voller 800-Clip-Korpus MIT STT (Lachen/Schluesselwoerter trennen erregte von lauter Szene) und je Streamer kalibrierte Kill-Feed-/Souls-OCR, damit Lautstaerke weniger dominiert und diskriminierende Signale hinzukommen.
+
+### M6 Schnitt + Persistenz (Real-Beleg)
+- Schnitt: `analyse --schneiden` erzeugt mp4 mit Zeitfenster + Score im Namen unter `/home/nathanael/vod-archive/highlights/<vod_id>/`. Sichtprobe (4 valide 38-s-Clips, echter Treffer 13086-13124 score 0.67) belegt; der volle 25er-Lauf wurde bei Host-Load 23 abgebrochen (guter Host-Bürger), Code-Pfad ist identisch.
+- Persistenz: `analyse --persist` versucht Insert in twitch_vod_highlights, faengt UndefinedTable (Prod-Migration ausstehend) und legt sauber lokal `highlights.json` ab (korrekte Struktur: streamer_twitch_id, vod_id, start_s, end_s, score, signale JSONB, status).
+
+### Gates (Selbstpruefung)
+- Python-Tests: 13 gruen (`.venv/bin/python -m pytest tests/ -q`), inkl. echtem Frame-Fixture.
+- diff-policy.py: P2 (skipif) behoben. Es bleibt P4 fuer die drei `rust/migrations/`-Dateien, weil diff-policy keine Contract-Amendments liest. Der Contract-Amendment stellt rust/migrations/ in den Scope; fuer den Merge braucht es die Nutzer-Freigabedatei `~/.claude/.contract-approvals/2026-09-06-highlight-erkennung-vod` (ein Pfad je Zeile, nur der Nutzer legt sie an). OFFEN.
+- gate_hook.py --review: Skript unter claude-config/bin nicht vorhanden; Stufe-4-Review laeuft ueber einen frischen opus48-coder-Reviewer (adversarial gegen Diff + Contract).
+
+### Offene Schritte fuer den Nutzer
+1. Prod-Migration der drei Dateien in `rust/migrations/` als `postgres` anwenden, DML an twitchbot/twitchdash/deadlock, Version in `_sqlx_migrations` (sha384) eintragen (Docs/workspace/gates-und-merge.md).
+2. Contract-Scope-Freigabe fuer `rust/migrations/` anlegen (`~/.claude/.contract-approvals/2026-09-06-highlight-erkennung-vod`).
+3. Sichtpruefungen: Kalibrierungs-Frames (`kalibrierung/`), Korpus-Report (`korpus-report.md`), geschnittene mp4 (`/home/nathanael/vod-archive/highlights/v2853130679/`).
+4. Voller Skalenlauf: Korpus mit ~800 Clips MIT STT (`lernen --limit 800`), alle 16 VODs (`analyse --nur-signale`), volle Messung (`messen --streamer earlysalty`); je Streamer Kill-Feed-/Souls-Regionen kalibrieren.
