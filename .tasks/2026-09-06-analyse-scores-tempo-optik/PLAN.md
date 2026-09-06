@@ -60,7 +60,7 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 
 - Änderungen: `ScoreGauge.tsx` bekommt `hint?: string` unter dem Label; `Overview.tsx` übergibt die vier Texte aus REQ-04; `RetentionRadar.tsx` bekommt `label`-Renderer an den Ecken (Recharts `Radar` mit `dot` und `label`, Zahl in `--color-text-primary`, 11 px, versetzt nach außen), `fillOpacity` 0.35, Achsenticks mit größerem Abstand (`tickLine={false}`, Margin anpassen).
 - Validierung: `npm run build`, Sichtprüfung per Vite-Preview und Headless-Chrome (Memory `dashboard-sichtpruefung-headless-chrome`), Screenshot nach `.tasks/2026-09-06-analyse-scores-tempo-optik/screens/`.
-- Status: grün (Unit-Tests/Typecheck grün, Sichtprüfung folgt)
+- Status: verifiziert (Unit/Typecheck grün, Radar und Erklärtexte per Screenshot belegt: screens/01-overview-mock-1280.png)
 
 ### M6: Tage-Feld Fix (REQ-06)
 
@@ -92,6 +92,17 @@ Status je Milestone unten eintragen (offen, rot belegt, grün, verifiziert).
 - Headless-Chrome rendert in dieser Umgebung (kein SwiftShader-Stall): Screenshots je Route erfolgreich erzeugt (`screens/01-overview-1280.png` bis `05-planning-1280.png`).
 - Grenze der Sichtprüfung hier: Der Vite-Dev-Server im Preview-Mode fängt nur einen Teil der Endpunkte per Fixture ab; die Analyse-Chart-Endpunkte (overview, audience, growth, planning) laufen ins echte Backend und liefern 502 (kein Backend im Agenten-Kontext). Dadurch bleiben Radar, Score-Karten, Demographics-/Topic-Donut, Raid-Tabelle und Wochentags-Balken auf den Screenshots leer. Kein Crash durch die Änderungen: keine ErrorBoundary, keine JS-Exception aus dem eigenen Code (nur Netzwerk-502).
 - Datengetriebene Optik-Prüfung (Radar mit zwei Null-Werten als Fläche und Eck-Zahlen, Topic-Donut mit 15 Themen und Legende, Raid-Sortierung/Filter, Wochentags-Spreizung) an den Orchestrator/die Hauptsession übergeben, die gegen das Live-Backend bzw. vollständige Fixtures prüfen kann (Memory `dashboard-sichtpruefung-headless-chrome`).
+
+## Kritiker-Runde Strang B (gate_hook --review, 2026-09-06)
+
+- BLOCKING (Score-Hint-Texte in `Overview.tsx:154-157`): Der Kritiker liest Strang B gegen origin/main, wo Strang A (neue Formeln, M2) noch nicht gemergt ist, und meldet die drei REQ-04-Texte als falsch. Bewertung: Die Texte sind wörtlich aus REQ-04 und beschreiben genau die neuen Formeln aus REQ-01/REQ-02 (Bindung Ø/Peak, Raids je Stream, Netto-Follower je Stunde). Sie stimmen mit dem beabsichtigten Endzustand (A und B gemeinsam gemergt, Live-Check erwartet Retention ~58, Network ~45). Sie auf die alten Formeln umzutexten würde REQ-04 verletzen und nach dem A-Merge wieder falsch sein. Auflösung: Texte bleiben, harte Merge-Abhängigkeit an den Orchestrator gemeldet: Strang B darf nicht vor/ohne Strang A live gehen (gemeinsamer Review und Merge, CLAUDE.md "zusammengehörige Branches zusammen reviewen").
+- NIT 4 (Chart-Rampe Kontrast): REQ-09 definiert "sichtbar voneinander ab" ausdrücklich als ">= 12 % Luminanzabstand"; die Rampe erfüllt das (benachbart 12,6/16,4/15,4/17,9 pp). Der Kritiker misst Kontrastverhältnis; bei einer reinen Gold-Rampe (REQ-09: ohne Grün/Grau/Orange) stehen konstanter Kontrast und 12 pp am dunklen Ende im Konflikt. Contract-Metrik erfüllt, Rampe bleibt.
+- NIT 8 (`-0 %`): behoben, Rundung vor Vorzeichen, `±0 %` statt `-0 %` (Commit 6d3215ae).
+- NIT 10 (leere Suche): behoben, Leerhinweis statt nur Kopfzeile (Commit 6d3215ae).
+- NIT 6 (Header-Test-Anker): behoben, Anker am Tage-Feld per `aria-label` (Commit 6d3215ae).
+- NIT 7 (Radar-Winkel): Positionierung nutzt jetzt den echten Eckpunkt, `index` nur als Fallback fürs Zentrum (Commit 6d3215ae); die sechs Winkel entsprechen dem sechselementigen `data`-Array.
+- NIT 9 (Wochenschnitt ungewichtet): bewusst das Mittel der Wochentags-Mittel ("durchschnittlicher Wochentag"), REQ-12 gibt keine Gewichtung vor; nicht geändert.
+- NIT 5 (Sichtprüfung): Radar und Score-Karten sind jetzt empirisch belegt (Overview-Endpunkt per CDP gemockt, Growth 0 und Monetization 0): alle sechs Eck-Zahlen erscheinen (70, 58, 65, 0, 0, 45), das Polygon ist als Gold-Fläche lesbar, alle vier Erklärtexte stehen unter den Karten, Fußzeile bleibt. Beleg: `screens/01-overview-mock-1280.png`. Donut-Größe/Farben, Raid-Sortierung/Filter und Wochentags-Spreizung bleiben zur Live-Prüfung beim Orchestrator (kein Fixture in dieser Umgebung).
 
 ## Abschluss (beide Stränge)
 
