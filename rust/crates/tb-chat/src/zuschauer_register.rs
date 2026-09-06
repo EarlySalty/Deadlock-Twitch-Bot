@@ -15,13 +15,13 @@ use crate::types::ChatMessageEvent;
 pub const PRIOR_COMMUNITY: f64 = 0.8;
 pub const PRIOR_PARTNER: f64 = 0.2;
 pub const GATE_MAX_P: f64 = 0.35;
-pub const FUZZY_FLOOR: f64 = 0.62;
 
 const NAMENS_SCORE_EXACT_UNIQUE: f64 = 0.90;
-const NAMENS_SCORE_EXACT_AMBIG: f64 = 0.55;
+const NAMENS_SCORE_EXACT_AMBIG: f64 = 0.50;
 const NAMENS_SCORE_HIGH: f64 = 0.60;
-const NAMENS_SCORE_MID: f64 = 0.40;
-const NAMENS_SCORE_LOW: f64 = 0.20;
+const NAMENS_SCORE_MID: f64 = 0.10;
+const RATIO_HIGH: f64 = 0.93;
+const RATIO_MID: f64 = 0.82;
 
 const COMMUNITY_CHANNEL: &str = "dach_lock";
 const MEMBER_INDEX_TTL: Duration = Duration::from_secs(3600);
@@ -176,8 +176,9 @@ pub fn score(
 ) -> (f64, Option<String>, serde_json::Value) {
     if let Some(discord_id) = hard_discord_id {
         let signals = serde_json::json!({
+            "stufe": "hart",
             "hard_match": true,
-            "namens_score": 0.0,
+            "namens_score": 1.0,
             "namens_quelle": serde_json::Value::Null,
             "match_ratio": 1.0,
             "prior": prior,
@@ -192,32 +193,39 @@ pub fn score(
     let mut discord_id: Option<String> = None;
     let mut namens_quelle = serde_json::Value::Null;
     let mut match_ratio = 0.0;
+    let mut stufe = "kein_treffer";
 
     if !login_key.is_empty() {
         if let Some((member, ratio, exact_unique)) = index.best_match(&login_key) {
-            if ratio >= FUZZY_FLOOR {
+            if (ratio - 1.0).abs() < f64::EPSILON {
                 match_ratio = ratio;
-                namens_score = if (ratio - 1.0).abs() < f64::EPSILON {
-                    if exact_unique {
-                        NAMENS_SCORE_EXACT_UNIQUE
-                    } else {
-                        NAMENS_SCORE_EXACT_AMBIG
-                    }
-                } else if ratio >= 0.93 {
-                    NAMENS_SCORE_HIGH
-                } else if ratio >= 0.82 {
-                    NAMENS_SCORE_MID
+                namens_quelle = serde_json::Value::String(matched_field(&login_key, &member));
+                if exact_unique {
+                    namens_score = NAMENS_SCORE_EXACT_UNIQUE;
+                    discord_id = Some(member.id.clone());
+                    stufe = "exakt_eindeutig";
                 } else {
-                    NAMENS_SCORE_LOW
-                };
+                    namens_score = NAMENS_SCORE_EXACT_AMBIG;
+                    stufe = "exakt_mehrdeutig";
+                }
+            } else if ratio >= RATIO_HIGH {
+                match_ratio = ratio;
+                namens_score = NAMENS_SCORE_HIGH;
                 discord_id = Some(member.id.clone());
                 namens_quelle = serde_json::Value::String(matched_field(&login_key, &member));
+                stufe = "high";
+            } else if ratio >= RATIO_MID {
+                match_ratio = ratio;
+                namens_score = NAMENS_SCORE_MID;
+                namens_quelle = serde_json::Value::String(matched_field(&login_key, &member));
+                stufe = "mid";
             }
         }
     }
 
     let p = 1.0 - (1.0 - prior) * (1.0 - namens_score);
     let signals = serde_json::json!({
+        "stufe": stufe,
         "hard_match": false,
         "namens_score": namens_score,
         "namens_quelle": namens_quelle,
@@ -583,12 +591,59 @@ mod tests {
     #[test]
     fn member_index_exakt_mehrdeutig_gibt_niedrigeren_score() {
         let ambig = MemberIndex::build(&[member("1", "dax"), member("2", "dax")]);
-        let (p_ambig, _d1, _s1) = score("dax", &ambig, PRIOR_PARTNER, None);
+        let (p_ambig, d1, s1) = score("dax", &ambig, PRIOR_PARTNER, None);
         let erwartet_ambig = 1.0 - (1.0 - PRIOR_PARTNER) * (1.0 - NAMENS_SCORE_EXACT_AMBIG);
         assert!((p_ambig - erwartet_ambig).abs() < 1e-9, "ambig p war {p_ambig}");
+        assert!(d1.is_none(), "mehrdeutig darf keine Discord-ID setzen");
+        assert_eq!(s1["stufe"], serde_json::json!("exakt_mehrdeutig"));
 
         let unique = MemberIndex::build(&[member("1", "dax")]);
         let (p_unique, _d2, _s2) = score("dax", &unique, PRIOR_PARTNER, None);
         assert!(p_ambig < p_unique, "ambig {p_ambig} sollte < unique {p_unique}");
+    }
+
+    #[test]
+    fn score_beste_aehnlichkeit_075_ist_kein_signal() {
+        let mut members = Vec::new();
+        for i in 0..60u32 {
+            let suffix = "abcdefghijklmnopqrstuvwxyz"
+                .chars()
+                .nth((i % 26) as usize)
+                .unwrap();
+            members.push(member(&format!("m{i}"), &format!("fremdwort{suffix}")));
+        }
+        members.push(member("999", "gzmeranxy"));
+        let index = MemberIndex::build(&members);
+        let (p, discord, signals) = score("gamername", &index, PRIOR_PARTNER, None);
+        assert!(discord.is_none(), "0,75-Treffer darf keine Discord-ID liefern");
+        assert_eq!(signals["stufe"], serde_json::json!("kein_treffer"));
+        assert_eq!(signals["namens_score"], serde_json::json!(0.0));
+        assert!((p - PRIOR_PARTNER).abs() < 1e-9, "kein Signal soll p=prior geben, war {p}");
+        assert!(p < GATE_MAX_P, "kein Signal soll das Gate passieren, war {p}");
+    }
+
+    #[test]
+    fn score_mid_ist_niedriges_signal_ohne_discord() {
+        let index = MemberIndex::build(&[member("100", "mittalnaom")]);
+        let (p, discord, signals) = score("mittelname", &index, PRIOR_PARTNER, None);
+        assert!(discord.is_none(), "MID darf keine Discord-ID setzen");
+        assert_eq!(signals["stufe"], serde_json::json!("mid"));
+        assert_eq!(signals["namens_score"], serde_json::json!(NAMENS_SCORE_MID));
+        let erwartet = 1.0 - (1.0 - PRIOR_PARTNER) * (1.0 - NAMENS_SCORE_MID);
+        assert!((p - erwartet).abs() < 1e-9, "war {p}, erwartet {erwartet}");
+        assert!(p < GATE_MAX_P, "MID mit Partner-Prior soll das Gate passieren, war {p}");
+    }
+
+    #[test]
+    fn score_high_setzt_discord_und_lehnt_gate_ab() {
+        let index = MemberIndex::build(&[member("100", "nanigxmer")]);
+        let (p, discord, signals) = score("nanigamer", &index, PRIOR_PARTNER, None);
+        assert_eq!(discord.as_deref(), Some("100"), "HIGH setzt die Discord-ID");
+        assert_eq!(signals["stufe"], serde_json::json!("high"));
+        assert_eq!(signals["namens_score"], serde_json::json!(NAMENS_SCORE_HIGH));
+        let erwartet = 1.0 - (1.0 - PRIOR_PARTNER) * (1.0 - NAMENS_SCORE_HIGH);
+        assert!((p - erwartet).abs() < 1e-9, "war {p}, erwartet {erwartet}");
+        assert!((p - 0.68).abs() < 1e-9, "HIGH mit Partner-Prior soll p=0,68 geben, war {p}");
+        assert!(p >= GATE_MAX_P, "HIGH soll das Gate ablehnen, war {p}");
     }
 }
