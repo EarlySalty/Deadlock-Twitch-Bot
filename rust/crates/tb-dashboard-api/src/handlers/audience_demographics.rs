@@ -816,6 +816,25 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn viewer_sample_nur_im_fenster() {
+        let Some(pool) = make_pool("t_demo_vsample_fenster").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, avg_viewers, duration_seconds) VALUES ('nani', NOW()-INTERVAL '2 days', NOW()-INTERVAL '2 days'+INTERVAL '3 hours', 10.0, 10800)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_session_viewers (session_id, viewer_count, ts_utc) VALUES (1, 12, NOW()-INTERVAL '2 days'), (1, 8, NOW()-INTERVAL '2 days'+INTERVAL '1 hour'), (1, 99, NOW()-INTERVAL '40 days')")
+            .execute(&pool).await.unwrap();
+
+        let resp = call(pool).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(
+            v["dataQuality"]["viewerSampleCount"], 2,
+            "nur die zwei Samples im 30-Tage-Fenster zählen, das 40 Tage alte nicht"
+        );
+    }
+
     // P2.97: Ein DB-Fehler (fehlende Tabelle) muss 500 ergeben, kein zeroed-200.
     #[tokio::test]
     async fn db_error_returns_500() {

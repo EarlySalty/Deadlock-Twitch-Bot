@@ -72,7 +72,6 @@ pub struct DataQuality {
     pub bot_filter_applied: bool,
 }
 
-/// Health-Scores (Python `_calculate_health_scores`), je 0–100.
 #[derive(Serialize)]
 pub struct HealthScores {
     pub total: i64,
@@ -1058,6 +1057,20 @@ mod tests {
             },
         );
         assert_eq!(network_gedeckelt.network, 100);
+
+        let hohe_bindung = calculate_health_scores(
+            100.0,
+            88.0,
+            5,
+            0.0,
+            0,
+            0.0,
+            4,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats::default(),
+        );
+        assert_eq!(hohe_bindung.retention, 88);
     }
 
     #[test]
