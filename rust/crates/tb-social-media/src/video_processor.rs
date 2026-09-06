@@ -283,19 +283,29 @@ impl VideoProcessor {
         let input_abs = std::fs::canonicalize(input_path)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| input_path.to_string());
+        // Sowohl Eingang als auch Ausgang muessen absolut sein: ffmpeg laeuft im
+        // ASS-Ordner (gegen Pfad-Sonderzeichen im subtitles-Filter), ein relativer
+        // Ausgabepfad wuerde sonst gegen dieses Verzeichnis aufgeloest.
+        let output_abs = if Path::new(output_path).is_absolute() {
+            output_path.to_string()
+        } else {
+            std::env::current_dir()
+                .map(|c| c.join(output_path).to_string_lossy().into_owned())
+                .unwrap_or_else(|_| output_path.to_string())
+        };
         let output = tokio::process::Command::new(&self.ffmpeg)
             .current_dir(&dir)
             .args([
                 "-i", &input_abs, "-vf", &format!("subtitles={name}"),
                 "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-c:a", "copy", "-movflags", "+faststart", "-y", output_path,
+                "-c:a", "copy", "-movflags", "+faststart", "-y", &output_abs,
             ])
             .output()
             .await?;
         if !output.status.success() {
             return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&output.stderr).trim().to_string()));
         }
-        ensure_output(output_path)
+        ensure_output(&output_abs)
     }
 
     /// Schneidet das Video auf `max_duration` Sekunden (oder kopiert es, wenn
