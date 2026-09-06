@@ -1627,14 +1627,30 @@ async fn main() {
         );
         supervisor.spawn("social_clip_prep_worker", async move { prep.run().await });
 
-        // Enrichment: LLM-Dispatcher (Consent aus Settings). Der Transcriber
-        // wird in einem spaeteren Schritt injiziert; ohne ihn wird die
-        // Transkriptions-Stage still uebersprungen (None-Pfad).
+        // Vorschau-Render: erzeugt on-demand das fertige Hochformat-Video eines
+        // Clips (Layout, Blur-Rand, Untertitel) fuers Dashboard. Der Bot schreibt
+        // die Datei (data/clips), das Dashboard liest und streamt sie nur.
+        let preview = tb_social_media::preview::PreviewWorker::new(
+            pool.clone(),
+            yt_dlp_path().to_string_lossy().into_owned(),
+            "data/clips",
+        );
+        supervisor.spawn("social_clip_preview_worker", async move { preview.run().await });
+
+        // Enrichment: LLM-Dispatcher (Consent aus Settings) plus lokaler
+        // STT-Transcriber (ops/stt-server, loopback). Liegt eine lokale
+        // Clip-Datei vor, transkribiert der Worker sie und die Vokabel-Korrektur
+        // greift; ohne loopback-STT bleibt die Stage aus (None-Pfad).
         let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> = Arc::new(
             tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()),
         );
-        let enrichment =
+        let mut enrichment =
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
+        if let Some(transcriber) = tb_social_media::transcription::SttTranscriber::from_default() {
+            let transcriber: Arc<dyn tb_social_media::enrich_pipeline::Transcriber> =
+                Arc::new(transcriber);
+            enrichment = enrichment.with_transcriber(transcriber);
+        }
         supervisor.spawn(
             "social_enrichment_worker",
             async move { enrichment.run().await },

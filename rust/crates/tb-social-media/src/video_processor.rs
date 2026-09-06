@@ -265,6 +265,39 @@ impl VideoProcessor {
         ensure_output(output_path)
     }
 
+    /// Brennt eine ASS-Untertiteldatei ins Video. Der `subtitles`-Filter ist bei
+    /// Pfaden mit Sonderzeichen (Doppelpunkt) fragil; deshalb laeuft ffmpeg im
+    /// Verzeichnis der ASS-Datei und bekommt nur den Dateinamen.
+    pub async fn burn_subtitles(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        ass_path: &str,
+    ) -> Result<(), VideoProcessorError> {
+        let ass = Path::new(ass_path);
+        let dir = ass.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = ass
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| VideoProcessorError::OutputMissing(ass_path.to_string()))?;
+        let input_abs = std::fs::canonicalize(input_path)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| input_path.to_string());
+        let output = tokio::process::Command::new(&self.ffmpeg)
+            .current_dir(&dir)
+            .args([
+                "-i", &input_abs, "-vf", &format!("subtitles={name}"),
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:a", "copy", "-movflags", "+faststart", "-y", output_path,
+            ])
+            .output()
+            .await?;
+        if !output.status.success() {
+            return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+        }
+        ensure_output(output_path)
+    }
+
     /// Schneidet das Video auf `max_duration` Sekunden (oder kopiert es, wenn
     /// bereits kürzer).
     pub async fn trim_video(

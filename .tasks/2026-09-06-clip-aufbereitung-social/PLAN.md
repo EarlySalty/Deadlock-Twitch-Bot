@@ -300,3 +300,52 @@ Lib-Tests: 226 passed, 0 failed (Baseline 224 + M1-Prep + M2).
 Rot-Test zuerst: `video_processor::tests::compose_filter_blur_pad_hat_boxblur_und_zentriertes_overlay`
 FAILED - "blur_pad braucht einen Blur-Hintergrund" (fiel in den pip-Zweig). Danach gruen.
 Lib-Tests: 227 passed, 0 failed.
+
+### M4 - REQ-03 eingebrannte Untertitel: Backend ERLEDIGT (Frontend-Schalter separat)
+
+- `transcription::SttTranscriber` bruecke auf tb-engagement::transcribe (lokaler STT,
+  loopback-Guard). In main.rs in den Enrichment-Worker injiziert, wenn loopback erreichbar.
+- `subtitles`: `segment_subtitles` (max 2 Zeilen, ~42 Zeichen, 1-4s), `build_ass`
+  (Gold auf dunklem Balken, BorderStyle 3), `correct_segments`/`ass_from_segments`
+  (Vokabel-Korrektur). Kein drawtext, ffmpeg `subtitles`-Filter.
+- `render` (zentraler Baustein): `render_clip_vertical` komponiert Layout und brennt
+  Untertitel ein, wenn Streamer sie anhat und ein Transkript vorliegt. Genutzt von
+  Upload (M2), Vorschau (M5), Batch (M6).
+- `video_processor::burn_subtitles` (ffmpeg -vf subtitles, cwd=ASS-Ordner gegen
+  Pfad-Sonderzeichen).
+- Migration `20260906121000` fuegt `subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE`
+  an `social_media_streamer_settings`; `StreamerSettings` + load/save + posting-plan-
+  Endpoint (GET liefert `subtitles_enabled`, PUT nimmt es an).
+
+Rot-Tests zuerst: `subtitles::tests::segmentiert_nach_zeilen_und_dauer` FAILED
+("langer Abschnitt wird in mehrere Cues geschnitten", Stub -> leere Vec). Danach gruen.
+Zusaetzlich `ass_hat_gold_stil_und_dunklen_balken`, `render::tests::*`.
+
+### M5 - REQ-04 Vorschau-Render als Hintergrundjob: Backend ERLEDIGT (Frontend separat)
+
+- Migration `20260906122000`: Spalten `preview_path/preview_status/preview_error/
+  preview_updated_at` an `twitch_clips_social_media`.
+- `preview`: Zustandsmaschine (pending->rendering->ready/error), `PreviewWorker`
+  (cipher-frei, im Bot: laedt bei Bedarf, rendert per `render_clip_vertical` nach
+  `data/clips/<id>_preview.mp4`, schreibt Pfad). Der Bot schreibt die Datei (644),
+  das Dashboard liest/streamt sie nur - keine Cross-User-Schreibkonflikte.
+- Handler in `social_media.rs`: POST/GET `.../preview`, GET `.../preview/file`
+  (mp4 mit Range). Routen in `lib.rs`, alle unter `/social-media/api/` (keine
+  Caddy-Aenderung). Auth wie die bestehenden Admin-Clip-Handler (require_sm_access
+  + require_clip_in_scope + Partner-Guard).
+- Retention loescht `preview_path` mit (INV-07): `ExpiredClip.preview_path` +
+  retention_worker entfernt die Vorschau-Datei vor dem Zeilenloeschen.
+
+Rot-Test zuerst: `preview::tests::vorschau_zustandsmaschine` FAILED
+(request_preview-Stub setzte keinen Status). Danach gruen.
+
+### M7 - REQ-07 Doku gegen den Code: ERLEDIGT
+
+- `docs/architecture/social-media.md`: Whisper/Claude/MiniMax/Ollama raus, tb-llm
+  (Fireworks, Deepseek V4 Flash) und lokaler STT-Server (ops/stt-server) als Weg,
+  Untertitel/`subtitles` ergaenzt, Consent-Verhalten praezisiert.
+- Veraltete Transcriber-Kommentare in `enrich_pipeline.rs`/`enrichment_worker.rs`
+  auf den aktiven STT-Weg umgeschrieben.
+- `docs/funktionsweise/social-media-uploads.md`: Transkription/Untertitel sind nach
+  M4 real, die bestehenden Aussagen stimmen jetzt mit dem Code (keine falschen
+  Provider-Namen vorhanden).

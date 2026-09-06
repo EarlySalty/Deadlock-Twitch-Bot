@@ -19,7 +19,7 @@ use crate::clip_queue::{
     get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
-use crate::layout::get_clip_stored_layout;
+use crate::render::render_clip_vertical;
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
 use crate::uploaders::youtube::{YouTubeRefreshCreds, YouTubeUploader, GOOGLE_TOKEN_URL};
@@ -30,8 +30,6 @@ const STALE_AFTER_SECS: i64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 10;
 const DEFAULT_INTERVAL_SECS: u64 = 60;
 const DEFAULT_MAX_PARALLEL: usize = 2;
-const TARGET_WIDTH: i64 = 1080;
-const TARGET_HEIGHT: i64 = 1920;
 
 #[derive(Debug, thiserror::Error)]
 enum WorkerError {
@@ -571,28 +569,17 @@ impl UploadTask {
         if Path::new(&output_path).exists() {
             return Ok(output_path);
         }
-        let max_duration = max_duration_for(platform);
-        // Liegt ein gespeichertes Layout vor (Clip-Override oder Streamer-Default),
-        // rendert der Upload es mit Facecam-Compositing; sonst faellt er auf
-        // Center-Crop zurueck.
-        match get_clip_stored_layout(&self.pool, clip_db_id).await {
-            Some(layout) => {
-                self.video_processor
-                    .compose_and_trim(input_path, &output_path, max_duration, &layout)
-                    .await?;
-            }
-            None => {
-                self.video_processor
-                    .convert_and_trim(
-                        input_path,
-                        &output_path,
-                        max_duration,
-                        TARGET_WIDTH,
-                        TARGET_HEIGHT,
-                    )
-                    .await?;
-            }
-        }
+        // Zentraler Render-Baustein: gespeichertes Layout (sonst Center-Crop) und
+        // eingebrannte Untertitel, falls der Streamer sie anhat.
+        render_clip_vertical(
+            &self.video_processor,
+            &self.pool,
+            clip_db_id,
+            input_path,
+            &output_path,
+            max_duration_for(platform),
+        )
+        .await?;
         Ok(output_path)
     }
 }

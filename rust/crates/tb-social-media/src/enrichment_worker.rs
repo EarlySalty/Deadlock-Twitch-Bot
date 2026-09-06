@@ -1,10 +1,10 @@
 //! Enrichment-Worker (Port von `bot/social_media/enrichment_worker.py`).
 //!
-//! Reichert pending Clips im Hintergrund per Vokabel-Korrektur + LLM an. Holt
-//! batchweise die offenen Clips und schickt sie durch die
-//! [`ClipEnrichmentPipeline`]. Der Transcriber bleibt injizierbar, wird aber per
-//! Grillme-Entscheidung (Block 15) NICHT gesetzt — Transkription ist deaktiviert
-//! (kein OpenAI), die Stage wird übersprungen. LLM wird injiziert.
+//! Reichert pending Clips im Hintergrund per Transkription, Vokabel-Korrektur
+//! und LLM an. Holt batchweise die offenen Clips und schickt sie durch die
+//! [`ClipEnrichmentPipeline`]. Der Transcriber ist injizierbar; tb-bot setzt den
+//! lokalen STT-Transcriber (`ops/stt-server`), sofern der loopback-Dienst
+//! erreichbar ist, sonst wird die Stage übersprungen. LLM wird injiziert.
 //! An/Aus 1:1: dauerhaft an, Intervall 90s, Batch 3.
 
 use std::sync::Arc;
@@ -41,9 +41,8 @@ impl EnrichmentWorker {
         }
     }
 
-    /// Setzt einen Transcriber. Aktuell ungenutzt (Transkription per
-    /// Grillme-Entscheidung deaktiviert), bleibt als Infra-Anker für einen
-    /// späteren nicht-OpenAI-Transkriptionsweg.
+    /// Setzt den Transcriber (lokaler STT-Server). tb-bot injiziert ihn im
+    /// cipher-freien Worker-Block, sofern der loopback-Dienst erreichbar ist.
     pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
         self.transcriber = Some(transcriber);
         self

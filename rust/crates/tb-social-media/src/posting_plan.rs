@@ -72,6 +72,7 @@ impl ApprovalMode {
 pub struct StreamerSettings {
     pub approval_mode: ApprovalMode,
     pub timezone: String,
+    pub subtitles_enabled: bool,
 }
 
 impl Default for StreamerSettings {
@@ -79,6 +80,7 @@ impl Default for StreamerSettings {
         Self {
             approval_mode: ApprovalMode::Manual,
             timezone: "Europe/Berlin".to_string(),
+            subtitles_enabled: true,
         }
     }
 }
@@ -236,7 +238,7 @@ pub async fn ensure_streamer_rows(pool: &PgPool, streamer_login: &str) -> Result
 pub async fn load_streamer_settings(pool: &PgPool, streamer_login: &str) -> StreamerSettings {
     let login = streamer_login.trim().to_lowercase();
     let row = sqlx::query!(
-        "SELECT approval_mode, timezone FROM social_media_streamer_settings WHERE streamer_login = $1",
+        "SELECT approval_mode, timezone, subtitles_enabled FROM social_media_streamer_settings WHERE streamer_login = $1",
         login
     )
     .fetch_optional(pool)
@@ -247,6 +249,7 @@ pub async fn load_streamer_settings(pool: &PgPool, streamer_login: &str) -> Stre
         Some(row) => StreamerSettings {
             approval_mode: ApprovalMode::parse(&row.approval_mode),
             timezone: row.timezone,
+            subtitles_enabled: row.subtitles_enabled,
         },
         None => StreamerSettings::default(),
     }
@@ -263,16 +266,18 @@ pub async fn save_streamer_settings(
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query!(
         "INSERT INTO social_media_streamer_settings \
-             (streamer_login, approval_mode, timezone, updated_at, updated_by) \
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) \
+             (streamer_login, approval_mode, timezone, subtitles_enabled, updated_at, updated_by) \
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, $5) \
          ON CONFLICT (streamer_login) DO UPDATE SET \
              approval_mode = EXCLUDED.approval_mode, \
              timezone = EXCLUDED.timezone, \
+             subtitles_enabled = EXCLUDED.subtitles_enabled, \
              updated_at = CURRENT_TIMESTAMP, \
              updated_by = EXCLUDED.updated_by",
         login,
         settings.approval_mode.as_str(),
         settings.timezone,
+        settings.subtitles_enabled,
         updated_by
     )
     .execute(pool)

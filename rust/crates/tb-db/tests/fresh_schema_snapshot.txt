@@ -310,6 +310,7 @@ social_media_streamer_layout|updated_at|timestamp with time zone|NO|CURRENT_TIME
 social_media_streamer_layout|updated_by|text|YES|
 social_media_streamer_settings|approval_mode|text|NO|'manual'::text
 social_media_streamer_settings|streamer_login|text|NO|
+social_media_streamer_settings|subtitles_enabled|boolean|NO|true
 social_media_streamer_settings|timezone|text|NO|'Europe/Berlin'::text
 social_media_streamer_settings|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_streamer_settings|updated_by|text|YES|
@@ -653,6 +654,10 @@ twitch_clips_social_media|last_analytics_sync|timestamp with time zone|YES|
 twitch_clips_social_media|layout_override_json|jsonb|YES|
 twitch_clips_social_media|local_file_path|text|YES|
 twitch_clips_social_media|music_track|text|YES|
+twitch_clips_social_media|preview_error|text|YES|
+twitch_clips_social_media|preview_path|text|YES|
+twitch_clips_social_media|preview_status|text|YES|
+twitch_clips_social_media|preview_updated_at|timestamp with time zone|YES|
 twitch_clips_social_media|retention_until|timestamp with time zone|YES|
 twitch_clips_social_media|source_kind|text|NO|'twitch'::text
 twitch_clips_social_media|status|text|YES|'pending'::text

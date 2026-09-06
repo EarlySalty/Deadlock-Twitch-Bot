@@ -331,6 +331,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(social_media::enrichment_run_handler),
         )
         .route(
+            "/social-media/api/admin/clips/:clip_db_id/preview",
+            post(social_media::preview_request_handler).get(social_media::preview_status_handler),
+        )
+        .route(
+            "/social-media/api/admin/clips/:clip_db_id/preview/file",
+            get(social_media::preview_file_handler),
+        )
+        .route(
             "/social-media/api/admin/analytics/clips/:clip_db_id",
             get(social_media::clip_analytics_get_handler),
         )

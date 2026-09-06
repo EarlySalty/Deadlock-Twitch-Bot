@@ -41,11 +41,9 @@ pub enum TranscribeError {
     Failed(String),
 }
 
-/// Injizierbarer Transcriber. Die Transkription ist per Grillme-Entscheidung
-/// (Block 15) bewusst deaktiviert — es wird KEIN Transcriber injiziert
-/// (`transcriber = None`), die Stage wird übersprungen. Das Trait bleibt als
-/// Infra-Anker, falls später ein nicht-OpenAI-Weg (Whisper o.Ä.) nachgerüstet
-/// wird; die frühere OpenAI-Impl ist entfernt (kein OpenAI).
+/// Injizierbarer Transcriber. tb-bot setzt die STT-Impl aus `transcription`
+/// (lokaler `ops/stt-server`, loopback). Fehlt der Dienst, bleibt der Wert
+/// `None` und die Stage wird übersprungen.
 #[async_trait]
 pub trait Transcriber: Send + Sync {
     async fn transcribe_clip(
