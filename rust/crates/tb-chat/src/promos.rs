@@ -290,6 +290,7 @@ const STAMMGAST_DAYS: i64 = 30;
 const CHANNEL_TARGETED_COOLDOWN_SEC: u64 = 900;
 /// User-Pitch-Cooldown in Sekunden (targeted_promo.py:36: _USER_PITCH_COOLDOWN_SEC).
 const USER_PITCH_COOLDOWN_SEC: u64 = 86400;
+const TARGETED_USER_PITCH_AKTIV: bool = false;
 /// Lurker-Tax-Freshness in Minuten (promos.py:62: _LURKER_TAX_FRESHNESS_MINUTES).
 const LURKER_TAX_FRESHNESS_MINUTES: u64 = 5;
 /// Lurker-Tax: mind. 3 frühere Sessions (promos.py:63).
@@ -2464,7 +2465,7 @@ impl PromoEngine {
         let (game, title) = self.load_live_context(login).await;
         let recent = self.load_recent_channel_messages(login, 8).await;
 
-        if want_user && !active_chatters.is_empty() {
+        if TARGETED_USER_PITCH_AKTIV && want_user && !active_chatters.is_empty() {
             if let Some((target_login, target_id)) =
                 self.pick_user_target(active_chatters, login, now).await
             {
@@ -4647,6 +4648,53 @@ mod db_tests {
             "Global-Zweig muss den Invite anhaengen: {}",
             texts[0]
         );
+    }
+
+    #[tokio::test]
+    async fn targeted_user_pitch_ist_abgeschaltet() {
+        let pool = pool_or_skip!("promo_targeted_user_aus");
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, chatter_id)
+             VALUES (1, 'tukanal', 'zocker42', 'chatter-77')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+                "bei uns findest du leute zum zocken".to_string(),
+            ))));
+
+        let sent = engine
+            .maybe_send_targeted_promo(
+                "tukanal",
+                "u-tu",
+                "https://discord.gg/deadlock",
+                &["zocker42".to_string()],
+                Instant::now(),
+            )
+            .await;
+
+        assert!(sent);
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "kein Einzelzuschauer-Pitch mit @chatter senden"
+        );
+        assert_eq!(
+            api.announcement_count().await,
+            1,
+            "stattdessen laeuft der targeted_global-Pfad"
+        );
+        let user_pitches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'targeted_user'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(user_pitches, 0, "kein targeted_user-Eintrag im Pitch-Log");
     }
 
     #[tokio::test]
