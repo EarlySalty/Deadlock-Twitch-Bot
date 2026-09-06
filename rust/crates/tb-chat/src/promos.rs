@@ -394,6 +394,7 @@ pub trait PartnerChannelCheck: Send + Sync {
 pub enum PitchCardKind {
     Anlass,
     Partner,
+    Gezielt,
 }
 
 #[async_trait]
@@ -550,6 +551,13 @@ pub struct PromoEngine {
     channel_states: DashMap<String, Mutex<ChannelState>>,
     targeted_state: Mutex<TargetedState>,
     zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
+    gezielt_state: DashMap<String, GezieltPersonState>,
+}
+
+#[derive(Clone)]
+struct GezieltPersonState {
+    session_id: i64,
+    msgs: Vec<String>,
 }
 
 /// Fallback-PartnerChannelCheck: immer true (für Tests).
@@ -595,6 +603,7 @@ impl PromoEngine {
             channel_states: DashMap::new(),
             targeted_state: Mutex::new(TargetedState::new()),
             zuschauer_register: None,
+            gezielt_state: DashMap::new(),
         }
     }
 
@@ -841,6 +850,10 @@ impl PromoEngine {
             }
         }
 
+        let gezielt_msgs = self
+            .track_gezielt_message(&login, &target_user_id, text)
+            .await;
+
         if !self.pitch_user_limit_ok(&target_user_id).await {
             self.pitch_judge_throttle_release(&login, &target_user_id);
             tracing::debug!(channel = %login, chatter = %target_user_id, "anlass-pitch: user-limit");
@@ -854,7 +867,8 @@ impl PromoEngine {
 
         let (game, title) = self.load_live_context(&login).await;
         let recent = self.load_recent_channel_messages(&login, 8).await;
-        let occasion = if text.chars().count() >= 25 {
+        let text_len = text.chars().count();
+        let occasion = if text_len >= 25 {
             let input = PitchJudgeInput {
                 trigger_text: text.to_string(),
                 game: game.clone(),
@@ -870,7 +884,12 @@ impl PromoEngine {
             None
         };
         let Some((occasion, reply)) = occasion else {
-            tracing::debug!(channel = %login, "anlass-pitch: kein anlass");
+            let llm_called = self
+                .maybe_send_gezielt_pitch(event, gezielt_msgs, game, title, recent)
+                .await;
+            if text_len < 25 && !llm_called {
+                self.pitch_judge_throttle_release(&login, &target_user_id);
+            }
             return;
         };
         let resp_reply = reply;
@@ -1170,6 +1189,237 @@ impl PromoEngine {
             sent_at: None,
         })
         .await;
+    }
+
+    async fn active_session_id(&self, login: &str) -> Option<i64> {
+        sqlx::query_scalar!(
+            r#"SELECT active_session_id FROM twitch_live_state
+                WHERE LOWER(streamer_login) = LOWER($1) AND is_live = 1
+                LIMIT 1"#,
+            login,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+    }
+
+    async fn track_gezielt_message(&self, login: &str, chatter_id: &str, text: &str) -> Vec<String> {
+        let session_id = self.active_session_id(login).await.unwrap_or(0);
+        let key = format!("{login}|{chatter_id}");
+        let mut entry = self
+            .gezielt_state
+            .entry(key)
+            .or_insert_with(|| GezieltPersonState {
+                session_id,
+                msgs: Vec::new(),
+            });
+        if entry.session_id != session_id {
+            entry.session_id = session_id;
+            entry.msgs.clear();
+        }
+        entry.msgs.push(text.to_string());
+        if entry.msgs.len() > 8 {
+            let drop_n = entry.msgs.len() - 8;
+            entry.msgs.drain(0..drop_n);
+        }
+        entry.msgs.clone()
+    }
+
+    async fn gezielt_limit_reject(
+        &self,
+        target_user_id: &str,
+        login: &str,
+        session_start: DateTime<Utc>,
+    ) -> Option<&'static str> {
+        match sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                 SELECT 1 FROM twitch_promo_pitch_log
+                  WHERE target_user_id = $1 AND pfad = 'gezielt' AND sent_at IS NOT NULL
+               ) AS "exists!""#,
+            target_user_id,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(true) => return Some("limit_user_ever"),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(%error, "gezielt-pitch: user-limit nicht lesbar, blockiere");
+                return Some("limit_user_ever");
+            }
+        }
+        match sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "count!" FROM twitch_promo_pitch_log
+                WHERE channel_login = $1 AND pfad = 'gezielt' AND sent_at IS NOT NULL
+                  AND sent_at >= $2"#,
+            login,
+            session_start,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(count) if count >= 2 => return Some("limit_channel_stream"),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "gezielt-pitch: kanal-limit nicht lesbar, blockiere");
+                return Some("limit_channel_stream");
+            }
+        }
+        match sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "count!" FROM twitch_promo_pitch_log
+                WHERE pfad = 'gezielt' AND sent_at IS NOT NULL
+                  AND sent_at > NOW() - INTERVAL '1 day'"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(count) if count >= 15 => return Some("limit_daily"),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "gezielt-pitch: tageslimit nicht lesbar, blockiere");
+                return Some("limit_daily");
+            }
+        }
+        None
+    }
+
+    async fn gezielt_signals_hint(&self, target_user_id: &str) -> Option<String> {
+        let register = self.zuschauer_register.as_ref()?;
+        let info = register.signals_for(target_user_id).await?;
+        let p = info.get("p").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let signals = info
+            .get("signals")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        Some(format!("p={p:.2} Signale: {signals}"))
+    }
+
+    async fn maybe_send_gezielt_pitch(
+        &self,
+        event: &ChatMessageEvent,
+        msgs: Vec<String>,
+        game: Option<String>,
+        title: Option<String>,
+        recent: Vec<String>,
+    ) -> bool {
+        let login = event.broadcaster_user_login.to_lowercase();
+        let channel_id = &event.broadcaster_user_id;
+        let target_user_id = &event.chatter_user_id;
+        let target_login = &event.chatter_user_login;
+        let trigger = msgs.last().cloned().unwrap_or_default();
+
+        if msgs.len() < 2 {
+            return false;
+        }
+        if msgs.iter().all(|m| m.trim().is_empty()) {
+            self.log_zuschauer_reject(&login, target_user_id, "kein_text", &trigger, "gezielt")
+                .await;
+            return false;
+        }
+
+        let session_start = self
+            .load_stream_start(&login)
+            .await
+            .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(3));
+
+        if let Some(reason) = self
+            .gezielt_limit_reject(target_user_id, &login, session_start)
+            .await
+        {
+            self.log_zuschauer_reject(&login, target_user_id, reason, &trigger, "gezielt")
+                .await;
+            return false;
+        }
+
+        let ctx = TargetedPitchContext {
+            target_login: target_login.clone(),
+            target_messages: msgs.clone(),
+            game,
+            title,
+            recent_chat: recent,
+        };
+        let Some(body) = self.pitch_text_gen.targeted_pitch(&ctx).await else {
+            self.log_zuschauer_reject(&login, target_user_id, "kein_text", &trigger, "gezielt")
+                .await;
+            return true;
+        };
+
+        if let Some(reason) = pitch_filter_reject(&body) {
+            self.log_zuschauer_reject(&login, target_user_id, reason.as_str(), &trigger, "gezielt")
+                .await;
+            return true;
+        }
+        if pitch_injection_reject(&body, target_login) {
+            self.log_zuschauer_reject(&login, target_user_id, "injection", &trigger, "gezielt")
+                .await;
+            return true;
+        }
+
+        let out_text = format!("@{target_login} {body}");
+        let lock = self.get_send_lock(&login);
+        let _guard = lock.lock().await;
+
+        if self
+            .gezielt_limit_reject(target_user_id, &login, session_start)
+            .await
+            .is_some()
+        {
+            return true;
+        }
+
+        let Some(log_id) = self
+            .insert_pitch_log_pending(PitchLogEntry {
+                channel_login: login.clone(),
+                target_user_id: Some(target_user_id.clone()),
+                pfad: "gezielt",
+                occasion: None,
+                trigger_text: Some(trigger.clone()),
+                generated_text: Some(out_text.clone()),
+                reject_reason: None,
+                sent_at: None,
+            })
+            .await
+        else {
+            tracing::warn!(channel = %login, "gezielt-pitch: log nicht schreibbar, kein pitch");
+            return true;
+        };
+
+        let outcome = self
+            .guarded_api_for("promo", &login)
+            .send_message(channel_id, &out_text)
+            .await;
+        self.record_suppression_on_drop(&login, channel_id, "promo", &outcome)
+            .await;
+        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
+            self.mark_pitch_log_dropped(log_id, "send_dropped").await;
+            return true;
+        }
+
+        self.mark_pitch_log_sent(log_id).await;
+        self.mark_promo_sent(
+            &login,
+            Instant::now(),
+            "gezielt_pitch",
+            Utc::now().timestamp() as f64,
+        )
+        .await;
+        drop(_guard);
+
+        if let Some(sink) = self.pitch_review_sink.as_ref() {
+            let hint = self.gezielt_signals_hint(target_user_id).await;
+            sink.send_card(
+                &login,
+                target_login,
+                &trigger,
+                &body,
+                PitchCardKind::Gezielt,
+                hint.as_deref(),
+            )
+            .await;
+        }
+        true
     }
 
     async fn log_anlass_reject(
@@ -5728,6 +5978,249 @@ mod db_tests {
             1,
             "zweite Nachricht desselben Chatters darf den Judge nicht erneut aufrufen"
         );
+    }
+
+    #[tokio::test]
+    async fn gezielter_pitch_erst_ab_zweiter_nachricht() {
+        let pool = pool_or_skip!("promo_gezielt_ab_zweiter");
+        seed_partner_channel(&pool, "c-gz", "gzkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(None, ""))));
+        let sink = RecordingReviewSink::default();
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+                "cooler run, sowas sieht man selten".to_string(),
+            ))))
+            .set_pitch_review_sink(Arc::new(sink.clone()))
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let ev1 = pitch_event("c-gz", "gzkanal", "u-gz", "Gzler", "wann kommt update");
+        engine.on_message_pitch(&ev1).await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "erste Nachricht darf noch keinen gezielten Pitch senden"
+        );
+
+        let ev2 = pitch_event("c-gz", "gzkanal", "u-gz", "Gzler", "gutes spiel bruder");
+        engine.on_message_pitch(&ev2).await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "zweite Nachricht loest den gezielten Pitch aus"
+        );
+
+        let row: (String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT pfad, sent_at FROM twitch_promo_pitch_log
+              WHERE pfad = 'gezielt' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "gezielt");
+        assert!(row.1.is_some(), "sent_at muss gesetzt sein");
+
+        let cards = sink.cards.lock().await;
+        assert_eq!(cards.len(), 1, "eine Review-Karte erwartet");
+        assert_eq!(cards[0].4, PitchCardKind::Gezielt);
+        assert!(
+            cards[0].5.as_deref().unwrap_or("").contains("p="),
+            "Karte muss p und Signale tragen: {:?}",
+            cards[0].5
+        );
+    }
+
+    #[tokio::test]
+    async fn gezielter_pitch_ohne_eigene_nachrichten_kein_pitch() {
+        let pool = pool_or_skip!("promo_gezielt_kein_text");
+        seed_partner_channel(&pool, "c-gk", "gkkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some("egal".to_string()))))
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let ev = pitch_event("c-gk", "gkkanal", "u-gk", "Gkler", "");
+        let called = engine
+            .maybe_send_gezielt_pitch(
+                &ev,
+                vec![String::new(), String::new()],
+                None,
+                None,
+                Vec::new(),
+            )
+            .await;
+        assert!(!called, "ohne eigene Nachrichten wird das Modell nicht aufgerufen");
+        assert_eq!(api.message_count().await, 0);
+        let reason: (Option<String>,) = sqlx::query_as(
+            "SELECT reject_reason FROM twitch_promo_pitch_log WHERE pfad = 'gezielt'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.0.as_deref(), Some("kein_text"));
+    }
+
+    #[tokio::test]
+    async fn gezielter_pitch_limit_einmal_pro_user() {
+        let pool = pool_or_skip!("promo_gezielt_user_ever");
+        seed_partner_channel(&pool, "c-ge", "gekanal").await;
+        sqlx::query(
+            "INSERT INTO twitch_promo_pitch_log (channel_login, target_user_id, pfad, sent_at, created_at)
+             VALUES ('anderer_kanal', 'u-ge', 'gezielt', NOW() - INTERVAL '2 hours', NOW() - INTERVAL '2 hours')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some("hallo".to_string()))))
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let ev = pitch_event("c-ge", "gekanal", "u-ge", "Geler", "nachricht zwei");
+        let called = engine
+            .maybe_send_gezielt_pitch(
+                &ev,
+                vec!["hallo zusammen".to_string(), "noch eine nachricht".to_string()],
+                None,
+                None,
+                Vec::new(),
+            )
+            .await;
+        assert!(!called);
+        assert_eq!(api.message_count().await, 0);
+        let reason: (Option<String>,) = sqlx::query_as(
+            "SELECT reject_reason FROM twitch_promo_pitch_log
+              WHERE pfad = 'gezielt' AND sent_at IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.0.as_deref(), Some("limit_user_ever"));
+    }
+
+    #[tokio::test]
+    async fn gezielter_pitch_limit_zwei_pro_kanal_und_stream() {
+        let pool = pool_or_skip!("promo_gezielt_kanal_stream");
+        seed_partner_channel(&pool, "c-gc", "gckanal").await;
+        for uid in ["u-gc1", "u-gc2"] {
+            sqlx::query(
+                "INSERT INTO twitch_promo_pitch_log (channel_login, target_user_id, pfad, sent_at, created_at)
+                 VALUES ('gckanal', $1, 'gezielt', NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '5 minutes')",
+            )
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some("hallo".to_string()))))
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let ev = pitch_event("c-gc", "gckanal", "u-gc3", "Gcler", "nachricht zwei");
+        let called = engine
+            .maybe_send_gezielt_pitch(
+                &ev,
+                vec!["hallo zusammen".to_string(), "noch eine nachricht".to_string()],
+                None,
+                None,
+                Vec::new(),
+            )
+            .await;
+        assert!(!called);
+        assert_eq!(api.message_count().await, 0);
+        let reason: (Option<String>,) = sqlx::query_as(
+            "SELECT reject_reason FROM twitch_promo_pitch_log
+              WHERE pfad = 'gezielt' AND target_user_id = 'u-gc3'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.0.as_deref(), Some("limit_channel_stream"));
+    }
+
+    #[tokio::test]
+    async fn gezielter_pitch_limit_fuenfzehn_pro_tag() {
+        let pool = pool_or_skip!("promo_gezielt_tageslimit");
+        seed_partner_channel(&pool, "c-gt", "gtkanal").await;
+        for idx in 0..15 {
+            sqlx::query(
+                "INSERT INTO twitch_promo_pitch_log (channel_login, target_user_id, pfad, sent_at, created_at)
+                 VALUES ($1, $2, 'gezielt', NOW() - INTERVAL '3 hours', NOW() - INTERVAL '3 hours')",
+            )
+            .bind(format!("tageskanal_{idx}"))
+            .bind(format!("u-tag-{idx}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some("hallo".to_string()))))
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let ev = pitch_event("c-gt", "gtkanal", "u-gt-neu", "Gtler", "nachricht zwei");
+        let called = engine
+            .maybe_send_gezielt_pitch(
+                &ev,
+                vec!["hallo zusammen".to_string(), "noch eine nachricht".to_string()],
+                None,
+                None,
+                Vec::new(),
+            )
+            .await;
+        assert!(!called);
+        assert_eq!(api.message_count().await, 0);
+        let reason: (Option<String>,) = sqlx::query_as(
+            "SELECT reject_reason FROM twitch_promo_pitch_log
+              WHERE pfad = 'gezielt' AND target_user_id = 'u-gt-neu'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.0.as_deref(), Some("limit_daily"));
+    }
+
+    #[tokio::test]
+    async fn anlass_hat_vorrang_vor_gezielt() {
+        let pool = pool_or_skip!("promo_anlass_vor_gezielt");
+        seed_partner_channel(&pool, "c-av", "avkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
+            "deadlock ist echt unterschaetzt, das game macht suchtig",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_pitch_text_gen(Arc::new(FixedTextGen(Some("gezielt text".to_string()))))
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let ev = pitch_event(
+            "c-av",
+            "avkanal",
+            "u-av",
+            "Avler",
+            "yo wieso ist deadlock so unpopulaer wie haben die den anschluss verpasst",
+        );
+        engine.on_message_pitch(&ev).await;
+
+        let anlass: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'anlass' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(anlass.0, 1, "der Anlass-Pitch geht raus");
+        let gezielt: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'gezielt'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(gezielt.0, 0, "kein gezielter Pitch fuer dieselbe Nachricht");
     }
 
     // -----------------------------------------------------------------------

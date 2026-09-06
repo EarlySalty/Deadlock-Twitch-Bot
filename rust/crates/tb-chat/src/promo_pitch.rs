@@ -453,6 +453,7 @@ pub async fn build_targeted_pitch_text(ctx: &TargetedPitchContext) -> Option<Str
     let user = serde_json::to_string(ctx).ok()?;
     let request = tb_llm::Request::simple(TARGETED_PITCH_SYSTEM_PROMPT, user)
         .temperature(0.7)
+        .denken_aus()
         .timeout(PITCH_TIMEOUT);
     let response = tb_llm::complete(USE_CASE, request).await.ok()?;
     let text = finalize_targeted_pitch(&response.text)?;
