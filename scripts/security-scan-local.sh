@@ -117,10 +117,13 @@ if need gitleaks; then
   cat >> "$gitleaks_cfg" <<'EOF'
 
 [[allowlists]]
-description = "Testfixtures, keine echten Secrets."
+description = "Testfixtures und Demo-Chiffrate, keine echten Secrets."
 paths = [
   '''src/auth\.rs''',
   '''src/transcode/encoder\.rs''',
+  '''rust/crates/tb-dashboard-api/src/handlers/ad_manager\.rs''',
+  '''rust/crates/tb-dashboard-api/src/obs/ws\.rs''',
+  '''website/src/components/partner-clean/Security\.tsx''',
 ]
 targetRules = ["generic-api-key"]
 EOF
