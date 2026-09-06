@@ -232,3 +232,45 @@ Zeit: ~0,5 Tag.
   `git pull --ff-only origin main`), Migration als `postgres` anwenden und Rechte
   setzen (Docs/workspace/gates-und-merge.md), Release im isolierten Worktree bauen,
   Dienste neu starten, Live-Pruefung, Branch/Worktree loeschen.
+
+## Umsetzungsstand (Implementierung)
+
+Baseline vor dem Bau (origin/main, tb-social-media + tb-dashboard-api,
+`SQLX_OFFLINE=1 TB_TEST_DATABASE_URL=postgres:///tb_bb_test`): 1357 passed, 0 failed.
+
+### M1 - REQ-06 Betrieb wieder scharf: ERLEDIGT (Code + Migration; Prod/Backfill offen)
+
+Ursache (an der Live-DB belegt, twitch_analytics): Helix `GET /clips` liefert `game_id`,
+aber kein `game_name`; die Deadlock-Kategorie trug keine `twitch_game_id` (NULL). Damit
+matchte `resolve_category` Deadlock nie, alle 126 Clips landeten in `other`
+(enrichment_enabled=false) und wurden nie angereichert. Zweite Ursache: der einzige
+Download-Aufrufer war der cipher-gated Upload-Worker NACH der Freigabe.
+
+Fix:
+- Migration `20260906120000_social_media_deadlock_game_id.sql` setzt
+  `social_media_category.twitch_game_id='2132205352'` (Deadlock). Neue Clips werden damit
+  am Schreibweg korrekt klassifiziert (kein Poll-Nachtrag).
+- Backfill-SQL `.tasks/.../backfill-deadlock-clips.sql` reklassifiziert die 50 Deadlock-
+  Altzeilen (game_id=2132205352) und setzt game_name='Deadlock'. Einmalig, kein Dauerlauf.
+- Neuer cipher-freier `clip_prep_worker::ClipPrepWorker`: laedt Clips enrichment-faehiger
+  Kategorien ohne lokale Datei per yt-dlp herunter (injizierbarer Downloader), setzt
+  local_file_path/downloaded_at, unabhaengig von Freigabe und FieldCipher. In main.rs im
+  cipher-freien Block gespawnt.
+
+Rot-Test zuerst (dokumentierter roter Lauf):
+`clip_prep_worker::tests::prep_laedt_deadlock_clip_und_macht_ihn_enrichbar`
+FAILED - `assertion left==right failed: genau der Deadlock-Clip wird geladen; left:0 right:1`
+(Stub `prepare_once` gab 0 zurueck). Nach der Implementierung gruen.
+
+Was sich nach Deploy sichtbar aendert: der Prep-Worker laedt die (nach Backfill)
+deadlock-klassifizierten earlysalty-Clips lokal, der Enrichment-Worker legt je Clip eine
+`social_media_clip_enrichment`-Zeile an; die Clips erscheinen im Dashboard mit Transkript/
+Titel statt kalt.
+
+Live-Voraussetzungen (operativ, ausserhalb Code-Scope, durch Nutzer zu setzen):
+- Backfill-SQL gegen Prod anwenden (siehe offene Schritte).
+- Migration gegen Prod als `postgres` anwenden.
+- `external_llm_consent=true` in `social_media_settings` (sonst bleibt der LLM-Schritt
+  `skipped_no_key`; Download und Enrichment-Zeile entstehen trotzdem).
+- `TB_CLIP_FETCHER_ENABLED=1`, damit neue Clips ueberhaupt geholt werden (Gate steht aus).
+- `DB_MASTER_KEY_V1` fuer den Upload-Worker (nur fuer Uploads, nicht fuer Download/Enrichment).

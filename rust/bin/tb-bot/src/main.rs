@@ -1617,10 +1617,19 @@ async fn main() {
             async move { reports.run().await },
         );
 
-        // Enrichment: LLM-Dispatcher (Consent aus Settings). Transkription ist
-        // entfernt (B15-OFF-transcription: OpenAI-Whisper raus, kein Ersatz) —
-        // der Enrichment-Worker läuft ohne Transcriber, die Transkriptions-Stage
-        // wird übersprungen (None-Pfad).
+        // Vor-Download: laedt Clips enrichment-faehiger Kategorien lokal, ohne
+        // Freigabe und ohne Field-Cipher. Loest die Henne-Ei-Sperre, dass
+        // Enrichment eine lokale Datei braucht, der Download aber frueher nur im
+        // cipher-gated Upload-Worker nach der Freigabe lief.
+        let prep = tb_social_media::clip_prep_worker::ClipPrepWorker::new(
+            pool.clone(),
+            yt_dlp_path().to_string_lossy().into_owned(),
+        );
+        supervisor.spawn("social_clip_prep_worker", async move { prep.run().await });
+
+        // Enrichment: LLM-Dispatcher (Consent aus Settings). Der Transcriber
+        // wird in einem spaeteren Schritt injiziert; ohne ihn wird die
+        // Transkriptions-Stage still uebersprungen (None-Pfad).
         let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> = Arc::new(
             tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()),
         );

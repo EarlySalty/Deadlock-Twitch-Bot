@@ -54,6 +54,7 @@ pub mod approval_worker;
 pub mod clip;
 pub mod clip_analytics;
 pub mod clip_manager;
+pub mod clip_prep_worker;
 pub mod clip_queue;
 pub mod clip_templates;
 pub mod correction;
