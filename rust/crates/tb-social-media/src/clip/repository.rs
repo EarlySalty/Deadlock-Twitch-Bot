@@ -136,61 +136,6 @@ impl ClipRepository {
         Ok((id, true))
     }
 
-    pub async fn register_corpus_clip(&self, rec: &ClipRecord) -> Result<(i64, bool), sqlx::Error> {
-        let created_at = chrono::DateTime::parse_from_rfc3339(&rec.created_at)
-            .map(|value| value.with_timezone(&chrono::Utc))
-            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
-        let view_count = int4_metric("view_count", rec.view_count)?;
-
-        let existing: Option<i64> = sqlx::query_scalar!(
-            "SELECT id AS \"id!\" FROM twitch_clips_social_media WHERE clip_id = $1",
-            &rec.clip_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some(id) = existing {
-            return Ok((id, false));
-        }
-
-        let category_key = crate::posting_plan::resolve_category(
-            &self.pool,
-            rec.game_id.as_deref(),
-            rec.game_name.as_deref(),
-        )
-        .await;
-
-        let id: i64 = sqlx::query_scalar!(
-            r#"
-            INSERT INTO twitch_clips_social_media
-                (clip_id, clip_url, clip_title, clip_thumbnail_url,
-                 streamer_login, twitch_user_id, created_at, duration_seconds,
-                 view_count, game_name, game_id, category_key, status,
-                 source_kind, vod_id, vod_offset_s)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', 'corpus', $13, $14)
-            RETURNING id AS "id!"
-            "#,
-            &rec.clip_id,
-            &rec.clip_url,
-            &rec.clip_title,
-            rec.thumbnail_url.as_deref(),
-            &rec.streamer_login,
-            &rec.twitch_user_id,
-            created_at,
-            rec.duration_seconds,
-            view_count,
-            rec.game_name.as_deref(),
-            rec.game_id.as_deref(),
-            category_key,
-            rec.vod_id.as_deref(),
-            rec.vod_offset_s
-        )
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok((id, true))
-    }
-
     /// Belegt das Clip-Override mit dem Streamer-Default (best-effort, mirror
     /// Python: Layout-Fehler brechen den Register-Pfad nicht ab).
     async fn apply_layout(&self, clip_db_id: i64, streamer_login: &str) {
@@ -304,6 +249,7 @@ mod tests {
             thumbnail_url: None,
             streamer_login: login.to_string(),
             twitch_user_id: "999".to_string(),
+            broadcaster_name: None,
             created_at: "2026-06-15T00:00:00Z".to_string(),
             duration_seconds: 28.0,
             view_count: 5,
@@ -373,37 +319,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(created_at.to_rfc3339(), "2026-06-15T00:00:00+00:00");
-    }
-
-    #[tokio::test]
-    async fn register_corpus_clip_setzt_source_kind_und_vod_felder() {
-        let Some(pool) = make_pool("t_sm_repo_corpus").await else {
-            return;
-        };
-        let repo = ClipRepository::new(pool.clone());
-
-        let mut r = rec("corpus1", "nani");
-        r.vod_id = Some("vod42".to_string());
-        r.vod_offset_s = Some(1234);
-
-        let (id, is_new) = repo.register_corpus_clip(&r).await.unwrap();
-        assert!(is_new);
-
-        let (source_kind, vod_id, vod_offset): (String, Option<String>, Option<i32>) =
-            sqlx::query_as(
-                "SELECT source_kind, vod_id, vod_offset_s FROM twitch_clips_social_media WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(source_kind, "corpus");
-        assert_eq!(vod_id.as_deref(), Some("vod42"));
-        assert_eq!(vod_offset, Some(1234));
-
-        let (id2, is_new2) = repo.register_corpus_clip(&r).await.unwrap();
-        assert_eq!(id, id2);
-        assert!(!is_new2);
     }
 
     #[tokio::test]
