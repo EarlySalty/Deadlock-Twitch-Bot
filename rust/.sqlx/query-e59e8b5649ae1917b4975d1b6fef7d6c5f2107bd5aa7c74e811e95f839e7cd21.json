@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id, twitch_login, discord_user_id,\n                      community_probability, signals::text AS \"signals!\",\n                      first_partner_channel, first_seen_at, computed_at\n                 FROM twitch_zuschauer_register\n                WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "community_probability",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "signals!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "first_partner_channel",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "first_seen_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "computed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      null,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e59e8b5649ae1917b4975d1b6fef7d6c5f2107bd5aa7c74e811e95f839e7cd21"
+}

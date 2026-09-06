@@ -58,6 +58,7 @@ pub mod title_db;
 pub mod title_jobs;
 pub mod token;
 pub mod types;
+pub mod zuschauer_register;
 
 pub use api::{BanOutcome, ChatApi};
 pub use channel_classifier::{ChannelClass, ChannelClassifier};

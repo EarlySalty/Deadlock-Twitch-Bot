@@ -2925,6 +2925,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "strsim",
  "tb-analytics",
  "tb-domain",
  "tb-engagement",
