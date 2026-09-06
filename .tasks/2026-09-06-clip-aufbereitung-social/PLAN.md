@@ -439,3 +439,21 @@ den FESTEN Schema-Namen `t_sm_upload_completed_write_fail` und stoeren sich. Nac
 gegen eine isolierte Wegwerf-Docker-DB (keine Peer-Kontamination) laeuft der Test gruen
 (calls=1). Empfehlung fuer den Merge-Lauf: Tests nicht parallel zweier Sessions gegen
 dieselbe `tb_bb_test` fahren (oder je Session eine eigene Test-DB).
+
+### Flake-Befund praezisiert (parallel-last, nicht Peer)
+
+Auch mit beendeter Peer-Session schlaegt `upload_worker::tests::
+completed_write_failure_after_success_marks_failed` im FULL-Suite-Lauf mit `calls=2`
+fehl, laeuft aber ISOLIERT deterministisch gruen (`calls=1`). Es ist also eine
+parallel-last-empfindliche Flakiness dieses bestehenden 180s-Tests (echte 10s-Sleeps
+in warte_auf_tiktok), kein Peer-Effekt und kein Regressionsfehler meiner Aenderungen:
+- Der Upload-Pfad ist unveraendert; `convert_to_vertical` kehrt bei vorhandener
+  konvertierter Datei frueh zurueck, mein `render_base`-Change wird nie erreicht.
+- Gleicher Testumfang lief in m5_full gruen, in fix_full/clean_full rot -> intermittent.
+- Isoliert (nur dieser Test, eigene DB) gruen.
+Definitive Zahlen sauberer Lauf gegen tb_bb_test (Peer weg): tb-dashboard-api 1115+12+6,
+0 failed; tb-social-media 234 passed, 1 failed (nur dieser Flake). Offline-Build
+(SQLX_OFFLINE=true) alle drei Crates gruen.
+Empfehlung Merge-Lauf: diesen Test isoliert oder mit `--test-threads` gedrosselt
+laufen lassen; der latente calls=2-Race in warte_auf_tiktok gehoert als eigener,
+bestehender Punkt untersucht (ausserhalb dieses Auftrags, INV-05: Test nicht abschwaechen).
