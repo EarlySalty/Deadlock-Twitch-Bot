@@ -46,6 +46,11 @@
   --color-warning-soft: rgba(232, 163, 61, 0.15);
   --color-danger-soft: rgba(255, 90, 60, 0.15);
   --color-secondary: #9d968a;
+  --color-chart-1: #6B4E27;
+  --color-chart-2: #9C7A3C;
+  --color-chart-3: #C5A059;
+  --color-chart-4: #DDBD7A;
+  --color-chart-5: #F1D9A6;
   --color-text-primary: #f2eee6;
   --color-text-secondary: #9d968a;
   /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
