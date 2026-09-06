@@ -160,6 +160,11 @@ export function RaidRetention({ data }: RaidRetentionProps) {
                 ))}
               </tbody>
             </table>
+            {sichtbareRaids.length === 0 && (
+              <div className="py-6 text-center text-sm text-text-secondary">
+                Kein Raid passt zur Suche „{suche.trim()}“.
+              </div>
+            )}
           </div>
         </Rise>
       )}

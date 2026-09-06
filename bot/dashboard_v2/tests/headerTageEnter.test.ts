@@ -41,9 +41,11 @@ test('der gleiche Wert loest kein onDaysChange aus', () => {
 });
 
 test('das Tage-Feld faengt Enter ab, uebernimmt und gibt den Fokus frei', () => {
-  const inputStart = HEADER.indexOf('type="number"');
-  assert.ok(inputStart >= 0, 'das Tage-Feld muss ein Zahlenfeld sein');
-  const inputBlock = HEADER.slice(inputStart, inputStart + 600);
+  const labelPos = HEADER.indexOf("aria-label={t('Tage')}");
+  assert.ok(labelPos >= 0, 'das Tage-Feld muss per aria-label Tage erkennbar sein');
+  const feldStart = HEADER.lastIndexOf('<input', labelPos);
+  assert.ok(feldStart >= 0 && HEADER.slice(feldStart, labelPos).includes('type="number"'), 'das Tage-Feld muss ein Zahlenfeld sein');
+  const inputBlock = HEADER.slice(feldStart, feldStart + 700);
   assert.match(inputBlock, /onKeyDown=\{event =>/, 'das Tage-Feld braucht einen onKeyDown-Handler');
   assert.match(inputBlock, /event\.key === 'Enter'/, 'Enter muss abgefangen werden');
   assert.match(inputBlock, /uebernehmeTage\(\);/, 'Enter muss die Uebernahme ausloesen');

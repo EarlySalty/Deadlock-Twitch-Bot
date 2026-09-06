@@ -367,12 +367,19 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
         const viewerPct = hasStreams ? wochentagBalkenHoehe(day.avgViewers, minViewers, maxViewers) : 0;
         const abweichung =
           hasStreams && wochenSchnitt > 0 ? ((day.avgViewers - wochenSchnitt) / wochenSchnitt) * 100 : null;
+        const abweichungGerundet = abweichung === null ? null : Math.round(abweichung);
         const abweichungFarbe =
           abweichung === null || Math.abs(abweichung) < 5
             ? 'text-text-secondary'
             : abweichung > 0
             ? 'text-success'
             : 'text-danger';
+        const abweichungVorzeichen =
+          abweichungGerundet === null || abweichungGerundet === 0
+            ? '±'
+            : abweichungGerundet > 0
+            ? '+'
+            : '-';
 
         return (
           <motion.div
@@ -422,10 +429,10 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
                 <Users className="w-3 h-3 inline mr-0.5 -mt-0.5" />
                 Ø Viewer
               </div>
-              {abweichung !== null && (
+              {abweichungGerundet !== null && (
                 <div className={`mt-1 text-xs font-semibold ${abweichungFarbe}`}>
-                  {abweichung >= 0 ? '+' : '-'}
-                  {Math.abs(abweichung).toFixed(0)}% ggü. Schnitt
+                  {abweichungVorzeichen}
+                  {Math.abs(abweichungGerundet)}% ggü. Schnitt
                 </div>
               )}
             </div>

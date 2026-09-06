@@ -57,12 +57,19 @@ export function RetentionRadar({
 
   const eckenWinkel = [90, 30, -30, -90, -150, -210];
   const EckenLabel = (props: any) => {
-    const { x, y, index, value } = props;
-    if (x == null || y == null || index == null) return null;
-    const rad = ((eckenWinkel[index] ?? 90) * Math.PI) / 180;
+    const { x, y, cx, cy, index, value } = props;
+    if (x == null || y == null) return null;
+    let dx = x - (cx ?? x);
+    let dy = y - (cy ?? y);
+    if (Math.hypot(dx, dy) < 2) {
+      const rad = ((eckenWinkel[index ?? 0] ?? 90) * Math.PI) / 180;
+      dx = Math.cos(rad);
+      dy = -Math.sin(rad);
+    }
+    const len = Math.hypot(dx, dy) || 1;
     const abstand = 14;
-    const lx = x + Math.cos(rad) * abstand;
-    const ly = y - Math.sin(rad) * abstand;
+    const lx = x + (dx / len) * abstand;
+    const ly = y + (dy / len) * abstand;
     return (
       <text
         x={lx}
