@@ -868,16 +868,9 @@ impl SpamFilter {
             }
         }
 
-        // Schritt 5: Viewer-Muster (moderation.py Z. 537–539)
-        if viewer_pattern_re().is_match(&lowered) {
-            hits += 1;
-            reasons.push(VIEWER_PATTERN_REASON.to_string());
-        }
-
-        // Schritt 6+7: Gelernte Muster (moderation.py Z. 542–562)
-        // Erst alle Phrasen prüfen (break bei erstem Treffer),
-        // dann alle Fragmente (break bei erstem Treffer).
         let learned = self.learned.load();
+        let mut learned_hits: i32 = 0;
+        let mut learned_reasons: Vec<String> = Vec::new();
         let mut learned_phrase_hit = false;
         for lp in &learned.spam {
             if lp.pattern_type != "phrase" {
@@ -888,8 +881,8 @@ impl SpamFilter {
                 && (lowered.contains(lp.pattern.to_lowercase().as_str())
                     || (pc.len() >= 4 && compact_str.contains(pc.as_str())))
             {
-                hits += 2;
-                reasons.push(format!("Learned-Phrase: {}", lp.pattern));
+                learned_hits += 2;
+                learned_reasons.push(format!("Learned-Phrase: {}", lp.pattern));
                 learned_phrase_hit = true;
                 break;
             }
@@ -905,12 +898,20 @@ impl SpamFilter {
                     .map(|re| re.is_match(&lowered))
                     .unwrap_or(false);
                 if frag_match || (pc.len() >= 4 && compact_str.contains(pc.as_str())) {
-                    hits += 1;
-                    reasons.push(format!("Learned-Fragment: {}", lp.pattern));
+                    learned_hits += 1;
+                    learned_reasons.push(format!("Learned-Fragment: {}", lp.pattern));
                     break;
                 }
             }
         }
+
+        if learned_hits == 0 && viewer_pattern_re().is_match(&lowered) {
+            hits += 1;
+            reasons.push(VIEWER_PATTERN_REASON.to_string());
+        }
+
+        hits += learned_hits;
+        reasons.extend(learned_reasons);
 
         (hits, reasons)
     }
@@ -971,6 +972,31 @@ const GENERIC_PATTERN_TOKENS: &[&str] = &[
     "online",
     "site",
     "link",
+    "discord",
+    "telegram",
+    "instagram",
+    "youtube",
+    "tiktok",
+    "whatsapp",
+    "steam",
+    "kick",
+    "snapchat",
+    "twitter",
+];
+
+/// Angebotswörter, die zusammen mit einer domain-förmigen Adresse ein Muster
+/// wie „ai viewers twitch.ad" distinktiv machen, obwohl jedes einzelne Wort
+/// generisch ist.
+const ANGEBOT_TOKENS: &[&str] = &[
+    "viewer",
+    "viewers",
+    "follower",
+    "followers",
+    "sub",
+    "subs",
+    "promotion",
+    "boost",
+    "growth",
 ];
 
 /// Ab dieser Wortzahl trägt ein Muster allein durch seine Satzlänge — beides
@@ -1035,6 +1061,58 @@ fn ist_dienstwort(token: &str) -> bool {
     !t.trim_matches('.').contains('.') && compacted.chars().count() >= 6
 }
 
+/// Token in Domain-Form: Label plus alphabetische TLD, dessen Kompaktform kein
+/// generisches Wort ist. Anders als [`ist_dienstdomain`] darf das Label selbst
+/// generisch sein („twitch.ad"), damit Angebote mit bekannter Plattform als
+/// Label greifen; „view.ers" fällt raus, weil die Kompaktform „viewers" ist.
+fn ist_domainform(token: &str) -> bool {
+    let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
+    let labels: Vec<&str> = t
+        .trim_matches('.')
+        .split('.')
+        .filter(|l| !l.is_empty())
+        .collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    let tld = labels[labels.len() - 1];
+    if tld.chars().count() < 2 || !tld.chars().all(|c| c.is_alphabetic()) {
+        return false;
+    }
+    let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+    !GENERIC_PATTERN_TOKENS.contains(&compacted.as_str())
+}
+
+/// Kanonische Schreibweise eines Angebot-plus-Domain-Musters: Zusätze wie
+/// „(no space)" oder „(remove the space)" raus, Trennversuch „ .ad" zu „.ad"
+/// zusammengezogen, klein und Leerraum zusammengefasst.
+pub fn kanonische_angebot_domain(pattern: &str) -> String {
+    let lowered = pattern.to_lowercase();
+    let ohne_zusatz = lowered
+        .replace("(no space)", " ")
+        .replace("(remove the space)", " ");
+    ohne_zusatz
+        .replace(" .", ".")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// True, wenn ein Muster aus mindestens drei Tokens besteht, eines davon eine
+/// Adresse in Domain-Form ist und ein weiteres ein Angebotswort — das Angebot
+/// „ai viewers twitch.ad", das ohne diese Regel als lauter generisches
+/// Vokabular durchs Gate fiele.
+pub fn ist_angebot_plus_domain(pattern: &str) -> bool {
+    let bereinigt = kanonische_angebot_domain(pattern);
+    let tokens: Vec<&str> = bereinigt.split_whitespace().collect();
+    tokens.len() >= 3
+        && tokens.iter().copied().any(ist_domainform)
+        && tokens.iter().any(|t| {
+            let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+            ANGEBOT_TOKENS.contains(&compacted.as_str())
+        })
+}
+
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu
 /// werden: entweder trägt ein Token eine Domain mit distinktivem
 /// registrierbarem Namen („eballo.com", „clicknex.online") — dann ist die
@@ -1067,7 +1145,10 @@ pub fn is_distinctive_spam_pattern(pattern: &str) -> bool {
     if tokens.iter().copied().any(ist_dienstdomain) {
         return true;
     }
-    tokens.len() <= STRICT_MAX_TOKENS && tokens.iter().copied().any(ist_dienstwort)
+    if tokens.len() <= STRICT_MAX_TOKENS && tokens.iter().copied().any(ist_dienstwort) {
+        return true;
+    }
+    ist_angebot_plus_domain(pattern)
 }
 
 /// Wie [`is_distinctive_spam_pattern`], zusätzlich mit der Phrasen-Ausnahme:

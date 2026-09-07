@@ -220,6 +220,15 @@ pub async fn learn_handler(
         }));
     }
 
+    let (pattern, pattern_type) = if tb_chat::spam_filter::ist_angebot_plus_domain(&pattern) {
+        (
+            tb_chat::spam_filter::kanonische_angebot_domain(&pattern),
+            "phrase".to_string(),
+        )
+    } else {
+        (pattern, pattern_type)
+    };
+
     sqlx::query(
         r#"
         INSERT INTO twitch_auto_learned_spam_patterns
