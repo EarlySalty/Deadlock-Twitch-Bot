@@ -15,10 +15,7 @@ Reset 08.09. 22:00 Europe/Berlin), deshalb steht Merge/Deploy aus.
    (vorher `git -C ~/repos/_ttb-main-deploy pull --ff-only origin main`)
 2. Bei ALLOW, von `~/repos/_ttb-main-deploy` (dort liegt main):
    `git merge --ff-only fix/targeted-global-aus && git push origin HEAD:main`
-3. Branch und Worktree loeschen:
-   `git worktree remove ~/.worktrees/targeted-global-aus` (erst nach Step 2),
-   `git branch -d fix/targeted-global-aus`
-4. Release nach Memory twitch-release-deploy-weg:
+3. Release nach Memory twitch-release-deploy-weg:
    - Freeze-Clone: `sudo git clone --no-hardlinks ~/repos/_ttb-main-deploy \
      /opt/deadlock/twitch/builds/<voller-sha>`, darin `<sha>` auschecken,
      Remote wieder auf GitHub setzen.
@@ -36,3 +33,7 @@ Reset 08.09. 22:00 Europe/Berlin), deshalb steht Merge/Deploy aus.
    keine neuen Zeilen mit `pfad = 'targeted_global'`; neue Sends nur noch
    `periodic`/`anlass`/`partner`/`gezielt`. Bot-Log pruefen, dass der
    Promo-Loop laeuft (Periodik-Sends erscheinen wie bisher).
+6. Erst nach Schritt 4 (die Release-Binaries liegen im Worktree und werden
+   dort kopiert) und Schritt 5 aufraeumen, vom main-Checkout aus:
+   `git worktree remove ~/.worktrees/targeted-global-aus`,
+   `git branch -d fix/targeted-global-aus`.
