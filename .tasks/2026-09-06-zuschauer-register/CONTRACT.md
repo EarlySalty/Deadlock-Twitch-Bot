@@ -1,6 +1,6 @@
 # Contract: Zuschauer-Register und Pitch nur an echte Neulinge
 
-status: aktiv
+status: erledigt
 datum: 2026-09-06
 klasse: hoch
 repo: Deadlock-Twitch-Bot

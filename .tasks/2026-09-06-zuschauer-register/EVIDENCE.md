@@ -81,3 +81,12 @@ Urteil: Ein reiner Exakt-Namensabgleich rekonstruiert die 80-Prozent-Ueberlappun
 - Kein kanaluebergreifendes "erstes Mal in irgendeinem Partnerkanal": `twitch_first_message_events` ist je Streamer; ein Aggregat ueber alle 61 aktiven Partnerkanaele fehlt und muss neu gebaut werden.
 - Kein Discord-Beitrittsdatum je Twitch-Zuschauer ohne ID-Bruecke; `guild_member_directory.joined_at` ist nur ueber die noch fehlende Zuordnung nutzbar.
 - Ablageort offen: die zentrale DB (`core`) traegt keine Twitch-Daten, die Twitch-DB traegt das streamer-only-Register. Ein Zuschauer-Register braucht eine bewusste Entscheidung, wo es liegt (Twitch-DB analog `twitch_streamer_identities` oder zentral in `core`).
+
+## Abschluss (2026-09-07, Release 9c128ed6)
+
+- Gate fail-closed ohne Session, bei Ladefehler und bei fehlendem Register: rust/crates/tb-chat/src/zuschauer_register.rs:536 (`gate`), rust/crates/tb-chat/src/zuschauer_register.rs:562.
+- Pfadübergreifendes Personen-Limit für den gezielten Pitch: rust/crates/tb-chat/src/promos.rs:1240 (`gezielt_limit_reject`), Send-Pfad rust/crates/tb-chat/src/promos.rs:1311.
+- Reject-Entprellung je Session: rust/crates/tb-chat/src/promos.rs:1134 (`log_zuschauer_reject`).
+- Migrationen auf Prod angewendet und in `_sqlx_migrations` eingetragen: rust/migrations/20260906140000_twitch_zuschauer_register.sql:1, rust/migrations/20260906150000_twitch_promo_pitch_log_limits.sql:1.
+- Backfill-Schreiblauf (als `twitchbot`, transiente Unit): 14500 Einträge, 428 mit Discord-Zuordnung, 13862 unter 0,35, 392 zwischen 0,6 und 0,85, 246 über 0,85, 18906 Logins ohne User-ID nicht aufgelöst.
+- Live: beide Twitch-Units auf `releases/9c128ed6`, kein Fehler im Journal nach dem Restart. Branch-SHAs vor dem Löschen: feat/zuschauer-register 9c128ed6, feat/zuschauer-register-backfill 42f0abe7 (Inhalt über Merge 577ecd7b in main).
