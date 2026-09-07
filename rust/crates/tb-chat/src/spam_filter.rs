@@ -1125,9 +1125,10 @@ pub fn ist_angebot_plus_domain(pattern: &str) -> bool {
 }
 
 /// Speicherform für beide Lernpfade (Richter und Mod-Korrektur): ein
-/// Angebot-plus-Domain-Muster wird auf die kanonische Domain gezogen und als
-/// `phrase` gespeichert, damit nur die Ganzphrase trifft; jedes andere Muster
-/// bleibt unverändert mit seinem übergebenen Typ.
+/// Angebot-plus-Domain-Muster wird als Ganzphrase kanonisiert (Zusätze raus,
+/// Trennversuch " ." zu "." gezogen) und als `phrase` gespeichert, damit nur
+/// der Ganzsatz trifft; jedes andere Muster bleibt unverändert mit seinem
+/// übergebenen Typ.
 pub fn angebot_domain_speicherform(pattern: &str, fallback_typ: &str) -> (String, String) {
     if ist_angebot_plus_domain(pattern) {
         (kanonische_angebot_domain(pattern), "phrase".to_string())
