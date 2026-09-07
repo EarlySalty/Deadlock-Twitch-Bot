@@ -1067,8 +1067,9 @@ const DOMAIN_TLDS: &[&str] = &[
 /// Token in Domain-Form: Label plus gültige TLD, dessen Kompaktform kein
 /// generisches Wort ist. Anders als [`ist_dienstdomain`] darf das Label selbst
 /// generisch sein („twitch.ad"), damit Angebote mit bekannter Plattform als
-/// Label greifen; „view.ers" fällt raus, weil die Kompaktform „viewers" ist,
-/// „leute.bis" fällt raus, weil „bis" keine TLD ist.
+/// Label greifen. „view.ers" und „leute.bis" fallen an der TLD-Prüfung raus;
+/// der Kompaktform-Check greift zusätzlich, wenn die ganze Adresse zu einem
+/// generischen Wort zusammenfällt.
 fn ist_domainform(token: &str) -> bool {
     let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
     let labels: Vec<&str> = t
@@ -1136,7 +1137,9 @@ pub fn angebot_domain_speicherform(pattern: &str, fallback_typ: &str) -> (String
 /// registrierbarem Namen („eballo.com", „clicknex.online") — dann ist die
 /// Länge des Musters egal —, oder das ganze Muster besteht aus höchstens
 /// [`STRICT_MAX_TOKENS`] Tokens, von denen eines ein Dienstname ist
-/// („streamboo", „peakpy").
+/// („streamboo", „peakpy"), oder es ist ein Angebot-plus-Domain-Muster nach
+/// [`ist_angebot_plus_domain`] („ai viewers twitch.ad": drei Tokens, Domain-Form
+/// plus Angebotswort).
 ///
 /// Dies ist das **strenge** Gate ohne Phrasen-Ausnahme. Es gilt überall, wo
 /// kein Mensch im Loop steht — allen voran auf dem Judge-Pfad

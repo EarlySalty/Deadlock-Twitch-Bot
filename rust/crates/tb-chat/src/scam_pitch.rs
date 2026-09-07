@@ -1818,6 +1818,10 @@ pub(crate) enum LearnOutcome {
 ///    Belegtext stehen ([`beleg_form`]). Ein halluziniertes Muster, das so kein
 ///    Chatter geschrieben hat, wird nicht gelernt.
 /// 3. Distinktivitäts-Gate ([`crate::spam_filter::is_distinctive_spam_pattern`]).
+/// 4. Speicherform ([`crate::spam_filter::angebot_domain_speicherform`]): ein
+///    Angebot-plus-Domain-Muster wird auf die Ganzphrase kanonisiert und als
+///    `phrase` gespeichert; der vom Richter gemeldete `pattern_type` wird dabei
+///    überschrieben.
 pub(crate) struct JudgeLearning<'a> {
     pub pattern: &'a str,
     pub pattern_type: &'a str,
