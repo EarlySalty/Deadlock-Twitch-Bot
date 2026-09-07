@@ -4115,6 +4115,26 @@ mod db_tests {
         }
     }
 
+    struct SessionDroppingJudge {
+        pool: PgPool,
+        channel_login: String,
+    }
+
+    #[async_trait]
+    impl PitchJudge for SessionDroppingJudge {
+        async fn decide(
+            &self,
+            _input: PitchJudgeInput,
+        ) -> Option<crate::promo_pitch::PitchResponse> {
+            sqlx::query("UPDATE twitch_live_state SET is_live = 0 WHERE streamer_login = $1")
+                .bind(&self.channel_login)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+            Some(pitch_response(None, ""))
+        }
+    }
+
     struct MockPartnerPitchGen {
         text: Option<String>,
         calls: Arc<std::sync::atomic::AtomicUsize>,
@@ -6256,32 +6276,34 @@ mod db_tests {
     #[tokio::test]
     async fn gezielter_pitch_ohne_session_ruft_modell_nicht() {
         let pool = pool_or_skip!("promo_gezielt_ohne_session");
+        seed_partner_channel(&pool, "c-gos", "goskanal").await;
         let api = Arc::new(super::tests::MockApi::default());
         let generator = CountingTextGen::new("cooler run, sowas sieht man selten");
         let calls = generator.calls.clone();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(Arc::new(SessionDroppingJudge {
+                pool: pool.clone(),
+                channel_login: "goskanal".to_string(),
+            }))
             .set_pitch_text_gen(Arc::new(generator))
-            .set_zuschauer_register(test_register(pool));
-        let event = pitch_event(
+            .set_zuschauer_register(test_register(pool.clone()));
+        let first = pitch_event(
             "c-gos",
             "goskanal",
             "u-gos",
             "Gosler",
-            "das ist meine zweite echte nachricht in dieser runde",
+            "erste echte nachricht",
+        );
+        let second = pitch_event(
+            "c-gos",
+            "goskanal",
+            "u-gos",
+            "Gosler",
+            "das ist meine zweite echte nachricht in dieser laufenden runde",
         );
 
-        engine
-            .maybe_send_gezielt_pitch(
-                &event,
-                vec![
-                    "das ist meine erste echte nachricht".to_string(),
-                    "das ist meine zweite echte nachricht".to_string(),
-                ],
-                None,
-                None,
-                Vec::new(),
-            )
-            .await;
+        engine.on_message_pitch(&first).await;
+        engine.on_message_pitch(&second).await;
 
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
