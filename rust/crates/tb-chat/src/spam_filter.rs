@@ -748,10 +748,9 @@ impl SpamFilter {
     /// 2. Casefold Phrase (+2, break) — nur wenn kein Exact-Treffer
     /// 3. Domain-Kompakt (+2) — nur wenn kein Phrase-Treffer
     /// 4. Fragment-Fallback (+1, break) — nur wenn kein Phrase/Domain-Treffer
-    /// 5. Gelernte Phrase (+2, break)
-    /// 6. Gelerntes Fragment (+1, break) — nur wenn keine gelernte Phrase
-    /// 7. Viewer-Muster (+1) — nur wenn keine gelernte Phrase schon greift, sonst
-    ///    stufte der weiche Regex einen reversiblen Löschfall zum Ban hoch
+    /// 5. Viewer-Muster (+1, immer)
+    /// 6. Gelernte Phrase (+2, break)
+    /// 7. Gelerntes Fragment (+1, break)
     /// 8. Mention-Score addieren (aus ctx)
     /// 9. Kontext-Eskalatoren: Account-Alter <90d +1 / Erstnachricht +1 (nur bei hartem Signal UND Score < SPAM_MIN_MATCHES)
     ///
@@ -869,9 +868,12 @@ impl SpamFilter {
             }
         }
 
+        if viewer_pattern_re().is_match(&lowered) {
+            hits += 1;
+            reasons.push(VIEWER_PATTERN_REASON.to_string());
+        }
+
         let learned = self.learned.load();
-        let mut learned_hits: i32 = 0;
-        let mut learned_reasons: Vec<String> = Vec::new();
         let mut learned_phrase_hit = false;
         for lp in &learned.spam {
             if lp.pattern_type != "phrase" {
@@ -882,8 +884,8 @@ impl SpamFilter {
                 && (lowered.contains(lp.pattern.to_lowercase().as_str())
                     || (pc.len() >= 4 && compact_str.contains(pc.as_str())))
             {
-                learned_hits += 2;
-                learned_reasons.push(format!("Learned-Phrase: {}", lp.pattern));
+                hits += 2;
+                reasons.push(format!("Learned-Phrase: {}", lp.pattern));
                 learned_phrase_hit = true;
                 break;
             }
@@ -899,20 +901,12 @@ impl SpamFilter {
                     .map(|re| re.is_match(&lowered))
                     .unwrap_or(false);
                 if frag_match || (pc.len() >= 4 && compact_str.contains(pc.as_str())) {
-                    learned_hits += 1;
-                    learned_reasons.push(format!("Learned-Fragment: {}", lp.pattern));
+                    hits += 1;
+                    reasons.push(format!("Learned-Fragment: {}", lp.pattern));
                     break;
                 }
             }
         }
-
-        if !learned_phrase_hit && viewer_pattern_re().is_match(&lowered) {
-            hits += 1;
-            reasons.push(VIEWER_PATTERN_REASON.to_string());
-        }
-
-        hits += learned_hits;
-        reasons.extend(learned_reasons);
 
         (hits, reasons)
     }
