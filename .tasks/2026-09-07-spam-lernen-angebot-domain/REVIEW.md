@@ -70,3 +70,15 @@ Nur erlaubte Dateien: `git diff --stat` zeigt genau spam_filter.rs, scam_pitch.r
 
 - spam_filter.rs `DOMAIN_TLDS` enthält sehr kurze Alltagsendungen ("ad", "me", "gg", "co", "de", "cc", "tv", "bio"). Das weitet die Domain-Form-Fläche. Durch die Kombination aus drei Tokens, separatem Angebotswort, Ganzphrasen-Speicherung und Richter-Gate bleibt der Effekt eingegrenzt; kein Handlungsbedarf für den Merge.
 - Auf dem Richter-Pfad wird `kanonische_angebot_domain`/`ist_angebot_plus_domain` doppelt gerechnet (im Gate und in `angebot_domain_speicherform`). Reine Redundanz, korrekt, nicht merge-relevant.
+
+## Nachtrag Gate-Runde 1
+
+Fund (blockierend): Die Aussage in Prüfpunkt 1 und der Freigabesatz oben deckten die Trennform mit Leerzeichen auf beiden Seiten des Punkts nicht ab. `kanonische_angebot_domain` zog mit `.replace(" .", ".")` nur das Leerzeichen vor dem Punkt zusammen. `kanonische_angebot_domain("ai viewers streamboo . com")` ergab "ai viewers streamboo. com", Tokens `["ai","viewers","streamboo.","com"]`, `ist_domainform` false, das Muster wurde nicht gelernt. REQ-01 nennt "streamboo . com" wörtlich als Pflichtfall (40 von 65 Live-Fällen).
+
+Fix (Commit 3d52da8e): Ein Regex `\s+\.\s*` zieht Leerraum vor und nach dem Punkt zusammen. "streamboo . com" und "streamboo .com" werden zu "streamboo.com". "promotion. ru" (kein Leerzeichen vor dem Punkt) bleibt unverändert, INV-02 gilt weiter. Der Fix sitzt im gemeinsamen Helfer und wirkt damit auf beiden Speicherpfaden (Richter in `scam_pitch.rs`, Mensch in `spam_learning.rs`).
+
+Grenze (INV-02 hat Vorrang): Die Form "streamboo. com" (Punkt am Wort, Leerzeichen danach, 7 Live-Fälle) bleibt außen vor, weil sie strukturell identisch zu "promotion. ru" ist und nur über die TLD-Liste unterscheidbar wäre; "ru" ist eine echte TLD, ein Zusammenziehen träfe "promotion. ru" mit und verletzte INV-02.
+
+Testnachweis: Neue Tests `gate_lernt_angebot_domain_leerzeichen_beidseits` (Distinktivität und Kanonform für "ai viewers streamboo . com", "best viewers eballo . com (remove the space)", Negativfall "boost viewers on the stream - promotion. ru") und `gelernte_phrase_trifft_kompaktform_mit_leerzeichen` (Learned-Phrase-Treffer auf "Ai viewers streamboo . com"). Der erste war vor dem Fix rot (`assertion failed: is_distinctive_spam_pattern("ai viewers streamboo . com")` an spam_filter.rs:1775), nach dem Fix grün. `cargo test -p tb-chat --lib`: 792 passed, 0 failed, 4 ignored. `cargo test -p tb-internal-api`: 303 passed, 0 failed.
+
+Nit 6 mit erledigt: die verbliebenen Kommentare "Schritt 1" bis "Schritt 4" in `calculate_spam_score` entfernt (die Kommentare "Schritt 5" und "Schritt 6+7" fehlten bereits), reiner Kommentar-Diff, Repo-Regel keine Code-Kommentare.
