@@ -33,10 +33,6 @@ const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const INVITE_QUESTION_USER_COOLDOWN: Duration = Duration::from_secs(3600);
 const INVITE_QUESTION_JUDGED_COOLDOWN: Duration = Duration::from_secs(30);
 const PENDING_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
-/// Wie lange ein Interesse-Opener ("das Game sieht mega aus") als Indiz
-/// nachwirkt. Innerhalb des Fensters reicht ein schwaches Folgesignal.
-const INTEREST_HINT_WINDOW: Duration = Duration::from_secs(600);
-
 const GO_REPLY: &str = "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}";
 const CONFIRM_REPLY: &str =
     "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg.";
@@ -50,8 +46,8 @@ Antworte EXAKT mit einem JSON-Objekt ohne Markdown und ohne weiteren Text:
 
 Regeln:
 - "yes" nur, wenn der Chatter selbst Zugang zu Deadlock sucht oder keinen hat.
-- "no" bei normalem Gameplay, Meinung, Smalltalk, Discord ohne Zugangsbezug oder wenn der Chatter längst spielt.
-- "unsure" wenn die Absicht unklar ist — auch bei reiner Begeisterung ("das Game sieht mega aus"), solange nicht erkennbar ist, ob der Chatter schon spielt."#;
+- "no" bei normalem Gameplay, Meinung, Smalltalk, Discord ohne Zugangsbezug oder wenn der Chatter bereits spielt. Anfänger, erste MOBA-Erfahrung, Hero-Suche und Tipps bedeuten keinen fehlenden Spielzugang. Eine Einladung zum Discord ist kein Spiel-Invite.
+- "unsure" nur bei einer ausdrücklich genannten, aber unklaren Zugangsfrage. Reine Begeisterung und fehlende Information zum Spielbesitz ergeben "no"."#;
 
 trait InviteQuestionClock: Send + Sync {
     fn now(&self) -> Instant;
@@ -78,16 +74,6 @@ fn invite_question_re() -> &'static Regex {
     })
 }
 
-fn invite_access_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)\b(spielen|play|zock\w*|zugang|einlad\w*|invit\w*|beta|key|access|ea|early\s*access|reinkomm\w*|rankomm\w*)\b",
-        )
-        .expect("valid invite access regex")
-    })
-}
-
 fn invite_strong_access_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -109,46 +95,10 @@ fn invite_lack_re() -> &'static Regex {
     })
 }
 
-/// Interesse-Opener ohne Zugangswort: "Das Game sieht echt mega aus". Bei
-/// Neulingen der häufigste Einstieg in eine Invite-Frage — Stammgäste filtert
-/// danach das Neuheits-Gate, den Rest der Judge.
-fn invite_interest_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(game|spiel|deadlock)\b").expect("valid invite interest regex")
-    })
-}
-
-fn invite_praise_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)\b(sieht|schaut|aussehen|mega|geil|nice|cool|krass|interessant|hype|bock|lust|spa(?:ß|ss)\w*)\b",
-        )
-        .expect("valid invite praise regex")
-    })
-}
-
-fn invite_join_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)\b(anschlie(?:ss|ß)\w*|mit\s*(?:spiel\w*|zock\w*)|mitspiel\w*|mitzock\w*)\b",
-        )
-        .expect("valid invite join regex")
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct InviteQuestionSignal {
     is_candidate: bool,
     has_strong_access: bool,
-    /// Interesse am Spiel ohne Zugangswort: allein nur ein Indiz, das ein
-    /// Merkfenster öffnet, nie ein Auslöser.
-    has_interest: bool,
-    /// Irgendein Zugangs- oder Frage-Bezug — reicht erst innerhalb eines
-    /// offenen Interesse-Fensters als Kandidat.
-    has_weak_signal: bool,
 }
 
 fn classify_invite_question(content: &str) -> InviteQuestionSignal {
@@ -157,27 +107,18 @@ fn classify_invite_question(content: &str) -> InviteQuestionSignal {
         return InviteQuestionSignal {
             is_candidate: false,
             has_strong_access: false,
-            has_interest: false,
-            has_weak_signal: false,
         };
     }
 
-    let has_join = invite_join_re().is_match(raw);
-    let has_access = invite_access_re().is_match(raw) || has_join;
     let has_strong_access = invite_strong_access_re().is_match(raw);
     let has_question = raw.contains('?') || invite_question_re().is_match(raw);
-    // ponytail: Aussagen ohne Fragezeichen ("bekommt ja keinen Zugang") nur mit
-    // starkem Zugangswort durchlassen, den Rest sortiert der Judge aus.
-    let has_lack = has_strong_access && invite_lack_re().is_match(raw);
-    // ponytail: Begeisterung über das Spiel ist der typische Opener vor der
-    // Invite-Frage; ohne Zugangswort bleibt sie auf Neulinge beschränkt.
-    let has_interest = invite_interest_re().is_match(raw) && invite_praise_re().is_match(raw);
+    let has_lack = invite_lack_re().is_match(raw);
 
+    // Anfänger, Spielinteresse und Mitspielen sind kein Bedarf an Spielzugang.
+    // Nur eine konkrete Zugangsfrage oder ein Zugangsmangel darf zum Judge.
     InviteQuestionSignal {
-        is_candidate: (has_access && has_question) || has_lack,
+        is_candidate: has_strong_access && (has_question || has_lack),
         has_strong_access,
-        has_interest,
-        has_weak_signal: has_access || has_question,
     }
 }
 
@@ -506,7 +447,6 @@ pub enum SilentReason {
     CommandPrefix,
     MissingLogin,
     NoRegexMatch,
-    RegularWithoutStrongAccess,
     CooldownChannel,
     CooldownUserReplied,
     CooldownJudgeBrake,
@@ -520,8 +460,6 @@ pub enum SilentReason {
     /// Echtes Modell-`unsure` bei einem Stammgast.
     JudgeUnsureRegular,
     JudgeYesLowConfidenceRegular,
-    /// Interesse-Opener gemerkt, aber allein kein Auslöser.
-    InterestNoted,
 }
 
 impl SilentReason {
@@ -531,7 +469,6 @@ impl SilentReason {
             Self::CommandPrefix => "command_prefix",
             Self::MissingLogin => "missing_login",
             Self::NoRegexMatch => "no_regex_match",
-            Self::RegularWithoutStrongAccess => "regular_without_strong_access",
             Self::CooldownChannel => "cooldown_channel",
             Self::CooldownUserReplied => "cooldown_user_replied",
             Self::CooldownJudgeBrake => "cooldown_judge_brake",
@@ -542,7 +479,6 @@ impl SilentReason {
             Self::JudgeParseError => "judge_parse_error",
             Self::JudgeUnsureRegular => "judge_unsure_regular",
             Self::JudgeYesLowConfidenceRegular => "judge_yes_low_confidence_regular",
-            Self::InterestNoted => "interest_noted",
         }
     }
 }
@@ -658,7 +594,6 @@ pub struct InviteQuestionResponder {
     channel_cooldowns: Mutex<HashMap<String, Instant>>,
     user_cooldowns: Mutex<HashMap<(String, String), (Instant, CooldownKind)>>,
     pending_confirmations: Mutex<HashMap<(String, String), Instant>>,
-    interest_hints: Mutex<HashMap<(String, String), Instant>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -707,7 +642,6 @@ impl InviteQuestionResponder {
             channel_cooldowns: Mutex::new(HashMap::new()),
             user_cooldowns: Mutex::new(HashMap::new()),
             pending_confirmations: Mutex::new(HashMap::new()),
-            interest_hints: Mutex::new(HashMap::new()),
         }
     }
 
@@ -828,22 +762,7 @@ impl InviteQuestionResponder {
         }
 
         let signal = classify_invite_question(raw);
-        // Interesse allein löst nie aus: es öffnet nur ein Fenster, in dem ein
-        // schwaches Folgesignal desselben Chatters zum Kandidaten wird.
-        let hint_open = self.interest_hint_open(&channel_login, &chatter_login);
-        let is_candidate = signal.is_candidate || (hint_open && signal.has_weak_signal);
-        if !is_candidate {
-            if signal.has_interest {
-                self.remember_interest_hint(&channel_login, &chatter_login);
-                return InviteQuestionDecision::silent(
-                    SilentReason::InterestNoted,
-                    channel_login,
-                    chatter_login,
-                    raw.to_string(),
-                    false,
-                    signal.has_strong_access,
-                );
-            }
+        if !signal.is_candidate {
             return InviteQuestionDecision::silent(
                 SilentReason::NoRegexMatch,
                 channel_login,
@@ -855,18 +774,6 @@ impl InviteQuestionResponder {
         }
 
         let is_newcomer = self.is_newcomer(&channel_login, &chatter_login).await;
-        // ponytail: Stammgäste nur bei explizitem Zugangswort, Schwelle statt Schalter
-        if !is_newcomer && !signal.has_strong_access {
-            return InviteQuestionDecision::silent(
-                SilentReason::RegularWithoutStrongAccess,
-                channel_login,
-                chatter_login,
-                raw.to_string(),
-                is_newcomer,
-                signal.has_strong_access,
-            );
-        }
-
         if let Some(reason) = self.cooldown_block_reason(&channel_login, &chatter_login) {
             return InviteQuestionDecision::silent(
                 reason,
@@ -1096,26 +1003,6 @@ impl InviteQuestionResponder {
             users.insert(
                 (channel_login.to_string(), chatter_login.to_string()),
                 (now, CooldownKind::Replied),
-            );
-        }
-    }
-
-    fn interest_hint_open(&self, channel_login: &str, chatter_login: &str) -> bool {
-        let key = (channel_login.to_string(), chatter_login.to_string());
-        let now = self.clock.now();
-        let Ok(hints) = self.interest_hints.lock() else {
-            return false;
-        };
-        hints
-            .get(&key)
-            .is_some_and(|last| now.duration_since(*last) <= INTEREST_HINT_WINDOW)
-    }
-
-    fn remember_interest_hint(&self, channel_login: &str, chatter_login: &str) {
-        if let Ok(mut hints) = self.interest_hints.lock() {
-            hints.insert(
-                (channel_login.to_string(), chatter_login.to_string()),
-                self.clock.now(),
             );
         }
     }
@@ -1608,7 +1495,7 @@ mod tests {
 
     #[test]
     fn regex_klassifikation_erkennt_nur_zugangsfragen() {
-        assert!(classify_invite_question("Wie kann man das Spiel denn spielen?").is_candidate);
+        assert!(!classify_invite_question("Wie kann man das Spiel denn spielen?").is_candidate);
         let strong = classify_invite_question(
             "Bin auf dem Discord, wie kommt man an eine Einladung / wird eingeladen?",
         );
@@ -1643,86 +1530,30 @@ mod tests {
         assert!(!classify_invite_question("der Invite ist raus, danke!").is_candidate);
     }
 
-    #[test]
-    fn interesse_ist_indiz_aber_kein_kandidat() {
-        for raw in [
-            "Das Game sieht echt mega aus :D",
-            "das spiel schaut richtig geil aus",
-            "sieht interessant aus das Game",
+    #[tokio::test]
+    async fn anfaenger_und_gameplay_werden_auch_nach_begeisterung_keine_zugangsfrage() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
+        let invite = responder(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, false),
+            }),
+            judge.clone(),
+        );
+        for text in [
+            "hey",
+            "ich feier dein playstyle. bin noch komplett anfänger in deadlock",
+            "ja für ein copy paste ist das vielleicht nicht gut zum schauen aber finds cool zu sehen wie geil das spiel eigentlich werden kann wenn man mal so ein level an skill erreicht",
+            "jaa das ist auch mein ziel ein guten roam hero z ufinden der mir spaß macht",
+            "Ich hatte damals mal eine zeit lang lol gezockt aber wirklich nicht lange. Ist auch schon paar jahre her und sonst zocke ich fast nur shooter also jaa relativ neu in moba games aber deadlock ist das erste game was echt cool aussieht in der moba Kategorie",
+            "Wie finde ich einen Hero für Anfänger?",
+            "Das Game sieht echt mega aus",
+            "kann man da irgendwie mitzocken",
         ] {
-            let signal = classify_invite_question(raw);
-            assert!(signal.has_interest, "kein Indiz: {raw}");
-            assert!(!signal.is_candidate, "Indiz allein loest aus: {raw}");
-            assert!(!signal.has_strong_access, "faelschlich stark: {raw}");
+            invite.maybe_respond(&event("chrisqlso", text), "streamer").await;
         }
-
-        assert!(!classify_invite_question("Lategame... das Rasiere ich richtig").has_interest);
-        assert!(!classify_invite_question("mega play von dem Lash").has_interest);
-    }
-
-    #[tokio::test]
-    async fn interesse_opener_merkt_sich_und_erst_die_folgenachricht_loest_aus() {
-        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
-        let invite = responder(
-            MockApi::new(),
-            Arc::new(FakeStore {
-                rollup: rollup(1, false),
-            }),
-            judge.clone(),
-        );
-
-        let opener = decide_action(&invite, "neuling", "Das Game sieht echt mega aus :D").await;
-        assert_eq!(
-            opener.action,
-            InviteQuestionAction::Silent(SilentReason::InterestNoted)
-        );
-        assert_eq!(judge.call_count(), 0, "Indiz darf keinen Judge kosten");
-
-        let folge = decide_action(&invite, "neuling", "kann man da irgendwie mitzocken").await;
-        assert_eq!(folge.action, InviteQuestionAction::AskConfirmation);
-        assert_eq!(judge.call_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn zweites_reines_interesse_loest_weiterhin_nichts_aus() {
-        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
-        let invite = responder(
-            MockApi::new(),
-            Arc::new(FakeStore {
-                rollup: rollup(1, false),
-            }),
-            judge.clone(),
-        );
-
-        decide_action(&invite, "neuling", "Das Game sieht echt mega aus :D").await;
-        let zweiter = decide_action(&invite, "neuling", "das spiel schaut echt nice aus").await;
-
-        assert_eq!(
-            zweiter.action,
-            InviteQuestionAction::Silent(SilentReason::InterestNoted)
-        );
-        assert_eq!(judge.call_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn interesse_fenster_laeuft_nach_zehn_minuten_ab() {
-        let judge = FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.4)]);
-        let (invite, clock) = responder_with_clock(
-            MockApi::new(),
-            Arc::new(FakeStore {
-                rollup: rollup(1, false),
-            }),
-            judge.clone(),
-        );
-
-        decide_action(&invite, "neuling", "Das Game sieht echt mega aus :D").await;
-        clock.advance(Duration::from_secs(601));
-
-        let folge = decide_action(&invite, "neuling", "sowas wuerde ich auch zocken").await;
-        assert_eq!(
-            folge.action,
-            InviteQuestionAction::Silent(SilentReason::NoRegexMatch)
-        );
+        assert!(api.messages().is_empty());
         assert_eq!(judge.call_count(), 0);
     }
 
@@ -1754,7 +1585,7 @@ mod tests {
                 verdict(InviteQuestionVerdictKind::Yes, 0.9),
             ),
             (
-                SilentReason::RegularWithoutStrongAccess,
+                SilentReason::NoRegexMatch,
                 "Wie kann man das Spiel denn spielen?",
                 rollup(50, false),
                 verdict(InviteQuestionVerdictKind::Yes, 0.9),
@@ -2003,7 +1834,7 @@ mod tests {
 
         let sent = invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2029,7 +1860,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2086,7 +1917,12 @@ mod tests {
             Some(notifier_port),
         );
 
-        let decision = decide_action(&invite, "viewer", "Wie kann man Deadlock spielen?").await;
+        let decision = decide_action(
+            &invite,
+            "viewer",
+            "Wie bekomme ich einen Invite für Deadlock?",
+        )
+        .await;
         assert_eq!(
             decision.action,
             InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
@@ -2094,7 +1930,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2243,7 +2079,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2384,7 +2220,7 @@ mod tests {
                 "streamer",
             )
             .await;
-        assert_eq!(judge.calls().len(), 1);
+        assert!(judge.calls().is_empty());
     }
 
     #[tokio::test]
@@ -2396,14 +2232,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let judge = Arc::new(LlmInviteQuestionJudge::new(
-            EngagementLlmClient::new(
-                Some("test-key".to_string()),
-                Some(server.uri()),
-                Some("deepseek-v4-flash".to_string()),
-                Some(Duration::from_secs(2)),
-            ),
-        ));
+        let judge = Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
+            Some("test-key".to_string()),
+            Some(server.uri()),
+            Some("deepseek-v4-flash".to_string()),
+            Some(Duration::from_secs(2)),
+        )));
         let api = MockApi::new();
         let invite = responder(
             api.clone(),
@@ -2414,7 +2248,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("newbie", "Wie kann man Deadlock spielen?"),
+                &event("newbie", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2576,7 +2410,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2592,7 +2426,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2611,7 +2445,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2636,7 +2470,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2822,7 +2656,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2861,13 +2695,13 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
         invite
             .maybe_respond(
-                &event("other", "Wie kann man Deadlock spielen?"),
+                &event("other", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2877,7 +2711,7 @@ mod tests {
         clock.advance(Duration::from_secs(121));
         invite
             .maybe_respond(
-                &event("viewer", "Wie kann man Deadlock spielen?"),
+                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
                 "streamer",
             )
             .await;
