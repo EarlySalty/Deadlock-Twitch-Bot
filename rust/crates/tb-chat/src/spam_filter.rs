@@ -748,9 +748,10 @@ impl SpamFilter {
     /// 2. Casefold Phrase (+2, break) — nur wenn kein Exact-Treffer
     /// 3. Domain-Kompakt (+2) — nur wenn kein Phrase-Treffer
     /// 4. Fragment-Fallback (+1, break) — nur wenn kein Phrase/Domain-Treffer
-    /// 5. Viewer-Muster (+1, immer)
-    /// 6. Gelernte Phrase (+2, break)
-    /// 7. Gelerntes Fragment (+1, break)
+    /// 5. Gelernte Phrase (+2, break)
+    /// 6. Gelerntes Fragment (+1, break) — nur wenn keine gelernte Phrase
+    /// 7. Viewer-Muster (+1) — nur wenn keine gelernte Phrase schon greift, sonst
+    ///    stufte der weiche Regex einen reversiblen Löschfall zum Ban hoch
     /// 8. Mention-Score addieren (aus ctx)
     /// 9. Kontext-Eskalatoren: Account-Alter <90d +1 / Erstnachricht +1 (nur bei hartem Signal UND Score < SPAM_MIN_MATCHES)
     ///
@@ -905,7 +906,7 @@ impl SpamFilter {
             }
         }
 
-        if learned_hits == 0 && viewer_pattern_re().is_match(&lowered) {
+        if !learned_phrase_hit && viewer_pattern_re().is_match(&lowered) {
             hits += 1;
             reasons.push(VIEWER_PATTERN_REASON.to_string());
         }
@@ -1061,10 +1062,19 @@ fn ist_dienstwort(token: &str) -> bool {
     !t.trim_matches('.').contains('.') && compacted.chars().count() >= 6
 }
 
-/// Token in Domain-Form: Label plus alphabetische TLD, dessen Kompaktform kein
+/// Echte Top-Level-Domains, damit nur eine Adresse mit gültiger Endung als
+/// Domain-Form zählt. Ohne diese Prüfung gälte jeder deutsche Satz mit
+/// fehlendem Leerzeichen nach dem Punkt („subs leute.bis morgen") als Domain.
+const DOMAIN_TLDS: &[&str] = &[
+    "com", "net", "org", "io", "ru", "online", "xyz", "site", "shop", "store", "gg", "de", "tv",
+    "me", "link", "bio", "ad", "co", "app", "info", "biz", "click", "cc",
+];
+
+/// Token in Domain-Form: Label plus gültige TLD, dessen Kompaktform kein
 /// generisches Wort ist. Anders als [`ist_dienstdomain`] darf das Label selbst
 /// generisch sein („twitch.ad"), damit Angebote mit bekannter Plattform als
-/// Label greifen; „view.ers" fällt raus, weil die Kompaktform „viewers" ist.
+/// Label greifen; „view.ers" fällt raus, weil die Kompaktform „viewers" ist,
+/// „leute.bis" fällt raus, weil „bis" keine TLD ist.
 fn ist_domainform(token: &str) -> bool {
     let t = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
     let labels: Vec<&str> = t
@@ -1076,7 +1086,7 @@ fn ist_domainform(token: &str) -> bool {
         return false;
     }
     let tld = labels[labels.len() - 1];
-    if tld.chars().count() < 2 || !tld.chars().all(|c| c.is_alphabetic()) {
+    if !DOMAIN_TLDS.contains(&tld) {
         return false;
     }
     let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
@@ -1087,10 +1097,11 @@ fn ist_domainform(token: &str) -> bool {
 /// „(no space)" oder „(remove the space)" raus, Trennversuch „ .ad" zu „.ad"
 /// zusammengezogen, klein und Leerraum zusammengefasst.
 pub fn kanonische_angebot_domain(pattern: &str) -> String {
+    static ZUSATZ_RE: OnceLock<Regex> = OnceLock::new();
+    let zusatz =
+        ZUSATZ_RE.get_or_init(|| Regex::new(r"\([^)]*space[^)]*\)").expect("Zusatz-Regex konstant"));
     let lowered = pattern.to_lowercase();
-    let ohne_zusatz = lowered
-        .replace("(no space)", " ")
-        .replace("(remove the space)", " ");
+    let ohne_zusatz = zusatz.replace_all(&lowered, " ");
     ohne_zusatz
         .replace(" .", ".")
         .split_whitespace()
@@ -1111,6 +1122,18 @@ pub fn ist_angebot_plus_domain(pattern: &str) -> bool {
             let compacted: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
             ANGEBOT_TOKENS.contains(&compacted.as_str())
         })
+}
+
+/// Speicherform für beide Lernpfade (Richter und Mod-Korrektur): ein
+/// Angebot-plus-Domain-Muster wird auf die kanonische Domain gezogen und als
+/// `phrase` gespeichert, damit nur die Ganzphrase trifft; jedes andere Muster
+/// bleibt unverändert mit seinem übergebenen Typ.
+pub fn angebot_domain_speicherform(pattern: &str, fallback_typ: &str) -> (String, String) {
+    if ist_angebot_plus_domain(pattern) {
+        (kanonische_angebot_domain(pattern), "phrase".to_string())
+    } else {
+        (pattern.to_string(), fallback_typ.to_string())
+    }
 }
 
 /// True, wenn ein Muster unterscheidungskräftig genug ist, um gelernt zu

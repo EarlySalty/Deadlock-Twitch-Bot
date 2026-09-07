@@ -220,14 +220,8 @@ pub async fn learn_handler(
         }));
     }
 
-    let (pattern, pattern_type) = if tb_chat::spam_filter::ist_angebot_plus_domain(&pattern) {
-        (
-            tb_chat::spam_filter::kanonische_angebot_domain(&pattern),
-            "phrase".to_string(),
-        )
-    } else {
-        (pattern, pattern_type)
-    };
+    let (pattern, pattern_type) =
+        tb_chat::spam_filter::angebot_domain_speicherform(&pattern, &pattern_type);
 
     sqlx::query(
         r#"

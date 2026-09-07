@@ -1903,18 +1903,11 @@ pub(crate) async fn learn_pattern_from_judge(pool: &PgPool, req: JudgeLearning<'
         return LearnOutcome::Rejected;
     }
     let (gespeichertes_muster, gespeicherter_typ) =
-        if crate::spam_filter::ist_angebot_plus_domain(&canonical) {
-            (
-                crate::spam_filter::kanonische_angebot_domain(&canonical),
-                "phrase",
-            )
-        } else {
-            (canonical, pattern_type)
-        };
+        crate::spam_filter::angebot_domain_speicherform(&canonical, pattern_type);
     match save_spam_pattern(
         pool,
         &gespeichertes_muster,
-        gespeicherter_typ,
+        &gespeicherter_typ,
         source_message,
         channel,
         reasoning,
