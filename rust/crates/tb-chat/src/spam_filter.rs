@@ -818,7 +818,6 @@ impl SpamFilter {
         let mut hits: i32 = 0;
         let mut phrase_matched = false;
 
-        // Schritt 1: Exact Phrase (moderation.py Z. 494–499)
         for phrase in SPAM_PHRASES {
             if raw.contains(*phrase) {
                 hits += 2;
@@ -832,7 +831,6 @@ impl SpamFilter {
         let compact_str = compact(&lowered);
         let domainized_str = domainized(&lowered);
 
-        // Schritt 2: Casefold Phrase (moderation.py Z. 509–515)
         if !phrase_matched {
             for phrase in SPAM_PHRASES {
                 let plow = phrase.to_lowercase();
@@ -845,7 +843,6 @@ impl SpamFilter {
             }
         }
 
-        // Schritt 3: Domain-Kompakt (moderation.py Z. 521–526)
         if !phrase_matched {
             if let Some(m) = spam_domain_re().find(&domainized_str) {
                 hits += 2;
@@ -854,7 +851,6 @@ impl SpamFilter {
             }
         }
 
-        // Schritt 4: Fragment-Fallback (moderation.py Z. 529–534)
         if !phrase_matched {
             for frag in SPAM_FRAGMENTS {
                 let frag_low = frag.to_lowercase();
@@ -1093,12 +1089,14 @@ fn ist_domainform(token: &str) -> bool {
 /// zusammengezogen, klein und Leerraum zusammengefasst.
 pub fn kanonische_angebot_domain(pattern: &str) -> String {
     static ZUSATZ_RE: OnceLock<Regex> = OnceLock::new();
+    static TRENN_RE: OnceLock<Regex> = OnceLock::new();
     let zusatz =
         ZUSATZ_RE.get_or_init(|| Regex::new(r"\([^)]*space[^)]*\)").expect("Zusatz-Regex konstant"));
+    let trenn = TRENN_RE.get_or_init(|| Regex::new(r"\s+\.\s*").expect("Trenn-Regex konstant"));
     let lowered = pattern.to_lowercase();
     let ohne_zusatz = zusatz.replace_all(&lowered, " ");
-    ohne_zusatz
-        .replace(" .", ".")
+    let zusammengezogen = trenn.replace_all(&ohne_zusatz, ".");
+    zusammengezogen
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -1768,6 +1766,46 @@ mod tests {
         ));
         assert!(!is_distinctive_spam_pattern("twitch.ad"));
         assert!(!is_distinctive_spam_pattern("twitch ad"));
+    }
+
+    #[test]
+    fn gate_lernt_angebot_domain_leerzeichen_beidseits() {
+        assert!(is_distinctive_spam_pattern("ai viewers streamboo . com"));
+        assert_eq!(
+            kanonische_angebot_domain("ai viewers streamboo . com"),
+            "ai viewers streamboo.com"
+        );
+        assert!(is_distinctive_spam_pattern(
+            "best viewers eballo . com (remove the space)"
+        ));
+        assert_eq!(
+            kanonische_angebot_domain("best viewers eballo . com (remove the space)"),
+            "best viewers eballo.com"
+        );
+        assert!(!is_distinctive_spam_pattern(
+            "boost viewers on the stream - promotion. ru"
+        ));
+        assert_eq!(
+            kanonische_angebot_domain("boost viewers on the stream - promotion. ru"),
+            "boost viewers on the stream - promotion. ru"
+        );
+    }
+
+    #[test]
+    fn gelernte_phrase_trifft_kompaktform_mit_leerzeichen() {
+        let filter = SpamFilter::new(LearnedPatterns::mit_gelernten_spam_mustern([(
+            "ai viewers streamboo.com".to_string(),
+            "phrase".to_string(),
+        )]));
+        let treffer = filter.evaluate("Ai viewers streamboo . com", &ctx_default());
+        assert!(
+            treffer
+                .matched
+                .iter()
+                .any(|r| r.starts_with("Learned-Phrase")),
+            "Reasons: {:?}",
+            treffer.matched
+        );
     }
 
     #[test]
