@@ -588,6 +588,23 @@ impl LearnedPatterns {
         }
     }
 
+    #[cfg(test)]
+    pub fn mit_gelernten_spam_mustern(
+        patterns: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        Self {
+            spam: patterns
+                .into_iter()
+                .filter(|(pattern, _)| is_distinctive_spam_pattern_vom_menschen(pattern))
+                .map(|(pattern, pattern_type)| LearnedSpamPattern {
+                    pattern,
+                    pattern_type,
+                })
+                .collect(),
+            safe: vec![],
+        }
+    }
+
     /// Lädt gelernte Spam- und manuelle Safe-Muster aus der Postgres-DB.
     ///
     /// Tabelle (Prod-Schema 12.6.):
@@ -1629,6 +1646,115 @@ mod tests {
         // Echte Dienstnamen/Domains bleiben lernbar.
         assert!(is_distinctive_spam_pattern("peakpy. c0m"));
         assert!(is_distinctive_spam_pattern("streambo\u{1d4f8} .com"));
+    }
+
+    #[test]
+    fn gate_lernt_angebot_plus_domain() {
+        assert!(is_distinctive_spam_pattern("ai viewers twitch .ad"));
+        assert!(is_distinctive_spam_pattern("ai viewers twitch.ad"));
+        assert!(is_distinctive_spam_pattern("ai viewers twitch .ad (no space)"));
+        assert!(is_distinctive_spam_pattern(
+            "best viewers eballo .com (remove the space)"
+        ));
+        assert!(!is_distinctive_spam_pattern("ai viewers"));
+        assert!(!is_distinctive_spam_pattern("best viewers"));
+        assert!(!is_distinctive_spam_pattern("hello viewers"));
+        assert!(!is_distinctive_spam_pattern("viewer.com"));
+        assert!(!is_distinctive_spam_pattern("view.ers"));
+        assert!(!is_distinctive_spam_pattern(
+            "cheap viewers and followers available"
+        ));
+        assert!(!is_distinctive_spam_pattern("twitch.ad"));
+        assert!(!is_distinctive_spam_pattern("twitch ad"));
+    }
+
+    #[test]
+    fn gate_lehnt_generische_plattformwoerter_ab() {
+        for wort in [
+            "discord",
+            "telegram",
+            "instagram",
+            "youtube",
+            "tiktok",
+            "whatsapp",
+            "steam",
+            "kick",
+            "snapchat",
+            "twitter",
+        ] {
+            assert!(
+                !is_distinctive_spam_pattern(wort),
+                "Plattformwort darf nie allein distinktiv sein: {wort}"
+            );
+            assert!(
+                !is_distinctive_spam_pattern_vom_menschen(wort),
+                "Plattformwort darf auch per Mod-Korrektur nicht distinktiv sein: {wort}"
+            );
+        }
+    }
+
+    #[test]
+    fn gelerntes_angebot_muster_trifft_nur_ganzphrase() {
+        let filter = SpamFilter::new(LearnedPatterns::mit_gelernten_spam_mustern([(
+            "ai viewers twitch.ad".to_string(),
+            "phrase".to_string(),
+        )]));
+        let treffer = filter.evaluate("Ai viewers twitch .ad (no space)", &ctx_default());
+        assert!(
+            treffer
+                .matched
+                .iter()
+                .any(|r| r.starts_with("Learned-Phrase")),
+            "Reasons: {:?}",
+            treffer.matched
+        );
+        assert!(treffer.hard_signal, "Reasons: {:?}", treffer.matched);
+        for harmlos in ["die twitch ads nerven", "twitch ad break", "twitch.ad"] {
+            let v = filter.evaluate(harmlos, &ctx_default());
+            assert_eq!(v.score, 0, "{harmlos:?} darf nicht treffen: {:?}", v.matched);
+        }
+    }
+
+    #[test]
+    fn gelerntes_angebot_muster_bannt_erstnachricht_ohne_richter() {
+        let filter = SpamFilter::new(LearnedPatterns::mit_gelernten_spam_mustern([(
+            "ai viewers twitch.ad".to_string(),
+            "phrase".to_string(),
+        )]));
+        let ctx = SpamContext {
+            account_age_days: Some(0),
+            is_first_message: true,
+            ..Default::default()
+        };
+        let mit_kontext = filter.evaluate("Ai viewers twitch .ad (no space)", &ctx);
+        assert_eq!(
+            mit_kontext.action,
+            SpamAction::Ban,
+            "Reasons: {:?}",
+            mit_kontext.matched
+        );
+        let ohne_kontext = filter.evaluate("Ai viewers twitch .ad (no space)", &ctx_default());
+        assert_eq!(
+            ohne_kontext.action,
+            SpamAction::DeleteOnly,
+            "Reasons: {:?}",
+            ohne_kontext.matched
+        );
+    }
+
+    #[test]
+    fn gelerntes_plattformwort_wird_beim_laden_verworfen() {
+        let filter = SpamFilter::new(LearnedPatterns::mit_gelernten_spam_mustern([(
+            "discord".to_string(),
+            "fragment".to_string(),
+        )]));
+        let v = filter.evaluate("bei Discord erlauben links zu öffnen", &ctx_default());
+        assert!(
+            !v.matched.iter().any(|r| r.starts_with("Learned-")),
+            "generisches Plattformwort darf kein gelerntes Signal sein: {:?}",
+            v.matched
+        );
+        assert_eq!(v.score, 0, "Reasons: {:?}", v.matched);
     }
 
     // --- Leerer Input ---

@@ -2912,6 +2912,30 @@ mod tests {
         .await;
         assert!(matches!(outcome, LearnOutcome::Rejected));
     }
+
+    /// Angebot plus Domain wie "Ai viewers twitch .ad (no space)" muss gelernt
+    /// werden und die Domain ohne Leerzeichen vor dem Punkt speichern.
+    #[tokio::test]
+    async fn angebot_plus_domain_wird_vom_richter_gelernt() {
+        let pool = pool_or_skip!("judge_learning_angebot_domain");
+        let outcome = learn_pattern_from_judge(
+            &pool,
+            JudgeLearning {
+                pattern: "ai viewers twitch .ad",
+                pattern_type: "phrase",
+                evidence: "Ai viewers twitch .ad (no space)",
+                source_message: "Ai viewers twitch .ad (no space)",
+                channel: "testchannel",
+                reasoning: "Angebot plus Domain",
+                confidence: Some(0.95),
+            },
+        )
+        .await;
+        let LearnOutcome::Saved { pattern, .. } = outcome else {
+            panic!("Angebot plus Domain muss gelernt werden");
+        };
+        assert_eq!(pattern, "ai viewers twitch.ad");
+    }
     spam_review_decision_persistence_test!(
         spam_review_timeout_wird_persistiert,
         "spam_review_decision_timeout",
