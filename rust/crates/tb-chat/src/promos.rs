@@ -282,8 +282,6 @@ fn format_promo_invite(invite: &str, spec: &str) -> Option<String> {
     }
     Some(value)
 }
-/// Kanal-Targeted-Cooldown in Sekunden (targeted_promo.py:37: _CHANNEL_TARGETED_COOLDOWN_SEC).
-const CHANNEL_TARGETED_COOLDOWN_SEC: u64 = 900;
 /// Lurker-Tax-Freshness in Minuten (promos.py:62: _LURKER_TAX_FRESHNESS_MINUTES).
 const LURKER_TAX_FRESHNESS_MINUTES: u64 = 5;
 /// Lurker-Tax: mind. 3 frühere Sessions (promos.py:63).
@@ -479,24 +477,6 @@ impl ChannelState {
 }
 
 // ---------------------------------------------------------------------------
-// Targeted-Promo-State (module-level, In-Memory — kein DB-Persist, Reset bei Neustart)
-// (targeted_promo.py: module-level dicts)
-// ---------------------------------------------------------------------------
-
-struct TargetedState {
-    /// channel_login → monotonic ts — targeted_promo.py.
-    channel_last_targeted: HashMap<String, Instant>,
-}
-
-impl TargetedState {
-    fn new() -> Self {
-        Self {
-            channel_last_targeted: HashMap::new(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // PromoEngine
 // ---------------------------------------------------------------------------
 
@@ -536,7 +516,6 @@ pub struct PromoEngine {
     promo_semaphore: Arc<Semaphore>,
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
-    targeted_state: Mutex<TargetedState>,
     zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
     gezielt_state: DashMap<String, GezieltPersonState>,
     gezielt_send_lock: Mutex<()>,
@@ -591,7 +570,6 @@ impl PromoEngine {
             promo_semaphore: Arc::new(Semaphore::new(PROMO_MAX_CONCURRENT)),
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
-            targeted_state: Mutex::new(TargetedState::new()),
             zuschauer_register: None,
             gezielt_state: DashMap::new(),
             gezielt_send_lock: Mutex::new(()),
@@ -1861,14 +1839,6 @@ impl PromoEngine {
     }
 
     async fn process_due_channel(self: Arc<Self>, login: String, channel_id: String, now: Instant) {
-        let (invite, _is_specific) = self.invite_resolver.resolve_invite(&login).await;
-        let active_chatters = self.get_active_chatters(&login).await;
-        if self
-            .maybe_send_targeted_promo(&login, &channel_id, &invite, &active_chatters, now)
-            .await
-        {
-            return;
-        }
         let sent = self
             .maybe_send_promo_with_stats(&login, &channel_id, now, false)
             .await;
@@ -2762,107 +2732,6 @@ impl PromoEngine {
         format!(
             "Lurker Steuer: {mentions} falls ihr gerade entspannt mitlest, denkt gern an eure Channel-Points."
         )
-    }
-
-    async fn maybe_send_targeted_promo(
-        &self,
-        login: &str,
-        channel_id: &str,
-        invite: &str,
-        _active_chatters: &[String],
-        now: Instant,
-    ) -> bool {
-        let cd_ok = {
-            let ts_state = self.targeted_state.lock().await;
-            let last = ts_state.channel_last_targeted.get(login).copied();
-            last.is_none_or(|t| now.duration_since(t).as_secs() >= CHANNEL_TARGETED_COOLDOWN_SEC)
-        };
-
-        if !cd_ok {
-            return false;
-        }
-
-        let Some(text) = self.build_promo_text(login, invite).await else {
-            self.record_pitch_log(PitchLogEntry {
-                channel_login: login.to_string(),
-                target_user_id: None,
-                pfad: "targeted_global",
-                occasion: None,
-                trigger_text: None,
-                generated_text: None,
-                reject_reason: Some("kein_text".to_string()),
-                sent_at: None,
-            })
-            .await;
-            return false;
-        };
-
-        let lock = self.get_send_lock(login);
-        let _guard = lock.lock().await;
-        if !self.overall_promo_ready_locked(login, now).await {
-            return false;
-        }
-
-        let sent = self
-            .guarded_api_for("promo", login)
-            .send_announcement(channel_id, &text, "purple")
-            .await
-            .unwrap_or(false);
-        if !sent {
-            self.record_pitch_log(PitchLogEntry {
-                channel_login: login.to_string(),
-                target_user_id: None,
-                pfad: "targeted_global",
-                occasion: None,
-                trigger_text: None,
-                generated_text: Some(text),
-                reject_reason: Some("send_dropped".to_string()),
-                sent_at: None,
-            })
-            .await;
-            return false;
-        }
-
-        {
-            let mut ts_state = self.targeted_state.lock().await;
-            ts_state
-                .channel_last_targeted
-                .insert(login.to_string(), now);
-        }
-        self.record_pitch_log(PitchLogEntry {
-            channel_login: login.to_string(),
-            target_user_id: None,
-            pfad: "targeted_global",
-            occasion: None,
-            trigger_text: None,
-            generated_text: Some(text),
-            reject_reason: None,
-            sent_at: Some(Utc::now()),
-        })
-        .await;
-        self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64)
-            .await;
-
-        true
-    }
-
-    /// Aktive Chatter aus dem Aktivitäts-Bucket (promos.py:1466).
-    async fn get_active_chatters(&self, login: &str) -> Vec<String> {
-        let state_ref = self
-            .channel_states
-            .entry(login.to_string())
-            .or_insert_with(|| Mutex::new(ChannelState::new()));
-        let state = state_ref.lock().await;
-        let now = Instant::now();
-        let window = Duration::from_secs(PROMO_ACTIVITY_WINDOW_MIN * 60);
-        state
-            .activity
-            .iter()
-            .filter(|(ts, _)| now.duration_since(*ts) <= window)
-            .map(|(_, c)| c.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect()
     }
 
     /// Stream-Start-Verzögerung prüfen (constants.py: PROMO_STREAM_START_DELAY_MIN = 10 min).
@@ -4748,8 +4617,8 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn targeted_promo_respektiert_promo_channel_allowed_gate() {
-        let pool = pool_or_skip!("promo_targeted_allowed_gate");
+    async fn send_promo_if_due_respektiert_promo_channel_allowed_gate() {
+        let pool = pool_or_skip!("promo_slot_allowed_gate");
         let api = Arc::new(super::tests::MockApi::default());
         let engine = Arc::new(PromoEngine::new(
             pool.clone(),
@@ -4790,139 +4659,84 @@ mod db_tests {
         assert_eq!(
             api.announcement_count().await,
             0,
-            "ohne aktiven Partner-State darf auch Targeted-Global nicht senden"
+            "ohne aktiven Partner-State sendet der Promo-Slot nichts"
         );
         assert_eq!(api.message_count().await, 0);
     }
 
     #[tokio::test]
-    async fn targeted_promo_suppression_guard_skippt_global_send() {
-        let pool = pool_or_skip!("promo_targeted_guard_suppressed");
+    async fn send_promo_if_due_laeuft_ohne_targeted_global() {
+        let pool = pool_or_skip!("promo_ohne_targeted_global");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(true)))
-            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
-                "mitspieler findest du bei uns".to_string(),
-            ))));
-
-        let sent = engine
-            .maybe_send_targeted_promo(
-                "targetkanal",
-                "u-target",
-                "https://discord.gg/deadlock",
-                &[],
-                Instant::now(),
-            )
-            .await;
-
-        assert!(!sent);
-        assert_eq!(
-            api.announcement_count().await,
-            0,
-            "Suppression-Guard verhindert den Targeted-Global-Send"
+        let engine = Arc::new(
+            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+                    "mitspieler findest du bei uns".to_string(),
+                )))),
         );
-    }
 
-    #[tokio::test]
-    async fn targeted_promo_suppression_guard_allowed_sendet_global() {
-        let pool = pool_or_skip!("promo_targeted_guard_allowed");
-        let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(FixedSuppression(false)))
-            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
-                "mitspieler findest du bei uns".to_string(),
-            ))));
-
-        let sent = engine
-            .maybe_send_targeted_promo(
-                "targetkanal",
-                "u-target",
-                "https://discord.gg/deadlock",
-                &[],
-                Instant::now(),
-            )
-            .await;
-
-        assert!(sent);
-        assert_eq!(
-            api.announcement_count().await,
-            1,
-            "Allowed-Guard delegiert den Targeted-Global-Send"
-        );
-    }
-
-    #[tokio::test]
-    async fn targeted_global_haengt_invite_an() {
-        let pool = pool_or_skip!("promo_targeted_global_invite");
-        let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
-                "bei uns findest du leute zum zocken".to_string(),
-            ))));
-
-        let sent = engine
-            .maybe_send_targeted_promo(
-                "gkanal",
-                "u-g",
-                "https://discord.gg/deadlock",
-                &[],
-                Instant::now(),
-            )
-            .await;
-
-        assert!(sent);
-        let texts = api.announcement_texts().await;
-        assert_eq!(texts.len(), 1);
-        assert!(
-            texts[0].ends_with("https://discord.gg/deadlock"),
-            "Global-Zweig muss den Invite anhaengen: {}",
-            texts[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn kein_timer_pitch_an_einzelpersonen() {
-        let pool = pool_or_skip!("promo_kein_timer_einzelpitch");
         sqlx::query(
-            "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, chatter_id)
-             VALUES (1, 'tukanal', 'zocker42', 'chatter-77')",
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ('u-p', 'pkanal')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, archived_at)
+             VALUES ('pkanal', 1, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game)
+             VALUES ('u-p', 'pkanal', 1, 'Deadlock')",
         )
         .execute(&pool)
         .await
         .unwrap();
 
-        let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
-                "bei uns findest du leute zum zocken".to_string(),
-            ))));
+        let now = Instant::now();
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("pkanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.raw_msg_count_since_promo = PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO;
+            for idx in 0..PROMO_ACTIVITY_MIN_MSGS {
+                state.activity.push_back((now, format!("chatter{idx}")));
+            }
+        }
 
-        let sent = engine
-            .maybe_send_targeted_promo(
-                "tukanal",
-                "u-tu",
-                "https://discord.gg/deadlock",
-                &["zocker42".to_string(), "noch_einer".to_string()],
-                Instant::now(),
-            )
-            .await;
+        engine.send_promo_if_due(now).await;
 
-        assert!(sent);
         assert_eq!(
             api.message_count().await,
             0,
-            "der Timer sendet nie einen @Einzelperson-Pitch"
+            "der Timer pitcht keine Einzelpersonen"
         );
         assert_eq!(
             api.announcement_count().await,
             1,
-            "der einzige gesendete Pfad ist targeted_global"
+            "der Periodik-Pfad übernimmt den Slot"
         );
-        let user_pitches: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'targeted_user'",
+        let targeted: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad LIKE 'targeted%'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(user_pitches, 0, "kein targeted_user-Eintrag im Pitch-Log");
+        assert_eq!(targeted, 0, "kein targeted_global/targeted_user mehr");
+        let periodic_sent: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log
+              WHERE pfad = 'periodic' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(periodic_sent, 1, "der Send läuft über periodic");
     }
 
     #[tokio::test]
