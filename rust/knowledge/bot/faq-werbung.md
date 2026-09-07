@@ -11,10 +11,10 @@ Was der Bot in deinen Chat schickt, wann, und wie du das komplett abstellst.
 
 ### Welche Werbung schickt der Bot in meinen Chat?
 
-Zwei Dinge, beide nur rund um den Community-Discord, keine externen Sponsoren, keine fremden Produkte, kein Spam. Erstens antwortet der Bot einem Zuschauer, der gerade eine passende Situation schreibt (keine Mitspieler, findet Deadlock zu unpopulär, alles zu tryhard, Solo-Queue-Frust, neu im Spiel, sucht Hilfe). Die Antwort geht zuerst auf das Gesagte ein und erwähnt danach höchstens in einem Satz die Community. Zweitens gibt es die periodische Einladung mit dem Discord-Link.
+Drei Dinge, alle nur rund um den Community-Discord, keine externen Sponsoren, keine fremden Produkte, kein Spam. Erstens antwortet der Bot einem Zuschauer, der gerade eine passende Situation schreibt (keine Mitspieler, findet Deadlock zu unpopulär, alles zu tryhard, Solo-Queue-Frust, neu im Spiel, sucht Hilfe). Zweitens kann er einem echten Neuling ab der zweiten richtigen Chat-Nachricht einen kurzen, passenden Hinweis geben, wenn es keinen solchen Anlass gibt. Persönliche Antworten gehen zuerst auf das Gesagte ein und erwähnen danach höchstens in einem Satz die Community. Drittens gibt es die periodische Einladung mit dem Discord-Link.
 
-- Anlass-Antworten sind frei geschrieben, keine fertigen Standard-Sprüche mehr.
-- In der Anlass-Antwort steht nie ein Link und kein "komm auf Discord".
+- Persönliche Antworten sind frei geschrieben, keine fertigen Standard-Sprüche mehr.
+- In einer persönlichen Antwort steht nie ein Link und kein "komm auf Discord".
 - Den Discord-Link bekommt ein Zuschauer nur in der periodischen Einladung oder wenn er selbst nach dem Discord fragt (`!discord`, `!invite`).
 - Keine Werbung für externe Produkte oder Drittanbieter.
 - Den Text der periodischen Einladung kannst du im Dashboard durch deinen eigenen ersetzen.
@@ -23,11 +23,12 @@ Zwei Dinge, beide nur rund um den Community-Discord, keine externen Sponsoren, k
 
 ### Wen spricht der Bot persönlich auf die Community an?
 
-Wenn der Bot direkt auf einen einzelnen Zuschauer eingeht, also die Anlass-Antwort auf eine passende Situation, dann nur bei jemandem, der zum ersten Mal in einem der Partnerkanäle schreibt und nach allem, was der Bot über ihn weiß, noch nicht zur Community gehört. Wer im Discord bekannt ist oder in einem Partnerkanal schon einmal geschrieben hat, wird nicht persönlich angesprochen. Die Kanalbetreiber selbst, Moderatoren, andere Bots, Streamer und Partner der Community bleiben außen vor.
+Wenn der Bot direkt auf einen einzelnen Zuschauer eingeht, dann nur bei jemandem, der zum ersten Mal in einem der Partnerkanäle schreibt und nach allem, was der Bot über ihn weiß, noch nicht zur Community gehört. Das gilt für die Antwort auf einen passenden Anlass genauso wie für den gezielten Hinweis nach mehreren Nachrichten. Wer im Discord bekannt ist, in einem Partnerkanal schon einmal geschrieben hat oder bereits einen persönlichen Community-Hinweis bekommen hat, wird nicht noch einmal angesprochen. Die Kanalbetreiber selbst, Moderatoren, andere Bots, Streamer und Partner der Community bleiben außen vor.
 
-- Gilt für die persönliche Anlass-Antwort an einen einzelnen Zuschauer.
+- Gilt für jede persönliche Community-Antwort an einen einzelnen Zuschauer.
 - Nur echte Neulinge, die frisch in einem Partnerkanal schreiben.
 - Wer im Discord dabei ist oder schon länger mitliest, wird nicht persönlich angesprochen.
+- Pro Person höchstens ein persönlicher Community-Hinweis, unabhängig vom Anlass.
 - Kanalbetreiber, Moderatoren, andere Bots, Streamer und Partner nie.
 - Erkennt der Bot jemanden nicht sicher als Neuling, spricht er ihn nicht persönlich an.
 - Die periodische Einladung ist davon unabhängig: sie ist eine normale Nachricht an den ganzen Chat und richtet sich nicht an eine einzelne Person.
@@ -44,10 +45,10 @@ Wenn du selbst Deadlock streamst und noch nicht Partner der Deutschen Deadlock C
 
 ### Wann genau wird das gepostet?
 
-Beides greift nur, wenn dein Stream läuft. Die Anlass-Antwort kommt kurz nachdem ein Zuschauer eine passende Situation schreibt, spricht die Person mit ihrem Namen an und ist streng gedeckelt: pro Zuschauer höchstens einmal in sieben Tagen und pro Stream nur wenige Antworten mit Abstand. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Cooldowns, damit nichts spammt.
+Alle drei Formen greifen nur, wenn dein Stream läuft. Bei einer passenden Situation kann die persönliche Antwort kurz nach der Nachricht kommen. Gibt es keinen solchen Anlass, kann ein gezielter Hinweis frühestens nach der zweiten richtigen Nachricht derselben Person folgen. Eine Person bekommt insgesamt höchstens einen persönlichen Community-Hinweis. Pro Kanal gehen höchstens zwei gezielte Hinweise je Stream und insgesamt höchstens fünfzehn am Tag raus. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Abstände, damit nichts spammt.
 
-- Die Anlass-Antwort trifft nur echte Situationen; ohne passenden Anlass schweigt der Bot.
-- Cooldowns und Limits verhindern, dass dieselben Zuschauer wiederholt angeschrieben werden.
+- Die Anlass-Antwort trifft nur echte Situationen; ohne passenden Anlass kann stattdessen ab der zweiten richtigen Nachricht ein gezielter Hinweis folgen.
+- Feste Grenzen verhindern, dass dieselben Zuschauer wiederholt angeschrieben werden.
 - Bei aktiven Sonder-Events kann der Bot in der periodischen Einladung stattdessen einen Aktions-Text einblenden.
 
 ### Wie schalte ich die Chat-Werbung komplett ab?
@@ -71,7 +72,7 @@ Ja. Wenn ein Admin global einen Aktions-Text aktiviert (z. B. zu einem Community
 
 ### Kann ich nur den Werbe-Text anpassen, ohne Werbefrei zu buchen?
 
-Ja. Im Dashboard kannst du den Text der periodischen Einladung durch einen eigenen ersetzen. Dann postet der Bot in der periodischen Einladung deinen Text statt des frei geschriebenen. Das ist kostenlos und für alle Pläne verfügbar. Den Discord-Link kannst du als Platzhalter einbauen. Die Anlass-Antworten auf einzelne Zuschauer bleiben davon unberührt und tragen weiterhin keinen Link.
+Ja. Im Dashboard kannst du den Text der periodischen Einladung durch einen eigenen ersetzen. Dann postet der Bot in der periodischen Einladung deinen Text statt des frei geschriebenen. Das ist kostenlos und für alle Pläne verfügbar. Den Discord-Link kannst du als Platzhalter einbauen. Persönliche Antworten an einzelne Zuschauer bleiben davon unberührt und tragen weiterhin keinen Link.
 
 - Eigener Werbe-Text im Dashboard hinterlegbar.
 - Platzhalter {invite} wird beim Senden durch den Discord-Link ersetzt.
