@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_promo_pitch_log\n                 (channel_login, target_user_id, pfad, occasion, trigger_text,\n                  generated_text, reject_reason, sent_at)\n               SELECT $1, $2, $3, NULL, $4, NULL, $5, NULL\n                WHERE NOT EXISTS (\n                    SELECT 1\n                      FROM twitch_promo_pitch_log log\n                     WHERE log.channel_login = $1\n                       AND log.target_user_id = $2\n                       AND log.reject_reason = $5\n                       AND log.created_at >= COALESCE((\n                           SELECT sessions.started_at\n                             FROM twitch_stream_sessions sessions\n                             JOIN twitch_live_state live\n                               ON live.active_session_id = sessions.id\n                            WHERE LOWER(live.streamer_login) = LOWER($1)\n                              AND live.is_live = 1\n                            LIMIT 1\n                       ), NOW())\n                )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b1de7c46abf22d74b58748ec142cea0005b3dcd09278fa92196caf5301ebd832"
+}

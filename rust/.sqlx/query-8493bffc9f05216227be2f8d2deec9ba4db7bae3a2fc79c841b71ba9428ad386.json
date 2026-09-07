@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id AS \"id!\", s.started_at AS \"started_at!\"\n                 FROM twitch_stream_sessions s\n                 JOIN twitch_live_state ls ON ls.active_session_id = s.id\n                WHERE LOWER(ls.streamer_login) = LOWER($1) AND ls.is_live = 1\n                LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8493bffc9f05216227be2f8d2deec9ba4db7bae3a2fc79c841b71ba9428ad386"
+}

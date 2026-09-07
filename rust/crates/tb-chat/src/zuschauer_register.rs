@@ -473,7 +473,9 @@ impl ZuschauerRegister {
                 first_seen_at: entry.first_seen_at.or(Some(now)),
                 computed_at,
             };
-            self.upsert(&updated).await;
+            if !self.upsert(&updated).await {
+                return None;
+            }
             return Some(updated);
         }
 
@@ -491,16 +493,18 @@ impl ZuschauerRegister {
             first_seen_at: Some(now),
             computed_at: now,
         };
-        self.upsert(&entry).await;
+        if !self.upsert(&entry).await {
+            return None;
+        }
         Some(entry)
     }
 
-    async fn session_start(
+    pub async fn current_session(
         &self,
         channel_login: &str,
-    ) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
-        sqlx::query_scalar!(
-            r#"SELECT s.started_at AS "started_at!"
+    ) -> Result<Option<(i64, DateTime<Utc>)>, sqlx::Error> {
+        sqlx::query!(
+            r#"SELECT s.id AS "id!", s.started_at AS "started_at!"
                  FROM twitch_stream_sessions s
                  JOIN twitch_live_state ls ON ls.active_session_id = s.id
                 WHERE LOWER(ls.streamer_login) = LOWER($1) AND ls.is_live = 1
@@ -509,6 +513,7 @@ impl ZuschauerRegister {
         )
         .fetch_optional(&self.pool)
         .await
+        .map(|row| row.map(|row| (row.id, row.started_at)))
     }
 
     async fn is_excluded(&self, twitch_user_id: &str) -> Result<bool, sqlx::Error> {
@@ -546,8 +551,8 @@ impl ZuschauerRegister {
             return GateOutcome::Reject("register_community");
         }
 
-        match self.session_start(channel_login).await {
-            Ok(Some(session_start)) => match entry.first_seen_at {
+        match self.current_session(channel_login).await {
+            Ok(Some((_, session_start))) => match entry.first_seen_at {
                 Some(first_seen) if first_seen < session_start => {
                     return GateOutcome::Reject("kein_neuling");
                 }

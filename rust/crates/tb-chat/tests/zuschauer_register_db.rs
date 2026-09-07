@@ -425,3 +425,35 @@ async fn ensure_current_erneuert_nach_sieben_tagen_ohne_first_seen_zu_aendern() 
     assert!((entry.first_seen_at.unwrap() - first_seen).num_seconds().abs() <= 1);
     assert!((Utc::now() - entry.computed_at).num_seconds() < 60);
 }
+
+#[tokio::test]
+async fn ensure_current_lehnt_bei_upsert_fehler_ab() {
+    let pool = pool_or_skip!("tb_zr_upsert_fehler");
+    sqlx::query(
+        "CREATE FUNCTION verweigere_register_insert() RETURNS trigger
+         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'insert verweigert'; END $$",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER verweigere_register_insert
+         BEFORE INSERT ON twitch_zuschauer_register
+         FOR EACH ROW EXECUTE FUNCTION verweigere_register_insert()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
+
+    let entry = register
+        .ensure_current("u_upsert_fehler", "neuergast", "somechannel")
+        .await;
+
+    assert!(entry.is_none(), "fehlgeschlagener Upsert muss fail-closed sein");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_zuschauer_register")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "fehlgeschlagener Upsert darf keinen Eintrag hinterlassen");
+}

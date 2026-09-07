@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                 SELECT 1 FROM twitch_promo_pitch_log\n                  WHERE target_user_id = $1\n                    AND pfad IN ('anlass', 'partner', 'gezielt')\n                    AND sent_at IS NOT NULL\n               ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c844a33c35ba62639860075a5cc35fe75039cb5030e3368351334a3cf13a0796"
+}
