@@ -1826,6 +1826,36 @@ mod tests {
             "ai viewers twitch.ad".to_string(),
             "phrase".to_string(),
         )]));
+
+        let ohne_kontext = filter.evaluate("Ai viewers twitch .ad (no space)", &ctx_default());
+        assert_eq!(
+            ohne_kontext.score, 3,
+            "gelernte Phrase +2 und Viewer-Muster +1 bleiben additiv: {:?}",
+            ohne_kontext.matched
+        );
+        assert_eq!(
+            ohne_kontext.action,
+            SpamAction::Ban,
+            "Reasons: {:?}",
+            ohne_kontext.matched
+        );
+        assert!(
+            ohne_kontext
+                .matched
+                .iter()
+                .any(|r| r.starts_with("Learned-Phrase")),
+            "Reasons: {:?}",
+            ohne_kontext.matched
+        );
+        assert!(
+            ohne_kontext
+                .matched
+                .iter()
+                .any(|r| r == VIEWER_PATTERN_REASON),
+            "Viewer-Muster muss additiv neben der gelernten Phrase stehen: {:?}",
+            ohne_kontext.matched
+        );
+
         let ctx = SpamContext {
             account_age_days: Some(0),
             is_first_message: true,
@@ -1838,12 +1868,43 @@ mod tests {
             "Reasons: {:?}",
             mit_kontext.matched
         );
-        let ohne_kontext = filter.evaluate("Ai viewers twitch .ad (no space)", &ctx_default());
+
+        let nur_loeschung = SpamFilter::new(LearnedPatterns::mit_gelernten_spam_mustern([(
+            "boost promotion twitch.ad".to_string(),
+            "phrase".to_string(),
+        )]));
+        let v = nur_loeschung.evaluate("boost promotion twitch.ad", &ctx_default());
         assert_eq!(
-            ohne_kontext.action,
+            v.action,
             SpamAction::DeleteOnly,
+            "gelernte Phrase ohne Viewer-Wort bleibt unter der Schwelle: {:?}",
+            v.matched
+        );
+        assert!(
+            !v.matched.iter().any(|r| r == VIEWER_PATTERN_REASON),
+            "ohne Viewer-Wort darf kein Viewer-Muster greifen: {:?}",
+            v.matched
+        );
+    }
+
+    #[test]
+    fn additivitaet_viewer_bleibt_neben_gelernter_phrase() {
+        let filter = SpamFilter::new(LearnedPatterns::mit_gelernten_spam_mustern([(
+            "eballo.com".to_string(),
+            "phrase".to_string(),
+        )]));
+        let v = filter.evaluate("Best Viewers Eballo .com (remove the space)", &ctx_default());
+        assert!(v.score >= 3, "Reasons: {:?}", v.matched);
+        assert_eq!(v.action, SpamAction::Ban, "Reasons: {:?}", v.matched);
+        assert!(
+            v.matched.iter().any(|r| r.starts_with("Learned-Phrase")),
             "Reasons: {:?}",
-            ohne_kontext.matched
+            v.matched
+        );
+        assert!(
+            v.matched.iter().any(|r| r == VIEWER_PATTERN_REASON),
+            "Viewer-Muster muss additiv neben der gelernten Phrase stehen: {:?}",
+            v.matched
         );
     }
 

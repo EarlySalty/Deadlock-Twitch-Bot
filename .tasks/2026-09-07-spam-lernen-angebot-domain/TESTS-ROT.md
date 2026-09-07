@@ -59,3 +59,19 @@ SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgr
 Ergebnis: `760 passed; 6 failed; 4 ignored; 0 filtered out` in 271,18 s. Die sechs Fehlschlaege sind genau die neuen Regressionstests, kein Bestandstest bricht.
 
 TESTNACHWEIS[TW-1]: 760 passed, 4 ignored | Rot-Gegenprobe: 6 failed statt 0 (genau die sechs neuen Tests, ohne Fix rot)
+
+## Runde 2 (Amendment A1)
+
+Nachbesserung gegen HEAD bc6567b0 (Fix schon drin, aber mit falscher Viewer-Unterdrückung bei gelernter Phrase). Beide Tests sind gegen diesen HEAD rot. Befehl und Env wie oben.
+
+### REQ-03 additiv: gelernte Phrase plus Viewer-Muster ergibt Ban
+
+- Test: `spam_filter::tests::gelerntes_angebot_muster_bannt_erstnachricht_ohne_richter` (umgebaut)
+- Rot: `assertion left == right failed: gelernte Phrase +2 und Viewer-Muster +1 bleiben additiv ... left: 2, right: 3` an `spam_filter.rs:1831` (Viewer-Muster wird unterdrückt, sobald die gelernte Phrase greift)
+- Soll nach Fix: "Ai viewers twitch .ad (no space)" ohne Kontext Score 3 und `SpamAction::Ban`, Gründe enthalten `Learned-Phrase` und `Muster: viewer + name`; mit Kontext ebenfalls `Ban`; die gelernte Phrase "boost promotion twitch.ad" ohne Viewer-Wort bleibt `DeleteOnly`.
+
+### Additivität mit Prod-Muster eballo.com
+
+- Test: `spam_filter::tests::additivitaet_viewer_bleibt_neben_gelernter_phrase`
+- Rot: `Viewer-Muster muss additiv neben der gelernten Phrase stehen: ["Phrase(Exact): (remove the space)", "Learned-Phrase: eballo.com"]` an `spam_filter.rs:1904` (Viewer-Grund fehlt wegen der Unterdrückung)
+- Soll nach Fix: "Best Viewers Eballo .com (remove the space)" mit gelernter Phrase "eballo.com" ergibt Score mindestens 3, `Ban`, Gründe enthalten `Learned-Phrase` und `Muster: viewer + name`.
