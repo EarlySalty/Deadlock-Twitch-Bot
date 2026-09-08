@@ -175,6 +175,10 @@ function PlattformVerbindung({
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
+      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
+    },
   });
   // Verbunden, aber im Uplink liegt kein Ziel: dann ist beim automatischen
   // Nachlauf etwas schiefgegangen. Ohne diesen Knopf bliebe nur der
@@ -582,7 +586,7 @@ export function ZielKarte({
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
             <span className="mt-1 block text-xs font-normal text-text-secondary">
-              {betrieb.activeProfile ? `Aktuelle Ausgabe: ${profilText(betrieb.activeProfile)}` : 'Aktuelle Ausgabe: noch nicht bestätigt'}
+              {betrieb.activeProfile ? `${betrieb.activeProfile.profile_origin === 'running_graph' ? 'Laufendes Encoderprofil' : 'Aktuelle Ausgabe'}: ${profilText(betrieb.activeProfile)}` : 'Aktuelle Ausgabe: noch nicht bestätigt'}
             </span>
             {betrieb.reason ? <span className="mt-1 block text-xs font-normal text-warning">{betrieb.reason}</span> : null}
             {chat ? <PlattformVerbindung chat={chat} csrfToken={csrfToken ?? null} /> : null}

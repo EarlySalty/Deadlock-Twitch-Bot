@@ -2,6 +2,7 @@ import { fetchJson, withCookieCredentials } from './core';
 import { normalisiereCaps } from '../uplinkEmpfehlung';
 import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
 import type { ZielBetriebsdaten } from '../uplinkBetrieb';
+import type { EingangsSession } from '../uplinkBetrieb';
 
 /**
  * `live_status` kommt nicht vom Relay, sondern aus der Twitch-Beobachtung des
@@ -21,6 +22,8 @@ export interface UplinkMe {
   ingest_url?: string;
   service_status?: 'ready' | 'unavailable' | 'input_only';
   capabilities?: { reconnect?: boolean };
+  /** Tatsächliche Eingangs-Generation des Uplink-Dienstes, unabhängig von Twitch live. */
+  session?: EingangsSession | null;
   live_status?: UplinkLiveStatus;
   /** Wartezeit nur nach einem unerwarteten Internetabriss. */
   reconnect_wait_s: number;
@@ -48,7 +51,7 @@ export interface UplinkMe {
   verbindungen?: UplinkVerbindung[];
 }
 
-export type UplinkVerbindungStatus = 'verbunden' | 'neu_verbinden' | 'rechte_ergaenzen' | 'zugang_unbekannt' | 'getrennt';
+export type UplinkVerbindungStatus = 'verbunden' | 'neu_verbinden' | 'rechte_ergaenzen' | 'zugang_unbekannt' | 'trennung_offen' | 'getrennt';
 
 export interface UplinkVerbindung {
   platform: string;
@@ -120,7 +123,7 @@ export function uplinkConnectUrl(platform: UplinkPlattform): string {
 
 /**
  * Trennt eine Plattform: Zugang zurueckgenommen, Ziel im Uplink entfernt.
- * Das stoppt auch den Raid-Bot, weil beides an demselben Zugang haengt.
+ * Der gemeinsam genutzte Twitch-Grant für Raid und Bot bleibt erhalten.
  */
 export function trenneUplinkPlattform(
   platform: UplinkPlattform,
@@ -236,6 +239,8 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
       statusText = 'Für Uplink fehlen noch Rechte';
     } else if (status === 'zugang_unbekannt') {
       statusText = 'Kontozugang konnte gerade nicht geprüft werden';
+    } else if (status === 'trennung_offen') {
+      statusText = 'Trennung noch nicht bestätigt';
     } else if (!aktiv && (p.id === 'kick' || p.id === 'youtube')) {
       statusText = `Kontoverbindung zu ${p.label} ist hier noch nicht eingerichtet`;
     } else if (aktiv) {

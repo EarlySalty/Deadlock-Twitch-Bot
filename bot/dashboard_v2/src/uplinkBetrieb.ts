@@ -4,6 +4,8 @@ export interface LaufendesProfil {
   fps: number;
   bitrate_kbps: number;
   codec?: string;
+  /** Herkunft aus dem laufenden Graph; Bitrate ist dessen Ziel, kein Messwert. */
+  profile_origin?: 'running_graph';
 }
 
 export interface ZielBetriebsdaten {
@@ -19,6 +21,10 @@ export interface ZielBetriebsdaten {
 export function zielBetrieb(ziel: ZielBetriebsdaten | undefined, zugang?: string) {
   const result = { state: 'unknown', label: 'Nicht eingerichtet', tone: 'neutral',
     reason: null as string | null, activeProfile: null as LaufendesProfil | null };
+  if (zugang === 'trennung_offen') {
+    return { ...result, state: 'disconnect_pending', label: 'Trennung noch nicht bestätigt', tone: 'warning',
+      reason: 'Der Dienst hat das Entfernen des Sendeziels noch nicht bestätigt. Trennen erneut ausführen.' };
+  }
   if (!ziel) return result;
   if (ziel.blocked || ziel.output_state === 'failed') {
     return { ...result, state: 'failed', label: 'Ausgabe angehalten', tone: 'warning',
@@ -51,7 +57,37 @@ export function zielBetrieb(ziel: ZielBetriebsdaten | undefined, zugang?: string
 export function profilText(profil: LaufendesProfil | null | undefined): string | null {
   if (!profil || ![profil.width, profil.height, profil.fps, profil.bitrate_kbps]
     .every((value) => Number.isFinite(value) && value > 0)) return null;
-  return `${profil.width}×${profil.height} · ${profil.fps} fps · ${profil.bitrate_kbps} kbit/s`;
+  return `${profil.width}×${profil.height} · ${Number(profil.fps.toFixed(3))} fps${profil.codec ? ` · ${profil.codec.toUpperCase()}` : ''} · ${profil.bitrate_kbps} kbit/s${profil.profile_origin === 'running_graph' ? ' Zielbitrate' : ''}`;
+}
+
+export interface EingangsBeobachtung {
+  codec: string;
+  width: number;
+  height: number;
+  fps_numerator: number;
+  fps_denominator: number;
+  audio: { wire_track: number; codec: string; sample_rate: number; channels: number }[];
+  sampled_duration_ms: number;
+}
+
+export interface EingangsSession {
+  active: boolean;
+  state: string;
+  received_events: number;
+  received_bytes: number;
+  error?: string | null;
+  ingest_end_reason?: string | null;
+  source_observation?: EingangsBeobachtung | null;
+  outputs?: { encode_groups: number; video_decoders: number } | null;
+}
+
+export function eingangStatus(session: EingangsSession | null | undefined, unavailable: boolean) {
+  if (unavailable) return { label: 'Eingangsstatus unbekannt', observation: null };
+  if (!session) return { label: 'Noch kein Stream empfangen', observation: null };
+  const label = !session.active ? 'Eingang beendet'
+    : session.received_events > 0 ? 'Stream wird empfangen'
+    : 'Verbindung aufgebaut, Medien werden erwartet';
+  return { label, observation: session.source_observation ?? null };
 }
 
 export function obsZugang(me: {

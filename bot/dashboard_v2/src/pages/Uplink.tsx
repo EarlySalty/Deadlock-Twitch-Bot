@@ -35,6 +35,7 @@ import {
 import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
+import { UplinkEingang } from './UplinkEingang';
 import { PREVIEW_PRICING_ROUTE } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { obsZugang, zielBetrieb } from '@/uplinkBetrieb';
@@ -84,9 +85,9 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
   // vor dem Umbau lässt sich nicht mehr anzeigen. Dann gilt trotzdem die
   // Rückfrage, denn ein Neuerzeugen entwertet auch diese Eintragungen in OBS.
   const vorhanden = Boolean(me.dock_url_vorhanden) || adressen.length > 0;
-  const darfAufdecken = me.live_status === 'aus';
+  const darfAufdecken = me.live_status === 'aus' && !me.session?.active;
   const grundVerdeckt =
-    me.live_status === 'live'
+    me.live_status === 'live' || me.session?.active
       ? 'Du bist gerade live. Solange bleiben die Adressen verdeckt, damit sie nicht im Stream landen. Kopieren geht trotzdem.'
       : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleiben die Adressen verdeckt. Kopieren geht trotzdem.';
 
@@ -800,7 +801,7 @@ export function UplinkPage() {
     // aufgedeckt werden darf. Beendet der Streamer den Stream, waehrend das
     // Dashboard offen liegt, soll das Aufdecken kurz darauf wieder gehen, ohne
     // dass jemand neu laedt. Andersherum genauso: Stream an, Adresse zu.
-    refetchInterval: 15_000,
+    refetchInterval: 5_000,
     refetchOnWindowFocus: true,
   });
   const { data: helpPages, isError: isHelpError } = useQuery({
@@ -930,6 +931,10 @@ export function UplinkPage() {
             )}
 
             {data?.enabled && (
+              <UplinkEingang session={data.session} unavailable={isError || data.service_status !== 'ready'} />
+            )}
+
+            {data?.enabled && (
               <div className="grid items-start gap-4 md:gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
                 <Rise className="panel-card space-y-4 rounded-2xl p-4 md:p-6">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -971,8 +976,8 @@ export function UplinkPage() {
 
                     <ObsSchritt nummer={3} titel="Privaten Streamschlüssel einfügen" offenStart>
                       {obs ? <CopyField label="Privater Streamschlüssel für OBS" value={obs.key}
-                        darfAufdecken={data.live_status === 'aus'}
-                        grundVerdeckt="Solange dein Streamstatus live oder unbekannt ist, bleibt der Schlüssel verdeckt. Kopieren geht trotzdem." /> : null}
+                        darfAufdecken={data.live_status === 'aus' && !data.session?.active}
+                        grundVerdeckt="Solange Uplink Medien empfängt oder dein Plattformstatus live oder unbekannt ist, bleibt der Schlüssel verdeckt. Kopieren geht trotzdem." /> : null}
                       <p className="text-xs text-text-secondary">
                         Kopiere deinen Uplink-Schlüssel in <Feld>Streamschlüssel</Feld>. Serveradresse und Schlüssel sind zwei getrennte Felder.
                       </p>

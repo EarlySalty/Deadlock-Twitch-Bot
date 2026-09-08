@@ -1,14 +1,24 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, rm, lstat, realpath } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve, extname } from 'node:path';
 import { getPreviewApiFixture, getPreviewPathFixture } from '../src/preview/fixtures.ts';
 
-const executable = process.argv[2];
-assert.ok(executable?.startsWith('/'), 'Ein expliziter Chromium-Pfad ist erforderlich');
+// Kein ausführbares Programm aus CLI, Umgebung oder Browserdaten übernehmen.
+// Dieser lokale Bediennachweis verwendet ausschließlich den geprüften Build.
+assert.equal(process.argv.length, 2, 'Dieser Nachweis akzeptiert keine CLI-Argumente');
+const executable = '/home/nathanael/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell';
+const executableInfo = await lstat(executable);
+assert.ok(executableInfo.isFile() && !executableInfo.isSymbolicLink()
+  && (executableInfo.mode & 0o022) === 0, 'Chromium muss eine geschützte reguläre Datei sein');
+assert.equal(await realpath(executable), executable, 'Chromium darf nicht umgeleitet sein');
+assert.equal(createHash('sha256').update(await readFile(executable)).digest('hex'),
+  'e11fc9ce65c96313476f7ee9844b6fb6a9220fb048693cfe9eee00acf4170a9f',
+  'Der Chromium-Build stimmt nicht mit dem geprüften Build überein');
 const artifacts = new URL('./artifacts/uplink/', import.meta.url);
 await mkdir(artifacts, { recursive: true });
 const dist = resolve(new URL('../../analytics/dashboard_v2/dist/', import.meta.url).pathname);
@@ -40,13 +50,20 @@ const server = createServer(async (request, response) => {
     if (request.method !== 'GET') return json({ error: 'Für diesen lokalen Bediennachweis nicht freigegeben.' }, 409);
     if (url.pathname.endsWith('/uplink/me')) {
       const data = structuredClone(getPreviewPathFixture('/twitch/api/v2/uplink/me'));
-      data.live_status = live ? 'live' : 'aus'; data.service_status = 'ready'; data.capabilities = { reconnect: false };
+      data.live_status = 'aus'; data.service_status = 'ready'; data.capabilities = { reconnect: false };
+      data.session = live ? { active: true, state: 'Medien werden empfangen', received_events: 245, received_bytes: 143000,
+        source_observation: { codec: 'h264', width: 320, height: 180, fps_numerator: 25, fps_denominator: 1,
+          audio: [{wire_track:0,codec:'aac',sample_rate:48000,channels:1},{wire_track:1,codec:'aac',sample_rate:48000,channels:1}],sampled_duration_ms:1000 },
+        outputs: { encode_groups: 1, video_decoders: 1 } } : null;
       return json(data);
     }
     if (url.pathname.endsWith('/uplink/destinations')) {
       destinationPolls += 1;
       const data = structuredClone(destinations);
       if (!live) for (const target of data.destinations) { target.output_state = 'unknown'; target.active_profile = null; }
+      if (live) data.destinations.find(target => target.platform === 'youtube').active_profile = {
+        width: 256, height: 144, fps: 25, codec: 'h264', bitrate_kbps: 500, profile_origin: 'running_graph',
+      };
       return json(data);
     }
     if (url.pathname.endsWith('/auth-status')) {
@@ -156,9 +173,13 @@ try {
   await screenshot('einstellungen-gespeichert');
   live = true;
   await cdp('Page.reload'); await wait("document.body.innerText.includes('Medien werden gesendet')");
-  assert.equal(await evaluate("document.body.innerText.includes('Aktuelle Ausgabe: noch nicht bestätigt')"), true);
+  assert.equal(await evaluate("document.body.innerText.includes('Stream wird empfangen')"), true);
+  assert.equal(await evaluate("document.body.innerText.includes('H264 · 320×180 · 25 fps')"), true);
+  assert.equal(await evaluate("document.body.innerText.includes('Laufendes Encoderprofil: 256×144 · 25 fps · H264 · 500 kbit/s Zielbitrate')"), true);
+  assert.equal(await evaluate("document.body.innerText.includes('Plattform bestätigt live')"), false);
   assert.equal(await evaluate(`document.querySelector('input[aria-label="Privater Streamschlüssel für OBS: verdeckt"]').type`), 'password');
   await screenshot('sendend-desktop');
+  assert.equal(await evaluate('[...document.querySelectorAll("button")].filter(button => button.innerText === "Zeigen").every(button => button.disabled)'), true, 'Laufender Uplink-Eingang hält private Felder auch bei Twitch offline verdeckt');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await screenshot('sendend-mobil');
   assert.equal(await evaluate('document.documentElement.scrollWidth > innerWidth'), false);

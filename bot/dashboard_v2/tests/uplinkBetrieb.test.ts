@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { obsZugang, zielBetrieb } from '../src/uplinkBetrieb';
+import { eingangStatus, obsZugang, zielBetrieb } from '../src/uplinkBetrieb';
+const browserGlobal = globalThis as typeof globalThis & { window?: { __TWITCH_DASHBOARD_RUNTIME__?: Record<string, unknown> } };
+browserGlobal.window = { __TWITCH_DASHBOARD_RUNTIME__: {} };
+const { plattformVerbindungen } = await import('../src/api/uplink');
 
 test('eingeschaltete Wünsche sind kein Nachweis für laufende Medien', () => {
   const stand = zielBetrieb({ enabled: true });
@@ -59,4 +62,21 @@ test('Ein Eingang ohne vollständigen Dienst wird nicht als OBS-Einrichtung frei
   for (const service_status of ['input_only', 'unavailable', undefined]) {
     assert.equal(obsZugang({ service_status, public_ingest_url: 'rtmps://uplink.example/live', ingest_key: 'private-test-key' }), null);
   }
+});
+
+test('offene Trennung bleibt sichtbar und über denselben Trennen-Weg wiederholbar', () => {
+  const [verbindung] = plattformVerbindungen({ verbindungen: [{ platform: 'twitch', status: 'trennung_offen' }] } as Parameters<typeof plattformVerbindungen>[0]);
+  assert.equal(verbindung.statusText, 'Trennung noch nicht bestätigt');
+  assert.equal(verbindung.trennenMoeglich, true);
+  assert.equal(zielBetrieb({ enabled: true, output_state: 'sending' }, 'trennung_offen').label, 'Trennung noch nicht bestätigt');
+  assert.equal(zielBetrieb(undefined, 'trennung_offen').label, 'Trennung noch nicht bestätigt');
+});
+
+test('Eingang unterscheidet empfangene Medien, vergangene Session und unbekannten Abruf', () => {
+  const session = { active: true, state: 'running', received_events: 12, received_bytes: 1024, error: null };
+  assert.equal(eingangStatus(session, false).label, 'Stream wird empfangen');
+  assert.equal(eingangStatus({ ...session, active: false }, false).label, 'Eingang beendet');
+  assert.equal(eingangStatus(session, true).label, 'Eingangsstatus unbekannt');
+  assert.equal(eingangStatus({ ...session, received_events: 0 }, false).label, 'Verbindung aufgebaut, Medien werden erwartet');
+  assert.equal(eingangStatus(null, false).label, 'Noch kein Stream empfangen');
 });
