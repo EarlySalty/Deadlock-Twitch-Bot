@@ -1508,6 +1508,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             )
         };
         Ok(OAuthCallbackResult {
+            twitch_user_id: Some(twitch_user_id),
             status: 200,
             title: title.to_string(),
             body_html: body_html.to_string(),
@@ -1557,6 +1558,7 @@ const PUBLIC_ONBOARDING_LOGIN: &str = "public:website_onboarding";
 /// Fehler-Payload ohne redirect_url (Python `_oauth_error_payload`).
 fn failure(status: u16, title: &str, body_html: String) -> OAuthCallbackResult {
     OAuthCallbackResult {
+        twitch_user_id: None,
         status,
         title: title.to_string(),
         body_html,
@@ -3568,6 +3570,7 @@ mod callback_tests {
             .await
             .unwrap();
         assert_eq!(result.status, 200);
+        assert_eq!(result.twitch_user_id.as_deref(), Some("111"));
         let raid: bool = sqlx::query_scalar(
             "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id='111'",
         )
@@ -3618,6 +3621,7 @@ mod callback_tests {
             .await
             .unwrap();
         assert_eq!(result.status, 409);
+        assert!(result.twitch_user_id.is_none());
         assert!(result.body_html.contains("erneut"));
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_raid_auth")
             .fetch_one(&pool)

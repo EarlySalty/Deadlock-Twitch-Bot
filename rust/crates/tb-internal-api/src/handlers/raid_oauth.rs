@@ -141,6 +141,8 @@ pub struct OAuthCallbackResult {
     pub body_html: String,
     /// Nur im Erfolgsfall gesetzt (Python: `redirect_url` nur im 200-Dict).
     pub redirect_url: Option<String>,
+    /// Bestätigte Identität nach erfolgreicher Grantprüfung und Speicherung.
+    pub twitch_user_id: Option<String>,
 }
 
 // ── Port-Trait ────────────────────────────────────────────────────────────────
@@ -820,6 +822,11 @@ async fn run_oauth_callback(
     if let Some(redirect_url) = result.redirect_url {
         json_body["redirect_url"] = serde_json::Value::String(redirect_url);
     }
+    if (200..300).contains(&status_code) {
+        if let Some(id) = result.twitch_user_id {
+            json_body["twitch_user_id"] = serde_json::Value::String(id);
+        }
+    }
     Ok(json_body)
 }
 
@@ -958,6 +965,7 @@ mod tests {
                 title: "Autorisierung erfolgreich".to_string(),
                 body_html: "<p>OK</p>".to_string(),
                 redirect_url: Some("https://example.test/dashboard".to_string()),
+                twitch_user_id: Some("123".into()),
             })
         }
 
@@ -1012,6 +1020,7 @@ mod tests {
                 title: "ok".to_string(),
                 body_html: "ok".to_string(),
                 redirect_url: None,
+                twitch_user_id: None,
             })
         }
         async fn enforce_discord_action_scope(
@@ -1489,6 +1498,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert_eq!(j["status"], 200);
+        assert_eq!(j["twitch_user_id"], "123");
         assert!(j["title"].as_str().is_some());
         assert!(j["body_html"].as_str().is_some());
     }

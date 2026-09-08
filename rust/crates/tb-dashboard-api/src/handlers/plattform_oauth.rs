@@ -67,8 +67,11 @@ pub trait KickApi: Send + Sync {
 
 #[async_trait]
 pub trait YouTubeApi: Send + Sync {
-    async fn exchange_code(&self, code: &str, redirect_uri: &str)
-        -> Result<OAuthToken, OAuthFehler>;
+    async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+    ) -> Result<OAuthToken, OAuthFehler>;
     async fn refresh(&self, refresh_token: &str) -> Result<OAuthToken, OAuthFehler>;
     async fn revoke(&self, access_token: &str) -> Result<(), OAuthFehler>;
     async fn konto(&self, access_token: &str) -> Result<YouTubeKonto, OAuthFehler>;
@@ -152,7 +155,9 @@ async fn token_request(url: &str, params: &[(&str, &str)]) -> Result<OAuthToken,
         .await
         .map_err(|e| OAuthFehler::Other(format!("invalid token response: {e}")))?;
     if parsed.access_token.trim().is_empty() {
-        return Err(OAuthFehler::Other("token response ohne access_token".into()));
+        return Err(OAuthFehler::Other(
+            "token response ohne access_token".into(),
+        ));
     }
     Ok(parsed.in_token())
 }
@@ -165,9 +170,9 @@ pub struct KickOAuth {
 }
 
 impl KickOAuth {
-    pub fn aus_umgebung() -> Option<Self> {
-        let client_id = non_empty_env("KICK_CLIENT_ID")?;
-        let client_secret = non_empty_env("KICK_CLIENT_SECRET")?;
+    pub fn aus_konfiguration() -> Option<Self> {
+        let client_id = non_empty_config("KICK_CLIENT_ID")?;
+        let client_secret = non_empty_config("KICK_CLIENT_SECRET")?;
         Some(Self {
             client_id,
             client_secret,
@@ -390,7 +395,7 @@ pub struct GoogleOAuth {
 }
 
 impl GoogleOAuth {
-    pub fn aus_umgebung() -> Option<Self> {
+    pub fn aus_konfiguration() -> Option<Self> {
         let client_id = google_client_id()?;
         let client_secret = google_client_secret()?;
         Some(Self {
@@ -498,7 +503,12 @@ impl YouTubeApi for GoogleOAuth {
             .or_else(|| antwort.items.first())
             .cloned()
             .expect("nicht leer geprueft");
-        let rtmp_url = if !gewaehlt.cdn.ingestion_info.rtmps_ingestion_address.is_empty() {
+        let rtmp_url = if !gewaehlt
+            .cdn
+            .ingestion_info
+            .rtmps_ingestion_address
+            .is_empty()
+        {
             gewaehlt.cdn.ingestion_info.rtmps_ingestion_address
         } else {
             gewaehlt.cdn.ingestion_info.ingestion_address
@@ -570,21 +580,18 @@ struct YtIngestionInfo {
     rtmps_ingestion_address: String,
 }
 
-pub fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+pub fn non_empty_config(key: &str) -> Option<String> {
+    crate::uplink_config::platform_value(key)
 }
 
 pub fn google_client_id() -> Option<String> {
-    non_empty_env("GOOGLE_OAUTH_ID")
-        .or_else(|| non_empty_env("GOOGLE_CLIENT_ID"))
-        .or_else(|| non_empty_env("YOUTUBE_CLIENT_ID"))
+    non_empty_config("GOOGLE_OAUTH_ID")
+        .or_else(|| non_empty_config("GOOGLE_CLIENT_ID"))
+        .or_else(|| non_empty_config("YOUTUBE_CLIENT_ID"))
 }
 
 pub fn google_client_secret() -> Option<String> {
-    non_empty_env("GOOGLE_CLIENT_SECRET").or_else(|| non_empty_env("YOUTUBE_CLIENT_SECRET"))
+    non_empty_config("GOOGLE_CLIENT_SECRET").or_else(|| non_empty_config("YOUTUBE_CLIENT_SECRET"))
 }
 
 #[cfg(test)]
@@ -743,7 +750,10 @@ mod tests {
             .mount(&server)
             .await;
         let client = GoogleOAuth::fuer_test(&server.uri(), &server.uri());
-        assert_eq!(client.konto("tot").await.unwrap_err(), OAuthFehler::InvalidGrant);
+        assert_eq!(
+            client.konto("tot").await.unwrap_err(),
+            OAuthFehler::InvalidGrant
+        );
     }
 
     #[tokio::test]

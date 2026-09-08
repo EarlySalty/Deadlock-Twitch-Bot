@@ -412,7 +412,7 @@ export default function App() {
             <AnalyticsDashboard />
           )}
         </ErrorBoundary>
-        {zeigeAssistent && <DashboardAssistent />}
+        {zeigeAssistent && <DashboardAssistent imDokumentfluss={isUplinkRoute} />}
       </LanguageProvider>
     </QueryClientProvider>
   );

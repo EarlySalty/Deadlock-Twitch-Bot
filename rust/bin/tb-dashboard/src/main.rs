@@ -319,6 +319,19 @@ fn spawn_affiliate_gutschrift_loop(pool: sqlx::PgPool) {
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    // Nur Uplink migriert hier auf normale Konfiguration und Infisical-FD.
+    // Bestehende benachbarte Dashboarddienste behalten ihren eigenen Startvertrag.
+    let configured =
+        match tb_dashboard_api::uplink_config::load_arguments(std::env::args_os().skip(1)).await {
+            Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        };
+    if let Err(error) = configured {
+        tracing::error!("{error}");
+        std::process::exit(1);
+    }
+
     let settings = Settings::from_env().unwrap_or_else(|e| {
         tracing::error!("Konfigurationsfehler: {e}");
         std::process::exit(1);

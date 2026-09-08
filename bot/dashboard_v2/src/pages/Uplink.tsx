@@ -37,9 +37,8 @@ import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import { PREVIEW_PRICING_ROUTE } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
-import { amdSpitzeKbps, noetigerUploadMbit, obsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
+import { obsZugang, zielBetrieb } from '@/uplinkBetrieb';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
-import type { ObsBitrateEmpfehlung } from '@/uplinkEmpfehlung';
 
 /**
  * Inhalt von Schritt 5 der OBS-Anleitung, "Fenster einrichten".
@@ -295,70 +294,18 @@ function HilfeKapitel({ datei, label, html }: { datei: string; label: string; ht
  * aus, stand hier vorher "solange kein Ziel eingerichtet ist" bei jemandem
  * mit vier eingerichteten Zielen.
  */
-function bitrateBegruendung(bitrate: ObsBitrateEmpfehlung): string {
-  const anfang =
-    bitrate.herkunft === 'unbekannt'
-      ? 'Deine Ziele konnten wir gerade nicht laden, deshalb steht hier der Standardwert. Ob er zu dem passt, was du eingerichtet hast, können wir im Moment nicht sagen. '
-      : bitrate.herkunft === 'start'
-        ? 'Startwert, solange kein Ziel eingerichtet ist. Sobald deine Ziele stehen, passt sich die Zahl an. '
-        : bitrate.hoehe !== null && bitrate.hoehe > 1080
-          ? `Du schickst 2K weiter, dein höchstes Ziel steht auf ${bitrate.hoehe}p. `
-          : `Passt zu deinen Zielen: dein höchstes geht mit ${bitrate.hoehe}p raus. `;
-  return (
-    anfang +
-    `Die Grenze ist dein Upload, und den kennen wir nicht: dafür brauchst du gemessene ${noetigerUploadMbit(bitrate)} Mbit, bei einer AMD-Karte ${noetigerUploadMbit(bitrate, true)} Mbit. Miss ihn, und wenn er darunter liegt, geh eine Stufe runter. Mehr als hier steht brauchst du nicht, weil du HEVC schickst und wir daraus für jede Plattform H.264 rechnen.`
-  );
-}
-
-/**
- * Was im Bitraten-Feld steht, samt der Spitze, die AMD daraus macht.
- *
- * Die Maximalbitrate ist bei "AMD HW H.264/H.265/AV1" kein Feld: OBS setzt sie
- * dort selbst auf das Anderthalbfache. Wer das nicht weiss, haelt die zweite
- * Zahl fuer eine Grenze und plant seine Leitung ein Drittel zu knapp. Deshalb
- * steht die echte Spitze hier und nicht in einer Fussnote.
- */
-function bitrateWert(bitrate: ObsBitrateEmpfehlung): string {
-  return `${bitrate.kbps} kbps, Maximum ${bitrate.maxKbps} kbps`;
-}
-
-function bitrateAmdHinweis(bitrate: ObsBitrateEmpfehlung): string {
-  return `Bei AMD gibt es das Feld „Maximalbitrate“ nicht. Trag dort nur die ${bitrate.kbps} ein, OBS macht daraus von selbst eine Spitze von ${amdSpitzeKbps(bitrate)} kbps. Wenn deine Leitung das nicht trägt, nimm stattdessen CBR: dann ist die eingetragene Zahl auch die Obergrenze.`;
-}
-
-/**
- * Die Ausgabe-Einstellungen, jede mit dem Grund dahinter.
- *
- * Ohne den Grund stellt niemand etwas um, was schon laeuft. HEVC ist der
- * Punkt, an dem Uplink sich lohnt, und VBR ist genau die Einstellung, die man
- * bei Twitch direkt nicht setzen darf und hier setzen soll.
- *
- * Die Bitrate ist keine feste Zahl mehr, sondern die Stufe aus der
- * eingebetteten Hilfeseite, die zu den eingestellten Zielen passt: siehe
- * `obsBitrateEmpfehlung`.
- */
-function obsAusgabe(bitrate: ObsBitrateEmpfehlung) {
+function obsAusgabe() {
   return [
-    {
-      feld: 'Videoencoder',
-      wert: 'HEVC (H.265), Hardware',
-      warum: 'NVIDIA NVENC HEVC, AMD HEVC oder Apple VT HEVC. Darum geht es hier: HEVC packt dasselbe Bild in weniger Bits.',
-    },
-    {
-      feld: 'Ratensteuerung',
-      wert: 'VBR',
-      warum: 'Zu uns darf die Bitrate schwanken. Was zu den Plattformen rausgeht, machen wir selbst konstant.',
-    },
-    {
-      feld: 'Bitrate',
-      wert: bitrateWert(bitrate),
-      warum: `${bitrateBegruendung(bitrate)} ${bitrateAmdHinweis(bitrate)}`,
-    },
-    {
-      feld: 'Keyframe-Intervall',
-      wert: '2 s',
-      warum: 'Feste 2 Sekunden. Bei „automatisch“ setzen manche Encoder gar keine, und dann startet kein Zuschauer sauber ein.',
-    },
+    { feld: 'Videoencoder', wert: 'AV1 bevorzugt, H.264 ebenfalls möglich',
+      warum: 'Wähle einen Encoder, den deine OBS-Version für den benutzerdefinierten RTMPS-Dienst anbietet. Uplink prüft das tatsächlich empfangene Profil.' },
+    { feld: 'Ratensteuerung', wert: 'CBR',
+      warum: 'Plane dein Uploadbudget einschließlich Audio und Reserve. Eine Plattform-Zielbitrate ist keine automatische Vorgabe für deinen Upload.' },
+    { feld: 'Auflösung und Bildrate', wert: 'Dein gewünschtes Quellprofil',
+      warum: 'Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.' },
+    { feld: 'Keyframe-Intervall', wert: '2 s',
+      warum: 'Die endgültigen Anforderungen prüft Uplink je Plattform und Ausgabeprofil.' },
+    { feld: 'Audio', wert: 'Live-Mix und bei Bedarf eigener VOD-Mix',
+      warum: 'Beide Mischungen müssen als getrennte Spuren ankommen. Fehlenden VOD-Ton ersetzt Uplink nicht unbemerkt durch den Live-Mix.' },
   ];
 }
 
@@ -388,15 +335,18 @@ function CopyField({
   darfAufdecken,
   grundVerdeckt,
   grundAnzeigen = true,
+  privat = true,
 }: {
   label: string;
   value: string;
   darfAufdecken: boolean;
   grundVerdeckt: string;
   grundAnzeigen?: boolean;
+  privat?: boolean;
 }) {
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
-  const [offen, setOffen] = useState(false);
+  const [privatOffen, setOffen] = useState(false);
+  const offen = !privat || privatOffen;
   const feldRef = useRef<HTMLInputElement>(null);
 
   // Sobald das Aufdecken nicht mehr erlaubt ist, faellt ein offener Wert zu.
@@ -435,11 +385,11 @@ function CopyField({
           data-1p-ignore
           data-lpignore="true"
           value={value}
-          aria-label={`${label}: ${offen ? value : 'verdeckt'}`}
+          aria-label={`${label}: ${offen ? 'sichtbar' : 'verdeckt'}`}
           className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-xs text-white"
         />
         <div className="flex gap-2">
-          <button
+          {privat ? <button
             type="button"
             onClick={() => setOffen((vorher) => !vorher)}
             disabled={!darfAufdecken}
@@ -449,7 +399,7 @@ function CopyField({
           >
             {offen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
             {offen ? 'Verdecken' : 'Zeigen'}
-          </button>
+          </button> : null}
           <button
             type="button"
             aria-label={`${label} kopieren`}
@@ -482,10 +432,12 @@ function CopyField({
 function ReconnectWaitKarte({
   wert,
   max,
+  verfuegbar,
   onSaved,
 }: {
   wert: number;
   max: number;
+  verfuegbar: boolean;
   onSaved: () => void;
 }) {
   const [entwurf, setEntwurf] = useState<string | null>(null);
@@ -493,7 +445,7 @@ function ReconnectWaitKarte({
   const payload = reconnectWaitPayload(eingabe);
   const speichern = useMutation({
     mutationFn: () => {
-      if (payload === null) {
+      if (!verfuegbar || payload === null) {
         throw new Error('Gib eine ganze Zahl ab 0 Sekunden ein.');
       }
       return saveUplinkReconnectWait(payload);
@@ -513,7 +465,9 @@ function ReconnectWaitKarte({
         <h2 className="mt-1 text-base font-bold text-white">Verhalten bei Internetabriss</h2>
         <p className="mt-1 text-sm text-text-secondary">{UPLINK_RECONNECT_WAIT_TEXT}</p>
         <p className="mt-2 text-xs text-text-secondary">
-          0 bis {max} Sekunden. Die Änderung gilt für die nächste Session.
+          {verfuegbar
+            ? `0 bis ${max} Sekunden. Die Änderung gilt für die nächste Session.`
+            : 'Die gespeicherte Frist wird derzeit noch nicht angewendet. Die Einstellung wird freigegeben, sobald die Wiederverbindung im Dienst verfügbar ist.'}
         </p>
       </div>
       <div className="space-y-2">
@@ -524,6 +478,7 @@ function ReconnectWaitKarte({
           </span>
           <input
             type="number"
+            disabled={!verfuegbar}
             min={0}
             max={max}
             step={1}
@@ -536,7 +491,7 @@ function ReconnectWaitKarte({
           </label>
           <button
             type="button"
-            disabled={speichern.isPending || payload === null}
+            disabled={!verfuegbar || speichern.isPending || payload === null}
             onClick={() => speichern.mutate()}
             className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -859,10 +814,12 @@ export function UplinkPage() {
     queryKey: ['uplink-destinations'],
     queryFn: fetchUplinkDestinations,
     retry: false,
+    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
   });
   // Das Relay antwortet auf einen leeren Erfolg auch mal mit `{}`. Ohne die
   // Absicherung wirft `.length` beim Rendern, und die ErrorBoundary ersetzt
-  // dann das ganze Dashboard, also auch die SRT-Adresse, die der Streamer
+  // dann das ganze Dashboard, also auch die Einrichtung, die der Streamer
   // gerade braucht.
   const gespeicherteZiele = ziele?.destinations ?? [];
   // Zugangsstand je Plattform, steht im Kopf der Plattform-Karte.
@@ -872,14 +829,7 @@ export function UplinkPage() {
     authStatus?.csrfToken ?? authStatus?.csrf_token ?? null,
     !authLaedt
   );
-  // Die OBS-Bitrate folgt dem, was der Streamer als Ziele eingestellt hat.
-  // Eine feste Zahl in der Anleitung war beides: zu hoch fuer jede normale
-  // Leitung und ohne Bezug zu dem, was hier tatsaechlich rausgeht.
-  //
-  // `zieleFehler` muss mit: ohne das Flag ist ein fehlgeschlagener Abruf von
-  // einem leeren Konto nicht zu unterscheiden, und der Text behauptet dann
-  // "kein Ziel eingerichtet" bei jemandem, der Ziele hat.
-  const obsBitrate = obsBitrateEmpfehlung(gespeicherteZiele, zieleFehler);
+  const obs = data && !isError ? obsZugang(data) : null;
   const waitlist = useMutation({
     mutationFn: joinUplinkWaitlist,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['uplink-me'] }),
@@ -898,10 +848,10 @@ export function UplinkPage() {
   });
   const capsFuer = (platform: string) => caps?.platforms.find((c) => c.platform === platform);
   const streamStatus =
-    data?.live_status === 'live'
-      ? { text: 'Stream live', klasse: 'border-success/35 bg-success/10 text-success' }
-      : data?.live_status === 'aus'
-        ? { text: 'Stream offline', klasse: 'border-border bg-background/60 text-text-secondary' }
+    !isError && data?.live_status === 'live'
+      ? { text: 'Twitch live', klasse: 'border-success/35 bg-success/10 text-success' }
+      : !isError && data?.live_status === 'aus'
+        ? { text: 'Twitch offline', klasse: 'border-border bg-background/60 text-text-secondary' }
         : { text: isLoading ? 'Streamstatus lädt' : 'Streamstatus unbekannt', klasse: 'border-warning/30 bg-warning/10 text-warning' };
 
   return (
@@ -928,7 +878,7 @@ export function UplinkPage() {
                   </span>
                   {data?.enabled ? (
                     <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                      Zugang aktiv
+                      Uplink freigeschaltet
                     </span>
                   ) : null}
                 </div>
@@ -1006,47 +956,30 @@ export function UplinkPage() {
                     </ObsSchritt>
 
                     <ObsSchritt nummer={2} titel="Serveradresse einfügen" offenStart>
-                      {data.srt_hint ? (
+                      {obs ? (
                         <>
-                          <CopyField
-                            label="Serveradresse für OBS"
-                            value={data.srt_hint}
-                            darfAufdecken={data.live_status === 'aus'}
-                            grundVerdeckt={
-                              data.live_status === 'live'
-                                ? 'Du bist gerade live. Solange bleibt die Adresse verdeckt, damit sie nicht im Stream landet. Kopieren geht trotzdem.'
-                                : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleibt die Adresse verdeckt. Kopieren geht trotzdem.'
-                            }
-                          />
-                          <div
-                            data-uplink-private-warning
-                            role="note"
-                            className="rounded-xl border border-warning/45 bg-warning/10 px-3 py-2.5 text-xs text-warning shadow-[inset_3px_0_0_var(--color-warning)]"
-                          >
-                            <div className="flex items-start gap-2.5">
-                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-warning/35 bg-warning/15">
-                                <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
-                              </span>
-                              <p className="pt-0.5 leading-relaxed">
-                                <strong className="font-semibold text-white">Privat:</strong> Diese Adresse enthält
-                                deinen Schlüssel. Nicht im Stream zeigen.
-                              </p>
-                            </div>
-                          </div>
+                          <CopyField label="Serveradresse für OBS" value={obs.server}
+                            privat={false} darfAufdecken grundVerdeckt="" />
+                          <p className="text-xs text-text-secondary">Diese öffentliche Adresse gehört in das OBS-Feld <Feld>Server</Feld>.</p>
                         </>
                       ) : (
                         <p role="alert" className="text-sm text-warning">
-                          Der Relay hat gerade keine SRT-Adresse geliefert. Lade die Seite neu; bleibt es dabei,
-                          meld dich beim Support.
+                          Die RTMPS-Einrichtung ist gerade nicht vollständig verfügbar. Deine Plattformziele bleiben gespeichert.
                         </p>
                       )}
                     </ObsSchritt>
 
-                    <ObsSchritt nummer={3} titel="Streamschlüssel leer lassen">
+                    <ObsSchritt nummer={3} titel="Privaten Streamschlüssel einfügen" offenStart>
+                      {obs ? <CopyField label="Privater Streamschlüssel für OBS" value={obs.key}
+                        darfAufdecken={data.live_status === 'aus'}
+                        grundVerdeckt="Solange dein Streamstatus live oder unbekannt ist, bleibt der Schlüssel verdeckt. Kopieren geht trotzdem." /> : null}
                       <p className="text-xs text-text-secondary">
-                        Das OBS-Feld <Feld>Streamschlüssel</Feld> bleibt leer. Einen alten Twitch-Schlüssel dort
-                        löschen; dein Schlüssel steckt bereits in der Serveradresse.
+                        Kopiere deinen Uplink-Schlüssel in <Feld>Streamschlüssel</Feld>. Serveradresse und Schlüssel sind zwei getrennte Felder.
                       </p>
+                      <div data-uplink-private-warning role="note"
+                        className="rounded-xl border border-warning/45 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+                        <strong className="text-white">Privat:</strong> Den Streamschlüssel nicht im Stream zeigen oder weitergeben.
+                      </div>
                     </ObsSchritt>
 
                     <ObsSchritt nummer={4} titel="Ausgabe einstellen">
@@ -1054,7 +987,7 @@ export function UplinkPage() {
                         <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
                       </p>
                       <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
-                        {obsAusgabe(obsBitrate).map((zeile) => (
+                        {obsAusgabe().map((zeile) => (
                           <div key={zeile.feld} className="grid gap-1 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
                             <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">
                               {zeile.feld}
@@ -1066,6 +999,11 @@ export function UplinkPage() {
                           </div>
                         ))}
                       </dl>
+                      <p className="mt-3 text-xs text-warning">
+                        Fehlt bei „Benutzerdefiniert“ die VOD-Tonspur, benötigt OBS eine globale Einstellung.
+                        {' '}<a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">Einrichtung der zweiten Tonspur</a>.
+                        {' '}Ein Profilimport allein aktiviert sie nicht.
+                      </p>
                     </ObsSchritt>
 
                     <ObsSchritt nummer={5} titel="Fenster einrichten">
@@ -1091,13 +1029,13 @@ export function UplinkPage() {
                         </p>
                       </div>
                       <span
-                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-success/30 bg-success/10 text-success'}`}
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-primary/30 bg-primary/10 text-primary'}`}
                       >
                         {zieleLaden
                           ? 'Ziele werden geladen'
                           : zieleFehler
                             ? 'Status unbekannt'
-                            : `${gespeicherteZiele.filter((ziel) => ziel.enabled).length} aktiv`}
+                            : `${gespeicherteZiele.filter((ziel) => zielBetrieb(ziel).state === 'sending').length} mit Medienfluss · ${gespeicherteZiele.filter((ziel) => ziel.enabled).length} eingeschaltet`}
                       </span>
                     </div>
 
@@ -1183,6 +1121,7 @@ export function UplinkPage() {
               <ReconnectWaitKarte
                 wert={data.reconnect_wait_s}
                 max={data.reconnect_wait_max_s}
+                verfuegbar={data.capabilities?.reconnect === true}
                 onSaved={() => queryClient.invalidateQueries({ queryKey: ['uplink-me'] })}
               />
             )}

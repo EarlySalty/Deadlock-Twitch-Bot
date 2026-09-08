@@ -13,6 +13,9 @@ pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
 pub mod query_int;
+#[cfg(test)]
+mod test_postgres;
+pub mod uplink_config;
 
 pub use auth::csrf::csrf_protect;
 pub use auth::discord_admin_login::{discord_admin_login_config_from_env, DiscordAdminLoginConfig};
@@ -164,23 +167,22 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
     use handlers::{
         ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
         audience_demographics, auth_status, billing, category_activity, category_comparison,
-        dashboard_assistent,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
-        engagement_mode, engagement_settings, exp_analytics, follower_funnel, greeting_settings,
-        internal_home, leaderboard, loyalty_curve, lurk_command_settings, lurker_analysis,
-        lurker_tax_settings, moderation_settings, monetization, onboarding, overview, performance,
-        plattform_connect, raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
-        scam_guard_settings,
-        session_detail, silent_settings, social_media, spa, stream_report, streamer_disconnect,
-        streamers, tag_analysis, tip_settings, title, title_performance, uplink, viewer_timeline,
-        viewers, watch_time,
+        dashboard_assistent, engagement_mode, engagement_settings, exp_analytics, follower_funnel,
+        greeting_settings, internal_home, leaderboard, loyalty_curve, lurk_command_settings,
+        lurker_analysis, lurker_tax_settings, moderation_settings, monetization, onboarding,
+        overview, performance, plattform_connect, raid_analytics, raid_history, rankings,
+        retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings,
+        social_media, spa, stream_report, streamer_disconnect, streamers, tag_analysis,
+        tip_settings, title, title_performance, uplink, viewer_timeline, viewers, watch_time,
     };
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
     // Changelog-POST). Bucket "internal_home", 60 Requests/60 s pro Client-IP.
     let internal_home_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "internal_home", 60, 60);
-    let uplink_connect_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
+    let uplink_connect_rl =
+        RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
     Router::new()
         .route(
@@ -1820,7 +1822,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         )
         .layer(CompressionLayer::new());
 
-    if let Some(config) = handlers::platform_token::platform_token_config_from_env() {
+    if let Some(config) = handlers::platform_token::platform_token_config_from_runtime() {
         let refresh_config = config.clone();
         let refresh_pool = uplink_refresh_pool.clone();
         tokio::spawn(async move {

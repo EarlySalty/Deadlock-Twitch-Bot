@@ -387,9 +387,8 @@ const UPLINK_ME_FIXTURE = {
   enabled: true,
   waitlisted: false,
   ingest_key: 'rsr_preview',
-  rtmp_url: '',
-  srt_hint:
-    'srt://deutsche-deadlock-community.de:8899?mode=caller&latency=2000&streamid=rsr_preview_key',
+  service_status: 'ready',
+  public_ingest_url: 'rtmps://uplink.example/live',
   live_status: 'aus',
   reconnect_wait_s: 90,
   reconnect_wait_max_s: 300,
@@ -401,7 +400,7 @@ const UPLINK_ME_FIXTURE = {
     points: 'https://deutsche-deadlock-community.de/dock/points?t=dock_vorschau',
   },
   verbindungen: [
-    { platform: 'twitch', status: 'verbunden' },
+    { platform: 'twitch', status: 'rechte_ergaenzen', stream_key_vorhanden: true },
     { platform: 'kick', status: 'getrennt' },
     { platform: 'youtube', status: 'getrennt' },
     { platform: 'tiktok', status: 'getrennt' },
@@ -417,27 +416,27 @@ const UPLINK_DESTINATIONS_FIXTURE = {
       rtmp_url: 'rtmp://live.twitch.tv/app',
       enabled: true,
       requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 16000 },
-      effective: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 16000 },
+      active_profile: null, output_state: 'failed', publication_confirmed: false,
+      reason: 'Die Prüfung dieses Twitch-Profils ist noch offen.',
     },
     {
       platform: 'youtube',
       rtmp_url: 'rtmp://a.rtmp.youtube.com/live2',
       enabled: true,
       requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 18000 },
-      effective: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 18000 },
+      active_profile: null,
+      output_state: 'sending', publication_confirmed: false,
     },
   ],
 };
 
-// Empfehlungen, keine Grenzen. Der `ingest`-Eintrag ist weg, es gibt keinen
-// Deckel mehr, gegen den die Oberflaeche pruefen koennte.
+// Aktueller Dienstvertrag: Quelle und Ziel müssen vor Empfehlungen geprüft werden.
 const UPLINK_CAPS_FIXTURE = {
-  platforms: [
-    { platform: 'twitch', recommended_width: 2560, recommended_height: 1440, recommended_fps: 60, recommended_bitrate_kbps: 12000, force_cbr: true },
-    { platform: 'kick', recommended_width: 1920, recommended_height: 1080, recommended_fps: 60, recommended_bitrate_kbps: 8000, force_cbr: true },
-    { platform: 'youtube', recommended_width: 2560, recommended_height: 1440, recommended_fps: 60, recommended_bitrate_kbps: 24000, force_cbr: false },
-    { platform: 'tiktok', recommended_width: 1920, recommended_height: 1080, recommended_fps: 60, recommended_bitrate_kbps: 8000, force_cbr: false },
-  ],
+  platforms: ['twitch', 'kick', 'youtube', 'tiktok'].map(platform => ({
+    platform, recommended_width: null, recommended_height: null,
+    recommended_fps: null, recommended_bitrate_kbps: null, force_cbr: true,
+    verification: 'requires_source_and_target',
+  })),
 };
 
 const UPLINK_ADMIN_WAITLIST_FIXTURE = {

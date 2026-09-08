@@ -49,7 +49,7 @@ test('App.tsx rendert den Assistenten nur außerhalb von Demo und Preview', () =
   assert.match(APP, /!isPreviewModeEnabled\(\)/);
   assert.match(APP, /!hasDemoRuntimeConfig\(\)/);
   assert.match(APP, /!resolveEffectiveDemoMode\(/);
-  assert.match(APP, /zeigeAssistent && <DashboardAssistent \/>/);
+  assert.match(APP, /zeigeAssistent && <DashboardAssistent imDokumentfluss=\{isUplinkRoute\} \/>/);
 });
 
 test('assistent.ts sendet page und language und setzt X-CSRF-Token bedingt', () => {

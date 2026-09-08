@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Synthetische lokale Browser-Abnahmebilder
+/tests/artifacts/

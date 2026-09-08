@@ -58,10 +58,10 @@ function SidebarLink({
     <a
       href={href}
       aria-current={active ? 'page' : undefined}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap ${active ? activeClasses : inactiveClasses}`}
+      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap lg:whitespace-normal ${active ? activeClasses : inactiveClasses}`}
     >
       <Icon className="h-4 w-4 shrink-0" />
-      <span>{label}</span>
+      <span className="min-w-0 lg:break-words">{label}</span>
     </a>
   );
 }

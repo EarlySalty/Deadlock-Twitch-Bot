@@ -11,51 +11,11 @@
 <main class="uplink-doc" data-doc="stoerungen">
   <p class="nur-standalone"><a href="index.html">Zurück zur Hilfe</a></p>
   <h1>Störungen</h1>
-  <p class="lede">Zuerst die sichtbare Lage, dann der nächste Schritt. Kundenseitige Abrisse behandeln wir wie die Plattformen selbst: kurzes Reconnect-Fenster, danach ist der Stream zu.</p>
-
-  <section id="stoerungen-kein-platz">
-    <h2>Start wird abgelehnt, Plätze belegt</h2>
-    <p>Es ist gerade voll. Laufende Streams bleiben. Für diesen Abend streamst du direkt zur Plattform (OBS wieder auf Twitch/Kick stellen).</p>
-  </section>
-
-  <section id="stoerungen-kein-bild">
-    <h2>OBS sendet, auf der Plattform kommt nichts</h2>
-    <ol>
-      <li>Im Dashboard prüfen: Uplink freigeschaltet, SRT-Adresse ist da.</li>
-      <li>OBS-Dienst ist Benutzerdefiniert, Server ist die SRT-Adresse aus dem Dashboard.</li>
-      <li>Alte Adresse in OBS: die SRT-Adresse im Dashboard neu kopieren und in OBS ersetzen. Dein Schlüssel steckt als <code>streamid</code> darin, es gibt keinen zweiten Wert zum Abtippen.</li>
-    </ol>
-  </section>
-
-  <section id="stoerungen-fight-bricht">
-    <h2>Bild reißt in Fights</h2>
-    <p>Deine Leitung oder der Encoder kommt nicht hinterher.</p>
-    <ul>
-      <li>Bei VBR das Maximum um 1000 Kbps senken.</li>
-      <li>Oder 30 fps statt 60.</li>
-      <li>Skipped frames in OBS größer 0: Auflösung eine Stufe runter, Encoder auf Hardware-HEVC lassen.</li>
-    </ul>
-  </section>
-
-  <section id="stoerungen-hevc-fehlt">
-    <h2>HEVC steht nicht in der Liste</h2>
-    <p>Dann Hardware-H.264. Der Restream läuft, braucht aber mehr Upload. Software-x265 und AV1 neben dem Spiel weglassen.</p>
-  </section>
-
-  <section id="stoerungen-streamlabs">
-    <h2>Streamlabs</h2>
-    <p>Viele Streamlabs-Versionen können kein SRT, und nur über SRT kommt dein Stream bei uns an. Kannst du die SRT-Adresse aus dem Dashboard dort nicht eintragen, nimm OBS. Auch HEVC ist aus Streamlabs oft nicht nutzbar. Dann ist der Bandbreitenvorteil weg.</p>
-  </section>
-
-  <section id="stoerungen-abriss">
-    <h2>Internet bricht weg</h2>
-    <p>Kurz weg: wir halten die Plattform-Seite offen und setzen fort, sobald OBS wieder da ist. Länger weg: der Stream gilt als beendet, wie bei einem normalen Plattform-Abriss. Neu starten in OBS.</p>
-  </section>
-
-  <section class="nur-standalone" id="stoerungen-naechste-schritte">
-    <h2>Weiterlesen</h2>
-    <p class="nur-standalone"><a href="obs.html">OBS einrichten</a> · <a href="was-ist.html">Was ist Uplink</a></p>
-  </section>
+  <section><h2>OBS sendet, aber auf der Plattform kommt nichts an</h2><p>Prüfe im Dashboard den Eingang und den Status des betroffenen Ziels. Eingeschaltet ist eine Einstellung; Medien werden gesendet bestätigt lokalen Ausgangsverkehr. Eine veröffentlichte Plattformübertragung benötigt ihre eigene Bestätigung.</p></section>
+  <section><h2>OBS kann sich nicht verbinden</h2><p>Verwende Benutzerdefiniert, die öffentliche RTMPS-Serveradresse und den getrennten privaten Uplink-Schlüssel aus dem Dashboard. Übernimm beide Felder vollständig. Eine alte Gesamtadresse mit eingebettetem Schlüssel ist ungültig.</p></section>
+  <section><h2>Zugang erneuern</h2><p>Der Knopf Neu verbinden führt durch die bestehende Plattformfreigabe. Fehlendes Chatrecht bedeutet nicht automatisch, dass auch ein gespeicherter Medienzugang ungültig ist. Der Status der einzelnen Funktionen bleibt getrennt sichtbar.</p></section>
+  <section><h2>Das Bild stockt</h2><p>Prüfe die tatsächliche Bitrate, verfügbare Uploadkapazität und ausgelassenen Frames in OBS. Senke bei knapper Leitung das CBR-Budget oder die Quellauflösung beziehungsweise Bildrate. Eine größere Ausgangsauflösung stellt fehlende Details nicht wieder her.</p></section>
+  <section><h2>Internet bricht weg</h2><p>Beachte den aktuellen Verbindungszustand und die im Dashboard gespeicherte Wiederverbindungsfrist. Ein Transportabbruch ist nicht automatisch ein bewusstes Streamende. Verlass dich nur auf das tatsächlich angezeigte Verhalten; ein Wartebild oder ein nahtloser Wechsel darf nicht aus einem eingeschalteten Ziel abgeleitet werden.</p></section>
 </main>
 </body>
 </html>

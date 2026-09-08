@@ -11,6 +11,51 @@ permissions:
   contents: read
 
 jobs:
+  uplink-auth-tests:
+    name: "Uplink Auth, Broker und Dashboard-Anschluss"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install PostgreSQL 16 host programs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-16
+          /usr/lib/postgresql/16/bin/initdb --version
+          /usr/lib/postgresql/16/bin/postgres --version
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: "rust"
+
+      # Diese Tests starten eigene begrenzte PostgreSQL-Prozesse auf privaten
+      # Unixsockets. Sie verwenden weder den Schema-Service noch dessen ENV.
+      - name: Auth transactions and callback races
+        run: |
+          cargo test --locked -j2 -p tb-raid --test auth_writer --test oauth_grant_consistency --test token_refresher --test background_token_refresh
+          cargo test --locked -j2 -p tb-transport-twitch --lib user_token
+          cargo test --locked -j2 -p tb-bot raid_oauth_impl::callback_tests
+          cargo test --locked -j2 -p tb-internal-api handlers::raid_oauth::tests --lib
+
+      - name: Broker, Uplink disconnect and normal startup
+        run: |
+          cargo test --locked -j2 -p tb-dashboard-api handlers::platform_token::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api handlers::uplink::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api uplink_config::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api handlers::auth_login::tests::callback_ --lib
+          cargo run --locked -j2 -p tb-dashboard-api --example uplink_start_probe
+
   offline-build:
     name: "offline-build"
     runs-on: ubuntu-latest

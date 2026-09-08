@@ -49,9 +49,8 @@ use crate::auth::security::require_internal;
 /// dieselbe Route und werden sauber abgewiesen.
 pub const PLATFORM_TWITCH: &str = "twitch";
 
-/// Ohne dieses Recht kann das Relay den Chat gar nicht lesen. Ein Grant ohne
-/// es ist fuer diese Route wertlos, also gibt es ihn auch nicht heraus.
-pub const CHAT_LESE_SCOPE: &str = "user:read:chat";
+#[cfg(test)]
+const CHAT_LESE_SCOPE: &str = "user:read:chat";
 
 /// Ab dieser Restlaufzeit wird beim Abruf vorab erneuert. Das Relay haelt
 /// EventSub-Verbindungen ueber Stunden; ein Token, das waehrenddessen
@@ -72,21 +71,18 @@ pub struct PlatformTokenConfig {
     pub youtube: Option<Arc<dyn super::plattform_oauth::YouTubeApi>>,
 }
 
-fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+fn non_empty_config(key: &str) -> Option<String> {
+    crate::uplink_config::platform_value(key)
 }
 
-/// Baut die Config aus der Prozessumgebung (Infisical-geladen). Braucht
+/// Baut die Config aus dem einmalig geladenen Infisical-RAM-Vertrag. Braucht
 /// `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` und den Feldschluessel
 /// `DB_MASTER_KEY_V1`. Fehlt eines, bleibt die Route mit 503 zu. Secrets
 /// werden nicht geloggt.
-pub fn platform_token_config_from_env() -> Option<PlatformTokenConfig> {
-    let client_id = non_empty_env("TWITCH_CLIENT_ID")?;
-    let client_secret = non_empty_env("TWITCH_CLIENT_SECRET")?;
-    let cipher = match FieldCipher::from_env() {
+pub fn platform_token_config_from_runtime() -> Option<PlatformTokenConfig> {
+    let client_id = non_empty_config("TWITCH_CLIENT_ID")?;
+    let client_secret = non_empty_config("TWITCH_CLIENT_SECRET")?;
+    let cipher = match FieldCipher::from_hex_key(&non_empty_config("DB_MASTER_KEY_V1")?, "v1") {
         Ok(c) => Arc::new(c),
         Err(e) => {
             tracing::warn!(error = %e, "platform_token: Feldschluessel fehlt, Route bleibt zu");
@@ -100,9 +96,9 @@ pub fn platform_token_config_from_env() -> Option<PlatformTokenConfig> {
             return None;
         }
     };
-    let kick = super::plattform_oauth::KickOAuth::aus_umgebung()
+    let kick = super::plattform_oauth::KickOAuth::aus_konfiguration()
         .map(|c| Arc::new(c) as Arc<dyn super::plattform_oauth::KickApi>);
-    let youtube = super::plattform_oauth::GoogleOAuth::aus_umgebung()
+    let youtube = super::plattform_oauth::GoogleOAuth::aus_konfiguration()
         .map(|c| Arc::new(c) as Arc<dyn super::plattform_oauth::YouTubeApi>);
     Some(PlatformTokenConfig {
         cipher,
@@ -129,6 +125,23 @@ fn map_token_error(error: UserTokenError) -> RefreshError {
 
 #[async_trait::async_trait]
 impl TwitchTokenClient for HelixRefreshClient {
+    async fn validate_token(
+        &self,
+        access_token: &str,
+        expected_user_id: &str,
+    ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+        let verified = self
+            .helix
+            .validate_user_token(access_token, expected_user_id)
+            .await
+            .map_err(map_token_error)?;
+        Ok(tb_raid::token_refresher::TokenValidation {
+            client_id: verified.client_id,
+            twitch_user_id: verified.user_id,
+            scopes: verified.scopes,
+            expires_in: verified.expires_in,
+        })
+    }
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
         self.helix
             .refresh_user_token(refresh_token)
@@ -173,7 +186,7 @@ pub struct PlatformTokenQuery {
 
 /// Was das Relay bekommt. Bewusst ein eigener Typ ohne `refresh_token`: die
 /// Serialisierung kann ihn gar nicht mitschicken (Contract REQ-7).
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(PartialEq, Eq, Serialize)]
 pub struct PlatformTokenAntwort {
     pub access_token: String,
     pub expires_at: DateTime<Utc>,
@@ -182,11 +195,16 @@ pub struct PlatformTokenAntwort {
     pub scopes: Vec<String>,
 }
 
+impl std::fmt::Debug for PlatformTokenAntwort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PlatformTokenAntwort([geschützt])")
+    }
+}
+
 /// Warum kein Token herausgeht.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TokenFehler {
-    /// Keine Zeile, kein lesbarer Token, oder der Grant traegt das Chat-Recht
-    /// nicht. Fuer das Relay ist das derselbe Fall: es gibt nichts zu holen.
+    /// Keine verbundene Uplink-Identität oder kein lesbarer Token.
     KeineVerbindung,
     /// Der Streamer muss neu durch den Twitch-Dialog.
     NeuVerbinden,
@@ -223,11 +241,6 @@ fn abgelaufen(expires_at: Option<DateTime<Utc>>, jetzt: DateTime<Utc>) -> bool {
     }
 }
 
-/// Ob dieser Grant fuer das Relay taugt.
-pub fn taugt_fuer_chat(scopes: &[String]) -> bool {
-    scopes.iter().any(|s| s.trim() == CHAT_LESE_SCOPE)
-}
-
 // ───────────────────────────────────────────────────────────────────────────
 // Kern
 // ───────────────────────────────────────────────────────────────────────────
@@ -236,7 +249,7 @@ pub fn taugt_fuer_chat(scopes: &[String]) -> bool {
 ///
 /// Der eine Weg zu einem brauchbaren Token, den jeder Aufrufer nimmt: die
 /// interne Route fuer rs-relay genauso wie der Stream-Key-Nachlauf und der
-/// Widerruf beim Trennen. Wer stattdessen die Zeile direkt liest, arbeitet
+/// Verbindungsstatus. Wer stattdessen die Zeile direkt liest, arbeitet
 /// frueher oder spaeter mit einem abgelaufenen Token: `refresh_all_due` im Bot
 /// fasst nur Zeilen mit `raid_enabled IS TRUE` an, ein Streamer ohne Raids
 /// haette also nach wenigen Stunden nichts Gueltiges mehr, und die Aufrufer
@@ -253,10 +266,10 @@ pub async fn gueltiger_twitch_token(
     let uid = streamer_id.to_string();
     let store = RaidAuthStore::new(pool.clone(), config.cipher.clone());
 
-    // `load_decrypted_unrestricted` und nicht `load_decrypted`: das
+    // Der gemeinsame Snapshot prüft keine Raid-Aktivierung: Das
     // `raid_enabled`-Gate gehoert zum Raid-Bot. Wer Raids abgeschaltet hat,
     // darf trotzdem seinen eigenen Chat im Dock sehen.
-    let tokens = match store.load_decrypted_unrestricted(&uid).await {
+    let (tokens, scopes) = match store.load_decrypted_with_scopes(&uid).await {
         Ok(Some(t)) => t,
         Ok(None) => return Err(TokenFehler::KeineVerbindung),
         Err(e) => {
@@ -264,16 +277,12 @@ pub async fn gueltiger_twitch_token(
             return Err(TokenFehler::NichtLieferbar);
         }
     };
+    if tokens.uplink_disconnected {
+        return Err(TokenFehler::KeineVerbindung);
+    }
     if tokens.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
-    let scopes = match store.get_scopes(&uid).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(streamer_id, error = %e, "platform_token: Scopes nicht lesbar");
-            return Err(TokenFehler::NichtLieferbar);
-        }
-    };
     if !refresh_faellig(tokens.token_expires_at, jetzt) {
         return Ok((tokens, scopes));
     }
@@ -306,7 +315,7 @@ pub async fn gueltiger_twitch_token(
         }
     }
 
-    let frisch = match store.load_decrypted_unrestricted(&uid).await {
+    let (frisch, scopes) = match store.load_decrypted_with_scopes(&uid).await {
         Ok(Some(t)) => t,
         Ok(None) => return Err(TokenFehler::KeineVerbindung),
         Err(e) => {
@@ -314,13 +323,13 @@ pub async fn gueltiger_twitch_token(
             return Err(TokenFehler::NichtLieferbar);
         }
     };
+    if frisch.uplink_disconnected {
+        return Err(TokenFehler::KeineVerbindung);
+    }
     if frisch.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
-    // Scopes nach dem Refresh neu lesen: haette er den Satz veraendert, bekaeme
-    // das Relay sonst den alten und legte Subscriptions an, fuer die kein
-    // Recht mehr vorliegt.
-    let scopes = store.get_scopes(&uid).await.unwrap_or(scopes);
+    // Scopes und Uplink-Intent stammen aus demselben Snapshot wie der neue Token.
     // Ein Token, das auch nach dem Refresh abgelaufen ist, ist keiner. Lieber
     // eine ehrliche Absage als ein Token, mit dem der Aufrufer ins Leere laeuft.
     if abgelaufen(frisch.token_expires_at, jetzt) {
@@ -375,9 +384,6 @@ pub async fn platform_token_antwort(
     // Bewusst NACH dem Token-Weg: ein Streamer mit altem Raid-Grant soll
     // dieselbe 404 bekommen wie einer ohne Zeile, und der Refresh haelt seine
     // Raid-Tokens dabei nebenbei frisch.
-    if !taugt_fuer_chat(&scopes) {
-        return Err(TokenFehler::KeineVerbindung);
-    }
     Ok(PlatformTokenAntwort {
         access_token: tokens.access_token,
         expires_at: tokens.token_expires_at.unwrap_or(jetzt),
@@ -493,13 +499,19 @@ pub async fn plattform_refresh(
                 return Ok(());
             };
             store
-                .refresh_and_store(streamer_id, platform, REFRESH_VORLAUF, jetzt, |rt| async move {
-                    client
-                        .refresh(&rt)
-                        .await
-                        .map(|t| in_neuer_token(t, jetzt))
-                        .map_err(in_abbruch)
-                })
+                .refresh_and_store(
+                    streamer_id,
+                    platform,
+                    REFRESH_VORLAUF,
+                    jetzt,
+                    |rt| async move {
+                        client
+                            .refresh(&rt)
+                            .await
+                            .map(|t| in_neuer_token(t, jetzt))
+                            .map_err(in_abbruch)
+                    },
+                )
                 .await
         }
         "youtube" => {
@@ -507,13 +519,19 @@ pub async fn plattform_refresh(
                 return Ok(());
             };
             store
-                .refresh_and_store(streamer_id, platform, REFRESH_VORLAUF, jetzt, |rt| async move {
-                    client
-                        .refresh(&rt)
-                        .await
-                        .map(|t| in_neuer_token(t, jetzt))
-                        .map_err(in_abbruch)
-                })
+                .refresh_and_store(
+                    streamer_id,
+                    platform,
+                    REFRESH_VORLAUF,
+                    jetzt,
+                    |rt| async move {
+                        client
+                            .refresh(&rt)
+                            .await
+                            .map(|t| in_neuer_token(t, jetzt))
+                            .map_err(in_abbruch)
+                    },
+                )
                 .await
         }
         _ => return Ok(()),
@@ -533,17 +551,17 @@ fn fehler_antwort(fehler: TokenFehler) -> Response {
     match fehler {
         TokenFehler::KeineVerbindung => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "keine_verbindung" })),
+            Json(json!({ "error": "keine_verbindung", "error_code": "connection_missing" })),
         )
             .into_response(),
         TokenFehler::NeuVerbinden => (
             StatusCode::CONFLICT,
-            Json(json!({ "error": "needs_reauth" })),
+            Json(json!({ "error": "needs_reauth", "error_code": "reauthorization_required" })),
         )
             .into_response(),
         TokenFehler::NichtLieferbar => (
             StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": "token_nicht_lieferbar" })),
+            Json(json!({ "error": "token_nicht_lieferbar", "error_code": "temporarily_unavailable" })),
         )
             .into_response(),
     }
@@ -646,6 +664,19 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TwitchTokenClient for FakeTokenClient {
+        async fn validate_token(
+            &self,
+            _: &str,
+            uid: &str,
+        ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+            let result = self.ergebnis.lock().unwrap().clone()?;
+            Ok(tb_raid::token_refresher::TokenValidation {
+                client_id: "public-test-client".into(),
+                twitch_user_id: uid.into(),
+                scopes: result.scopes,
+                expires_in: result.expires_in,
+            })
+        }
         async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
             self.aufrufe.lock().unwrap().push(refresh_token.to_string());
             match &*self.ergebnis.lock().unwrap() {
@@ -671,21 +702,6 @@ mod tests {
         assert!(refresh_faellig(Some(jetzt + Duration::minutes(10)), jetzt));
         assert!(refresh_faellig(Some(jetzt + Duration::minutes(9)), jetzt));
         assert!(!refresh_faellig(Some(jetzt + Duration::minutes(11)), jetzt));
-    }
-
-    #[test]
-    fn ohne_chat_lese_recht_taugt_der_grant_nicht() {
-        let voll: Vec<String> = tb_raid::scope_profiles::UPLINK_SCOPES
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(taugt_fuer_chat(&voll));
-        let raid: Vec<String> = tb_raid::scope_profiles::FULL_STREAMER_SCOPES
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(!taugt_fuer_chat(&raid));
-        assert!(!taugt_fuer_chat(&[]));
     }
 
     #[tokio::test]
@@ -724,25 +740,15 @@ mod tests {
     /// Eigenes Testschema mit den zwei Tabellen, die dieser Weg anfasst.
     /// Spaltentypen wie in `fresh_schema_snapshot.txt`, damit ein Test nicht
     /// gruen wird, den die Produktionstabelle ablehnen wuerde.
-    async fn maybe_pool() -> Option<PgPool> {
-        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
-            return None;
-        }
-        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let schema = crate::auth::session::test_schema_name("platform_token");
-        let admin = PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        admin.close().await;
-        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
-        let opts = opts.options([("search_path", schema.as_str())]);
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
-            .connect_with(opts)
-            .await
-            .ok()?;
+    async fn test_pool() -> (PgPool, crate::test_postgres::TestPostgres) {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260908210000_twitch_uplink_intent.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_raid_auth (
                 twitch_user_id TEXT NOT NULL PRIMARY KEY,
@@ -767,6 +773,8 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, technical_pause_reason TEXT)")
+            .execute(&pool).await.unwrap();
         // Die plattformneutrale Tabelle: Spalten wie in der Migration.
         sqlx::query(
             "CREATE TABLE platform_connections (
@@ -806,22 +814,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        Some(pool)
-    }
-
-    macro_rules! pool_oder_ende {
-        () => {
-            match maybe_pool().await {
-                Some(p) => p,
-                None => {
-                    assert!(
-                        std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
-                        "TB_TEST_REQUIRE_DB=1, aber keine Test-DB erreichbar"
-                    );
-                    return;
-                }
-            }
-        };
+        (pool, database)
     }
 
     /// Legt eine Zeile in `twitch_raid_auth` an, verschluesselt wie der
@@ -895,7 +888,7 @@ mod tests {
 
     #[tokio::test]
     async fn liefert_access_token_ohne_refresh_token() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         zeile_anlegen(
@@ -925,7 +918,7 @@ mod tests {
 
     #[tokio::test]
     async fn keine_zeile_ist_404() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         assert_eq!(
@@ -937,8 +930,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ohne_chat_scope_404() {
-        let pool = pool_oder_ende!();
+    async fn ohne_chat_scope_bleiben_andere_funktionen_authorisiert() {
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         // Ein reiner Raid-Grant: Tokens sind gueltig, taugen aber nicht.
@@ -953,15 +946,19 @@ mod tests {
             false,
         )
         .await;
-        assert_eq!(
-            platform_token_antwort(&pool, &config, 5103, "twitch", jetzt).await,
-            Err(TokenFehler::KeineVerbindung)
-        );
+        let reply = platform_token_antwort(&pool, &config, 5103, "twitch", jetzt)
+            .await
+            .expect("gültiger Grant unabhängig vom Chat");
+        assert!(!reply.scopes.iter().any(|scope| scope == CHAT_LESE_SCOPE));
+        assert!(reply
+            .scopes
+            .iter()
+            .any(|scope| scope == "channel:manage:broadcast"));
     }
 
     #[tokio::test]
     async fn needs_reauth_409() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         zeile_anlegen(
@@ -986,7 +983,7 @@ mod tests {
 
     #[tokio::test]
     async fn abgelaufen_wird_ueber_refresher_erneuert() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let client = Arc::new(FakeTokenClient::neu());
         let config = config_mit(client.clone());
         let jetzt = zeit("2026-08-28T10:00:00Z");
@@ -1016,7 +1013,7 @@ mod tests {
     /// falschen Chat.
     #[tokio::test]
     async fn fremde_plattform_bekommt_kein_twitch_token() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         zeile_anlegen(
@@ -1046,7 +1043,7 @@ mod tests {
     /// Minuten fiel.
     #[tokio::test]
     async fn token_im_fenster_zwischen_den_vorlaeufen_kommt_trotzdem() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         zeile_anlegen(
@@ -1081,7 +1078,7 @@ mod tests {
     /// also ist 404 die richtige Antwort und nicht ein Fehler.
     #[tokio::test]
     async fn ohne_eintrag_ist_die_fremde_plattform_404() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         assert_eq!(
@@ -1091,7 +1088,12 @@ mod tests {
     }
 
     struct FakeKick {
-        ergebnis: std::sync::Mutex<Result<super::super::plattform_oauth::OAuthToken, super::super::plattform_oauth::OAuthFehler>>,
+        ergebnis: std::sync::Mutex<
+            Result<
+                super::super::plattform_oauth::OAuthToken,
+                super::super::plattform_oauth::OAuthFehler,
+            >,
+        >,
     }
 
     #[async_trait::async_trait]
@@ -1101,15 +1103,19 @@ mod tests {
             _code: &str,
             _redirect_uri: &str,
             _verifier: &str,
-        ) -> Result<super::super::plattform_oauth::OAuthToken, super::super::plattform_oauth::OAuthFehler>
-        {
+        ) -> Result<
+            super::super::plattform_oauth::OAuthToken,
+            super::super::plattform_oauth::OAuthFehler,
+        > {
             unreachable!("kein exchange in diesem test")
         }
         async fn refresh(
             &self,
             _refresh_token: &str,
-        ) -> Result<super::super::plattform_oauth::OAuthToken, super::super::plattform_oauth::OAuthFehler>
-        {
+        ) -> Result<
+            super::super::plattform_oauth::OAuthToken,
+            super::super::plattform_oauth::OAuthFehler,
+        > {
             match &*self.ergebnis.lock().unwrap() {
                 Ok(t) => Ok(t.clone()),
                 Err(e) => Err(e.clone()),
@@ -1124,8 +1130,10 @@ mod tests {
         async fn konto(
             &self,
             _access_token: &str,
-        ) -> Result<super::super::plattform_oauth::KickKonto, super::super::plattform_oauth::OAuthFehler>
-        {
+        ) -> Result<
+            super::super::plattform_oauth::KickKonto,
+            super::super::plattform_oauth::OAuthFehler,
+        > {
             unreachable!("kein konto in diesem test")
         }
         async fn event_subscriptions_loeschen(
@@ -1163,7 +1171,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_token_wird_bei_ablauf_erneuert() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let mut config = config_mit(Arc::new(FakeTokenClient::neu()));
         config.kick = Some(Arc::new(FakeKick {
             ergebnis: std::sync::Mutex::new(Ok(super::super::plattform_oauth::OAuthToken {
@@ -1186,7 +1194,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_invalid_grant_setzt_needs_reauth() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let mut config = config_mit(Arc::new(FakeTokenClient::neu()));
         config.kick = Some(Arc::new(FakeKick {
             ergebnis: std::sync::Mutex::new(Err(
@@ -1211,7 +1219,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_ohne_client_und_abgelaufen_meldet_neu_verbinden() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         kick_zeile_anlegen(&pool, &config.cipher, 5203, jetzt - Duration::minutes(1)).await;
@@ -1223,7 +1231,7 @@ mod tests {
 
     #[tokio::test]
     async fn kick_ohne_client_aber_gueltig_liefert_den_token() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         kick_zeile_anlegen(&pool, &config.cipher, 5204, jetzt + Duration::minutes(2)).await;
@@ -1236,7 +1244,7 @@ mod tests {
     /// Und wenn dort etwas liegt, kommt es auch heraus, ohne Refresh-Token.
     #[tokio::test]
     async fn eintrag_im_plattform_speicher_wird_geliefert() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config_mit(Arc::new(FakeTokenClient::neu()));
         let jetzt = zeit("2026-08-28T10:00:00Z");
         let aad = super::super::platform_store::PlatformConnectionStore::aad(5110, "kick");

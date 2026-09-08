@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, Loader2, Power } from 'lucide-react';
 import kickLogo from '@/assets/platforms/kick.svg';
@@ -27,6 +27,7 @@ import type {
   UplinkProfilName,
 } from '@/api/uplink';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
+import { profilText, zielBetrieb } from '@/uplinkBetrieb';
 
 type Modus = 'stufe' | 'manuell';
 
@@ -224,13 +225,13 @@ function PlattformVerbindung({
           in der Rueckfrage, wo er auch etwas entscheidet. */}
       {chat.status === 'getrennt' ? (
         <span className="flex flex-wrap items-baseline gap-1.5 text-[11px] text-text-secondary">
-          <span>{VERBINDEN_KURZ}</span>
-          <details className="inline">
+          <span>{chat.id === 'tiktok' ? 'Video benötigt einen freigeschalteten RTMP-Zugang. Chat-Zugang ist hier nicht bestätigt.' : VERBINDEN_KURZ}</span>
+          {chat.aktiv && chat.id === 'twitch' ? <details className="inline">
             <summary className="cursor-pointer list-none text-primary underline decoration-dotted underline-offset-2">
               Welche Rechte?
             </summary>
             <span className="mt-1 block max-w-prose">{VERBINDEN_HINWEIS}</span>
-          </details>
+          </details> : null}
         </span>
       ) : null}
       {nachfrage ? (
@@ -329,7 +330,9 @@ export function ZielKarte({
   // Satz stuende hier ein "Gespeichert", waehrend auf der Plattform weiter
   // das alte Bild laeuft, und niemand wuesste, ob das noch kommt.
   const [livetext, setLivetext] = useState('');
+  const revision = useRef(0);
   const angefasst = () => {
+    revision.current += 1;
     setGespeichert(false);
     setFehlertext('');
     setLivetext('');
@@ -386,8 +389,8 @@ export function ZielKarte({
   };
 
   // Was die Plattform vorschlaegt. Steht als Hinweis am Feld und sonst
-  // nirgends: es gibt keine Obergrenze mehr, gegen die hier jemand pruefen
-  // koennte. Was eingestellt ist, geht genau so raus.
+  // nirgends. Der Dienst prüft das Wunschprofil anhand des gemessenen
+  // Eingangs und des Plattformzugangs vor der Aktivierung.
   const plattformEmpfehlung = {
     width: caps?.recommended_width ?? null,
     height: caps?.recommended_height ?? null,
@@ -399,8 +402,8 @@ export function ZielKarte({
    * Prueft die manuellen Zahlen, bevor sie abgeschickt werden.
    *
    * Nur noch das, was technisch nicht geht: eine fehlende Zahl und ungerade
-   * Kantenlaengen, mit denen H.264 nicht umgehen kann. Keine Obergrenze mehr,
-   * kein Vergleich gegen die Plattform. Wer 16000 kbps will, bekommt 16000.
+   * Kantenlängen. Eine gespeicherte Zahl erteilt noch keine
+   * Plattformfreigabe: diese Prüfung gehört zum Medienstart im Dienst.
    */
   function manuellPruefen(): UplinkManuellesProfil | string {
     const zahlen = {
@@ -426,6 +429,7 @@ export function ZielKarte({
   }
 
   const speichern = useMutation({
+    onMutate: () => revision.current,
     mutationFn: async (enabled?: boolean) => {
       // Im automatischen Weg gibt es kein Formular mehr: Adresse und
       // Schluessel kommen von der Verbindung. Was noch im State liegt, darf
@@ -474,11 +478,13 @@ export function ZielKarte({
       }
       return saveUplinkDestination(body);
     },
-    onSuccess: (antwort) => {
-      setStreamKey('');
+    onSuccess: (antwort, _enabled, gesendeteRevision) => {
+      const unveraendert = gesendeteRevision === revision.current;
+      if (unveraendert) setStreamKey('');
       setFehlertext('');
-      setGespeichert(true);
-      setLivetext(antwort.live_quality?.message ?? '');
+      setGespeichert(unveraendert);
+      setLivetext(unveraendert ? antwort.live_quality?.message ?? ''
+        : 'Der vorherige Stand wurde gespeichert. Deine neuen Änderungen sind noch offen.');
       queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
@@ -522,16 +528,18 @@ export function ZielKarte({
   const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
   const ungespeichert =
     eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt);
-  const kartenStatus = !eingerichtet ? 'nicht-eingerichtet' : ziel?.enabled ? 'aktiv' : 'pausiert';
-  const statusText = !eingerichtet ? 'nicht eingerichtet' : ziel?.enabled ? 'aktiv' : 'pausiert';
+  const betrieb = zielBetrieb(ziel, chat?.status);
+  const kartenStatus = betrieb.state;
+  const statusText = betrieb.label;
+  const liveBestaetigt = betrieb.tone === 'success';
   const rtmpId = `${basisId}-rtmp`;
   const keyId = `${basisId}-key`;
   const profilId = `${basisId}-profil`;
   const fehlerId = `${basisId}-fehler`;
-  const kartenKlasse = ziel?.enabled
+  const kartenKlasse = liveBestaetigt
     ? 'border-success/55 bg-success/10 shadow-[0_18px_46px_rgba(67,181,129,0.18)] ring-1 ring-success/15'
-    : eingerichtet
-      ? 'border-warning/30 bg-warning/5'
+    : betrieb.tone === 'warning'
+      ? 'border-warning/40 bg-warning/5'
       : 'border-border bg-background/35';
 
   return (
@@ -542,9 +550,9 @@ export function ZielKarte({
       onToggle={(ereignis) => setOffen(ereignis.currentTarget.open)}
       className={`group overflow-hidden rounded-2xl border transition-colors ${kartenKlasse}`}
     >
-      <summary className={`flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden ${ziel?.enabled ? 'px-5 py-5' : 'px-4 py-3.5'}`}>
+      <summary className={`flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 transition-colors hover:bg-white/5 [&::-webkit-details-marker]:hidden ${eingerichtet ? 'px-5 py-5' : 'px-4 py-3.5'}`}>
         <span className="flex min-w-0 items-center gap-3">
-          <span aria-hidden="true" className={`flex shrink-0 items-center justify-center rounded-xl border text-xs font-black tracking-tight ${ziel?.enabled ? 'h-11 w-11 border-success/50 bg-success/15 text-success shadow-[0_8px_24px_rgba(67,181,129,0.18)]' : 'h-10 w-10 border-primary/25 bg-primary/10 text-primary'}`}>
+          <span aria-hidden="true" className={`flex shrink-0 items-center justify-center rounded-xl border text-xs font-black tracking-tight ${liveBestaetigt ? 'h-11 w-11 border-success/50 bg-success/15 text-success shadow-[0_8px_24px_rgba(67,181,129,0.18)]' : 'h-10 w-10 border-primary/25 bg-primary/10 text-primary'}`}>
             <img
               src={PLATTFORM_LOGOS[platform]}
               alt=""
@@ -556,9 +564,10 @@ export function ZielKarte({
               <span className={`${ziel?.enabled ? 'text-base' : 'text-sm'} font-bold text-white`}>{label}</span>
               <span
                 className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                  ziel?.enabled
+                  liveBestaetigt
                     ? 'bg-success/15 text-success'
-                    : eingerichtet
+                    : betrieb.state === 'sending' ? 'bg-white/10 text-white'
+                    : betrieb.tone === 'warning'
                       ? 'bg-warning/15 text-warning'
                       : 'bg-white/5 text-text-secondary'
                 }`}
@@ -568,10 +577,14 @@ export function ZielKarte({
             </span>
             <span className="mt-0.5 block text-xs font-normal text-text-secondary">
               {eingerichtet && kopfWerte
-                ? `${kopfWerte.height}p${kopfWerte.fps} · ${kopfWerte.bitrate_kbps} kbps`
+                ? `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
+            <span className="mt-1 block text-xs font-normal text-text-secondary">
+              {betrieb.activeProfile ? `Aktuelle Ausgabe: ${profilText(betrieb.activeProfile)}` : 'Aktuelle Ausgabe: noch nicht bestätigt'}
+            </span>
+            {betrieb.reason ? <span className="mt-1 block text-xs font-normal text-warning">{betrieb.reason}</span> : null}
             {chat ? <PlattformVerbindung chat={chat} csrfToken={csrfToken ?? null} /> : null}
           </span>
         </span>
@@ -652,7 +665,7 @@ export function ZielKarte({
         <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-              Qualität, die wir an {label} senden
+              Gewünschte Ausgabe für {label}
             </span>
             <div role="group" aria-label={`Qualitätsmodus für ${label}`} className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold">
               <button
@@ -749,18 +762,15 @@ export function ZielKarte({
                   }}
                 />
               </div>
-              {!caps && (
+              {Object.values(plattformEmpfehlung).every(wert => wert === null) && (
                 <p className="text-xs text-text-secondary">
-                  Die Empfehlungen von {label} konnten wir gerade nicht abrufen, deshalb stehen
-                  keine an den Feldern. Auf das, was wir senden, hat das keinen Einfluss: deine
-                  Werte gehen so raus, wie sie hier stehen.
+                  Eine passende Empfehlung ist noch nicht geprüft. Dafür benötigt Uplink deinen tatsächlichen Eingang und die Freigaben dieses Ziels. Deine gespeicherten Wunschwerte bleiben erhalten.
                 </p>
               )}
               <p className="text-xs text-text-secondary">
-                Freie Werte, wir senden genau das. Die Zahlen von {label} sind eine Empfehlung und
-                keine Grenze. Ob {label} mehr annimmt oder drosselt, siehst du im Stream.
+                Du speicherst ein Wunschprofil. Der Dienst prüft es anhand deines Eingangs, der verfügbaren Verarbeitung und der Plattformfreigabe.
                 {caps?.force_cbr
-                  ? ` ${label} verlangt eine feste Bitrate, wir halten sie konstant.`
+                  ? ` ${label} benötigt ein geprüftes Profil mit fester Zielbitrate.`
                   : ''}
               </p>
             </div>
@@ -798,7 +808,7 @@ export function ZielKarte({
         </div>
 
         {eingerichtet && (
-          <div role="status" className="flex items-start gap-2 rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
+          <div role="status" className="flex items-start gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-xs text-text-secondary">
             <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {/* Bewusst `requested` und nicht `effective`: der Satz beschreibt
                 den gespeicherten Stand, und beide Felder sind seit dem Ende der
@@ -810,8 +820,7 @@ export function ZielKarte({
                 : 'Schlüssel liegt verschlüsselt bei uns.'}
               {bestellt ? (
                 <>
-                  {' '}Wir senden {bestellt.width}x{bestellt.height} mit {bestellt.fps} Bildern und{' '}
-                  {bestellt.bitrate_kbps} kbps.
+                  {' '}Gespeicherter Wunsch: {profilText(bestellt)}.
                 </>
               ) : null}
               {ungespeichert ? (

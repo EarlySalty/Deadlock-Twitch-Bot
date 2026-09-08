@@ -13,7 +13,7 @@ const UPLINK_API = readFileSync(join(PAGES_ROOT, '../api/uplink.ts'), 'utf8');
 test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzustände', () => {
   assert.doesNotMatch(UPLINK, /data-section="uplink-status"/);
   assert.match(UPLINK, /role="status"[\s\S]{0,500}\{streamStatus\.text\}/);
-  assert.match(UPLINK, /Stream offline/);
+  assert.match(UPLINK, /Twitch offline/);
   assert.doesNotMatch(UPLINK, />OBS verbunden</);
 });
 
@@ -166,7 +166,7 @@ test('verbinden_lebt_in_der_plattform_karte', () => {
   assert.doesNotMatch(UPLINK_API, /uplink\/connect\/\$\{platform\}`;/);
   assert.match(UPLINK_API, /Mit \$\{p\.label\} verbinden/);
   assert.match(UPLINK_API, /'Neu verbinden'/);
-  assert.match(UPLINK_API, /Folgt später/);
+  assert.doesNotMatch(UPLINK_API, /Folgt später/);
 });
 
 test('verbinden_knopf_nennt_wofuer_die_rechte_gebraucht_werden', () => {
@@ -205,7 +205,7 @@ test('kartenkopf_bleibt_kurz_und_erklaert_nur_bei_getrennt', () => {
   // Drei Zeilen Erklaertext ueber jeder Karte haben die Seite erschlagen.
   // Der lange Text steckt jetzt in der aufklappbaren Hilfe.
   assert.match(UPLINK_API, /VERBINDEN_KURZ/);
-  assert.match(UPLINK_API, /Holt Stream-Schlüssel, Chat, Aktivitäten, Stream-Infos und Kanalpunkte in einem Schritt\./);
+  assert.doesNotMatch(UPLINK_API, /Holt Stream-Schlüssel, Chat, Aktivitäten, Stream-Infos und Kanalpunkte in einem Schritt\./);
   assert.match(ZIEL, /chat\.status === 'getrennt' \? \(/);
   assert.match(ZIEL, /Welche Rechte\?/);
   // Der Trennen-Hinweis steht nur in der Rueckfrage, nicht als Dauertext.
@@ -214,9 +214,7 @@ test('kartenkopf_bleibt_kurz_und_erklaert_nur_bei_getrennt', () => {
 });
 
 test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => {
-  // Trennen nimmt den ganzen Zugang zurueck. Ohne den Satz schaltet man
-  // Leuten unbemerkt die automatischen Raids ab.
-  assert.match(UPLINK_API, /automatischen Raids auf, bis du dich neu verbindest/);
+  assert.match(UPLINK_API, /Bot- und Raidfunktionen bleiben verbunden/);
   assert.match(ZIEL, /TRENNEN_HINWEIS/);
   assert.match(ZIEL, /trenneUplinkPlattform\(chat\.id, csrfToken/);
   assert.match(ZIEL, /^\s+Trennen$/m);

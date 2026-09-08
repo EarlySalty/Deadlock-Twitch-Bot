@@ -1,31 +1,25 @@
 ---
-title: Uplink: Was ist das?
+title: Uplink: Was ist Uplink
 namespace: bot
-category: feature
+category: setup
 audience: streamer
-last_updated: 2026-08-21
-source: rs-relay/docs/was-ist.html
+last_updated: 2026-09-08
+source: Uplink-Dashboard
 tip_eligible: false
 ---
-Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS; einen eigenen Knopf dafür gibt es nicht.
 
-Uplink ist für Streamer gedacht, die ihren OBS-Stream an mehrere verbundene Plattformen senden möchten.
+### Ein Eingang, mehrere Ziele
 
-### Wie läuft Uplink ab?
+Uplink nimmt deinen OBS-Stream entgegen und verteilt ihn passend an deine Plattformen. Du richtest den Zugang, die Plattformen und deine OBS-Fenster im bestehenden Dashboard ein.
 
-1. Lass den Dienst im Dashboard freischalten und kopiere die SRT-Adresse.
-2. Stelle OBS auf unsere SRT-Adresse, nicht mehr direkt auf Twitch.
-3. Starte den Stream in OBS. Die verbundenen Plattformen werden angelegt.
-4. Beende den Stream in OBS. Die verbundenen Plattformen werden ebenfalls beendet.
+### Wunsch und laufende Ausgabe
 
-### Was stellst du ein, was passiert bei uns?
+Eingeschaltet bedeutet, dass ein Ziel beim nächsten Stream berücksichtigt werden soll. Erst der gemessene Medienbetrieb zeigt, ob Uplink dorthin sendet. Eine öffentliche Livebestätigung der Plattform wird nur angezeigt, wenn sie tatsächlich vorliegt.
 
-Du stellst in OBS Encoder, Auflösung, FPS, Bitrate und die SRT-Adresse ein. Dein Twitch-Ziel trägst du im Dashboard ein. Titel und Kategorie änderst du in den Dashboards der Plattformen.
+### Bild und Ton
 
-Für Twitch und Kick gilt CBR. Welche Auflösung wir senden, stellst du im Dashboard ein, von 480p bis 1440p.
+Kompatible Medien können unverändert weitergeleitet werden. Erforderliche andere Bilder oder Ausgabeprofile werden serverseitig verarbeitet. Live- und VOD-Mischungen bleiben getrennt; benötigte Bild- und Tonquellen müssen bereits im Eingang vorhanden sein.
 
-Uplink nimmt deinen Stream über SRT an. Im Dashboard steht dafür genau eine SRT-Adresse.
+### Wenn etwas fehlt
 
-### Was passiert, wenn kein Platz frei ist?
-
-Der Start wird abgelehnt. Dein laufender Stream bleibt unangetastet. Für diesen Abend streamst du direkt zur Plattform, wie ohne Uplink.
+Abgelehnte Profile, fehlender VOD-Ton oder eine erforderliche neue Plattformfreigabe werden am betroffenen Ziel angezeigt. Gespeicherte Einstellungen allein sind kein Qualitäts- oder Funktionsnachweis.
