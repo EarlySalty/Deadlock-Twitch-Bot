@@ -1965,7 +1965,6 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         let title = match kind {
             PitchCardKind::Anlass => "Anlass-Pitch",
             PitchCardKind::Partner => "Partner-Pitch",
-            PitchCardKind::Gezielt => "Gezielter Pitch",
         };
         let mut displays = vec![
             format!("**{}** in `{}`", title, neutralize_pitch_codespan(channel_login)),
