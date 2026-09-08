@@ -55,7 +55,7 @@ tb-transport-twitch = { workspace = true }
 tokio     = { workspace = true, features = ["net", "rt-multi-thread"] }
 # WebSocket-Client fuer eben diese Tests. Steht ueber `axum/ws` ohnehin schon im
 # Abhaengigkeitsbaum, kostet also keine neue Abhaengigkeit.
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 tower     = { workspace = true, features = ["util"] }
 wiremock  = { workspace = true }
 tb-db     = { workspace = true }
