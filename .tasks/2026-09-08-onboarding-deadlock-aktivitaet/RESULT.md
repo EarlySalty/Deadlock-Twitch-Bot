@@ -1,6 +1,6 @@
 # Onboarding nach Deadlock-Aktivität
 
-Stand: 2026-09-08. Implementierung: `af906f3e`, Basis `76789c00`.
+Stand: 2026-09-08. Eigene Implementierung: `af906f3e`; Integration neuer main-Basis `d55880ab` per regulärem Merge: `bd2e2fbd`.
 Branch: `fix/onboarding-deadlock-aktivitaet`.
 
 ## Ergebnis
@@ -27,13 +27,14 @@ Auf der ursprünglichen Basis `273ae126`, Implementierungsstand `f346dff9`:
 - SQL-Reviewer: Live-EXPLAIN ANALYZE für 90 Tage alter Query 10,584 s, deterministischer Sprachfilter mit MAX FILTER 11,746 s (473 Kandidaten). Kein Array-Sortieren erforderlich. Performance ist bei Millionen Snapshots weiterhin nicht interaktiv schnell.
 - `git diff --check` erfolgreich. Unabhängiger Quality-Review ohne fachlichen Blocker.
 
-## Externe Blockaden und offene Verifikation
+## Erneute Prüfung nach Gate- und Build-Umbau
 
-- Tatsächliche Selbstprüfung: `python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-onboarding-aktivitaet --base main --head fix/onboarding-deadlock-aktivitaet`. Abbruch: Claude-Wochenlimit, Reset laut Ausgabe 22 Uhr Europe/Berlin. Kein Codeurteil und keine Gatefreigabe.
-- Nach Rebase scheitert `cargo check -p tb-dashboard-api -p tb-monitoring` vor den Zielcrates in unverändertem `tb-crypto`: `rand::RngCore` und `rand::rngs::OsRng` fehlen nach dem zwischenzeitlichen main-Bump auf rand 0.10.2. Fünf Fehler in `field.rs` und `token.rs`. Crypto-Quellen und Cargo-Manifeste/Lock sind gegen origin/main unverändert. Keine fremden Major-Upgrades in diesem Task repariert.
-- Noch kein Merge, Releasebuild, Deploy oder Neustart. Neue Live-API-Ausgabe und neue Stats-Schreibwerte müssen nach einem freigegebenen erfolgreichen Deploy geprüft werden.
+- Die neue Gatearchitektur startet GPT-6 Astra/high; Claude Opus 5 ist nur Ersatz bei fehlendem Urteil (Exit 2), kein zweites Würfeln nach fachlichem BLOCK. Tatsächliche neue Aufrufe auf `bd2e2fbd` und dem gemeinsamen Integrationsstand `e4f43268` erhielten **ALLOW**. Der Reviewer weist auf nicht verfügbare Repositorytools hin; unabhängiger Quality-Review bestätigt zusätzlich den Fachpatch. Das alte Wochenlimit ist überholt.
+- Die zuvor dokumentierten rand-Fehler auf unverändertem main wurden erneut gemessen. Build-Kompatibilitätsfix `bc691d95` ist jetzt regulär mitgemergt: OS-Zufall über die aktuelle rand-API, HMAC-Konstruktoren, explizite Hex-Fingerprints; sqlx auf 0.8.6 und cbc auf 0.1.2 begrenzt, um eine umfangsfremde SQL-/Cipher-Migration zu vermeiden. Crypto-Quellen, Manifeste und Lockdatei **sind damit bewusst Teil des finalen Diffs**. Isolierte Crypto-Tests (19) und reale Bot-/Dashboard-Binary-Checks waren beim Buildworker erfolgreich; unabhängiger Security-Review begleitet diese Änderungen.
+- Die integrierten Research-Tests trafen zusätzlich eine vorbestehende Test-API-Inkompatibilität durch argon2 0.6 in `demo_login.rs`. Test-only-Anpassung wird vor den finalen Regressionen integriert; Tests werden nicht ausgeblendet.
+- Finale integrierte Regressionen und Fullrelease (`tb-bot`, `tb-dashboard`, `tb-stream-audit`) laufen erst nach dieser Anpassung erfolgreich durch. Bis zum dokumentierten Abschluss sind Main-Merge und Deploy noch offen.
 - Browserwerkzeug nicht verfügbar; keine visuelle Live-Abnahme behauptet.
 
-Unveränderter Live-Stand zum Abschluss: Release `a8d14ebc2cc47eb81f1aadaeff33296f7ec1da4e`, beide Systemdienste aktiv, `/readyz` HTTP 200 mit Datenbank und interner API bereit. Dieser Nachweis betrifft ausdrücklich den alten Stand.
+Unveränderter Live-Stand beim ursprünglichen Abschluss: Release `a8d14ebc2cc47eb81f1aadaeff33296f7ec1da4e`, beide Systemdienste aktiv, `/readyz` HTTP 200. Dieser Nachweis betrifft ausdrücklich den alten Stand und muss nach Deploy erneuert werden.
 
 Logs der Sitzung liegen lokal unter `/tmp/tb-onboarding-*.log`.
