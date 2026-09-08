@@ -20,7 +20,7 @@ const APPS = [
 
 const ALLOWED_HEX = new Set([
   // Matte Dashboard-Akzente; neutrale Flächen und Text bleiben unverändert.
-  '#b39a6b', '#dac6a2', '#c6af87', '#e0ceaf', '#65a486', '#c6a169', '#df7969', '#73bdc9', '#9ccfd6',
+  '#99825b', '#b39a6b', '#dac6a2', '#c6af87', '#e0ceaf', '#65a486', '#c6a169', '#df7969', '#73bdc9', '#9ccfd6',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
   // Satz hob die Kachel nur um 0.54% Luminanz vom Grund ab, die Seite verschmolz
   // zu einem schwarzen Block. admin_dashboard + shared-theme stehen noch auf den

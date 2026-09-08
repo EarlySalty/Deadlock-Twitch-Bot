@@ -12,7 +12,7 @@
  * Plasma-Blau war vorher AUCH die Chrome-Akzentfarbe (--color-accent). Dadurch wurde jeder
  * Button, jede Icon-Kachel und jede Aura neonblau — neben dem Gold ein harter Bruch. Plasma
  * ist jetzt ausschliesslich Status; das Chrome traegt ein zweites Metall (helles Messing).
- * Chart-Serienfarben (#73BDC9 & Co. in den Chart-Seiten) bleiben bewusst unberuehrt: dort
+ * Chart-Serienfarben (#00D9FF & Co. in den Chart-Seiten) bleiben bewusst unberuehrt: dort
  * ist Farbe Datenkodierung, keine Deko — monochrome Diagramme waeren unlesbar.
  */
 @theme {
@@ -57,7 +57,7 @@
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
      Werte, faellt auf die Display-Font zurueck bis der CDN-Font geladen ist. */
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
-  --gradient-brand: linear-gradient(120deg, var(--color-primary-hover) 10%, var(--color-primary) 55%, var(--color-accent));
+  --gradient-brand: linear-gradient(120deg, var(--color-primary-hover) 10%, var(--color-primary) 55%, #99825B);
   --gradient-dash: linear-gradient(135deg, var(--color-primary), var(--color-accent));
   --gradient-bg: linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
   --gradient-hero: linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
