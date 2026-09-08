@@ -1,88 +1,45 @@
 //! Hermetische Tests des Onboarding-/Re-Auth-Writes. Round-Trip-Verifikation
 //! über RaidAuthStore; Scope-Validierung + raid_enabled-Erhalt geprüft.
 
-use std::str::FromStr;
-use std::sync::Arc;
-
 use chrono::Utc;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::PgPool;
+use std::sync::Arc;
 use tb_crypto::{FieldCipher, KID};
 use tb_raid::{AuthWriteError, AuthWriter, NewAuth, RaidAuthStore};
-
+#[path = "support/auth_database.rs"]
+mod auth_database;
+use auth_database::Database;
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
-
-macro_rules! pool_or_skip {
-    ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        pool_in_schema(&dsn, $schema).await
-    }};
+struct ValidatedScopes(Vec<String>);
+#[async_trait::async_trait]
+impl tb_raid::TwitchTokenClient for ValidatedScopes {
+    async fn validate_token(
+        &self,
+        _: &str,
+        uid: &str,
+    ) -> Result<tb_raid::token_refresher::TokenValidation, tb_raid::RefreshError> {
+        Ok(tb_raid::token_refresher::TokenValidation {
+            client_id: "test".into(),
+            twitch_user_id: uid.into(),
+            scopes: self.0.clone(),
+            expires_in: 3600,
+        })
+    }
+    async fn refresh(&self, _: &str) -> Result<tb_raid::TokenResponse, tb_raid::RefreshError> {
+        unreachable!()
+    }
+    async fn exchange_code(
+        &self,
+        _: &str,
+    ) -> Result<tb_raid::TokenResponse, tb_raid::RefreshError> {
+        unreachable!()
+    }
+    async fn token_owner(&self, _: &str) -> Result<tb_raid::TokenOwnerInfo, tb_raid::RefreshError> {
+        unreachable!()
+    }
 }
-
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(dsn)
-        .unwrap()
-        .options([("search_path", schema)]);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TABLE twitch_raid_auth (
-            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
-            access_token TEXT, refresh_token TEXT,
-            token_expires_at TIMESTAMPTZ, scopes TEXT, authorized_at TIMESTAMPTZ,
-            raid_enabled BOOLEAN DEFAULT TRUE, needs_reauth BOOLEAN DEFAULT FALSE,
-            reauth_notified_at TIMESTAMPTZ,
-            access_token_enc BYTEA, refresh_token_enc BYTEA,
-            enc_version INTEGER, enc_kid TEXT
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    // remove_from_blacklist (in store_new_auth) räumt diese beiden Tabellen mit auf.
-    sqlx::query(
-        "CREATE TABLE twitch_token_blacklist (
-            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, error_message TEXT,
-            error_count INTEGER DEFAULT 1, first_error_at TEXT, last_error_at TEXT,
-            grace_expires_at TEXT
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "CREATE TABLE twitch_partners (
-            twitch_user_id TEXT, technical_pause_reason TEXT,
-            manual_partner_opt_out INTEGER DEFAULT 0,
-            raid_bot_enabled INTEGER DEFAULT 0
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool
+fn valid_client() -> ValidatedScopes {
+    ValidatedScopes(BASE_SCOPES.iter().map(|s| (*s).into()).collect())
 }
-
 fn cipher() -> Arc<FieldCipher> {
     Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap())
 }
@@ -108,6 +65,7 @@ fn base_auth(user_id: &str, activate: bool) -> NewAuth {
         granted_scopes: BASE_SCOPES.iter().map(|s| s.to_string()).collect(),
         resolved_scope_profile: "base".to_string(),
         activate_raid_features: activate,
+        state_created_at: Utc::now(),
     }
 }
 
@@ -115,12 +73,13 @@ type PartnerPauseRow = (String, Option<String>, Option<i32>, Option<i32>);
 
 #[tokio::test]
 async fn neuer_auth_wird_verschluesselt_gespeichert_und_ist_lesbar() {
-    let pool = pool_or_skip!("t6a_authwrite_new");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     let writer = AuthWriter::new(pool.clone(), cipher.clone());
 
     writer
-        .store_new_auth(&base_auth("42", true), Utc::now())
+        .store_new_auth(&base_auth("42", true), &valid_client(), Utc::now())
         .await
         .unwrap();
 
@@ -142,12 +101,20 @@ async fn neuer_auth_wird_verschluesselt_gespeichert_und_ist_lesbar() {
 
 #[tokio::test]
 async fn falsche_scopes_werden_abgelehnt_ohne_zu_schreiben() {
-    let pool = pool_or_skip!("t6a_authwrite_scopes");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     let mut bad = base_auth("42", true);
     bad.granted_scopes = vec!["bits:read".to_string()]; // unvollständig
-    let err = writer.store_new_auth(&bad, Utc::now()).await.unwrap_err();
+    let err = writer
+        .store_new_auth(
+            &bad,
+            &ValidatedScopes(bad.granted_scopes.clone()),
+            Utc::now(),
+        )
+        .await
+        .unwrap_err();
     assert!(matches!(err, AuthWriteError::ScopeMismatch { .. }));
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_auth")
@@ -159,7 +126,8 @@ async fn falsche_scopes_werden_abgelehnt_ohne_zu_schreiben() {
 
 #[tokio::test]
 async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
-    let pool = pool_or_skip!("t6a_authwrite_preserve");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     // Bestehende Zeile: raid_enabled=true, needs_reauth=true.
@@ -173,7 +141,7 @@ async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
 
     // Re-Auth OHNE activate_raid_features → raid_enabled bleibt true (Erhalt).
     writer
-        .store_new_auth(&base_auth("42", false), Utc::now())
+        .store_new_auth(&base_auth("42", false), &valid_client(), Utc::now())
         .await
         .unwrap();
 
@@ -189,7 +157,8 @@ async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
 
 #[tokio::test]
 async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
-    let pool = pool_or_skip!("t6a_authwrite_unblock");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     // Ausgangslage: wegen invalid_grant blacklisteter + technisch pausierter Partner.
@@ -218,7 +187,7 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
 
     // Erfolgreiche Re-Autorisierung.
     writer
-        .store_new_auth(&base_auth("42", true), Utc::now())
+        .store_new_auth(&base_auth("42", true), &valid_client(), Utc::now())
         .await
         .unwrap();
 
@@ -259,7 +228,8 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
 
 #[tokio::test]
 async fn reauth_loest_token_error_suffix_pause_auch_ohne_aktivierung() {
-    let pool = pool_or_skip!("t6a_authwrite_suffix_pause");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     sqlx::query(
@@ -278,7 +248,7 @@ async fn reauth_loest_token_error_suffix_pause_auch_ohne_aktivierung() {
     .unwrap();
 
     writer
-        .store_new_auth(&base_auth("43", false), Utc::now())
+        .store_new_auth(&base_auth("43", false), &valid_client(), Utc::now())
         .await
         .unwrap();
 
@@ -301,7 +271,8 @@ async fn reauth_loest_token_error_suffix_pause_auch_ohne_aktivierung() {
 
 #[tokio::test]
 async fn reauth_reaktiviert_hard_pause_nicht() {
-    let pool = pool_or_skip!("t6a_authwrite_hardpause");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     sqlx::query(
@@ -313,7 +284,7 @@ async fn reauth_reaktiviert_hard_pause_nicht() {
     .unwrap();
 
     writer
-        .store_new_auth(&base_auth("55", true), Utc::now())
+        .store_new_auth(&base_auth("55", true), &valid_client(), Utc::now())
         .await
         .unwrap();
 
@@ -333,7 +304,8 @@ async fn reauth_reaktiviert_hard_pause_nicht() {
 
 #[tokio::test]
 async fn reauth_respektiert_echte_optouts_und_hard_pauses() {
-    let pool = pool_or_skip!("t6a_authwrite_optout_hardpauses");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     sqlx::query(
@@ -354,7 +326,10 @@ async fn reauth_respektiert_echte_optouts_und_hard_pauses() {
     for user_id in ["60", "61", "62", "63", "64", "65"] {
         let mut auth = base_auth(user_id, true);
         auth.twitch_login = format!("drag{user_id}");
-        writer.store_new_auth(&auth, Utc::now()).await.unwrap();
+        writer
+            .store_new_auth(&auth, &valid_client(), Utc::now())
+            .await
+            .unwrap();
     }
 
     let rows: Vec<PartnerPauseRow> = sqlx::query_as(
@@ -377,14 +352,24 @@ async fn reauth_respektiert_echte_optouts_und_hard_pauses() {
                 Some(1),
                 Some(0),
             ),
-            ("62".to_string(), Some("blocked".to_string()), Some(0), Some(0)),
+            (
+                "62".to_string(),
+                Some("blocked".to_string()),
+                Some(0),
+                Some(0)
+            ),
             (
                 "63".to_string(),
                 Some("bot_banned".to_string()),
                 Some(0),
                 Some(0),
             ),
-            ("64".to_string(), Some("blocked".to_string()), Some(1), Some(0)),
+            (
+                "64".to_string(),
+                Some("blocked".to_string()),
+                Some(1),
+                Some(0)
+            ),
             (
                 "65".to_string(),
                 Some("bot_banned".to_string()),

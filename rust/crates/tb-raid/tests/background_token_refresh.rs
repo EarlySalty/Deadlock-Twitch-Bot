@@ -2,13 +2,11 @@
 //! Port von Python `RaidAuthManager.refresh_all_tokens`). Echter Postgres-
 //! Test-Container, Stub-Token-Client mit erfolgreichem Refresh.
 //!
-//! Env-gated: ohne `TB_TEST_DATABASE_URL` werden die Tests übersprungen.
+//! Jeder Test startet einen isolierten PostgreSQL-Prozess über Unixsocket.
 
-use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{Duration, DurationRound, TimeDelta, Utc};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
@@ -18,57 +16,27 @@ use tb_raid::{
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
 
-macro_rules! pool_or_skip {
-    ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        pool_in_schema(&dsn, $schema).await
-    }};
-}
-
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(dsn)
-        .unwrap()
-        .options([("search_path", schema)]);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TABLE twitch_raid_auth (
-            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, access_token TEXT,
-            refresh_token TEXT, token_expires_at TIMESTAMPTZ, scopes TEXT,
-            raid_enabled BOOLEAN DEFAULT TRUE, needs_reauth BOOLEAN DEFAULT FALSE,
-            access_token_enc BYTEA, refresh_token_enc BYTEA, enc_version INTEGER,
-            enc_kid TEXT, last_refreshed_at TIMESTAMPTZ )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool
-}
+#[path = "support/auth_database.rs"]
+mod auth_database;
+use auth_database::Database;
 
 /// Token-Client-Stub: liefert immer einen frischen Token (1 h gültig).
 struct OkTokenClient;
 #[async_trait::async_trait]
 impl TwitchTokenClient for OkTokenClient {
+    async fn validate_token(
+        &self,
+        _: &str,
+        uid: &str,
+    ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+        Ok(tb_raid::token_refresher::TokenValidation {
+            client_id: "test".into(),
+            twitch_user_id: uid.into(),
+            scopes: vec!["channel:manage:raids".into()],
+            expires_in: 3600,
+        })
+    }
+
     async fn refresh(&self, _t: &str) -> Result<TokenResponse, RefreshError> {
         Ok(TokenResponse {
             access_token: "neuer-access".to_string(),
@@ -89,6 +57,25 @@ impl TwitchTokenClient for OkTokenClient {
 struct NoBlacklist;
 #[async_trait::async_trait]
 impl TokenBlacklist for NoBlacklist {
+    async fn add_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uid: &str,
+        login: &str,
+        error: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.add_to_blacklist(uid, login, error).await;
+        Ok(())
+    }
+    async fn clear_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uid: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.clear_failure_count(uid).await;
+        Ok(())
+    }
+
     async fn is_blacklisted(&self, _id: &str) -> bool {
         false
     }
@@ -152,7 +139,8 @@ async fn stored_expiry(pool: &PgPool, user_id: &str) -> chrono::DateTime<Utc> {
 
 #[tokio::test]
 async fn refresht_nur_faellige_tokens() {
-    let pool = pool_or_skip!("t7_bg_due");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let now = Utc::now();
 
     // Fällig: läuft in 1 h ab (< 2 h Puffer).
@@ -195,7 +183,8 @@ async fn refresht_nur_faellige_tokens() {
 
 #[tokio::test]
 async fn ueberspringt_raid_disabled_und_needs_reauth() {
-    let pool = pool_or_skip!("t7_bg_skip");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     // Auf Mikrosekunden trunkieren: Postgres `TIMESTAMPTZ` speichert nur µs,
     // chrono::Utc::now() liefert ns. Ohne Trunkierung scheitert der exakte
     // `assert_eq!`-Vergleich unten an den verlorenen Nanosekunden.

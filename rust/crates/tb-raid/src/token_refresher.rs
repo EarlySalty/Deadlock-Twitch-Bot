@@ -50,15 +50,33 @@ pub fn is_refresh_due(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> 
 }
 
 /// Twitch-Token-Antwort (`/oauth2/token`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,
     /// Gültigkeit in Sekunden (`expires_in`).
     pub expires_in: i64,
-    /// Gewährte Scopes (Twitch `scope`-Array). Beim Refresh ungenutzt
-    /// (Scopes bleiben erhalten), beim Exchange/Onboarding relevant.
+    /// Scope-Antwort des Token-Endpunkts; vor dem Speichern separat validiert.
     pub scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("tokens", &"[redacted]")
+            .field("expires_in", &self.expires_in)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
+}
+
+/// Vom Tokenclient tatsächlich validierte Nutzer-/Clientbindung, keine Tokens.
+#[derive(Debug, Clone)]
+pub struct TokenValidation {
+    pub client_id: String,
+    pub twitch_user_id: String,
+    pub scopes: Vec<String>,
+    pub expires_in: i64,
 }
 
 /// Fehlerklassen des Token-Endpoints — steuern Blacklist vs. nicht.
@@ -75,6 +93,15 @@ pub enum RefreshError {
 /// HTTP-Port zum Twitch-Token-Endpoint (echte Impl in `tb-transport-twitch`).
 #[async_trait::async_trait]
 pub trait TwitchTokenClient: Send + Sync {
+    /// Prüft bei Twitch Client-ID, Plattform-ID, Scopes und Restgültigkeit.
+    /// Ein Adapter ohne diese Fähigkeit darf keinen vorhandenen Grant freigeben.
+    async fn validate_token(
+        &self,
+        _access_token: &str,
+        _expected_user_id: &str,
+    ) -> Result<TokenValidation, RefreshError> {
+        Err(RefreshError::Other("Tokenprüfung nicht verfügbar".into()))
+    }
     /// Erneuert ein Access-Token via `grant_type=refresh_token`.
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError>;
 
@@ -109,6 +136,26 @@ pub struct TokenOwnerInfo {
 /// Lockout-Store-Port (`twitch_token_blacklist`, echte Impl `TokenBlacklistStore`).
 #[async_trait::async_trait]
 pub trait TokenBlacklist: Send + Sync {
+    async fn add_in_transaction(
+        &self,
+        _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _uid: &str,
+        _login: &str,
+        _error: &str,
+    ) -> Result<(), sqlx::Error> {
+        Err(sqlx::Error::Protocol(
+            "Blacklist unterstützt keine atomare Änderung".into(),
+        ))
+    }
+    async fn clear_in_transaction(
+        &self,
+        _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _uid: &str,
+    ) -> Result<(), sqlx::Error> {
+        Err(sqlx::Error::Protocol(
+            "Blacklist unterstützt keine atomare Änderung".into(),
+        ))
+    }
     async fn is_blacklisted(&self, twitch_user_id: &str) -> bool;
     async fn has_recent_failure(&self, twitch_user_id: &str) -> bool;
     async fn add_to_blacklist(&self, twitch_user_id: &str, twitch_login: &str, error_message: &str);
@@ -125,6 +172,14 @@ pub enum RefreshOutcome {
     Blacklisted,
     /// Übersprungen (geblacklistet/Cooldown/Client-blockiert) oder anderer Fehler.
     Skipped,
+}
+
+#[derive(sqlx::FromRow)]
+struct RefreshGrant {
+    refresh_token_enc: Option<Vec<u8>>,
+    token_expires_at: Option<DateTime<Utc>>,
+    needs_reauth: Option<bool>,
+    enc_version: Option<i32>,
 }
 
 pub struct RaidTokenRefresher {
@@ -173,33 +228,40 @@ impl RaidTokenRefresher {
         _current_refresh_token: &str,
         now: DateTime<Utc>,
     ) -> Result<RefreshOutcome, sqlx::Error> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(35),
+            self.refresh_locked(twitch_user_id, twitch_login, now),
+        )
+        .await
+        .map_err(|_| sqlx::Error::Protocol("Twitch-Refresh überschritt die Gesamtfrist".into()))?
+    }
+    async fn refresh_locked(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        now: DateTime<Utc>,
+    ) -> Result<RefreshOutcome, sqlx::Error> {
         if self.blacklist.is_blacklisted(twitch_user_id).await
             || self.blacklist.has_recent_failure(twitch_user_id).await
         {
             return Ok(RefreshOutcome::Skipped);
         }
 
-        let mut tx = self.pool.begin().await?;
-        let (lock_a, lock_b) = advisory_lock_pair(twitch_user_id);
-        let _ = sqlx::query!(
-            r#"SELECT 1 AS "locked!" FROM (SELECT pg_advisory_xact_lock($1, $2)) AS _lock"#,
-            lock_a,
-            lock_b
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        if !crate::auth_writer::valid_uid(twitch_user_id) {
+            return Err(sqlx::Error::Protocol("Ungültige Plattform-ID".into()));
+        }
+        let mut tx = crate::auth_writer::auth_transaction(&self.pool, twitch_user_id).await?;
 
         // Re-Read unterm Lock: frischesten Stand holen, damit wir keinen bereits
         // invalidierten Refresh-Token von vor dem Lock verwenden (Twitch rotiert
         // Refresh-Tokens bei Nutzung — ein paralleler Python-Writer könnte ihn
         // inzwischen schon konsumiert haben).
-        let row = sqlx::query!(
-            r#"SELECT refresh_token_enc AS "refresh_token_enc?",
-                      token_expires_at AS "token_expires_at?"
+        let row: Option<RefreshGrant> = sqlx::query_as(
+            r#"SELECT refresh_token_enc,token_expires_at,needs_reauth,enc_version
                  FROM twitch_raid_auth
-                WHERE twitch_user_id = $1"#,
-            twitch_user_id
+                WHERE twitch_user_id = $1 FOR UPDATE"#,
         )
+        .bind(twitch_user_id)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -210,7 +272,15 @@ impl RaidTokenRefresher {
                 return Ok(RefreshOutcome::Skipped);
             }
             Some(row) => {
-                let refresh_aad = aad::raid_auth("refresh_token", twitch_user_id, 1);
+                if row.needs_reauth.unwrap_or(false) {
+                    tx.commit().await?;
+                    return Ok(RefreshOutcome::Skipped);
+                }
+                let refresh_aad = aad::raid_auth(
+                    "refresh_token",
+                    twitch_user_id,
+                    i64::from(row.enc_version.unwrap_or(1)),
+                );
                 let token = match row.refresh_token_enc {
                     Some(b) => match self.cipher.decrypt_field(&b, &refresh_aad) {
                         Ok(t) => t,
@@ -242,13 +312,24 @@ impl RaidTokenRefresher {
             }
         }
 
-        let response = match self.client.refresh(&fresh_refresh_token).await {
+        let response = match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.client.refresh(&fresh_refresh_token),
+        )
+        .await
+        .map_err(|_| sqlx::Error::Protocol("Twitch-Refresh überschritt die Frist".into()))?
+        {
             Ok(response) => response,
             Err(RefreshError::InvalidGrant) => {
-                tx.commit().await?;
                 self.blacklist
-                    .add_to_blacklist(twitch_user_id, twitch_login, "invalid refresh grant")
-                    .await;
+                    .add_in_transaction(
+                        &mut tx,
+                        twitch_user_id,
+                        twitch_login,
+                        "invalid refresh grant",
+                    )
+                    .await?;
+                tx.commit().await?;
                 return Ok(RefreshOutcome::Blacklisted);
             }
             Err(RefreshError::InvalidClient | RefreshError::Other(_)) => {
@@ -256,6 +337,23 @@ impl RaidTokenRefresher {
                 return Ok(RefreshOutcome::Skipped);
             }
         };
+
+        let verified_at = Utc::now();
+        let verified = crate::auth_writer::verify(
+            self.client.as_ref(),
+            &response.access_token,
+            twitch_user_id,
+        )
+        .await
+        .map_err(|_| {
+            sqlx::Error::Protocol("Erneuerter Twitch-Zugang konnte nicht bestätigt werden".into())
+        })?;
+        if response.refresh_token.is_empty() || response.refresh_token.len() > 4096 {
+            return Err(sqlx::Error::Protocol(
+                "Erneuerter Twitch-Zugang ohne Refresh-Token".into(),
+            ));
+        }
+        let scopes = verified.scopes.join(" ");
 
         // Verschlüsseln — schlägt es fehl, NICHTS schreiben (Lockout-Schutz).
         let access_aad = aad::raid_auth("access_token", twitch_user_id, 1);
@@ -274,23 +372,23 @@ impl RaidTokenRefresher {
             return Ok(RefreshOutcome::Skipped);
         };
 
-        // Floor gegen literal-0/negativ aus der Twitch-Antwort (fehlendes Feld
-        // fängt bereits der serde-Default 3600 ab) — sonst sofort-stale-Token.
-        let expires_at = now + Duration::seconds(response.expires_in.max(60));
-        let result = sqlx::query!(
+        let expires_at = crate::auth_writer::validated_expiry(verified_at, verified.expires_in)
+            .map_err(|_| sqlx::Error::Protocol("Ungültige Twitch-Ablaufzeit".into()))?;
+        let result = sqlx::query(
             r#"
             UPDATE twitch_raid_auth
                SET access_token = 'ENC', refresh_token = 'ENC',
                    access_token_enc = $1, refresh_token_enc = $2,
                    enc_version = 1, enc_kid = 'v1',
-                   token_expires_at = $3, last_refreshed_at = NOW()
+                   token_expires_at = $3, last_refreshed_at = clock_timestamp(), scopes=$5
              WHERE twitch_user_id = $4
             "#,
-            access_enc,
-            refresh_enc,
-            expires_at,
-            twitch_user_id
         )
+        .bind(access_enc)
+        .bind(refresh_enc)
+        .bind(expires_at)
+        .bind(twitch_user_id)
+        .bind(scopes)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() == 0 {
@@ -299,9 +397,11 @@ impl RaidTokenRefresher {
             tracing::error!(user = %mask(twitch_user_id), "Refresh: keine Auth-Zeile getroffen");
             return Ok(RefreshOutcome::Skipped);
         }
-        tx.commit().await?;
         // Erfolgreicher Refresh → Fehler-/Lockout-Zustand löschen (Python).
-        self.blacklist.clear_failure_count(twitch_user_id).await;
+        self.blacklist
+            .clear_in_transaction(&mut tx, twitch_user_id)
+            .await?;
+        tx.commit().await?;
         Ok(RefreshOutcome::Refreshed)
     }
 
@@ -363,11 +463,7 @@ impl RaidTokenRefresher {
             // Refresh-Token entschlüsseln; ohne ihn ist kein Refresh möglich.
             let enc_v = i64::from(row.enc_version.unwrap_or(1));
             let refresh_aad = aad::raid_auth("refresh_token", &user_id, enc_v);
-            let refresh_token = match row
-                .refresh_token_enc
-                .as_deref()
-                .filter(|b| !b.is_empty())
-            {
+            let refresh_token = match row.refresh_token_enc.as_deref().filter(|b| !b.is_empty()) {
                 Some(blob) => match self.cipher.decrypt_field(blob, &refresh_aad) {
                     Ok(token) if !token.is_empty() => Some(token),
                     Ok(_) => None,
@@ -382,8 +478,7 @@ impl RaidTokenRefresher {
                 },
                 None => None,
             };
-            let Some(refresh_token) = refresh_token
-            else {
+            let Some(refresh_token) = refresh_token else {
                 tracing::warn!(
                     user = %mask(&user_id),
                     "Hintergrund-Refresh übersprungen: kein entschlüsselbarer Refresh-Token"
