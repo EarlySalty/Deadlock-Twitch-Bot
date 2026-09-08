@@ -3,6 +3,10 @@ datum: 2026-09-08
 
 # Übergabe vor Implementierung
 
+## Abgeschlossener Versuch
+
+Beide echten Läufe sind vollständig beendet: je 60 von 60 Antworten, keine Fehler, keine leeren oder abgeschnittenen Antworten, Exit 0. Der direkte private Gesamtvergleich und die Kennzahlen stehen in ERGEBNIS.md. Der nachfolgende Abschnitt hält frühere Zwischenstände fest und ist keine offene Arbeitsanweisung. Runtime-Abschluss und finaler Git-Merge werden mit Root koordiniert; es gibt keine offene Modell-/Coding-Freigaberückfrage.
+
 ## Aktueller Stand nach dem erneuten Nutzer-Go
 
 Der folgende historische Übergabetext wird durch diesen Abschnitt und die letzten CONTRACT-Amendments ersetzt. Die begrenzte Codex-Umsetzung wurde vom Root freigegeben und ist gebaut. Es gibt keinen offenen Nutzer-Freigabeblocker. In dieser Runde werden ausschließlich lokale Qwen3.5-4B/9B-Modelle verglichen. Ein neuer Infisical-/Cloudpfad wurde nicht gebaut, DeepSeek bleibt unverändert produktiv.

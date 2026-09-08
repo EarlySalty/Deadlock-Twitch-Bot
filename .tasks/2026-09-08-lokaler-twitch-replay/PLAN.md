@@ -1,4 +1,4 @@
-status: aktiv
+status: abgeschlossen
 datum: 2026-09-08
 
 # Umsetzung des genehmigten Versuchs
@@ -34,4 +34,4 @@ Der erste Testlauf vor Implementierung war rot: `cargo test -p tb-llm --features
 - Durchsatz, Median/P95, Fehler, Kontext und Runtime-Ressourcen festhalten. Keine erfundene oder automatisch behauptete Sprachfreigabe.
 - Eigenprüfung mit gate_hook.py --review gegen den tatsächlichen eigenen Commit; unabhängige Rust-/Security-Gegenprüfung vor Root-Merge.
 - Stop-Regel: Produktionslast gefährdet den Betrieb oder wiederholte technische Fehler machen die Messung unbrauchbar.
-- Status: Codeprüfung läuft zum Abschluss; vollständige echte Messung noch nicht begonnen. Nach Root-Run-Go je 50 Fälle plus zehn Baselines ohne Zeitersparnis-Abkürzung. Kein fester Sampling-Seed: Code, Inputs, Parameter und Binärhash sind reproduzierbar, einzelne Antworten können zwischen Wiederholungen variieren.
+- Status: vollständig abgeschlossen. Beide Modelle lieferten jeweils 50 personalisierte Antworten plus zehn Baselines, ohne Fehler oder Abschneidungen. Privater Gesamtvergleich und Nachweise sind erstellt; Ergebnis in ERGEBNIS.md. Kein fester Sampling-Seed: Code, Inputs, Parameter und Binärhash sind nachprüfbar, einzelne Antworten können zwischen Wiederholungen variieren. Der getestete Binärstand ist außerhalb des Worktrees mit Hash im Dateinamen gesichert.
