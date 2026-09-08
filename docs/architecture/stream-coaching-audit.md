@@ -133,3 +133,39 @@ Keine Daten- oder Log-Mounts auf `/opt/deadlock/twitch/current` ergänzen: deren
 aufgelöstes Ziel bleibt beim nächsten Releasewechsel am alten Release hängen.
 Dienstlogs gehen ins Journal. Nach dem Neustart Dateizuwachs des Mitschnitts
 und mindestens einen erfolgreichen Aufnahmeblock prüfen.
+
+### Nur das Audit ausliefern
+
+Nach gemeinsamem Review, Merge und Push das Binary `tb-stream-audit-bin` aus
+einem sauberen, isolierten Checkout des freigegebenen Commits bauen. Für einen
+Audit-Fix wird der globale `current`-Link nicht umgeschaltet. Stattdessen:
+
+1. Unter `/opt/deadlock/twitch/audit-releases/<vollständiger-git-sha>/` einen
+   neuen, root-eigenen Releaseordner erstellen. Dort das gebaute Binary als
+   `rust/target/release/tb-stream-audit` und den unveränderten Launcher aus dem
+   selben Git-Commit als `rust/scripts/run_stream_audit_service.sh` installieren,
+   jeweils Modus `0755`, Eigentümer `root:root`, ohne Gruppenschreibrechte.
+   SHA256-Prüfsummen beider Dateien als `SHA256SUMS` festhalten. Einen vorhandenen
+   Releaseordner niemals überschreiben.
+2. `/etc/systemd/system/deadlock-twitch-stream-coaching-watch.service.d/20-audit-release.conf`
+   mit diesem Inhalt installieren (den SHA in beiden Pfaden ersetzen):
+
+   ```ini
+   [Service]
+   WorkingDirectory=/opt/deadlock/twitch/audit-releases/<vollständiger-git-sha>
+   ExecStart=
+   ExecStart=/usr/bin/bash /opt/deadlock/twitch/audit-releases/<vollständiger-git-sha>/rust/scripts/run_stream_audit_service.sh
+   ```
+
+3. `systemctl daemon-reload`, Unit prüfen und ausschließlich
+   `deadlock-twitch-stream-coaching-watch` neu starten. Den tatsächlichen
+   Binarypfad über `/proc/<MainPID>/exe` kontrollieren und Prüfsummen vergleichen.
+   Vorhandene Mitschnitte bleiben erhalten; der neue Recorder legt einen neuen
+   Teil mit aktuellem Zeitstempel an. Anschließend Dateizuwachs des neuen Teils
+   und den Abschluss eines Aufnahmeblocks nachweisen.
+
+Das Drop-in pinnt das Audit ausdrücklich auf diesen Commit. Bei späteren
+Audit-Deploys wird es auf den neuen geprüften Audit-Release gesetzt; ein
+allgemeiner Bot-/Dashboard-Deploy aktualisiert das gepinnte Audit nicht.
+Für einen Rücksprung das Drop-in auf den vorherigen Audit-Release setzen und
+den Auditdienst neu starten; die dauerhaften Daten werden dabei nicht geändert.
