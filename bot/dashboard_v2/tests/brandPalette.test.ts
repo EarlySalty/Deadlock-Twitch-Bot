@@ -19,6 +19,8 @@ const APPS = [
 ];
 
 const ALLOWED_HEX = new Set([
+  // Matte Dashboard-Akzente; neutrale Flächen und Text bleiben unverändert.
+  '#b39a6b', '#dac6a2', '#c6af87', '#e0ceaf', '#65a486', '#c6a169', '#df7969', '#73bdc9', '#9ccfd6',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
   // Satz hob die Kachel nur um 0.54% Luminanz vom Grund ab, die Seite verschmolz
   // zu einem schwarzen Block. admin_dashboard + shared-theme stehen noch auf den
@@ -178,5 +180,30 @@ test('Pergament-Tinten halten Kontrast >= 4.5:1 gegen das Papier', () => {
       ratio(parchment, ink) >= 4.5,
       `${ink} auf Pergament: nur ${ratio(parchment, ink).toFixed(2)}:1`,
     );
+  }
+});
+
+// Farbige Statusbeschriftungen und dunkle Schrift auf Gold bleiben lesbar.
+test('matte Dashboard-Akzente halten den Textkontrast', () => {
+  const css = readFileSync(join(import.meta.dirname, '../src/index.css'), 'utf8');
+  const token = (name: string) => {
+    const match = css.match(new RegExp('--color-' + name + ':\\s*(#[0-9a-f]{6})', 'i'));
+    assert.ok(match, name);
+    return match[1];
+  };
+  const luminance = (hex: string) => {
+    const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+  };
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  for (const name of ['primary', 'accent', 'success', 'warning', 'danger', 'info']) {
+    assert.ok(contrast(token(name), token('card')) >= 4.5, name + ' auf Karte');
+  }
+  for (const name of ['primary', 'primary-hover', 'accent', 'accent-hover']) {
+    assert.ok(contrast(token(name), token('on-gold')) >= 4.5, 'Schrift auf ' + name);
   }
 });

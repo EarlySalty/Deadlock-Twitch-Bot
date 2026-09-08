@@ -21,8 +21,8 @@ import type {
   InternalHomeViewersOverTimePoint,
 } from '@/api/home';
 
-// Marken-Gold (Industrial Gold, 0xC8A86B) fuer den Verlauf statt StreamElements-Blau.
-const GOLD = '200, 168, 107';
+// Chart und Bestwerte folgen dem gemeinsamen Gold-Akzent.
+const GOLD = 'var(--color-primary)';
 
 function formatDurationShort(seconds: number | null | undefined): string {
   if (seconds == null) return '–';
@@ -103,15 +103,15 @@ function BestTile({
     <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,translate,scale,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
       <div
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-        style={{ background: `radial-gradient(120% 80% at 50% 0%, rgba(${GOLD}, 0.22), transparent 60%)` }}
+        style={{ background: `radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, ${GOLD} 22%, transparent), transparent 60%)` }}
       />
       <div className="mb-2 flex items-center justify-between">
         <div
           className="icon-duotone flex h-7 w-7 items-center justify-center rounded-lg border"
           style={{
-            background: `rgba(${GOLD}, 0.14)`,
-            borderColor: `rgba(${GOLD}, 0.28)`,
-            color: `rgb(${GOLD})`,
+            background: `color-mix(in srgb, ${GOLD} 14%, transparent)`,
+            borderColor: `color-mix(in srgb, ${GOLD} 28%, transparent)`,
+            color: GOLD,
           }}
         >
           <Icon className="h-3.5 w-3.5" />
@@ -119,7 +119,7 @@ function BestTile({
         {isRecord ? (
           <span
             className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-            style={{ background: `rgba(${GOLD}, 0.16)`, color: `rgb(${GOLD})` }}
+            style={{ background: `color-mix(in srgb, ${GOLD} 16%, transparent)`, color: GOLD }}
           >
             <Flame className="h-3 w-3" />
             Neuer Rekord
@@ -129,7 +129,7 @@ function BestTile({
       <div className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</div>
       <div
         className="kpi-number mt-0.5 text-xl font-bold text-white"
-        style={{ textShadow: `0 0 18px rgba(${GOLD}, 0.5)` }}
+        style={{ textShadow: `0 0 18px color-mix(in srgb, ${GOLD} 50%, transparent)` }}
       >
         {display}
       </div>
@@ -187,7 +187,7 @@ export function StreamRecapCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32, delay }}
     >
-      <div className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: `rgb(${GOLD})` }}>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: GOLD }}>
         Dein Kanal in Rekorden
       </div>
       <h2 className="mt-1 text-xl font-semibold text-white">
@@ -219,16 +219,16 @@ export function StreamRecapCard({
               <AreaChart data={points} margin={{ top: 6, right: 6, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="recapViewerGold" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={`rgba(${GOLD}, 0.55)`} />
-                    <stop offset="100%" stopColor={`rgba(${GOLD}, 0.02)`} />
+                    <stop offset="0%" stopColor={`color-mix(in srgb, ${GOLD} 55%, transparent)`} />
+                    <stop offset="100%" stopColor={`color-mix(in srgb, ${GOLD} 2%, transparent)`} />
                   </linearGradient>
                 </defs>
                 <YAxis hide domain={[0, 'dataMax + 1']} />
                 <Tooltip
-                  cursor={{ stroke: `rgba(${GOLD}, 0.4)` }}
+                  cursor={{ stroke: `color-mix(in srgb, ${GOLD} 40%, transparent)` }}
                   contentStyle={{
                     background: 'rgba(11, 11, 11, 0.92)',
-                    border: `1px solid rgba(${GOLD}, 0.3)`,
+                    border: `1px solid color-mix(in srgb, ${GOLD} 30%, transparent)`,
                     borderRadius: 10,
                     fontSize: 12,
                   }}
@@ -238,7 +238,7 @@ export function StreamRecapCard({
                 <Area
                   type="monotone"
                   dataKey="viewers"
-                  stroke={`rgb(${GOLD})`}
+                  stroke={GOLD}
                   strokeWidth={2}
                   fill="url(#recapViewerGold)"
                   isAnimationActive={false}
