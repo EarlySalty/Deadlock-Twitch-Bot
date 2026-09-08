@@ -1,12 +1,10 @@
 //! Hermetische Tests des Token-Refresh-Schreibpfads. Stub-Client + Stub-
 //! Blacklist (kein Netz); echte Round-Trip-Verifikation über RaidAuthStore.
 
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
@@ -16,58 +14,9 @@ use tb_raid::{
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
 
-fn test_dsn() -> Option<String> {
-    std::env::var("TB_TEST_DATABASE_URL").ok()
-}
-
-macro_rules! pool_or_skip {
-    ($schema:expr) => {{
-        let Some(dsn) = test_dsn() else {
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        pool_in_schema(&dsn, $schema).await
-    }};
-}
-
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(dsn)
-        .unwrap()
-        .options([("search_path", schema)]);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .unwrap();
-    sqlx::query(
-        "CREATE TABLE twitch_raid_auth (
-            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
-            access_token TEXT, refresh_token TEXT,
-            token_expires_at TIMESTAMPTZ, scopes TEXT,
-            raid_enabled BOOLEAN DEFAULT TRUE, needs_reauth BOOLEAN DEFAULT FALSE,
-            access_token_enc BYTEA, refresh_token_enc BYTEA,
-            enc_version INTEGER, enc_kid TEXT, last_refreshed_at TIMESTAMPTZ
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool
-}
+#[path = "support/auth_database.rs"]
+mod auth_database;
+use auth_database::Database;
 
 fn cipher() -> Arc<FieldCipher> {
     Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap())
@@ -118,6 +67,19 @@ impl StubClient {
 }
 #[async_trait::async_trait]
 impl TwitchTokenClient for StubClient {
+    async fn validate_token(
+        &self,
+        _: &str,
+        uid: &str,
+    ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+        Ok(tb_raid::token_refresher::TokenValidation {
+            client_id: "test".into(),
+            twitch_user_id: uid.into(),
+            scopes: vec!["channel:manage:raids".into()],
+            expires_in: 3600,
+        })
+    }
+
     async fn refresh(&self, _refresh_token: &str) -> Result<TokenResponse, RefreshError> {
         self.result
             .lock()
@@ -141,6 +103,25 @@ struct StubBlacklist {
 }
 #[async_trait::async_trait]
 impl TokenBlacklist for StubBlacklist {
+    async fn add_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uid: &str,
+        login: &str,
+        error: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.add_to_blacklist(uid, login, error).await;
+        Ok(())
+    }
+    async fn clear_in_transaction(
+        &self,
+        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uid: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.clear_failure_count(uid).await;
+        Ok(())
+    }
+
     async fn is_blacklisted(&self, _u: &str) -> bool {
         self.blacklisted.load(Ordering::SeqCst)
     }
@@ -200,6 +181,19 @@ impl CapturingStubClient {
 }
 #[async_trait::async_trait]
 impl TwitchTokenClient for CapturingStubClient {
+    async fn validate_token(
+        &self,
+        _: &str,
+        uid: &str,
+    ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+        Ok(tb_raid::token_refresher::TokenValidation {
+            client_id: "test".into(),
+            twitch_user_id: uid.into(),
+            scopes: vec!["channel:manage:raids".into()],
+            expires_in: 3600,
+        })
+    }
+
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
         *self.received_token.lock().unwrap() = Some(refresh_token.to_string());
         Ok(self.response.clone())
@@ -240,7 +234,8 @@ impl TwitchTokenClient for BlockedStubClient {
 /// fälligen (abgelaufenen) Auth-Zeile wird `refresh` nie aufgerufen.
 #[tokio::test]
 async fn refresh_all_due_kurzschliesst_bei_client_auth_block() {
-    let pool = pool_or_skip!("t6a_refresh_client_auth_block");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     // Fällige Zeile (abgelaufen) — ohne den Guard würde sie refresht.
     seed_row_expired(&pool, &cipher, "42", "alt-refresh").await;
@@ -268,7 +263,8 @@ async fn refresh_all_due_kurzschliesst_bei_client_auth_block() {
 
 #[tokio::test]
 async fn erfolgreicher_refresh_schreibt_neue_verschluesselte_tokens() {
-    let pool = pool_or_skip!("t6a_refresh_ok");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     seed_row(&pool, &cipher, "42").await;
     let blacklist = Arc::new(StubBlacklist::default());
@@ -305,7 +301,8 @@ async fn erfolgreicher_refresh_schreibt_neue_verschluesselte_tokens() {
 
 #[tokio::test]
 async fn invalid_grant_blacklistet_und_laesst_tokens_unveraendert() {
-    let pool = pool_or_skip!("t6a_refresh_invalid_grant");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     seed_row(&pool, &cipher, "42").await;
     let blacklist = Arc::new(StubBlacklist::default());
@@ -331,7 +328,8 @@ async fn invalid_grant_blacklistet_und_laesst_tokens_unveraendert() {
 
 #[tokio::test]
 async fn invalid_client_und_other_ueberspringen_ohne_blacklist() {
-    let pool = pool_or_skip!("t6a_refresh_skip");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     seed_row(&pool, &cipher, "42").await;
     let blacklist = Arc::new(StubBlacklist::default());
@@ -354,7 +352,8 @@ async fn invalid_client_und_other_ueberspringen_ohne_blacklist() {
 
 #[tokio::test]
 async fn geblacklisteter_streamer_wird_vorab_uebersprungen() {
-    let pool = pool_or_skip!("t6a_refresh_pre_blacklist");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     seed_row(&pool, &cipher, "42").await;
     let blacklist = Arc::new(StubBlacklist::default());
@@ -380,7 +379,8 @@ async fn geblacklisteter_streamer_wird_vorab_uebersprungen() {
 /// Der Fix stellt sicher, dass der HTTP-Call mit dem DB-seitigen Token erfolgt.
 #[tokio::test]
 async fn re_read_unterm_lock_nutzt_db_refresh_token_nicht_uebergebenen() {
-    let pool = pool_or_skip!("t6a_refresh_reread");
+    let db = Database::new().await;
+    let pool = db.pool.clone();
     let cipher = cipher();
     // DB enthält `db-refresh` als Refresh-Token; Token ist abgelaufen.
     seed_row_expired(&pool, &cipher, "42", "db-refresh").await;

@@ -1223,13 +1223,13 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         // 3. State konsumieren (single-use).
         let state_info = self
             .state_store
-            .consume(&state_str, Utc::now())
+            .consume_with_created_at(&state_str, Utc::now())
             .await
             .map_err(|e| {
                 tracing::error!("oauth_callback: StateStore::consume fehlgeschlagen: {e}");
                 RaidOAuthError::Internal
             })?;
-        let Some(state_info) = state_info else {
+        let Some((state_info, state_created_at)) = state_info else {
             return Ok(failure(
                 400,
                 "Ungültiger State",
@@ -1330,34 +1330,9 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             return Ok(wrong_account_failure());
         }
 
-        // 7. Scope-Check (`oauth_callback.py:189-206`): gewährte Scopes dürfen
-        // das Profil nicht ÜBERSCHREITEN. (Der AuthWriter prüft beim Persist
-        // zusätzlich auf exakte Gleichheit — strenger als Python bei
-        // theoretisch fehlenden Scopes, was Twitch praktisch nie liefert.)
-        let granted: Vec<String> = token_response
-            .scopes
-            .iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let allowed: std::collections::BTreeSet<&str> =
-            scopes_for_profile(&state_info.scope_profile)
-                .iter()
-                .copied()
-                .collect();
-        let unexpected: Vec<&str> = granted
-            .iter()
-            .map(String::as_str)
-            .filter(|s| !allowed.contains(s))
-            .collect();
-        if !unexpected.is_empty() {
-            tracing::warn!(
-                login = %twitch_login,
-                scopes = %unexpected.join(", "),
-                "oauth_callback: Scopes außerhalb des Profils"
-            );
-            return Ok(invalid_scopes_failure());
-        }
+        // AuthWriter validiert die tatsächlich am Token vorhandenen Rechte bei
+        // Twitch. Weitere erlaubte Rechte sind kein Fehler und werden nicht erfunden.
+        let granted = token_response.scopes.clone();
 
         // 7b. Signup-Block. Bewusst VOR `store_new_auth`: wer nicht ins
         // Partnerprogramm gehört, soll gar nicht erst Credentials bei uns
@@ -1391,12 +1366,17 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             twitch_login: twitch_login.clone(),
             access_token: token_response.access_token.clone(),
             refresh_token: token_response.refresh_token.clone(),
-            expires_in: token_response.expires_in.max(60),
+            expires_in: token_response.expires_in,
             granted_scopes: granted,
             resolved_scope_profile: state_info.scope_profile.clone(),
-            activate_raid_features: true,
+            activate_raid_features: state_info.scope_profile != "uplink",
+            state_created_at,
         };
-        if let Err(e) = self.auth_writer.store_new_auth(&new_auth, Utc::now()).await {
+        if let Err(e) = self
+            .auth_writer
+            .store_new_auth(&new_auth, self.token_client.as_ref(), Utc::now())
+            .await
+        {
             use tb_raid::auth_writer::AuthWriteError;
             return Ok(match e {
                 AuthWriteError::ScopeMismatch { profile } => {
@@ -1407,6 +1387,8 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                     );
                     invalid_scopes_failure()
                 }
+                AuthWriteError::DisconnectedSinceAuthorization => failure(409,"Uplink wurde getrennt","<p>Diese Anmeldung wurde vor dem Trennen gestartet. Bitte verbinde Twitch im Uplink-Dashboard erneut.</p>".into()),
+                AuthWriteError::ConflictingGrant => failure(409,"Weitere Freigabe nötig","<p>Diese Anmeldung würde vorhandene Twitch-Rechte ersetzen. Bitte erteile die benötigten Rechte über den Verbinden-Knopf im Uplink-Dashboard.</p>".into()),
                 other => {
                     tracing::error!(
                         login = %twitch_login,
@@ -1444,14 +1426,17 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         // immer dann, wenn der Partner inaktiv ist und reaktiviert werden darf —
         // sonst bliebe der Web-Weg über `/twitch/raid/auth` folgenlos.
         // Async, deshalb vor dem `match` (Match-Guards dürfen nicht awaiten).
-        let sync_existing_auth = match (&self.partner_setup, had_existing_auth) {
+        let partner_setup = (state_info.scope_profile != "uplink")
+            .then_some(self.partner_setup.as_ref())
+            .flatten();
+        let sync_existing_auth = match (partner_setup, had_existing_auth) {
             (Some(_), true) => {
                 should_sync_existing_auth_followup(state_discord_user_id.as_deref())
                     || partner_needs_reactivation(&self.pool, &twitch_user_id, &twitch_login).await
             }
             _ => false,
         };
-        match (&self.partner_setup, had_existing_auth) {
+        match (partner_setup, had_existing_auth) {
             (Some(setup), false) => {
                 let setup = setup.clone();
                 let uid = twitch_user_id.clone();
@@ -1496,14 +1481,14 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 });
             }
             (Some(_), true) => {}
-            (None, false) => {
+            (None, false) if state_info.scope_profile != "uplink" => {
                 tracing::warn!(
                     login = %twitch_login,
                     "oauth_callback: Erst-Auth gespeichert, aber kein PartnerSetupService \
                      verdrahtet — Followups entfallen"
                 );
             }
-            (None, true) => {}
+            (None, _) => {}
         }
 
         tracing::info!(login = %twitch_login, "Raid auth successful");
@@ -2117,6 +2102,7 @@ mod db_tests {
         sqlx::query(
             r#"
             CREATE TABLE oauth_state_tokens (
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 state_token     TEXT PRIMARY KEY,
                 platform        TEXT,
                 streamer_login  TEXT,
@@ -2780,6 +2766,10 @@ mod db_tests {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[path = "../../../crates/tb-raid/tests/support/auth_database.rs"]
+mod auth_test_database;
+
+#[cfg(test)]
 mod callback_tests {
     use super::*;
     use std::sync::Mutex;
@@ -2791,63 +2781,14 @@ mod callback_tests {
 
     const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
 
-    fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
-    }
-
-    macro_rules! db_dsn_or_skip {
-        () => {
-            match test_dsn() {
-                Some(d) => d,
-                None => {
-                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-                    }
-                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                    return;
-                }
-            }
-        };
-    }
-
-    async fn make_pool(dsn: &str, schema: &str) -> PgPool {
-        // Schema auf einer Wegwerf-Verbindung anlegen.
-        let admin = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(dsn)
-            .await
-            .expect("connect admin");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-
-        // search_path via after_connect auf JEDER Verbindung setzen, nicht nur
-        // einmalig per `SET`. Der oauth_callback-Schreibpfad (AuthWriter::store_new_auth)
-        // oeffnet eine EIGENE Transaktions-Verbindung via `pool.begin()`; ein einmaliges
-        // `SET search_path` auf der Pool-Connection greift dort nicht, die Transaktion
-        // laeuft gegen `public` und sieht die Test-Tabellen nicht -> "relation does not
-        // exist" -> Handler verschluckt den Fehler in eine generische 500 statt 200.
-        let schema_owned = schema.to_string();
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .after_connect(move |conn, _| {
-                let schema = schema_owned.clone();
-                Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {schema}"))
-                        .execute(conn)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect(dsn)
-            .await
-            .expect("connect pool mit search_path");
+    async fn make_pool(base: &PgPool) -> PgPool {
+        let pool = base.clone();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260908210000_twitch_uplink_intent.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         // Prod-treue Typen (TIMESTAMPTZ/BOOLEAN wie twitch_analytics).
         sqlx::query(
             r#"
@@ -2877,6 +2818,7 @@ mod callback_tests {
         sqlx::query(
             r#"
             CREATE TABLE oauth_state_tokens (
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 state_token     TEXT PRIMARY KEY,
                 platform        TEXT,
                 streamer_login  TEXT,
@@ -3050,11 +2992,18 @@ mod callback_tests {
     struct StubTokenClient {
         exchange: Mutex<Option<Result<TokenResponse, RefreshError>>>,
         owner: Mutex<Option<Result<TokenOwnerInfo, RefreshError>>>,
+        validated: tb_raid::token_refresher::TokenValidation,
     }
 
     impl StubTokenClient {
         fn ok(scopes: &[&str], owner_id: &str, owner_login: &str) -> Self {
             Self {
+                validated: tb_raid::token_refresher::TokenValidation {
+                    client_id: "cid".into(),
+                    twitch_user_id: owner_id.into(),
+                    scopes: scopes.iter().map(|s| (*s).into()).collect(),
+                    expires_in: 14000,
+                },
                 exchange: Mutex::new(Some(Ok(TokenResponse {
                     access_token: "frisch-acc".to_string(),
                     refresh_token: "frisch-ref".to_string(),
@@ -3070,6 +3019,12 @@ mod callback_tests {
 
         fn exchange_fails() -> Self {
             Self {
+                validated: tb_raid::token_refresher::TokenValidation {
+                    client_id: "cid".into(),
+                    twitch_user_id: "1".into(),
+                    scopes: vec![],
+                    expires_in: 14000,
+                },
                 exchange: Mutex::new(Some(Err(RefreshError::Other("kaputt".into())))),
                 owner: Mutex::new(None),
             }
@@ -3078,6 +3033,13 @@ mod callback_tests {
 
     #[async_trait]
     impl TwitchTokenClient for StubTokenClient {
+        async fn validate_token(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+            Ok(self.validated.clone())
+        }
         async fn refresh(&self, _t: &str) -> Result<TokenResponse, RefreshError> {
             unreachable!("refresh im Callback-Test ungenutzt")
         }
@@ -3144,8 +3106,8 @@ mod callback_tests {
 
     #[tokio::test]
     async fn erfolg_speichert_verschluesselte_tokens_und_liefert_redirect() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_ok").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         let state = seed_state(&pool, "dragscope", None, None).await;
         let imp = make_impl(
             &pool,
@@ -3187,8 +3149,8 @@ mod callback_tests {
     /// `store_new_auth`, nicht danach mit anschliessendem Aufraeumen.
     #[tokio::test]
     async fn signup_block_speichert_keine_credentials_und_zeigt_absagetext() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_signup_block").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         sqlx::query(
             "INSERT INTO twitch_partner_signup_denylist
                 (twitch_user_id, twitch_login, reason, added_by)
@@ -3232,8 +3194,8 @@ mod callback_tests {
     /// der reale Ausfall ist (Migration nicht gelaufen).
     #[tokio::test]
     async fn signup_block_lookup_fehler_speichert_keine_credentials() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_signup_block_fail").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         sqlx::query("DROP TABLE twitch_partner_signup_denylist")
             .execute(&pool)
             .await
@@ -3261,8 +3223,8 @@ mod callback_tests {
 
     #[tokio::test]
     async fn reauth_ohne_discord_state_fuehrt_partner_sync_aus() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_reauth_no_discord_sync").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         sqlx::query(
             "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
              VALUES ('222', 'reauthme', FALSE, TRUE)",
@@ -3323,8 +3285,8 @@ mod callback_tests {
         // Der Weg, den das Dashboard bei inaktivem Partner anbietet:
         // „Jetzt neu autorisieren" → /twitch/raid/auth → Callback, ohne
         // Discord-ID im State. Vorher ein No-op — der Streamer blieb passiv.
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_reauth_departnered").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         sqlx::query(
             "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled)
              VALUES ('333', 'getrennt', FALSE)",
@@ -3382,8 +3344,8 @@ mod callback_tests {
 
     #[tokio::test]
     async fn user_id_mismatch_gibt_403_und_speichert_nichts() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_uid_mismatch").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         let state = seed_state(&pool, "dragscope", None, Some("999")).await;
         let imp = make_impl(
             &pool,
@@ -3408,8 +3370,8 @@ mod callback_tests {
 
     #[tokio::test]
     async fn login_mismatch_ohne_user_id_erwartung_gibt_403() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_login_mismatch").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         // requested_login wird zur Login-Erwartung (kein discord:/public:-Präfix).
         let state = seed_state(&pool, "erwarteter_kanal", None, None).await;
         let imp = make_impl(
@@ -3428,8 +3390,8 @@ mod callback_tests {
 
     #[tokio::test]
     async fn discord_login_erzeugt_keine_login_erwartung() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_discord_login").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         // Synthetischer Onboarding-Login → kein Mismatch trotz fremdem Kanal.
         let state = seed_state(&pool, "discord:42", None, None).await;
         let imp = make_impl(
@@ -3446,12 +3408,12 @@ mod callback_tests {
     }
 
     #[tokio::test]
-    async fn unerwartete_scopes_geben_400_und_speichern_nichts() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_scopes").await;
+    async fn fehlende_validierte_scopes_geben_400_und_speichern_nichts() {
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         let state = seed_state(&pool, "dragscope", None, None).await;
         let mut scopes = raid_scopes();
-        scopes.push("channel:manage:broadcast"); // außerhalb des Profils
+        scopes.retain(|s| *s != "channel:manage:raids"); // Pflichtrecht fehlt bei tatsächlicher Validierung
         let imp = make_impl(&pool, StubTokenClient::ok(&scopes, "111", "dragscope")).await;
 
         let result = imp
@@ -3470,8 +3432,8 @@ mod callback_tests {
 
     #[tokio::test]
     async fn exchange_fehler_gibt_generische_500_payload() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_exchange_fail").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         let state = seed_state(&pool, "dragscope", None, None).await;
         let imp = make_impl(&pool, StubTokenClient::exchange_fails()).await;
 
@@ -3487,13 +3449,19 @@ mod callback_tests {
 
     #[tokio::test]
     async fn ungueltiger_state_gibt_400_ohne_token_calls() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_bad_state").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
         // Stub würde bei Aufruf panicen (None) — beweist, dass vor dem
         // State-Check kein Twitch-Call passiert.
         let imp = make_impl(
             &pool,
             StubTokenClient {
+                validated: tb_raid::token_refresher::TokenValidation {
+                    client_id: "cid".into(),
+                    twitch_user_id: "1".into(),
+                    scopes: vec![],
+                    expires_in: 1,
+                },
                 exchange: Mutex::new(None),
                 owner: Mutex::new(None),
             },
@@ -3515,8 +3483,8 @@ mod callback_tests {
     /// feuerte. Vor dem Fix: Timeout auf `notified()` => rot.
     #[tokio::test]
     async fn reauth_triggert_sofortigen_chat_subscription_reconcile() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_cb_reauth_chat_reconcile").await;
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
 
         // Bestehende Auth-Zeile => Re-Auth-Pfad. needs_reauth=TRUE bildet den
         // vor der Re-Auth geblockten Kanal ab.
@@ -3573,5 +3541,88 @@ mod callback_tests {
         tokio::time::timeout(Duration::from_millis(500), reconcile.notified())
             .await
             .expect("Re-Auth muss den Chat-Subscription-Reconcile sofort ausloesen");
+    }
+    #[tokio::test]
+    async fn uplink_callback_does_not_enable_raids_or_create_a_partner() {
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
+        let state = RaidOAuthState {
+            requested_login: "streamer".into(),
+            scope_profile: "uplink".into(),
+            expected_twitch_login: None,
+            expected_twitch_user_id: Some("111".into()),
+            discord_user_id: None,
+        };
+        StateStore::new(pool.clone(), "https://example.test/callback")
+            .persist("synthetic-uplink-state", &state, Utc::now())
+            .await
+            .unwrap();
+        let imp = make_impl_with_partner_setup(
+            &pool,
+            StubTokenClient::ok(scopes_for_profile("uplink"), "111", "streamer"),
+            Some(partner_setup_service(&pool)),
+        )
+        .await;
+        let result = imp
+            .oauth_callback("synthetic-code", "synthetic-uplink-state", "")
+            .await
+            .unwrap();
+        assert_eq!(result.status, 200);
+        let raid: bool = sqlx::query_scalar(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id='111'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!raid);
+        let enabled: bool = sqlx::query_scalar(
+            "SELECT enabled FROM twitch_uplink_auth_intent WHERE twitch_user_id='111'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(enabled);
+        let partners: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_partners")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(partners, 0);
+    }
+    #[tokio::test]
+    async fn stale_uplink_callback_returns_visible_conflict_after_disconnect() {
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
+        let state = RaidOAuthState {
+            requested_login: "streamer".into(),
+            scope_profile: "uplink".into(),
+            expected_twitch_login: None,
+            expected_twitch_user_id: Some("111".into()),
+            discord_user_id: None,
+        };
+        StateStore::new(pool.clone(), "https://example.test/callback")
+            .persist("synthetic-old-state", &state, Utc::now())
+            .await
+            .unwrap();
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        AuthWriter::new(pool.clone(), cipher)
+            .disconnect_uplink("111", Utc::now())
+            .await
+            .unwrap();
+        let imp = make_impl(
+            &pool,
+            StubTokenClient::ok(scopes_for_profile("uplink"), "111", "streamer"),
+        )
+        .await;
+        let result = imp
+            .oauth_callback("synthetic-code", "synthetic-old-state", "")
+            .await
+            .unwrap();
+        assert_eq!(result.status, 409);
+        assert!(result.body_html.contains("erneut"));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_raid_auth")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

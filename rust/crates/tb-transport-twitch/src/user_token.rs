@@ -22,7 +22,7 @@ fn default_expires_in() -> i64 {
 }
 
 /// Antwort des Token-Endpoints (Refresh-Pfad).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct UserTokenResponse {
     #[serde(default)]
     pub access_token: String,
@@ -32,6 +32,25 @@ pub struct UserTokenResponse {
     pub expires_in: i64,
     #[serde(default)]
     pub scope: Vec<String>,
+}
+
+impl std::fmt::Debug for UserTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserTokenResponse")
+            .field("tokens", &"[redacted]")
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
+/// Tatsächlich bei Twitch geprüfte Bindung eines Nutzer-Tokens. Keine Secrets.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ValidatedUserToken {
+    pub client_id: String,
+    pub user_id: String,
+    pub scopes: Vec<String>,
+    pub expires_in: i64,
 }
 
 /// Fehlerklassen des Token-Endpoints (steuern Blacklist vs. nicht).
@@ -129,7 +148,88 @@ struct TokenOwnerResponse {
     data: Vec<TokenOwner>,
 }
 
+// Alle Token-/Owner-Antworten sind klein. Fehlertexte des Gegenübers bleiben
+// im RAM und werden nicht in Diagnose- oder Callbackmeldungen übernommen.
+async fn bounded_oauth_body(mut response: reqwest::Response) -> Result<Vec<u8>, UserTokenError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| UserTokenError::Other("Twitch-Antwort unvollständig".into()))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > 32768 {
+            return Err(UserTokenError::Other("Twitch-Antwort zu groß".into()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 impl HelixClient {
+    /// GET /oauth2/validate, gebunden an den konfigurierten Client und die
+    /// bestätigte Plattform-ID. Antwortgröße und gesamte HTTP-Dauer begrenzt.
+    pub async fn validate_user_token(
+        &self,
+        access_token: &str,
+        expected_user_id: &str,
+    ) -> Result<ValidatedUserToken, UserTokenError> {
+        if access_token.is_empty()
+            || access_token.len() > 4096
+            || expected_user_id.is_empty()
+            || !expected_user_id.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(UserTokenError::InvalidGrant);
+        }
+        let config = self.helix_config();
+        let url = config
+            .token_url
+            .strip_suffix("/oauth2/token")
+            .ok_or_else(|| UserTokenError::Other("Tokenprüfung: ungültiger Endpunkt".into()))?;
+        let mut response = self
+            .http_client()
+            .get(format!("{url}/oauth2/validate"))
+            .header("Authorization", format!("OAuth {access_token}"))
+            .timeout(std::time::Duration::from_secs(8))
+            .send()
+            .await
+            .map_err(|_| UserTokenError::Other("Tokenprüfung nicht erreichbar".into()))?;
+        if response.status().as_u16() == 401 {
+            return Err(UserTokenError::InvalidGrant);
+        }
+        if response.status().as_u16() != 200 {
+            return Err(UserTokenError::Other("Tokenprüfung fehlgeschlagen".into()));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| UserTokenError::Other("Tokenprüfung unvollständig".into()))?
+        {
+            if chunk.len() > (32 * 1024_usize).saturating_sub(bytes.len()) {
+                return Err(UserTokenError::Other(
+                    "Tokenprüfung: Antwort zu groß".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let validated: ValidatedUserToken = serde_json::from_slice(&bytes)
+            .map_err(|_| UserTokenError::Other("Tokenprüfung: ungültige Antwort".into()))?;
+        if validated.client_id != config.client_id
+            || validated.user_id != expected_user_id
+            || validated.expires_in <= 0
+            || validated.scopes.len() > 128
+            || validated.scopes.iter().any(|s| {
+                s.is_empty()
+                    || s.len() > 128
+                    || !s.is_ascii()
+                    || s.bytes()
+                        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+            })
+        {
+            return Err(UserTokenError::InvalidGrant);
+        }
+        Ok(validated)
+    }
     /// Erneuert einen User-Access-Token (grant_type=refresh_token).
     pub async fn refresh_user_token(
         &self,
@@ -185,21 +285,12 @@ impl HelixClient {
             .form(params)
             .send()
             .await
-            .map_err(|error| UserTokenError::Other(format!("request failed: {error}")))?;
+            .map_err(|_| UserTokenError::Other("Twitch-Verbindung fehlgeschlagen".into()))?;
 
         let status = response.status().as_u16();
+        let body = bounded_oauth_body(response).await?;
         if status != 200 {
-            let body = match response.text().await {
-                Ok(body) => body,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        status,
-                        "Twitch-User-Token: Fehlerbody nicht lesbar"
-                    );
-                    String::new()
-                }
-            };
+            let body = String::from_utf8_lossy(&body);
             if is_invalid_client(status, &body) {
                 // P2.33: 15-Min-Block setzen (Python `_block_client_auth`), damit
                 // Exchange/Refresh/Sweep Twitch während einer Credentials-Panne
@@ -210,14 +301,13 @@ impl HelixClient {
             if is_invalid_grant(status, &body) {
                 return Err(UserTokenError::InvalidGrant);
             }
-            let snippet: String = body.chars().take(300).collect();
-            return Err(UserTokenError::Other(format!("HTTP {status}: {snippet}")));
+            return Err(UserTokenError::Other(format!(
+                "Twitch-Token-Endpunkt: HTTP {status}"
+            )));
         }
 
-        let parsed = response
-            .json::<UserTokenResponse>()
-            .await
-            .map_err(|error| UserTokenError::Other(format!("invalid token response: {error}")))?;
+        let parsed = serde_json::from_slice::<UserTokenResponse>(&body)
+            .map_err(|_| UserTokenError::Other("Twitch-Token-Antwort nicht lesbar".into()))?;
         // P2.33: Erfolgreicher Tausch/Refresh hebt einen evtl. Cooldown auf
         // (Python: `_client_auth_blocked_until = 0.0`).
         self.clear_client_auth_block();
@@ -242,31 +332,17 @@ impl HelixClient {
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|error| UserTokenError::Other(format!("request failed: {error}")))?;
+            .map_err(|_| UserTokenError::Other("Twitch-Verbindung fehlgeschlagen".into()))?;
 
         let status = response.status().as_u16();
         if status != 200 {
-            let body = match response.text().await {
-                Ok(body) => body,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        status,
-                        "Twitch-User-Token: Owner-Fehlerbody nicht lesbar"
-                    );
-                    String::new()
-                }
-            };
-            let snippet: String = body.chars().take(300).collect();
             return Err(UserTokenError::Other(format!(
-                "user lookup HTTP {status}: {snippet}"
+                "Twitch-Kontoabfrage: HTTP {status}"
             )));
         }
-
-        let body: TokenOwnerResponse = response
-            .json()
-            .await
-            .map_err(|error| UserTokenError::Other(format!("invalid users response: {error}")))?;
+        let bytes = bounded_oauth_body(response).await?;
+        let body: TokenOwnerResponse = serde_json::from_slice(&bytes)
+            .map_err(|_| UserTokenError::Other("Twitch-Kontoantwort nicht lesbar".into()))?;
         let owner =
             body.data.into_iter().next().ok_or_else(|| {
                 UserTokenError::Other("missing user data in response".to_string())
@@ -322,7 +398,7 @@ impl HelixClient {
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|error| UserTokenError::Other(format!("request failed: {error}")))?;
+            .map_err(|_| UserTokenError::Other("Twitch-Verbindung fehlgeschlagen".into()))?;
         let status = response.status().as_u16();
         if status != 200 {
             // Kein Body-Auszug: bei 200 staende der Key darin, und ein
@@ -371,7 +447,7 @@ impl HelixClient {
             .form(&params)
             .send()
             .await
-            .map_err(|error| UserTokenError::Other(format!("request failed: {error}")))?;
+            .map_err(|_| UserTokenError::Other("Twitch-Verbindung fehlgeschlagen".into()))?;
         let status = response.status().as_u16();
         if status != 200 {
             return Err(UserTokenError::Other(format!("revoke HTTP {status}")));
@@ -386,6 +462,91 @@ mod tests {
     use crate::client::HelixConfig;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn validation_checks_client_user_expiry_and_actual_scopes() {
+        use wiremock::matchers::header;
+        for (client_id, user_id, expires, success) in [
+            ("cid", "42", 3600, true),
+            ("foreign", "42", 3600, false),
+            ("cid", "99", 3600, false),
+            ("cid", "42", 0, false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET")).and(path("/oauth2/validate"))
+                .and(header("Authorization", "OAuth synthetic-token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "client_id":client_id,"user_id":user_id,"expires_in":expires,"scopes":["user:read:chat"]
+                }))).mount(&server).await;
+            let result = client_for(&server)
+                .validate_user_token("synthetic-token", "42")
+                .await;
+            assert_eq!(result.is_ok(), success);
+            if success {
+                assert_eq!(result.unwrap().scopes, ["user:read:chat"]);
+            }
+        }
+    }
+    #[tokio::test]
+    async fn validation_rejects_revoked_app_missing_and_oversized_responses_without_leaking_them() {
+        for response in [
+            ResponseTemplate::new(401).set_body_string("synthetic-token"),
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"client_id":"cid","user_id":null,"scopes":[],"expires_in":123}),
+            ),
+            ResponseTemplate::new(200).set_body_string("x".repeat(33000)),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/oauth2/validate"))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let error = client_for(&server)
+                .validate_user_token("synthetic-token", "42")
+                .await
+                .unwrap_err();
+            assert!(!format!("{error:?}").contains("synthetic-token"));
+        }
+    }
+    #[tokio::test]
+    async fn validation_does_not_follow_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/oauth2/validate"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/collect", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/collect"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(client_for(&server)
+            .validate_user_token("synthetic-token", "42")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn token_endpoint_errors_never_echo_remote_secrets() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("synthetic-private-token-response"),
+            )
+            .mount(&server)
+            .await;
+        let error = client_for(&server)
+            .refresh_user_token("synthetic-refresh")
+            .await
+            .unwrap_err();
+        assert!(!format!("{error:?}").contains("synthetic-private-token-response"));
+    }
 
     fn client_for(server: &MockServer) -> HelixClient {
         HelixClient::new(HelixConfig {

@@ -104,25 +104,22 @@ impl StateStore {
     ) -> Result<(), sqlx::Error> {
         let expires_at = now + Duration::seconds(STATE_TTL_SECONDS);
         let state_lookup_key = tb_crypto::token_lookup_key(state_token);
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO oauth_state_tokens
-                (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())
             ON CONFLICT (state_token) DO UPDATE SET
                 platform = EXCLUDED.platform,
                 streamer_login = EXCLUDED.streamer_login,
                 redirect_uri = EXCLUDED.redirect_uri,
                 pkce_verifier = EXCLUDED.pkce_verifier,
-                expires_at = EXCLUDED.expires_at
-            "#,
-            state_lookup_key,
-            PLATFORM_RAID,
-            &state.requested_login,
-            &self.redirect_uri,
-            state.serialize_meta(),
-            expires_at
+                expires_at = EXCLUDED.expires_at,
+                created_at = EXCLUDED.created_at
+            "#
         )
+        .bind(state_lookup_key).bind(PLATFORM_RAID).bind(&state.requested_login)
+        .bind(&self.redirect_uri).bind(state.serialize_meta()).bind(expires_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -161,23 +158,32 @@ impl StateStore {
         state_token: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<RaidOAuthState>, sqlx::Error> {
+        Ok(self
+            .consume_with_created_at(state_token, now)
+            .await?
+            .map(|(state, _)| state))
+    }
+    /// Die DB-Zeit der State-Erzeugung bindet den Callback an die Absicht vor
+    /// einem späteren Trennen. Fehlende alte Zeitangaben sind nicht bestätigt.
+    pub async fn consume_with_created_at(
+        &self,
+        state_token: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<(RaidOAuthState, DateTime<Utc>)>, sqlx::Error> {
         let state_lookup_key = tb_crypto::token_lookup_key(state_token);
-        let row = sqlx::query!(
+        let row: Option<(String, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
             r#"
             DELETE FROM oauth_state_tokens
             WHERE state_token = $1 AND platform = $2 AND expires_at > $3
-            RETURNING COALESCE(streamer_login, '') AS "streamer_login!",
-                      pkce_verifier AS "pkce_verifier?"
+            RETURNING COALESCE(streamer_login, ''),pkce_verifier,created_at
             "#,
-            state_lookup_key,
-            PLATFORM_RAID,
-            now
         )
+        .bind(state_lookup_key)
+        .bind(PLATFORM_RAID)
+        .bind(now)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row_to_state(
-            row.map(|row| (row.streamer_login, row.pkce_verifier)),
-        ))
+        Ok(row.and_then(|(login, meta, created)| row_to_state(Some((login, meta))).zip(created)))
     }
 
     /// Räumt abgelaufene raid-State-Tokens ab; liefert die Anzahl.

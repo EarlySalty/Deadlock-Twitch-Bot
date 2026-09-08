@@ -26,7 +26,7 @@ use tb_crypto::{aad, FieldCipher};
 use crate::util::mask_log_identifier as mask;
 
 /// Entschlüsseltes Token-Bündel eines Streamers.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RaidTokens {
     pub twitch_user_id: String,
     pub twitch_login: String,
@@ -34,6 +34,19 @@ pub struct RaidTokens {
     pub refresh_token: Option<String>,
     pub token_expires_at: Option<DateTime<Utc>>,
     pub needs_reauth: bool,
+    /// Nur die Uplink-Nutzung wurde bewusst getrennt; Raid-/Botnutzung ist
+    /// davon unabhängig. Im gemeinsamen Snapshot für den Broker geprüft.
+    pub uplink_disconnected: bool,
+}
+impl std::fmt::Debug for RaidTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RaidTokens")
+            .field("twitch_user_id", &self.twitch_user_id)
+            .field("needs_reauth", &self.needs_reauth)
+            .field("uplink_disconnected", &self.uplink_disconnected)
+            .field("tokens", &"[redacted]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Roh-Zeile aus `twitch_raid_auth` (prod-verifizierte Typen: `_enc` bytea,
@@ -46,6 +59,8 @@ struct RaidAuthRow {
     enc_version: Option<i32>,
     token_expires_at: Option<DateTime<Utc>>,
     needs_reauth: Option<bool>,
+    scopes: Option<String>,
+    uplink_disconnected: bool,
 }
 
 /// Lesezugriff auf den verschlüsselten Raid-Token-Store.
@@ -99,14 +114,16 @@ impl RaidAuthStore {
         let sql = if require_raid_enabled {
             r#"
             SELECT twitch_login, access_token_enc, refresh_token_enc,
-                   enc_version, token_expires_at, needs_reauth
+                   enc_version, token_expires_at, needs_reauth, scopes,
+                   FALSE AS uplink_disconnected
             FROM twitch_raid_auth
             WHERE twitch_user_id = $1 AND raid_enabled IS TRUE
             "#
         } else {
             r#"
             SELECT twitch_login, access_token_enc, refresh_token_enc,
-                   enc_version, token_expires_at, needs_reauth
+                   enc_version, token_expires_at, needs_reauth, scopes,
+                   FALSE AS uplink_disconnected
             FROM twitch_raid_auth
             WHERE twitch_user_id = $1
             "#
@@ -118,7 +135,30 @@ impl RaidAuthStore {
         let Some(row) = row else {
             return Ok(None);
         };
-
+        Ok(self.decode_row(twitch_user_id, row))
+    }
+    /// Grant, zugehörige Rechte und Uplink-Absicht aus genau einem DB-Snapshot.
+    /// Kein Raid-Gate; needs_reauth und uplink_disconnected muss der Broker
+    /// vor der Ausgabe an Uplink prüfen. Kein Rückfall auf ältere Scopes.
+    pub async fn load_decrypted_with_scopes(
+        &self,
+        twitch_user_id: &str,
+    ) -> Result<Option<(RaidTokens, Vec<String>)>, sqlx::Error> {
+        let row:Option<RaidAuthRow>=sqlx::query_as("SELECT COALESCE(a.twitch_login,'') AS twitch_login,a.access_token_enc,a.refresh_token_enc,a.enc_version,a.token_expires_at,a.needs_reauth,a.scopes,COALESCE(i.enabled=FALSE,FALSE) AS uplink_disconnected FROM twitch_raid_auth a LEFT JOIN twitch_uplink_auth_intent i ON i.twitch_user_id=a.twitch_user_id WHERE a.twitch_user_id=$1")
+            .bind(twitch_user_id).fetch_optional(&self.pool).await?;
+        let Some(row) = row else { return Ok(None) };
+        let scopes = row
+            .scopes
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        Ok(self
+            .decode_row(twitch_user_id, row)
+            .map(|tokens| (tokens, scopes)))
+    }
+    fn decode_row(&self, twitch_user_id: &str, row: RaidAuthRow) -> Option<RaidTokens> {
         let enc_version = i64::from(row.enc_version.unwrap_or(1));
         let access_token = self.resolve_token(
             "access_token",
@@ -128,7 +168,7 @@ impl RaidAuthStore {
         );
         let Some(access_token) = access_token else {
             // Access nicht lesbar → Token nicht verfügbar (kein Plaintext-Fallback).
-            return Ok(None);
+            return None;
         };
         let refresh_token = self.resolve_token(
             "refresh_token",
@@ -137,14 +177,15 @@ impl RaidAuthStore {
             enc_version,
         );
 
-        Ok(Some(RaidTokens {
+        Some(RaidTokens {
             twitch_user_id: twitch_user_id.to_string(),
             twitch_login: row.twitch_login,
             access_token,
             refresh_token,
             token_expires_at: row.token_expires_at,
             needs_reauth: row.needs_reauth.unwrap_or(false),
-        }))
+            uplink_disconnected: row.uplink_disconnected,
+        })
     }
 
     /// Scopes eines Streamers als Liste (`scopes` ist Space-getrennter Text).
