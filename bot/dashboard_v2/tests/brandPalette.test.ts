@@ -20,7 +20,7 @@ const APPS = [
 
 const ALLOWED_HEX = new Set([
   // Matte Dashboard-Akzente; neutrale Flächen und Text bleiben unverändert.
-  '#99825b', '#b39a6b', '#dac6a2', '#c6af87', '#e0ceaf', '#65a486', '#c6a169', '#df7969', '#73bdc9', '#9ccfd6',
+  '#99825b', '#bc9a5e', '#dcc394', '#ccae79', '#dfca9f', '#4aa574', '#c6a169', '#df7969', '#73bdc9', '#9ccfd6',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
   // Satz hob die Kachel nur um 0.54% Luminanz vom Grund ab, die Seite verschmolz
   // zu einem schwarzen Block. admin_dashboard + shared-theme stehen noch auf den
@@ -29,7 +29,7 @@ const ALLOWED_HEX = new Set([
   '#1a1310', '#221a15', '#2a221c', '#362c23',
   // Patch-Schwarz: /streamer-Flaechen (theme-v2.css) auf dashboard_v2 gespiegelt.
   // Nur die Flaechen wurden neutral-schwarz; der Gold-Akzent oben bleibt.
-  '#0b0b0b', '#101010', '#0f0f0e', '#161616',
+  '#0d0d0d', '#121212', '#0b0b0b', '#101010', '#0f0f0e', '#161616',
   // Text auf Schwarz (heller als das warme #ede0c4, damit es auf #0b0b0b traegt).
   '#f2eee6', '#9d968a',
   // Gold + Messing. Messing ist der CHROME-Akzent (Buttons, Icon-Kacheln, Auren).

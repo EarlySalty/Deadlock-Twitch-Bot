@@ -50,20 +50,12 @@ function MiniStat({
     warning: 'bg-warning/15 border-warning/25 text-warning',
   }[accent];
 
-  const glowRgb =
-    accent === 'success'
-      ? '46,204,113'
-      : accent === 'warning'
-        ? '245,182,66'
-        : accent === 'accent'
-          ? '168,85,247'
-          : '6,182,212';
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,translate,scale,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
       <div
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         style={{
-          background: `radial-gradient(120% 80% at 50% 0%, rgba(${glowRgb}, 0.2), transparent 60%)`,
+          background: 'radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--color-primary) 8%, transparent), transparent 60%)',
         }}
       />
       {Icon ? (
@@ -74,7 +66,6 @@ function MiniStat({
       <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">{label}</div>
       <div
         className="kpi-number mt-1 text-xl font-bold text-white"
-        style={{ textShadow: `0 0 18px rgba(${glowRgb}, 0.55)` }}
       >
         {value != null ? `${prefix}${formatNumber(value)}${suffix}` : '\u2013'}
       </div>

@@ -17,29 +17,29 @@
  */
 @theme {
   /* Neutrale Flächen wie /streamer; Gold sitzt an den Kanten. */
-  --color-bg: #0b0b0b;
-  --color-background: #101010;
+  --color-bg: #0d0d0d;
+  --color-background: #121212;
   --color-card: #161616;
   --color-card-hover: rgb(30, 30, 30);
-  --color-primary: #B39A6B;
-  --color-primary-hover: #DAC6A2;
-  --color-primary-soft: rgba(179, 154, 107, 0.20);
+  --color-primary: #BC9A5E;
+  --color-primary-hover: #DCC394;
+  --color-primary-soft: rgba(188, 154, 94, 0.20);
   /* Chrome-Akzent: helles Messing. Zweites Metall neben Antik-Gold — genug Abstand fuer
      Hierarchie, kein Farbbruch. */
-  --color-accent: #C6AF87;
-  --color-accent-hover: #E0CEAF;
-  --color-accent-soft: rgba(198, 175, 135, 0.18);
-  --color-orange: #B39A6B;
-  --color-orange-hover: #DAC6A2;
+  --color-accent: #CCAE79;
+  --color-accent-hover: #DFCA9F;
+  --color-accent-soft: rgba(204, 174, 121, 0.18);
+  --color-orange: #BC9A5E;
+  --color-orange-hover: #DCC394;
   --color-teal: #73BDC9;
   --color-teal-hover: #9CCFD6;
   /* Leicht entsättigte Statusfarben: ruhig, aber auf dunklen Flächen lesbar. */
-  --color-success: #65A486;
+  --color-success: #4AA574;
   --color-warning: #C6A169;
   --color-danger: #DF7969;
   --color-error: #DF7969;
   --color-info: #73BDC9;
-  --color-success-soft: rgba(101, 164, 134, 0.15);
+  --color-success-soft: rgba(74, 165, 116, 0.15);
   --color-warning-soft: rgba(198, 161, 105, 0.15);
   --color-danger-soft: rgba(223, 121, 105, 0.15);
   --color-secondary: #9d968a;
@@ -59,11 +59,11 @@
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
   --gradient-brand: linear-gradient(120deg, var(--color-primary-hover) 10%, var(--color-primary) 55%, #99825B);
   --gradient-dash: linear-gradient(135deg, var(--color-primary), var(--color-accent));
-  --gradient-bg: linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
-  --gradient-hero: linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
+  --gradient-bg: linear-gradient(180deg, #101010 0%, #0d0d0d 55%, #121212 100%);
+  --gradient-hero: linear-gradient(160deg, #0d0d0d 0%, #121212 55%, #161616 100%);
   --shadow-primary-glow: 0 6px 16px rgba(0, 0, 0, 0.35);
   --shadow-primary-glow-hover: 0 8px 20px rgba(0, 0, 0, 0.45);
-  --shadow-card-soft: 0 12px 28px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --shadow-card-soft: 0 12px 24px rgba(0, 0, 0, 0.42), inset 0 0 0 1px rgba(255, 255, 255, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.055);
 }
 
 /* Base Styles */
@@ -90,8 +90,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
   background-size: 36px 36px;
   opacity: 0.5;
   z-index: 0;
