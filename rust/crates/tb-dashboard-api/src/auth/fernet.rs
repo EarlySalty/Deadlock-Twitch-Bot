@@ -29,7 +29,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
@@ -106,7 +106,7 @@ pub fn encrypt(key_b64: &str, plaintext: &[u8]) -> Result<String, FernetError> {
     raw.extend_from_slice(&buf);
 
     let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(&key.signing).expect("HMAC-Key immer gültig");
+        <HmacSha256 as KeyInit>::new_from_slice(&key.signing).expect("HMAC-Key immer gültig");
     mac.update(&raw);
     raw.extend_from_slice(&mac.finalize().into_bytes());
 
@@ -160,7 +160,7 @@ pub fn decrypt(key_b64: &str, token: &str, ttl_secs: Option<u64>) -> Result<Vec<
     let presented_hmac = &raw[hmac_offset..];
 
     let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(signing_key).expect("HMAC-Key immer gültig");
+        <HmacSha256 as KeyInit>::new_from_slice(signing_key).expect("HMAC-Key immer gültig");
     mac.update(signed_data);
     mac.verify_slice(presented_hmac)
         .map_err(|_| FernetError::HmacMismatch)?;

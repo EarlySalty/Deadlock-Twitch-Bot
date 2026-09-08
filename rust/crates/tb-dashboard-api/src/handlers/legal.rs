@@ -30,8 +30,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use hmac::{Hmac, Mac};
-use rand::{rngs::OsRng, RngCore};
+use hmac::{Hmac, KeyInit, Mac};
+use rand::{rngs::SysRng, TryRng};
 use serde::Deserialize;
 use sha2::Sha256;
 
@@ -886,7 +886,9 @@ fn csrf_token_value(cookie_secret: &str, expires_at: u64, nonce_hex: &str) -> St
 
 fn new_csrf_token(cookie_secret: &str) -> String {
     let mut nonce = [0_u8; 16];
-    OsRng.fill_bytes(&mut nonce);
+    SysRng
+        .try_fill_bytes(&mut nonce)
+        .expect("Betriebssystem-Zufall ist nicht verfügbar");
     csrf_token_value(
         cookie_secret,
         now_epoch_secs() + LEGAL_GATE_CSRF_TTL_SECONDS,

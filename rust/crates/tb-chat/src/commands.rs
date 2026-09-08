@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use sqlx::PgPool;
 use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
@@ -1008,7 +1008,7 @@ impl CommandEngine {
 
     async fn cmd_ping(&self, event: &ChatMessageEvent) {
         let reply = {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             PING_REPLIES
                 .choose(&mut rng)
                 .copied()
@@ -1381,7 +1381,7 @@ impl CommandEngine {
         // Titel aufbereiten — commands.py:179–185
         let raw_title = args.trim();
         let title = if raw_title.is_empty() {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             CLIP_TITLE_FALLBACKS
                 .choose(&mut rng)
                 .copied()

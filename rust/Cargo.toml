@@ -39,7 +39,7 @@ edition = "2021"
 thiserror = "2"
 aes-gcm = "0.11"
 aes = "0.8"
-cbc = { version = "0.2", features = ["block-padding"] }
+cbc = { version = "=0.1.2", features = ["block-padding"] }
 base64 = "0.23"
 hex = "0.4"
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
@@ -55,7 +55,7 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate", "chrono"] }
+sqlx = { version = "=0.8.6", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate", "chrono"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.11"
 blake2 = "0.11"

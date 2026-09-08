@@ -2,7 +2,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use rand::RngCore;
+use rand::TryRng;
 use tb_error::CryptoError;
 use zeroize::Zeroizing;
 
@@ -36,7 +36,8 @@ impl FieldCipher {
         if bytes.len() != KEY_SIZE {
             return Err(CryptoError::KeyMissing);
         }
-        let key = Key::<Aes256Gcm>::from_slice(bytes.as_slice());
+        let key =
+            <&Key<Aes256Gcm>>::try_from(bytes.as_slice()).map_err(|_| CryptoError::KeyMissing)?;
         Ok(Self {
             cipher: Aes256Gcm::new(key),
             kid: kid.to_string(),
@@ -47,7 +48,9 @@ impl FieldCipher {
     /// `version[1] ‖ kid_len[1] ‖ kid ‖ nonce[12] ‖ ciphertext‖tag[16]`.
     pub fn encrypt_field(&self, plaintext: &str, aad: &str) -> Result<Vec<u8>, CryptoError> {
         let mut nonce_bytes = [0u8; NONCE_SIZE];
-        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .map_err(|_| CryptoError::EncryptFailed)?;
         self.encrypt_field_with_nonce(plaintext, aad, &nonce_bytes)
     }
 
@@ -59,11 +62,11 @@ impl FieldCipher {
         aad: &str,
         nonce_bytes: &[u8; NONCE_SIZE],
     ) -> Result<Vec<u8>, CryptoError> {
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce = Nonce::from(*nonce_bytes);
         let ct = self
             .cipher
             .encrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: plaintext.as_bytes(),
                     aad: aad.as_bytes(),
@@ -104,7 +107,8 @@ impl FieldCipher {
             return Err(CryptoError::KeyMissing);
         }
         let nonce_end = kid_end + NONCE_SIZE;
-        let nonce = Nonce::from_slice(&blob[kid_end..nonce_end]);
+        let nonce = <&Nonce<_>>::try_from(&blob[kid_end..nonce_end])
+            .map_err(|_| CryptoError::DecryptFailed)?;
         let ct = &blob[nonce_end..];
         if ct.is_empty() {
             return Err(CryptoError::InvalidPayload(
