@@ -1107,8 +1107,8 @@ export function UplinkPage() {
                         <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
                       </summary>
                       <p className="border-t border-border/60 px-3 py-3 text-xs text-text-secondary">
-                        Schick uns HEVC mit den Werten aus Schritt 4. Uplink rechnet daraus für jedes Ziel H.264
-                        mit genau den Werten, die du in der Plattformkarte speicherst.
+                        Schick uns AV1 oder H.264 mit den Werten aus Schritt 4. In jeder Plattformkarte
+                        siehst du getrennt, welche Ausgabe du gespeichert hast und welche gerade läuft.
                       </p>
                     </details>
                   </Rise>
