@@ -1,5 +1,7 @@
 //! FD9-Nachweis mit dem echten Launcher und dem Dashboard-Argumentvertrag.
-//! Ohne Argumente ausschließlich synthetischer Infisical-Server auf Loopback.
+//! Ohne Argumente ausschließlich synthetischer Infisical-Server über Unixsocket.
+#[path = "../tests/support/infisical.rs"]
+mod infisical;
 use std::{
     io::{Seek, Write},
     os::fd::AsRawFd,
@@ -35,6 +37,7 @@ async fn main() -> Result<(), &'static str> {
         .expect(1)
         .mount(&server)
         .await;
+    let peer = infisical::InfisicalMock::start(&server);
     let descriptor = nix::sys::memfd::memfd_create(
         c"uplink-public-probe",
         nix::sys::memfd::MemFdCreateFlag::MFD_CLOEXEC,
@@ -50,7 +53,8 @@ async fn main() -> Result<(), &'static str> {
     let directory = tempfile::tempdir().map_err(|_| "Testkonfigurationsordner fehlt.")?;
     let config = directory.path().join("uplink.json");
     std::fs::write(&config, serde_json::to_vec(&serde_json::json!({
-        "relay_base_url":server.uri(),"infisical_base_url":server.uri(),"project_id":"public-probe",
+        "relay_base_url":server.uri(),"infisical_base_url":uplink_infisical_transport::BASE_URL,
+        "infisical_socket_path":peer.path,"infisical_socket_owner_uid":peer.owner,"project_id":"public-probe",
         "environment":"test","secret_path":"/uplink","credential_fd":9
     })).map_err(|_| "Testkonfiguration ungültig.")?).map_err(|_| "Testkonfiguration nicht schreibbar.")?;
 

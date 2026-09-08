@@ -9,7 +9,9 @@ Der bestehende Launcher `rust/scripts/run_tb_dashboard_service.sh` startet den S
 ```json
 {
   "relay_base_url": "http://127.0.0.1:8891",
-  "infisical_base_url": "http://127.0.0.1:8080",
+  "infisical_base_url": "http://infisical.local",
+  "infisical_socket_path": "/run/uplink-infisical/api.sock",
+  "infisical_socket_owner_uid": 0,
   "project_id": "vorhandene-projekt-id",
   "environment": "vorhandene-umgebung",
   "secret_path": "/vorhandener-pfad",
@@ -18,6 +20,8 @@ Der bestehende Launcher `rust/scripts/run_tb_dashboard_service.sh` startet den S
 ```
 
 Adressen sind Beispiele für interne Verwaltung, keine neue öffentliche Einrichtung. Optional stehen `kick_redirect_uri` und `youtube_redirect_uri` ebenfalls in dieser Datei; die bisherigen HTTPS-Callbacks sind Vorgaben. Der autorisierte vorhandene Startprozess übergibt seine eigene Infisical-Identität im expliziten FD. Keine geliehene Credential-Datei einer anderen Unit und kein Secret in Argumenten, ENV oder einer neu geschriebenen Datei. Der Leser verlangt eine begrenzte reguläre FD-Quelle, schützt auch den Original-FD mit CLOEXEC und hält Werte nur im RAM. Anonyme memfd-Quellen sind in den Tests tatsächlich geprüft.
+
+Die Infisical-Adresse ist eine feste HTTP-Kennung innerhalb des geschützten Unixsockets. Der neue Uplink-Leser öffnet dafür weder DNS noch TCP; Besitzer und Verzeichnisse werden vor dem Zugriff geprüft. Der root-eigene Bridgeprozess aus dem Uplink-Release erlaubt die bestehende Dashboard-UID. Fehlender Socket, falscher Besitzer oder ungeeignete Rechte beenden den Start ohne Übertragung des Bootstrap-Tokens. Der normale FD9- und Migrationsnachweis verwendet denselben Client über eine private synthetische Unix-Gegenstelle. Benachbarte Legacy-Startkonfiguration ist von dieser engen Änderung nicht betroffen.
 
 Infisical wird über den bestehenden `/api/v4/secrets/`-Vertrag gelesen. Vorhandene API- und Adminzugänge bleiben getrennt; kein Admin-Fallback auf API-Zugang. Lokale Werte haben Vorrang vor importierten Werten. Fehlende Konfiguration, Redirects, zu große oder unvollständige Antworten ergeben sichtbare Fehler. Der Proxy übermittelt weder rohe Fehlertexte noch fremde Antwortkörper mit möglichen Zugangsdaten. Erfolgreiche Antworten müssen gültiges JSON sein. Ein Ziel-DELETE benötigt ein ausdrückliches boolesches `deleted`; eine unbekannte Route beweist keine Entfernung.
 

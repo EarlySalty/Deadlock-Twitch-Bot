@@ -26,6 +26,7 @@ pulldown-cmark = { workspace = true }
 sha2         = { workspace = true }
 hex          = { workspace = true }
 reqwest      = { workspace = true }
+uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }
 # time/rt/macros: Heartbeat-Intervalle, der Listener-Task und `select!` im
 # OBS-Dock-Gateway.
 tokio        = { workspace = true, features = ["sync", "time", "rt", "macros"] }

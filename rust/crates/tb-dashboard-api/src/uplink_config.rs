@@ -16,6 +16,10 @@ const SECRET_LIMIT: usize = 4 * 1024 * 1024;
 pub struct UplinkConfig {
     pub relay_base_url: String,
     pub infisical_base_url: String,
+    #[serde(default = "infisical_socket_default")]
+    pub infisical_socket_path: std::path::PathBuf,
+    #[serde(default)]
+    pub infisical_socket_owner_uid: u32,
     pub project_id: String,
     pub environment: String,
     pub secret_path: String,
@@ -24,6 +28,10 @@ pub struct UplinkConfig {
     pub kick_redirect_uri: Option<String>,
     #[serde(default)]
     pub youtube_redirect_uri: Option<String>,
+}
+
+fn infisical_socket_default() -> std::path::PathBuf {
+    uplink_infisical_transport::DEFAULT_SOCKET.into()
 }
 
 pub struct UplinkRuntime {
@@ -210,7 +218,9 @@ fn required(
 
 async fn fetch(config: &UplinkConfig, token: &str) -> Result<UplinkRuntime, &'static str> {
     let base = local_origin(&config.relay_base_url)?;
-    let infisical = local_origin(&config.infisical_base_url)?;
+    if config.infisical_base_url != uplink_infisical_transport::BASE_URL {
+        return Err("Infisical benötigt die geschützte Unix-Gegenstelle.");
+    }
     let kick_redirect_uri = redirect_uri(
         config.kick_redirect_uri.as_deref(),
         "https://deutsche-deadlock-community.de/callback/kick",
@@ -225,8 +235,18 @@ async fn fetch(config: &UplinkConfig, token: &str) -> Result<UplinkRuntime, &'st
     {
         return Err("Infisical-Projektkonfiguration ist unvollständig.");
     }
-    let response = http_client()?
-        .get(format!("{infisical}/api/v4/secrets/"))
+    let client = uplink_infisical_transport::client_builder(
+        &config.infisical_socket_path,
+        config.infisical_socket_owner_uid,
+    )?
+    .timeout(Duration::from_secs(15))
+    .build()
+    .map_err(|_| "Infisical-Client ist nicht verfügbar.")?;
+    let response = client
+        .get(format!(
+            "{}/api/v4/secrets/",
+            uplink_infisical_transport::BASE_URL
+        ))
         .query(&[
             ("projectId", config.project_id.as_str()),
             ("environment", config.environment.as_str()),
@@ -459,6 +479,10 @@ pub async fn load_arguments(
 }
 
 #[cfg(test)]
+#[path = "../tests/support/infisical.rs"]
+mod infisical_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::{
@@ -466,10 +490,12 @@ mod tests {
         Mock, MockServer, ResponseTemplate,
     };
 
-    fn config(base: String) -> UplinkConfig {
+    fn config(base: String, peer: &infisical_test::InfisicalMock) -> UplinkConfig {
         UplinkConfig {
-            relay_base_url: base.clone(),
-            infisical_base_url: base,
+            relay_base_url: base,
+            infisical_base_url: uplink_infisical_transport::BASE_URL.into(),
+            infisical_socket_path: peer.path.clone(),
+            infisical_socket_owner_uid: peer.owner,
             project_id: "public-test-project".into(),
             environment: "test".into(),
             secret_path: "/uplink".into(),
@@ -507,7 +533,8 @@ mod tests {
                 "secrets":[{"secretKey":"RS_RELAY_API_SECRET","secretValue":"synthetic-api"},{"secretKey":"RS_RELAY_ADMIN_SECRET","secretValue":"synthetic-admin"}],
                 "imports":[{"secrets":[{"secretKey":"RS_RELAY_API_SECRET","secretValue":"import-loses"}]}]
             }))).expect(1).mount(&server).await;
-        let runtime = fetch(&config(server.uri()), "synthetic-bootstrap")
+        let peer = infisical_test::InfisicalMock::start(&server);
+        let runtime = fetch(&config(server.uri(), &peer), "synthetic-bootstrap")
             .await
             .unwrap();
         assert_eq!(runtime.secret("/v1/me"), "synthetic-api");
@@ -532,10 +559,32 @@ mod tests {
             )
             .mount(&first)
             .await;
-        let error = fetch(&config(first.uri()), "synthetic-bootstrap")
+        let peer = infisical_test::InfisicalMock::start(&first);
+        let error = fetch(&config(first.uri(), &peer), "synthetic-bootstrap")
             .await
             .unwrap_err();
         assert!(!error.contains("synthetic"));
+    }
+
+    #[tokio::test]
+    async fn untrusted_infisical_peer_never_receives_the_bootstrap() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let peer = infisical_test::InfisicalMock::start(&server);
+        for failure in 0..3 {
+            let mut configuration = config(server.uri(), &peer);
+            match failure {
+                0 => configuration.infisical_socket_owner_uid = peer.owner.wrapping_add(1),
+                1 => configuration.infisical_socket_path = peer.path.with_file_name("absent.sock"),
+                _ => configuration.infisical_base_url = server.uri(),
+            }
+            assert!(fetch(&configuration, "synthetic-bootstrap").await.is_err());
+        }
+        server.verify().await;
     }
 
     #[tokio::test]
@@ -564,10 +613,11 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        let peer = infisical_test::InfisicalMock::start(&server);
         let credential = memory_credential(b"synthetic-migration-bootstrap");
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("uplink.json");
-        std::fs::write(&path,serde_json::json!({"relay_base_url":server.uri(),"infisical_base_url":server.uri(),"project_id":"synthetic","environment":"test","secret_path":"/","credential_fd":credential.as_raw_fd()}).to_string()).unwrap();
+        std::fs::write(&path,serde_json::json!({"relay_base_url":server.uri(),"infisical_base_url":uplink_infisical_transport::BASE_URL,"infisical_socket_path":peer.path,"infisical_socket_owner_uid":peer.owner,"project_id":"synthetic","environment":"test","secret_path":"/","credential_fd":credential.as_raw_fd()}).to_string()).unwrap();
         let pool = migration_pool(&path).await.unwrap();
         tb_db::migrate::run_uplink_migrations(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_uplink_auth_intent VALUES('11',false,now())")
@@ -627,7 +677,7 @@ mod tests {
                 .env("PGPORT", "9999")
                 .env("PGUSER", "untrusted")
                 .env("PGDATABASE", "untrusted")
-                .env("PGPASSWORD", "synthetic-inherited-password")
+                .env("PGPASSWORD", uuid::Uuid::new_v4().to_string())
                 .env("PGAPPNAME", "untrusted")
                 .env("PGSSLMODE", "require")
                 .env("PGSSLROOTCERT", "/nonexistent/synthetic-cert")
@@ -743,10 +793,12 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        let peer = infisical_test::InfisicalMock::start(&server);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("uplink.json");
         std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
-            "relay_base_url":server.uri(),"infisical_base_url":server.uri(),"project_id":"public-test",
+            "relay_base_url":server.uri(),"infisical_base_url":uplink_infisical_transport::BASE_URL,
+            "infisical_socket_path":peer.path,"infisical_socket_owner_uid":peer.owner,"project_id":"public-test",
             "environment":"test","secret_path":"/uplink","credential_fd":credential.as_raw_fd(),
             "kick_redirect_uri":"https://dashboard.example/callback/kick"
         })).unwrap()).unwrap();
@@ -772,7 +824,8 @@ mod tests {
                 .respond_with(reply)
                 .mount(&server)
                 .await;
-            assert!(fetch(&config(server.uri()), "synthetic-bootstrap")
+            let peer = infisical_test::InfisicalMock::start(&server);
+            assert!(fetch(&config(server.uri(), &peer), "synthetic-bootstrap")
                 .await
                 .is_err());
         }
