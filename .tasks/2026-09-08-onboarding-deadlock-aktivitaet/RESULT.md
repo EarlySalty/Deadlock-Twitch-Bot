@@ -31,7 +31,9 @@ Auf der ursprünglichen Basis `273ae126`, Implementierungsstand `f346dff9`:
 
 - Tatsächliche Selbstprüfung: `python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-onboarding-aktivitaet --base main --head fix/onboarding-deadlock-aktivitaet`. Abbruch: Claude-Wochenlimit, Reset laut Ausgabe 22 Uhr Europe/Berlin. Kein Codeurteil und keine Gatefreigabe.
 - Nach Rebase scheitert `cargo check -p tb-dashboard-api -p tb-monitoring` vor den Zielcrates in unverändertem `tb-crypto`: `rand::RngCore` und `rand::rngs::OsRng` fehlen nach dem zwischenzeitlichen main-Bump auf rand 0.10.2. Fünf Fehler in `field.rs` und `token.rs`. Crypto-Quellen und Cargo-Manifeste/Lock sind gegen origin/main unverändert. Keine fremden Major-Upgrades in diesem Task repariert.
-- Noch kein Merge, Push, Releasebuild, Deploy oder Neustart. Neue Live-API-Ausgabe und neue Stats-Schreibwerte müssen nach einem freigegebenen erfolgreichen Deploy geprüft werden.
+- Noch kein Merge, Releasebuild, Deploy oder Neustart. Neue Live-API-Ausgabe und neue Stats-Schreibwerte müssen nach einem freigegebenen erfolgreichen Deploy geprüft werden.
 - Browserwerkzeug nicht verfügbar; keine visuelle Live-Abnahme behauptet.
+
+Unveränderter Live-Stand zum Abschluss: Release `a8d14ebc2cc47eb81f1aadaeff33296f7ec1da4e`, beide Systemdienste aktiv, `/readyz` HTTP 200 mit Datenbank und interner API bereit. Dieser Nachweis betrifft ausdrücklich den alten Stand.
 
 Logs der Sitzung liegen lokal unter `/tmp/tb-onboarding-*.log`.
