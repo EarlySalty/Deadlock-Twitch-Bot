@@ -42,7 +42,7 @@ aes = "0.8"
 cbc = { version = "0.1", features = ["block-padding"] }
 base64 = "0.23"
 hex = "0.4"
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 hmac = "0.12"
 # default-features=false: wir nutzen nur die HTML-Renderer-Funktion (html::push_html);
 # das Default-Feature "getopts" gehört zum bundled CLI-Tool des Crates und wird
