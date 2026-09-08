@@ -4,6 +4,13 @@ import { UserPlus, Users, Heart, TrendingUp, TrendingDown, Zap, Radio, Share2, I
 import { useState } from 'react';
 import type { FollowerFunnel as FollowerFunnelType } from '@/types/analytics';
 
+// Stufenfarben gehören nur zum Funnel; Bewertung und Trends bleiben semantisch.
+const FUNNEL_COLORS = {
+  viewers: 'var(--color-primary)',
+  returning: '#DE8A6A',
+  followers: '#C47682',
+} as const;
+
 interface FollowerFunnelProps {
   data: FollowerFunnelType;
   previousConversionRate?: number;
@@ -58,30 +65,30 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       label: 'Unique Viewer',
       value: data.uniqueViewers,
       icon: Users,
-      color: 'from-primary to-primary',
+      color: FUNNEL_COLORS.viewers,
       width: 100,
     },
     {
       label: 'Wiederkehrend',
       value: data.returningViewers,
       icon: Heart,
-      color: 'from-accent to-accent',
+      color: FUNNEL_COLORS.returning,
       width: data.uniqueViewers > 0 ? (data.returningViewers / data.uniqueViewers) * 100 : 0,
     },
     {
       label: 'Neue Follower',
       value: data.newFollowers,
       icon: UserPlus,
-      color: 'from-success to-success',
+      color: FUNNEL_COLORS.followers,
       width: data.uniqueViewers > 0 ? (data.newFollowers / data.uniqueViewers) * 100 : 0,
     },
   ];
 
   const sourceData = [
-    { label: 'Organisch', value: data.followersBySource.organic, icon: Zap, color: 'text-success' },
-    { label: 'Raids', value: data.followersBySource.raids, icon: Radio, color: 'text-primary' },
-    { label: 'Hosts', value: data.followersBySource.hosts, icon: Share2, color: 'text-accent' },
-    { label: 'Sonstige', value: data.followersBySource.other, icon: Users, color: 'text-text-secondary' },
+    { label: 'Organisch', value: data.followersBySource.organic, icon: Zap, color: FUNNEL_COLORS.followers },
+    { label: 'Raids', value: data.followersBySource.raids, icon: Radio, color: FUNNEL_COLORS.viewers },
+    { label: 'Hosts', value: data.followersBySource.hosts, icon: Share2, color: FUNNEL_COLORS.returning },
+    { label: 'Sonstige', value: data.followersBySource.other, icon: Users, color: 'var(--color-text-secondary)' },
   ];
 
   const totalSourceFollowers = sourceData.reduce((sum, s) => sum + s.value, 0);
@@ -92,8 +99,8 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
     >
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-success/20 flex items-center justify-center">
-            <UserPlus className="w-5 h-5 text-success" />
+          <div className="w-10 h-10 rounded-lg bg-primary/15 flex items-center justify-center">
+            <UserPlus className="w-5 h-5 text-primary" />
           </div>
           <div>
             <h3 className="text-lg font-bold text-white">Follower Conversion Funnel</h3>
@@ -103,7 +110,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       </div>
 
       {/* Conversion Rate Hero Section */}
-      <div className="bg-gradient-to-r from-primary/10 to-success/10 rounded-xl p-5 mb-6 border border-primary/20">
+      <div className="bg-background rounded-xl p-5 mb-6 border border-primary/25">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="text-sm text-text-secondary">Conversion Rate</span>
@@ -246,8 +253,8 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
               className="relative"
             >
               <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-lg bg-gradient-to-r ${stage.color} flex items-center justify-center flex-shrink-0`}>
-                  <Icon className="w-5 h-5 text-white" />
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: stage.color }}>
+                  <Icon className="w-5 h-5 text-on-gold" />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
@@ -261,7 +268,8 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                       initial={{ width: 0 }}
                       animate={{ width: `${Math.max(stage.width, 2)}%` }}
                       transition={{ delay: Math.min(0.1 + i * 0.04, 0.24), duration: 0.5 }}
-                      className={`h-full bg-gradient-to-r ${stage.color} rounded-full`}
+                      className="h-full rounded-full"
+                      style={{ backgroundColor: stage.color }}
                     />
                   </div>
                 </div>
@@ -289,7 +297,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                 transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}
                 className="bg-background rounded-lg p-3 text-center"
               >
-                <Icon className={`w-5 h-5 mx-auto mb-2 ${source.color}`} />
+                <Icon className="w-5 h-5 mx-auto mb-2" style={{ color: source.color }} />
                 <div className="text-xs text-text-secondary mb-1">{source.label}</div>
                 <div className="text-lg font-bold text-white">{source.value}</div>
                 <div className="text-xs text-text-secondary">{percentage.toFixed(1)}%</div>
