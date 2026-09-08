@@ -673,6 +673,7 @@ async fn stats_batch_inserts() {
     let store = StatsStore::new(pool.clone());
     let ts = Utc::now();
     let sample = |login: &str, partner: bool| StatsSample {
+        twitch_user_id: "123456".to_string(),
         streamer: login.to_string(),
         viewer_count: 7,
         is_partner: partner,

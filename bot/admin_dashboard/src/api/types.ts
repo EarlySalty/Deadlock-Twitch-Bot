@@ -610,6 +610,7 @@ export interface ResearchBaseline {
   avg_viewers: ResearchDistribution;
   total_hours: ResearchDistribution;
   active_days: ResearchDistribution;
+  sessions_count: ResearchDistribution;
 }
 
 export interface ResearchScoreComponent {
@@ -628,6 +629,7 @@ export interface ResearchResponse {
   baseline: ResearchBaseline;
   score: {
     total: number;
+    activity_factor: number;
     components: {
       viewers: ResearchScoreComponent;
       hours: ResearchScoreComponent;

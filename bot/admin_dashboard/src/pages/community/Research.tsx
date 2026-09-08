@@ -10,19 +10,19 @@ import { EmptyState } from '@/components/shared/EmptyState';
 
 const COPY = {
   pageTitle: 'Streamer-Research',
-  pageDescription: 'Wie wertvoll wäre ein Onboarding? Deadlock-Aktivität und Viewer im Vergleich zu unseren Partnern.',
+  pageDescription: 'Wen sollten wir als Partner gewinnen? Regelmäßige Deadlock-Streams stehen im Vordergrund.',
   loginLabel: 'Twitch-Login',
   loginPlaceholder: 'z. B. earlysalty',
   submit: 'Analysieren',
   periodLabel: 'Zeitraum',
-  scoreLabel: 'Onboarding-Value',
+  scoreLabel: 'Priorität',
   scoreScale: 'von 100',
   partnerBadge: 'Bereits Partner',
   partnerStatus: 'Status',
   componentsTitle: 'Score-Komponenten (Perzentil gegenüber Partnern)',
-  viewersComponent: 'Ø Viewer',
-  hoursComponent: 'Deadlock-Stunden',
-  consistencyComponent: 'Aktive Tage',
+  viewersComponent: 'Ø Zuschauer · 5 %',
+  hoursComponent: 'Deadlock-Stunden · 60 %',
+  consistencyComponent: 'Deadlock-Streams · 35 %',
   percentileSuffix: 'Perzentil',
   comparisonTitle: 'Vergleich mit Partner-Median',
   metricColumn: 'Kennzahl',
@@ -32,7 +32,7 @@ const COPY = {
   peakViewers: 'Peak-Viewer',
   totalHours: 'Deadlock-Stunden',
   activeDays: 'Aktive Tage',
-  sessions: 'Streams (Sessions)',
+  sessions: 'Deadlock-Streams',
   deShare: 'Anteil deutschsprachig',
   lastSeen: 'Zuletzt in der Kategorie gesehen',
   recentTitles: 'Letzte Stream-Titel',
@@ -42,7 +42,7 @@ const COPY = {
   initialTitle: 'Streamer nachschlagen',
   initialDescription: 'Twitch-Login eingeben. Die Bewertung basiert auf unseren Snapshots der Deadlock-Kategorie.',
   notFoundTitle: 'Nicht in der Deadlock-Kategorie gesehen',
-  notFoundDescription: 'Dieser Login ist im gewählten Zeitraum in keinem Deadlock-Stream aufgetaucht. Der Onboarding-Value ist damit praktisch null.',
+  notFoundDescription: 'Dieser Login ist im gewählten Zeitraum in keinem Deadlock-Stream aufgetaucht. Die Priorität ist damit praktisch null.',
   baselineContext: 'Partner in der Vergleichsgruppe',
   hoursUnit: 'Std.',
   noValue: '—',
@@ -117,7 +117,7 @@ function ResearchResult({ data }: { data: ResearchResponse }) {
     [COPY.peakViewers, formatNumber(data.subject.peak_viewers), COPY.noValue],
     [COPY.totalHours, `${formatNumber(data.subject.total_hours)} ${COPY.hoursUnit}`, `${formatNumber(data.baseline.total_hours.median)} ${COPY.hoursUnit}`],
     [COPY.activeDays, formatNumber(data.subject.active_days), formatNumber(data.baseline.active_days.median)],
-    [COPY.sessions, formatNumber(data.subject.sessions_count), COPY.noValue],
+    [COPY.sessions, formatNumber(data.subject.sessions_count), formatNumber(data.baseline.sessions_count.median)],
     [COPY.deShare, `${formatNumber(data.subject.de_share * 100)}%`, COPY.noValue],
     [COPY.lastSeen, formatDate(data.subject.last_seen), COPY.noValue],
   ];
@@ -142,6 +142,7 @@ function ResearchResult({ data }: { data: ResearchResponse }) {
             <span className="text-7xl font-semibold leading-none text-white">{data.score.total}</span>
             <span className="pb-2 text-sm text-text-secondary">{COPY.scoreScale}</span>
           </div>
+          <p className="mt-4 text-sm text-text-secondary">Aktualität: {formatNumber(data.score.activity_factor * 100)} % · Zuletzt gesehen: {formatDate(data.subject.last_seen)}</p>
           <div className="mt-6 inline-flex rounded-full border border-accent/30 bg-accent/10 px-4 py-2 text-sm font-semibold text-white">
             {data.score.tier.label}
           </div>
@@ -155,9 +156,9 @@ function ResearchResult({ data }: { data: ResearchResponse }) {
             {COPY.componentsTitle}
           </h2>
           <div className="mt-5 grid gap-3">
-            <ComponentBar label={COPY.viewersComponent} component={data.score.components.viewers} />
             <ComponentBar label={COPY.hoursComponent} component={data.score.components.hours} />
             <ComponentBar label={COPY.consistencyComponent} component={data.score.components.consistency} />
+            <ComponentBar label={COPY.viewersComponent} component={data.score.components.viewers} />
           </div>
         </article>
       </div>
@@ -288,7 +289,8 @@ export default function ResearchPage() {
           <Sparkles className="h-5 w-5 text-primary" />
           <div>
             <h2 className="font-semibold text-white">Onboarding-Vorschläge</h2>
-            <p className="mt-1 text-sm text-text-secondary">Noch nicht angebundene Streamer, nach Onboarding-Value sortiert.</p>
+            <p className="mt-1 text-sm text-text-secondary">Deutschsprachige Streamer: 60 % Deadlock-Stunden, 35 % Stream-Anzahl, 5 % Zuschauer.</p>
+            <p className="mt-1 text-xs text-text-secondary">Nach 7 Tagen ohne Deadlock-Stream sinkt die Priorität allmählich: alle weiteren 14 Tage auf die Hälfte. Streams werden aus Kategorie-Sichtungen geschätzt.</p>
           </div>
         </div>
         {suggestionsQuery.isLoading ? (
@@ -304,10 +306,10 @@ export default function ResearchPage() {
                 <tr>
                   <th className="px-6 py-4 font-medium">Rang</th>
                   <th className="px-6 py-4 font-medium">Streamer</th>
-                  <th className="px-6 py-4 font-medium">Value</th>
-                  <th className="px-6 py-4 font-medium">Ø Viewer</th>
+                  <th className="px-6 py-4 font-medium">Priorität</th>
                   <th className="px-6 py-4 font-medium">Deadlock-Stunden</th>
-                  <th className="px-6 py-4 font-medium">Aktive Tage</th>
+                  <th className="px-6 py-4 font-medium">Deadlock-Streams</th>
+                  <th className="px-6 py-4 font-medium">Ø Zuschauer</th>
                   <th className="px-6 py-4 font-medium">Aktion</th>
                 </tr>
               </thead>
@@ -317,9 +319,9 @@ export default function ResearchPage() {
                     <td className="px-6 py-4 text-text-secondary">#{index + 1}</td>
                     <td className="px-6 py-4 font-semibold text-white">{item.login}</td>
                     <td className="px-6 py-4 font-semibold text-primary">{item.score.total}/100</td>
-                    <td className="px-6 py-4 text-white">{formatNumber(item.subject.avg_viewers)}</td>
                     <td className="px-6 py-4 text-white">{formatNumber(item.subject.total_hours)} {COPY.hoursUnit}</td>
-                    <td className="px-6 py-4 text-white">{formatNumber(item.subject.active_days)}</td>
+                    <td className="px-6 py-4 text-white">{formatNumber(item.subject.sessions_count)}</td>
+                    <td className="px-6 py-4 text-text-secondary">{formatNumber(item.subject.avg_viewers)}</td>
                     <td className="px-6 py-4">
                       <button
                         type="button"
@@ -339,7 +341,7 @@ export default function ResearchPage() {
           </div>
         ) : (
           <div className="p-8">
-            <EmptyState icon={Search} title="Keine Vorschläge" description="Im gewählten Zeitraum wurden keine noch offenen Kandidaten gefunden." />
+            <EmptyState icon={Search} title="Keine Vorschläge" description="Im gewählten Zeitraum wurden keine noch offenen deutschsprachigen Kandidaten gefunden." />
           </div>
         )}
       </article>

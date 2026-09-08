@@ -91,6 +91,7 @@ struct Baseline {
     avg_viewers: Distribution,
     total_hours: Distribution,
     active_days: Distribution,
+    sessions_count: Distribution,
 }
 
 #[derive(Serialize)]
@@ -103,6 +104,7 @@ struct Distribution {
 #[derive(Serialize)]
 struct Score {
     total: i32,
+    activity_factor: f64,
     components: ScoreComponents,
     tier: Tier,
 }
@@ -128,7 +130,7 @@ struct Tier {
 }
 
 type SubjectTick = (DateTime<Utc>, i32, Option<String>, Option<String>);
-type PartnerAggregate = (String, f64, f64, i64);
+type PartnerAggregate = (String, f64, f64, i64, i64);
 
 #[derive(sqlx::FromRow)]
 struct SuggestionAggregate {
@@ -157,7 +159,10 @@ const PARTNER_BASELINE_SQL: &str = r#"WITH partner_ticks AS (
               WHEN previous_ts IS NULL OR ts_utc - previous_ts > INTERVAL '30 minutes' THEN 0
               ELSE LEAST(EXTRACT(EPOCH FROM (ts_utc - previous_ts)), 1800)
           END)::float8 / 3600.0) AS total_hours,
-          COUNT(DISTINCT (ts_utc AT TIME ZONE 'UTC')::date)::bigint AS active_days
+          COUNT(DISTINCT (ts_utc AT TIME ZONE 'UTC')::date)::bigint AS active_days,
+          COUNT(*) FILTER (
+              WHERE previous_ts IS NULL OR ts_utc - previous_ts > INTERVAL '30 minutes'
+          )::bigint AS sessions_count
    FROM partner_ticks
    GROUP BY streamer
    ORDER BY streamer"#;
@@ -192,7 +197,10 @@ const SUGGESTIONS_SQL: &str = r#"WITH candidate_ticks AS (
           MODE() WITHIN GROUP (ORDER BY NULLIF(LOWER(TRIM(language)), '')) AS dominant_language,
           AVG(CASE WHEN LOWER(TRIM(COALESCE(language, ''))) = 'de' THEN 1.0 ELSE 0.0 END)::float8 AS de_share
    FROM candidate_ticks
-   GROUP BY login"#;
+   GROUP BY login
+   HAVING AVG(CASE WHEN LOWER(TRIM(COALESCE(language, ''))) = 'de' THEN 1.0 ELSE 0.0 END) > 0.5
+      AND MAX(ts_utc) FILTER (WHERE COALESCE(LOWER(TRIM(language)), '') = 'de') = MAX(ts_utc)
+      AND COALESCE(MAX(ts_utc) FILTER (WHERE COALESCE(LOWER(TRIM(language)), '') <> 'de') < MAX(ts_utc), TRUE)"#;
 
 fn valid_login(login: &str) -> bool {
     (1..=25).contains(&login.len())
@@ -226,6 +234,7 @@ fn baseline_from(partners: &[PartnerAggregate]) -> Baseline {
         avg_viewers: distribution(partners.iter().map(|row| row.1).collect()),
         total_hours: distribution(partners.iter().map(|row| row.2).collect()),
         active_days: distribution(partners.iter().map(|row| row.3 as f64).collect()),
+        sessions_count: distribution(partners.iter().map(|row| row.4 as f64).collect()),
     }
 }
 
@@ -319,26 +328,37 @@ fn aggregate_subject(ticks: &[SubjectTick]) -> SubjectMetrics {
     }
 }
 
+// Eine Woche Pause bleibt neutral; danach halbiert sich die Priorität alle
+// zwei Wochen. Der gewählte Auswertungszeitraum verlängert diese Frist nicht.
+fn activity_factor(last_seen: Option<DateTime<Utc>>, now: DateTime<Utc>) -> f64 {
+    let Some(last_seen) = last_seen else {
+        return 0.0;
+    };
+    let inactive_days = (now - last_seen).num_seconds().max(0) as f64 / 86_400.0;
+    2.0_f64.powf(-((inactive_days - 7.0).max(0.0) / 14.0))
+}
+
 fn build_score(subject: &SubjectMetrics, partners: &[PartnerAggregate]) -> Score {
     let (tier_key, tier_label) = get_tier(subject.avg_viewers);
     if subject.sample_count == 0 {
         return Score {
             total: 0,
+            activity_factor: 0.0,
             components: ScoreComponents {
                 viewers: ScoreComponent {
                     value: 0.0,
                     percentile: 0,
-                    weight: 0.5,
+                    weight: 0.05,
                 },
                 hours: ScoreComponent {
                     value: 0.0,
                     percentile: 0,
-                    weight: 0.3,
+                    weight: 0.6,
                 },
                 consistency: ScoreComponent {
                     value: 0.0,
                     percentile: 0,
-                    weight: 0.2,
+                    weight: 0.35,
                 },
             },
             tier: Tier {
@@ -350,42 +370,45 @@ fn build_score(subject: &SubjectMetrics, partners: &[PartnerAggregate]) -> Score
 
     let mut viewer_values: Vec<f64> = partners.iter().map(|row| row.1).collect();
     let mut hour_values: Vec<f64> = partners.iter().map(|row| row.2).collect();
-    let mut day_values: Vec<f64> = partners.iter().map(|row| row.3 as f64).collect();
+    let mut session_values: Vec<f64> = partners.iter().map(|row| row.4 as f64).collect();
     viewer_values.sort_by(f64::total_cmp);
     hour_values.sort_by(f64::total_cmp);
-    day_values.sort_by(f64::total_cmp);
+    session_values.sort_by(f64::total_cmp);
     // Ohne Vergleichsgruppe liefert percentile_of 50 („Mittelmaß") — bei
     // leerer Partner-Baseline irreführend, daher Percentile 0.
-    let (viewers_pct, hours_pct, days_pct) = if partners.is_empty() {
+    let (viewers_pct, hours_pct, sessions_pct) = if partners.is_empty() {
         (0, 0, 0)
     } else {
         (
             percentile_of(&viewer_values, subject.avg_viewers),
             percentile_of(&hour_values, subject.total_hours),
-            percentile_of(&day_values, subject.active_days as f64),
+            percentile_of(&session_values, subject.sessions_count as f64),
         )
     };
 
+    let activity_factor = activity_factor(subject.last_seen, Utc::now());
     Score {
-        total: (0.5 * f64::from(viewers_pct)
-            + 0.3 * f64::from(hours_pct)
-            + 0.2 * f64::from(days_pct))
-        .round() as i32,
+        total: ((0.05 * f64::from(viewers_pct)
+            + 0.6 * f64::from(hours_pct)
+            + 0.35 * f64::from(sessions_pct))
+            * activity_factor)
+            .round() as i32,
+        activity_factor,
         components: ScoreComponents {
             viewers: ScoreComponent {
                 value: subject.avg_viewers,
                 percentile: viewers_pct,
-                weight: 0.5,
+                weight: 0.05,
             },
             hours: ScoreComponent {
                 value: subject.total_hours,
                 percentile: hours_pct,
-                weight: 0.3,
+                weight: 0.6,
             },
             consistency: ScoreComponent {
-                value: subject.active_days as f64,
-                percentile: days_pct,
-                weight: 0.2,
+                value: subject.sessions_count as f64,
+                percentile: sessions_pct,
+                weight: 0.35,
             },
         },
         tier: Tier {
@@ -537,9 +560,16 @@ pub async fn suggestions_handler(
             .then_with(|| {
                 right
                     .subject
-                    .avg_viewers
-                    .total_cmp(&left.subject.avg_viewers)
+                    .total_hours
+                    .total_cmp(&left.subject.total_hours)
             })
+            .then_with(|| {
+                right
+                    .subject
+                    .sessions_count
+                    .cmp(&left.subject.sessions_count)
+            })
+            .then_with(|| right.subject.last_seen.cmp(&left.subject.last_seen))
             .then_with(|| left.login.cmp(&right.login))
     });
     items.truncate(12);
@@ -560,10 +590,14 @@ mod tests {
     use sqlx::{postgres::PgPoolOptions, PgPool};
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let config_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-database-url.txt");
+        let Ok(dsn) = std::fs::read_to_string(config_path) else {
+            eprintln!("SKIP: Testdatenbank fehlt ({config_path})");
+            return None;
+        };
         let pool = PgPoolOptions::new()
             .max_connections(1)
-            .connect(&dsn)
+            .connect(dsn.trim())
             .await
             .expect("connect test database");
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
@@ -658,6 +692,116 @@ mod tests {
         .execute(pool)
         .await
         .expect("insert baseline");
+    }
+
+    #[test]
+    fn regelmaessiger_kleiner_kanal_schlaegt_einmaligen_grossen() {
+        let partners = vec![
+            ("a".into(), 10.0, 5.0, 2, 2),
+            ("b".into(), 50.0, 20.0, 5, 5),
+            ("c".into(), 100.0, 50.0, 10, 10),
+        ];
+        let regular = SubjectMetrics {
+            sample_count: 100,
+            total_hours: 40.0,
+            sessions_count: 8,
+            avg_viewers: 5.0,
+            last_seen: Some(Utc::now()),
+            ..Default::default()
+        };
+        let one_off = SubjectMetrics {
+            sample_count: 10,
+            total_hours: 4.0,
+            sessions_count: 1,
+            avg_viewers: 1000.0,
+            last_seen: Some(Utc::now()),
+            ..Default::default()
+        };
+        let score = build_score(&regular, &partners);
+        assert!(score.total > build_score(&one_off, &partners).total);
+        assert_eq!(score.components.consistency.value, 8.0);
+        assert_eq!(score.components.hours.weight, 0.6);
+        assert_eq!(score.components.consistency.weight, 0.35);
+        assert_eq!(score.components.viewers.weight, 0.05);
+        let departed = SubjectMetrics {
+            sample_count: 500,
+            total_hours: 100.0,
+            sessions_count: 30,
+            avg_viewers: 500.0,
+            last_seen: Some(Utc::now() - Duration::days(60)),
+            ..Default::default()
+        };
+        assert!(score.total > build_score(&departed, &partners).total);
+    }
+
+    #[test]
+    fn streamanzahl_zaehlt_neustart_nach_luecke_auch_am_selben_tag() {
+        let start = DateTime::parse_from_rfc3339("2026-09-08T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let ticks: Vec<_> = [0, 30, 61, 71]
+            .into_iter()
+            .map(|minute| {
+                (
+                    start + Duration::minutes(minute),
+                    10,
+                    None,
+                    Some("de".into()),
+                )
+            })
+            .collect();
+        let subject = aggregate_subject(&ticks);
+        assert_eq!(subject.sessions_count, 2);
+        assert_eq!(subject.active_days, 1);
+        assert!((subject.total_hours - 40.0 / 60.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn aktualitaet_hat_karenz_und_weichen_verfall() {
+        let now = Utc::now();
+        assert_eq!(activity_factor(Some(now - Duration::days(7)), now), 1.0);
+        assert_eq!(activity_factor(Some(now - Duration::days(21)), now), 0.5);
+        assert_eq!(activity_factor(Some(now - Duration::days(35)), now), 0.25);
+        assert_eq!(activity_factor(None, now), 0.0);
+        assert_eq!(activity_factor(Some(now + Duration::days(1)), now), 1.0);
+    }
+
+    #[tokio::test]
+    async fn vorschlaege_nur_mehrheitlich_und_zuletzt_deutsch() {
+        let Some(pool) = pool_or_skip("admin_research_sprache").await else {
+            return;
+        };
+        insert_baseline(&pool).await;
+        for (login, languages) in [
+            ("deutsch", [Some("de"), Some(" DE "), Some("de")]),
+            ("englisch", [Some("en"), Some("en"), Some("en")]),
+            ("mehrheit_englisch", [Some("en"), Some("en"), Some("de")]),
+            ("wechsel_englisch", [Some("de"), Some("de"), Some("en")]),
+            ("zuletzt_unbekannt", [Some("de"), Some("de"), None]),
+            ("unbekannt", [None, None, None]),
+        ] {
+            for (i, language) in languages.into_iter().enumerate() {
+                sqlx::query("INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count, language) VALUES ($1, $2, 10, $3)")
+                    .bind(Utc::now() - Duration::minutes(30 - i as i64 * 10))
+                    .bind(login).bind(language).execute(&pool).await.unwrap();
+            }
+        }
+        // Zwei widersprüchliche Sprachwerte zur selben letzten Sichtung:
+        // nicht abhängig von einer zufälligen Sortierreihenfolge empfehlen.
+        sqlx::query("INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count, language) VALUES (NOW() - INTERVAL '20 minutes', 'sprach_tie', 10, 'de'), (NOW() - INTERVAL '10 minutes', 'sprach_tie', 10, 'de'), (NOW(), 'sprach_tie', 10, 'de'), (NOW(), 'sprach_tie', 10, NULL), (NOW() - INTERVAL '10 minutes', 'halb_deutsch', 10, 'en'), (NOW(), 'halb_deutsch', 10, 'de')")
+            .execute(&pool).await.unwrap();
+        let (status, body) =
+            suggestions_request(DashboardAuthLevel::admin(), pool.clone(), Some("90")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body["items"][0]["login"], "deutsch");
+        let (_, detail) = request(DashboardAuthLevel::admin(), pool, "deutsch", Some("90")).await;
+        assert_eq!(
+            body["items"][0]["subject"]["sessions_count"],
+            detail["subject"]["sessions_count"]
+        );
+        assert_eq!(body["items"][0]["score"]["total"], detail["score"]["total"]);
+        assert_eq!(body["baseline"]["sessions_count"]["median"], 1.0);
     }
 
     #[tokio::test]

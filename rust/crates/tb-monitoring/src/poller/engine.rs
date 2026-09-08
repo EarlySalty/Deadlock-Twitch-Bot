@@ -950,6 +950,7 @@ impl PollEngine {
     ) {
         let now = Utc::now();
         let sample_of = |stream: &StreamSnapshot| StatsSample {
+            twitch_user_id: stream.user_id.clone(),
             streamer: stream.user_login.to_lowercase(),
             viewer_count: stream.viewer_count,
             is_partner: partner_logins.contains(&stream.user_login.to_lowercase()),
