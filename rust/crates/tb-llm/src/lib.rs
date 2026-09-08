@@ -36,6 +36,9 @@ pub mod keys;
 pub mod ledger;
 pub mod selection;
 
+#[cfg(feature = "local-eval")]
+pub mod local_eval;
+
 pub use hub::{
     complete, complete_detailed, strip_think, Accept, Ledger, LlmError, LlmFailure, Message,
     Request, Response,

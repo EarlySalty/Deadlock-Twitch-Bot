@@ -17,6 +17,11 @@ use serde_json::Value;
 use crate::ledger;
 use crate::selection::{endpoint_chain, endpoint_for, LlmEndpoint};
 
+#[cfg(feature = "local-eval")]
+mod replay;
+#[cfg(feature = "local-eval")]
+pub use replay::{EvalResponse, LocalClient};
+
 /// Zeitgrenze, wenn der Aufrufer keine nennt.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(240);
 /// Obergrenze fuer eine vom Anbieter genannte Wartezeit.
@@ -465,7 +470,7 @@ async fn call_endpoint(
         let rest = ende.saturating_duration_since(started);
         // Die Frist liegt um den ganzen Request (Senden, Warten, Body lesen),
         // nicht im Client: so reicht ein einziger Client fuer alle Fristen.
-        let senden = send_openai_compatible(&client, endpoint, api_key, request);
+        let senden = send_openai_compatible(&client, endpoint, Some(api_key), request);
         let outcome = match tokio::time::timeout(rest, senden).await {
             Ok(outcome) => outcome,
             Err(_) => {
@@ -591,7 +596,7 @@ fn openai_compatible_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
 async fn send_openai_compatible(
     client: &reqwest::Client,
     endpoint: &LlmEndpoint,
-    api_key: &str,
+    api_key: Option<&str>,
     request: &Request,
 ) -> Result<Value, RawError> {
     let body = openai_compatible_body(endpoint, request);
@@ -599,13 +604,19 @@ async fn send_openai_compatible(
         "{}/chat/completions",
         endpoint.base_url.trim_end_matches('/')
     );
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
+    let mut builder = client.post(&url);
+    if let Some(api_key) = api_key {
+        builder = builder.header("Authorization", format!("Bearer {api_key}"));
+    }
+    let response = builder
         .json(&body)
         .send()
         .await
         .map_err(|error| RawError::Fehler(transport_error(&error)))?;
+    #[cfg(feature = "local-eval")]
+    if api_key.is_none() {
+        return replay::finish_local(response).await;
+    }
     finish(response).await
 }
 

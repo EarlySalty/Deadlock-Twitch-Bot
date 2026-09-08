@@ -81,9 +81,7 @@ fn dsn_from_env() -> Option<String> {
 /// der Aufrufer loggt und macht best-effort weiter.
 async fn build_pool() -> sqlx::Result<PgPool> {
     let dsn = dsn_from_env().ok_or_else(|| {
-        sqlx::Error::Configuration(
-            "kein DSN (TWITCH_ANALYTICS_DSN/DATABASE_URL) gesetzt".into(),
-        )
+        sqlx::Error::Configuration("kein DSN (TWITCH_ANALYTICS_DSN/DATABASE_URL) gesetzt".into())
     })?;
     // Wenige Verbindungen genügen — das Ledger wird nur sporadisch beschrieben.
     PgPoolOptions::new()
@@ -272,17 +270,30 @@ mod tests {
     /// prüfen kann. Ohne `TB_TEST_DATABASE_URL` (keine Test-DB) → `None`, der Test
     /// überspringt sich. Das Fixture entspricht der produktiven Migration.
     async fn make_pool(schema: &str) -> Option<PgPool> {
+        // Schemanamen sind SQL-Bezeichner und können nicht gebunden werden.
+        assert!(
+            schema.starts_with("t_mmu_")
+                && schema
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+            "Ungültiger Ledger-Testschemaname"
+        );
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
             .await
             .expect("Test-DSN verbinden");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::QueryBuilder::<sqlx::Postgres>::new("DROP SCHEMA IF EXISTS ")
+            .push(schema)
+            .push(" CASCADE")
+            .build()
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::QueryBuilder::<sqlx::Postgres>::new("CREATE SCHEMA ")
+            .push(schema)
+            .build()
             .execute(&admin)
             .await
             .unwrap();
@@ -322,9 +333,17 @@ mod tests {
         let Some(pool) = make_pool("t_mmu_record").await else {
             return;
         };
-        record_with_pool(&pool, SOURCE, "engagement", "deepseek-v4-flash", 120, 80, true)
-            .await
-            .expect("Insert");
+        record_with_pool(
+            &pool,
+            SOURCE,
+            "engagement",
+            "deepseek-v4-flash",
+            120,
+            80,
+            true,
+        )
+        .await
+        .expect("Insert");
 
         // Rückgelesen per Runtime-Query (kein Makro → kein Test-Cache nötig).
         let (ts, source, purpose, model, tokens_in, tokens_out, total, success): (
@@ -413,9 +432,17 @@ mod tests {
         let Some(pool) = make_pool("t_mmu_clamp").await else {
             return;
         };
-        record_with_pool(&pool, SOURCE, "engagement", "deepseek-v4-flash", -5, -10, true)
-            .await
-            .expect("Insert");
+        record_with_pool(
+            &pool,
+            SOURCE,
+            "engagement",
+            "deepseek-v4-flash",
+            -5,
+            -10,
+            true,
+        )
+        .await
+        .expect("Insert");
         let (tokens_in, tokens_out, total): (i64, i64, i64) = sqlx::query_as(
             "SELECT tokens_in, tokens_out, total FROM llm_usage ORDER BY id DESC LIMIT 1",
         )
@@ -432,8 +459,8 @@ mod tests {
         };
         // ts im exakten Schreibformat (ISO-8601 UTC, Sekunden, +00:00) bilden.
         let now_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false);
-        let old_ts = (Utc::now() - chrono::Duration::hours(6))
-            .to_rfc3339_opts(SecondsFormat::Secs, false);
+        let old_ts =
+            (Utc::now() - chrono::Duration::hours(6)).to_rfc3339_opts(SecondsFormat::Secs, false);
         // Aktuell (zählt): zweimal je 100 total.
         for _ in 0..2 {
             sqlx::query("INSERT INTO llm_usage (ts, source, total) VALUES ($1, 'twitch-bot', 100)")

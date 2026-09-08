@@ -27,7 +27,7 @@ Audit, das darauf baut, faellt still aus.
 |----------|-----------|
 | **Laeuft als** | `deadlock-twitch-stream-coaching-watch.service` (systemd, Rust-Binaerprogramm). |
 | **Nutzt** | `tb-transport-twitch` (Helix: wer sendet, `started_at`), `tb-engagement::audio_capture` (streamlink), `tb-engagement::transcribe` (lokaler STT-Dienst), `tb-llm::selection` (Anbieterwahl `stream_audit`), Master-Broker (`/internal/master/v1/discord/send-dm`). |
-| **Daten** | `STREAM_AUDIT_OUTPUT_DIR` — Berichte als `.md`/`.json` je Kanal, Aufnahmen unter `aufnahmen/<kanal>/<stream-id>/t<sekunde>-b<nummer>/<capture>/`. |
+| **Daten** | `STREAM_AUDIT_OUTPUT_DIR` — im Systemdienst dauerhaft `/var/lib/deadlock-twitch-audit/data/stream_coaching_audits`; Berichte als `.md`/`.json` je Kanal, Aufnahmen unter `aufnahmen/<kanal>/<stream-id>/t<sekunde>-b<nummer>/<capture>/`. |
 | **Externe Dienste** | Twitch (Helix, HLS), der Anbieter aus der Twitch-Bot-Konfiguration fuer den Modellschritt. Transkription bleibt lokal. |
 | **Secret-Namen** | `TWITCH_CLIENT_ID`/`_SECRET`, Broker-Token, Anbieter-Key aus `tb-llm`. |
 
@@ -120,3 +120,52 @@ Audit, das darauf baut, faellt still aus.
 - Der Ausgabeordner gehoert diesem Dienst allein: die Aufbewahrung loescht dort
   Berichte nach Namensmuster und Aufnahmen nach Ordnerform.
 
+### Datenpfad beim Deploy
+
+Die Unit aus `ops/systemd/` und der Ausgabeordner aus `ops/systemd/audit.conf`
+gehören zusammen. Beim Aktualisieren einer bestehenden Installation den Wert
+`STREAM_AUDIT_OUTPUT_DIR` in `/etc/deadlock-twitch/audit.conf` auf
+`/var/lib/deadlock-twitch-audit/data/stream_coaching_audits` setzen; andere
+Betreibereinstellungen erhalten. Danach Unit installieren, `daemon-reload` und
+den Auditdienst neu starten. Die vorhandenen Daten bleiben an ihrem Ort.
+`StateDirectory` gibt diesem Pfad Schreibrechte trotz `ProtectSystem=strict`.
+Keine Daten- oder Log-Mounts auf `/opt/deadlock/twitch/current` ergänzen: deren
+aufgelöstes Ziel bleibt beim nächsten Releasewechsel am alten Release hängen.
+Dienstlogs gehen ins Journal. Nach dem Neustart Dateizuwachs des Mitschnitts
+und mindestens einen erfolgreichen Aufnahmeblock prüfen.
+
+### Nur das Audit ausliefern
+
+Nach gemeinsamem Review, Merge und Push das Binary `tb-stream-audit-bin` aus
+einem sauberen, isolierten Checkout des freigegebenen Commits bauen. Für einen
+Audit-Fix wird der globale `current`-Link nicht umgeschaltet. Stattdessen:
+
+1. Unter `/opt/deadlock/twitch/audit-releases/<vollständiger-git-sha>/` einen
+   neuen, root-eigenen Releaseordner erstellen. Dort das gebaute Binary als
+   `rust/target/release/tb-stream-audit` und den unveränderten Launcher aus dem
+   selben Git-Commit als `rust/scripts/run_stream_audit_service.sh` installieren,
+   jeweils Modus `0755`, Eigentümer `root:root`, ohne Gruppenschreibrechte.
+   SHA256-Prüfsummen beider Dateien als `SHA256SUMS` festhalten. Einen vorhandenen
+   Releaseordner niemals überschreiben.
+2. `/etc/systemd/system/deadlock-twitch-stream-coaching-watch.service.d/20-audit-release.conf`
+   mit diesem Inhalt installieren (den SHA in beiden Pfaden ersetzen):
+
+   ```ini
+   [Service]
+   WorkingDirectory=/opt/deadlock/twitch/audit-releases/<vollständiger-git-sha>
+   ExecStart=
+   ExecStart=/usr/bin/bash /opt/deadlock/twitch/audit-releases/<vollständiger-git-sha>/rust/scripts/run_stream_audit_service.sh
+   ```
+
+3. `systemctl daemon-reload`, Unit prüfen und ausschließlich
+   `deadlock-twitch-stream-coaching-watch` neu starten. Den tatsächlichen
+   Binarypfad über `/proc/<MainPID>/exe` kontrollieren und Prüfsummen vergleichen.
+   Vorhandene Mitschnitte bleiben erhalten; der neue Recorder legt einen neuen
+   Teil mit aktuellem Zeitstempel an. Anschließend Dateizuwachs des neuen Teils
+   und den Abschluss eines Aufnahmeblocks nachweisen.
+
+Das Drop-in pinnt das Audit ausdrücklich auf diesen Commit. Bei späteren
+Audit-Deploys wird es auf den neuen geprüften Audit-Release gesetzt; ein
+allgemeiner Bot-/Dashboard-Deploy aktualisiert das gepinnte Audit nicht.
+Für einen Rücksprung das Drop-in auf den vorherigen Audit-Release setzen und
+den Auditdienst neu starten; die dauerhaften Daten werden dabei nicht geändert.
