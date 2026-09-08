@@ -2853,7 +2853,7 @@ dependencies = [
  "tb-llm",
  "tb-raid",
  "tb-transport-twitch",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "wiremock",
@@ -2891,7 +2891,7 @@ dependencies = [
  "tb-transport-discord",
  "tb-transport-twitch",
  "tb-vod-archive",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3005,7 +3005,7 @@ dependencies = [
  "tb-scout",
  "tb-social-media",
  "tb-transport-twitch",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tower",
@@ -3027,7 +3027,7 @@ dependencies = [
  "tb-config",
  "tb-domain",
  "tb-error",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
@@ -3054,7 +3054,7 @@ dependencies = [
  "tb-analytics",
  "tb-crypto",
  "tb-llm",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3066,7 +3066,7 @@ dependencies = [
 name = "tb-error"
 version = "0.1.0"
 dependencies = [
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3081,7 +3081,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "sqlx",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "wiremock",
@@ -3095,7 +3095,7 @@ dependencies = [
  "axum",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tower",
  "tower-http 0.7.1",
@@ -3135,7 +3135,7 @@ name = "tb-knowledge"
 version = "0.1.0"
 dependencies = [
  "regex",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3168,7 +3168,7 @@ dependencies = [
  "tb-analytics",
  "tb-chat",
  "tb-transport-twitch",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3246,7 +3246,7 @@ dependencies = [
  "tb-crypto",
  "tb-llm",
  "tb-transport-twitch",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "url",
@@ -3304,7 +3304,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tb-config",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "wiremock",
 ]
@@ -3319,7 +3319,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tb-config",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "wiremock",
@@ -3335,7 +3335,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tb-social-media",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
