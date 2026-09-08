@@ -413,7 +413,7 @@ const UPLINK_DESTINATIONS_FIXTURE = {
   destinations: [
     {
       platform: 'twitch',
-      rtmp_url: 'rtmp://live.twitch.tv/app',
+      rtmp_url: 'rtmps://ingest.global-contribute.live-video.net:443/app',
       enabled: true,
       requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 16000 },
       active_profile: null, output_state: 'failed', publication_confirmed: false,
@@ -421,7 +421,7 @@ const UPLINK_DESTINATIONS_FIXTURE = {
     },
     {
       platform: 'youtube',
-      rtmp_url: 'rtmp://a.rtmp.youtube.com/live2',
+      rtmp_url: 'rtmps://a.rtmps.youtube.com:443/live2',
       enabled: true,
       requested: { width: 2560, height: 1440, fps: 60, bitrate_kbps: 18000 },
       active_profile: null,
