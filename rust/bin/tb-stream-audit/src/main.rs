@@ -1266,7 +1266,7 @@ nicht erkannt."
             }
             let text = format!(
                 "Coaching-Audit {kanal}: sendet, aber es kommt keine Aufnahme zustande \
-(seit mindestens {MAX_STILLE_VERSUCHE} Anlaeufen). streamlink pruefen."
+(seit mindestens {MAX_STILLE_VERSUCHE} Anläufen). Aufnahmefehler im Dienstprotokoll prüfen."
             );
             // Der Schluessel der DM traegt die Anlaufzahl - derselbe Schluessel
             // mit anderem Text kann beim Broker als Widerspruch gelten. Die
@@ -1472,12 +1472,6 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                 .await
                 .sperren(kanal.clone(), zustand.lauf.clone());
             let lauf_ms = zustand.lauf.clone();
-            let konfig_dm = konfiguration.clone();
-            let kanal_dm = kanal.clone();
-            let lauf_dm = zustand.lauf.clone();
-            tokio::spawn(async move {
-                start_dm_einmal(&konfig_dm, &kanal_dm, &lauf_dm).await;
-            });
             let handle = tokio::spawn(kanal_aufnehmen(
                 zustand,
                 konfiguration.clone(),
@@ -1511,8 +1505,22 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                 // Ein an einer toten Pipe haengendes ffmpeg endet nie von
                 // selbst. Ohne diese Pruefung bliebe der Eintrag fuer immer
                 // stehen und der Kanal ab dann ohne Mitschnitt.
+                let vorige_groesse = rec.letzte_groesse;
                 let haengt = ende.is_none() && rec.haengt().await;
                 if ende.is_none() && !haengt {
+                    // Erst wirklicher Dateizuwachs über die Anlaufphase hinweg
+                    // hebt den Fehlerstand auf; ein erfolgreicher Spawn reicht
+                    // nicht, sonst würde jeder sofortige Abbruch ihn löschen.
+                    if rec.letzte_groesse > vorige_groesse
+                        && rec.gestartet.elapsed() >= MITSCHNITT_MIN_LAUFZEIT
+                    {
+                        mitschnitt_fehler.remove(&format!("{kanal}/{}", rec.lauf));
+                        hinweis_erledigt(
+                            &konfiguration,
+                            &format!("mitschnitt-aus-{kanal}-{}", rec.lauf),
+                        )
+                        .await;
+                    }
                     continue;
                 }
                 let laufzeit = rec.gestartet.elapsed();
@@ -1532,17 +1540,17 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                                 versuche: 0,
                                 naechster_versuch: std::time::Instant::now(),
                             });
-                    eintrag.versuche += 1;
+                    eintrag.versuche = eintrag.versuche.saturating_add(1);
                     let wartezeit = backoff_wartezeit(eintrag.versuche);
                     eintrag.naechster_versuch = std::time::Instant::now() + wartezeit;
-                    if eintrag.versuche >= MITSCHNITT_MAX_VERSUCHE {
+                    if eintrag.versuche >= MITSCHNITT_MELDESCHWELLE {
                         tracing::error!(
                             kanal,
                             lauf = rec_lauf,
                             versuche = eintrag.versuche,
                             grund = if haengt { "haengt" } else { "Fehlexit" },
                             diagnose,
-                            "Ton-Mitschnitt scheitert dauerhaft - kein weiterer Versuch fuer diesen Lauf"
+                            "Ton-Mitschnitt scheitert wiederholt - Wiederanlauf bleibt aktiv"
                         );
                         // Und melden. Jeder andere dauerhafte Ausfall dieses
                         // Dienstes schickt eine DM; ausgerechnet der Ausfall
@@ -1603,9 +1611,8 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                 }
             }
             // 2. Jeder live sendende Lauf ohne aktiven Recorder bekommt einen -
-            //    solange genug Platz frei ist, die Wartezeit aus einem
-            //    Fehlversuch abgelaufen ist und der Lauf den Versuchs-Deckel
-            //    nicht gerissen hat. Deckt Aussetzer UND einen fehlgeschlagenen
+            //    solange genug Platz frei ist und die Wartezeit aus einem
+            //    Fehlversuch abgelaufen ist. Deckt Aussetzer UND einen fehlgeschlagenen
             //    Erststart ab. Bestehende Recorder laufen weiter.
             let jetzt = std::time::Instant::now();
             let ziele: Vec<(String, String)> = live_lauf
@@ -1638,10 +1645,10 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                                     versuche: 0,
                                     naechster_versuch: std::time::Instant::now(),
                                 });
-                            eintrag.versuche += 1;
+                            eintrag.versuche = eintrag.versuche.saturating_add(1);
                             eintrag.naechster_versuch =
                                 std::time::Instant::now() + backoff_wartezeit(eintrag.versuche);
-                            if eintrag.versuche >= MITSCHNITT_MAX_VERSUCHE {
+                            if eintrag.versuche >= MITSCHNITT_MELDESCHWELLE {
                                 // Fehlt streamlink dauerhaft, kommt der
                                 // Recorder nie bis zum Teardown-Pfad - ohne
                                 // diese Zeile endete es in Stille.
@@ -1649,8 +1656,7 @@ Neue Mitschnitte warten, laufende Bloecke laufen zu Ende.",
                                     kanal,
                                     lauf,
                                     versuche = eintrag.versuche,
-                                    "Ton-Mitschnitt laesst sich nicht starten - kein weiterer \
-Versuch fuer diesen Lauf"
+                                    "Ton-Mitschnitt lässt sich nicht starten - Wiederanlauf bleibt aktiv"
                                 );
                                 mitschnitt_ausfall_melden(
                                     &konfiguration,
@@ -1675,7 +1681,7 @@ Versuch fuer diesen Lauf"
             // Ein Eintrag mit noch laufender Wartezeit bleibt aber stehen, auch
             // wenn der Lauf gerade nicht in `live_lauf` steht: meldet Helix
             // einen Kanal fuer einen Takt nicht, faellt der Eintrag sonst raus
-            // und der Versuchs-Deckel waere zurueckgesetzt. Das deckt den
+            // und der Backoff wäre zurückgesetzt. Das deckt den
             // kurzen Aussetzer ab, nicht mehr - faellt Helix laenger aus als
             // die letzte Wartezeit, faengt der Zaehler wieder bei null an.
             mitschnitt_fehler.retain(|schluessel, fehler| {
@@ -1847,6 +1853,19 @@ async fn kanal_aufnehmen(
                     "Block aufgenommen"
                 );
                 warteschlange.lock().await.einreihen(block);
+                // Erst die fertige Aufnahme beweist einen erfolgreichen Start.
+                // Der Task-Spawn und selbst ein lebender streamlink-Prozess
+                // sagen noch nichts über tatsächlich empfangene Audiodaten.
+                // Zustellung nicht in der Aufnahme abwarten; nach einem Fehler
+                // versucht der nächste fertige Block denselben Schlüssel erneut.
+                let konfig_dm = konfiguration.clone();
+                let kanal_dm = kanal.clone();
+                let lauf_dm = zustand.lauf.clone();
+                tokio::spawn(async move {
+                    if let Err(fehler) = start_dm_einmal(&konfig_dm, &kanal_dm, &lauf_dm).await {
+                        tracing::error!(fehler, kanal = kanal_dm, "Start-DM nicht bestätigt");
+                    }
+                });
             }
             Err(fehler) => {
                 // Ein Fehlschlag heisst in aller Regel: der Stream ist vorbei.
@@ -3234,6 +3253,19 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
         if pfad.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
+        // Alte Startmeldungen dürfen nicht nach Streamende oder einem späteren
+        // Aufnahmefehler als aktuelle Erfolgsmeldung nachgereicht werden.
+        // Neue Starts werden ausschließlich nach einem fertigen Block versucht.
+        if pfad
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.starts_with("start-"))
+        {
+            if let Err(fehler) = tokio::fs::remove_file(&pfad).await {
+                tracing::warn!(%fehler, "Veraltete Startmeldung nicht entfernbar");
+            }
+            continue;
+        }
         let Ok(roh) = tokio::fs::read_to_string(&pfad).await else {
             continue;
         };
@@ -3574,34 +3606,47 @@ const START_MARKE: &str = "start_gemeldet.json";
 const ENDE_MARKE: &str = "ende_gemeldet.json";
 const AKTE: &str = "akte.json";
 
-async fn start_dm_einmal(konfiguration: &Konfiguration, kanal: &str, lauf: &str) {
+async fn start_dm_einmal(
+    konfiguration: &Konfiguration,
+    kanal: &str,
+    lauf: &str,
+) -> Result<(), String> {
     let ordner = lauf_ordner(konfiguration, kanal, lauf);
-    if let Err(fehler) = tokio::fs::create_dir_all(&ordner).await {
-        tracing::warn!(?fehler, kanal, "Startordner nicht anlegbar");
-    }
-    let marke = ordner.join(START_MARKE);
-    if tokio::fs::try_exists(&marke).await.unwrap_or(false) {
-        return;
-    }
     let text = report::start_dm_text(kanal);
     let schluessel = format!("{kanal}-{lauf}-start");
-    match dm_rohtext(&text, &schluessel).await {
-        Ok(()) => {
-            if let Err(fehler) = nur_fuer_mich(&marke, b"{}").await {
-                tracing::warn!(fehler, kanal, "Startmarke nicht schreibbar");
+    start_dm_sichern(&ordner, || dm_rohtext(&text, &schluessel)).await
+}
+
+async fn start_dm_sichern<F, Fut>(ordner: &Path, senden: F) -> Result<(), String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    // Blockaufnahmen desselben Laufs können kurz nacheinander fertig werden.
+    // Serialisieren schützt Marker und Versand auch bei langsamem Broker.
+    static START_SPERRE: Mutex<()> = Mutex::const_new(());
+    let _sperre = START_SPERRE.lock().await;
+    tokio::fs::create_dir_all(ordner)
+        .await
+        .map_err(|e| format!("Startordner nicht anlegbar: {e}"))?;
+    let marke = ordner.join(START_MARKE);
+    match tokio::fs::read(&marke).await {
+        Ok(roh) => {
+            let status: serde_json::Value =
+                serde_json::from_slice(&roh).map_err(|e| format!("Startmarke unlesbar: {e}"))?;
+            // Die bisherige Marke war {} und steht ebenfalls für zugestellt.
+            if status == serde_json::json!({}) || status["zugestellt"] == true {
+                return Ok(());
             }
         }
-        Err(fehler) => {
-            tracing::error!(fehler, kanal, "Start-DM nicht zustellbar");
-            hinweis_aufheben(
-                konfiguration,
-                &format!("start-{kanal}-{lauf}"),
-                &schluessel,
-                &text,
-            )
-            .await;
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Startmarke nicht lesbar: {e}")),
     }
+    // Schreibfähigkeit vor dem Versand beweisen. Bei Fehler bleibt es still,
+    // statt den Erfolg trotz EROFS immer wieder ungesichert zu behaupten.
+    atomar_schreiben(&marke, br#"{"zugestellt":false}"#).await?;
+    senden().await?;
+    atomar_schreiben(&marke, br#"{"zugestellt":true}"#).await
 }
 
 async fn akte_lesen(konfiguration: &Konfiguration, kanal: &str, lauf: &str) -> report::LaufAkte {
@@ -4760,7 +4805,7 @@ async fn platz_fuer_mitschnitt(konfiguration: &Konfiguration) -> bool {
     }
 }
 
-/// Meldet, dass ein Stream endgueltig ohne Ton-Mitschnitt bleibt.
+/// Meldet wiederholte Fehler des Ton-Mitschnitts bei weiter aktivem Backoff.
 ///
 /// Hoechstens eine DM je Lauf: die Marke liegt im Mitschnitt-Ordner und
 /// verschwindet mit ihm, ein neuer Stream meldet sich also wieder.
@@ -4776,19 +4821,17 @@ async fn mitschnitt_ausfall_melden(
         return;
     }
     let text = format!(
-        "Coaching-Audit: Fuer {kanal} kommt kein durchgehender Ton-Mitschnitt mehr zustande \
-({diagnose}). Die Auswertung in Bloecken laeuft weiter, aber dieser Stream hat keine \
-1:1-Aufnahme."
+        "Coaching-Audit: Der durchgehende Ton-Mitschnitt für {kanal} scheitert \
+({diagnose}). Der Dienst versucht es mit Wartezeit erneut."
     );
-    let schluessel = format!(
-        "{}-mitschnitt-aus-{}",
-        start_kennung(),
-        naechste_vorfall_nummer()
-    );
+    let schluessel = format!("{kanal}-{lauf}-mitschnitt-aus");
     match dm_rohtext(&text, &schluessel).await {
         Ok(()) => {
-            let _ = tokio::fs::create_dir_all(&ordner).await;
-            let _ = nur_fuer_mich(&marke, b"{}").await;
+            if let Err(fehler) = tokio::fs::create_dir_all(&ordner).await {
+                tracing::error!(%fehler, kanal, "Mitschnitt-Ausfallmarke: Ordner nicht anlegbar");
+            } else if let Err(fehler) = atomar_schreiben(&marke, b"{}").await {
+                tracing::error!(fehler, kanal, "Mitschnitt-Ausfallmarke nicht schreibbar");
+            }
         }
         Err(fehler) => {
             tracing::error!(fehler, kanal, "Mitschnitt-Ausfall nicht meldbar");
@@ -4905,12 +4948,8 @@ async fn laufmarke_belegen(pfad: &Path, frisch_sekunden: u64) -> bool {
     }
 }
 
-/// So viele Fehlversuche je Lauf, dann wird fuer diesen Lauf kein Recorder mehr
-/// gestartet. Ohne Deckel wuerde ein dauerhaft scheiterndes ffmpeg im
-/// 60-Sekunden-Takt der Live-Pruefung neu gestartet: in einem sechsstuendigen
-/// Stream rund 360 Neustarts, 360 Fehlstart-Dateien und 360 Erfolgsmeldungen im
-/// Protokoll fuer etwas, das durchgehend scheitert.
-const MITSCHNITT_MAX_VERSUCHE: u32 = 5;
+/// Meldeschwelle. Auch danach bleibt die Selbstheilung mit Backoff aktiv.
+const MITSCHNITT_MELDESCHWELLE: u32 = 5;
 /// Kuerzeste Laufzeit, ab der ein beendeter Recorder als echtes Stream-Ende und
 /// nicht als Fehlstart gilt.
 ///
@@ -4919,7 +4958,7 @@ const MITSCHNITT_MAX_VERSUCHE: u32 = 5;
 /// Start des Recorders, nicht die echte Prozesslaufzeit. Bei gleichem Wert
 /// laese sich ein ffmpeg, das nach einer Sekunde mit Status 0 endet, als
 /// vollwertiger Lauf, der Fehlerzaehler fiele zurueck auf Null, und der
-/// Versuchs-Deckel griffe nie - genau der Neustart im Minutentakt, den er
+/// Backoff griffe nie - genau der Neustart im Minutentakt, den er
 /// verhindern soll.
 const MITSCHNITT_MIN_LAUFZEIT: Duration = Duration::from_secs(5 * 60);
 /// Wartezeit vor dem ersten Wiederanlauf; sie verdoppelt sich je Fehlversuch.
@@ -4950,12 +4989,10 @@ fn ist_fehlstart(erfolgreich_beendet: bool, haengt: bool, laufzeit: Duration) ->
 }
 
 /// Wartezeit vor dem naechsten Anlauf nach `versuche` Fehlversuchen. Verdoppelt
-/// sich je Versuch. Der Deckel liegt bei einem Versuch mehr, als der
-/// Versuchs-Deckel zulaesst - so bleibt die Verdopplung ueber den ganzen
-/// erreichbaren Bereich echt, statt am Ende auf einen Wert zu klemmen, den nie
-/// jemand sieht.
+/// sich je Versuch bis höchstens 32 Minuten; ein reparierter Dienst darf
+/// noch während derselben Sendung wieder aufnehmen.
 fn backoff_wartezeit(versuche: u32) -> Duration {
-    let schritte = versuche.saturating_sub(1).min(MITSCHNITT_MAX_VERSUCHE);
+    let schritte = versuche.saturating_sub(1).min(MITSCHNITT_MELDESCHWELLE);
     MITSCHNITT_BACKOFF_START.saturating_mul(1u32 << schritte)
 }
 
@@ -4970,7 +5007,7 @@ impl RecorderFehler {
     /// Eintrag heisst: noch kein Fehler, also los.
     fn darf_starten(eintrag: Option<&Self>, jetzt: std::time::Instant) -> bool {
         match eintrag {
-            Some(f) => f.versuche < MITSCHNITT_MAX_VERSUCHE && jetzt >= f.naechster_versuch,
+            Some(f) => jetzt >= f.naechster_versuch,
             None => true,
         }
     }
@@ -5101,7 +5138,8 @@ async fn mitschnitt_starten_mit(
     ffmpeg: &str,
 ) -> Option<Recorder> {
     let dir = mitschnitt_ordner(konfiguration, kanal, lauf);
-    if tokio::fs::create_dir_all(&dir).await.is_err() {
+    if let Err(fehler) = tokio::fs::create_dir_all(&dir).await {
+        tracing::error!(%fehler, kanal, lauf, ordner = %dir.display(), "Mitschnittordner nicht anlegbar");
         return None;
     }
     // Zerhackt sich ein Stream immer wieder, waeren es sonst beliebig viele
@@ -5528,6 +5566,97 @@ mod tests {
         ))
     }
 
+    #[tokio::test]
+    async fn start_dm_wird_dauerhaft_nur_einmal_bestaetigt() {
+        let wurzel = test_ordner("start-einmal");
+        let gesendet = std::sync::atomic::AtomicUsize::new(0);
+        for _ in 0..2 {
+            start_dm_sichern(&wurzel, || async {
+                gesendet.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(gesendet.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let status: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(wurzel.join(START_MARKE)).await.unwrap())
+                .unwrap();
+        assert_eq!(status["zugestellt"], true);
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_dm_pending_nach_brokerfehler_oder_neustart_wird_wiederholt() {
+        let wurzel = test_ordner("start-pending");
+        let fehler =
+            start_dm_sichern(&wurzel, || async { Err("Broker ausgefallen".to_owned()) }).await;
+        assert!(fehler.is_err());
+        let status: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(wurzel.join(START_MARKE)).await.unwrap())
+                .unwrap();
+        assert_eq!(status["zugestellt"], false);
+        // Neuer Aufruf ohne irgendeinen flüchtigen Zustand wie nach Neustart.
+        start_dm_sichern(&wurzel, || async { Ok(()) })
+            .await
+            .unwrap();
+        let status: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(wurzel.join(START_MARKE)).await.unwrap())
+                .unwrap();
+        assert_eq!(status["zugestellt"], true);
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_dm_ohne_schreibbare_marke_sendet_keinen_erfolg() {
+        let wurzel = test_ordner("start-schreibfehler");
+        tokio::fs::create_dir_all(&wurzel).await.unwrap();
+        // Ein Verzeichnis statt der atomaren Schreibdatei erzwingt zuverlässig
+        // einen Schreibfehler, auch wenn Tests als privilegierter Nutzer laufen.
+        tokio::fs::create_dir(wurzel.join(START_MARKE).with_extension("json.neu"))
+            .await
+            .unwrap();
+        let fehler = start_dm_sichern(&wurzel, || async {
+            panic!("Ohne dauerhaft beschreibbaren Marker darf keine Erfolgsmeldung raus")
+        })
+        .await;
+        assert!(fehler.is_err());
+        assert!(!wurzel.join(START_MARKE).exists());
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_dm_legacy_marke_verhindert_wiederholung() {
+        let wurzel = test_ordner("start-legacy");
+        tokio::fs::create_dir_all(&wurzel).await.unwrap();
+        tokio::fs::write(wurzel.join(START_MARKE), b"{}")
+            .await
+            .unwrap();
+        start_dm_sichern(&wurzel, || async { panic!("Schon zugestellt") })
+            .await
+            .unwrap();
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_dm_parallel_sendet_nur_einmal() {
+        let wurzel = test_ordner("start-parallel");
+        let gesendet = std::sync::atomic::AtomicUsize::new(0);
+        let senden = || async {
+            gesendet.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            Ok(())
+        };
+        let (a, b) = tokio::join!(
+            start_dm_sichern(&wurzel, senden),
+            start_dm_sichern(&wurzel, senden)
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(gesendet.load(std::sync::atomic::Ordering::SeqCst), 1);
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
     fn test_konfiguration(wurzel: &Path) -> Konfiguration {
         Konfiguration {
             kanaele: Vec::new(),
@@ -5897,7 +6026,7 @@ mod tests {
     }
 
     #[test]
-    fn der_versuchs_deckel_und_die_wartezeit_halten_den_neustart_auf() {
+    fn die_wartezeit_bremst_ohne_die_selbstheilung_abzuschalten() {
         let jetzt = std::time::Instant::now();
         // Kein Fehler bisher: sofort starten.
         assert!(RecorderFehler::darf_starten(None, jetzt));
@@ -5913,12 +6042,18 @@ mod tests {
             naechster_versuch: jetzt - Duration::from_secs(1),
         };
         assert!(RecorderFehler::darf_starten(Some(&bereit), jetzt));
-        // Deckel gerissen: auch nach abgelaufener Wartezeit nicht mehr.
+        // Auch nach vielen Fehlern darf eine behobene Störung noch in
+        // derselben Sendung heilen, sobald die Wartezeit abgelaufen ist.
         let erschoepft = RecorderFehler {
-            versuche: MITSCHNITT_MAX_VERSUCHE,
+            versuche: MITSCHNITT_MELDESCHWELLE,
             naechster_versuch: jetzt - Duration::from_secs(1),
         };
-        assert!(!RecorderFehler::darf_starten(Some(&erschoepft), jetzt));
+        assert!(RecorderFehler::darf_starten(Some(&erschoepft), jetzt));
+        let wieder_wartend = RecorderFehler {
+            versuche: u32::MAX,
+            naechster_versuch: jetzt + backoff_wartezeit(u32::MAX),
+        };
+        assert!(!RecorderFehler::darf_starten(Some(&wieder_wartend), jetzt));
     }
 
     #[test]
@@ -5928,12 +6063,12 @@ mod tests {
         assert_eq!(backoff_wartezeit(3), MITSCHNITT_BACKOFF_START * 4);
         // Der letzte erreichbare Versuch verdoppelt noch echt.
         assert_eq!(
-            backoff_wartezeit(MITSCHNITT_MAX_VERSUCHE),
-            MITSCHNITT_BACKOFF_START * (1 << (MITSCHNITT_MAX_VERSUCHE - 1))
+            backoff_wartezeit(MITSCHNITT_MELDESCHWELLE),
+            MITSCHNITT_BACKOFF_START * (1 << (MITSCHNITT_MELDESCHWELLE - 1))
         );
         // Und darueber ist gedeckelt, sonst waere die Pause laenger als jeder
         // Stream.
-        let deckel = MITSCHNITT_BACKOFF_START * (1 << MITSCHNITT_MAX_VERSUCHE);
+        let deckel = MITSCHNITT_BACKOFF_START * (1 << MITSCHNITT_MELDESCHWELLE);
         assert_eq!(backoff_wartezeit(99), deckel);
         // Ein Aufruf mit 0 darf nicht unterlaufen.
         assert_eq!(backoff_wartezeit(0), MITSCHNITT_BACKOFF_START);
