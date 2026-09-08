@@ -3278,6 +3278,7 @@ name = "tb-stream-audit"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
  "regex",
  "serde",
  "serde_json",
