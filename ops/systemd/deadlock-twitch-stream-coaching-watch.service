@@ -32,8 +32,9 @@ LogsDirectory=deadlock-twitch-audit
 LogsDirectoryMode=0700
 RuntimeDirectory=deadlock-twitch-audit
 RuntimeDirectoryMode=0700
-BindPaths=/var/lib/deadlock-twitch-audit/data:/opt/deadlock/twitch/current/data
-BindPaths=/var/log/deadlock-twitch-audit:/opt/deadlock/twitch/current/logs
+# Aufnahme, Status und Berichte verwenden den stabilen StateDirectory-Pfad
+# aus audit.conf. Keine Bind-Mounts auf current: systemd löst den Symlink nur
+# beim Start auf, während der nächste Deploy bereits auf ein neues Release zeigt.
 
 NoNewPrivileges=yes
 PrivateTmp=yes
