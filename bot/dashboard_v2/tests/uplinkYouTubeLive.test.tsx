@@ -10,8 +10,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   UplinkYouTubeLive,
   entwurfAus,
+  naechsterEntwurf,
   speichernErlaubt,
   type UplinkYouTubeLiveProps,
+  type YouTubeLiveEntwurf,
   type YouTubeLiveEinstellungen,
   type YouTubeLiveStatus,
   type YouTubeLiveZustand,
@@ -127,11 +129,22 @@ test('Beenden ist nur in den laufenden Zuständen aktiv', () => {
   for (const zustand of ['inaktiv', 'beendet', 'blockiert', 'fehler'] as const) {
     assert.ok(knopf(render({ status: status(zustand) }), 'beenden').includes('disabled=""'), `beenden bei ${zustand}`);
   }
-  assert.ok(!knopf(render({ status: status('live') }), 'beenden').includes('disabled=""'));
+  for (const zustand of ['vorbereitet', 'sendet', 'live', 'unklar'] as const) {
+    assert.ok(!knopf(render({ status: status(zustand) }), 'beenden').includes('disabled=""'), `beenden aktiv bei ${zustand}`);
+  }
+});
 
-  const beschaeftigt = render({ status: status('live'), beschaeftigt: true });
-  assert.ok(knopf(beschaeftigt, 'beenden').includes('disabled=""'));
-  assert.ok(knopf(beschaeftigt, 'speichern').includes('disabled=""'));
+test('während beschäftigt sind beide Knöpfe gesperrt, obwohl der Titel gültig ist', () => {
+  const einstellungen: YouTubeLiveEinstellungen = {
+    titel: 'Ranked Grind',
+    sichtbarkeit: 'public',
+    autoStart: false,
+    autoStop: false,
+    freigegebenAm: '2026-09-08T10:00:00Z',
+  };
+  const html = render({ einstellungen, status: status('live'), beschaeftigt: true });
+  assert.ok(knopf(html, 'beenden').includes('disabled=""'));
+  assert.ok(knopf(html, 'speichern').includes('disabled=""'));
 });
 
 test('die Quelle hat keinen eigenen Fetch, keine Query, kein localStorage, keinen Gedankenstrich', () => {
@@ -164,6 +177,26 @@ test('entwurfAus setzt die Anfangswerte und übernimmt gespeicherte Werte', () =
     entwurfAus({ titel: 'Abend', sichtbarkeit: 'unlisted', autoStart: true, autoStop: true, freigegebenAm: '2026-09-08T00:00:00Z' }),
     { titel: 'Abend', sichtbarkeit: 'unlisted', autoStart: true, autoStop: true, liveFreigeben: true },
   );
+});
+
+test('naechsterEntwurf übernimmt nur den Serverstand, wenn das Formular unberührt ist', () => {
+  const getippt: YouTubeLiveEntwurf = {
+    titel: 'Mein Tippstand',
+    sichtbarkeit: 'unlisted',
+    autoStart: true,
+    autoStop: false,
+    liveFreigeben: true,
+  };
+  const server: YouTubeLiveEinstellungen = {
+    titel: 'Normalisierter Titel',
+    sichtbarkeit: 'public',
+    autoStart: false,
+    autoStop: true,
+    freigegebenAm: '2026-09-08T10:00:00Z',
+  };
+  assert.deepEqual(naechsterEntwurf(getippt, server, false), entwurfAus(server));
+  assert.deepEqual(naechsterEntwurf(getippt, server, true), getippt);
+  assert.deepEqual(naechsterEntwurf(getippt, null, false), entwurfAus(null));
 });
 
 test('speichernErlaubt sperrt leeren und zu langen Titel', () => {
