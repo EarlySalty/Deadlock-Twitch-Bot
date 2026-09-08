@@ -153,6 +153,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                       outerRadius="90%"
                       paddingAngle={2}
                       onMouseEnter={(_, index) => setHoveredViewerType(data.viewerTypes[index]?.label ?? null)}
+                      onMouseLeave={() => setHoveredViewerType(null)}
                     >
                       {data.viewerTypes.map((type, index) => (
                         <Cell
