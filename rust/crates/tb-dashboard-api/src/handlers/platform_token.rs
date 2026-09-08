@@ -188,6 +188,7 @@ pub struct PlatformTokenQuery {
 /// Serialisierung kann ihn gar nicht mitschicken (Contract REQ-7).
 #[derive(PartialEq, Eq, Serialize)]
 pub struct PlatformTokenAntwort {
+    pub connection_generation: i64,
     pub access_token: String,
     pub expires_at: DateTime<Utc>,
     pub platform_user_id: String,
@@ -385,6 +386,7 @@ pub async fn platform_token_antwort(
     // dieselbe 404 bekommen wie einer ohne Zeile, und der Refresh haelt seine
     // Raid-Tokens dabei nebenbei frisch.
     Ok(PlatformTokenAntwort {
+        connection_generation: tokens.connection_generation,
         access_token: tokens.access_token,
         expires_at: tokens.token_expires_at.unwrap_or(jetzt),
         platform_user_id: streamer_id.to_string(),
@@ -410,7 +412,7 @@ async fn fremde_plattform_antwort(
 ) -> Result<PlatformTokenAntwort, TokenFehler> {
     let store =
         super::platform_store::PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
-    let verbindung = match store.load(streamer_id, platform).await {
+    let (verbindung, generation) = match store.load_for_uplink(streamer_id, platform).await {
         Ok(Some(v)) => v,
         Ok(None) => return Err(TokenFehler::KeineVerbindung),
         Err(e) => {
@@ -418,6 +420,9 @@ async fn fremde_plattform_antwort(
             return Err(TokenFehler::NichtLieferbar);
         }
     };
+    if !generation.enabled || generation.disconnect_pending {
+        return Err(TokenFehler::KeineVerbindung);
+    }
     if verbindung.needs_reauth {
         return Err(TokenFehler::NeuVerbinden);
     }
@@ -428,6 +433,7 @@ async fn fremde_plattform_antwort(
                 return Err(TokenFehler::NeuVerbinden);
             }
             return Ok(PlatformTokenAntwort {
+                connection_generation: generation.generation,
                 access_token: verbindung.access_token,
                 expires_at: verbindung.expires_at,
                 platform_user_id: verbindung.platform_user_id,
@@ -436,7 +442,7 @@ async fn fremde_plattform_antwort(
             });
         }
         plattform_refresh(&store, config, streamer_id, platform, jetzt).await?;
-        let frisch = match store.load(streamer_id, platform).await {
+        let (frisch, generation) = match store.load_for_uplink(streamer_id, platform).await {
             Ok(Some(v)) => v,
             Ok(None) => return Err(TokenFehler::KeineVerbindung),
             Err(e) => {
@@ -444,6 +450,9 @@ async fn fremde_plattform_antwort(
                 return Err(TokenFehler::NichtLieferbar);
             }
         };
+        if !generation.enabled || generation.disconnect_pending {
+            return Err(TokenFehler::KeineVerbindung);
+        }
         if frisch.needs_reauth {
             return Err(TokenFehler::NeuVerbinden);
         }
@@ -451,6 +460,7 @@ async fn fremde_plattform_antwort(
             return Err(TokenFehler::NichtLieferbar);
         }
         return Ok(PlatformTokenAntwort {
+            connection_generation: generation.generation,
             access_token: frisch.access_token,
             expires_at: frisch.expires_at,
             platform_user_id: frisch.platform_user_id,
@@ -460,6 +470,7 @@ async fn fremde_plattform_antwort(
     }
 
     Ok(PlatformTokenAntwort {
+        connection_generation: generation.generation,
         access_token: verbindung.access_token,
         expires_at: verbindung.expires_at,
         platform_user_id: verbindung.platform_user_id,
@@ -743,6 +754,12 @@ mod tests {
     async fn test_pool() -> (PgPool, crate::test_postgres::TestPostgres) {
         let database = crate::test_postgres::TestPostgres::start().await;
         let pool = database.pool.clone();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260908220000_uplink_target_generations.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::raw_sql(include_str!(
             "../../../../migrations/20260908210000_twitch_uplink_intent.sql"
         ))
@@ -1277,6 +1294,7 @@ mod tests {
     #[tokio::test]
     async fn die_antwort_ist_json_ohne_refresh_token() {
         let antwort = Json(PlatformTokenAntwort {
+            connection_generation: 0,
             access_token: "acc".into(),
             expires_at: zeit("2026-08-28T12:00:00Z"),
             platform_user_id: "5107".into(),

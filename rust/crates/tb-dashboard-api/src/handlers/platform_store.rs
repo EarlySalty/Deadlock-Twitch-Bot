@@ -91,6 +91,103 @@ impl PlatformConnectionStore {
             .await
     }
 
+    /// Token und Zielgeneration aus demselben PostgreSQL-Snapshot.
+    pub async fn load_for_uplink(
+        &self,
+        streamer_id: i64,
+        platform: &str,
+    ) -> Result<
+        Option<(
+            PlatformConnection,
+            tb_raid::target_generation::TargetGeneration,
+        )>,
+        StoreFehler,
+    > {
+        #[derive(sqlx::FromRow)]
+        struct Snapshot {
+            #[sqlx(flatten)]
+            row: Zeile,
+            generation: i64,
+            enabled: bool,
+            disconnect_pending: bool,
+        }
+        let row:Option<Snapshot>=tokio::time::timeout(std::time::Duration::from_secs(10),sqlx::query_as("SELECT c.*,COALESCE(g.generation,0) AS generation,COALESCE(g.enabled,true) AS enabled,COALESCE(g.disconnect_pending,false) AS disconnect_pending FROM platform_connections c LEFT JOIN uplink_target_generations g ON g.twitch_user_id=c.streamer_id::text AND g.platform=c.platform WHERE c.streamer_id=$1 AND c.platform=$2").bind(streamer_id).bind(platform).fetch_optional(&self.pool)).await.map_err(|_|sqlx::Error::PoolTimedOut)??;
+        row.map(|s| {
+            Ok((
+                self.entschluesseln(s.row)?,
+                tb_raid::target_generation::TargetGeneration {
+                    generation: s.generation,
+                    enabled: s.enabled,
+                    disconnect_pending: s.disconnect_pending,
+                },
+            ))
+        })
+        .transpose()
+    }
+    /// Callback-Absicht und Grant werden zusammen unter derselben UID-Sperre geschrieben.
+    pub async fn upsert_callback(
+        &self,
+        verbindung: &PlatformConnection,
+        created_at: DateTime<Utc>,
+    ) -> Result<i64, StoreFehler> {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let uid = verbindung.streamer_id.to_string();
+            let mut tx =
+                tb_raid::target_generation::transaction(&self.pool, &uid, &verbindung.platform)
+                    .await?;
+            let generation = tb_raid::target_generation::activate_callback(
+                &mut tx,
+                &uid,
+                &verbindung.platform,
+                created_at,
+            )
+            .await?;
+            let aad = Self::aad(verbindung.streamer_id, &verbindung.platform);
+            let access = self
+                .cipher
+                .encrypt_field(&verbindung.access_token, &aad)
+                .map_err(|e| StoreFehler::Crypto(e.to_string()))?;
+            let refresh = self
+                .cipher
+                .encrypt_field(&verbindung.refresh_token, &aad)
+                .map_err(|e| StoreFehler::Crypto(e.to_string()))?;
+            self.upsert_mit(&mut *tx, verbindung, &access, &refresh)
+                .await?;
+            tx.commit().await?;
+            Ok(generation)
+        })
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)?
+    }
+    pub async fn delete_fenced(
+        &self,
+        streamer_id: i64,
+        platform: &str,
+        generation: i64,
+    ) -> Result<bool, StoreFehler> {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let Some(mut tx) = tb_raid::target_generation::disconnect_transaction(
+                &self.pool,
+                &streamer_id.to_string(),
+                platform,
+                generation,
+            )
+            .await?
+            else {
+                return Ok(false);
+            };
+            sqlx::query("DELETE FROM platform_connections WHERE streamer_id=$1 AND platform=$2")
+                .bind(streamer_id)
+                .bind(platform)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok(true)
+        })
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)?
+    }
+
     async fn load_mit<'e, E>(
         &self,
         exec: E,
@@ -139,13 +236,8 @@ impl PlatformConnectionStore {
             .cipher
             .encrypt_field(&verbindung.refresh_token, &aad)
             .map_err(|e| StoreFehler::Crypto(e.to_string()))?;
-        self.upsert_mit(
-            &self.pool,
-            verbindung,
-            &access_enc,
-            &refresh_enc,
-        )
-        .await
+        self.upsert_mit(&self.pool, verbindung, &access_enc, &refresh_enc)
+            .await
     }
 
     async fn upsert_mit<'e, E>(
@@ -244,7 +336,27 @@ impl PlatformConnectionStore {
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = Result<NeuerToken, RefreshAbbruch>>,
     {
-        let mut tx = self.pool.begin().await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(35),
+            self.refresh_locked(streamer_id, platform, vorlauf, jetzt, refresh),
+        )
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)?
+    }
+    async fn refresh_locked<F, Fut>(
+        &self,
+        streamer_id: i64,
+        platform: &str,
+        vorlauf: chrono::Duration,
+        jetzt: DateTime<Utc>,
+        refresh: F,
+    ) -> Result<RefreshAusgang, StoreFehler>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: Future<Output = Result<NeuerToken, RefreshAbbruch>>,
+    {
+        let uid = streamer_id.to_string();
+        let mut tx = tb_raid::target_generation::transaction(&self.pool, &uid, platform).await?;
         let (lock_a, lock_b) = advisory_lock_pair(streamer_id, platform);
         sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
             .bind(lock_a)
@@ -252,6 +364,11 @@ impl PlatformConnectionStore {
             .execute(&mut *tx)
             .await?;
 
+        let disabled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM uplink_target_generations WHERE twitch_user_id=$1 AND platform=$2 AND enabled=false)").bind(&uid).bind(platform).fetch_one(&mut *tx).await?;
+        if disabled {
+            tx.commit().await?;
+            return Ok(RefreshAusgang::NichtNoetig);
+        }
         let Some(zeile) = self.load_mit(&mut *tx, streamer_id, platform, true).await? else {
             tx.commit().await?;
             return Ok(RefreshAusgang::NichtNoetig);
@@ -364,7 +481,8 @@ pub enum RefreshAusgang {
 }
 
 fn advisory_lock_pair(streamer_id: i64, platform: &str) -> (i32, i32) {
-    let digest = Sha256::digest(format!("platform_connections_refresh:{streamer_id}:{platform}").as_bytes());
+    let digest =
+        Sha256::digest(format!("platform_connections_refresh:{streamer_id}:{platform}").as_bytes());
     let a = i32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
     let b = i32::from_be_bytes([digest[4], digest[5], digest[6], digest[7]]);
     (a, b)
@@ -384,25 +502,15 @@ mod tests {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
 
-    async fn maybe_pool() -> Option<PgPool> {
-        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
-            return None;
-        }
-        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let schema = crate::auth::session::test_schema_name("platform_store");
-        let admin = PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        admin.close().await;
-        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
-        let opts = opts.options([("search_path", schema.as_str())]);
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(3)
-            .connect_with(opts)
-            .await
-            .ok()?;
+    async fn test_pool() -> (PgPool, crate::test_postgres::TestPostgres) {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260908220000_uplink_target_generations.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE platform_connections (
                 streamer_id BIGINT NOT NULL,
@@ -423,22 +531,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        Some(pool)
-    }
-
-    macro_rules! pool_oder_ende {
-        () => {
-            match maybe_pool().await {
-                Some(p) => p,
-                None => {
-                    assert!(
-                        std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
-                        "TB_TEST_REQUIRE_DB=1, aber keine Test-DB erreichbar"
-                    );
-                    return;
-                }
-            }
-        };
+        (pool, database)
     }
 
     fn verbindung(
@@ -461,7 +554,7 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_und_load_verschluesseln_und_entschluesseln() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let store = PlatformConnectionStore::new(pool.clone(), cipher());
         let jetzt = zeit("2026-09-02T10:00:00Z");
         store
@@ -473,17 +566,18 @@ mod tests {
         assert_eq!(geladen.refresh_token, "ref-1");
         assert_eq!(geladen.platform_login, "streamerin");
 
-        let roh: Vec<u8> =
-            sqlx::query_scalar("SELECT access_token_enc FROM platform_connections WHERE streamer_id = 700")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let roh: Vec<u8> = sqlx::query_scalar(
+            "SELECT access_token_enc FROM platform_connections WHERE streamer_id = 700",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_ne!(roh, b"acc-1", "Token darf nicht im Klartext liegen");
     }
 
     #[tokio::test]
     async fn delete_entfernt_die_zeile() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let store = PlatformConnectionStore::new(pool, cipher());
         let jetzt = zeit("2026-09-02T10:00:00Z");
         store
@@ -497,20 +591,32 @@ mod tests {
 
     #[tokio::test]
     async fn faellige_liefert_nur_ablaufende_und_ohne_reauth() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let store = PlatformConnectionStore::new(pool, cipher());
         let jetzt = zeit("2026-09-02T10:00:00Z");
         store
-            .upsert(&verbindung(710, "kick", jetzt + chrono::Duration::minutes(2)))
+            .upsert(&verbindung(
+                710,
+                "kick",
+                jetzt + chrono::Duration::minutes(2),
+            ))
             .await
             .unwrap();
         store
-            .upsert(&verbindung(711, "youtube", jetzt + chrono::Duration::hours(5)))
+            .upsert(&verbindung(
+                711,
+                "youtube",
+                jetzt + chrono::Duration::hours(5),
+            ))
             .await
             .unwrap();
         store.set_needs_reauth(710, "kick").await.unwrap();
         store
-            .upsert(&verbindung(712, "kick", jetzt + chrono::Duration::minutes(1)))
+            .upsert(&verbindung(
+                712,
+                "kick",
+                jetzt + chrono::Duration::minutes(1),
+            ))
             .await
             .unwrap();
 
@@ -520,28 +626,41 @@ mod tests {
             .unwrap();
         assert!(faellig.contains(&(712, "kick".to_string())));
         assert!(!faellig.contains(&(710, "kick".to_string())), "reauth raus");
-        assert!(!faellig.contains(&(711, "youtube".to_string())), "noch lange gueltig");
+        assert!(
+            !faellig.contains(&(711, "youtube".to_string())),
+            "noch lange gueltig"
+        );
     }
 
     #[tokio::test]
     async fn refresh_and_store_schreibt_frischen_token_zurueck() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let store = PlatformConnectionStore::new(pool, cipher());
         let jetzt = zeit("2026-09-02T10:00:00Z");
         store
-            .upsert(&verbindung(720, "kick", jetzt + chrono::Duration::minutes(2)))
+            .upsert(&verbindung(
+                720,
+                "kick",
+                jetzt + chrono::Duration::minutes(2),
+            ))
             .await
             .unwrap();
         let ausgang = store
-            .refresh_and_store(720, "kick", chrono::Duration::minutes(10), jetzt, |rt| async move {
-                assert_eq!(rt, "ref-1");
-                Ok(NeuerToken {
-                    access_token: "acc-2".into(),
-                    refresh_token: Some("ref-2".into()),
-                    expires_at: jetzt + chrono::Duration::hours(3),
-                    scopes: vec!["chat:write".into()],
-                })
-            })
+            .refresh_and_store(
+                720,
+                "kick",
+                chrono::Duration::minutes(10),
+                jetzt,
+                |rt| async move {
+                    assert_eq!(rt, "ref-1");
+                    Ok(NeuerToken {
+                        access_token: "acc-2".into(),
+                        refresh_token: Some("ref-2".into()),
+                        expires_at: jetzt + chrono::Duration::hours(3),
+                        scopes: vec!["chat:write".into()],
+                    })
+                },
+            )
             .await
             .unwrap();
         assert_eq!(ausgang, RefreshAusgang::Erneuert);
@@ -552,17 +671,25 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_and_store_setzt_reauth_bei_invalid_grant() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let store = PlatformConnectionStore::new(pool, cipher());
         let jetzt = zeit("2026-09-02T10:00:00Z");
         store
-            .upsert(&verbindung(721, "kick", jetzt + chrono::Duration::minutes(2)))
+            .upsert(&verbindung(
+                721,
+                "kick",
+                jetzt + chrono::Duration::minutes(2),
+            ))
             .await
             .unwrap();
         let ausgang = store
-            .refresh_and_store(721, "kick", chrono::Duration::minutes(10), jetzt, |_rt| async move {
-                Err(RefreshAbbruch::NeuAnmeldung)
-            })
+            .refresh_and_store(
+                721,
+                "kick",
+                chrono::Duration::minutes(10),
+                jetzt,
+                |_rt| async move { Err(RefreshAbbruch::NeuAnmeldung) },
+            )
             .await
             .unwrap();
         assert_eq!(ausgang, RefreshAusgang::NeuAnmeldungNoetig);
@@ -572,7 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_and_store_ueberspringt_frischen_token() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let store = PlatformConnectionStore::new(pool, cipher());
         let jetzt = zeit("2026-09-02T10:00:00Z");
         store
@@ -580,11 +707,48 @@ mod tests {
             .await
             .unwrap();
         let ausgang = store
-            .refresh_and_store(722, "kick", chrono::Duration::minutes(10), jetzt, |_rt| async move {
-                panic!("darf nicht refreshen, Token ist frisch");
-            })
+            .refresh_and_store(
+                722,
+                "kick",
+                chrono::Duration::minutes(10),
+                jetzt,
+                |_rt| async move {
+                    panic!("darf nicht refreshen, Token ist frisch");
+                },
+            )
             .await
             .unwrap();
         assert_eq!(ausgang, RefreshAusgang::NichtNoetig);
+    }
+    #[tokio::test]
+    async fn old_disconnect_completion_cannot_delete_reconnected_platform_grant() {
+        let (pool, _database) = test_pool().await;
+        let store = PlatformConnectionStore::new(pool.clone(), cipher());
+        for platform in ["kick", "youtube"] {
+            let mut grant = verbindung(9001, platform, Utc::now() + chrono::Duration::hours(2));
+            let created = Utc::now();
+            let first = store.upsert_callback(&grant, created).await.unwrap();
+            let disconnected =
+                tb_raid::target_generation::begin_disconnect(&pool, "9001", platform)
+                    .await
+                    .unwrap();
+            assert!(disconnected > first);
+            assert!(store.upsert_callback(&grant, created).await.is_err());
+            grant.access_token = "new-synthetic-grant".into();
+            let current = store.upsert_callback(&grant, Utc::now()).await.unwrap();
+            assert!(current > disconnected);
+            assert!(!store
+                .delete_fenced(9001, platform, disconnected)
+                .await
+                .unwrap());
+            let (kept, state) = store
+                .load_for_uplink(9001, platform)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(kept.access_token, "new-synthetic-grant");
+            assert!(state.enabled && !state.disconnect_pending);
+            assert_eq!(state.generation, current);
+        }
     }
 }

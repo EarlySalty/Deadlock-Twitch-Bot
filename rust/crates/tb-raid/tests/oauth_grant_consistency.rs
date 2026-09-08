@@ -685,3 +685,76 @@ async fn sensitive_auth_debug_output_is_redacted() {
     };
     assert!(!format!("{response:?}").contains("synthetic-private"));
 }
+
+#[tokio::test]
+async fn pending_disconnect_fences_old_callback_and_new_generation_survives_old_completion() {
+    let db = Database::new().await;
+    let cipher = cipher();
+    let writer = AuthWriter::new(db.pool.clone(), cipher.clone());
+    let old = grant("42", "uplink", "synthetic-uplink");
+    writer
+        .store_new_auth(&old, &VerifiedClient, Utc::now())
+        .await
+        .unwrap();
+    let reader = RaidAuthStore::new(db.pool.clone(), cipher);
+    let old_generation = reader
+        .load_decrypted_with_scopes("42")
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+        .connection_generation;
+    let disconnected = tb_raid::target_generation::begin_disconnect(&db.pool, "42", "twitch")
+        .await
+        .unwrap();
+    assert!(disconnected > old_generation);
+    assert!(
+        reader
+            .load_decrypted_with_scopes("42")
+            .await
+            .unwrap()
+            .unwrap()
+            .0
+            .uplink_disconnected
+    );
+    assert!(writer
+        .store_new_auth(&old, &VerifiedClient, Utc::now())
+        .await
+        .is_err());
+    assert_eq!(
+        tb_raid::target_generation::begin_disconnect(&db.pool, "42", "twitch")
+            .await
+            .unwrap(),
+        disconnected
+    );
+    // A new explicit authorization is ordered after the persisted disconnect.
+    let fresh = grant("42", "uplink", "synthetic-uplink-fresh");
+    writer
+        .store_new_auth(&fresh, &VerifiedClient, Utc::now())
+        .await
+        .unwrap();
+    let (current, _) = reader
+        .load_decrypted_with_scopes("42")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(current.connection_generation > disconnected);
+    assert!(!writer
+        .finish_uplink_disconnect("42", disconnected)
+        .await
+        .unwrap());
+    let (after, _) = reader
+        .load_decrypted_with_scopes("42")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.connection_generation, current.connection_generation);
+    assert!(!after.uplink_disconnected);
+    assert_eq!(after.access_token, "synthetic-uplink-fresh");
+    // The old state remains barred even after reactivation.
+    assert!(writer
+        .store_new_auth(&old, &VerifiedClient, Utc::now())
+        .await
+        .is_err());
+    db.close().await;
+}

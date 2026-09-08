@@ -100,6 +100,12 @@ impl Database {
             manual_partner_opt_out INTEGER DEFAULT 0, raid_bot_enabled INTEGER DEFAULT 0);")
             .execute(&self.pool).await.unwrap();
         sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260908220000_uplink_target_generations.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
             "../../../../migrations/20260908210000_twitch_uplink_intent.sql"
         ))
         .execute(&self.pool)

@@ -1,5 +1,5 @@
 ---
-title: Uplink: Was ist Uplink
+title: "Uplink: Was ist Uplink"
 namespace: bot
 category: setup
 audience: streamer

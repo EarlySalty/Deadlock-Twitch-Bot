@@ -325,6 +325,13 @@ impl AuthWriter {
         .await?;
 
         if new.resolved_scope_profile == "uplink" {
+            crate::target_generation::activate_callback(
+                &mut tx,
+                uid,
+                "twitch",
+                new.state_created_at,
+            )
+            .await?;
             sqlx::query("INSERT INTO twitch_uplink_auth_intent(twitch_user_id,enabled) VALUES($1,TRUE) ON CONFLICT(twitch_user_id) DO UPDATE SET enabled=TRUE")
                 .bind(uid).execute(&mut *tx).await?;
         }
@@ -398,6 +405,20 @@ impl AuthWriter {
         )
         .await
         .map_err(|_| AuthWriteError::Timeout)?
+    }
+    /// Nur nach bestätigtem Relay-DELETE derselben Generation abschließen.
+    /// Ein inzwischen neuer Connect bleibt erhalten (false = überholt).
+    pub async fn finish_uplink_disconnect(
+        &self,
+        uid: &str,
+        generation: i64,
+    ) -> Result<bool, AuthWriteError> {
+        tokio::time::timeout(std::time::Duration::from_secs(15),async{
+            let Some(mut tx)=crate::target_generation::disconnect_transaction(&self.pool,uid,"twitch",generation).await? else { return Ok(false) };
+            sqlx::query("INSERT INTO twitch_uplink_auth_intent(twitch_user_id,enabled,last_disconnected_at) SELECT twitch_user_id,false,last_disconnected_at FROM uplink_target_generations WHERE twitch_user_id=$1 AND platform='twitch' AND generation=$2 ON CONFLICT(twitch_user_id) DO UPDATE SET enabled=false,last_disconnected_at=GREATEST(twitch_uplink_auth_intent.last_disconnected_at,EXCLUDED.last_disconnected_at)").bind(uid).bind(generation).execute(&mut *tx).await?;
+            tx.commit().await?;
+            Ok(true)
+        }).await.map_err(|_|AuthWriteError::Timeout)?
     }
     async fn disconnect_uplink_inner(&self, uid: &str) -> Result<(), AuthWriteError> {
         if !valid_uid(uid) {

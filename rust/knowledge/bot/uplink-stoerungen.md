@@ -1,5 +1,5 @@
 ---
-title: Uplink: Störungen
+title: "Uplink: Störungen"
 namespace: bot
 category: setup
 audience: streamer
