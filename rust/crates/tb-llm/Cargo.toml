@@ -21,7 +21,7 @@ tracing     = { workspace = true }
 # die Ledger-Queries sind laufzeit-geprüft (`sqlx::query`/`query_scalar`), damit
 # tb-llm keinen Compile-Time-`.sqlx`-Cache braucht und der Workspace-schema-gate
 # nicht über eine gesonderte tb-llm-Cache-Datei stolpert.
-sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"] }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
