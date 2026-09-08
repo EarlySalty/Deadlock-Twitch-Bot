@@ -39,6 +39,12 @@ export interface HochkantStand {
   aktiveRevision: number | null;
 }
 
+export interface HochkantVorrat {
+  kamera: HochkantRahmen | null;
+  kameraBand: HochkantBand | null;
+  kameraBox: HochkantRahmen | null;
+}
+
 export type HochkantGriff = 'mitte' | 'nw' | 'ne' | 'sw' | 'se';
 
 export const MIN_KANTE = 0.05;
@@ -48,9 +54,22 @@ function begrenzen(wert: number, unten: number, oben: number): number {
   return Math.min(Math.max(wert, unten), oben);
 }
 
-function geradePixel(wert: number): number {
-  const gerundet = Math.round(wert);
-  return Math.max(2, gerundet - (gerundet % 2));
+function geradeGroesse(wert: number): number {
+  const abgerundet = Math.floor(wert);
+  return Math.max(2, abgerundet - (abgerundet % 2));
+}
+
+function geradePosition(wert: number): number {
+  const abgerundet = Math.max(0, Math.floor(wert));
+  return abgerundet - (abgerundet % 2);
+}
+
+function inFlaeche(position: number, groesse: number, grenze: number): { pos: number; groesse: number } {
+  let g = groesse;
+  let p = position;
+  if (p + g > grenze) p = geradePosition(grenze - g);
+  while (p + g > grenze && g > 2) g -= 2;
+  return { pos: Math.max(0, p), groesse: g };
 }
 
 function quellVerhaeltnis(quelle: HochkantQuelle): number {
@@ -59,6 +78,10 @@ function quellVerhaeltnis(quelle: HochkantQuelle): number {
 
 function rahmenVerhaeltnis(rahmen: HochkantRahmen, quelle: HochkantQuelle): number {
   return (rahmen.w * quelle.breite) / (rahmen.h * quelle.hoehe);
+}
+
+export function kameraVerhaeltnis(kamera: HochkantRahmen, quelle: HochkantQuelle): number {
+  return rahmenVerhaeltnis(kamera, quelle);
 }
 
 function verhaeltnisImZielraum(rahmen: HochkantRahmen, ziel: HochkantZiel): number {
@@ -81,6 +104,14 @@ function imBild(rahmen: HochkantRahmen): boolean {
 
 function kanteZuKlein(rahmen: HochkantRahmen): boolean {
   return rahmen.w < MIN_KANTE - 1e-9 || rahmen.h < MIN_KANTE - 1e-9;
+}
+
+function pixelUeberlauf(rahmen: HochkantRahmen, breite: number, hoehe: number): boolean {
+  const x = geradePosition(rahmen.x * breite);
+  const y = geradePosition(rahmen.y * hoehe);
+  const w = geradeGroesse(rahmen.w * breite);
+  const h = geradeGroesse(rahmen.h * hoehe);
+  return x + w > breite || y + h > hoehe;
 }
 
 export function rahmenBegrenzen(rahmen: HochkantRahmen, minKante: number = MIN_KANTE): HochkantRahmen {
@@ -173,9 +204,8 @@ export function hochkantAnfang(quelle: HochkantQuelle, ziel: HochkantZiel): Hoch
     w: kameraBreite,
     h: kameraBreite * sv,
   };
-  const kameraVerhaeltnis = rahmenVerhaeltnis(kamera, quelle);
   const boxBreite = 0.35;
-  const boxHoehe = (boxBreite * ziel.breite) / (kameraVerhaeltnis * ziel.hoehe);
+  const boxHoehe = (boxBreite * ziel.breite) / (rahmenVerhaeltnis(kamera, quelle) * ziel.hoehe);
   const kameraBox: HochkantRahmen = {
     x: 1 - boxBreite - 0.03,
     y: 0.03,
@@ -222,6 +252,9 @@ export function hochkantPruefen(
   if (kanteZuKlein(layout.gameplay)) {
     fehler.push('Der Gameplay-Rahmen unterschreitet die Mindestkante von fünf Prozent.');
   }
+  if (pixelUeberlauf(layout.gameplay, quelle.breite, quelle.hoehe)) {
+    fehler.push('Der Gameplay-Rahmen überschreitet nach der Pixelrundung das Bild.');
+  }
 
   if (layout.kamera) {
     if (!imBild(layout.kamera)) {
@@ -230,8 +263,9 @@ export function hochkantPruefen(
     if (kanteZuKlein(layout.kamera)) {
       fehler.push('Der Kamera-Rahmen unterschreitet die Mindestkante von fünf Prozent.');
     }
-  } else if (layout.modus !== 'nur_gameplay') {
-    fehler.push('Ohne Kamera ist nur der Modus nur Gameplay möglich.');
+    if (pixelUeberlauf(layout.kamera, quelle.breite, quelle.hoehe)) {
+      fehler.push('Der Kamera-Rahmen überschreitet nach der Pixelrundung das Bild.');
+    }
   }
 
   const ratios = zielverhaeltnisse(layout, ziel);
@@ -239,9 +273,18 @@ export function hochkantPruefen(
     fehler.push('Das Gameplay-Seitenverhältnis passt nicht zum Zielbild.');
   }
 
+  if (layout.modus === 'nur_gameplay') {
+    if (layout.kamera || layout.kameraBand || layout.kameraBox) {
+      fehler.push('Kamera aus, aber Kameradaten gesetzt.');
+    }
+  }
+
   if (layout.modus === 'gestapelt') {
     if (!layout.kamera) {
       fehler.push('Der gestapelte Modus braucht eine Kamera.');
+    }
+    if (layout.kameraBox) {
+      fehler.push('Das Kamerafenster gehört nur in den Bild-im-Bild-Modus.');
     }
     if (!layout.kameraBand) {
       fehler.push('Im gestapelten Modus fehlt das Kameraband.');
@@ -249,17 +292,27 @@ export function hochkantPruefen(
       if (layout.kameraBand.hoehe < 0.1 - 1e-9 || layout.kameraBand.hoehe > 0.5 + 1e-9) {
         fehler.push('Die Bandhöhe muss zwischen zehn und fünfzig Prozent liegen.');
       }
+      if (layout.kameraBand.lage === 'oben') {
+        fehler.push('Kamera oben unterstützt Uplink noch nicht.');
+      }
+      if (geradeGroesse(layout.kameraBand.hoehe * ziel.hoehe) > ziel.hoehe - 2) {
+        fehler.push('Das Kameraband ist zu hoch für das Zielbild.');
+      }
       if (layout.kamera && ratios.kamera != null) {
         if (!nahBeiVerhaeltnis(rahmenVerhaeltnis(layout.kamera, quelle), ratios.kamera)) {
           fehler.push('Das Kamera-Seitenverhältnis passt nicht zum Kameraband.');
         }
       }
     }
-  } else if (layout.kameraBand) {
-    fehler.push('Das Kameraband gehört nur in den gestapelten Modus.');
   }
 
   if (layout.modus === 'bild_im_bild') {
+    if (!layout.kamera) {
+      fehler.push('Der Bild-im-Bild-Modus braucht eine Kamera.');
+    }
+    if (layout.kameraBand) {
+      fehler.push('Das Kameraband gehört nur in den gestapelten Modus.');
+    }
     if (!layout.kameraBox) {
       fehler.push('Im Bild-im-Bild-Modus fehlt das Kamerafenster.');
     } else {
@@ -269,16 +322,15 @@ export function hochkantPruefen(
       if (kanteZuKlein(layout.kameraBox)) {
         fehler.push('Das Kamerafenster unterschreitet die Mindestkante von fünf Prozent.');
       }
+      if (pixelUeberlauf(layout.kameraBox, ziel.breite, ziel.hoehe)) {
+        fehler.push('Das Kamerafenster überschreitet nach der Pixelrundung das Zielbild.');
+      }
       if (layout.kamera) {
-        const boxIst = verhaeltnisImZielraum(layout.kameraBox, ziel);
-        const kameraIst = rahmenVerhaeltnis(layout.kamera, quelle);
-        if (!nahBeiVerhaeltnis(boxIst, kameraIst)) {
+        if (!nahBeiVerhaeltnis(verhaeltnisImZielraum(layout.kameraBox, ziel), rahmenVerhaeltnis(layout.kamera, quelle))) {
           fehler.push('Das Kamerafenster hat ein anderes Seitenverhältnis als die Kamera.');
         }
       }
     }
-  } else if (layout.kameraBox) {
-    fehler.push('Das Kamerafenster gehört nur in den Bild-im-Bild-Modus.');
   }
 
   return fehler;
@@ -298,22 +350,10 @@ export interface ZielPixel {
   kameraBox: ZielPixelRahmen | null;
 }
 
-function quellPixel(rahmen: HochkantRahmen, quelle: HochkantQuelle): ZielPixelRahmen {
-  return {
-    x: geradePixel(rahmen.x * quelle.breite),
-    y: geradePixel(rahmen.y * quelle.hoehe),
-    w: geradePixel(rahmen.w * quelle.breite),
-    h: geradePixel(rahmen.h * quelle.hoehe),
-  };
-}
-
-function zielraumPixel(rahmen: HochkantRahmen, ziel: HochkantZiel): ZielPixelRahmen {
-  return {
-    x: geradePixel(rahmen.x * ziel.breite),
-    y: geradePixel(rahmen.y * ziel.hoehe),
-    w: geradePixel(rahmen.w * ziel.breite),
-    h: geradePixel(rahmen.h * ziel.hoehe),
-  };
+function pixelRahmen(rahmen: HochkantRahmen, breite: number, hoehe: number): ZielPixelRahmen {
+  const achseX = inFlaeche(geradePosition(rahmen.x * breite), geradeGroesse(rahmen.w * breite), breite);
+  const achseY = inFlaeche(geradePosition(rahmen.y * hoehe), geradeGroesse(rahmen.h * hoehe), hoehe);
+  return { x: achseX.pos, y: achseY.pos, w: achseX.groesse, h: achseY.groesse };
 }
 
 export function zielPixel(
@@ -321,16 +361,18 @@ export function zielPixel(
   quelle: HochkantQuelle,
   ziel: HochkantZiel,
 ): ZielPixel {
-  const gameplay = quellPixel(layout.gameplay, quelle);
+  const gameplay = pixelRahmen(layout.gameplay, quelle.breite, quelle.hoehe);
   const kamera =
-    layout.modus !== 'nur_gameplay' && layout.kamera ? quellPixel(layout.kamera, quelle) : null;
+    layout.modus !== 'nur_gameplay' && layout.kamera
+      ? pixelRahmen(layout.kamera, quelle.breite, quelle.hoehe)
+      : null;
   const kameraBand =
     layout.modus === 'gestapelt' && layout.kameraBand
-      ? { hoehe: geradePixel(layout.kameraBand.hoehe * ziel.hoehe) }
+      ? { hoehe: Math.min(geradeGroesse(layout.kameraBand.hoehe * ziel.hoehe), ziel.hoehe - 2) }
       : null;
   const kameraBox =
     layout.modus === 'bild_im_bild' && layout.kameraBox
-      ? zielraumPixel(layout.kameraBox, ziel)
+      ? pixelRahmen(layout.kameraBox, ziel.breite, ziel.hoehe)
       : null;
   return { gameplay, kamera, kameraBand, kameraBox };
 }
@@ -376,10 +418,57 @@ export function hochkantGleich(a: HochkantLayout, b: HochkantLayout): boolean {
   return Math.abs(bandA.hoehe - bandB.hoehe) < 1e-9 && bandA.lage === bandB.lage;
 }
 
+export function ausrichten(layout: HochkantLayout, ziel: HochkantZiel, quelle: HochkantQuelle): HochkantLayout {
+  const ratios = zielverhaeltnisse(layout, ziel);
+  const gameplay = seitenverhaeltnisSperren(layout.gameplay, ratios.gameplay, quelle);
+  let kamera = layout.kamera;
+  if (kamera && layout.modus === 'gestapelt' && ratios.kamera != null) {
+    kamera = seitenverhaeltnisSperren(kamera, ratios.kamera, quelle);
+  }
+  let kameraBox = layout.kameraBox;
+  if (layout.modus === 'bild_im_bild' && kamera && kameraBox) {
+    kameraBox = seitenverhaeltnisSperren(kameraBox, rahmenVerhaeltnis(kamera, quelle), {
+      breite: ziel.breite,
+      hoehe: ziel.hoehe,
+    });
+  }
+  return { ...layout, gameplay, kamera, kameraBox };
+}
+
+export function modusWechseln(
+  layout: HochkantLayout,
+  modus: HochkantModus,
+  ziel: HochkantZiel,
+  quelle: HochkantQuelle,
+  vorrat: HochkantVorrat,
+): HochkantLayout {
+  const kameraVorrat = layout.kamera ?? vorrat.kamera;
+  const bandVorrat = layout.kameraBand ?? vorrat.kameraBand ?? { hoehe: 0.25, lage: 'unten' as HochkantBandLage };
+  const boxVorrat = layout.kameraBox ?? vorrat.kameraBox;
+  if (modus === 'nur_gameplay') {
+    return ausrichten({ ...layout, modus, kamera: null, kameraBand: null, kameraBox: null }, ziel, quelle);
+  }
+  if (modus === 'gestapelt') {
+    return ausrichten(
+      { ...layout, modus, kamera: kameraVorrat, kameraBand: { ...bandVorrat, lage: 'unten' }, kameraBox: null },
+      ziel,
+      quelle,
+    );
+  }
+  return ausrichten(
+    { ...layout, modus, kamera: kameraVorrat, kameraBand: null, kameraBox: boxVorrat },
+    ziel,
+    quelle,
+  );
+}
+
 export function naechsterEntwurf(
   entwurf: HochkantLayout,
-  basis: HochkantLayout,
-  neu: HochkantLayout,
+  basis: HochkantLayout | null,
+  neu: HochkantLayout | null,
+  anfang: HochkantLayout,
 ): HochkantLayout {
-  return hochkantGleich(entwurf, basis) ? neu : entwurf;
+  if (neu == null) return entwurf;
+  const referenz = basis ?? anfang;
+  return hochkantGleich(entwurf, referenz) ? neu : entwurf;
 }

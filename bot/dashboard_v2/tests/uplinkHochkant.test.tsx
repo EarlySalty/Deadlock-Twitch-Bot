@@ -8,8 +8,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 (globalThis as { React?: typeof React }).React = React;
 
 import { UplinkHochkantEditor } from '../src/components/uplink/UplinkHochkantEditor';
+import type { UplinkHochkantEditorProps } from '../src/components/uplink/UplinkHochkantEditor';
 import { hochkantAnfang } from '../src/components/uplink/hochkantLayout';
-import type { HochkantLayout, HochkantStand, UplinkHochkantEditorProps } from '../src/components/uplink/UplinkHochkantEditor';
+import type { HochkantLayout, HochkantStand } from '../src/components/uplink/hochkantLayout';
 
 const ZIEL = { breite: 1080, hoehe: 1920 };
 const HD = { breite: 1920, hoehe: 1080 };
@@ -35,7 +36,12 @@ function render(props: UplinkHochkantEditorProps): string {
 test('ohne Stand zeigt der Editor den Anfangswert und den Leertext', () => {
   const html = render(basis());
   assert.ok(html.includes('Noch kein Stand gespeichert.'));
-  assert.ok(html.includes('Gameplay 608×1080 Pixel, Kamera 384×384 Pixel'));
+  assert.ok(html.includes('Gameplay 606×1080 Pixel, Kamera 384×384 Pixel'));
+});
+
+test('ohne gespeicherten Stand ist Speichern mit dem Anfangswert erlaubt', () => {
+  const html = render(basis());
+  assert.equal((html.match(/disabled=""/g) ?? []).length, 0);
 });
 
 test('mit Stand und aktiver Revision stehen beide Saetze', () => {

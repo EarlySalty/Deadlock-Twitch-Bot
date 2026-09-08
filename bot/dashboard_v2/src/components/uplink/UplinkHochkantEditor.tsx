@@ -7,25 +7,27 @@ import type {
 } from 'react';
 import { Camera, Layers, Maximize2, RotateCcw, Save } from 'lucide-react';
 import {
+  ausrichten,
   hochkantAnfang,
   hochkantGleich,
   hochkantPruefen,
+  kameraVerhaeltnis,
+  modusWechseln,
   naechsterEntwurf,
   rahmenBegrenzen,
   rahmenZiehen,
-  seitenverhaeltnisSperren,
   vorschauAusschnitt,
   zielPixel,
   zielverhaeltnisse,
 } from './hochkantLayout';
 import type {
-  HochkantBandLage,
   HochkantGriff,
   HochkantLayout,
   HochkantModus,
   HochkantQuelle,
   HochkantRahmen,
   HochkantStand,
+  HochkantVorrat,
   HochkantZiel,
 } from './hochkantLayout';
 
@@ -53,54 +55,6 @@ const RASTER =
   'repeating-linear-gradient(45deg, rgba(255,255,255,0.05) 0 12px, rgba(255,255,255,0.01) 12px 24px)';
 
 type Farbe = keyof typeof FARBEN;
-
-function kameraVerhaeltnis(kamera: HochkantRahmen, quelle: HochkantQuelle): number {
-  return (kamera.w * quelle.breite) / (kamera.h * quelle.hoehe);
-}
-
-function ausrichten(layout: HochkantLayout, ziel: HochkantZiel, quelle: HochkantQuelle): HochkantLayout {
-  const ratios = zielverhaeltnisse(layout, ziel);
-  const gameplay = seitenverhaeltnisSperren(layout.gameplay, ratios.gameplay, quelle);
-  let kamera = layout.kamera;
-  if (kamera && layout.modus === 'gestapelt' && ratios.kamera != null) {
-    kamera = seitenverhaeltnisSperren(kamera, ratios.kamera, quelle);
-  }
-  let kameraBox = layout.kameraBox;
-  if (layout.modus === 'bild_im_bild' && kamera && kameraBox) {
-    kameraBox = seitenverhaeltnisSperren(kameraBox, kameraVerhaeltnis(kamera, quelle), {
-      breite: ziel.breite,
-      hoehe: ziel.hoehe,
-    });
-  }
-  return { ...layout, gameplay, kamera, kameraBox };
-}
-
-function modusWechseln(
-  layout: HochkantLayout,
-  modus: HochkantModus,
-  ziel: HochkantZiel,
-  quelle: HochkantQuelle,
-  vorlage: HochkantLayout,
-): HochkantLayout {
-  const kameraVorrat = layout.kamera ?? vorlage.kamera;
-  const bandVorrat = layout.kameraBand ?? vorlage.kameraBand ?? { hoehe: 0.25, lage: 'unten' as HochkantBandLage };
-  const boxVorrat = layout.kameraBox ?? vorlage.kameraBox;
-  if (modus === 'nur_gameplay') {
-    return ausrichten({ ...layout, modus, kamera: null, kameraBand: null, kameraBox: null }, ziel, quelle);
-  }
-  if (modus === 'gestapelt') {
-    return ausrichten(
-      { ...layout, modus, kamera: kameraVorrat, kameraBand: bandVorrat, kameraBox: null },
-      ziel,
-      quelle,
-    );
-  }
-  return ausrichten(
-    { ...layout, modus, kamera: kameraVorrat, kameraBand: null, kameraBox: boxVorrat },
-    ziel,
-    quelle,
-  );
-}
 
 interface Ziehbar {
   id: string;
@@ -327,23 +281,50 @@ export function UplinkHochkantEditor({
   );
   const [entwurf, setEntwurf] = useState<HochkantLayout>(() => stand?.layout ?? anfang);
   const [ausgewaehlt, setAusgewaehlt] = useState<string | null>('gameplay');
-  const basis = useRef<HochkantLayout>(stand?.layout ?? anfang);
+  const [basis, setBasis] = useState<HochkantLayout | null>(() => stand?.layout ?? null);
+  const letzterStand = useRef<HochkantStand | null>(stand);
+  const merker = useRef<HochkantVorrat>({
+    kamera: entwurf.kamera ?? anfang.kamera,
+    kameraBand: entwurf.kameraBand ?? anfang.kameraBand,
+    kameraBox: entwurf.kameraBox ?? anfang.kameraBox,
+  });
 
   useEffect(() => {
-    const neu = stand?.layout ?? anfang;
-    const gewaehlt = naechsterEntwurf(entwurf, basis.current, neu);
-    if (gewaehlt !== entwurf) {
-      basis.current = neu;
-      setEntwurf(gewaehlt);
-    } else if (hochkantGleich(entwurf, basis.current)) {
-      basis.current = neu;
-    }
-  }, [stand, anfang, entwurf]);
+    if (entwurf.kamera) merker.current.kamera = entwurf.kamera;
+    if (entwurf.kameraBand) merker.current.kameraBand = entwurf.kameraBand;
+    if (entwurf.kameraBox) merker.current.kameraBox = entwurf.kameraBox;
+  }, [entwurf]);
+
+  useEffect(() => {
+    if (stand === letzterStand.current) return;
+    letzterStand.current = stand;
+    const neu = stand?.layout ?? null;
+    if (neu == null) return;
+    const gewaehlt = naechsterEntwurf(entwurf, basis, neu, anfang);
+    if (gewaehlt !== entwurf) setEntwurf(gewaehlt);
+    if (hochkantGleich(gewaehlt, neu)) setBasis(neu);
+  }, [stand, anfang, entwurf, basis]);
+
+  const vorrat = (): HochkantVorrat => ({
+    kamera: merker.current.kamera ?? anfang.kamera,
+    kameraBand: merker.current.kameraBand ?? anfang.kameraBand,
+    kameraBox: merker.current.kameraBox ?? anfang.kameraBox,
+  });
 
   const ratios = zielverhaeltnisse(entwurf, ziel);
   const fehler = hochkantPruefen(entwurf, ziel, quelleEff);
-  const unveraendert = hochkantGleich(entwurf, basis.current);
+  const unveraendert = basis != null && hochkantGleich(entwurf, basis);
   const speichernGesperrt = beschaeftigt || fehler.length > 0 || unveraendert;
+
+  const speichern = () => {
+    onSpeichern(entwurf);
+    setBasis(entwurf);
+  };
+
+  const zuruecksetzen = () => {
+    setEntwurf(basis ?? anfang);
+    onZuruecksetzen();
+  };
 
   const pixel = zielPixel(entwurf, quelleEff, ziel);
 
@@ -384,7 +365,8 @@ export function UplinkHochkantEditor({
   };
 
   const wechsleModus = (modus: HochkantModus) => {
-    setEntwurf((prev) => modusWechseln(prev, modus, ziel, quelleEff, anfang));
+    const vorlage = vorrat();
+    setEntwurf((prev) => modusWechseln(prev, modus, ziel, quelleEff, vorlage));
   };
 
   const setzeKamera = (an: boolean) => {
@@ -401,10 +383,6 @@ export function UplinkHochkantEditor({
         quelleEff,
       );
     });
-  };
-
-  const setzeBandLage = (lage: HochkantBandLage) => {
-    setEntwurf((prev) => (prev.kameraBand ? { ...prev, kameraBand: { ...prev.kameraBand, lage } } : prev));
   };
 
   const kameraAn = entwurf.kamera != null && entwurf.modus !== 'nur_gameplay';
@@ -564,22 +542,7 @@ export function UplinkHochkantEditor({
                 className="mt-1 w-full"
               />
             </label>
-            <div role="group" aria-label="Lage des Kamerabands" className="flex overflow-hidden rounded-lg border border-border text-xs font-semibold">
-              {(['oben', 'unten'] as HochkantBandLage[]).map((lage) => {
-                const aktiv = entwurf.kameraBand?.lage === lage;
-                return (
-                  <button
-                    key={lage}
-                    type="button"
-                    aria-pressed={aktiv}
-                    onClick={() => setzeBandLage(lage)}
-                    className={`min-h-10 flex-1 px-3 py-1 ${aktiv ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
-                  >
-                    {lage === 'oben' ? 'Kamera oben' : 'Kamera unten'}
-                  </button>
-                );
-              })}
-            </div>
+            <p className="text-[11px] text-text-secondary">Die Kamera sitzt unten, das Spielbild oben.</p>
           </div>
         ) : null}
 
@@ -613,7 +576,7 @@ export function UplinkHochkantEditor({
         <button
           type="button"
           disabled={speichernGesperrt}
-          onClick={() => onSpeichern(entwurf)}
+          onClick={speichern}
           className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-50"
         >
           <Save size={15} aria-hidden="true" />
@@ -622,7 +585,7 @@ export function UplinkHochkantEditor({
         <button
           type="button"
           disabled={beschaeftigt}
-          onClick={onZuruecksetzen}
+          onClick={zuruecksetzen}
           className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           <RotateCcw size={15} aria-hidden="true" />
