@@ -62,7 +62,7 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
 
   return (
     <nav className="mb-8 overflow-x-auto">
-      <div className="panel-card rounded-2xl p-2.5 min-w-max flex items-center gap-1.5">
+      <div className="panel-inset rounded-2xl p-2.5 min-w-max flex items-center gap-1.5">
         {visibleTabs.map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;

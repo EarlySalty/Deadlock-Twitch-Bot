@@ -16,14 +16,11 @@
  * ist Farbe Datenkodierung, keine Deko — monochrome Diagramme waeren unlesbar.
  */
 @theme {
-  /* Grundtoene: eine Stufe heller als vorher. Die Kachel hob sich nur ~4% vom Grund ab,
-     dadurch verschmolz die Seite zu einem schwarzen Block. Jetzt liest man die Kanten. */
-  /* Patch-Schwarz (#0b0b0b / #101010 / #161616), abgestimmt auf website/theme-v2.css.
-     Nur die Flaechen sind schwarz; der Gold-Akzent (--color-primary) bleibt. */
+  /* Neutrale Flächen wie /streamer; Gold sitzt an den Kanten. */
   --color-bg: #0b0b0b;
-  --color-background: #0f0f0e;
-  --color-card: #221a15;
-  --color-card-hover: #2a221c;
+  --color-background: #101010;
+  --color-card: #161616;
+  --color-card-hover: rgb(30, 30, 30);
   --color-primary: #C5A059;
   --color-primary-hover: #F1D299;
   --color-primary-soft: rgba(197, 160, 89, 0.20);
@@ -51,10 +48,10 @@
   /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
      unlesbar — auf Metall wird mit dunkler Tinte geschrieben. */
   --color-on-gold: #241A12;
-  --color-border: rgba(239, 212, 157, 0.34);
-  --color-border-strong: rgba(239, 212, 157, 0.50);
-  --color-border-hover: rgba(239, 212, 157, 0.44);
-  --color-popover: #1a1310;
+  --color-border: rgba(239, 212, 157, 0.24);
+  --color-border-strong: rgba(239, 212, 157, 0.38);
+  --color-border-hover: rgba(239, 212, 157, 0.34);
+  --color-popover: #161616;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
@@ -64,9 +61,9 @@
   --gradient-dash: linear-gradient(135deg, #C5A059, #E0BE86);
   --gradient-bg: linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
   --gradient-hero: linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
-  --shadow-primary-glow: 0 12px 28px rgba(197, 160, 89, 0.22);
-  --shadow-primary-glow-hover: 0 16px 36px rgba(197, 160, 89, 0.35), 0 0 20px rgba(197, 160, 89, 0.12);
-  --shadow-card-soft: 0 16px 45px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --shadow-primary-glow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  --shadow-primary-glow-hover: 0 8px 20px rgba(0, 0, 0, 0.45);
+  --shadow-card-soft: 0 12px 28px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.055);
 }
 
 /* Base Styles */
@@ -159,28 +156,23 @@ svg.icon-duotone {
   background: linear-gradient(180deg, var(--color-card-hover) 0%, var(--color-primary) 100%);
 }
 
-.glass {
-  background-color: var(--color-card);
-  background-image:
-    linear-gradient(155deg, rgba(241, 210, 153, 0.1) 0%, rgba(241, 210, 153, 0.05) 32%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.22) 100%),
-    repeating-linear-gradient(
-      177deg,
-      rgba(255, 255, 255, 0.016) 0px,
-      rgba(255, 255, 255, 0) 1px,
-      rgba(0, 0, 0, 0.045) 2px,
-      rgba(255, 255, 255, 0) 3px
-    );
+/* Echte Karten: matte Anthrazitfläche, feine Goldkante und helle Innenlinie.
+   Innenfelder und Tabs bleiben versenkt und bekommen keinen Kartenschatten. */
+.glass,
+.panel-card {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.025), transparent 60%), var(--color-card);
   border: 1px solid var(--color-border);
-  box-shadow:
-    inset 0 1px 0 rgba(241, 210, 153, 0.18),
-    0 0 0 1px rgba(0, 0, 0, 0.85),
-    0 18px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-card-soft);
 }
 
-/* Gold-Flaeche. Traegt IMMER dunkle Tinte — Kinder erben die Farbe, damit niemand
-   versehentlich weissen Text auf Messing setzt (Kontrast ~1.8:1, faellt keinem Build auf). */
+.panel-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
 .gradient-accent {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
   color: var(--color-on-gold);
 }
 
@@ -188,257 +180,49 @@ svg.icon-duotone {
   color: var(--color-on-gold);
 }
 
-.panel-card {
-  position: relative;
-  overflow: hidden;
-  isolation: isolate;
-  background-color: var(--color-card);
-  background-image:
-    linear-gradient(155deg, rgba(241, 210, 153, 0.1) 0%, rgba(241, 210, 153, 0.05) 32%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.22) 100%),
-    repeating-linear-gradient(
-      177deg,
-      rgba(255, 255, 255, 0.016) 0px,
-      rgba(255, 255, 255, 0) 1px,
-      rgba(0, 0, 0, 0.045) 2px,
-      rgba(255, 255, 255, 0) 3px
-    );
+/* Nur umrandete, eigenständige Karten: keine Skeletons oder Tab-Kacheln. */
+.bg-card:where(.border):where(.rounded-xl, .rounded-2xl, .rounded-3xl):where(:not(.animate-pulse)):where(:not(.h-14)) {
+  box-shadow: var(--shadow-card-soft);
+}
+
+.panel-card .panel-card,
+.panel-card .bg-card.border,
+.panel-inset {
+  background: var(--color-background);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.panel-inset {
   border: 1px solid var(--color-border);
-  box-shadow:
-    inset 0 1px 0 rgba(241, 210, 153, 0.18),
-    0 0 0 1px rgba(0, 0, 0, 0.85),
-    0 18px 40px rgba(0, 0, 0, 0.6);
 }
 
-.panel-card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(circle at 11px 11px, #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
-    radial-gradient(circle at calc(100% - 11px) 11px, #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
-    radial-gradient(circle at 11px calc(100% - 11px), #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px),
-    radial-gradient(circle at calc(100% - 11px) calc(100% - 11px), #F1D299 0.6px, #9A7C42 1.7px, rgba(0, 0, 0, 0.5) 2.6px, transparent 3.2px);
-  opacity: 0.6;
-}
-
-.bg-card {
-  background-image:
-    linear-gradient(155deg, rgba(241, 210, 153, 0.1) 0%, rgba(241, 210, 153, 0.05) 32%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.22) 100%),
-    repeating-linear-gradient(
-      177deg,
-      rgba(255, 255, 255, 0.016) 0px,
-      rgba(255, 255, 255, 0) 1px,
-      rgba(0, 0, 0, 0.045) 2px,
-      rgba(255, 255, 255, 0) 3px
-    );
-}
-
-.bg-card.rounded-xl:not(.h-14),
-.bg-card.rounded-2xl,
-.bg-card.rounded-3xl {
-  box-shadow:
-    inset 0 1px 0 rgba(241, 210, 153, 0.18),
-    0 0 0 1px rgba(0, 0, 0, 0.85),
-    0 18px 40px rgba(0, 0, 0, 0.6);
+.panel-card :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  background-color: var(--color-bg);
 }
 
 .card-glow {
   position: relative;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
-.card-glow::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  pointer-events: none;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-primary) 55%, transparent),
-    color-mix(in srgb, var(--color-accent) 35%, transparent) 45%,
-    transparent 65%
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  opacity: 0.55;
-  transition: opacity 280ms ease;
+@media (hover: hover) and (pointer: fine) {
+  .card-glow:hover {
+    border-color: var(--color-border-hover);
+  }
 }
 
-.card-glow:hover::before {
-  opacity: 1;
-}
+/* Status bleibt an einer Kante erkennbar, ohne farbigen Lichtschein. */
+.card-glow-warning { border-color: color-mix(in srgb, var(--color-warning) 42%, transparent); }
+.card-glow-success { border-color: color-mix(in srgb, var(--color-success) 42%, transparent); }
+.card-glow-danger { border-color: color-mix(in srgb, var(--color-danger) 42%, transparent); }
+.card-glow-accent { border-color: var(--color-border-strong); }
 
-.card-glow {
-  transition:
-    transform 240ms ease,
-    box-shadow 280ms ease,
-    border-color 240ms ease;
-}
-
-.card-glow:hover {
-  transform: translateY(-3px);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-primary) 22%, transparent),
-    0 22px 44px -16px color-mix(in srgb, var(--color-primary) 38%, rgba(0, 0, 0, 0.5)),
-    0 14px 28px rgba(0, 0, 0, 0.32);
-}
-
-.card-glow-warning::before {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-warning) 55%, transparent),
-    color-mix(in srgb, var(--color-orange) 35%, transparent) 45%,
-    transparent 65%
-  );
-  opacity: 0.7;
-}
-
-.card-glow-success::before {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-success) 55%, transparent),
-    color-mix(in srgb, var(--color-teal) 35%, transparent) 45%,
-    transparent 65%
-  );
-  opacity: 0.6;
-}
-
-.card-glow-danger::before {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-danger) 60%, transparent),
-    color-mix(in srgb, var(--color-orange) 30%, transparent) 45%,
-    transparent 65%
-  );
-  opacity: 0.7;
-}
-
-.card-glow-accent {
-  background: linear-gradient(
-    160deg,
-    rgba(224, 190, 134, 0.16) 0%,
-    rgba(197, 160, 89, 0.12) 45%,
-    rgba(17, 17, 17, 0.94) 100%
-  );
-}
-
-.card-glow-accent::before {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-accent) 65%, transparent),
-    color-mix(in srgb, var(--color-primary) 50%, transparent) 50%,
-    transparent 70%
-  );
-  opacity: 0.85;
-}
-
-.card-glow-accent:hover {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-accent) 32%, transparent),
-    0 26px 52px -18px color-mix(in srgb, var(--color-accent) 50%, rgba(0, 0, 0, 0.55)),
-    0 14px 28px rgba(0, 0, 0, 0.34);
-}
-
-/* Soft variant: deutlich gedaempftes Glow, fuer Cards wo der Glow sonst ueberstrahlt */
-.card-glow-soft {
-  background: linear-gradient(160deg, rgba(28, 28, 28, 0.94) 0%, rgba(17, 17, 17, 0.94) 100%);
-}
-
-.card-glow-soft::before {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-primary) 32%, transparent),
-    color-mix(in srgb, var(--color-accent) 18%, transparent) 50%,
-    transparent 70%
-  );
-  opacity: 0.4;
-}
-
-.card-glow-soft:hover {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-primary) 14%, transparent),
-    0 16px 32px -14px color-mix(in srgb, var(--color-primary) 22%, rgba(0, 0, 0, 0.5)),
-    0 10px 22px rgba(0, 0, 0, 0.28);
-}
-
-/* Always-on Glow fuer kleine KPI-Cards (Viewer / Follower / Chat / Stream-Stunden) */
 .kpi-glow-always {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent),
-    0 14px 30px -14px color-mix(in srgb, var(--color-primary) 32%, rgba(0, 0, 0, 0.55)),
-    0 8px 18px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-card-soft);
 }
 
-.kpi-glow-always.kpi-glow-success {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-success) 22%, transparent),
-    0 14px 30px -14px color-mix(in srgb, var(--color-success) 38%, rgba(0, 0, 0, 0.55)),
-    0 8px 18px rgba(0, 0, 0, 0.28);
-}
-
-.kpi-glow-always.kpi-glow-danger {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-danger) 24%, transparent),
-    0 14px 30px -14px color-mix(in srgb, var(--color-danger) 38%, rgba(0, 0, 0, 0.55)),
-    0 8px 18px rgba(0, 0, 0, 0.28);
-}
-
-.kpi-glow-always:hover {
-  transform: translateY(-3px);
-}
-
-.kpi-glow-always.kpi-glow-success:hover {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-success) 38%, transparent),
-    0 22px 44px -16px color-mix(in srgb, var(--color-success) 55%, rgba(0, 0, 0, 0.55)),
-    0 12px 24px rgba(0, 0, 0, 0.34);
-}
-
-.kpi-glow-always.kpi-glow-danger:hover {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent),
-    0 22px 44px -16px color-mix(in srgb, var(--color-danger) 55%, rgba(0, 0, 0, 0.55)),
-    0 12px 24px rgba(0, 0, 0, 0.34);
-}
-
-/* Hero-Aura */
-.hero-aura {
-  position: relative;
-  isolation: isolate;
-}
-
-@keyframes hero-aura-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.hero-aura::before {
-  content: "";
-  position: absolute;
-  inset: -45%;
-  z-index: -1;
-  pointer-events: none;
-  background: conic-gradient(
-    from 0deg,
-    rgba(197, 160, 89, 0.18),
-    rgba(224, 190, 134, 0.20),
-    rgba(154, 124, 66, 0.16),
-    rgba(241, 210, 153, 0.14),
-    rgba(197, 160, 89, 0.18)
-  );
-  filter: blur(60px);
-  opacity: 0.38;
-  animation: hero-aura-spin 28s linear infinite;
-}
+.kpi-glow-success { border-color: color-mix(in srgb, var(--color-success) 42%, transparent); }
+.kpi-glow-danger { border-color: color-mix(in srgb, var(--color-danger) 42%, transparent); }
 
 /* Glow-Pill (live indicator etc.) */
 .glow-pill-live {
@@ -467,28 +251,27 @@ svg.icon-duotone {
   border-radius: 999px;
   background: linear-gradient(180deg, var(--color-primary), var(--color-accent));
   opacity: 0.85;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--color-primary) 45%, transparent);
+  box-shadow: none;
 }
 
 .accent-bar[data-tone="warning"]::before {
   background: linear-gradient(180deg, var(--color-warning), var(--color-orange));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--color-warning) 50%, transparent);
+  box-shadow: none;
 }
 
 .accent-bar[data-tone="danger"]::before {
   background: linear-gradient(180deg, var(--color-danger), var(--color-orange));
-  box-shadow: 0 0 14px color-mix(in srgb, var(--color-danger) 55%, transparent);
+  box-shadow: none;
 }
 
 .accent-bar[data-tone="success"]::before {
   background: linear-gradient(180deg, var(--color-success), var(--color-teal));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--color-success) 50%, transparent);
+  box-shadow: none;
 }
 
 .metric-highlight {
-  box-shadow:
-    0 0 0 1px rgba(197, 160, 89, 0.24),
-    0 12px 32px rgba(197, 160, 89, 0.16);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-card-soft);
 }
 
 .gradient-brand {
@@ -601,12 +384,7 @@ svg.icon-duotone {
 }
 
 .internal-home-kpi:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border-hover));
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent),
-    0 14px 30px rgba(197, 160, 89, 0.18),
-    0 12px 28px rgba(0, 0, 0, 0.24);
+  border-color: var(--color-border-hover);
 }
 
 .internal-home-stream {

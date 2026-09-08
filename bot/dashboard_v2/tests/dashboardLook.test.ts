@@ -17,10 +17,10 @@ const block = (css: string, selector: string): string => {
   return css.slice(open, close);
 };
 
-test('die Karten tragen den alten Braun-Gold-Look mit Nieten und Streifen', () => {
-  assert.match(INDEX, /\.panel-card::after/);
-  assert.match(block(INDEX, '.glass {'), /repeating-linear-gradient/);
-  assert.match(block(INDEX, '.panel-card {'), /repeating-linear-gradient/);
+test('Karten bleiben neutral und verzichten auf Nieten und Streifen', () => {
+  assert.match(INDEX, /--color-card:\s*#161616/);
+  assert.doesNotMatch(INDEX, /\.panel-card::after|repeating-linear-gradient/);
+  assert.doesNotMatch(INDEX, /#221a15|#2a221c|#1a1310/);
 });
 
 test('die animierte Gold-Aura der Shell ist entfernt', () => {
@@ -41,12 +41,11 @@ test('das Raster wird nicht zu den Raendern hin ausgeblendet', () => {
   assert.doesNotMatch(block(INDEX, 'body::before'), /mask-image/);
 });
 
-test('die Karten tragen den warmen Gold-Braun-Verlauf, nicht flaechig', () => {
-  assert.match(block(INDEX, '.panel-card {'), /155deg/);
-  assert.match(block(INDEX, '.panel-card {'), /rgba\(241, 210, 153, 0\.1\) 0%/);
-  assert.match(block(INDEX, '.panel-card {'), /rgba\(0, 0, 0, 0\.22\) 100%/);
-  assert.doesNotMatch(block(INDEX, '.panel-card {'), /linear-gradient\(0deg/);
-  assert.match(INDEX, /--color-border:\s*rgba\(239, 212, 157, 0\.34\)/);
+test('Gold bleibt an der Kartenkante, Tiefe entsteht durch neutralen Schatten', () => {
+  assert.match(block(INDEX, '.panel-card {'), /border: 1px solid var\(--color-border\)/);
+  assert.match(block(INDEX, '.panel-card {'), /box-shadow: var\(--shadow-card-soft\)/);
+  assert.doesNotMatch(block(INDEX, '.panel-card {'), /rgba\(241, 210, 153/);
+  assert.doesNotMatch(INDEX, /hero-aura::before|hero-aura-spin/);
 });
 
 test('Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring', () => {
