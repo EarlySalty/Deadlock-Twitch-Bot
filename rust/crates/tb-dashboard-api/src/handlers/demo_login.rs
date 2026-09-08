@@ -395,13 +395,12 @@ const LOGIN_PAGE_HTML: &str = r#"<!DOCTYPE html>
 #[cfg(test)]
 mod unit_tests {
     use super::*;
-    use argon2::password_hash::SaltString;
     use argon2::{Argon2, PasswordHasher};
 
     fn make_hash(password: &str) -> String {
-        let salt = SaltString::from_b64("dGVzdHNhbHR0ZXN0c2E").unwrap();
+        let salt = b"testsalttestsa";
         Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password_with_salt(password.as_bytes(), salt)
             .unwrap()
             .to_string()
     }
@@ -441,7 +440,6 @@ mod unit_tests {
 mod route_tests {
     use super::*;
     use crate::auth::security::{rate_limit_middleware, RateLimitLayerConfig, RateLimiter};
-    use argon2::password_hash::SaltString;
     use argon2::{Argon2, PasswordHasher};
     use axum::body::Body;
     use axum::http::Request;
@@ -471,9 +469,9 @@ mod route_tests {
     }
 
     fn make_hash(password: &str) -> String {
-        let salt = SaltString::from_b64("cnVudGltZXNhbHRydW50aQ").unwrap();
+        let salt = b"runtimesaltrunti";
         Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password_with_salt(password.as_bytes(), salt)
             .unwrap()
             .to_string()
     }
