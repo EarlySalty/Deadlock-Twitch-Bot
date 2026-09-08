@@ -39,7 +39,7 @@ fn line_hat_minimax(line: &str) -> bool {
         .contains(NEEDLE)
 }
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -54,7 +54,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
             if SKIP_DIRS.contains(&name) {
                 continue;
             }
-            collect_files(root, &path, out);
+            collect_files(&path, out);
         } else {
             let ext = path
                 .extension()
@@ -71,8 +71,8 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
 fn kein_minimax_bezeichner_mehr_im_code() {
     let root = repo_root();
     let mut files = Vec::new();
-    collect_files(&root, &root.join("rust"), &mut files);
-    collect_files(&root, &root.join("bot/dashboard_v2/src"), &mut files);
+    collect_files(&root.join("rust"), &mut files);
+    collect_files(&root.join("bot/dashboard_v2/src"), &mut files);
     files.sort();
 
     let mut hits: Vec<String> = Vec::new();
