@@ -32,9 +32,9 @@ test('die Shell rendert keine BackgroundBlobs mehr', () => {
   assert.doesNotMatch(SHELL, /BackgroundBlobs/);
 });
 
-test('Raster und Grund-Verlauf stammen aus der Vorlage', () => {
-  assert.match(INDEX, /rgba\(255, 255, 255, 0\.07\)/);
-  assert.match(INDEX, /--gradient-bg:\s*linear-gradient\(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%\)/);
+test('Raster und neutrale Grundtöne bleiben dezent', () => {
+  assert.match(INDEX, /rgba\(255, 255, 255, 0\.05\)/);
+  assert.match(INDEX, /--gradient-bg:\s*linear-gradient\(180deg, #101010 0%, #0d0d0d 55%, #121212 100%\)/);
 });
 
 test('das Raster wird nicht zu den Raendern hin ausgeblendet', () => {

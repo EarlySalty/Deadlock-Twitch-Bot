@@ -80,10 +80,9 @@ export function CalendarHeatmap({
 
       <div className="flex-1">
         <div
-          className="mb-1 grid"
+          className="mb-1 grid gap-1"
           style={{
             gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))`,
-            maxWidth: `${weeks.length * 26}px`,
           }}
         >
           {monthLabels.map(({ month, weekIndex }) => (
@@ -101,10 +100,8 @@ export function CalendarHeatmap({
           className="grid gap-1"
           style={{
             gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))`,
-            gridTemplateRows: 'repeat(7, auto)',
+            gridTemplateRows: 'repeat(7, 2rem)',
             gridAutoFlow: 'column',
-            maxWidth: `${weeks.length * 26}px`,
-            justifyContent: 'start',
           }}
         >
           {weeks.flatMap((week, weekIndex) =>
@@ -125,8 +122,6 @@ export function CalendarHeatmap({
                   transition={{ delay: Math.min(weekIndex * 0.01, 0.24) }}
                   className="rounded-sm relative group cursor-pointer"
                   style={{
-                    aspectRatio: '1',
-                    maxWidth: '22px',
                     backgroundColor: getHeatmapColor(value, maxValue),
                   }}
                 >

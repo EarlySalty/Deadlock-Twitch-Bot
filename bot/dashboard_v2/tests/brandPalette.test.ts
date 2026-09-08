@@ -19,6 +19,10 @@ const APPS = [
 ];
 
 const ALLOWED_HEX = new Set([
+  // Lokale Funnel-Stufen: Kupfer und Rosenholz.
+  '#de8a6a', '#c47682',
+  // Warme Goldspitzen, etwas dunkler als die ursprünglichen Messing-Highlights.
+  '#e6c78f', '#d6b676', '#e8cfa0',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
   // Satz hob die Kachel nur um 0.54% Luminanz vom Grund ab, die Seite verschmolz
   // zu einem schwarzen Block. admin_dashboard + shared-theme stehen noch auf den
@@ -27,7 +31,7 @@ const ALLOWED_HEX = new Set([
   '#1a1310', '#221a15', '#2a221c', '#362c23',
   // Patch-Schwarz: /streamer-Flaechen (theme-v2.css) auf dashboard_v2 gespiegelt.
   // Nur die Flaechen wurden neutral-schwarz; der Gold-Akzent oben bleibt.
-  '#0b0b0b', '#101010', '#0f0f0e', '#161616',
+  '#0d0d0d', '#121212', '#0b0b0b', '#101010', '#0f0f0e', '#161616',
   // Text auf Schwarz (heller als das warme #ede0c4, damit es auf #0b0b0b traegt).
   '#f2eee6', '#9d968a',
   // Gold + Messing. Messing ist der CHROME-Akzent (Buttons, Icon-Kacheln, Auren).
@@ -178,5 +182,30 @@ test('Pergament-Tinten halten Kontrast >= 4.5:1 gegen das Papier', () => {
       ratio(parchment, ink) >= 4.5,
       `${ink} auf Pergament: nur ${ratio(parchment, ink).toFixed(2)}:1`,
     );
+  }
+});
+
+// Farbige Statusbeschriftungen und dunkle Schrift auf Gold bleiben lesbar.
+test('Dashboard-Akzente halten den Textkontrast', () => {
+  const css = readFileSync(join(import.meta.dirname, '../src/index.css'), 'utf8');
+  const token = (name: string) => {
+    const match = css.match(new RegExp('--color-' + name + ':\\s*(#[0-9a-f]{6})', 'i'));
+    assert.ok(match, name);
+    return match[1];
+  };
+  const luminance = (hex: string) => {
+    const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+  };
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  for (const name of ['primary', 'accent', 'success', 'warning', 'danger', 'info']) {
+    assert.ok(contrast(token(name), token('card')) >= 4.5, name + ' auf Karte');
+  }
+  for (const name of ['primary', 'primary-hover', 'accent', 'accent-hover']) {
+    assert.ok(contrast(token(name), token('on-gold')) >= 4.5, 'Schrift auf ' + name);
   }
 });
