@@ -413,7 +413,7 @@ mod tests {
     use super::*;
     use axum::body::Bytes;
     use axum::http::HeaderValue;
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

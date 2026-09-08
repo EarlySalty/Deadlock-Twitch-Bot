@@ -10,7 +10,7 @@
 //! Das Webhook-Secret (`whsec_…`) wird ausschließlich für die HMAC-Berechnung
 //! verwendet und niemals geloggt oder in Fehlern transportiert.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;

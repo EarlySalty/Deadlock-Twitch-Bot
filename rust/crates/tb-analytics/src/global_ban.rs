@@ -55,7 +55,7 @@ pub async fn db_schema_fingerprint(pool: &PgPool) -> Result<String, sqlx::Error>
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(combined.as_bytes());
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 // ── Global-Ban Add ────────────────────────────────────────────────────────────

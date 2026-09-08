@@ -3,9 +3,9 @@
 //! Pendant zu Pythons `secrets.token_urlsafe(...)` (OS-CSPRNG). Ein Token aus
 //! dieser Quelle ist der CSRF-Anker im OAuth-Flow — schwacher Zufall erlaubt
 //! Token-Injection gegen fremde Konten. Deshalb hier zentral und ausschließlich
-//! über `OsRng`, nie über selbstgebaute Mischfunktionen.
+//! über `SysRng`, nie über selbstgebaute Mischfunktionen.
 
-use rand::RngCore;
+use rand::TryRng;
 use sha2::{Digest, Sha256};
 
 /// Irreversibler Datenbank-Lookup-Key für zufällige Bearer- und OAuth-Tokens.
@@ -22,7 +22,9 @@ pub fn token_lookup_key(raw: &str) -> String {
 pub fn random_hex_token(n_bytes: usize) -> String {
     use std::fmt::Write as _;
     let mut bytes = vec![0u8; n_bytes];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("Betriebssystem-Zufall ist nicht verfügbar");
     let mut out = String::with_capacity(n_bytes * 2);
     for byte in bytes {
         write!(&mut out, "{byte:02x}").expect("write in String ist infallibel");
@@ -33,13 +35,15 @@ pub fn random_hex_token(n_bytes: usize) -> String {
 /// Byte-identisches Pendant zu Pythons `secrets.token_urlsafe(n_bytes)`:
 /// `n_bytes` OS-Zufall, base64-urlsafe-kodiert OHNE `=`-Padding.
 ///
-/// Quelle ist immer `OsRng` (OS-CSPRNG) — diese Tokens werden als Session-IDs
+/// Quelle ist immer `SysRng` (OS-CSPRNG) — diese Tokens werden als Session-IDs
 /// und CSRF-Anker verwendet; schwacher Zufall erlaubt Session-Übernahme. Die
 /// Länge des Resultats ist `ceil(n_bytes * 4 / 3)` Zeichen (z. B. 43 für 32 Byte).
 pub fn random_urlsafe_token(n_bytes: usize) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     let mut bytes = vec![0u8; n_bytes];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("Betriebssystem-Zufall ist nicht verfügbar");
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 
