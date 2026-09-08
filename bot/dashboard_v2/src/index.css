@@ -21,27 +21,27 @@
   --color-background: #101010;
   --color-card: #161616;
   --color-card-hover: rgb(30, 30, 30);
-  --color-primary: #C5A059;
-  --color-primary-hover: #F1D299;
-  --color-primary-soft: rgba(197, 160, 89, 0.20);
+  --color-primary: #B39A6B;
+  --color-primary-hover: #DAC6A2;
+  --color-primary-soft: rgba(179, 154, 107, 0.20);
   /* Chrome-Akzent: helles Messing. Zweites Metall neben Antik-Gold — genug Abstand fuer
      Hierarchie, kein Farbbruch. */
-  --color-accent: #E0BE86;
-  --color-accent-hover: #F3D9AE;
-  --color-accent-soft: rgba(224, 190, 134, 0.18);
-  --color-orange: #C5A059;
-  --color-orange-hover: #F1D299;
-  --color-teal: #00D9FF;
-  --color-teal-hover: #5CE7FF;
-  /* Status-Gruen: mattes Smaragd statt Neon (#00FF88 leuchtet auf Schwarz zu grell). */
-  --color-success: #43b581;
-  --color-warning: #E8A33D;
-  --color-danger: #FF5A3C;
-  --color-error: #FF5A3C;
-  --color-info: #00D9FF;
-  --color-success-soft: rgba(67, 181, 129, 0.15);
-  --color-warning-soft: rgba(232, 163, 61, 0.15);
-  --color-danger-soft: rgba(255, 90, 60, 0.15);
+  --color-accent: #C6AF87;
+  --color-accent-hover: #E0CEAF;
+  --color-accent-soft: rgba(198, 175, 135, 0.18);
+  --color-orange: #B39A6B;
+  --color-orange-hover: #DAC6A2;
+  --color-teal: #73BDC9;
+  --color-teal-hover: #9CCFD6;
+  /* Leicht entsättigte Statusfarben: ruhig, aber auf dunklen Flächen lesbar. */
+  --color-success: #65A486;
+  --color-warning: #C6A169;
+  --color-danger: #DF7969;
+  --color-error: #DF7969;
+  --color-info: #73BDC9;
+  --color-success-soft: rgba(101, 164, 134, 0.15);
+  --color-warning-soft: rgba(198, 161, 105, 0.15);
+  --color-danger-soft: rgba(223, 121, 105, 0.15);
   --color-secondary: #9d968a;
   --color-text-primary: #f2eee6;
   --color-text-secondary: #9d968a;
@@ -57,8 +57,8 @@
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
      Werte, faellt auf die Display-Font zurueck bis der CDN-Font geladen ist. */
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
-  --gradient-brand: linear-gradient(120deg, #F1D299 10%, #C5A059 55%, #9A7C42);
-  --gradient-dash: linear-gradient(135deg, #C5A059, #E0BE86);
+  --gradient-brand: linear-gradient(120deg, var(--color-primary-hover) 10%, var(--color-primary) 55%, #99825B);
+  --gradient-dash: linear-gradient(135deg, var(--color-primary), var(--color-accent));
   --gradient-bg: linear-gradient(180deg, #0f0f0e 0%, #0b0b0b 55%, #101010 100%);
   --gradient-hero: linear-gradient(160deg, #0b0b0b 0%, #101010 55%, #161616 100%);
   --shadow-primary-glow: 0 6px 16px rgba(0, 0, 0, 0.35);
