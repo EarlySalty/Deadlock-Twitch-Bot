@@ -19,8 +19,8 @@ const APPS = [
 ];
 
 const ALLOWED_HEX = new Set([
-  // Matte Dashboard-Akzente; neutrale Flächen und Text bleiben unverändert.
-  '#99825b', '#bc9a5e', '#dcc394', '#ccae79', '#dfca9f', '#4aa574', '#c6a169', '#df7969', '#73bdc9', '#9ccfd6',
+  // Warme Goldspitzen, etwas dunkler als die ursprünglichen Messing-Highlights.
+  '#e6c78f', '#d6b676', '#e8cfa0',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
   // Satz hob die Kachel nur um 0.54% Luminanz vom Grund ab, die Seite verschmolz
   // zu einem schwarzen Block. admin_dashboard + shared-theme stehen noch auf den
@@ -184,7 +184,7 @@ test('Pergament-Tinten halten Kontrast >= 4.5:1 gegen das Papier', () => {
 });
 
 // Farbige Statusbeschriftungen und dunkle Schrift auf Gold bleiben lesbar.
-test('matte Dashboard-Akzente halten den Textkontrast', () => {
+test('Dashboard-Akzente halten den Textkontrast', () => {
   const css = readFileSync(join(import.meta.dirname, '../src/index.css'), 'utf8');
   const token = (name: string) => {
     const match = css.match(new RegExp('--color-' + name + ':\\s*(#[0-9a-f]{6})', 'i'));

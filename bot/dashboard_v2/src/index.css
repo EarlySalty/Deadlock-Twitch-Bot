@@ -21,27 +21,27 @@
   --color-background: #121212;
   --color-card: #161616;
   --color-card-hover: rgb(30, 30, 30);
-  --color-primary: #BC9A5E;
-  --color-primary-hover: #DCC394;
-  --color-primary-soft: rgba(188, 154, 94, 0.20);
+  --color-primary: #C5A059;
+  --color-primary-hover: #E6C78F;
+  --color-primary-soft: rgba(197, 160, 89, 0.20);
   /* Chrome-Akzent: helles Messing. Zweites Metall neben Antik-Gold — genug Abstand fuer
      Hierarchie, kein Farbbruch. */
-  --color-accent: #CCAE79;
-  --color-accent-hover: #DFCA9F;
-  --color-accent-soft: rgba(204, 174, 121, 0.18);
-  --color-orange: #BC9A5E;
-  --color-orange-hover: #DCC394;
-  --color-teal: #73BDC9;
-  --color-teal-hover: #9CCFD6;
-  /* Leicht entsättigte Statusfarben: ruhig, aber auf dunklen Flächen lesbar. */
-  --color-success: #4AA574;
-  --color-warning: #C6A169;
-  --color-danger: #DF7969;
-  --color-error: #DF7969;
-  --color-info: #73BDC9;
-  --color-success-soft: rgba(74, 165, 116, 0.15);
-  --color-warning-soft: rgba(198, 161, 105, 0.15);
-  --color-danger-soft: rgba(223, 121, 105, 0.15);
+  --color-accent: #D6B676;
+  --color-accent-hover: #E8CFA0;
+  --color-accent-soft: rgba(214, 182, 118, 0.18);
+  --color-orange: #C5A059;
+  --color-orange-hover: #E6C78F;
+  --color-teal: #00D9FF;
+  --color-teal-hover: #5CE7FF;
+  /* Lebendige Statusfarben; nur die hellen Goldspitzen sind gedämpft. */
+  --color-success: #43B581;
+  --color-warning: #E8A33D;
+  --color-danger: #FF5A3C;
+  --color-error: #FF5A3C;
+  --color-info: #00D9FF;
+  --color-success-soft: rgba(67, 181, 129, 0.15);
+  --color-warning-soft: rgba(232, 163, 61, 0.15);
+  --color-danger-soft: rgba(255, 90, 60, 0.15);
   --color-secondary: #9d968a;
   --color-text-primary: #f2eee6;
   --color-text-secondary: #9d968a;
@@ -57,7 +57,7 @@
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
      Werte, faellt auf die Display-Font zurueck bis der CDN-Font geladen ist. */
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
-  --gradient-brand: linear-gradient(120deg, var(--color-primary-hover) 10%, var(--color-primary) 55%, #99825B);
+  --gradient-brand: linear-gradient(120deg, var(--color-primary-hover) 10%, var(--color-primary) 55%, #9A7C42);
   --gradient-dash: linear-gradient(135deg, var(--color-primary), var(--color-accent));
   --gradient-bg: linear-gradient(180deg, #101010 0%, #0d0d0d 55%, #121212 100%);
   --gradient-hero: linear-gradient(160deg, #0d0d0d 0%, #121212 55%, #161616 100%);
