@@ -953,15 +953,18 @@ mod tests {
         let klartext = sqlx::query(
             "INSERT INTO oauth_state_tokens \
              (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, created_at) \
-             VALUES ($1, 'youtube', '9004', 'https://x.test/callback/youtube', 'klartext', $2)",
+             VALUES ($1, 'youtube', '9004', 'https://x.test/callback/youtube', 'klartext', $2, clock_timestamp())",
         )
         .bind(tb_crypto::token_lookup_key("ystt2"))
         .bind(jetzt + Duration::seconds(STATE_TTL_SECONDS))
         .execute(&pool)
         .await;
-        assert!(
-            klartext.is_err(),
-            "Klartext-Verifier fuer YouTube muss an der Constraint scheitern"
+        let error = klartext.expect_err("Klartext-Verifier muss abgelehnt werden");
+        let database_error = error.as_database_error().expect("PostgreSQL-Fehler");
+        assert_eq!(database_error.code().as_deref(), Some("23514"));
+        assert_eq!(
+            database_error.constraint(),
+            Some("oauth_state_tokens_pkce_encrypted")
         );
     }
 

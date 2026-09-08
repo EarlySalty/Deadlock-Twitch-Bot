@@ -905,6 +905,8 @@ pub struct DestinationBody {
     pub manuell: Option<ManuellesProfil>,
     /// Ziel an- oder abschalten, ohne es zu loeschen.
     pub enabled: Option<bool>,
+    /// Nur Twitch, ausdrücklich gespeichert; ausgelassen bleibt unverändert.
+    pub twitch_audio_mode: Option<String>,
 }
 
 fn fehler(status: StatusCode, text: &str) -> Response {
@@ -952,6 +954,15 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
 
     if let Some(enabled) = body.enabled {
         felder.insert("enabled".into(), json!(enabled));
+    }
+    if let Some(mode) = body.twitch_audio_mode.as_deref() {
+        if body.platform.trim() != "twitch" || !matches!(mode, "live" | "separate_vod") {
+            return Err(fehler(
+                StatusCode::BAD_REQUEST,
+                "Twitch-Audiowahl ist ungültig.",
+            ));
+        }
+        felder.insert("twitch_audio_mode".into(), json!(mode));
     }
 
     let werte = match (&body.profil, body.manuell) {
@@ -1697,6 +1708,30 @@ mod tests {
             profil: None,
             manuell: None,
             enabled: None,
+            twitch_audio_mode: None,
+        }
+    }
+
+    #[test]
+    fn twitch_audio_choice_is_forwarded_only_when_explicit() {
+        for mode in ["live", "separate_vod"] {
+            let request: DestinationBody =
+                serde_json::from_value(json!({"platform":"twitch","twitch_audio_mode":mode}))
+                    .unwrap();
+            assert_eq!(ziel_nutzlast(&request).unwrap()["twitch_audio_mode"], mode);
+        }
+        let mut unchanged = body("twitch");
+        unchanged.enabled = Some(true);
+        assert!(ziel_nutzlast(&unchanged)
+            .unwrap()
+            .get("twitch_audio_mode")
+            .is_none());
+        for (platform, mode) in [("kick", "live"), ("twitch", "fallback")] {
+            let request: DestinationBody = serde_json::from_value(
+                json!({"platform":platform,"enabled":true,"twitch_audio_mode":mode}),
+            )
+            .unwrap();
+            assert!(ziel_nutzlast(&request).is_err());
         }
     }
 

@@ -83,7 +83,7 @@ export interface EingangsSession {
 
 export function eingangStatus(session: EingangsSession | null | undefined, unavailable: boolean) {
   if (unavailable) return { label: 'Eingangsstatus unbekannt', observation: null };
-  if (!session) return { label: 'Noch kein Stream empfangen', observation: null };
+  if (!session) return { label: 'Kein laufender Streameingang', observation: null };
   const label = !session.active ? 'Eingang beendet'
     : session.received_events > 0 ? 'Stream wird empfangen'
     : 'Verbindung aufgebaut, Medien werden erwartet';

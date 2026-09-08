@@ -136,5 +136,5 @@ test('Eingang unterscheidet empfangene Medien, vergangene Session und unbekannte
   assert.equal(eingangStatus({ ...session, active: false }, false).label, 'Eingang beendet');
   assert.equal(eingangStatus(session, true).label, 'Eingangsstatus unbekannt');
   assert.equal(eingangStatus({ ...session, received_events: 0 }, false).label, 'Verbindung aufgebaut, Medien werden erwartet');
-  assert.equal(eingangStatus(null, false).label, 'Noch kein Stream empfangen');
+  assert.equal(eingangStatus(null, false).label, 'Kein laufender Streameingang');
 });

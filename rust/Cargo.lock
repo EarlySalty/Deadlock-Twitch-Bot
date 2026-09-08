@@ -3046,6 +3046,7 @@ dependencies = [
  "hmac 0.13.0",
  "nix",
  "pbkdf2",
+ "percent-encoding",
  "pulldown-cmark",
  "rand 0.10.2",
  "regex",

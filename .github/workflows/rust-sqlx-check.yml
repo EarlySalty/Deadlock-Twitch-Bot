@@ -53,6 +53,8 @@ jobs:
           cargo test --locked -j2 -p tb-dashboard-api handlers::platform_token::tests --lib
           cargo test --locked -j2 -p tb-dashboard-api handlers::uplink::tests --lib
           cargo test --locked -j2 -p tb-dashboard-api uplink_config::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api handlers::plattform_connect::tests::youtube_state_ohne_verifier_erfuellt_pkce_constraint --lib
+          cargo check --locked -j2 -p tb-dashboard -p tb-bot
           cargo test --locked -j2 -p tb-dashboard-api handlers::auth_login::tests::callback_ --lib
           cargo run --locked -j2 -p tb-dashboard-api --example uplink_start_probe
 

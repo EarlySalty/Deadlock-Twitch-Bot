@@ -34,6 +34,30 @@ use crate::error::DbError;
 /// Eingebettete Migrationen aus dem Workspace-Verzeichnis `rust/migrations/`.
 pub static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
 
+/// Enger vorbereitender Release-Schritt. Der reguläre vollständige Migrator
+/// bleibt unverändert; dieselben Versionen/Prüfsummen und SQLx-Sperren gelten.
+pub async fn run_uplink_migrations(pool: &PgPool) -> Result<(), DbError> {
+    let migrations: Vec<_> = MIGRATOR
+        .iter()
+        .filter(|migration| matches!(migration.version, 20260908210000 | 20260908220000))
+        .cloned()
+        .collect();
+    if migrations.len() != 2 {
+        return Err(DbError::Integrity(
+            "Uplink-Release-Migrationen fehlen.".into(),
+        ));
+    }
+    Migrator {
+        migrations: std::borrow::Cow::Owned(migrations),
+        ignore_missing: true,
+        locking: MIGRATOR.locking,
+        no_tx: MIGRATOR.no_tx,
+    }
+    .run(pool)
+    .await?;
+    Ok(())
+}
+
 pub const SCHEMA_OWNER_COMPONENT: &str = "analytics_schema";
 pub const SCHEMA_OWNER_VALUE: &str = "rust";
 pub const SCHEMA_OWNER_MARKER_VERSION: i32 = 1;

@@ -30,6 +30,7 @@ reqwest      = { workspace = true }
 # OBS-Dock-Gateway.
 tokio        = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 url          = { workspace = true }
+percent-encoding = "2.3.2"
 uuid         = { workspace = true }
 thiserror    = { workspace = true }
 regex        = { workspace = true }
