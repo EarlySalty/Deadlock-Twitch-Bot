@@ -48,7 +48,7 @@ hmac = "0.13"
 # das Default-Feature "getopts" gehört zum bundled CLI-Tool des Crates und wird
 # von uns als Library-Dependency nie aufgerufen — zieht sonst getopts+deps unnötig mit.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
-rand = "0.8"
+rand = "0.10"
 zeroize = "1"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
