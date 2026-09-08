@@ -472,3 +472,24 @@ export function naechsterEntwurf(
   const referenz = basis ?? anfang;
   return hochkantGleich(entwurf, referenz) ? neu : entwurf;
 }
+
+export function standUebernehmen(
+  entwurf: HochkantLayout,
+  basis: HochkantLayout | null,
+  neu: HochkantLayout | null,
+  anfang: HochkantLayout,
+): { entwurf: HochkantLayout; basis: HochkantLayout | null } {
+  return { entwurf: naechsterEntwurf(entwurf, basis, neu, anfang), basis: neu };
+}
+
+export function speichernErlaubt(
+  entwurf: HochkantLayout,
+  basis: HochkantLayout | null,
+  fehler: string[],
+  beschaeftigt: boolean,
+): boolean {
+  if (beschaeftigt) return false;
+  if (fehler.length > 0) return false;
+  if (basis != null && hochkantGleich(entwurf, basis)) return false;
+  return true;
+}

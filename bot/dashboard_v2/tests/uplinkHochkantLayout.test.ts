@@ -11,6 +11,8 @@ import {
   rahmenBegrenzen,
   rahmenZiehen,
   seitenverhaeltnisSperren,
+  speichernErlaubt,
+  standUebernehmen,
   vorschauAusschnitt,
   zielPixel,
 } from '../src/components/uplink/hochkantLayout';
@@ -270,4 +272,38 @@ test('naechsterEntwurf durch bearbeiten, speichern, Bestaetigung und zuruecksetz
   assert.equal(naechsterEntwurf(bearbeitet, bearbeitet, bestaetigung, anfang), bestaetigung);
 
   assert.equal(naechsterEntwurf(bearbeitet, null, null, anfang), bearbeitet);
+});
+
+test('Speichern, Fehler und erneutes Speichern bleiben erlaubt, bis der Serverstand gleicht', () => {
+  const anfang = hochkantAnfang(HD, ZIEL);
+  const bearbeitet: HochkantLayout = { ...anfang, gameplay: { ...anfang.gameplay } };
+  assert.equal(speichernErlaubt(bearbeitet, null, [], false), true);
+  assert.equal(speichernErlaubt(bearbeitet, null, [], false), true);
+  assert.equal(speichernErlaubt(bearbeitet, bearbeitet, [], false), false);
+  assert.equal(speichernErlaubt(bearbeitet, null, ['Fehler'], false), false);
+  assert.equal(speichernErlaubt(bearbeitet, null, [], true), false);
+});
+
+test('standUebernehmen laesst den Entwurf stehen und laesst die Basis wandern', () => {
+  const anfang = hochkantAnfang(HD, ZIEL);
+  const bearbeitet: HochkantLayout = { ...anfang, gameplay: { ...anfang.gameplay, x: anfang.gameplay.x + 0.05 } };
+  const neuerStand: HochkantLayout = { ...anfang, modus: 'nur_gameplay', kamera: null, kameraBand: null, kameraBox: null };
+
+  const neu = standUebernehmen(bearbeitet, null, neuerStand, anfang);
+  assert.equal(neu.entwurf, bearbeitet);
+  assert.equal(neu.basis, neuerStand);
+  assert.equal(speichernErlaubt(neu.entwurf, neu.basis, [], false), true);
+
+  const unberuehrt = standUebernehmen(anfang, null, neuerStand, anfang);
+  assert.equal(unberuehrt.entwurf, neuerStand);
+  assert.equal(unberuehrt.basis, neuerStand);
+});
+
+test('standUebernehmen setzt die Basis auf null, wenn der Stand geloescht wird', () => {
+  const anfang = hochkantAnfang(HD, ZIEL);
+  const bearbeitet: HochkantLayout = { ...anfang, gameplay: { ...anfang.gameplay, x: anfang.gameplay.x + 0.05 } };
+  const gestrichen = standUebernehmen(bearbeitet, anfang, null, anfang);
+  assert.equal(gestrichen.entwurf, bearbeitet);
+  assert.equal(gestrichen.basis, null);
+  assert.equal(speichernErlaubt(gestrichen.entwurf, gestrichen.basis, [], false), true);
 });

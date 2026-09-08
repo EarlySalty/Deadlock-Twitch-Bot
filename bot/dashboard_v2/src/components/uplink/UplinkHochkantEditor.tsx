@@ -9,13 +9,13 @@ import { Camera, Layers, Maximize2, RotateCcw, Save } from 'lucide-react';
 import {
   ausrichten,
   hochkantAnfang,
-  hochkantGleich,
   hochkantPruefen,
   kameraVerhaeltnis,
   modusWechseln,
-  naechsterEntwurf,
   rahmenBegrenzen,
   rahmenZiehen,
+  speichernErlaubt,
+  standUebernehmen,
   vorschauAusschnitt,
   zielPixel,
   zielverhaeltnisse,
@@ -299,10 +299,9 @@ export function UplinkHochkantEditor({
     if (stand === letzterStand.current) return;
     letzterStand.current = stand;
     const neu = stand?.layout ?? null;
-    if (neu == null) return;
-    const gewaehlt = naechsterEntwurf(entwurf, basis, neu, anfang);
-    if (gewaehlt !== entwurf) setEntwurf(gewaehlt);
-    if (hochkantGleich(gewaehlt, neu)) setBasis(neu);
+    const naechste = standUebernehmen(entwurf, basis, neu, anfang);
+    if (naechste.entwurf !== entwurf) setEntwurf(naechste.entwurf);
+    if (naechste.basis !== basis) setBasis(naechste.basis);
   }, [stand, anfang, entwurf, basis]);
 
   const vorrat = (): HochkantVorrat => ({
@@ -313,12 +312,10 @@ export function UplinkHochkantEditor({
 
   const ratios = zielverhaeltnisse(entwurf, ziel);
   const fehler = hochkantPruefen(entwurf, ziel, quelleEff);
-  const unveraendert = basis != null && hochkantGleich(entwurf, basis);
-  const speichernGesperrt = beschaeftigt || fehler.length > 0 || unveraendert;
+  const speichernGesperrt = !speichernErlaubt(entwurf, basis, fehler, beschaeftigt);
 
   const speichern = () => {
     onSpeichern(entwurf);
-    setBasis(entwurf);
   };
 
   const zuruecksetzen = () => {

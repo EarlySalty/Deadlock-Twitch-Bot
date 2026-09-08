@@ -32,3 +32,9 @@ zustand: umgesetzt, lokal auf feat/uplink-hochkant-editor, nicht gepusht
 - N4: `nur_gameplay` mit gesetzten Kameradaten ist ein Fehler.
 - Reine Helfer `ausrichten` und `modusWechseln` liegen jetzt in `hochkantLayout.ts` und sind getestet.
 - Gate 4: Tests importieren `HochkantLayout`/`HochkantStand` aus `hochkantLayout` und `UplinkHochkantEditorProps` aus der Komponente; `tsc --noEmit --ignoreConfig ... tests/*` laeuft sauber.
+
+## Fix-Runde nach zweitem Gate (neuer Commit)
+
+- Speichern loest nur noch `onSpeichern` aus, kein optimistisches Setzen der Basis. Die Basis ist ausschliesslich der Serverstand (`stand.layout`, sonst null); nach einem Serverfehler bleibt Speichern moeglich, erst ein gleichender Serverstand sperrt.
+- Basis folgt immer dem neuesten `stand.layout`, auch waehrend der Nutzer tippt (Entwurf bleibt, Basis wandert, Gating gegen die neue Basis); ein geloeschter Stand setzt die Basis auf null. Zuruecksetzen stellt die aktuelle Basis her, sonst den Anfangswert.
+- Neue reine Funktionen `standUebernehmen` und `speichernErlaubt` in `hochkantLayout.ts`, getestet: Speichern/Fehler/erneut erlaubt, neuer Stand waehrend Bearbeitung, geloeschter Stand waehrend Bearbeitung.
