@@ -1,7 +1,7 @@
-status: aktiv
+status: abgeschlossen
 datum: 2026-09-08
 
-# Übergabe vor Implementierung
+# Übergabe des abgeschlossenen Versuchs
 
 ## Abgeschlossener Versuch
 
@@ -13,7 +13,7 @@ Der folgende historische Übergabetext wird durch diesen Abschnitt und die letzt
 
 Der standardmäßig ausgeschaltete Feature-Einstieg `tb-local-replay` liegt in `tb-llm`. Er prüft den eingefrorenen Datensatz vollständig vor Aufrufen, erstellt private JSONL-/HTML-/Markdown-Berichte und atomare Zwischenstände mit `complete=false`. Ungültige Modelltexte werden verworfen, bereits gelieferte Tokens und Abschlussgrund bleiben als Messwerte erhalten. Die zweite Runde kann die erste anhand Datensatz, Binärhash, Systemkarte, Parametern und einzelnen Prompt-Prüfsummen verifiziert direkt daneben darstellen. Kein Sender, Concierge oder produktiver Dienst ist angebunden.
 
-Die beiden im unabhängigen Rustreview gefundenen Punkte (Telemetrieverlust und fehlender Abbruchstand) sind behoben und synthetisch getestet. Sicherheitsreview kontrolliert zusätzlich echten Vorlauf-Binärhash und lokale Vorlaufadresse. Alle neuen Rust-Dateien sind formatiert; zwei vorbestehende Testfixture-/Clippyfehler wurden minimal innerhalb von `tb-llm` behoben. Die genauen finalen Cargo-Logs werden in VALIDIERUNG.md benannt. Echte Modellläufe starten erst nach dem Root-Run-Go. Parameter: 50 Fälle plus zehn Baselines je Modell, 160 Tokens, Temperatur 0,4, 600 Sekunden Frist. Kein fester Sampling-Seed, deshalb keine bitgenau identischen Antworttexte bei Wiederholung versprechen.
+Die beiden im unabhängigen Rustreview gefundenen Punkte (Telemetrieverlust und fehlender Abbruchstand) sind behoben und synthetisch getestet. Der Sicherheitsreview bestätigte zusätzlich echten Vorlauf-Binärhash und lokale Vorlaufadresse. Alle neuen Rust-Dateien sind formatiert; zwei vorbestehende Testfixture-/Clippyfehler wurden minimal innerhalb von `tb-llm` behoben. Die genauen finalen Cargo-Logs werden in VALIDIERUNG.md benannt. Die echten Modellläufe wurden nach dem Root-Run-Go vollständig ausgeführt. Parameter: 50 Fälle plus zehn Baselines je Modell, 160 Tokens, Temperatur 0,4, 600 Sekunden Frist. Kein fester Sampling-Seed, deshalb keine bitgenau identischen Antworttexte bei Wiederholung versprechen.
 
 ## Historische Übergabe vor dem erneuten Go
 

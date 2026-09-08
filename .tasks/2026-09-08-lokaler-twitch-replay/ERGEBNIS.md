@@ -45,3 +45,5 @@ Dauerhafte private Nachweise: `runtime/style-metrics-final.json`, `runtime/style
 Der private Vergleich macht tatsächliche Antworten prüfbar. Die technischen Erfolge sind keine Freigabe für natürliches Deutsch, Nanis Stimme oder autonomes Streamer-Onboarding. Der kleine Pool aus 16 älteren Vorlagen hat selbst längere Texte als die 50 Referenzen; diese Datenbegrenzung und die zusätzliche lokale Stilmessung gehören zur Interpretation. Es gab keine menschliche Qualitätsbewertung der Antworten.
 
 Das Feature bleibt standardmäßig aus. DeepSeek bleibt unverändert das produktive Modell. Nanis Stil gilt ausschließlich für Twitch, nicht für den Concierge. Produktives Anschließen des Kontextaufbaus ist eine eigene Folgearbeit und wurde durch diesen Offlinevergleich nicht erledigt.
+
+Beide lokalen Modell-Units wurden nach dem Versuch gestoppt; Port 18789 ist frei. Bot und Dashboard blieben aktiv, ohne Neustart oder Speicherlimitverletzung. Die CPU-Messung stammt vom gleichzeitig produktiv genutzten Host. Der private Abschlussnachweis liegt unter `runtime/replay-stop-status.txt`, die vollständigen technischen Zahlen unter `runtime/9b-replay-technical-summary.json`.
