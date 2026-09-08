@@ -4820,9 +4820,12 @@ async fn mitschnitt_ausfall_melden(
     if tokio::fs::try_exists(&marke).await.unwrap_or(false) {
         return;
     }
+    tracing::error!(kanal, lauf, diagnose, "Wiederholter Mitschnitt-Ausfall");
+    // Schlüssel und Text müssen auch bei nicht schreibbarer Zustellmarke
+    // unverändert bleiben; wechselnde Prozessdiagnosen gehören ins Journal.
     let text = format!(
-        "Coaching-Audit: Der durchgehende Ton-Mitschnitt für {kanal} scheitert \
-({diagnose}). Der Dienst versucht es mit Wartezeit erneut."
+        "Coaching-Audit: Der durchgehende Ton-Mitschnitt für {kanal} scheitert. \
+Der Dienst versucht es mit Wartezeit erneut. Details stehen im Dienstprotokoll."
     );
     let schluessel = format!("{kanal}-{lauf}-mitschnitt-aus");
     match dm_rohtext(&text, &schluessel).await {
@@ -5142,6 +5145,18 @@ async fn mitschnitt_starten_mit(
         tracing::error!(%fehler, kanal, lauf, ordner = %dir.display(), "Mitschnittordner nicht anlegbar");
         return None;
     }
+    // Hier existiert noch kein aktiver Recorder für diesen Lauf. Fehlstarts
+    // hinterlassen gelegentlich leere AAC-Dateien: wirklich entfernen, bevor
+    // sie den Teile-Deckel aufbrauchen. Nicht im Archiv-Lesepfad ausblenden.
+    if let Err(fehler) = leere_mitschnittreste_entfernen(&dir).await {
+        tracing::error!(
+            fehler,
+            kanal,
+            lauf,
+            "Leere Mitschnittreste nicht aufräumbar"
+        );
+        return None;
+    }
     // Zerhackt sich ein Stream immer wieder, waeren es sonst beliebig viele
     // Teile - die Doku verspricht "wenige".
     if let Some(teile) = mitschnitt_dateien_sammeln(&dir).await {
@@ -5269,6 +5284,26 @@ async fn mitschnitt_starten_mit(
             None
         }
     }
+}
+
+/// Ausschließlich vor dem Start eines Recorders, solange kein Schreiber läuft.
+async fn leere_mitschnittreste_entfernen(dir: &Path) -> Result<(), String> {
+    let dateien = mitschnitt_dateien_sammeln(dir)
+        .await
+        .ok_or_else(|| "Mitschnittordner nicht lesbar".to_owned())?;
+    for datei in dateien {
+        let daten = tokio::fs::symlink_metadata(&datei)
+            .await
+            .map_err(|e| format!("Mitschnitt nicht prüfbar: {e}"))?;
+        // Keine Links verfolgen und niemals auch nur ein Byte echtes Material
+        // löschen. AAC im ADTS-Format besitzt keinen separaten Dateiheader.
+        if daten.is_file() && daten.len() == 0 {
+            tokio::fs::remove_file(&datei)
+                .await
+                .map_err(|e| format!("Leerer Mitschnitt nicht entfernbar: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -5654,6 +5689,80 @@ mod tests {
         a.unwrap();
         b.unwrap();
         assert_eq!(gesendet.load(std::sync::atomic::Ordering::SeqCst), 1);
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn eine_alte_startmeldung_wird_nicht_verspaetet_nachgereicht() {
+        let wurzel = test_ordner("start-veraltet");
+        let konfiguration = test_konfiguration(&wurzel);
+        hinweis_aufheben(
+            &konfiguration,
+            "start-kanal-lauf",
+            "kanal-lauf-start",
+            "Aufnahme läuft",
+        )
+        .await;
+        let pfad = hinweis_ordner(&konfiguration).join("start-kanal-lauf.json");
+        assert!(pfad.exists());
+        // Kein Broker konfiguriert oder kontaktiert: alte Starts verlassen
+        // die Warteschlange vor jedem möglichen Versand.
+        offene_hinweise_senden(&konfiguration).await;
+        assert!(!pfad.exists());
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mehr_als_24_leere_fehlstarts_verhindern_den_neustart_nicht() {
+        let wurzel = test_ordner("mitschnitt-leerreste");
+        let konfiguration = test_konfiguration(&wurzel);
+        let dir = mitschnitt_ordner(&konfiguration, "kanal", "lauf");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        for n in 0..MITSCHNITT_MAX_TEILE + 2 {
+            tokio::fs::write(dir.join(archiv::mitschnitt_name(n as i64)), b"")
+                .await
+                .unwrap();
+        }
+        let echter_teil = dir.join(archiv::mitschnitt_name(100));
+        tokio::fs::write(&echter_teil, b"echtes Audio bleibt erhalten")
+            .await
+            .unwrap();
+        let fremde_datei = dir.join("andere-datei");
+        tokio::fs::write(&fremde_datei, b"").await.unwrap();
+        // Harmloser Prozess statt Twitch/ffmpeg: Some beweist, dass der
+        // produktive Startpfad nach den Fehlversuchen bis zum Spawn gelangt.
+        let recorder =
+            mitschnitt_starten_mit(&konfiguration, "kanal", "lauf", "/bin/false", "/bin/false")
+                .await;
+        assert!(
+            recorder.is_some(),
+            "Leere Fehlversuche haben den Teile-Deckel verbraucht"
+        );
+        drop(recorder);
+        assert_eq!(
+            tokio::fs::read(&echter_teil).await.unwrap(),
+            b"echtes Audio bleibt erhalten"
+        );
+        assert!(fremde_datei.exists());
+        assert_eq!(mitschnitt_dateien_sammeln(&dir).await.unwrap().len(), 1);
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn leere_mitschnittreste_raeumen_folgt_keinem_symlink() {
+        let wurzel = test_ordner("mitschnitt-links");
+        tokio::fs::create_dir_all(&wurzel).await.unwrap();
+        let ziel = wurzel.join("unberuehrt");
+        tokio::fs::write(&ziel, b"").await.unwrap();
+        let link = wurzel.join(archiv::mitschnitt_name(1));
+        std::os::unix::fs::symlink(&ziel, &link).unwrap();
+        leere_mitschnittreste_entfernen(&wurzel).await.unwrap();
+        assert!(tokio::fs::symlink_metadata(&link)
+            .await
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(ziel.exists());
         tokio::fs::remove_dir_all(wurzel).await.unwrap();
     }
 

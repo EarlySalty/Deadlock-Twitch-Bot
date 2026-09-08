@@ -31,6 +31,7 @@ aufgenommenes Material. Vorübergehende Aufnahmefehler heilen durch Wiederanlauf
 - ops/systemd/audit.conf
 - ops/systemd/deadlock-twitch-stream-coaching-watch.service
 - rust/scripts/run_stream_audit_service.sh
+- docs/architecture/stream-coaching-audit.md
 - .tasks/2026-09-08-coaching-audit-aufnahme/
 
 ## Amendments
