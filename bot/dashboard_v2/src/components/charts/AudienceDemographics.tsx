@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { Globe, Users, Clock, Heart, Activity, TrendingUp } from 'lucide-react';
@@ -57,6 +58,9 @@ const VIEWER_COLORS = [
 ];
 
 export function AudienceDemographics({ data }: AudienceDemographicsProps) {
+  const [hoveredViewerType, setHoveredViewerType] = useState<string | null>(null);
+  const [focusedViewerType, setFocusedViewerType] = useState<string | null>(null);
+  const activeViewerType = hoveredViewerType ?? focusedViewerType;
   const activityLabels = {
     'weekend-heavy': 'Wochenend-fokussiert',
     'weekday-focused': 'Wochentags-fokussiert',
@@ -135,8 +139,8 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
               <Users className="w-4 h-4" />
               Viewer-Typen
             </h4>
-            <div className="flex items-center gap-4">
-              <div className="w-48 h-48">
+            <div className="flex flex-col sm:flex-row items-center gap-4">
+              <div className="w-48 h-48 shrink-0" onMouseLeave={() => setHoveredViewerType(null)}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -148,12 +152,15 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                       innerRadius="58%"
                       outerRadius="90%"
                       paddingAngle={2}
+                      onMouseEnter={(_, index) => setHoveredViewerType(data.viewerTypes[index]?.label ?? null)}
                     >
-                      {data.viewerTypes.map((_, index) => (
+                      {data.viewerTypes.map((type, index) => (
                         <Cell
-                          key={index}
+                          key={type.label}
                           fill={VIEWER_COLORS[index % VIEWER_COLORS.length]}
-                          stroke="none"
+                          stroke={activeViewerType === type.label ? 'var(--color-text-primary)' : 'none'}
+                          strokeWidth={2}
+                          opacity={activeViewerType === null || activeViewerType === type.label ? 1 : 0.35}
                         />
                       ))}
                     </Pie>
@@ -163,26 +170,36 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                         border: '1px solid var(--color-border)',
                         borderRadius: '8px',
                       }}
-                      formatter={(value) => {
+                      formatter={(value, name) => {
                         const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
-                        return [`${numericValue.toFixed(1)}%`, 'Anteil'];
+                        return [`${numericValue.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`, name];
                       }}
                     />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
-              <div className="flex-1 space-y-2">
+              <div className="w-full min-w-0 flex-1 space-y-2">
                 {data.viewerTypes.map((type, i) => (
-                  <div key={type.label} className="flex items-center justify-between">
+                  <button
+                    key={type.label}
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-3 rounded-lg border px-2 py-1.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${activeViewerType === type.label ? 'border-primary bg-primary/10' : 'border-transparent'}`}
+                    onMouseEnter={() => setHoveredViewerType(type.label)}
+                    onMouseLeave={() => setHoveredViewerType(null)}
+                    onFocus={() => setFocusedViewerType(type.label)}
+                    onBlur={() => setFocusedViewerType(null)}
+                    onClick={() => setFocusedViewerType(type.label)}
+                    aria-label={`${type.label}: ${type.percentage.toLocaleString('de-DE')} Prozent im Diagramm hervorheben`}
+                  >
                     <div className="flex items-center gap-2">
                       <div
-                        className="w-3 h-3 rounded-full"
+                        className="w-3 h-3 shrink-0 rounded-full"
                         style={{ backgroundColor: VIEWER_COLORS[i % VIEWER_COLORS.length] }}
                       />
-                      <span className="text-sm text-text-secondary">{type.label}</span>
+                      <span className={`text-sm ${activeViewerType === type.label ? 'font-semibold text-white' : 'text-text-secondary'}`}>{type.label}</span>
                     </div>
-                    <span className="text-sm font-medium text-white">{type.percentage}%</span>
-                  </div>
+                    <span className="shrink-0 text-sm font-medium text-white">{type.percentage.toLocaleString('de-DE')} %</span>
+                  </button>
                 ))}
               </div>
             </div>
