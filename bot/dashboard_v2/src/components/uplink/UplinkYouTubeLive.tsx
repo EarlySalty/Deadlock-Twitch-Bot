@@ -77,6 +77,15 @@ export function speichernErlaubt(entwurf: YouTubeLiveEntwurf): boolean {
   return laenge >= 1 && entwurf.titel.length <= TITEL_MAX;
 }
 
+export function naechsterEntwurf(
+  entwurf: YouTubeLiveEntwurf,
+  einstellungen: YouTubeLiveEinstellungen | null,
+  beruehrt: boolean,
+): YouTubeLiveEntwurf {
+  if (beruehrt) return entwurf;
+  return entwurfAus(einstellungen);
+}
+
 function beendenErlaubt(status: YouTubeLiveStatus | null): boolean {
   if (!status) return false;
   return (
@@ -157,13 +166,17 @@ export function UplinkYouTubeLive({
   const [entwurf, setEntwurf] = useState<YouTubeLiveEntwurf>(() => entwurfAus(einstellungen));
 
   useEffect(() => {
-    if (beruehrt.current) return;
-    setEntwurf(entwurfAus(einstellungen));
+    setEntwurf((v) => naechsterEntwurf(v, einstellungen, beruehrt.current));
   }, [einstellungen]);
 
   const aendern = (teil: Partial<YouTubeLiveEntwurf>) => {
     beruehrt.current = true;
     setEntwurf((v) => ({ ...v, ...teil }));
+  };
+
+  const speichern = () => {
+    beruehrt.current = false;
+    onSpeichern(entwurf);
   };
 
   if (!verbunden) {
@@ -190,6 +203,22 @@ export function UplinkYouTubeLive({
   const kannBeenden = beendenErlaubt(status);
   const freigegebenAm = einstellungen?.freigegebenAm ?? null;
 
+  let freigabeTon: 'success' | 'warning' | 'neutral';
+  let freigabeText: string;
+  if (freigegebenAm && entwurf.liveFreigeben) {
+    freigabeTon = 'success';
+    freigabeText = `Freigegeben am ${datumDe(freigegebenAm)}.`;
+  } else if (!freigegebenAm && entwurf.liveFreigeben) {
+    freigabeTon = 'neutral';
+    freigabeText = 'Wird mit dem Speichern freigegeben.';
+  } else if (freigegebenAm && !entwurf.liveFreigeben) {
+    freigabeTon = 'neutral';
+    freigabeText = 'Wird mit dem Speichern zurückgenommen.';
+  } else {
+    freigabeTon = 'warning';
+    freigabeText = 'Noch nicht freigegeben: beim OBS-Start legt Uplink keinen YouTube-Livestream an.';
+  }
+
   return (
     <section
       aria-label="YouTube Live"
@@ -205,17 +234,16 @@ export function UplinkYouTubeLive({
       </div>
 
       <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
-        {freigegebenAm ? (
-          <p className="flex items-start gap-2 text-xs text-text-secondary">
+        <p className="flex items-start gap-2 text-xs text-text-secondary">
+          {freigabeTon === 'success' ? (
             <ShieldCheck aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
-            <span>Freigegeben am {datumDe(freigegebenAm)}.</span>
-          </p>
-        ) : (
-          <p className="flex items-start gap-2 text-xs text-text-secondary">
+          ) : freigabeTon === 'warning' ? (
             <TriangleAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-            <span>Noch nicht freigegeben: beim OBS-Start legt Uplink keinen YouTube-Livestream an.</span>
-          </p>
-        )}
+          ) : (
+            <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          )}
+          <span>{freigabeText}</span>
+        </p>
         <label htmlFor={freigabeId} className="flex min-h-11 cursor-pointer items-start gap-3">
           <input
             id={freigabeId}
@@ -348,7 +376,7 @@ export function UplinkYouTubeLive({
           type="button"
           data-knopf="speichern"
           disabled={beschaeftigt || !erlaubt}
-          onClick={() => onSpeichern(entwurf)}
+          onClick={speichern}
           className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
         >
           {beschaeftigt && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
