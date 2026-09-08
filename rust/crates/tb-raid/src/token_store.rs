@@ -37,6 +37,7 @@ pub struct RaidTokens {
     /// Nur die Uplink-Nutzung wurde bewusst getrennt; Raid-/Botnutzung ist
     /// davon unabhängig. Im gemeinsamen Snapshot für den Broker geprüft.
     pub uplink_disconnected: bool,
+    pub connection_generation: i64,
 }
 impl std::fmt::Debug for RaidTokens {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -61,6 +62,7 @@ struct RaidAuthRow {
     needs_reauth: Option<bool>,
     scopes: Option<String>,
     uplink_disconnected: bool,
+    connection_generation: i64,
 }
 
 /// Lesezugriff auf den verschlüsselten Raid-Token-Store.
@@ -115,7 +117,7 @@ impl RaidAuthStore {
             r#"
             SELECT twitch_login, access_token_enc, refresh_token_enc,
                    enc_version, token_expires_at, needs_reauth, scopes,
-                   FALSE AS uplink_disconnected
+                   FALSE AS uplink_disconnected, 0::bigint AS connection_generation
             FROM twitch_raid_auth
             WHERE twitch_user_id = $1 AND raid_enabled IS TRUE
             "#
@@ -123,7 +125,7 @@ impl RaidAuthStore {
             r#"
             SELECT twitch_login, access_token_enc, refresh_token_enc,
                    enc_version, token_expires_at, needs_reauth, scopes,
-                   FALSE AS uplink_disconnected
+                   FALSE AS uplink_disconnected, 0::bigint AS connection_generation
             FROM twitch_raid_auth
             WHERE twitch_user_id = $1
             "#
@@ -144,7 +146,7 @@ impl RaidAuthStore {
         &self,
         twitch_user_id: &str,
     ) -> Result<Option<(RaidTokens, Vec<String>)>, sqlx::Error> {
-        let row:Option<RaidAuthRow>=sqlx::query_as("SELECT COALESCE(a.twitch_login,'') AS twitch_login,a.access_token_enc,a.refresh_token_enc,a.enc_version,a.token_expires_at,a.needs_reauth,a.scopes,COALESCE(i.enabled=FALSE,FALSE) AS uplink_disconnected FROM twitch_raid_auth a LEFT JOIN twitch_uplink_auth_intent i ON i.twitch_user_id=a.twitch_user_id WHERE a.twitch_user_id=$1")
+        let row:Option<RaidAuthRow>=sqlx::query_as("SELECT COALESCE(a.twitch_login,'') AS twitch_login,a.access_token_enc,a.refresh_token_enc,a.enc_version,a.token_expires_at,a.needs_reauth,a.scopes,(COALESCE(i.enabled=FALSE,FALSE) OR COALESCE(g.enabled=FALSE,FALSE)) AS uplink_disconnected,COALESCE(g.generation,0) AS connection_generation FROM twitch_raid_auth a LEFT JOIN twitch_uplink_auth_intent i ON i.twitch_user_id=a.twitch_user_id LEFT JOIN uplink_target_generations g ON g.twitch_user_id=a.twitch_user_id AND g.platform='twitch' WHERE a.twitch_user_id=$1")
             .bind(twitch_user_id).fetch_optional(&self.pool).await?;
         let Some(row) = row else { return Ok(None) };
         let scopes = row
@@ -185,6 +187,7 @@ impl RaidAuthStore {
             token_expires_at: row.token_expires_at,
             needs_reauth: row.needs_reauth.unwrap_or(false),
             uplink_disconnected: row.uplink_disconnected,
+            connection_generation: row.connection_generation,
         })
     }
 

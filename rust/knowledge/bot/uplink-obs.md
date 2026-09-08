@@ -1,5 +1,5 @@
 ---
-title: Uplink: OBS einrichten
+title: "Uplink: OBS einrichten"
 namespace: bot
 category: setup
 audience: streamer

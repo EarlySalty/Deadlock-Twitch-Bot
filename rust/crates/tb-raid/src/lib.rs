@@ -64,6 +64,7 @@ pub mod signal_correlation;
 pub mod signup_denylist;
 pub mod state_store;
 pub mod strikes_store;
+pub mod target_generation;
 pub mod target_resolution;
 pub mod token_blacklist;
 pub mod token_lifecycle;

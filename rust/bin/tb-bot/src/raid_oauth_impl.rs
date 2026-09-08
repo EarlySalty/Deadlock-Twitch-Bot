@@ -2786,6 +2786,12 @@ mod callback_tests {
     async fn make_pool(base: &PgPool) -> PgPool {
         let pool = base.clone();
         sqlx::raw_sql(include_str!(
+            "../../../migrations/20260908220000_uplink_target_generations.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
             "../../../migrations/20260908210000_twitch_uplink_intent.sql"
         ))
         .execute(&pool)

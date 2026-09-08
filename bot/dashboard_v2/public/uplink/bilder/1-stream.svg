@@ -29,5 +29,5 @@
 <rect x="205" y="225" width="630" height="44" rx="8" fill="none" stroke="#c8a86b" stroke-width="2.5"/>
 <circle cx="858" cy="247" r="14" fill="#c8a86b"/><text x="858" y="252" text-anchor="middle" font-size="15" font-weight="800" fill="#241c11" font-family="system-ui, sans-serif">3</text>
 <text x="222" y="252" class="dim" font-style="italic">••••••••••••••••</text>
-<text x="24" y="300" class="mark">1 Benutzerdefiniert wählen &#183; 2 Adresse aus dem Dashboard einfügen &#183; 3 nichts eintragen</text>
+<text x="24" y="300" class="mark">1 Benutzerdefiniert wählen &#183; 2 Adresse aus dem Dashboard einfügen &#183; 3 Streamschlüssel einfügen</text>
 </svg>
