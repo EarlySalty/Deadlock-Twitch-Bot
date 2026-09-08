@@ -119,7 +119,12 @@ pub struct HelixClient {
 impl HelixClient {
     /// Erstellt einen neuen HelixClient.
     pub fn new(config: HelixConfig) -> Result<Self, reqwest::Error> {
-        let http = Arc::new(Client::builder().timeout(REQUEST_TIMEOUT).build()?);
+        let http = Arc::new(
+            Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?,
+        );
         let token = AppTokenManager::new(
             http.clone(),
             config.token_url.clone(),

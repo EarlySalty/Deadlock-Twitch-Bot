@@ -24,7 +24,9 @@ const HELP_PAGES = [
 test('Dashboard bindet die Uplink-Hilfe mit main.uplink-doc ein', () => {
   assert.match(UPLINK_PAGE, /UPLINK_HELP_PAGES/);
   assert.match(UPLINK_PAGE, /dangerouslySetInnerHTML/);
-  assert.match(UPLINK_PAGE, /data\.srt_hint/);
+  assert.match(UPLINK_PAGE, /value=\{obs\.server\}/);
+  assert.match(UPLINK_PAGE, /value=\{obs\.key\}/);
+  assert.doesNotMatch(UPLINK_PAGE, /srt_hint/);
   assert.doesNotMatch(UPLINK_PAGE, /RTMP-Server/);
   assert.doesNotMatch(UPLINK_PAGE, /Komplette RTMP-Adresse/);
 

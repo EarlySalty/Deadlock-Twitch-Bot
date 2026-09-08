@@ -317,7 +317,59 @@ fn spawn_affiliate_gutschrift_loop(pool: sqlx::PgPool) {
 
 #[tokio::main]
 async fn main() {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments
+        .iter()
+        .any(|argument| argument == "--uplink-migrate")
+    {
+        let result = async {
+            if arguments.len() != 3
+                || arguments[0] != "--uplink-config"
+                || arguments[2] != "--uplink-migrate"
+            {
+                return Err("Aufruf: tb-dashboard --uplink-config <Datei> --uplink-migrate");
+            }
+            let pool = tb_dashboard_api::uplink_config::migration_pool(std::path::Path::new(
+                &arguments[1],
+            ))
+            .await?;
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tb_db::migrate::run_uplink_migrations(&pool),
+            )
+            .await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), pool.close()).await;
+            match result {
+                Ok(Ok(())) => Ok(()),
+                _ => Err("Uplink-Migrationen fehlgeschlagen; kein Dashboard gestartet."),
+            }
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                println!("Uplink-Intent und Zielgeneration sind migriert. Kein Listener gestartet.")
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     tracing_subscriber::fmt::init();
+
+    // Nur Uplink migriert hier auf normale Konfiguration und Infisical-FD.
+    // Bestehende benachbarte Dashboarddienste behalten ihren eigenen Startvertrag.
+    let configured =
+        match tb_dashboard_api::uplink_config::load_arguments(std::env::args_os().skip(1)).await {
+            Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        };
+    if let Err(error) = configured {
+        tracing::error!("{error}");
+        std::process::exit(1);
+    }
 
     let settings = Settings::from_env().unwrap_or_else(|e| {
         tracing::error!("Konfigurationsfehler: {e}");

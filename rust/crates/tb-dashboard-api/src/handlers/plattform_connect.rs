@@ -27,27 +27,25 @@ const KICK_DEFAULT_REDIRECT: &str = "https://deutsche-deadlock-community.de/call
 const YOUTUBE_DEFAULT_REDIRECT: &str = "https://deutsche-deadlock-community.de/callback/youtube";
 
 pub fn kick_redirect_uri() -> String {
-    std::env::var("KICK_REDIRECT_URI")
+    crate::uplink_config::runtime()
         .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .map(|runtime| runtime.kick_redirect_uri.clone())
         .unwrap_or_else(|| KICK_DEFAULT_REDIRECT.to_string())
 }
 
 pub fn youtube_redirect_uri() -> String {
-    std::env::var("YOUTUBE_UPLINK_REDIRECT_URI")
+    crate::uplink_config::runtime()
         .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .map(|runtime| runtime.youtube_redirect_uri.clone())
         .unwrap_or_else(|| YOUTUBE_DEFAULT_REDIRECT.to_string())
 }
 
 pub fn kick_konfiguriert() -> bool {
-    KickOAuth::aus_umgebung().is_some()
+    KickOAuth::aus_konfiguration().is_some()
 }
 
 pub fn youtube_konfiguriert() -> bool {
-    GoogleOAuth::aus_umgebung().is_some()
+    GoogleOAuth::aus_konfiguration().is_some()
 }
 
 fn pkce_verifier() -> String {
@@ -165,14 +163,14 @@ async fn persist_connect_state(
         .transpose()?;
     sqlx::query(
         "INSERT INTO oauth_state_tokens \
-         (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+         (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp()) \
          ON CONFLICT (state_token) DO UPDATE SET \
              platform = EXCLUDED.platform, \
              streamer_login = EXCLUDED.streamer_login, \
              redirect_uri = EXCLUDED.redirect_uri, \
              pkce_verifier = EXCLUDED.pkce_verifier, \
-             expires_at = EXCLUDED.expires_at",
+             expires_at = EXCLUDED.expires_at, created_at = EXCLUDED.created_at",
     )
     .bind(&lookup)
     .bind(platform)
@@ -187,10 +185,13 @@ async fn persist_connect_state(
 }
 
 pub struct ConnectState {
+    pub created_at: DateTime<Utc>,
     pub streamer_id: i64,
     pub redirect_uri: String,
     pub verifier: String,
 }
+
+type ConnectStateRow = (String, Option<String>, Option<String>, DateTime<Utc>);
 
 async fn consume_connect_state(
     pool: &PgPool,
@@ -200,18 +201,18 @@ async fn consume_connect_state(
     jetzt: DateTime<Utc>,
 ) -> Result<Option<ConnectState>, sqlx::Error> {
     let lookup = tb_crypto::token_lookup_key(state_token);
-    let zeile: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+    let zeile: Option<ConnectStateRow> = sqlx::query_as(
         "DELETE FROM oauth_state_tokens \
          WHERE state_token = $1 AND platform = $2 AND expires_at > $3 \
-         RETURNING COALESCE(streamer_login, ''), redirect_uri, pkce_verifier",
+         RETURNING COALESCE(streamer_login, ''), redirect_uri, pkce_verifier, created_at",
     )
     .bind(&lookup)
     .bind(platform)
     .bind(jetzt)
     .fetch_optional(pool)
     .await?;
-    Ok(zeile.and_then(|(login, redirect, verifier)| {
-        let streamer_id = login.trim().parse::<i64>().ok()?;
+    Ok(zeile.and_then(|(login, redirect, verifier, created_at)| {
+        let streamer_id = login.trim().parse::<i64>().ok().filter(|id| *id > 0)?;
         let verifier = match verifier {
             Some(enc) => match verifier_entschluesseln(cipher, platform, &lookup, &enc) {
                 Ok(klar) => klar,
@@ -223,6 +224,7 @@ async fn consume_connect_state(
             None => String::new(),
         };
         Some(ConnectState {
+            created_at,
             streamer_id,
             redirect_uri: redirect.unwrap_or_default(),
             verifier,
@@ -238,7 +240,11 @@ pub struct CallbackQuery {
 }
 
 fn nicht_eingerichtet(text: &str) -> Response {
-    (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": text }))).into_response()
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": text })),
+    )
+        .into_response()
 }
 
 fn zurueck_zum_dashboard(query: &str) -> Response {
@@ -250,10 +256,10 @@ pub async fn connect_kick_start_handler(
     config: Option<Extension<PlatformTokenConfig>>,
     auth: DashboardAuthLevel,
 ) -> Response {
-    let Some(_client) = KickOAuth::aus_umgebung() else {
+    let Some(_client) = KickOAuth::aus_konfiguration() else {
         return nicht_eingerichtet("Kick ist auf dieser Instanz noch nicht eingerichtet");
     };
-    let client_id = match super::plattform_oauth::non_empty_env("KICK_CLIENT_ID") {
+    let client_id = match super::plattform_oauth::non_empty_config("KICK_CLIENT_ID") {
         Some(id) => id,
         None => return nicht_eingerichtet("Kick ist auf dieser Instanz noch nicht eingerichtet"),
     };
@@ -285,8 +291,13 @@ pub async fn connect_kick_start_handler(
         tracing::warn!(%error, "kick-connect: State nicht speicherbar");
         return nicht_eingerichtet("Kick-Verbindung konnte nicht gestartet werden");
     }
-    Redirect::to(&kick_authorize_url(&client_id, &redirect_uri, &state_token, &challenge))
-        .into_response()
+    Redirect::to(&kick_authorize_url(
+        &client_id,
+        &redirect_uri,
+        &state_token,
+        &challenge,
+    ))
+    .into_response()
 }
 
 pub async fn connect_youtube_start_handler(
@@ -294,7 +305,7 @@ pub async fn connect_youtube_start_handler(
     config: Option<Extension<PlatformTokenConfig>>,
     auth: DashboardAuthLevel,
 ) -> Response {
-    let Some(_client) = GoogleOAuth::aus_umgebung() else {
+    let Some(_client) = GoogleOAuth::aus_konfiguration() else {
         return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
     };
     let Some(client_id) = google_client_id() else {
@@ -326,7 +337,12 @@ pub async fn connect_youtube_start_handler(
         tracing::warn!(%error, "youtube-connect: State nicht speicherbar");
         return nicht_eingerichtet("YouTube-Verbindung konnte nicht gestartet werden");
     }
-    Redirect::to(&youtube_authorize_url(&client_id, &redirect_uri, &state_token)).into_response()
+    Redirect::to(&youtube_authorize_url(
+        &client_id,
+        &redirect_uri,
+        &state_token,
+    ))
+    .into_response()
 }
 
 fn oauth_expires_at(jetzt: DateTime<Utc>, expires_in: i64) -> DateTime<Utc> {
@@ -356,11 +372,15 @@ async fn ziel_setzen_falls_moeglich(
     platform: &str,
     rtmp_url: &str,
     stream_key: &str,
+    generation: i64,
 ) -> bool {
     if stream_key.trim().is_empty() || !ingest_url_ok(rtmp_url) {
         return false;
     }
-    match relay.ziel_setzen(streamer_id, platform, rtmp_url, stream_key).await {
+    match relay
+        .ziel_setzen(streamer_id, platform, rtmp_url, stream_key, generation)
+        .await
+    {
         Ok(()) => true,
         Err(error) => {
             tracing::warn!(streamer_id, platform, %error, "connect: Uplink-Ziel nicht gesetzt");
@@ -400,8 +420,8 @@ pub async fn kick_callback_kern(
         needs_reauth: neu_verbinden,
     };
     let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
-    store
-        .upsert(&verbindung)
+    let generation = store
+        .upsert_callback(&verbindung, state.created_at)
         .await
         .map_err(|e| format!("speichern: {e}"))?;
 
@@ -411,6 +431,7 @@ pub async fn kick_callback_kern(
         "kick",
         &konto.rtmp_url,
         &konto.stream_key,
+        generation,
     )
     .await;
     Ok(KonnektErgebnis {
@@ -450,8 +471,8 @@ pub async fn youtube_callback_kern(
         needs_reauth: neu_verbinden,
     };
     let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
-    store
-        .upsert(&verbindung)
+    let generation = store
+        .upsert_callback(&verbindung, state.created_at)
         .await
         .map_err(|e| format!("speichern: {e}"))?;
 
@@ -463,6 +484,7 @@ pub async fn youtube_callback_kern(
                 "youtube",
                 &ziel.rtmp_url,
                 &ziel.stream_key,
+                generation,
             )
             .await
         }
@@ -497,14 +519,14 @@ pub async fn plattform_stream_key_hinterlegen(
     platform: &str,
     jetzt: DateTime<Utc>,
 ) -> StreamKeyStand {
-    let access_token = match platform_token_antwort(pool, config, streamer_id, platform, jetzt).await
-    {
-        Ok(antwort) => antwort.access_token,
-        Err(TokenFehler::KeineVerbindung) | Err(TokenFehler::NeuVerbinden) => {
-            return StreamKeyStand::KeineVerbindung
-        }
-        Err(TokenFehler::NichtLieferbar) => return StreamKeyStand::Fehlgeschlagen,
-    };
+    let (access_token, generation) =
+        match platform_token_antwort(pool, config, streamer_id, platform, jetzt).await {
+            Ok(antwort) => (antwort.access_token, antwort.connection_generation),
+            Err(TokenFehler::KeineVerbindung) | Err(TokenFehler::NeuVerbinden) => {
+                return StreamKeyStand::KeineVerbindung
+            }
+            Err(TokenFehler::NichtLieferbar) => return StreamKeyStand::Fehlgeschlagen,
+        };
     let ziel = match platform {
         "kick" => {
             let Some(client) = config.kick.as_ref() else {
@@ -539,8 +561,20 @@ pub async fn plattform_stream_key_hinterlegen(
     if stream_key.trim().is_empty() || !ingest_url_ok(&rtmp_url) {
         return StreamKeyStand::Fehlgeschlagen;
     }
+    if !matches!(
+        tb_raid::target_generation::check_current(
+            pool,
+            &streamer_id.to_string(),
+            platform,
+            generation
+        )
+        .await,
+        Ok(true)
+    ) {
+        return StreamKeyStand::KeineVerbindung;
+    }
     match relay
-        .ziel_setzen(streamer_id, platform, &rtmp_url, &stream_key)
+        .ziel_setzen(streamer_id, platform, &rtmp_url, &stream_key, generation)
         .await
     {
         Ok(()) => StreamKeyStand::Hinterlegt,
@@ -573,18 +607,18 @@ pub async fn callback_kick_handler(
     let Some(Extension(config)) = config else {
         return nicht_eingerichtet("Kick ist auf dieser Instanz noch nicht eingerichtet");
     };
-    let Some(client) = KickOAuth::aus_umgebung() else {
+    let Some(client) = KickOAuth::aus_konfiguration() else {
         return nicht_eingerichtet("Kick ist auf dieser Instanz noch nicht eingerichtet");
     };
     let state =
         match consume_connect_state(&pool, &config.cipher, "kick", state_token, Utc::now()).await {
-        Ok(Some(s)) => s,
-        Ok(None) => return zurueck_zum_dashboard("verbinden_fehler=kick"),
-        Err(error) => {
-            tracing::warn!(%error, "kick-callback: State nicht lesbar");
-            return zurueck_zum_dashboard("verbinden_fehler=kick");
-        }
-    };
+            Ok(Some(s)) => s,
+            Ok(None) => return zurueck_zum_dashboard("verbinden_fehler=kick"),
+            Err(error) => {
+                tracing::warn!(%error, "kick-callback: State nicht lesbar");
+                return zurueck_zum_dashboard("verbinden_fehler=kick");
+            }
+        };
     match kick_callback_kern(
         &pool,
         &config,
@@ -619,7 +653,7 @@ pub async fn callback_youtube_handler(
     let Some(Extension(config)) = config else {
         return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
     };
-    let Some(client) = GoogleOAuth::aus_umgebung() else {
+    let Some(client) = GoogleOAuth::aus_konfiguration() else {
         return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
     };
     let state = match consume_connect_state(
@@ -667,50 +701,36 @@ pub async fn plattform_trennen(
     pool: &PgPool,
     config: &PlatformTokenConfig,
     relay: &dyn RelayZiele,
-    kick: Option<&dyn KickApi>,
-    youtube: Option<&dyn YouTubeApi>,
+    _kick: Option<&dyn KickApi>,
+    _youtube: Option<&dyn YouTubeApi>,
     streamer_id: i64,
     platform: &str,
 ) -> PlattformTrennenErgebnis {
-    if let Err(error) = relay.ziel_loeschen(streamer_id, platform).await {
-        tracing::warn!(streamer_id, platform, %error, "trennen: Uplink-Ziel nicht entfernt");
+    let generation = match tb_raid::target_generation::begin_disconnect(
+        pool,
+        &streamer_id.to_string(),
+        platform,
+    )
+    .await
+    {
+        Ok(g) => g,
+        Err(_) => return PlattformTrennenErgebnis::SpeicherFehler,
+    };
+    if !matches!(
+        relay.ziel_loeschen(streamer_id, platform, generation).await,
+        Ok(true)
+    ) {
         return PlattformTrennenErgebnis::RelayFehler;
     }
     let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
-    let verbindung = match store.load(streamer_id, platform).await {
-        Ok(Some(v)) => v,
-        Ok(None) => return PlattformTrennenErgebnis::Getrennt,
-        Err(error) => {
-            tracing::warn!(streamer_id, platform, %error, "trennen: Verbindung nicht lesbar");
-            return PlattformTrennenErgebnis::SpeicherFehler;
-        }
-    };
-    match store.delete(streamer_id, platform).await {
-        Ok(_) => {}
-        Err(error) => {
-            tracing::error!(streamer_id, platform, %error, "trennen: Zeile nicht loeschbar");
-            return PlattformTrennenErgebnis::SpeicherFehler;
-        }
+    if !matches!(
+        store.delete_fenced(streamer_id, platform, generation).await,
+        Ok(true)
+    ) {
+        return PlattformTrennenErgebnis::SpeicherFehler;
     }
-    let widerruf = match platform {
-        "kick" => match kick {
-            Some(c) => {
-                if let Err(error) = c.event_subscriptions_loeschen(&verbindung.access_token).await {
-                    tracing::warn!(streamer_id, platform, error = %fehlertext(error), "trennen: Kick-Abos nicht loeschbar");
-                }
-                c.revoke(&verbindung.access_token).await.err()
-            }
-            None => None,
-        },
-        "youtube" => match youtube {
-            Some(c) => c.revoke(&verbindung.access_token).await.err(),
-            None => None,
-        },
-        _ => None,
-    };
-    if let Some(error) = widerruf {
-        tracing::warn!(streamer_id, platform, error = %fehlertext(error), "trennen: Widerruf fehlgeschlagen");
-    }
+    // Kein verzögerter Widerruf eines inzwischen erneut verwendeten Grants.
+    // Remote-Abonnements gehören zum generationstreuen Chat-Lifecycle.
     PlattformTrennenErgebnis::Getrennt
 }
 
@@ -751,8 +771,8 @@ mod tests {
     #[test]
     fn pkce_challenge_ist_base64url_sha256() {
         let challenge = pkce_challenge("verifier");
-        let erwartet = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(Sha256::digest(b"verifier"));
+        let erwartet =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(b"verifier"));
         assert_eq!(challenge, erwartet);
         assert!(!challenge.contains('='));
     }
@@ -779,25 +799,15 @@ mod tests {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
 
-    async fn maybe_pool() -> Option<PgPool> {
-        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
-            return None;
-        }
-        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let schema = crate::auth::session::test_schema_name("plattform_connect");
-        let admin = PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        admin.close().await;
-        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
-        let opts = opts.options([("search_path", schema.as_str())]);
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
-            .connect_with(opts)
-            .await
-            .ok()?;
+    async fn test_pool() -> (PgPool, crate::test_postgres::TestPostgres) {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260908220000_uplink_target_generations.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "CREATE TABLE oauth_state_tokens (\
              state_token TEXT PRIMARY KEY \
@@ -805,7 +815,7 @@ mod tests {
                  CHECK (state_token ~ '^[0-9a-f]{64}$'), \
              platform TEXT, \
              streamer_login TEXT, redirect_uri TEXT, pkce_verifier TEXT, expires_at TIMESTAMPTZ, \
-             consumed_at TIMESTAMPTZ, \
+             consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), \
              CONSTRAINT oauth_state_tokens_pkce_encrypted CHECK (\
                  platform NOT IN ('tiktok', 'youtube') \
                  OR pkce_verifier IS NULL \
@@ -834,27 +844,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        Some(pool)
-    }
-
-    macro_rules! pool_oder_ende {
-        () => {
-            match maybe_pool().await {
-                Some(p) => p,
-                None => {
-                    assert!(
-                        std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
-                        "TB_TEST_REQUIRE_DB=1, aber keine Test-DB erreichbar"
-                    );
-                    return;
-                }
-            }
-        };
+        (pool, database)
     }
 
     #[tokio::test]
     async fn connect_state_persist_und_consume() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let cipher = cipher();
         let jetzt = zeit("2026-09-02T10:00:00Z");
         persist_connect_state(
@@ -873,7 +868,10 @@ mod tests {
         .unwrap();
 
         assert!(
-            consume_connect_state(&pool, &cipher, "youtube", "stt", jetzt).await.unwrap().is_none(),
+            consume_connect_state(&pool, &cipher, "youtube", "stt", jetzt)
+                .await
+                .unwrap()
+                .is_none(),
             "falsche Plattform konsumiert nicht"
         );
         let state = consume_connect_state(&pool, &cipher, "kick", "stt", jetzt)
@@ -884,14 +882,17 @@ mod tests {
         assert_eq!(state.redirect_uri, "https://x.test/callback/kick");
         assert_eq!(state.verifier, "verf");
         assert!(
-            consume_connect_state(&pool, &cipher, "kick", "stt", jetzt).await.unwrap().is_none(),
+            consume_connect_state(&pool, &cipher, "kick", "stt", jetzt)
+                .await
+                .unwrap()
+                .is_none(),
             "zweimal konsumieren geht nicht"
         );
     }
 
     #[tokio::test]
     async fn kick_verifier_liegt_verschluesselt_in_der_zeile() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let cipher = cipher();
         let jetzt = zeit("2026-09-02T10:00:00Z");
         persist_connect_state(
@@ -916,13 +917,16 @@ mod tests {
         .await
         .unwrap();
         let roh = roh.unwrap();
-        assert!(roh.starts_with("enc:v1:"), "Verifier nicht verschluesselt: {roh}");
+        assert!(
+            roh.starts_with("enc:v1:"),
+            "Verifier nicht verschluesselt: {roh}"
+        );
         assert!(!roh.contains("klartext-verifier"));
     }
 
     #[tokio::test]
     async fn youtube_state_ohne_verifier_erfuellt_pkce_constraint() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let cipher = cipher();
         let jetzt = zeit("2026-09-02T10:00:00Z");
         persist_connect_state(
@@ -948,22 +952,25 @@ mod tests {
 
         let klartext = sqlx::query(
             "INSERT INTO oauth_state_tokens \
-             (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at) \
-             VALUES ($1, 'youtube', '9004', 'https://x.test/callback/youtube', 'klartext', $2)",
+             (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, created_at) \
+             VALUES ($1, 'youtube', '9004', 'https://x.test/callback/youtube', 'klartext', $2, clock_timestamp())",
         )
         .bind(tb_crypto::token_lookup_key("ystt2"))
         .bind(jetzt + Duration::seconds(STATE_TTL_SECONDS))
         .execute(&pool)
         .await;
-        assert!(
-            klartext.is_err(),
-            "Klartext-Verifier fuer YouTube muss an der Constraint scheitern"
+        let error = klartext.expect_err("Klartext-Verifier muss abgelehnt werden");
+        let database_error = error.as_database_error().expect("PostgreSQL-Fehler");
+        assert_eq!(database_error.code().as_deref(), Some("23514"));
+        assert_eq!(
+            database_error.constraint(),
+            Some("oauth_state_tokens_pkce_encrypted")
         );
     }
 
     #[tokio::test]
     async fn abgelaufener_state_wird_nicht_konsumiert() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let cipher = cipher();
         let jetzt = zeit("2026-09-02T10:00:00Z");
         persist_connect_state(
@@ -981,10 +988,12 @@ mod tests {
         .await
         .unwrap();
         let spaeter = jetzt + Duration::seconds(STATE_TTL_SECONDS + 1);
-        assert!(consume_connect_state(&pool, &cipher, "kick", "alt", spaeter)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            consume_connect_state(&pool, &cipher, "kick", "alt", spaeter)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     struct FakeKick;
@@ -1044,6 +1053,7 @@ mod tests {
             platform: &str,
             rtmp_url: &str,
             stream_key: &str,
+            _generation: i64,
         ) -> Result<(), String> {
             self.gesetzt.lock().unwrap().push((
                 streamer_id,
@@ -1053,7 +1063,12 @@ mod tests {
             ));
             Ok(())
         }
-        async fn ziel_loeschen(&self, _streamer_id: i64, _platform: &str) -> Result<bool, String> {
+        async fn ziel_loeschen(
+            &self,
+            _streamer_id: i64,
+            _platform: &str,
+            _generation: i64,
+        ) -> Result<bool, String> {
             Ok(true)
         }
     }
@@ -1096,13 +1111,14 @@ mod tests {
 
     #[tokio::test]
     async fn kick_callback_kern_speichert_und_setzt_ziel() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config();
         let relay = FakeRelay {
             gesetzt: std::sync::Mutex::new(Vec::new()),
         };
         let jetzt = zeit("2026-09-02T10:00:00Z");
         let state = ConnectState {
+            created_at: Utc::now(),
             streamer_id: 9100,
             redirect_uri: "https://x.test/callback/kick".into(),
             verifier: "verf".into(),
@@ -1125,7 +1141,9 @@ mod tests {
     #[test]
     fn ingest_url_wird_geprueft() {
         assert!(ingest_url_ok("rtmp://live.twitch.tv/app"));
-        assert!(ingest_url_ok("rtmps://fa723.global-contribute.live-video.net"));
+        assert!(ingest_url_ok(
+            "rtmps://fa723.global-contribute.live-video.net"
+        ));
         assert!(!ingest_url_ok(""));
         assert!(!ingest_url_ok("https://example.test/app"));
         assert!(!ingest_url_ok("rtmp://"));
@@ -1232,30 +1250,45 @@ mod tests {
             _platform: &str,
             _rtmp_url: &str,
             _stream_key: &str,
+            _generation: i64,
         ) -> Result<(), String> {
             Err("relay HTTP 502".into())
         }
-        async fn ziel_loeschen(&self, _streamer_id: i64, _platform: &str) -> Result<bool, String> {
+        async fn ziel_loeschen(
+            &self,
+            _streamer_id: i64,
+            _platform: &str,
+            _generation: i64,
+        ) -> Result<bool, String> {
             Ok(false)
         }
     }
 
     #[tokio::test]
     async fn kick_callback_kern_ohne_key_meldet_ziel_offen() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config();
         let relay = FakeRelay {
             gesetzt: std::sync::Mutex::new(Vec::new()),
         };
         let jetzt = zeit("2026-09-02T10:00:00Z");
         let state = ConnectState {
+            created_at: Utc::now(),
             streamer_id: 9110,
             redirect_uri: "https://x.test/callback/kick".into(),
             verifier: "verf".into(),
         };
-        let erg = kick_callback_kern(&pool, &config, &FakeKickKontoLeer, &relay, state, "code", jetzt)
-            .await
-            .unwrap();
+        let erg = kick_callback_kern(
+            &pool,
+            &config,
+            &FakeKickKontoLeer,
+            &relay,
+            state,
+            "code",
+            jetzt,
+        )
+        .await
+        .unwrap();
         assert!(erg.ziel_offen);
         assert!(!erg.neu_verbinden);
         assert!(relay.gesetzt.lock().unwrap().is_empty());
@@ -1265,38 +1298,55 @@ mod tests {
 
     #[tokio::test]
     async fn kick_callback_kern_bei_relay_fehler_meldet_ziel_offen() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config();
         let jetzt = zeit("2026-09-02T10:00:00Z");
         let state = ConnectState {
+            created_at: Utc::now(),
             streamer_id: 9111,
             redirect_uri: "https://x.test/callback/kick".into(),
             verifier: "verf".into(),
         };
-        let erg = kick_callback_kern(&pool, &config, &FakeKick, &FakeRelayFehler, state, "code", jetzt)
-            .await
-            .unwrap();
+        let erg = kick_callback_kern(
+            &pool,
+            &config,
+            &FakeKick,
+            &FakeRelayFehler,
+            state,
+            "code",
+            jetzt,
+        )
+        .await
+        .unwrap();
         assert!(erg.ziel_offen);
         assert!(!erg.neu_verbinden);
     }
 
     #[tokio::test]
     async fn kick_callback_kern_ohne_refresh_token_meldet_neu_verbinden() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config();
         let relay = FakeRelay {
             gesetzt: std::sync::Mutex::new(Vec::new()),
         };
         let jetzt = zeit("2026-09-02T10:00:00Z");
         let state = ConnectState {
+            created_at: Utc::now(),
             streamer_id: 9112,
             redirect_uri: "https://x.test/callback/kick".into(),
             verifier: "verf".into(),
         };
-        let erg =
-            kick_callback_kern(&pool, &config, &FakeKickOhneRefresh, &relay, state, "code", jetzt)
-                .await
-                .unwrap();
+        let erg = kick_callback_kern(
+            &pool,
+            &config,
+            &FakeKickOhneRefresh,
+            &relay,
+            state,
+            "code",
+            jetzt,
+        )
+        .await
+        .unwrap();
         assert!(erg.neu_verbinden);
         let store = PlatformConnectionStore::new(pool, config.cipher.clone());
         let gespeichert = store.load(9112, "kick").await.unwrap().unwrap();
@@ -1305,7 +1355,7 @@ mod tests {
 
     #[tokio::test]
     async fn streamkey_fuer_kick_setzt_ziel() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let mut config = config();
         config.kick = Some(std::sync::Arc::new(FakeKick) as std::sync::Arc<dyn KickApi>);
         let jetzt = zeit("2026-09-02T10:00:00Z");
@@ -1348,10 +1398,16 @@ mod tests {
             _platform: &str,
             _rtmp_url: &str,
             _stream_key: &str,
+            _generation: i64,
         ) -> Result<(), String> {
             Ok(())
         }
-        async fn ziel_loeschen(&self, streamer_id: i64, platform: &str) -> Result<bool, String> {
+        async fn ziel_loeschen(
+            &self,
+            streamer_id: i64,
+            platform: &str,
+            _generation: i64,
+        ) -> Result<bool, String> {
             self.geloescht
                 .lock()
                 .unwrap()
@@ -1362,7 +1418,7 @@ mod tests {
 
     #[tokio::test]
     async fn trennen_loescht_relay_ziel_auch_ohne_zeile() {
-        let pool = pool_oder_ende!();
+        let (pool, _database) = test_pool().await;
         let config = config();
         let relay = LoeschRelay {
             geloescht: std::sync::Mutex::new(Vec::new()),
@@ -1372,5 +1428,170 @@ mod tests {
         let geloescht = relay.geloescht.lock().unwrap();
         assert_eq!(geloescht.len(), 1);
         assert_eq!(geloescht[0], (9200, "kick".to_string()));
+    }
+    struct PausedYouTube {
+        entered: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl YouTubeApi for PausedYouTube {
+        async fn exchange_code(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, OAuthFehler> {
+            Ok(super::super::plattform_oauth::OAuthToken {
+                access_token: "synthetic-google".into(),
+                refresh_token: Some("synthetic-refresh".into()),
+                expires_in: 7200,
+                scopes: vec!["https://www.googleapis.com/auth/youtube.force-ssl".into()],
+            })
+        }
+        async fn refresh(
+            &self,
+            _: &str,
+        ) -> Result<super::super::plattform_oauth::OAuthToken, OAuthFehler> {
+            unreachable!()
+        }
+        async fn revoke(&self, _: &str) -> Result<(), OAuthFehler> {
+            panic!("Uplink disconnect must not revoke a later shared grant")
+        }
+        async fn konto(
+            &self,
+            _: &str,
+        ) -> Result<super::super::plattform_oauth::YouTubeKonto, OAuthFehler> {
+            Ok(super::super::plattform_oauth::YouTubeKonto {
+                channel_id: "UC-synthetic".into(),
+                titel: "Synthetic".into(),
+            })
+        }
+        async fn ziel(
+            &self,
+            _: &str,
+        ) -> Result<Option<super::super::plattform_oauth::YouTubeZiel>, OAuthFehler> {
+            self.entered.notify_one();
+            self.resume.notified().await;
+            Ok(Some(super::super::plattform_oauth::YouTubeZiel {
+                rtmp_url: "rtmps://youtube.test/live".into(),
+                stream_key: "synthetic-key".into(),
+            }))
+        }
+    }
+    #[derive(Default)]
+    struct FencedRelay {
+        state: std::sync::Mutex<(i64, bool, usize)>,
+    }
+    #[async_trait::async_trait]
+    impl RelayZiele for FencedRelay {
+        async fn ziel_setzen(
+            &self,
+            _: i64,
+            _: &str,
+            _: &str,
+            _: &str,
+            generation: i64,
+        ) -> Result<(), String> {
+            let mut s = self.state.lock().unwrap();
+            if generation < s.0 || generation == s.0 && s.1 {
+                return Err("relay HTTP 409".into());
+            }
+            *s = (generation, false, s.2 + 1);
+            Ok(())
+        }
+        async fn ziel_loeschen(&self, _: i64, _: &str, generation: i64) -> Result<bool, String> {
+            let mut s = self.state.lock().unwrap();
+            if generation < s.0 {
+                return Err("relay HTTP 409".into());
+            }
+            *s = (generation, true, s.2);
+            Ok(true)
+        }
+    }
+    #[tokio::test]
+    async fn delayed_youtube_callback_cannot_restore_target_after_disconnect() {
+        let (pool, _database) = test_pool().await;
+        let config = config();
+        let relay = FencedRelay::default();
+        let client = PausedYouTube {
+            entered: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        };
+        let state = ConnectState {
+            streamer_id: 9201,
+            redirect_uri: "https://local.test/callback".into(),
+            verifier: String::new(),
+            created_at: Utc::now(),
+        };
+        let callback = youtube_callback_kern(
+            &pool,
+            &config,
+            &client,
+            &relay,
+            state,
+            "synthetic-code",
+            Utc::now(),
+        );
+        let disconnect = async {
+            client.entered.notified().await;
+            assert!(matches!(
+                plattform_trennen(&pool, &config, &relay, None, Some(&client), 9201, "youtube")
+                    .await,
+                PlattformTrennenErgebnis::Getrennt
+            ));
+            client.resume.notify_one();
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(callback, disconnect)
+        })
+        .await
+        .unwrap();
+        assert!(result.unwrap().ziel_offen);
+        assert_eq!(relay.state.lock().unwrap().2, 0);
+        assert!(relay.state.lock().unwrap().1);
+        let store = PlatformConnectionStore::new(pool.clone(), config.cipher.clone());
+        assert!(store
+            .load_for_uplink(9201, "youtube")
+            .await
+            .unwrap()
+            .is_none());
+        let state = tb_raid::target_generation::snapshot(&pool, "9201", "youtube")
+            .await
+            .unwrap();
+        assert!(!state.enabled && !state.disconnect_pending);
+    }
+    #[tokio::test]
+    async fn old_kick_callback_state_cannot_reactivate_after_disconnect() {
+        let (pool, _database) = test_pool().await;
+        let config = config();
+        let relay = FencedRelay::default();
+        let state = ConnectState {
+            streamer_id: 9202,
+            redirect_uri: "https://local.test/callback".into(),
+            verifier: "synthetic-verifier".into(),
+            created_at: Utc::now(),
+        };
+        assert!(matches!(
+            plattform_trennen(&pool, &config, &relay, None, None, 9202, "kick").await,
+            PlattformTrennenErgebnis::Getrennt
+        ));
+        assert!(kick_callback_kern(
+            &pool,
+            &config,
+            &FakeKick,
+            &relay,
+            state,
+            "synthetic-code",
+            Utc::now()
+        )
+        .await
+        .is_err());
+        assert_eq!(relay.state.lock().unwrap().2, 0);
+        assert!(
+            PlatformConnectionStore::new(pool.clone(), config.cipher.clone())
+                .load_for_uplink(9202, "kick")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

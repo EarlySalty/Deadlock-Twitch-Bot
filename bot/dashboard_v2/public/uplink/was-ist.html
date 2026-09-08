@@ -11,41 +11,10 @@
 <main class="uplink-doc" data-doc="was-ist">
   <p class="nur-standalone"><a href="index.html">Zurück zur Hilfe</a></p>
   <h1>Was ist Uplink</h1>
-  <p class="lede">Uplink nimmt deinen OBS-Stream entgegen und schickt ihn in der passenden Qualität an die verbundenen Plattformen. Du startest und stoppst wie gewohnt in OBS; einen eigenen Knopf dafür gibt es nicht.</p>
-
-  <section id="was-ist-ablauf">
-    <h2>Ablauf</h2>
-    <ol>
-      <li>Im Dashboard den Dienst freischalten lassen und die SRT-Adresse kopieren.</li>
-      <li>OBS auf unseren Server stellen, nicht mehr direkt auf Twitch.</li>
-      <li>Stream starten. Wir legen die verbundenen Ziele an.</li>
-      <li>Stream beenden. Wir beenden die Ziele mit.</li>
-    </ol>
-  </section>
-
-  <section id="was-ist-was-du-einstellst">
-    <h2>Was du einstellst, was wir machen</h2>
-    <table>
-      <thead>
-        <tr><th>Bei dir</th><th>Bei uns</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Encoder, Auflösung, FPS, Bitrate, SRT-Adresse</td><td>CBR für Twitch und Kick, Auflösung nach deiner Wahl im Dashboard, von 480p bis 1440p</td></tr>
-        <tr><td>Welches Ziel du einträgst</td><td>Push zu diesem Ziel</td></tr>
-        <tr><td>Titel und Kategorie in den Plattform-Dashboards</td><td>Start und Stop, sobald OBS läuft</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <section id="was-ist-plaetze">
-    <h2>Wenn kein Platz frei ist</h2>
-    <p>Dann lehnt der Start ab. Dein laufender Stream bleibt unangetastet. Für diesen Abend streamst du wieder direkt zur Plattform, so wie ohne Uplink.</p>
-  </section>
-
-  <section class="nur-standalone" id="was-ist-naechste-schritte">
-    <h2>Als Nächstes</h2>
-    <p class="nur-standalone"><a href="obs.html">OBS einrichten</a> · <a href="stoerungen.html">Störungen</a></p>
-  </section>
+  <section><h2>Ein Eingang, mehrere Ziele</h2><p>Uplink nimmt deinen OBS-Stream entgegen und verteilt ihn passend an deine Plattformen. Du richtest den Zugang, die Plattformen und deine OBS-Fenster im bestehenden Dashboard ein.</p></section>
+  <section><h2>Wunsch und laufende Ausgabe</h2><p>Eingeschaltet bedeutet, dass ein Ziel beim nächsten Stream berücksichtigt werden soll. Erst der gemessene Medienbetrieb zeigt, ob Uplink dorthin sendet. Eine öffentliche Livebestätigung der Plattform wird nur angezeigt, wenn sie tatsächlich vorliegt.</p></section>
+  <section><h2>Bild und Ton</h2><p>Kompatible Medien können unverändert weitergeleitet werden. Erforderliche andere Bilder oder Ausgabeprofile werden serverseitig verarbeitet. Live- und VOD-Mischungen bleiben getrennt; benötigte Bild- und Tonquellen müssen bereits im Eingang vorhanden sein.</p></section>
+  <section><h2>Wenn etwas fehlt</h2><p>Abgelehnte Profile, fehlender VOD-Ton oder eine erforderliche neue Plattformfreigabe werden am betroffenen Ziel angezeigt. Gespeicherte Einstellungen allein sind kein Qualitäts- oder Funktionsnachweis.</p></section>
 </main>
 </body>
 </html>

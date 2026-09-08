@@ -3,6 +3,29 @@
 # Secrets kommen wie bei tb-bot aus Infisical; Nicht-Secret-Konfiguration wird hier explizit gesetzt.
 set -euo pipefail
 
+# Übergang zum normalen Uplink-RAM-Leser. Diese Funktion kopiert keinen
+# Credentialinhalt: ausschließlich der vorhandene eigene FD wird vererbt.
+start_dashboard_with_uplink() {
+  local executable="$1" credential_path="$2" config_path="$3"
+  shift 3
+  local has_config=false argument
+  local arguments=("$@")
+  for argument in "${arguments[@]}"; do
+    if [[ "$argument" == '--uplink-config' ]]; then
+      has_config=true
+    fi
+  done
+  if [[ "$has_config" == false ]]; then
+    arguments=(--uplink-config "$config_path" "${arguments[@]}")
+  fi
+  if [[ ! -r "$credential_path" ]]; then
+    echo 'Die eigene Dashboard-Credential für Uplink ist nicht verfügbar.' >&2
+    return 1
+  fi
+  exec 9<"$credential_path"
+  exec "$executable" "${arguments[@]}"
+}
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SYSTEMD_CREDENTIAL_DIR='/run/credentials/deadlock-twitch-dashboard-rust.service'
 if [[ -r "$SYSTEMD_CREDENTIAL_DIR/infisical-token" ]]; then
@@ -95,4 +118,7 @@ export TWITCH_DASHBOARD_AUTH_REDIRECT_URI="${TWITCH_DASHBOARD_AUTH_REDIRECT_URI:
 # gesetzter URL an einen Legacy-Proxy weiter. Leer bedeutet 404 statt Proxy.
 export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-}"
 
-exec "$ROOT_DIR/rust/target/release/tb-dashboard"
+start_dashboard_with_uplink \
+  "$ROOT_DIR/rust/target/release/tb-dashboard" \
+  '/run/credentials/deadlock-twitch-dashboard-rust.service/infisical-token' \
+  '/etc/deadlock-twitch/uplink.json' "$@"

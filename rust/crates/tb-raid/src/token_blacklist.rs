@@ -55,6 +55,23 @@ impl TokenBlacklistStore {
 
 #[async_trait::async_trait]
 impl TokenBlacklist for TokenBlacklistStore {
+    async fn add_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uid: &str,
+        login: &str,
+        error: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.add_to_blacklist_tx(tx, uid, login, error, Utc::now())
+            .await
+    }
+    async fn clear_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uid: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.clear_failure_count_tx(tx, uid).await
+    }
     async fn is_blacklisted(&self, twitch_user_id: &str) -> bool {
         let count: Result<Option<i32>, _> = sqlx::query_scalar!(
             r#"SELECT error_count AS "error_count?" FROM twitch_token_blacklist WHERE twitch_user_id = $1"#,
@@ -132,7 +149,16 @@ impl TokenBlacklistStore {
     /// Dashboard-/Analytics-Gates als `token_error` pausiert, bis er voll
     /// neu autorisiert (die Re-Auth-Gegenrichtung in `auth_writer::store_new_auth`).
     async fn clear_failure_count_inner(&self, twitch_user_id: &str) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = crate::auth_writer::auth_transaction(&self.pool, twitch_user_id).await?;
+        self.clear_failure_count_tx(&mut tx, twitch_user_id).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    async fn clear_failure_count_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        twitch_user_id: &str,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE twitch_partners
                 SET technical_pause_reason = CASE
@@ -142,15 +168,14 @@ impl TokenBlacklistStore {
               WHERE twitch_user_id = $1",
         )
         .bind(twitch_user_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         sqlx::query!(
             "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1",
             twitch_user_id
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-        tx.commit().await?;
         Ok(())
     }
 
@@ -161,8 +186,21 @@ impl TokenBlacklistStore {
         error_message: &str,
         now: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = crate::auth_writer::auth_transaction(&self.pool, twitch_user_id).await?;
+        self.add_to_blacklist_tx(&mut tx, twitch_user_id, twitch_login, error_message, now)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    async fn add_to_blacklist_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        error_message: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
         let now_iso = Self::iso(now);
-        let mut tx = self.pool.begin().await?;
         let existing = sqlx::query!(
             r#"SELECT error_count AS "error_count?",
                       last_error_at AS "last_error_at?"
@@ -170,7 +208,7 @@ impl TokenBlacklistStore {
                 WHERE twitch_user_id = $1"#,
             twitch_user_id
         )
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
 
         match existing {
@@ -193,7 +231,7 @@ impl TokenBlacklistStore {
                         error_message,
                         twitch_user_id
                     )
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
                 } else {
                     let new_count = (prior + 1).max(1) as i32;
@@ -206,7 +244,7 @@ impl TokenBlacklistStore {
                         error_message,
                         twitch_user_id
                     )
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
                 }
             }
@@ -224,7 +262,7 @@ impl TokenBlacklistStore {
                     &now_iso,
                     &grace
                 )
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             }
         }
@@ -243,7 +281,7 @@ impl TokenBlacklistStore {
             twitch_login.trim().to_lowercase(),
             twitch_user_id
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
         // Partner-Mirror (Python _mark_reauth_required -> set_partner_raid_bot_enabled +
@@ -264,10 +302,8 @@ impl TokenBlacklistStore {
               WHERE twitch_user_id = $1",
             twitch_user_id
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-
-        tx.commit().await?;
         Ok(())
     }
 }

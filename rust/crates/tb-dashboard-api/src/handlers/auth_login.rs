@@ -95,6 +95,7 @@ struct RaidOAuthCallbackPayload {
     title: Option<String>,
     body_html: Option<String>,
     redirect_url: Option<String>,
+    twitch_user_id: Option<String>,
 }
 
 fn oauth_unconfigured() -> Response {
@@ -452,10 +453,11 @@ async fn maybe_delegate_raid_oauth_callback(
         warn!("Raid-OAuth-State erkannt, aber interner Raid-Callback ist nicht konfiguriert");
         return Some(raid_oauth_unavailable_response());
     };
-    let antwort = call_raid_oauth_callback(raid_config, code, state_token, error).await;
-    if antwort.status().as_u16() < 400 && ist_uplink_profil(&info.scope_profile) {
-        if let Some(uplink) = uplink {
-            stream_key_nachlauf_starten(state.pool().clone(), uplink.clone(), info.streamer_login);
+    let (antwort, confirmed_id) =
+        call_raid_oauth_callback(raid_config, code, state_token, error).await;
+    if ist_uplink_profil(&info.scope_profile) {
+        if let (Some(uplink), Some(id)) = (uplink, confirmed_id) {
+            stream_key_nachlauf_starten(state.pool().clone(), uplink.clone(), id);
         }
     }
     Some(antwort)
@@ -476,28 +478,11 @@ fn ist_uplink_profil(scope_profile: &str) -> bool {
 fn stream_key_nachlauf_starten(
     pool: sqlx::PgPool,
     config: crate::handlers::platform_token::PlatformTokenConfig,
-    login: String,
+    id: i64,
 ) {
     tokio::spawn(async move {
-        let Some(konto) = crate::handlers::uplink::HelixKonto::aus_umgebung() else {
+        let Some(konto) = crate::handlers::uplink::HelixKonto::aus_konfiguration() else {
             warn!("Uplink-Nachlauf: Twitch-Zugangsdaten fehlen, Stream-Key bleibt aus");
-            return;
-        };
-        // Der State kennt nur den Login; die numerische ID ist der Schlüssel
-        // des Relays und kommt aus derselben Quelle wie im übrigen Dashboard.
-        let id: Option<String> = match sqlx::query_scalar("SELECT tb_twitch_user_id($1)")
-            .bind(&login)
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(error) => {
-                warn!(%error, "Uplink-Nachlauf: Twitch-User-ID nicht auflösbar");
-                return;
-            }
-        };
-        let Some(id) = id.as_deref().and_then(|v| v.trim().parse::<i64>().ok()) else {
-            warn!("Uplink-Nachlauf: kein numerischer Twitch-Nutzer zum Login gefunden");
             return;
         };
         let stand = crate::handlers::uplink::stream_key_hinterlegen(
@@ -524,7 +509,7 @@ async fn call_raid_oauth_callback(
     code: &str,
     state_token: &str,
     error: &str,
-) -> Response {
+) -> (Response, Option<i64>) {
     let payload = json!({
         "code": code,
         "state": state_token,
@@ -546,22 +531,40 @@ async fn call_raid_oauth_callback(
         Ok(response) => response,
         Err(error) => {
             warn!(%error, "Raid-OAuth-Callback-Hop fehlgeschlagen");
-            return raid_oauth_unavailable_response();
+            return (raid_oauth_unavailable_response(), None);
         }
     };
     if !response.status().is_success() {
         let status = response.status().as_u16();
         warn!(status, "Raid-OAuth-Callback-Hop lieferte Fehlerstatus");
-        return raid_oauth_unavailable_response();
+        return (raid_oauth_unavailable_response(), None);
     }
 
     match response.json::<RaidOAuthCallbackPayload>().await {
-        Ok(payload) => raid_oauth_payload_response(payload),
+        Ok(payload) => {
+            let id = confirmed_callback_id(&payload);
+            (raid_oauth_payload_response(payload), id)
+        }
         Err(error) => {
             warn!(%error, "Raid-OAuth-Callback-Antwort war kein gueltiges JSON");
-            raid_oauth_unavailable_response()
+            (raid_oauth_unavailable_response(), None)
         }
     }
+}
+
+/// Nur die vom authentifizierten Bot-Hop bestätigte Erfolgsidentität.
+fn confirmed_callback_id(payload: &RaidOAuthCallbackPayload) -> Option<i64> {
+    if !payload
+        .status
+        .is_some_and(|status| (200..300).contains(&status))
+    {
+        return None;
+    }
+    let raw = payload.twitch_user_id.as_deref()?;
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<i64>().ok().filter(|id| *id > 0)
 }
 
 fn raid_oauth_payload_response(payload: RaidOAuthCallbackPayload) -> Response {
@@ -597,6 +600,7 @@ fn raid_oauth_unavailable_response() -> Response {
         title: Some("Twitch OAuth nicht verfügbar".to_string()),
         body_html: Some("<p>Der interne Bot-Service ist aktuell nicht verfügbar.</p>".to_string()),
         redirect_url: None,
+        twitch_user_id: None,
     })
 }
 
@@ -1128,12 +1132,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn callback_hop_carries_only_confirmed_success_id() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        for (status, field, expected) in [
+            (200, json!("123"), Some(123)),
+            (409, json!("123"), None),
+            (200, serde_json::Value::Null, None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/callback"))
+                .and(header(INTERNAL_TOKEN_HEADER, "public-test-token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "status":status,"title":"Test","body_html":"<p>Test</p>",
+                    "redirect_url":"https://example.test/twitch/uplink?verbunden=twitch",
+                    "twitch_user_id":field
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let config = RaidOAuthCallbackConfig {
+                endpoint_url: format!("{}/callback", server.uri()),
+                internal_token: "public-test-token".into(),
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .timeout(std::time::Duration::from_secs(3))
+                    .build()
+                    .unwrap(),
+            };
+            let (response, id) =
+                call_raid_oauth_callback(&config, "public-code", "public-state", "").await;
+            assert_eq!(id, expected);
+            assert_eq!(
+                response.status().as_u16(),
+                if status == 200 { 303 } else { status }
+            );
+            server.verify().await;
+        }
+    }
+
+    #[test]
+    fn callback_identity_requires_success_and_positive_id() {
+        for (status, uid, expected) in [
+            (Some(200), Some("123"), Some(123)),
+            (Some(200), Some("different-login"), None),
+            (Some(200), Some("0"), None),
+            (Some(200), Some("-1"), None),
+            (Some(200), Some(" 123"), None),
+            (Some(200), Some("9223372036854775808"), None),
+            (Some(200), None, None),
+            (None, Some("123"), None),
+            (Some(409), Some("123"), None),
+        ] {
+            let payload = RaidOAuthCallbackPayload {
+                status,
+                twitch_user_id: uid.map(str::to_owned),
+                ..Default::default()
+            };
+            assert_eq!(confirmed_callback_id(&payload), expected);
+        }
+    }
+
+    #[tokio::test]
     async fn raid_payload_redirectet_bei_erfolg_und_rendert_fehlerseite() {
         let redirect = raid_oauth_payload_response(RaidOAuthCallbackPayload {
             status: Some(200),
             title: Some("ok".to_string()),
             body_html: Some("<p>ok</p>".to_string()),
             redirect_url: Some("https://example.test/dash#x".to_string()),
+            twitch_user_id: Some("123".into()),
         });
         assert_eq!(redirect.status(), StatusCode::SEE_OTHER);
         assert_eq!(
@@ -1149,6 +1217,7 @@ mod tests {
             title: Some("Titel".to_string()),
             body_html: Some("<p>Body</p>".to_string()),
             redirect_url: None,
+            twitch_user_id: None,
         });
         assert_eq!(page.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(

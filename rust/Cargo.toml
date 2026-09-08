@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "vendor/uplink-infisical-transport",
     "crates/tb-error",
     "crates/tb-crypto",
     "crates/tb-domain",

@@ -1,6 +1,8 @@
 import { fetchJson, withCookieCredentials } from './core';
 import { normalisiereCaps } from '../uplinkEmpfehlung';
 import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
+import type { ZielBetriebsdaten } from '../uplinkBetrieb';
+import type { EingangsSession } from '../uplinkBetrieb';
 
 /**
  * `live_status` kommt nicht vom Relay, sondern aus der Twitch-Beobachtung des
@@ -16,8 +18,12 @@ export interface UplinkMe {
   enabled: boolean;
   waitlisted: boolean;
   ingest_key: string;
-  rtmp_url: string;
-  srt_hint: string;
+  public_ingest_url?: string;
+  ingest_url?: string;
+  service_status?: 'ready' | 'unavailable' | 'input_only';
+  capabilities?: { reconnect?: boolean };
+  /** Tatsächliche Eingangs-Generation des Uplink-Dienstes, unabhängig von Twitch live. */
+  session?: EingangsSession | null;
   live_status?: UplinkLiveStatus;
   /** Wartezeit nur nach einem unerwarteten Internetabriss. */
   reconnect_wait_s: number;
@@ -45,7 +51,7 @@ export interface UplinkMe {
   verbindungen?: UplinkVerbindung[];
 }
 
-export type UplinkVerbindungStatus = 'verbunden' | 'neu_verbinden' | 'getrennt';
+export type UplinkVerbindungStatus = 'verbunden' | 'neu_verbinden' | 'rechte_ergaenzen' | 'zugang_unbekannt' | 'trennung_offen' | 'getrennt';
 
 export interface UplinkVerbindung {
   platform: string;
@@ -117,7 +123,7 @@ export function uplinkConnectUrl(platform: UplinkPlattform): string {
 
 /**
  * Trennt eine Plattform: Zugang zurueckgenommen, Ziel im Uplink entfernt.
- * Das stoppt auch den Raid-Bot, weil beides an demselben Zugang haengt.
+ * Der gemeinsam genutzte Twitch-Grant für Raid und Bot bleibt erhalten.
  */
 export function trenneUplinkPlattform(
   platform: UplinkPlattform,
@@ -184,11 +190,10 @@ export interface UplinkPlattformVerbindung {
 /**
  * Hinweis unter dem Trennen-Knopf.
  *
- * Trennen nimmt den ganzen Zugang zurueck, nicht nur den Uplink-Teil. Wer das
- * nicht dazuschreibt, schaltet Leuten unbemerkt ihre Auto-Raids ab.
+ * Uplink wird getrennt; der gemeinsame Twitch-Grant für andere Funktionen bleibt.
  */
 export const TRENNEN_HINWEIS =
-  'Trennen nimmt den Zugang ganz zurück. Damit hören auch die automatischen Raids auf, bis du dich neu verbindest.';
+  'Trennt diese Plattform von Uplink und entfernt ihr Sendeziel. Deine übrigen Bot- und Raidfunktionen bleiben verbunden.';
 
 /**
  * Wofür die Rechte gebraucht werden, in Klartext.
@@ -212,7 +217,7 @@ export const TRENNEN_HINWEIS =
  * Klick bringt.
  */
 export const VERBINDEN_KURZ =
-  'Holt Stream-Schlüssel, Chat, Aktivitäten, Stream-Infos und Kanalpunkte in einem Schritt.';
+  'Verbindet dein Plattformkonto. Verfügbare Funktionen hängen von den gewährten Rechten ab.';
 
 export const VERBINDEN_HINWEIS =
   'Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Die übrigen Punkte in der Liste gehören zum Bot und zum Dashboard.';
@@ -224,19 +229,27 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
     const status = eintrag?.status ?? 'getrennt';
     const aktiv = eintrag?.verbindbar ?? verbindenAktiv(p.id);
     const streamKeyVorhanden = eintrag?.stream_key_vorhanden ?? false;
-    let statusText = 'Folgt später';
+    let statusText = 'Kontoverbindung nicht verfügbar';
     let knopfText: string | null = null;
     if (status === 'verbunden') {
       statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';
     } else if (status === 'neu_verbinden') {
-      statusText = 'Zugang abgelaufen';
+      statusText = 'Zugang erneuern';
+    } else if (status === 'rechte_ergaenzen') {
+      statusText = 'Für Uplink fehlen noch Rechte';
+    } else if (status === 'zugang_unbekannt') {
+      statusText = 'Kontozugang konnte gerade nicht geprüft werden';
+    } else if (status === 'trennung_offen') {
+      statusText = 'Trennung noch nicht bestätigt';
     } else if (!aktiv && (p.id === 'kick' || p.id === 'youtube')) {
-      statusText = `${p.label} ist auf dieser Instanz noch nicht eingerichtet`;
+      statusText = `Kontoverbindung zu ${p.label} ist hier noch nicht eingerichtet`;
     } else if (aktiv) {
       statusText = 'Nicht verbunden';
     }
     if (aktiv) {
-      knopfText = status === 'getrennt' ? `Mit ${p.label} verbinden` : 'Neu verbinden';
+      knopfText = status === 'getrennt' ? `Mit ${p.label} verbinden`
+        : status === 'rechte_ergaenzen' ? 'Rechte ergänzen'
+        : status === 'zugang_unbekannt' ? null : 'Neu verbinden';
     }
     return {
       id: p.id,
@@ -386,9 +399,9 @@ export function saveUplinkReconnectWait(
   );
 }
 
-/** Der Wert gilt nur fuer einen unerwarteten Abriss, nicht fuer OBS-Stop. */
+/** Ein gespeicherter Wert ist noch kein Nachweis einer aktiven Pufferreserve. */
 export const UPLINK_RECONNECT_WAIT_TEXT =
-  'Diese Zeit gilt nur nach einem unerwarteten Internetabriss. Wenn du den Stream in OBS beendest, räumt Uplink sofort auf.';
+  'Gespeicherte Frist für eine Wiederverbindung nach einem Verbindungsabbruch. Ein Verbindungsende allein beweist nicht, dass du den Stream bewusst beendet hast.';
 
 export function reconnectWaitEingabe(wert: number | null | undefined): string {
   return typeof wert === 'number' && Number.isFinite(wert) && wert >= 0 ? String(wert) : '';
@@ -412,56 +425,37 @@ export interface UplinkProfilAnsicht {
   bitrate_kbps: number;
 }
 
-/**
- * Die Profilnamen muessen zum Katalog in `handlers/uplink.rs` passen. Ein Name,
- * den der Server nicht kennt, gibt 400 statt still auf den Standard zu fallen.
- *
- * `warnung` ist gesetzt, wo die Stufe zwar waehlbar, aber nicht unbedenklich
- * ist. Getrennt vom `hinweis`, damit die Oberflaeche sie anders faerben kann:
- * ein Nachteil, den man ueberliest, ist keiner.
- *
- * Die 1440p-Warnung steht auf den Angaben aus dem Twitch-Hilfeartikel "2k
- * Streaming auf Twitch": 2K braucht dort Enhanced Broadcasting, das gibt es nur
- * fuer Partner und Affiliates, und es geht an Twitchs eigenen Ingest. Ueber
- * Uplink laeuft klassisches RTMP, damit ist 1440p bei Twitch offiziell nicht
- * unterstuetzt und es gibt keine Qualitaetsstufen fuer die Zuschauer.
- *
- * Die Bitrate aus demselben Artikel steht bewusst NICHT in der Warnung. Sie
- * gilt fuer jemanden, der 2K direkt an Twitch schickt. Ueber Uplink geht
- * `PROFIL_WERTE['1440p60']` an Twitch, also 12000 kbps, und was der Streamer
- * zu uns hochlaedt, ist davon wieder unabhaengig. Eine Zahl, die auf keinen
- * dieser drei Wege passt, gehoert nicht in eine Warnung.
- */
+/** Benannte Wunschprofile; keine Aussage über Plattformfreigabe oder aktive Ausgabe. */
 export const UPLINK_PROFILE = [
   {
     name: '1440p60',
-    label: '1440p60 (2K), 12000 kbps',
-    hinweis: 'Deine volle 2K-Auflösung, ohne Verkleinerung. Schick uns dafür auch 1440p aus OBS.',
+    label: '2560×1440, 60 fps, 12000 kbit/s',
+    hinweis: 'Wunschprofil für einen passenden 2560×1440-Eingang.',
     warnung:
-      'Twitch nimmt 2K offiziell nur über Enhanced Broadcasting an, und das läuft über Twitchs eigenen Ingest, nicht über uns. Für deine Zuschauer heißt das keine Qualitätsstufen: wer eine schwache Leitung hat, puffert, statt auf 720p zu wechseln. Probier es einen Abend aus und schick uns dafür auch 1440p aus OBS.',
+      'Twitch benötigt dafür eine bestätigte Enhanced-Broadcasting-Konfiguration und einen geeigneten Kanalzugang. Gespeichert bedeutet noch nicht freigegeben.',
   },
   {
     name: '1080p60-hoch',
     label: '1080p60, 8000 kbps',
-    hinweis: 'Twitch-Maximum für 1080p. Nur mit Partner- oder Affiliate-Status sinnvoll.',
+    hinweis: 'Wunschprofil mit höherem Video-Bitratenbudget. Wird für das jeweilige Ziel geprüft.',
     warnung: '',
   },
   {
     name: '1080p60',
     label: '1080p60, 6000 kbps',
-    hinweis: 'Standard. Passt auf jede Leitung, die Twitch akzeptiert.',
+    hinweis: 'Wunschprofil mit 6000 kbit/s Video am Ausgang. Dein Upload wird getrennt bewertet.',
     warnung: '',
   },
   {
     name: '720p60',
     label: '720p60, 4500 kbps',
-    hinweis: 'Weniger Serverlast und weniger Upload, immer noch 60 Bilder.',
+    hinweis: 'Kleineres Ausgabeprofil mit 60 Bildern pro Sekunde.',
     warnung: '',
   },
   {
     name: '480p30',
     label: '480p30, 1500 kbps',
-    hinweis: 'Notfallstufe bei schlechter Leitung.',
+    hinweis: 'Kleineres Ausgabeprofil mit 30 Bildern pro Sekunde.',
     warnung: '',
   },
 ] as const;
@@ -499,8 +493,8 @@ export function profilNameFuer(werte: UplinkProfilAnsicht | undefined): UplinkPr
  * Zielkarten: Twitch zuerst, weil es fuer fast alle das einzige Ziel ist.
  */
 export const UPLINK_PLATTFORMEN = [
-  { id: 'twitch', label: 'Twitch', rtmp: 'rtmp://live.twitch.tv/app' },
-  { id: 'youtube', label: 'YouTube', rtmp: 'rtmp://a.rtmp.youtube.com/live2' },
+  { id: 'twitch', label: 'Twitch', rtmp: 'rtmps://ingest.global-contribute.live-video.net:443/app' },
+  { id: 'youtube', label: 'YouTube', rtmp: 'rtmps://a.rtmps.youtube.com:443/live2' },
   { id: 'kick', label: 'Kick', rtmp: 'rtmps://fa723fc1b171.global-contribute.live-video.net' },
   { id: 'tiktok', label: 'TikTok', rtmp: '' },
 ] as const;
@@ -525,9 +519,16 @@ export interface UplinkManuellesProfil {
  * aber der laufende Stream bleibt bis zum naechsten Mal, wie er ist.
  */
 export interface UplinkLiveQualitaet {
-  status: 'applied' | 'applied_restart' | 'too_busy';
+  status: 'applied' | 'applied_restart' | 'too_busy' | 'next_stream';
   message: string;
 }
+
+export type UplinkTwitchAudioMode = 'live' | 'separate_vod';
+
+export const TWITCH_AUDIO_LABEL: Record<UplinkTwitchAudioMode, string> = {
+  live: 'Live-Ton',
+  separate_vod: 'Separater Twitch-VOD-Ton',
+};
 
 /**
  * Ein Ziel speichern. Drei Faelle, alle ueber denselben Aufruf:
@@ -547,6 +548,8 @@ export function saveUplinkDestination(body: {
   profil?: UplinkProfilName;
   manuell?: UplinkManuellesProfil;
   enabled?: boolean;
+  /** Nur für Twitch; weglassen erhält die bisherige Wahl, auch einen Altbestand ohne Wahl. */
+  twitch_audio_mode?: UplinkTwitchAudioMode;
 }): Promise<{ destinations: UplinkDestination[]; live_quality?: UplinkLiveQualitaet }> {
   return fetchJson('/twitch/api/v2/uplink/destinations', withCookieCredentials({
     method: 'PUT',
@@ -566,11 +569,7 @@ export interface UplinkCapsAntwort {
   platforms: UplinkCaps[];
 }
 
-/**
- * Der Empfehlungskatalog. Kommt vom Server, damit die Oberflaeche ihn nicht
- * doppelt pflegt: `relay.platform_caps` ist eine Tabelle in einem anderen
- * Repo und kann sich per Migration bewegen, ohne dass hier jemand etwas tut.
- */
+/** Geprüfte Hinweise des Dienstes; fehlende Werte bleiben ausdrücklich unbekannt. */
 export async function fetchUplinkCaps(): Promise<UplinkCapsAntwort> {
   const antwort = await fetchJson<{ platforms?: UplinkCapsRoh[] }>(
     '/twitch/api/v2/uplink/caps',
@@ -585,11 +584,17 @@ export async function fetchUplinkCaps(): Promise<UplinkCapsAntwort> {
  * Ohne Stream-Key: der liegt verschluesselt in der Datenbank und wird nie
  * wieder ausgeliefert. Fuer die Oberflaeche zaehlt nur, dass es ihn gibt.
  */
-export interface UplinkDestination {
+export interface UplinkDestination extends ZielBetriebsdaten {
   platform: string;
   rtmp_url: string;
   enabled: boolean;
-  /** Was der Streamer eingestellt hat, und damit auch das, was rausgeht. */
+  /** Ausdrücklich gespeichert; null bedeutet weiterhin die bisherige Servereinstellung. */
+  twitch_audio_mode?: UplinkTwitchAudioMode | null;
+  /** Vom Dienst bestätigte Wahl oder bisherige Einstellung für den nächsten Stream. */
+  effective_audio_mode?: UplinkTwitchAudioMode | null;
+  /** Nur aus dem tatsächlich sendenden Graph, nie aus dem gespeicherten Wunsch. */
+  active_audio_mode?: UplinkTwitchAudioMode | null;
+  /** Gespeicherter Wunsch. Die tatsächliche Ausgabe steht in active_profile. */
   requested?: UplinkProfilAnsicht;
   /**
    * Frueher das Ergebnis der Klemmung gegen die Plattform-Grenzen, heute immer
@@ -598,6 +603,25 @@ export interface UplinkDestination {
    * zeigt sie wieder einen anderen Wert an, als im Eingabefeld steht.
    */
   effective?: UplinkProfilAnsicht;
+}
+
+/** Ein lokaler Entwurf bleibt bei Refetch bestehen; er ändert keine laufende Ausgabe. */
+export function twitchAudioFormular(
+  ziel: UplinkDestination | undefined,
+  entwurf: UplinkTwitchAudioMode | null,
+) {
+  const bekannt = (wert: unknown): UplinkTwitchAudioMode | null =>
+    wert === 'live' || wert === 'separate_vod' ? wert : null;
+  const twitch = ziel?.platform === 'twitch' ? ziel : undefined;
+  const gespeichert = bekannt(twitch?.twitch_audio_mode);
+  return {
+    auswahl: entwurf ?? gespeichert,
+    gespeichert,
+    naechsterStream: bekannt(twitch?.effective_audio_mode),
+    aktiv: twitch?.output_state === 'sending' && !twitch.blocked
+      ? bekannt(twitch.active_audio_mode) : null,
+    geaendert: entwurf !== null && entwurf !== gespeichert,
+  };
 }
 
 export function fetchUplinkDestinations(): Promise<{ destinations: UplinkDestination[] }> {

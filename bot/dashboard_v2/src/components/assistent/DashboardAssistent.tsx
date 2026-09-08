@@ -52,7 +52,7 @@ function seiteSlug(): string {
   return slug.toLowerCase().replace(/[^a-z0-9/_-]/g, '').slice(0, 64);
 }
 
-export function DashboardAssistent() {
+export function DashboardAssistent({ imDokumentfluss = false }: { imDokumentfluss?: boolean }) {
   const { language } = useLanguage();
   const t = useT();
   const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
@@ -138,7 +138,7 @@ export function DashboardAssistent() {
   }
 
   return (
-    <div className="assistent-wrap">
+    <div className={`assistent-wrap${imDokumentfluss ? ' assistent-wrap--inline' : ''}`}>
       {open && (
         <section role="dialog" aria-label={t('Hilfe im Dashboard')} className="assistent-panel">
           <header className="assistent-kopf">

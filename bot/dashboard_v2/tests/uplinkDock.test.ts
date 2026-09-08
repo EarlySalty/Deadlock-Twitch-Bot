@@ -128,13 +128,13 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
 
   const youtube = zeilen.find((z) => z.id === 'youtube')!;
   assert.equal(youtube.aktiv, false);
-  assert.equal(youtube.statusText, 'YouTube ist auf dieser Instanz noch nicht eingerichtet');
+  assert.equal(youtube.statusText, 'Kontoverbindung zu YouTube ist hier noch nicht eingerichtet');
   assert.equal(youtube.knopfText, null);
   assert.equal(youtube.trennenMoeglich, false);
 
   const tiktok = zeilen.find((z) => z.id === 'tiktok')!;
   assert.equal(tiktok.aktiv, false);
-  assert.equal(tiktok.statusText, 'Folgt später');
+  assert.equal(tiktok.statusText, 'Kontoverbindung nicht verfügbar');
   assert.equal(tiktok.knopfText, null);
 
   const ohneKey = plattformVerbindungen({
@@ -161,7 +161,7 @@ test('verbindenButton_nur_fuer_twitch_aktiv', () => {
     ...BASIS,
     verbindungen: [{ platform: 'twitch', status: 'neu_verbinden', verbindbar: true }],
   });
-  assert.equal(neu[0].statusText, 'Zugang abgelaufen');
+  assert.equal(neu[0].statusText, 'Zugang erneuern');
   assert.notEqual(neu[0].statusText, neu[0].knopfText);
   assert.equal(neu[0].knopfText, 'Neu verbinden');
   assert.equal(neu[0].trennenMoeglich, true);
@@ -194,7 +194,7 @@ test('trennen_bleibt_bei_entzogenem_secret', () => {
     ...BASIS,
     verbindungen: [{ platform: 'youtube', status: 'neu_verbinden', verbindbar: false }],
   }).find((z) => z.id === 'youtube')!;
-  assert.equal(abgelaufen.statusText, 'Zugang abgelaufen');
+  assert.equal(abgelaufen.statusText, 'Zugang erneuern');
   assert.equal(abgelaufen.trennenMoeglich, true);
 });
 

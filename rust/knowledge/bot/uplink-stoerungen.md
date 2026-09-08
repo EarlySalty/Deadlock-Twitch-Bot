@@ -1,40 +1,29 @@
 ---
-title: Uplink: Häufige Störungen
+title: "Uplink: Störungen"
 namespace: bot
-category: faq
+category: setup
 audience: streamer
-last_updated: 2026-08-21
-source: rs-relay/docs/stoerungen.html
+last_updated: 2026-09-08
+source: Uplink-Dashboard
 tip_eligible: false
 ---
-Am Anfang zählt die sichtbare Lage, danach der nächste Schritt. Bei einem kurzen Netzabriss gibt es ein kurzes Wiederverbindungsfenster. Ist die Verbindung länger weg, ist der Stream beendet.
-
-### Der Start wird abgelehnt, weil Plätze belegt sind
-
-Es ist gerade voll. Laufende Streams bleiben bestehen. Für diesen Abend streamst du direkt zur Plattform. Stelle OBS dafür wieder auf Twitch oder Kick.
 
 ### OBS sendet, aber auf der Plattform kommt nichts an
 
-1. Prüfe im Dashboard, ob Uplink für dich freigeschaltet ist. Steht dort die SRT-Adresse, ist der Zugang da.
-2. Der OBS-Dienst muss **Benutzerdefiniert** sein. Als Server muss die SRT-Adresse aus dem Dashboard eingetragen sein.
-3. Steht in OBS noch eine alte Adresse, kopiere die SRT-Adresse im Dashboard neu und ersetze sie. Der Schlüssel steckt als `streamid` in der Adresse, es gibt keinen zweiten Wert zum Abtippen.
+Prüfe im Dashboard den Eingang und den Status des betroffenen Ziels. Eingeschaltet ist eine Einstellung; Medien werden gesendet bestätigt lokalen Ausgangsverkehr. Eine veröffentlichte Plattformübertragung benötigt ihre eigene Bestätigung.
 
-### Das Bild reißt in Fights
+### OBS kann sich nicht verbinden
 
-Deine Leitung oder der Encoder kommt nicht hinterher.
+Verwende Benutzerdefiniert, die öffentliche RTMPS-Serveradresse und den getrennten privaten Uplink-Schlüssel aus dem Dashboard. Übernimm beide Felder vollständig. Eine alte Gesamtadresse mit eingebettetem Schlüssel ist ungültig.
 
-- Senke bei VBR das Maximum um 1000 Kbps.
-- Oder nutze 30 fps statt 60.
-- Ist **Skipped frames** in OBS größer als 0, setze die Auflösung eine Stufe herunter und lass den Encoder auf Hardware-HEVC.
+### Zugang erneuern
 
-### HEVC steht nicht in der Liste
+Der Knopf Neu verbinden führt durch die bestehende Plattformfreigabe. Fehlendes Chatrecht bedeutet nicht automatisch, dass auch ein gespeicherter Medienzugang ungültig ist. Der Status der einzelnen Funktionen bleibt getrennt sichtbar.
 
-Nutze Hardware-H.264. Der Stream läuft dann weiter, braucht aber mehr Upload. Lass Software-x265 und AV1 neben dem Spiel weg.
+### Das Bild stockt
 
-### Streamlabs kann die SRT-Adresse nicht eintragen
+Prüfe die tatsächliche Bitrate, verfügbare Uploadkapazität und ausgelassenen Frames in OBS. Senke bei knapper Leitung das CBR-Budget oder die Quellauflösung beziehungsweise Bildrate. Eine größere Ausgangsauflösung stellt fehlende Details nicht wieder her.
 
-Viele Streamlabs-Versionen können kein SRT. Nur über SRT kommt dein Stream bei uns an. Wenn du die SRT-Adresse aus dem Dashboard dort nicht eintragen kannst, nimm OBS. Auch HEVC ist aus Streamlabs oft nicht nutzbar. Dann ist der Bandbreitenvorteil weg.
+### Internet bricht weg
 
-### Das Internet bricht weg
-
-Bei einem kurzen Ausfall halten wir die Plattform-Seite offen und setzen fort, sobald OBS wieder da ist. Bei einem längeren Ausfall gilt der Stream als beendet, wie bei einem normalen Plattform-Abriss. Starte ihn in OBS neu.
+Beachte den aktuellen Verbindungszustand und die im Dashboard gespeicherte Wiederverbindungsfrist. Ein Transportabbruch ist nicht automatisch ein bewusstes Streamende. Verlass dich nur auf das tatsächlich angezeigte Verhalten; ein Wartebild oder ein nahtloser Wechsel darf nicht aus einem eingeschalteten Ziel abgeleitet werden.

@@ -275,3 +275,7 @@
   box-shadow: var(--shadow-primary-glow-hover);
   transform: scale(1.03);
 }
+
+/* Uplink: Hilfe überlagert weder Einrichtung noch Plattformformulare. */
+.assistent-wrap--inline { position: relative; right: auto; bottom: auto; margin: 1rem; }
+.assistent-wrap--inline .assistent-panel { max-width: 100%; }
