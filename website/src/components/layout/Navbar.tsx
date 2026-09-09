@@ -64,7 +64,7 @@ export function Navbar() {
     >
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 flex justify-between items-center h-16 gap-3">
         {/* Logo */}
-        <span className="flex items-center gap-2.5 select-none min-w-0">
+        <span className="flex items-center gap-2.5 select-none min-w-0 mr-auto">
           <img
             src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`}
             alt=""
