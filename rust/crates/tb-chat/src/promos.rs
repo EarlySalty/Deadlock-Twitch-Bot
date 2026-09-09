@@ -517,6 +517,7 @@ pub struct PromoEngine {
     suppression_writer: Option<Arc<dyn OutboundSuppressionWriter>>,
     bot_scope_provider: Option<Arc<dyn BotScopeProvider>>,
     reward_checker: Option<Arc<dyn LurkerRewardChecker>>,
+    reward_gate_warned: DashMap<String, ()>,
     invite_resolver: Arc<dyn InviteResolver>,
     partner_check: Arc<dyn PartnerChannelCheck>,
     pitch_judge: Arc<dyn PitchJudge>,
@@ -562,6 +563,7 @@ impl PromoEngine {
             suppression_writer: None,
             bot_scope_provider: None,
             reward_checker: None,
+            reward_gate_warned: DashMap::new(),
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
             pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
@@ -2266,8 +2268,19 @@ impl PromoEngine {
             return;
         }
 
-        if let Some(checker) = self.reward_checker.as_ref() {
-            if !checker.active_lurker_reward_exists(channel_id).await {
+        match self.reward_checker.as_ref() {
+            Some(checker) => {
+                if !checker.active_lurker_reward_exists(channel_id).await {
+                    return;
+                }
+            }
+            None => {
+                if self.reward_gate_warned.insert(login.to_string(), ()).is_none() {
+                    warn!(
+                        login,
+                        "Lurker-Tax: kein Reward-Checker verdrahtet, Erinnerung wird nicht gesendet"
+                    );
+                }
                 return;
             }
         }
@@ -2464,7 +2477,7 @@ impl PromoEngine {
             let redeemed: Vec<String> = sqlx::query_scalar::<_, String>(
                 "SELECT LOWER(user_login) FROM twitch_channel_points_events \
                   WHERE session_id = $1 AND user_login IS NOT NULL \
-                    AND LOWER(reward_title) LIKE 'lurker steuer%'",
+                    AND TRIM(regexp_replace(LOWER(reward_title), '\\s+', ' ', 'g')) LIKE 'lurker steuer%'",
             )
             .bind(session_id)
             .fetch_all(&self.pool)
@@ -6228,13 +6241,35 @@ mod db_tests {
     }
 
     #[tokio::test]
+    async fn reminder_blockt_ohne_reward_checker() {
+        let pool = pool_or_skip!("promo_lurker_reward_ungated");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                "moderator:read:chatters".into(),
+            ])));
+        seed_sending_channel(&pool, "ungatedkanal", "u-ungated").await;
+
+        engine
+            .maybe_send_lurker_tax_reminder("ungatedkanal", "u-ungated", Instant::now())
+            .await;
+
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "ohne verdrahteten Reward-Checker darf die Erinnerung nicht gehen"
+        );
+    }
+
+    #[tokio::test]
     async fn lurker_tax_sendet_orange_announcement_ohne_plain_fallback() {
         let pool = pool_or_skip!("promo_lurker_announcement_drop");
         let api = Arc::new(super::tests::MockApi::announcement_dropped());
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
                 "moderator:read:chatters".into(),
-            ])));
+            ])))
+            .set_lurker_reward_checker(Arc::new(FakeReward(true)));
 
         let live_session_id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
