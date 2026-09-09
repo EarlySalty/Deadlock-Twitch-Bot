@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use rand::seq::IndexedRandom;
 use sqlx::PgPool;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, info, warn};
@@ -295,6 +296,33 @@ const LURKER_TAX_MAX_MENTIONS: usize = 2;
 const LURKER_TAX_CANDIDATE_FETCH: i64 = 25;
 pub const LURKER_TAX_REWARD_TITLE: &str = "Lurker Steuer";
 
+const LURKER_TAX_REMINDER_ONE: [&str; 5] = [
+    "Hey {mentions}, schön dass du da bist! Kleine Erinnerung vom Finanzamt: die Lurker Steuer wartet auf dich.",
+    "{mentions}, schön dass du da bist! Still mitgucken ist erlaubt, aber die Lurker Steuer zahlt sich nicht von allein.",
+    "Hey {mentions}, schön dass du da bist! Zeit für deine Lurker Steuer, dann bist du für heute frei.",
+    "{mentions}, schön dass du wieder da bist! Das Finanzamt grüßt: Lurker Steuer nicht vergessen.",
+    "Hey {mentions}, schön dass du da bist! Lurken kostet heute Lurker Steuer. Der Chat sagt danke.",
+];
+
+const LURKER_TAX_REMINDER_TWO: [&str; 5] = [
+    "Hey {mentions}, schön dass ihr da seid! Kleine Erinnerung vom Finanzamt: die Lurker Steuer wartet auf euch.",
+    "{mentions}, schön dass ihr da seid! Still mitgucken ist erlaubt, aber die Lurker Steuer zahlt sich nicht von allein.",
+    "Hey {mentions}, schön dass ihr da seid! Zeit für eure Lurker Steuer, dann seid ihr für heute frei.",
+    "{mentions}, schön dass ihr wieder da seid! Das Finanzamt grüßt: Lurker Steuer nicht vergessen.",
+    "Hey {mentions}, schön dass ihr da seid! Lurken kostet heute Lurker Steuer. Der Chat sagt danke.",
+];
+
+const LURKER_FOLLOWUP_WINDOW: Duration = Duration::from_secs(600);
+
+const LURKER_TAX_THANKS: [&str; 6] = [
+    "{name} hat die Lurker Steuer bezahlt. Vorbildlich, danke!",
+    "Steuerbescheid für {name}: bezahlt. Du darfst weiterlurken.",
+    "{name} hat die Lurker Steuer gezahlt, das Finanzamt ist stolz auf dich.",
+    "Ding ding, Lurker Steuer von {name} ist eingegangen. Musterbürger!",
+    "{name} zahlt brav Lurker Steuer. Alle anderen Lurker wissen jetzt, wie es geht.",
+    "Kasse klingelt: {name} hat die Lurker Steuer beglichen. Ehrenmensch.",
+];
+
 pub fn lurker_tax_title_matches(title: &str) -> bool {
     let normalized = title.split_whitespace().collect::<Vec<_>>().join(" ");
     normalized.to_lowercase().starts_with("lurker steuer")
@@ -468,6 +496,8 @@ struct ChannelState {
     /// derselbe ruhige Zuschauer mehrfach pro Session gepingt wird.
     lurker_mentions: (i64, HashSet<String>),
     thanked_redeemers: (i64, HashSet<String>),
+    lurker_reminded_at: (i64, HashMap<String, Instant>),
+    lurker_followup_answered: (i64, HashSet<String>),
 }
 
 impl ChannelState {
@@ -484,6 +514,8 @@ impl ChannelState {
             last_accessed: Instant::now(),
             lurker_mentions: (0, HashSet::new()),
             thanked_redeemers: (0, HashSet::new()),
+            lurker_reminded_at: (0, HashMap::new()),
+            lurker_followup_answered: (0, HashSet::new()),
         }
     }
 }
@@ -710,6 +742,8 @@ impl PromoEngine {
         if !self.promo_channel_allowed_db(&login).await {
             return;
         }
+
+        self.maybe_answer_lurker_followup(event).await;
 
         let now = Instant::now();
 
@@ -2304,6 +2338,16 @@ impl PromoEngine {
             if state.lurker_mentions.0 == session_id {
                 state.lurker_mentions.1.extend(selected.iter().cloned());
             }
+            if state.lurker_reminded_at.0 != session_id {
+                state.lurker_reminded_at = (session_id, HashMap::new());
+            }
+            let jetzt = Instant::now();
+            for login in &selected {
+                state
+                    .lurker_reminded_at
+                    .1
+                    .insert(login.to_lowercase(), jetzt);
+            }
         }
 
         // Promo-Slot belegen (promos.py:1357 — lurker_tax nutzt overall-Cooldown).
@@ -2451,24 +2495,95 @@ impl PromoEngine {
         logins
     }
 
-    /// Lurker-Tax-Text bauen (promos.py:401: `_build_lurker_tax_text`).
     fn build_lurker_tax_text(&self, candidates: &[String]) -> String {
         let mentions: Vec<String> = candidates
             .iter()
             .take(LURKER_TAX_MAX_MENTIONS)
             .map(|l| format!("@{l}"))
             .collect();
-        if mentions.len() <= 1 {
-            let name = mentions.first().cloned().unwrap_or_default();
-            format!(
-                "Hey {name}, schön dass du da bist! Vergiss nicht, deine Lurker Steuer zu zahlen: Belohnung '{LURKER_TAX_REWARD_TITLE}' einlösen."
-            )
+        let joined = mentions.join(" ");
+        let templates: &[&str] = if mentions.len() <= 1 {
+            &LURKER_TAX_REMINDER_ONE
         } else {
-            let joined = mentions.join(" und ");
-            format!(
-                "Hey {joined}, schön dass ihr da seid! Vergesst nicht, eure Lurker Steuer zu zahlen: Belohnung '{LURKER_TAX_REWARD_TITLE}' einlösen."
-            )
+            &LURKER_TAX_REMINDER_TWO
+        };
+        let template = {
+            let mut rng = rand::rng();
+            templates.choose(&mut rng).copied().unwrap_or(templates[0])
+        };
+        template.replace("{mentions}", &joined)
+    }
+
+    fn build_lurker_thank_text(&self, redeemer_login: &str) -> String {
+        let template = {
+            let mut rng = rand::rng();
+            LURKER_TAX_THANKS
+                .choose(&mut rng)
+                .copied()
+                .unwrap_or(LURKER_TAX_THANKS[0])
+        };
+        template.replace("{name}", &format!("@{redeemer_login}"))
+    }
+
+    async fn maybe_answer_lurker_followup(&self, event: &ChatMessageEvent) {
+        let lower = event.text().to_lowercase();
+        let ist_nachfrage = lower.contains('?')
+            || lower.split(|c: char| !c.is_alphabetic()).any(|w| {
+                matches!(w, "wo" | "wie" | "was" | "hä" | "wat" | "wohin" | "womit")
+            });
+        if !ist_nachfrage {
+            return;
         }
+
+        let login = event.broadcaster_user_login.to_lowercase();
+        let chatter = event.chatter_user_login.to_lowercase();
+        if chatter.is_empty() {
+            return;
+        }
+
+        let session_id: i64 = sqlx::query_scalar!(
+            "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = $1",
+            login,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0);
+
+        let antworten = {
+            let state_ref = self
+                .channel_states
+                .entry(login.clone())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            if state.lurker_reminded_at.0 != session_id {
+                state.lurker_reminded_at = (session_id, HashMap::new());
+            }
+            if state.lurker_followup_answered.0 != session_id {
+                state.lurker_followup_answered = (session_id, HashSet::new());
+            }
+            let frisch = state
+                .lurker_reminded_at
+                .1
+                .get(&chatter)
+                .map(|t| t.elapsed() <= LURKER_FOLLOWUP_WINDOW)
+                .unwrap_or(false);
+            frisch && state.lurker_followup_answered.1.insert(chatter.clone())
+        };
+        if !antworten {
+            return;
+        }
+
+        let text = format!(
+            "@{} bei den Kanalpunkten, Belohnung Lurker Steuer. Danach bist du frei.",
+            event.chatter_user_login
+        );
+        let _ = self
+            .api
+            .send_message(&event.broadcaster_user_id, &text)
+            .await;
     }
 
     pub async fn thank_lurker_tax_redeemer(
@@ -2510,7 +2625,7 @@ impl PromoEngine {
             return;
         }
 
-        let text = format!("@{redeemer_login} hat die Lurker Steuer bezahlt. Vorbildlich, danke!");
+        let text = self.build_lurker_thank_text(redeemer_login);
         let sent = self.api.send_message(broadcaster_id, &text).await.is_ok();
         if !sent {
             let state_ref = self
@@ -3345,17 +3460,22 @@ mod tests {
     // Lurker-Tax-Text
     // -----------------------------------------------------------------------
 
+    fn lurker_reminder_ok(text: &str) -> bool {
+        text.contains("schön dass")
+            && text.contains("Lurker Steuer")
+            && !text.contains("Kanalpunkte")
+            && !text.contains('—')
+            && !text.contains('–')
+    }
+
     #[tokio::test]
     async fn lurker_tax_text_format() {
         let engine = make_engine_no_db();
         let candidates = vec!["alice".to_string(), "bob".to_string()];
         let text = engine.build_lurker_tax_text(&candidates);
-        assert!(text.contains("@alice"), "Mention alice fehlt");
-        assert!(text.contains("@bob"), "Mention bob fehlt");
-        assert!(
-            text.contains("Belohnung 'Lurker Steuer' einlösen."),
-            "Belohnungshinweis fehlt: {text}"
-        );
+        assert!(text.contains("@alice"), "Mention alice fehlt: {text}");
+        assert!(text.contains("@bob"), "Mention bob fehlt: {text}");
+        assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
     }
 
     #[tokio::test]
@@ -3369,35 +3489,111 @@ mod tests {
     #[tokio::test]
     async fn req2_lurker_tax_text_ein_name_nennt_belohnung() {
         let engine = make_engine_no_db();
-        let text = engine.build_lurker_tax_text(&["xy".to_string()]);
-        assert_eq!(
-            text,
-            "Hey @xy, schön dass du da bist! Vergiss nicht, deine Lurker Steuer zu zahlen: Belohnung 'Lurker Steuer' einlösen."
+        let mut gesehen = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let text = engine.build_lurker_tax_text(&["xy".to_string()]);
+            assert!(text.contains("@xy"), "Erwähnung fehlt: {text}");
+            assert!(text.contains("schön dass du"), "Anrede fehlt: {text}");
+            assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+            gesehen.insert(text);
+        }
+        assert!(
+            gesehen.len() >= 2,
+            "es sollten mehrere Varianten vorkommen: {gesehen:?}"
         );
     }
 
     #[tokio::test]
     async fn req2_lurker_tax_text_zwei_namen_ein_satz() {
         let engine = make_engine_no_db();
-        let text = engine.build_lurker_tax_text(&["alice".to_string(), "bob".to_string()]);
-        assert!(text.contains("@alice"), "erste Erwähnung fehlt: {text}");
-        assert!(text.contains("@bob"), "zweite Erwähnung fehlt: {text}");
+        let mut gesehen = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let text = engine.build_lurker_tax_text(&["alice".to_string(), "bob".to_string()]);
+            assert!(text.contains("@alice"), "erste Erwähnung fehlt: {text}");
+            assert!(text.contains("@bob"), "zweite Erwähnung fehlt: {text}");
+            assert!(text.contains("schön dass ihr"), "Anrede fehlt: {text}");
+            assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+            gesehen.insert(text);
+        }
         assert!(
-            text.contains("Belohnung 'Lurker Steuer' einlösen."),
-            "Belohnungshinweis fehlt: {text}"
+            gesehen.len() >= 2,
+            "es sollten mehrere Varianten vorkommen: {gesehen:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn req3_lurker_thank_text_variiert() {
+        let engine = make_engine_no_db();
+        let mut gesehen = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let text = engine.build_lurker_thank_text("xy");
+            assert!(text.contains("@xy"), "Erwähnung fehlt: {text}");
+            assert!(
+                !text.contains('—') && !text.contains('–'),
+                "keine Gedankenstriche erlaubt: {text}"
+            );
+            gesehen.insert(text);
+        }
         assert!(
-            !text.contains('—') && !text.contains('–'),
-            "keine Gedankenstriche erlaubt: {text}"
+            gesehen.len() >= 2,
+            "es sollten mehrere Dank-Varianten vorkommen: {gesehen:?}"
         );
-        assert!(
-            !text.contains("Channel-Points"),
-            "alter Reminder-Text darf nicht mehr erscheinen: {text}"
-        );
+    }
+
+    fn followup_event(channel_login: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "bid".to_string(),
+            broadcaster_user_login: channel_login.to_string(),
+            chatter_user_id: "cid".to_string(),
+            chatter_user_login: chatter_login.to_string(),
+            message: crate::types::ChatMessageBody {
+                text: text.to_string(),
+                fragments: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn lurker_followup_antwortet_einmal_je_session() {
+        let api = Arc::new(MockApi::default());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("kanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state
+                .lurker_reminded_at
+                .1
+                .insert("lurk".to_string(), Instant::now());
+        }
+        let event = followup_event("kanal", "lurk", "wo finde ich das?");
+        engine.maybe_answer_lurker_followup(&event).await;
         assert_eq!(
-            text.matches('!').count(),
+            api.message_count().await,
             1,
-            "beide Erwähnungen gehören in einen Satz: {text}"
+            "erste Nachfrage eines erinnerten Zuschauers wird beantwortet"
+        );
+        engine.maybe_answer_lurker_followup(&event).await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "zweite Nachfrage in derselben Session bleibt still"
+        );
+    }
+
+    #[tokio::test]
+    async fn lurker_followup_ignoriert_nicht_erinnerte() {
+        let api = Arc::new(MockApi::default());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let event = followup_event("kanal", "fremd", "wo denn?");
+        engine.maybe_answer_lurker_followup(&event).await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "nicht erinnerter Zuschauer bekommt keine Antwort"
         );
     }
 
