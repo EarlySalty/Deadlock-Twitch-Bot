@@ -518,6 +518,7 @@ pub struct PromoEngine {
     bot_scope_provider: Option<Arc<dyn BotScopeProvider>>,
     reward_checker: Option<Arc<dyn LurkerRewardChecker>>,
     reward_gate_warned: DashMap<String, ()>,
+    plan_gate_error_warned: DashMap<String, ()>,
     invite_resolver: Arc<dyn InviteResolver>,
     partner_check: Arc<dyn PartnerChannelCheck>,
     pitch_judge: Arc<dyn PitchJudge>,
@@ -564,6 +565,7 @@ impl PromoEngine {
             bot_scope_provider: None,
             reward_checker: None,
             reward_gate_warned: DashMap::new(),
+            plan_gate_error_warned: DashMap::new(),
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
             pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
@@ -2654,7 +2656,16 @@ impl PromoEngine {
         .await
         {
             Ok(row) => row,
-            Err(_) => return true,
+            Err(error) => {
+                if self.plan_gate_error_warned.insert(login.to_string(), ()).is_none() {
+                    warn!(
+                        login,
+                        %error,
+                        "Lurker-Tax: Plan-Gate-Abfrage fehlgeschlagen, Aktion wird nicht gesendet"
+                    );
+                }
+                return false;
+            }
         };
         let Some(row) = settings else {
             return false;
