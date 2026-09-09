@@ -199,8 +199,38 @@ const ICH_FORM_MARKER: &[&str] = &[
     "wir zocken",
     "mein rank",
     "mein build",
+    "mein main",
+    "mein hero",
     "meine matches",
     "meine games",
+];
+
+const ICH_WAR_ORT: &[&str] = &["urlaub", "weg", "krank", "offline"];
+
+const ICH_BIN_RANG: &[&str] = &[
+    "ich bin initiate",
+    "ich bin seeker",
+    "ich bin alchemist",
+    "ich bin arcanist",
+    "ich bin ritualist",
+    "ich bin emissary",
+    "ich bin archon",
+    "ich bin oracle",
+    "ich bin phantom",
+    "ich bin ascendant",
+    "ich bin eternus",
+    "ich bin diamond",
+];
+
+const ICH_STARTER: &[&str] = &["ich", "wir", "hab", "habe", "haben"];
+
+const ICH_VERB_NAH: &[&str] = &[
+    "gezockt",
+    "gespielt",
+    "verloren",
+    "gewonnen",
+    "gerankt",
+    "gegrindet",
 ];
 
 const BELEIDIGUNG_MARKER: &[&str] = &[
@@ -226,17 +256,52 @@ const BELEIDIGUNG_MARKER: &[&str] = &[
     "scheiße",
     "scheisse",
     "scheißkerl",
+    "hurensöhne",
+    "arschlöcher",
+    "wixer",
+    "wixxer",
+    "ehrenlos",
+    "kek",
 ];
 
 const ICH_SPIEL_VERB: &[&str] = &["gespielt", "gezockt"];
+
+fn verb_nahe_starter(lower: &str) -> bool {
+    let tokens: Vec<&str> = lower
+        .split_whitespace()
+        .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
+        .collect();
+    for (index, token) in tokens.iter().enumerate() {
+        if !ICH_STARTER.contains(token) {
+            continue;
+        }
+        let ende = (index + 4).min(tokens.len().saturating_sub(1));
+        for folge in &tokens[(index + 1).min(tokens.len())..=ende] {
+            if ICH_VERB_NAH.contains(folge) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 pub fn ich_form_reject(text: &str) -> bool {
     let lower = text.to_lowercase();
     if ICH_FORM_MARKER.iter().any(|needle| lower.contains(needle)) {
         return true;
     }
-    (enthaelt_wort(&lower, "ich") || enthaelt_wort(&lower, "wir"))
+    if (enthaelt_wort(&lower, "ich") || enthaelt_wort(&lower, "wir"))
         && ICH_SPIEL_VERB.iter().any(|verb| lower.contains(verb))
+    {
+        return true;
+    }
+    if lower.contains("ich war") && ICH_WAR_ORT.iter().any(|ort| enthaelt_wort(&lower, ort)) {
+        return true;
+    }
+    if ICH_BIN_RANG.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    verb_nahe_starter(&lower)
 }
 
 pub fn beleidigung_reject(text: &str) -> bool {
@@ -924,6 +989,16 @@ mod tests {
             "wir haben das gestern zusammen gezockt",
             "ich zock heute noch ein bisschen",
             "war gestern weg, jetzt wieder hier",
+            "hab gestern gezockt",
+            "ich war im urlaub",
+            "mein main ist haze",
+            "wir haben verloren",
+            "ich bin diamond",
+            "ich hab verloren",
+            "ich hab gewonnen",
+            "hab gerankt",
+            "ich bin archon",
+            "mein hero ist grey talon",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
@@ -938,11 +1013,13 @@ mod tests {
         for text in [
             "hast du das schon mal gespielt",
             "wie lange hast du gezockt heute",
+            "ich bin nur der bot hier",
+            "ich glaub die community mag das",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
                 None,
-                "{text} redet ueber den Zuschauer, keine Ich-Form"
+                "{text} redet ueber den Zuschauer oder den Bot, keine Ich-Form"
             );
         }
     }
@@ -955,11 +1032,28 @@ mod tests {
             "verpiss dich",
             "du idiot",
             "das ist doch scheiße",
+            "ihr hurensöhne",
+            "ihr arschlöcher",
+            "du wixer",
+            "du wixxer",
+            "so ehrenlos ist das",
+            "kek",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
                 Some(PitchRejectReason::Beleidigung),
                 "{text} muss als Beleidigung verworfen werden"
+            );
+        }
+    }
+
+    #[test]
+    fn beleidigung_laesst_harmlose_woerter_durch() {
+        for text in ["ich mag kekse", "das ist ein keks"] {
+            assert_eq!(
+                pitch_filter_reject(text),
+                None,
+                "{text} enthaelt kek nur als Teilwort und darf nicht fallen"
             );
         }
     }
