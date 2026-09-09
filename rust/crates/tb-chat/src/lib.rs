@@ -120,4 +120,4 @@ pub use suppression_guard::{
 pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
-pub use types::{ChatMessageEvent, SendOutcome};
+pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};

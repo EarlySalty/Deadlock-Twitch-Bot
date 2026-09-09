@@ -2223,6 +2223,7 @@ mod tests {
                 fragments: vec![MessageFragment {
                     fragment_type: "text".to_string(),
                     text: text.to_string(),
+                    mention: None,
                 }],
             },
             badges,

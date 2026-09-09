@@ -742,7 +742,8 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
+            .set_bot_user_id(bot_user_id.clone());
         if let Some(sink) = pitch_review_sink {
             engine = engine.set_pitch_review_sink(sink);
         }
@@ -2889,6 +2890,7 @@ mod chat_notification_tests {
             source_broadcaster_user_id: None,
             source_broadcaster_user_login: None,
             source_message_id: None,
+            reply: None,
         }
     }
 

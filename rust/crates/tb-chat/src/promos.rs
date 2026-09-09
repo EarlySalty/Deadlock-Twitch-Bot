@@ -51,6 +51,55 @@ use crate::promo_pitch::{
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
 
+pub fn adressat_fremd(event: &ChatMessageEvent, bot_user_id: &str) -> bool {
+    if let Some(reply) = event.reply.as_ref() {
+        let parent = reply.parent_user_id.trim();
+        if !parent.is_empty() && parent != bot_user_id {
+            return true;
+        }
+    }
+    let chatter = event.chatter_user_id.trim();
+    for fragment in &event.message.fragments {
+        if let Some(mention) = fragment.mention.as_ref() {
+            let id = mention.user_id.trim();
+            if !id.is_empty() && id != chatter && id != bot_user_id {
+                return true;
+            }
+        }
+    }
+    let text = event.text().to_lowercase();
+    for name in [
+        event.broadcaster_user_login.as_str(),
+        event.broadcaster_user_name.as_str(),
+    ] {
+        let needle = name.trim().to_lowercase();
+        if needle.chars().count() >= 3 && text_enthaelt_wort(&text, &needle) {
+            return true;
+        }
+    }
+    false
+}
+
+fn text_enthaelt_wort(haystack_lower: &str, needle_lower: &str) -> bool {
+    let hay: Vec<char> = haystack_lower.chars().collect();
+    let pat: Vec<char> = needle_lower.chars().collect();
+    if pat.is_empty() || pat.len() > hay.len() {
+        return false;
+    }
+    for start in 0..=hay.len() - pat.len() {
+        if hay[start..start + pat.len()] != pat[..] {
+            continue;
+        }
+        let left_ok = start == 0 || !hay[start - 1].is_alphanumeric();
+        let end = start + pat.len();
+        let right_ok = end == hay.len() || !hay[end].is_alphanumeric();
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Konstanten — exakt aus bot/chat/constants.py und targeted_promo.py
 // ---------------------------------------------------------------------------
@@ -516,6 +565,7 @@ pub struct PromoEngine {
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
     zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
+    bot_user_id: String,
 }
 
 /// Fallback-PartnerChannelCheck: immer true (für Tests).
@@ -560,7 +610,13 @@ impl PromoEngine {
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             zuschauer_register: None,
+            bot_user_id: String::new(),
         }
+    }
+
+    pub fn set_bot_user_id(mut self, bot_user_id: impl Into<String>) -> Self {
+        self.bot_user_id = bot_user_id.into();
+        self
     }
 
     pub fn set_zuschauer_register(
@@ -766,6 +822,12 @@ impl PromoEngine {
         }
         if !self.stream_start_delay_ok(&login).await {
             tracing::debug!(channel = %login, "anlass-pitch: startverzoegerung");
+            return;
+        }
+
+        if adressat_fremd(event, &self.bot_user_id) {
+            self.log_zuschauer_reject(&login, &target_user_id, "adressat_fremd", text, "anlass")
+                .await;
             return;
         }
 
@@ -5982,5 +6044,72 @@ mod db_tests {
             new_count, 2,
             "API-getrackte Session-Viewer zählen als neue Chatter"
         );
+    }
+}
+
+#[cfg(test)]
+mod adressat_tests {
+    use super::adressat_fremd;
+    use crate::types::{ChatMessageBody, ChatMessageEvent, ChatReply, MentionRef, MessageFragment};
+
+    fn basis(text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "streamer_id".into(),
+            broadcaster_user_login: "marcymcwhy".into(),
+            broadcaster_user_name: "MarcyMcWhy".into(),
+            chatter_user_id: "viewer_id".into(),
+            chatter_user_login: "viewer".into(),
+            message: ChatMessageBody {
+                text: text.into(),
+                fragments: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn adressat_reply_an_fremden_ist_fremd() {
+        let mut event = basis("bin gerade in den ersten ranked games");
+        event.reply = Some(ChatReply {
+            parent_user_id: "streamer_id".into(),
+            parent_user_login: "marcymcwhy".into(),
+        });
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_reply_an_bot_ist_erlaubt() {
+        let mut event = basis("hey bot wie gehts dir eigentlich so");
+        event.reply = Some(ChatReply {
+            parent_user_id: "bot_id".into(),
+            parent_user_login: "ddc_bot".into(),
+        });
+        assert!(!adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_mention_auf_anderen_ist_fremd() {
+        let mut event = basis("schau mal was der gemacht hat");
+        event.message.fragments.push(MessageFragment {
+            fragment_type: "mention".into(),
+            text: "@jemand".into(),
+            mention: Some(MentionRef {
+                user_id: "anderer_id".into(),
+                user_login: "jemand".into(),
+            }),
+        });
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_broadcaster_anrede_ist_fremd() {
+        let event = basis("na marcymcwhy, schön eingeranked?");
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_normale_nachricht_ist_kein_fremd() {
+        let event = basis("solo queue ist echt die hölle heute");
+        assert!(!adressat_fremd(&event, "bot_id"));
     }
 }

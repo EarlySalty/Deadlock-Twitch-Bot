@@ -20,14 +20,25 @@ pub struct ChatBadge {
     pub info: String,
 }
 
+/// Aufgelöster Mention-Verweis (`event.message.fragments[].mention`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MentionRef {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub user_login: String,
+}
+
 /// Nachrichten-Fragment (`event.message.fragments[]`) — Typ `text`,
 /// `cheermote`, `emote` oder `mention`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct MessageFragment {
     #[serde(rename = "type")]
     pub fragment_type: String,
     #[serde(default)]
     pub text: String,
+    #[serde(default)]
+    pub mention: Option<MentionRef>,
 }
 
 /// `event.message` von `channel.chat.message`.
@@ -37,6 +48,16 @@ pub struct ChatMessageBody {
     pub text: String,
     #[serde(default)]
     pub fragments: Vec<MessageFragment>,
+}
+
+/// `event.reply` von `channel.chat.message`: gesetzt, wenn die Nachricht eine
+/// Antwort auf eine andere Nachricht ist.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChatReply {
+    #[serde(default)]
+    pub parent_user_id: String,
+    #[serde(default)]
+    pub parent_user_login: String,
 }
 
 /// EventSub `channel.chat.message` (v1) — die für uns relevanten Felder.
@@ -68,6 +89,8 @@ pub struct ChatMessageEvent {
     pub source_broadcaster_user_login: Option<String>,
     #[serde(default)]
     pub source_message_id: Option<String>,
+    #[serde(default)]
+    pub reply: Option<ChatReply>,
 }
 
 impl ChatMessageEvent {
@@ -160,6 +183,7 @@ mod tests {
             source_broadcaster_user_id: None,
             source_broadcaster_user_login: None,
             source_message_id: None,
+            reply: None,
         }
     }
 
