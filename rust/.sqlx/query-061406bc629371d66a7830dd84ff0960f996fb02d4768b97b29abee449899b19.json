@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT trigger_text, generated_text\n             FROM twitch_promo_pitch_log\n            WHERE pfad = $1\n              AND bewertung = $2\n              AND generated_text IS NOT NULL\n            ORDER BY COALESCE(bewertet_at, sent_at, created_at) DESC\n            LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "trigger_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "generated_text",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "061406bc629371d66a7830dd84ff0960f996fb02d4768b97b29abee449899b19"
+}

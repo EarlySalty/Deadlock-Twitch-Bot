@@ -18,6 +18,8 @@ Zwischenzustand: Nachrichten an den Streamer lösen keinen Pitch mehr aus.
 Validierung: `SQLX_OFFLINE=1 cargo test -p tb-chat --lib adressat` grün; Deserialisierung eines echten EventSub-JSON mit `reply`-Block im Test.
 Stop-Regel: EventSub-Feldnamen unklar → Twitch-Doku `channel.chat.message` v1 prüfen, nicht raten.
 
+Status: erledigt (Commit 4fad946f). `cargo test -p tb-chat --lib adressat` 5 passed, 0 failed (780 filtered). Amendment zum Scope: 3 Test-Helfer-Literale ausserhalb des erlaubten Bereichs mussten ein Feld ergaenzen (siehe CONTRACT Amendments).
+
 ## M2 Stilvertrag, Judge-Feld, harte Filter (REQ-01, REQ-03, REQ-04, REQ-08, REQ-09 Teil 1)
 
 Änderungen in `tb-chat/src/promo_pitch.rs`:
@@ -31,6 +33,8 @@ Zwischenzustand: Prompts tragen den Stilvertrag, Filter verwerfen Ich-Form und B
 Validierung: `cargo test -p tb-chat --lib promo_pitch` grün inkl. Fixture-Test; bestehende Filter-Tests unverändert grün.
 Stop-Regel: ein bestehender Test wird rot, weil sein Fixture jetzt als Ich-Form gilt → Fixture-Text minimal ändern, Eigenschaft des Tests bleibt (INV-04), im Commit begründen.
 
+Status: erledigt (Commit 0b7fae0c). `cargo test -p tb-chat --lib promo_pitch` 31 passed, 0 failed (756 filtered). Targeted-Only entfernt; pitch_response-Testhelfer bekam ernst_gemeint: true (Eigenschaft bleibt).
+
 ## M3 Beispielblock (REQ-05)
 
 Änderungen:
@@ -41,6 +45,8 @@ Stop-Regel: ein bestehender Test wird rot, weil sein Fixture jetzt als Ich-Form 
 Zwischenzustand: Prompts enthalten Beispiele, gelernte greifen ab vier.
 Validierung: `cargo test -p tb-chat --lib pitch_beispiele` grün; DB-Test mit `TB_TEST_DATABASE_URL`.
 Stop-Regel: Prompt über 6000 Zeichen → Beispielzahl senken, nicht Stilvertrag kürzen.
+
+Status: erledigt (Commit folgt in dieser Runde). pitch_beispiele-Tests grün im vollen tb-chat-Lauf (793 passed, DB-Tests liefen). Migration und Schema-Snapshot der drei Spalten sind schon in diesem Commit (Schema-Fundament fuer M3 bis M5). Prompts nutzen echte Umlaute (Korrektur der ae/oe/ue-Fassung aus M2).
 
 ## M4 Karte mit Message-ID und Migration (REQ-06)
 

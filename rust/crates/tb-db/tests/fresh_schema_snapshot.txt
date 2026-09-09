@@ -1188,6 +1188,8 @@ twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|
 twitch_promo_cooldowns|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|wall_ts|double precision|NO|
+twitch_promo_pitch_log|bewertet_at|timestamp with time zone|YES|
+twitch_promo_pitch_log|bewertung|text|YES|
 twitch_promo_pitch_log|channel_login|text|NO|
 twitch_promo_pitch_log|created_at|timestamp with time zone|NO|now()
 twitch_promo_pitch_log|generated_text|text|YES|
@@ -1195,6 +1197,7 @@ twitch_promo_pitch_log|id|bigint|NO|nextval('twitch_promo_pitch_log_id_seq'::reg
 twitch_promo_pitch_log|occasion|text|YES|
 twitch_promo_pitch_log|pfad|text|NO|
 twitch_promo_pitch_log|reject_reason|text|YES|
+twitch_promo_pitch_log|review_message_id|bigint|YES|
 twitch_promo_pitch_log|sent_at|timestamp with time zone|YES|
 twitch_promo_pitch_log|target_user_id|text|YES|
 twitch_promo_pitch_log|trigger_text|text|YES|
@@ -1652,6 +1655,9 @@ twitch_token_blacklist|role_removed|integer|YES|0
 twitch_token_blacklist|twitch_login|text|NO|
 twitch_token_blacklist|twitch_user_id|text|NO|
 twitch_token_blacklist|user_dm_sent|integer|YES|0
+twitch_uplink_auth_intent|enabled|boolean|NO|
+twitch_uplink_auth_intent|last_disconnected_at|timestamp with time zone|YES|
+twitch_uplink_auth_intent|twitch_user_id|text|NO|
 twitch_user_engagement_optout|opted_out_at|timestamp with time zone|NO|now()
 twitch_user_engagement_optout|twitch_user_id|text|NO|
 twitch_user_profile|channels|jsonb|NO|'[]'::jsonb
@@ -1712,3 +1718,9 @@ twitch_zuschauer_register|first_seen_at|timestamp with time zone|YES|
 twitch_zuschauer_register|signals|jsonb|NO|'{}'::jsonb
 twitch_zuschauer_register|twitch_login|text|YES|
 twitch_zuschauer_register|twitch_user_id|text|NO|
+uplink_target_generations|disconnect_pending|boolean|NO|false
+uplink_target_generations|enabled|boolean|NO|
+uplink_target_generations|generation|bigint|NO|
+uplink_target_generations|last_disconnected_at|timestamp with time zone|YES|
+uplink_target_generations|platform|text|NO|
+uplink_target_generations|twitch_user_id|text|NO|
