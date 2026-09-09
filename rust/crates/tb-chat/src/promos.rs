@@ -875,10 +875,13 @@ impl PromoEngine {
                 recent_chat: recent.clone(),
                 target_login: target_login.clone(),
             };
-            self.pitch_judge
-                .decide(input)
-                .await
-                .and_then(|resp| resp.occasion.map(|occ| (occ, resp.reply)))
+            self.pitch_judge.decide(input).await.and_then(|resp| {
+                if resp.ernst_gemeint {
+                    resp.occasion.map(|occ| (occ, resp.reply))
+                } else {
+                    None
+                }
+            })
         } else {
             None
         };
@@ -3634,7 +3637,6 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
-    use crate::promo_pitch::TargetedPitchContext;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
@@ -3658,9 +3660,6 @@ mod db_tests {
         ) -> Option<String> {
             self.0.as_ref().map(|body| format!("{body} {invite}"))
         }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.0.clone()
-        }
     }
 
     struct SlowTextGen {
@@ -3676,10 +3675,6 @@ mod db_tests {
         ) -> Option<String> {
             tokio::time::sleep(self.delay).await;
             Some(format!("hallo {invite}"))
-        }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            tokio::time::sleep(self.delay).await;
-            Some("hallo".to_string())
         }
     }
 
@@ -3702,10 +3697,6 @@ mod db_tests {
         async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Some(format!("{} {invite}", self.body))
-        }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Some(self.body.clone())
         }
     }
 
@@ -3850,6 +3841,7 @@ mod db_tests {
         crate::promo_pitch::PitchResponse {
             occasion,
             reply: reply.to_string(),
+            ernst_gemeint: true,
             confidence: 0.9,
         }
     }
