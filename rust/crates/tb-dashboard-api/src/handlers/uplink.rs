@@ -905,8 +905,6 @@ pub struct DestinationBody {
     pub manuell: Option<ManuellesProfil>,
     /// Ziel an- oder abschalten, ohne es zu loeschen.
     pub enabled: Option<bool>,
-    /// Nur Twitch, ausdrücklich gespeichert; ausgelassen bleibt unverändert.
-    pub twitch_audio_mode: Option<String>,
 }
 
 fn fehler(status: StatusCode, text: &str) -> Response {
@@ -954,15 +952,6 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
 
     if let Some(enabled) = body.enabled {
         felder.insert("enabled".into(), json!(enabled));
-    }
-    if let Some(mode) = body.twitch_audio_mode.as_deref() {
-        if body.platform.trim() != "twitch" || !matches!(mode, "live" | "separate_vod") {
-            return Err(fehler(
-                StatusCode::BAD_REQUEST,
-                "Twitch-Audiowahl ist ungültig.",
-            ));
-        }
-        felder.insert("twitch_audio_mode".into(), json!(mode));
     }
 
     let werte = match (&body.profil, body.manuell) {
@@ -1590,6 +1579,35 @@ mod tests {
     use crate::auth::level::AdminActor;
 
     #[tokio::test]
+    async fn proxy_reicht_twitch_audio_status_unveraendert_durch() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        for audio in [
+            json!({"source_tracks": null, "vod": null}),
+            json!({"source_tracks": 1, "vod": "gleich"}),
+            json!({"source_tracks": 2, "vod": "zweite_spur"}),
+            json!({"source_tracks": 3, "vod": "zweite_spur"}),
+        ] {
+            let antwort = json!({"destinations": [{"platform": "twitch", "audio": audio}]});
+            for verb in [reqwest::Method::GET, reqwest::Method::PUT] {
+                server.reset().await;
+                Mock::given(method(verb.as_str()))
+                    .and(path(RELAY_ZIEL_PFAD))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(&antwort))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let wert =
+                    relay_json_mit(&server.uri(), "synthetic-api", verb, RELAY_ZIEL_PFAD, None)
+                        .await
+                        .unwrap();
+                assert_eq!(wert, antwort);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn proxy_rejects_successful_but_invalid_json() {
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
@@ -1708,30 +1726,20 @@ mod tests {
             profil: None,
             manuell: None,
             enabled: None,
-            twitch_audio_mode: None,
         }
     }
 
     #[test]
-    fn twitch_audio_choice_is_forwarded_only_when_explicit() {
+    fn twitch_ziel_nutzlast_enthaelt_keine_tonwahl() {
         for mode in ["live", "separate_vod"] {
-            let request: DestinationBody =
-                serde_json::from_value(json!({"platform":"twitch","twitch_audio_mode":mode}))
-                    .unwrap();
-            assert_eq!(ziel_nutzlast(&request).unwrap()["twitch_audio_mode"], mode);
-        }
-        let mut unchanged = body("twitch");
-        unchanged.enabled = Some(true);
-        assert!(ziel_nutzlast(&unchanged)
-            .unwrap()
-            .get("twitch_audio_mode")
-            .is_none());
-        for (platform, mode) in [("kick", "live"), ("twitch", "fallback")] {
-            let request: DestinationBody = serde_json::from_value(
-                json!({"platform":platform,"enabled":true,"twitch_audio_mode":mode}),
-            )
+            let request: DestinationBody = serde_json::from_value(json!({
+                "platform": "twitch", "enabled": true, "twitch_audio_mode": mode,
+            }))
             .unwrap();
-            assert!(ziel_nutzlast(&request).is_err());
+            assert_eq!(
+                nutzlast_fuer(42, ziel_nutzlast(&request).unwrap()),
+                json!({"streamer_id": 42, "destinations": [{"platform": "twitch", "enabled": true}]}),
+            );
         }
     }
 
