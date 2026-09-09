@@ -2814,9 +2814,10 @@ impl PromoEngine {
     /// Entitlement `chat.lurker_tax` tragen). Nutzt die volle Snapshot-Resolution,
     /// damit abgelaufene Pläne (`manual_plan_expires_at` in der Vergangenheit) das
     /// kostenpflichtige Lurker-Tax-Feature NICHT mehr freischalten.
-    /// Nur die verifizierte Kanal-ID als Planreferenz, kein Namensfallback.
+    /// Zentrale Planauflösung gewinnt Checkoutreferenzen aus verifizierten
+    /// ID-Zuordnungen; kein Event-Login als Identitätsersatz.
     async fn lurker_tax_is_paid_plan(&self, user_id: &str) -> bool {
-        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, "", user_id).await {
+        match tb_analytics::plan::resolve_plan_snapshot_for_user_id(&self.pool, user_id).await {
             Ok(snapshot) => snapshot.entitlements.contains(&"chat.lurker_tax"),
             Err(error) => {
                 tracing::warn!(

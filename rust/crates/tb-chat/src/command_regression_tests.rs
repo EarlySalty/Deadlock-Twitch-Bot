@@ -1,4 +1,118 @@
 #[tokio::test]
+async fn regression_lurker_eigenes_checkout_login_abo_ohne_override() {
+    let db = crate::test_postgres::TestPostgres::start().await;
+    apply_ddl(&db.pool).await;
+    seed_partner(&db.pool).await;
+    sqlx::raw_sql("INSERT INTO streamer_plans (twitch_user_id,twitch_login,lurker_tax_enabled) VALUES ('bc123','testchannel',1);
+        INSERT INTO twitch_streamer_identities (twitch_user_id,twitch_login) VALUES ('bc123','testchannel');
+        DROP TABLE twitch_billing_subscriptions;
+        CREATE TABLE twitch_billing_subscriptions (
+            stripe_subscription_id TEXT PRIMARY KEY, stripe_customer_id TEXT, customer_reference TEXT,
+            status TEXT NOT NULL DEFAULT 'unknown', plan_id TEXT, cycle_months INTEGER NOT NULL DEFAULT 1,
+            quantity INTEGER NOT NULL DEFAULT 1, current_period_start TEXT, current_period_end TEXT,
+            cancel_at_period_end INTEGER NOT NULL DEFAULT 0, canceled_at TEXT, ended_at TEXT,
+            last_event_id TEXT, updated_at TEXT NOT NULL);")
+        .execute(&db.pool).await.unwrap();
+    // Derselbe Referenzvertrag wie customer_reference_for/Checkout: Login vor ID.
+    // Der echte Webhook-Schreiber persistiert die unveränderte Checkoutreferenz.
+    let checkout = serde_json::json!({
+        "mode": "subscription", "subscription": "sub_test", "customer": "cus_test",
+        "client_reference_id": "testchannel",
+        "metadata": {"customer_reference": "testchannel", "plan_id": "raid_boost"}
+    });
+    let subscription = serde_json::json!({
+        "id": "sub_test", "customer": "cus_test", "status": "active",
+        "metadata": {"plan_id": "raid_boost"},
+        "current_period_end": (chrono::Utc::now() + chrono::Duration::days(30)).timestamp()
+    });
+    let mut tx = db.pool.begin().await.unwrap();
+    tb_analytics::stripe::webhook_apply::apply_event(
+        &mut tx,
+        "evt_test",
+        "checkout.session.completed",
+        &checkout,
+        Some(&subscription),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let stored: (String,String,String,Option<String>) = sqlx::query_as("SELECT b.customer_reference,b.plan_id,b.status,p.manual_plan_id FROM twitch_billing_subscriptions b CROSS JOIN streamer_plans p WHERE p.twitch_user_id='bc123'").fetch_one(&db.pool).await.unwrap();
+    assert_eq!(
+        stored,
+        (
+            "testchannel".into(),
+            "raid_boost".into(),
+            "active".into(),
+            None
+        )
+    );
+    let legacy = tb_analytics::plan::resolve_plan_snapshot(&db.pool, "testchannel", "bc123")
+        .await
+        .unwrap();
+    assert_eq!(legacy.source, "billing_subscription");
+    assert!(legacy.entitlements.contains(&"chat.lurker_tax"));
+    let api = MockApi::new();
+    let promos = crate::promos::PromoEngine::new(
+        db.pool.clone(),
+        api.clone(),
+        Arc::new(crate::promos::NoopSuppressionCheck),
+    );
+    promos
+        .thank_lurker_tax_redeemer("bc123", "testchannel", "normal")
+        .await;
+    assert_eq!(
+        api.message_count().await,
+        1,
+        "reguläres eigenes Login-Abo muss den echten Verbraucher freischalten"
+    );
+    // Nach Rename bleibt die ID-gebundene bisherige Checkoutreferenz gültig.
+    sqlx::query(
+        "UPDATE twitch_streamer_identities SET twitch_login='renamed' WHERE twitch_user_id='bc123'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    promos
+        .thank_lurker_tax_redeemer("bc123", "renamed", "renamed-viewer")
+        .await;
+    assert_eq!(api.message_count().await, 2);
+    // Widerspruch: alter Checkoutname gehört nun nachweislich einer fremden ID.
+    sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('foreign','testchannel')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    promos
+        .thank_lurker_tax_redeemer("bc123", "renamed", "conflicting")
+        .await;
+    assert_eq!(
+        api.message_count().await,
+        2,
+        "recycelte Referenz ist nicht mehr eindeutig"
+    );
+    sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id='foreign'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let engine = make_engine_with_pool(db.pool.clone(), api.clone());
+    let mut event = make_event("!lurkersteuer_off", false, true);
+    event.broadcaster_user_login = "renamed".into();
+    assert!(engine.handle(&event).await);
+    assert!(api
+        .last_message()
+        .await
+        .unwrap()
+        .contains("Lurker Steuer deaktiviert"));
+    promos
+        .thank_lurker_tax_redeemer("bc123", "renamed", "after-off")
+        .await;
+    assert_eq!(
+        api.message_count().await,
+        3,
+        "Schreiber und Verbraucher verwenden dieselbe Planberechtigung"
+    );
+}
+
+#[tokio::test]
 async fn regression_statistik_settings_ausfall_antwortet_default_und_optout_bleiben() {
     let db = crate::test_postgres::TestPostgres::start().await;
     apply_ddl(&db.pool).await;

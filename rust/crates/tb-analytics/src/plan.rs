@@ -349,6 +349,26 @@ pub async fn resolve_plan_snapshot(
     login: &str,
     user_id: &str,
 ) -> Result<PlanSnapshot, sqlx::Error> {
+    resolve_plan_snapshot_inner(pool, login, user_id, false).await
+}
+
+/// Plan eines ID-gebundenen Verbrauchers. Loginreferenzen regulärer Checkouts
+/// werden ausschließlich aus gespeicherten Zuordnungen zu dieser ID gewonnen.
+/// Widersprüchliche Zuordnungen sperren die betroffene Namensreferenz.
+/// Gleiche Prioritäten/Entitlements wie bei `resolve_plan_snapshot`.
+pub async fn resolve_plan_snapshot_for_user_id(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<PlanSnapshot, sqlx::Error> {
+    resolve_plan_snapshot_inner(pool, "", user_id, true).await
+}
+
+async fn resolve_plan_snapshot_inner(
+    pool: &PgPool,
+    login: &str,
+    user_id: &str,
+    identity_bound: bool,
+) -> Result<PlanSnapshot, sqlx::Error> {
     let login = login.trim().to_lowercase();
     let user_id = user_id.trim();
     // Fallback-Ref (Python `fallback_ref`): bevorzugt Login, sonst user_id.
@@ -374,9 +394,21 @@ pub async fn resolve_plan_snapshot(
     // priorisiert den user_id-Treffer (CASE-ORDER). Ein nur per user_id (mit
     // abweichendem/leerem Login) eingetragener Override wurde sonst nicht
     // gefunden → Streamer verlor seinen bezahlten/gecompten Plan.
-    let manual = sqlx::query_as!(
-        ManualOverrideRow,
-        r#"
+    let manual = if identity_bound {
+        sqlx::query_as::<_, ManualOverrideRow>(
+            "SELECT twitch_user_id, twitch_login, manual_plan_id,
+                    manual_plan_expires_at::text, manual_plan_notes,
+                    manual_plan_updated_at::text
+               FROM streamer_plans WHERE twitch_user_id = $1
+              ORDER BY manual_plan_updated_at DESC NULLS LAST LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_as!(
+            ManualOverrideRow,
+            r#"
         SELECT
             COALESCE(twitch_user_id, '') AS "twitch_user_id?",
             COALESCE(twitch_login, '')   AS "twitch_login?",
@@ -392,11 +424,12 @@ pub async fn resolve_plan_snapshot(
             manual_plan_updated_at DESC NULLS LAST
         LIMIT 1
         "#,
-        &login,
-        user_id
-    )
-    .fetch_optional(pool)
-    .await?;
+            &login,
+            user_id
+        )
+        .fetch_optional(pool)
+        .await?
+    };
 
     if let Some(row) = manual {
         let pid_raw = row
@@ -467,9 +500,41 @@ pub async fn resolve_plan_snapshot(
         .iter()
         .map(|status| status.to_string())
         .collect();
-    let billing = sqlx::query_as!(
-        BillingRow,
-        r#"
+    let billing = if identity_bound {
+        // Checkout und Webhook speichern regulär den Login als customer_reference.
+        // Aktuelle und bisherige Namen dürfen nur aus einer ID-gebundenen Zeile
+        // kommen. Jede entgegenstehende Zuordnung (auch ohne ID) macht den Namen
+        // mehrdeutig. Prüfung und Aboauswahl teilen denselben SQL-Snapshot.
+        sqlx::query_as::<_, BillingRow>(
+            "WITH identities AS MATERIALIZED (
+                SELECT twitch_user_id, LOWER(TRIM(twitch_login)) AS login FROM streamer_plans
+                UNION
+                SELECT twitch_user_id, LOWER(TRIM(twitch_login)) FROM twitch_streamer_identities
+                UNION
+                SELECT twitch_user_id, LOWER(TRIM(twitch_login)) FROM twitch_streamers_partner_state
+             ), own_logins AS (
+                SELECT i.login FROM identities i
+                 WHERE i.twitch_user_id = $1 AND i.login <> ''
+                   AND NOT EXISTS (SELECT 1 FROM identities other
+                                    WHERE other.login = i.login
+                                      AND other.twitch_user_id IS DISTINCT FROM $1)
+             )
+             SELECT b.customer_reference, b.plan_id, b.status,
+                    b.current_period_end::text, b.updated_at::text
+               FROM twitch_billing_subscriptions b
+              WHERE (b.customer_reference = $1
+                     OR LOWER(b.customer_reference) IN (SELECT login FROM own_logins))
+                AND b.status = ANY($2::text[])
+              ORDER BY b.updated_at DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(&active_billing_statuses)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_as!(
+            BillingRow,
+            r#"
         SELECT
             COALESCE(customer_reference, '') AS "customer_reference?",
             plan_id,
@@ -483,12 +548,13 @@ pub async fn resolve_plan_snapshot(
         ORDER BY updated_at DESC
         LIMIT 1
         "#,
-        &login,
-        user_id,
-        &active_billing_statuses
-    )
-    .fetch_optional(pool)
-    .await?;
+            &login,
+            user_id,
+            &active_billing_statuses
+        )
+        .fetch_optional(pool)
+        .await?
+    };
 
     if let Some(row) = billing {
         // Strikt-kanonisch wie Python `load_billing_subscription` (repository.py:186):

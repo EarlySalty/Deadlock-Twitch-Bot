@@ -1677,9 +1677,8 @@ impl CommandEngine {
         };
 
         // is_paid_plan: effektiver Plan muss chat.lurker_tax tragen (commands.py:566).
-        let is_paid_plan = tb_analytics::plan::resolve_plan_snapshot(
+        let is_paid_plan = tb_analytics::plan::resolve_plan_snapshot_for_user_id(
             &self.pool,
-            &partner.twitch_login,
             &partner.twitch_user_id,
         )
         .await
