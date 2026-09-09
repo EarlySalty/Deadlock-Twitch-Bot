@@ -1,5 +1,5 @@
 //! Kuratierter, user-sichtbarer Befehls-Katalog — einzige Quelle für die
-//! `!commands`-Chat-Antwort, die /streamer/commands-Seite und das Deadlock-Gate.
+//! `!commands`-Chat-Antwort, die /streamer/commands-Seite.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandGroup {
@@ -34,7 +34,6 @@ pub struct CommandInfo {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
     pub group: CommandGroup,
-    pub deadlock_only: bool,
     pub summary: &'static str,
 }
 
@@ -45,126 +44,109 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!sub",
             aliases: &[],
             group: Fun,
-            deadlock_only: false,
-            summary: "Abo-Link für diesen Kanal. Freiwillige Erinnerung: !sub erinnerung an/aus/status.",
+            summary:
+                "Abo-Link für diesen Kanal. Freiwillige Erinnerung: !sub erinnerung an/aus/status.",
         },
         CommandInfo {
             name: "!rank",
             aliases: &[],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt deinen aktuellen Deadlock-Rang im Chat.",
         },
         CommandInfo {
             name: "!wins",
             aliases: &[],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt deine Deadlock-Karriere-Siege im Chat.",
         },
         CommandInfo {
             name: "!winrate",
             aliases: &[],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt deine Deadlock-Winrate der letzten Spiele.",
         },
         CommandInfo {
             name: "!mmr",
             aliases: &["!climb"],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt deinen aktuellen Rang und Trend der letzten Tage.",
         },
         CommandInfo {
             name: "!live",
             aliases: &[],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt, ob du gerade live in einem Deadlock-Match bist.",
         },
         CommandInfo {
             name: "!lastmatch",
             aliases: &["!last"],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt dein letztes Deadlock-Spiel (Ergebnis, Hero, KDA).",
         },
         CommandInfo {
             name: "!streak",
             aliases: &[],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt deine aktuelle Sieges- oder Pechsträhne.",
         },
         CommandInfo {
             name: "!mostplayed",
             aliases: &["!main"],
             group: Stats,
-            deadlock_only: true,
             summary: "Zeigt deinen meistgespielten Hero der letzten Spiele.",
         },
         CommandInfo {
             name: "!clip",
             aliases: &["!createclip"],
             group: Fun,
-            deadlock_only: true,
             summary: "Erstellt einen Clip vom aktuellen Stream.",
         },
         CommandInfo {
             name: "!invite",
             aliases: &[],
             group: Fun,
-            deadlock_only: true,
             summary: "Postet den Einladungslink zur Community.",
         },
         CommandInfo {
             name: "!discord",
             aliases: &["!dldc", "!dlde"],
             group: Fun,
-            deadlock_only: true,
             summary: "Postet den Einladungslink zur Deutschen Deadlock Community.",
         },
         CommandInfo {
             name: "!commands",
             aliases: &[],
             group: Fun,
-            deadlock_only: false,
             summary: "Zeigt die Befehle im Chat, plus Link zur vollen Übersicht.",
         },
         CommandInfo {
             name: "!help",
             aliases: &[],
             group: Fun,
-            deadlock_only: false,
             summary: "Kurzerklärung zu einem Feature: !help <thema>.",
         },
         CommandInfo {
             name: "!ping",
             aliases: &["!health", "!status", "!bot"],
             group: Fun,
-            deadlock_only: false,
             summary: "Prüft, ob der Bot gerade antwortet.",
         },
         CommandInfo {
             name: "!lurk",
             aliases: &[],
             group: Fun,
-            deadlock_only: false,
             summary: "Sagt dem Chat, dass du still weiter zuschaust.",
         },
         CommandInfo {
             name: "!engagement_ignore_me",
             aliases: &[],
             group: Fun,
-            deadlock_only: false,
             summary: "Nimmt dich aus dem Engagement-Tracking raus.",
         },
         CommandInfo {
             name: "!engagement_remember_me",
             aliases: &[],
             group: Fun,
-            deadlock_only: false,
             summary: "Nimmt dich wieder ins Engagement-Tracking auf.",
         },
         CommandInfo {
@@ -173,7 +155,6 @@ pub fn catalog() -> &'static [CommandInfo] {
             group: Mod,
             // Kein Gate: der Raid-Pfad prueft die Deadlock-Regel selbst und laesst den
             // Nachlauf nach Stream-Ende bewusst zu (CHANGELOG #123).
-            deadlock_only: false,
             summary: "Startet einen Raid zu einem Deadlock-Streamer (Mods/Broadcaster).",
         },
         CommandInfo {
@@ -181,90 +162,69 @@ pub fn catalog() -> &'static [CommandInfo] {
             aliases: &["!titel"],
             group: Mod,
             // Kein Gate: einen Stream-Titel setzt man vor dem Stream, nicht mittendrin.
-            deadlock_only: false,
             summary: "Schlägt einen Stream-Titel vor: !title <stichworte>.",
         },
         CommandInfo {
             name: "!raid_status",
             aliases: &["!raidbot_status"],
             group: Mod,
-            deadlock_only: false,
             summary: "Zeigt Auto-Raid-Status und grobe Raid-Statistik.",
         },
         CommandInfo {
             name: "!raid_history",
             aliases: &["!raidbot_history"],
             group: Mod,
-            deadlock_only: false,
             summary: "Zeigt die letzten Raids.",
         },
         CommandInfo {
             name: "!uban",
             aliases: &["!unban"],
             group: Mod,
-            deadlock_only: false,
             summary: "Nimmt den letzten Auto-Ban zurück.",
         },
         CommandInfo {
             name: "!explain",
             aliases: &[],
             group: Mod,
-            deadlock_only: false,
             summary: "Erklärt, warum der Bot jemanden als Scam eingestuft hat.",
         },
         CommandInfo {
             name: "!silentban",
             aliases: &[],
             group: Mod,
-            deadlock_only: false,
             summary: "Schaltet Chat-Hinweise zu Auto-Bans um.",
         },
         CommandInfo {
             name: "!silentraid",
             aliases: &[],
             group: Mod,
-            deadlock_only: false,
             summary: "Schaltet Chat-Hinweise zu Raids um.",
         },
         CommandInfo {
             name: "!lurkersteuer_off",
             aliases: &["!lurkersteuer_aus", "!lurker_tax_off"],
             group: Mod,
-            deadlock_only: false,
             summary: "Deaktiviert die Lurker-Erinnerung (nur Broadcaster).",
         },
         CommandInfo {
             name: "!engagement_status",
             aliases: &[],
             group: Mod,
-            deadlock_only: false,
             summary: "Zeigt, ob Engagement-Tracking im Kanal aktiv ist.",
         },
         CommandInfo {
             name: "!engagement_on",
             aliases: &[],
             group: Mod,
-            deadlock_only: false,
             summary: "Schaltet Engagement-Tracking für den Kanal ein.",
         },
         CommandInfo {
             name: "!engagement_off",
             aliases: &[],
             group: Mod,
-            deadlock_only: false,
             summary: "Schaltet Engagement-Tracking für den Kanal aus.",
         },
     ]
-}
-
-pub fn deadlock_only(cmd: &str) -> bool {
-    let cmd = cmd.trim();
-    cmd.starts_with('!')
-        && catalog().iter().any(|c| {
-            c.deadlock_only
-                && (c.name.eq_ignore_ascii_case(cmd)
-                    || c.aliases.iter().any(|a| a.eq_ignore_ascii_case(cmd)))
-        })
 }
 
 pub fn grouped() -> Vec<(CommandGroup, Vec<&'static CommandInfo>)> {
@@ -340,37 +300,6 @@ mod tests {
             missing.is_empty(),
             "Dispatch-Commands fehlen im Katalog: {missing:?}"
         );
-    }
-
-    /// Broadcaster- und Mod-Werkzeuge sind Betriebsmittel: sie muessen auch dann
-    /// laufen, wenn die Kategorie nicht (mehr) Deadlock ist. `!raid` zielt sogar
-    /// genau auf das Stream-Ende (CHANGELOG #123).
-    #[test]
-    fn mod_werkzeuge_sind_nie_deadlock_gegatet() {
-        let gegatet: Vec<&str> = catalog()
-            .iter()
-            .filter(|c| c.group == CommandGroup::Mod && c.deadlock_only)
-            .map(|c| c.name)
-            .collect();
-        assert!(
-            gegatet.is_empty(),
-            "Mod-Befehle duerfen kein Deadlock-Gate tragen: {gegatet:?}"
-        );
-    }
-
-    #[test]
-    fn deadlock_only_findet_name_und_alias() {
-        assert!(deadlock_only("!rank"));
-        assert!(deadlock_only("!climb"));
-        assert!(deadlock_only("!discord"));
-        assert!(!deadlock_only("!commands"));
-        assert!(!deadlock_only("!uban"));
-        assert!(!deadlock_only("!unbekannt"));
-        // Das Vor-Gate in `handle` fragt genau diese Funktion. `!raid` muss es
-        // passieren, sonst schluckt es den Raid nach Stream-Ende (CHANGELOG #123).
-        assert!(!deadlock_only("!raid"));
-        assert!(!deadlock_only("!traid"));
-        assert!(!deadlock_only("!title"));
     }
 
     #[test]

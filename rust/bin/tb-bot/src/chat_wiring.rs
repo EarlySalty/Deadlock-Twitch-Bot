@@ -2315,8 +2315,7 @@ impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
     }
 }
 
-/// !invite — Antwortzeile, Port der chat_command.rs-Logik (Deadlock-live-Gate
-/// + streamer-spezifischer Invite mit Env-Fallback).
+/// !invite — Antwortzeile unabhängig von Streamstatus und Kategorie.
 struct DbInvitePort {
     pool: PgPool,
 }
@@ -2328,28 +2327,6 @@ impl InvitePort for DbInvitePort {
         channel_login: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String> {
-        // Kanal muss live Deadlock streamen (chat_command.rs Z. 56–80).
-        let live: Option<(i32, Option<String>)> = sqlx::query_as(
-            "SELECT is_live, last_game FROM twitch_live_state \
-             WHERE LOWER(streamer_login) = $1 LIMIT 1",
-        )
-        .bind(channel_login)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        let is_deadlock_live = live
-            .map(|(is_live, game)| {
-                is_live == 1
-                    && game
-                        .as_deref()
-                        .map(|g| g.to_lowercase().contains("deadlock"))
-                        .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        if !is_deadlock_live {
-            return Ok(None);
-        }
-
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT invite_url FROM twitch_streamer_invites \
              WHERE LOWER(streamer_login) = $1 LIMIT 1",
@@ -3784,5 +3761,55 @@ mod db_tests {
         };
         let logins = resolver.partners_without_invite().await.unwrap();
         assert_eq!(logins, vec!["fresh".to_string()]);
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod invite_test_postgres;
+
+#[cfg(test)]
+mod invite_offline_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn echter_invite_port_antwortet_offline_und_bei_anderem_spiel() {
+        let database = invite_test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_invites VALUES ('testchannel', 'https://discord.gg/test')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_live_state (streamer_login TEXT, is_live INTEGER, last_game TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('testchannel', 0, 'Deadlock')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let port = DbInvitePort { pool: pool.clone() };
+        for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
+            sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
+                .bind(live)
+                .bind(game)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let reply = port
+                .invite_line("testchannel", "viewer")
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(reply.contains("https://discord.gg/test"));
+        }
     }
 }

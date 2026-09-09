@@ -5,7 +5,7 @@
 //!
 //! ```ignore
 //! let engine = CommandEngine::new(pool, api, raid_port, discord_link_port, invite_port, super_mod_port, autoban_store);
-//! let handled = engine.handle(&event, deadlock_live).await; // true = war Command, Pipeline stoppt
+//! let handled = engine.handle(&event).await; // true = war Command, Pipeline stoppt
 //! ```
 //!
 //! # Architektur-Hinweis
@@ -380,13 +380,32 @@ impl CommandEngine {
         self
     }
 
+    /// Bekannte Automationsbots behalten ihren eingeschränkten Befehlszugang.
+    pub(crate) async fn handle_known_bot(&self, event: &ChatMessageEvent) -> bool {
+        let command = event
+            .text()
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        if crate::stat_commands::StatCommand::from_chat(&command).is_some()
+            || matches!(
+                command.as_str(),
+                "!clip" | "!createclip" | "!discord" | "!dldc" | "!dlde" | "!invite"
+            )
+        {
+            return false;
+        }
+        self.handle(event).await
+    }
+
     /// Verarbeitet eine eingehende Chat-Nachricht.
     ///
     /// Gibt `true` zurück wenn die Nachricht ein Command war (Pipeline stoppt),
     /// `false` wenn kein Match.
     ///
     /// `commands.py` — RaidCommandsMixin dispatch-Tabelle.
-    pub async fn handle(&self, event: &ChatMessageEvent, deadlock_live: bool) -> bool {
+    pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
         let text_lower = event.text().to_lowercase();
 
         let (cmd, args) = if let Some(pos) = text_lower.find(' ') {
@@ -411,10 +430,6 @@ impl CommandEngine {
                 }
                 Ok(_) => {}
             }
-        }
-
-        if !deadlock_live && crate::catalog::deadlock_only(cmd) {
-            return false;
         }
 
         match cmd {
@@ -1429,6 +1444,27 @@ impl CommandEngine {
             }
         };
 
+        // Ein Clip braucht einen laufenden Stream, aber keine bestimmte Kategorie.
+        // Fehlender Live-State ist unbekannt: dann entscheidet Twitch selbst.
+        let live = sqlx::query_scalar::<_, i32>(
+            "SELECT COALESCE(is_live, 0) FROM twitch_live_state WHERE twitch_user_id = $1",
+        )
+        .bind(&event.broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await;
+        if matches!(live, Ok(Some(0))) {
+            let reply = [
+                "Hier läuft gerade kein Stream. Sobald es live geht, kannst du wieder clippen.",
+                "Der Kanal ist gerade offline – ohne Stream gibt es leider keinen Clip.",
+                "Gerade gibt es hier nichts zu clippen. Beim nächsten Livestream geht’s wieder.",
+            ]
+            .choose(&mut rand::rng())
+            .copied()
+            .unwrap();
+            self.reply(event, reply).await;
+            return;
+        }
+
         // Titel aufbereiten — commands.py:179–185
         let raw_title = args.trim();
         let title = if raw_title.is_empty() {
@@ -2421,51 +2457,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // DB-Tests (gegen TB_TEST_DATABASE_URL)
-    // -----------------------------------------------------------------------
-
-    macro_rules! pool_or_skip {
-        ($schema:expr) => {{
-            let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-                if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                    panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-                }
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            };
-            pool_in_schema(&dsn, $schema).await
-        }};
-    }
-
-    async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-        use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-        use std::str::FromStr;
-
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(dsn)
-            .await
-            .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-
-        let opts = PgConnectOptions::from_str(dsn)
-            .unwrap()
-            .options([("search_path", schema)]);
-        PgPoolOptions::new()
-            .max_connections(4)
-            .connect_with(opts)
-            .await
-            .unwrap()
-    }
-
     async fn seed_partner(pool: &PgPool) {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_streamers (twitch_login TEXT, twitch_user_id TEXT, is_monitored_only INTEGER DEFAULT 0)",
@@ -2495,6 +2486,7 @@ mod tests {
 
     async fn apply_ddl(pool: &PgPool) {
         for ddl in [
+            "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, is_live INTEGER, last_game TEXT)",
             // twitch_streamers_partner_state — prod-treu: is_partner_active INTEGER
             r#"CREATE TABLE twitch_streamers_partner_state (
                 twitch_login TEXT,
@@ -2668,104 +2660,97 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deadlock_gate_blockt_rank_stumm_wenn_nicht_live() {
-        let pool = pool_or_skip!("cmd_gate_rank_blocked");
+    async fn statistik_antwortet_ohne_livezustand() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool, api.clone());
 
-        let handled = engine
-            .handle(&make_event("!rank", false, false), false)
-            .await;
-
-        assert!(!handled);
-        assert_eq!(api.message_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn deadlock_gate_erlaubt_rank_wenn_live() {
-        let pool = pool_or_skip!("cmd_gate_rank_live");
-        apply_ddl(&pool).await;
-        let api = MockApi::new();
-        let engine = make_engine_with_pool(pool, api);
-
-        assert!(
-            engine
-                .handle(&make_event("!rank", false, false), true)
-                .await
-        );
-    }
-
-    #[tokio::test]
-    async fn deadlock_gate_erlaubt_commands_wenn_nicht_live() {
-        let pool = pool_or_skip!("cmd_gate_commands");
-        apply_ddl(&pool).await;
-        let api = MockApi::new();
-        let engine = make_engine_with_pool(pool, api.clone());
-
-        let handled = engine
-            .handle(&make_event("!commands", false, false), false)
-            .await;
+        let handled = engine.handle(&make_event("!rank", false, false)).await;
 
         assert!(handled);
         assert_eq!(api.message_count().await, 1);
     }
 
     #[tokio::test]
-    async fn deadlock_gate_erlaubt_engagement_ignore_me_wenn_nicht_live() {
-        let pool = pool_or_skip!("cmd_gate_engagement_ignore");
+    async fn statistik_antwortet_ohne_kategorie() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api);
+
+        assert!(engine.handle(&make_event("!rank", false, false)).await);
+    }
+
+    #[tokio::test]
+    async fn command_erlaubt_commands_wenn_nicht_live() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        let handled = engine.handle(&make_event("!commands", false, false)).await;
+
+        assert!(handled);
+        assert_eq!(api.message_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn command_erlaubt_engagement_ignore_me_wenn_nicht_live() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool, api);
 
         assert!(
             engine
-                .handle(&make_event("!engagement_ignore_me", false, false), false)
+                .handle(&make_event("!engagement_ignore_me", false, false))
                 .await
         );
     }
 
     #[tokio::test]
-    async fn deadlock_gate_erlaubt_uban_wenn_nicht_live() {
-        let pool = pool_or_skip!("cmd_gate_uban");
+    async fn command_erlaubt_uban_wenn_nicht_live() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool, api);
 
-        assert!(
-            engine
-                .handle(&make_event("!uban", true, false), false)
-                .await
-        );
+        assert!(engine.handle(&make_event("!uban", true, false)).await);
     }
 
     /// `!raid` wird am Stream-Ende gebraucht, wenn die Kategorie laengst nicht mehr
     /// Deadlock ist (CHANGELOG #123). Der Raid-Pfad prueft die Deadlock-Regel selbst
     /// und antwortet erklaerend; das grobe Vor-Gate darf ihn nicht stumm schlucken.
     #[tokio::test]
-    async fn deadlock_gate_erlaubt_raid_wenn_nicht_live() {
-        let pool = pool_or_skip!("cmd_gate_raid");
+    async fn command_erlaubt_raid_wenn_nicht_live() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool, api);
 
         assert!(
-            engine
-                .handle(&make_event("!raid", true, false), false)
-                .await,
+            engine.handle(&make_event("!raid", true, false)).await,
             "!raid muss den Raid-Pfad erreichen, auch wenn gerade kein Deadlock laeuft"
         );
     }
 
     #[tokio::test]
     async fn engagement_ignore_me_schreibt_optout() {
-        let pool = pool_or_skip!("cmd_engagement_ignore");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         let event = make_event("!engagement_ignore_me", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT twitch_user_id FROM twitch_user_engagement_optout WHERE twitch_user_id = 'u999'",
@@ -2781,7 +2766,8 @@ mod tests {
 
     #[tokio::test]
     async fn engagement_remember_me_löscht_optout() {
-        let pool = pool_or_skip!("cmd_engagement_remember");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
@@ -2792,7 +2778,7 @@ mod tests {
             .unwrap();
 
         let event = make_event("!engagement_remember_me", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT twitch_user_id FROM twitch_user_engagement_optout WHERE twitch_user_id = 'u999'",
@@ -2805,13 +2791,14 @@ mod tests {
 
     #[tokio::test]
     async fn engagement_status_ohne_eintrag() {
-        let pool = pool_or_skip!("cmd_engagement_status_leer");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         let event = make_event("!engagement_status", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("nie konfiguriert"), "Meldung: {msg}");
@@ -2824,7 +2811,7 @@ mod tests {
         let engine = make_engine_with_pool(pool, api.clone());
 
         engine
-            .handle(&make_event("!engagement_status", false, false), true)
+            .handle(&make_event("!engagement_status", false, false))
             .await;
 
         let msg = api.last_message().await.unwrap();
@@ -2833,13 +2820,14 @@ mod tests {
 
     #[tokio::test]
     async fn engagement_on_off_schreibt_enabled() {
-        let pool = pool_or_skip!("cmd_engagement_toggle");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         engine
-            .handle(&make_event("!engagement_on", true, false), true)
+            .handle(&make_event("!engagement_on", true, false))
             .await;
         let enabled: bool = sqlx::query_scalar(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
@@ -2850,7 +2838,7 @@ mod tests {
         assert!(enabled);
 
         engine
-            .handle(&make_event("!engagement_off", true, false), true)
+            .handle(&make_event("!engagement_off", true, false))
             .await;
         let enabled: bool = sqlx::query_scalar(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
@@ -2866,13 +2854,14 @@ mod tests {
 
     #[tokio::test]
     async fn engagement_on_ohne_recht_schreibt_nicht() {
-        let pool = pool_or_skip!("cmd_engagement_toggle_denied");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         engine
-            .handle(&make_event("!engagement_on", false, false), true)
+            .handle(&make_event("!engagement_on", false, false))
             .await;
 
         let count: i64 =
@@ -2887,7 +2876,8 @@ mod tests {
 
     #[tokio::test]
     async fn raid_history_ohne_einträge() {
-        let pool = pool_or_skip!("cmd_raid_hist_leer");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
 
@@ -2900,7 +2890,7 @@ mod tests {
 
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         let event = make_event("!raid_history", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Noch keine Raids"), "Meldung: {msg}");
@@ -2908,7 +2898,8 @@ mod tests {
 
     #[tokio::test]
     async fn raid_history_mit_einträgen() {
-        let pool = pool_or_skip!("cmd_raid_hist_mit");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
 
@@ -2928,7 +2919,7 @@ mod tests {
 
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         let event = make_event("!raid_history", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Letzte Raids"), "Meldung: {msg}");
@@ -2937,13 +2928,14 @@ mod tests {
 
     #[tokio::test]
     async fn kein_partner_gibt_fehlermeldung() {
-        let pool = pool_or_skip!("cmd_kein_partner");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
         let event = make_event("!raid_status", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(
@@ -2954,7 +2946,8 @@ mod tests {
 
     #[tokio::test]
     async fn raid_noauth_gate_uses_specific_placeholder_and_skips_manual_call() {
-        let pool = pool_or_skip!("cmd_raid_noauth_gate");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         seed_partner(&pool).await;
@@ -2976,7 +2969,7 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine.handle(&make_event("!raid", true, false), true).await;
+        engine.handle(&make_event("!raid", true, false)).await;
 
         assert_eq!(raid.manual_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
@@ -2989,7 +2982,8 @@ mod tests {
 
     #[tokio::test]
     async fn raid_started_reply_contains_target_login_placeholder() {
-        let pool = pool_or_skip!("cmd_raid_started_target");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         seed_partner(&pool).await;
@@ -3010,7 +3004,7 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine.handle(&make_event("!raid", true, false), true).await;
+        engine.handle(&make_event("!raid", true, false)).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Raid auf"), "Meldung: {msg}");
@@ -3037,7 +3031,8 @@ mod tests {
 
     #[tokio::test]
     async fn raid_enable_ist_kein_befehl_mehr() {
-        let pool = pool_or_skip!("cmd_raid_enable_entfaellt");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
@@ -3046,7 +3041,7 @@ mod tests {
             let event = make_event(cmd, true, false);
             // !raid_enable fällt in `_ => false` — keine Command-Behandlung.
             assert!(
-                !engine.handle(&event, true).await,
+                !engine.handle(&event).await,
                 "{cmd} sollte kein Befehl sein"
             );
         }
@@ -3059,7 +3054,8 @@ mod tests {
 
     #[tokio::test]
     async fn silentban_reauth_gate_blockt_toggle() {
-        let pool = pool_or_skip!("cmd_silentban_reauth");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         seed_partner(&pool).await;
@@ -3081,9 +3077,7 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine
-            .handle(&make_event("!silentban", true, false), true)
-            .await;
+        engine.handle(&make_event("!silentban", true, false)).await;
 
         assert_eq!(raid.silent_ban_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
@@ -3095,7 +3089,8 @@ mod tests {
 
     #[tokio::test]
     async fn silentraid_reauth_gate_blockt_toggle() {
-        let pool = pool_or_skip!("cmd_silentraid_reauth");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         seed_partner(&pool).await;
@@ -3117,9 +3112,7 @@ mod tests {
             Arc::new(MockAutoban(None)),
         );
 
-        engine
-            .handle(&make_event("!silentraid", true, false), true)
-            .await;
+        engine.handle(&make_event("!silentraid", true, false)).await;
 
         assert_eq!(raid.silent_raid_call_count().await, 0);
         let msg = api.last_message().await.unwrap();
@@ -3131,7 +3124,8 @@ mod tests {
 
     #[tokio::test]
     async fn uban_kein_eintrag() {
-        let pool = pool_or_skip!("cmd_uban_leer");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
 
@@ -3153,7 +3147,7 @@ mod tests {
         );
 
         let event = make_event("!uban", true, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
 
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("Kein Auto-Ban-Eintrag"), "Meldung: {msg}");
@@ -3161,7 +3155,8 @@ mod tests {
 
     #[tokio::test]
     async fn invite_cooldown_verhindert_doppelaufruf() {
-        let pool = pool_or_skip!("cmd_invite_cd");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         let api = MockApi::new();
@@ -3179,11 +3174,11 @@ mod tests {
 
         // Erster Aufruf
         let event = make_event("!invite", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
         let count_first = api.message_count().await;
 
         // Zweiter Aufruf sofort — Cooldown aktiv
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
         let count_second = api.message_count().await;
 
         assert_eq!(
@@ -3194,7 +3189,8 @@ mod tests {
 
     #[tokio::test]
     async fn invite_no_reply_does_not_consume_cooldown() {
-        let pool = pool_or_skip!("cmd_invite_no_reply_cd");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         let api = MockApi::new();
@@ -3211,10 +3207,10 @@ mod tests {
         );
 
         let event = make_event("!invite", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
         assert_eq!(api.message_count().await, 0);
 
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
         assert_eq!(api.message_count().await, 1);
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("invite-ok"), "Meldung: {msg}");
@@ -3222,7 +3218,8 @@ mod tests {
 
     #[tokio::test]
     async fn invite_send_error_does_not_consume_cooldown() {
-        let pool = pool_or_skip!("cmd_invite_send_error_cd");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         let api = MockApi::new();
@@ -3240,10 +3237,10 @@ mod tests {
         );
 
         let event = make_event("!invite", false, false);
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
         assert_eq!(api.message_count().await, 0);
 
-        engine.handle(&event, true).await;
+        engine.handle(&event).await;
         assert_eq!(api.message_count().await, 1);
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("invite-ok"), "Meldung: {msg}");
@@ -3251,7 +3248,8 @@ mod tests {
 
     #[tokio::test]
     async fn invite_success_marks_promo_cooldown_seam() {
-        let pool = pool_or_skip!("cmd_invite_promo_seam");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         let api = MockApi::new();
@@ -3269,9 +3267,7 @@ mod tests {
         )
         .set_invite_reply_notifier(notifier.clone());
 
-        engine
-            .handle(&make_event("!invite", false, false), true)
-            .await;
+        engine.handle(&make_event("!invite", false, false)).await;
 
         assert_eq!(api.message_count().await, 1);
         assert_eq!(notifier.channels().await, vec!["testchannel".to_string()]);
@@ -3311,14 +3307,15 @@ mod tests {
 
     #[tokio::test]
     async fn lurkersteuer_off_setzt_flag_false_bei_paid_plan() {
-        let pool = pool_or_skip!("cmd_lurker_off_paid");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         seed_lurker_partner(&pool, 1, true).await;
 
         let event = make_event("!lurkersteuer_off", false, true);
-        let handled = engine.handle(&event, true).await;
+        let handled = engine.handle(&event).await;
         assert!(
             handled,
             "!lurkersteuer_off muss als Command behandelt werden"
@@ -3338,14 +3335,15 @@ mod tests {
 
     #[tokio::test]
     async fn lurkersteuer_off_alias_lurker_tax_off() {
-        let pool = pool_or_skip!("cmd_lurker_off_alias");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         seed_lurker_partner(&pool, 1, true).await;
 
         let handled = engine
-            .handle(&make_event("!lurker_tax_off", false, true), true)
+            .handle(&make_event("!lurker_tax_off", false, true))
             .await;
         assert!(handled, "Alias !lurker_tax_off muss greifen");
 
@@ -3360,7 +3358,8 @@ mod tests {
 
     #[tokio::test]
     async fn lurkersteuer_off_nur_broadcaster() {
-        let pool = pool_or_skip!("cmd_lurker_off_nichtbc");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
@@ -3368,7 +3367,7 @@ mod tests {
 
         // Mod, aber nicht Broadcaster → Ablehnung, Flag bleibt 1.
         let handled = engine
-            .handle(&make_event("!lurkersteuer_off", true, false), true)
+            .handle(&make_event("!lurkersteuer_off", true, false))
             .await;
         assert!(handled);
 
@@ -3386,7 +3385,8 @@ mod tests {
 
     #[tokio::test]
     async fn lurkersteuer_off_nur_bei_paid_plan() {
-        let pool = pool_or_skip!("cmd_lurker_off_free");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
@@ -3394,7 +3394,7 @@ mod tests {
         seed_lurker_partner(&pool, 1, false).await;
 
         let handled = engine
-            .handle(&make_event("!lurkersteuer_off", false, true), true)
+            .handle(&make_event("!lurkersteuer_off", false, true))
             .await;
         assert!(handled);
 
@@ -3412,14 +3412,13 @@ mod tests {
 
     #[tokio::test]
     async fn lurk_command_default_antwortet_wie_bisher() {
-        let pool = pool_or_skip!("cmd_lurk_default");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool, api.clone());
 
-        let handled = engine
-            .handle(&make_event("!lurk", false, false), true)
-            .await;
+        let handled = engine.handle(&make_event("!lurk", false, false)).await;
 
         assert!(handled);
         let msg = api.last_message().await.unwrap();
@@ -3428,7 +3427,8 @@ mod tests {
 
     #[tokio::test]
     async fn lurk_command_aus_antwortet_nicht() {
-        let pool = pool_or_skip!("cmd_lurk_disabled");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurk_command_enabled) \
@@ -3440,9 +3440,7 @@ mod tests {
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool, api.clone());
 
-        let handled = engine
-            .handle(&make_event("!lurk", false, false), true)
-            .await;
+        let handled = engine.handle(&make_event("!lurk", false, false)).await;
 
         assert!(handled);
         assert_eq!(api.message_count().await, 0);
@@ -3464,11 +3462,9 @@ mod tests {
         assert_eq!(api.message_count().await, 1);
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, title_command_enabled) VALUES ('bc123', 'alter_login', 0), ('andere_id', 'testchannel', 1)").execute(&pool).await.unwrap();
         // Auch umbenannte Kanäle bleiben aus; weder Hilfe noch Ack/LLM-Task.
+        engine.handle(&make_event("!title", false, true)).await;
         engine
-            .handle(&make_event("!title", false, true), true)
-            .await;
-        engine
-            .handle(&make_event("!titel ranked", true, false), true)
+            .handle(&make_event("!titel ranked", true, false))
             .await;
         assert_eq!(api.message_count().await, 1);
         sqlx::query(
@@ -3477,9 +3473,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        engine
-            .handle(&make_event("!title", false, true), true)
-            .await;
+        engine.handle(&make_event("!title", false, true)).await;
         assert_eq!(api.message_count().await, 2);
         engine
             .cmd_title(&make_event("!title", false, false), "")
@@ -3534,16 +3528,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn commands_offline_und_andere_kategorie_mit_unveraenderten_schaltern() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('bc123', 0, 'Deadlock')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (is_live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
+            sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
+                .bind(is_live)
+                .bind(game)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let api = MockApi::new();
+            let engine = make_engine_with_pool(pool.clone(), api.clone());
+            for text in [
+                "!rank",
+                "!wins",
+                "!winrate",
+                "!mmr",
+                "!live",
+                "!lastmatch",
+                "!streak",
+                "!mostplayed",
+                "!discord",
+                "!invite",
+                "!commands",
+                "!help",
+                "!ping",
+            ] {
+                let before = api.message_count().await;
+                assert!(
+                    engine.handle(&make_event(text, false, false)).await,
+                    "{text}"
+                );
+                assert!(
+                    api.message_count().await > before,
+                    "{text} antwortet bei live={is_live}, {game}"
+                );
+            }
+            // Ein normaler Zuschauer erhält weiterhin keinen Mod-Zugriff.
+            engine.handle(&make_event("!raid", false, false)).await;
+            assert!(api
+                .last_message()
+                .await
+                .unwrap()
+                .contains("Nur Broadcaster"));
+        }
+    }
+
+    #[tokio::test]
+    async fn bekannte_bots_erhalten_keine_neuen_befehle() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+        for text in [
+            "!rank",
+            "!climb",
+            "!main",
+            "!clip",
+            "!createclip",
+            "!invite",
+            "!discord",
+            "!dldc",
+        ] {
+            assert!(
+                !engine
+                    .handle_known_bot(&make_event(text, false, false))
+                    .await
+            );
+        }
+        assert_eq!(api.message_count().await, 0);
+        assert!(
+            engine
+                .handle_known_bot(&make_event("!commands", false, false))
+                .await
+        );
+        assert_eq!(api.message_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn clip_offline_erklaert_und_andere_kategorie_erstellt() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('bc123', 0, 'Deadlock')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let api = MockApi::new();
+        let (engine, calls) = engine_mit_clip_port(pool.clone(), api.clone()).await;
+        assert!(engine.handle(&make_event("!clip", false, false)).await);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let reply = api.last_message().await.unwrap();
+        assert!(!reply.contains("Clip erstellt") && !reply.contains("10 Sekunden"));
+        assert_eq!(api.message_count().await, 1);
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id,clip_command_enabled) VALUES ('bc123',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (engine, calls) = engine_mit_clip_port(pool.clone(), api.clone()).await;
+        engine.handle(&make_event("!clip", false, false)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "Offlinehinweis bei ausgeschaltetem Befehl bleibt aus"
+        );
+        sqlx::query("UPDATE streamer_plans SET clip_command_enabled=1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_live_state SET is_live=1,last_game='Just Chatting'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
+        engine
+            .handle(&make_event("!createclip", false, false))
+            .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(api.last_message().await.unwrap().contains("Clip erstellt"));
+    }
+
+    #[tokio::test]
     async fn clip_command_default_verhaelt_sich_wie_bisher() {
-        let pool = pool_or_skip!("cmd_clip_default");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         let api = MockApi::new();
         let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
 
-        let handled = engine
-            .handle(&make_event("!clip", false, false), true)
-            .await;
+        let handled = engine.handle(&make_event("!clip", false, false)).await;
 
         assert!(handled);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "Clip muss erstellt werden");
@@ -3556,17 +3682,16 @@ mod tests {
         // Shared Chat (Stream Together) liefert dieselbe Nachricht mehrfach an
         // den Bot. Der zweite Aufruf innerhalb von 10s darf keinen zweiten Clip
         // erzeugen und auch keine zweite Chat-Nachricht schreiben.
-        let pool = pool_or_skip!("cmd_clip_cooldown");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         let api = MockApi::new();
         let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
 
-        engine.handle(&make_event("!clip", false, false), true).await;
+        engine.handle(&make_event("!clip", false, false)).await;
         let nachrichten_nach_erstem = api.message_count().await;
-        let handled = engine
-            .handle(&make_event("!clip", false, false), true)
-            .await;
+        let handled = engine.handle(&make_event("!clip", false, false)).await;
 
         assert!(handled, "!clip bleibt ein bekannter Command");
         assert_eq!(
@@ -3583,7 +3708,8 @@ mod tests {
 
     #[tokio::test]
     async fn clip_command_aus_antwortet_nicht() {
-        let pool = pool_or_skip!("cmd_clip_disabled");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         sqlx::query(
@@ -3596,9 +3722,7 @@ mod tests {
         let api = MockApi::new();
         let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
 
-        let handled = engine
-            .handle(&make_event("!clip", false, false), true)
-            .await;
+        let handled = engine.handle(&make_event("!clip", false, false)).await;
 
         assert!(handled, "!clip bleibt ein bekannter Command");
         assert_eq!(api.message_count().await, 0, "keine Chat-Antwort");
@@ -3611,7 +3735,8 @@ mod tests {
 
     #[tokio::test]
     async fn clip_command_aus_gilt_auch_fuer_createclip_alias() {
-        let pool = pool_or_skip!("cmd_clip_alias_disabled");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         seed_partner(&pool).await;
         sqlx::query(
@@ -3625,7 +3750,7 @@ mod tests {
         let (engine, calls) = engine_mit_clip_port(pool, api.clone()).await;
 
         let handled = engine
-            .handle(&make_event("!createclip", false, false), true)
+            .handle(&make_event("!createclip", false, false))
             .await;
 
         assert!(handled);
@@ -3654,7 +3779,7 @@ mod tests {
         ];
         let mut count = 0;
         for text in commands {
-            assert!(engine.handle(&make_event(text, false, false), true).await);
+            assert!(engine.handle(&make_event(text, false, false)).await);
             count += 1;
             assert_eq!(api.message_count().await, count, "Standard aktiv: {text}");
         }
@@ -3665,8 +3790,8 @@ mod tests {
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id,twitch_login,stat_command_settings) VALUES ('bc123','alter_name',$1), ('fremd','testchannel','{}')")
             .bind(flags).execute(&pool).await.unwrap();
         for text in commands {
-            for live in [true, false] {
-                assert!(engine.handle(&make_event(text, false, false), live).await);
+            for _ in 0..2 {
+                assert!(engine.handle(&make_event(text, false, false)).await);
                 assert_eq!(api.message_count().await, count, "Aus bleibt still: {text}");
             }
         }
@@ -3676,7 +3801,7 @@ mod tests {
                 .key();
             sqlx::query("UPDATE streamer_plans SET stat_command_settings=jsonb_set(stat_command_settings,ARRAY[$1], 'true') WHERE twitch_user_id='bc123'")
                 .bind(key).execute(&pool).await.unwrap();
-            assert!(engine.handle(&make_event(text, false, false), true).await);
+            assert!(engine.handle(&make_event(text, false, false)).await);
             count += 1;
             assert_eq!(
                 api.message_count().await,
@@ -3691,11 +3816,7 @@ mod tests {
             serde_json::json!(1),
         ] {
             sqlx::query("UPDATE streamer_plans SET stat_command_settings=jsonb_build_object('rank',$1::jsonb) WHERE twitch_user_id='bc123'").bind(invalid).execute(&pool).await.unwrap();
-            assert!(
-                engine
-                    .handle(&make_event("!rank", false, false), true)
-                    .await
-            );
+            assert!(engine.handle(&make_event("!rank", false, false)).await);
             assert_eq!(
                 api.message_count().await,
                 count,
@@ -3706,18 +3827,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(
-            engine
-                .handle(&make_event("!rank", false, false), true)
-                .await
-        );
+        assert!(engine.handle(&make_event("!rank", false, false)).await);
         assert_eq!(api.message_count().await, count, "DB-Fehler bleibt still");
         // Geschützte Commands passieren diesen Schalter auch ohne Einstellungstabelle.
-        assert!(
-            engine
-                .handle(&make_event("!commands", false, false), true)
-                .await
-        );
+        assert!(engine.handle(&make_event("!commands", false, false)).await);
         assert_eq!(api.message_count().await, count + 1);
     }
 }

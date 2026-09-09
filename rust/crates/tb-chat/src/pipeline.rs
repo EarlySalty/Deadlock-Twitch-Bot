@@ -848,10 +848,8 @@ impl ChatPipeline {
                 "known_bot.commands",
                 &channel_login,
                 &chatter_login,
-                // Deadlock-Gate hart auf `false`: die Kanal-Klassifizierung läuft erst in
-                // Schritt 3, hier ist `is_deadlock_live` noch unbekannt. Ein Bot aus der
-                // Whitelist bekommt damit nur die ungegateten Befehle (!ping, !help, …).
-                async move { commands.handle(&event_for_step, false).await },
+                // Bekannte Fremdbots behalten ihren eingeschränkten Befehlszugang.
+                async move { commands.handle_known_bot(&event_for_step).await },
             )
             .await;
             return false;
@@ -1163,12 +1161,11 @@ impl ChatPipeline {
             });
         }
 
-        // Schritt 15: Command-Processing — immer am Ende; Deadlock-Gate pro Command.
+        // Schritt 15: Command-Processing — unabhängig von Live-Status und Kategorie.
         let commands = Arc::clone(&p.commands);
         let event_for_step = event.clone();
-        let deadlock_live = class.is_deadlock_live;
         run_pipeline_step("commands", &channel_login, &chatter_login, async move {
-            commands.handle(&event_for_step, deadlock_live).await;
+            commands.handle(&event_for_step).await;
         })
         .await;
         should_spawn_engagement

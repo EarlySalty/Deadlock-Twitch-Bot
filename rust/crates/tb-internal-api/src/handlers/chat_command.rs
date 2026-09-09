@@ -4,12 +4,11 @@
 //! Gibt den fertigen Reply-Text zurück — Python sendet ihn via IRC.
 //!
 //! Aktuell unterstützt: `!invite`
-//!   - Nur aktiv, wenn der Kanal Deadlock streamt (last_game ILIKE 'deadlock',
-//!     is_live = 1).
+//!   - Unabhängig vom Streamstatus und der Kategorie verfügbar.
 //!   - Invite-URL: zuerst streamer-spezifisch aus `twitch_streamer_invites`,
 //!     dann Env-Var `PROMO_DISCORD_INVITE` oder globaler Default.
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_http_core::ApiError;
@@ -52,36 +51,6 @@ pub async fn handler(
 
     // Nur !invite ist aktuell implementiert.
     if cmd != "!invite" && !cmd.starts_with("!invite ") {
-        return Ok(Json(CommandResponse { reply: None }));
-    }
-
-    // Kanal muss live Deadlock streamen.
-    let live_row = sqlx::query!(
-        r#"SELECT COALESCE(is_live, 0) AS "is_live!", last_game
-           FROM twitch_live_state
-          WHERE LOWER(streamer_login) = $1
-          LIMIT 1"#,
-        &channel
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("chat_command live_state-Query fehlgeschlagen für {channel}: {e}");
-        ApiError::internal()
-    })?;
-
-    let is_deadlock_live = live_row
-        .map(|row| {
-            row.is_live == 1
-                && row
-                    .last_game
-                    .as_deref()
-                    .map(|g| g.to_lowercase().contains("deadlock"))
-                    .unwrap_or(false)
-        })
-        .unwrap_or(false);
-
-    if !is_deadlock_live {
         return Ok(Json(CommandResponse { reply: None }));
     }
 
@@ -130,4 +99,49 @@ async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<Str
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE);
     Ok(Some(invite.to_string()))
+}
+
+#[cfg(test)]
+#[path = "../../../../test-support/postgres.rs"]
+mod test_postgres;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn echter_command_handler_antwortet_offline_ohne_live_tabelle() {
+        let database = test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_invites VALUES ('testchannel', 'https://discord.gg/test')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let response = handler(
+            State(pool),
+            Json(CommandRequest {
+                channel_login: "testchannel".into(),
+                chatter_login: "viewer".into(),
+                content: "!invite".into(),
+            }),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["reply"]
+            .as_str()
+            .unwrap()
+            .contains("https://discord.gg/test"));
+    }
 }

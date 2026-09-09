@@ -33,5 +33,6 @@ tb-monitoring       = { workspace = true }
 tb-transport-twitch = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 tokio     = { workspace = true }
 tower     = { workspace = true, features = ["util"] }
