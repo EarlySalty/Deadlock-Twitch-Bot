@@ -166,7 +166,6 @@ mod tests {
         Json,
     };
     use serde_json::Value;
-    use sqlx::PgPool;
 
     use crate::auth::level::DashboardAuthLevel;
 
