@@ -106,6 +106,13 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Die Planprüfung des Bots braucht nur diese fünf Abo-Merkmale.
+    -- Stripe-IDs, Zahlungsereignisse und sämtliche Schreibrechte bleiben gesperrt.
+    IF to_regclass('public.twitch_billing_subscriptions') IS NOT NULL THEN
+        GRANT SELECT (customer_reference, plan_id, status, current_period_end, updated_at)
+            ON public.twitch_billing_subscriptions TO twitchbot;
+    END IF;
+
     -- EventSub-Transporttabellen werden ausschließlich vom Bot geschrieben.
     -- Das Dashboard darf den Kapazitätsstand und Fehlerzustand weiterhin lesen.
     FOREACH ingest_table IN ARRAY ARRAY[
