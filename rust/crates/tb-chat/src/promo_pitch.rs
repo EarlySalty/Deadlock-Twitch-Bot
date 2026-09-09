@@ -206,13 +206,22 @@ const BELEIDIGUNG_MARKER: &[&str] = &[
     "hurentochter",
     "mongo",
     "kackbratze",
+    "idiot",
+    "idioten",
+    "scheiße",
+    "scheisse",
+    "scheißkerl",
 ];
+
+const ICH_SPIEL_VERB: &[&str] = &["gespielt", "gezockt"];
 
 pub fn ich_form_reject(text: &str) -> bool {
     let lower = text.to_lowercase();
-    ICH_FORM_MARKER
-        .iter()
-        .any(|needle| lower.contains(needle))
+    if ICH_FORM_MARKER.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    (enthaelt_wort(&lower, "ich") || enthaelt_wort(&lower, "wir"))
+        && ICH_SPIEL_VERB.iter().any(|verb| lower.contains(verb))
 }
 
 pub fn beleidigung_reject(text: &str) -> bool {
@@ -848,6 +857,8 @@ mod tests {
             "bin gerade in den ersten ranked games",
             "wir spielen gerade die normale version",
             "mein build ist eh besser",
+            "ich habe gestern noch eine runde gespielt",
+            "wir haben das gestern zusammen gezockt",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
@@ -858,8 +869,28 @@ mod tests {
     }
 
     #[test]
+    fn ich_form_laesst_zuschauerbezug_durch() {
+        for text in [
+            "hast du das schon mal gespielt",
+            "wie lange hast du gezockt heute",
+        ] {
+            assert_eq!(
+                pitch_filter_reject(text),
+                None,
+                "{text} redet ueber den Zuschauer, keine Ich-Form"
+            );
+        }
+    }
+
+    #[test]
     fn beleidigung_filter_faengt_beschimpfungen() {
-        for text in ["du hurensohn", "so ein arschloch echt", "verpiss dich"] {
+        for text in [
+            "du hurensohn",
+            "so ein arschloch echt",
+            "verpiss dich",
+            "du idiot",
+            "das ist doch scheiße",
+        ] {
             assert_eq!(
                 pitch_filter_reject(text),
                 Some(PitchRejectReason::Beleidigung),
