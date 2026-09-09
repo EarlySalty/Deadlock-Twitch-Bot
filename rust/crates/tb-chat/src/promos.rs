@@ -446,7 +446,7 @@ pub trait PitchReviewSink: Send + Sync {
         reply: &str,
         kind: PitchCardKind,
         candidate_hint: Option<&str>,
-    );
+    ) -> Option<i64>;
 }
 
 // ---------------------------------------------------------------------------
@@ -868,12 +868,18 @@ impl PromoEngine {
             && self.pitch_channel_limit_ok(&login).await
             && self.pitch_judge_throttle_reserve(&login, &target_user_id)
         {
+            let beispiele = crate::pitch_beispiele::lade_block(
+                &self.pool,
+                crate::pitch_beispiele::PitchPfad::Anlass,
+            )
+            .await;
             let input = PitchJudgeInput {
                 trigger_text: text.to_string(),
                 game: game.clone(),
                 title: title.clone(),
                 recent_chat: recent.clone(),
                 target_login: target_login.clone(),
+                beispiele,
             };
             self.pitch_judge.decide(input).await.and_then(|resp| {
                 if resp.ernst_gemeint {
@@ -964,15 +970,19 @@ impl PromoEngine {
         drop(_guard);
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
-            sink.send_card(
-                &login,
-                &target_login,
-                text,
-                &resp_reply,
-                PitchCardKind::Anlass,
-                None,
-            )
-            .await;
+            if let Some(message_id) = sink
+                .send_card(
+                    &login,
+                    &target_login,
+                    text,
+                    &resp_reply,
+                    PitchCardKind::Anlass,
+                    None,
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
         }
     }
 
@@ -1000,12 +1010,18 @@ impl PromoEngine {
 
         let (game, title) = self.load_live_context(login).await;
         let recent = self.load_recent_channel_messages(login, 8).await;
+        let beispiele = crate::pitch_beispiele::lade_block(
+            &self.pool,
+            crate::pitch_beispiele::PitchPfad::Partner,
+        )
+        .await;
         let ctx = PartnerPitchContext {
             target_login: target_login.to_string(),
             target_messages: vec![trigger.to_string()],
             game,
             title,
             recent_chat: recent,
+            beispiele,
         };
         let Some(reply) = self.partner_pitch_gen.partner_pitch(&ctx).await else {
             self.log_partner_reject(login, target_user_id, "no_text", trigger, None)
@@ -1099,15 +1115,19 @@ impl PromoEngine {
                 candidate.login,
                 candidate.last_session.format("%Y-%m-%d")
             );
-            sink.send_card(
-                login,
-                target_login,
-                trigger,
-                &reply,
-                PitchCardKind::Partner,
-                Some(&hint),
-            )
-            .await;
+            if let Some(message_id) = sink
+                .send_card(
+                    login,
+                    target_login,
+                    trigger,
+                    &reply,
+                    PitchCardKind::Partner,
+                    Some(&hint),
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
         }
     }
 
@@ -1822,10 +1842,16 @@ impl PromoEngine {
         }
 
         let (game, title) = self.load_live_context(login).await;
+        let beispiele = crate::pitch_beispiele::lade_block(
+            &self.pool,
+            crate::pitch_beispiele::PitchPfad::Periodic,
+        )
+        .await;
         let ctx = ChannelPromoContext {
             game,
             title,
             recent_chat: self.load_recent_channel_messages(login, 8).await,
+            beispiele,
         };
         self.pitch_text_gen.channel_promo(&ctx, invite).await
     }
@@ -2839,6 +2865,19 @@ impl PromoEngine {
         }
     }
 
+    async fn set_review_message_id(&self, id: i64, message_id: i64) {
+        if let Err(e) = sqlx::query!(
+            "UPDATE twitch_promo_pitch_log SET review_message_id = $2 WHERE id = $1",
+            id,
+            message_id,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            warn!(id, "set_review_message_id fehlgeschlagen: {e}");
+        }
+    }
+
     async fn mark_pitch_log_dropped(&self, id: i64, reason: &str) {
         if let Err(e) = sqlx::query!(
             "UPDATE twitch_promo_pitch_log SET reject_reason = $2 WHERE id = $1",
@@ -3764,7 +3803,7 @@ mod db_tests {
             reply: &str,
             kind: PitchCardKind,
             candidate_hint: Option<&str>,
-        ) {
+        ) -> Option<i64> {
             self.cards.lock().await.push((
                 channel_login.to_string(),
                 target_login.to_string(),
@@ -3773,6 +3812,7 @@ mod db_tests {
                 kind,
                 candidate_hint.map(|h| h.to_string()),
             ));
+            Some(4242)
         }
     }
 
@@ -4061,6 +4101,9 @@ mod db_tests {
                 generated_text TEXT,
                 reject_reason TEXT,
                 sent_at TIMESTAMPTZ,
+                review_message_id BIGINT,
+                bewertung TEXT,
+                bewertet_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
             r#"CREATE TABLE twitch_chat_messages (

@@ -60,6 +60,8 @@ Zwischenzustand: jede neue Karte ist mit ihrer Log-Zeile verknüpft.
 Validierung: `cargo test -p tb-chat --lib` und `cargo test -p tb-bot pitch_review` grün; `cargo sqlx prepare --check` sauber; tb-db-Snapshot-Test grün (Docker-Container aus `rust/scripts/test_db.sh`).
 Stop-Regel: Snapshot-Test verlangt Handarbeit außerhalb des Scopes → stoppen und melden.
 
+Status: erledigt (Commit folgt). send_card liefert Option<i64>, DiscordPitchReviewSink liest SendResult.result.message_id, Karte traegt den Daumen-Hinweis, on_message_pitch und run_partner_pitch schreiben review_message_id. tb-bot pitch_review 1 passed; Migration/Snapshot in M3-Commit. Hinweis: promos.rs traegt hier auch die M3-Beispielverdrahtung (Dateien nicht per Hunk trennbar, git add -p gesperrt).
+
 ## M5 Bewertungs-Timer (REQ-07)
 
 Änderungen:
