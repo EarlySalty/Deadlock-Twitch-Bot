@@ -12,7 +12,8 @@ import {
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
 } from '@/preview/routes';
-import { resetWelcomeTour } from '@/components/onboarding/WelcomeTour';
+import { useOnboarding } from '@/components/onboarding/OnboardingContext';
+import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
 import {
   BarChart3,
   BookOpen,
@@ -21,6 +22,7 @@ import {
   Home,
   Loader2,
   MonitorPlay,
+  MessageSquare,
   Radio,
   RotateCcw,
   Settings,
@@ -36,7 +38,9 @@ export type DashboardRoute =
   | 'uplink'
   | 'verwaltung'
   | 'overlay'
-  | 'pricing';
+  | 'pricing'
+  | 'hilfe'
+  | 'feedback';
 
 function SidebarLink({
   href,
@@ -85,6 +89,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
     profileReady,
   } = useDashboardProfile();
   const queryClient = useQueryClient();
+  const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
   const shownAvatar = avatarFailed ? null : avatarUrl;
 
@@ -257,23 +262,25 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
             Hilfe
           </div>
           <a
-            href="/twitch/faq"
+            href="/twitch/hilfe"
             className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
           >
             <BookOpen className="h-4 w-4" />
-            FAQ &amp; Hilfe
+            Hilfe &amp; Einrichtung
           </a>
-          <button
+          {onboarding.enabled && <button
             type="button"
+            disabled={onboarding.pending}
             onClick={() => {
-              resetWelcomeTour();
-              window.location.reload();
+              void onboarding.open('bookmark');
             }}
             className="flex w-full items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
           >
             <RotateCcw className="h-4 w-4" />
-            Tour neu starten
-          </button>
+            Tour erneut zeigen
+          </button>}
+          <a href="/twitch/feedback" aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">Kritik &amp; Wünsche</span><FeedbackBadge isAdmin={adminMode} /></a>
+          <a href="/twitch/faq" className="block px-3 py-2 text-sm text-text-secondary hover:text-white">Häufige Fragen</a>
         </div>
       </div>
     </Rise>

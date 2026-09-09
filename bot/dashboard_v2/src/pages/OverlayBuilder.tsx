@@ -1,16 +1,17 @@
 import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
+import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
 import { OverlayBuilderSection } from '@/components/verwaltung/OverlayBuilderSection';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_VERWALTUNG_ROUTE } from '@/preview/routes';
 import { ArrowRight, Loader2 } from 'lucide-react';
 
 export function OverlayBuilderPage() {
-  const { isLoading: loadingAuth } = useAuthStatus();
+  const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
 
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['internal-home', null],
+    queryKey: ['internal-home', null, authStatus?.twitchUserId],
     queryFn: () => fetchInternalHome(null),
     staleTime: Number.POSITIVE_INFINITY,
     enabled: !loadingAuth,
@@ -61,13 +62,14 @@ export function OverlayBuilderPage() {
 
       <Rise>
         <a
-          href={PREVIEW_VERWALTUNG_ROUTE}
+          href={`${PREVIEW_VERWALTUNG_ROUTE}#overlay`}
           className="inline-flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-white"
         >
           ← Zurück zur Verwaltung
         </a>
       </Rise>
 
+      <OnboardingGuide overlayBuilder />
       <OverlayBuilderSection login={twitchLogin} />
     </>
   );

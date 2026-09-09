@@ -1,178 +1,31 @@
-export type BrowserName =
-  | 'brave'
-  | 'chrome'
-  | 'edge'
-  | 'firefox'
-  | 'opera'
-  | 'vivaldi'
-  | 'safari'
-  | 'unbekannt';
-
-export type MobilArt = 'android' | 'ios' | null;
-
-export interface BrowserEingabe {
-  userAgent: string;
-  brave: boolean;
-  platform: string;
-  mobile: boolean;
+export type BookmarkBrowser = 'windows' | 'mac' | 'ios-safari' | 'ios-chrome' | 'android-chrome' | 'android-firefox' | 'other';
+export const BOOKMARK_BROWSERS: { value: BookmarkBrowser; label: string }[] = [
+  {value: 'windows', label: 'Computer: Windows oder Linux'}, {value: 'mac', label: 'Computer: Mac'},
+  {value: 'ios-safari', label: 'iPhone / iPad: Safari'}, {value: 'ios-chrome', label: 'iPhone / iPad: Chrome'},
+  {value: 'android-chrome', label: 'Android: Chrome'}, {value: 'android-firefox', label: 'Android: Firefox'},
+  {value: 'other', label: 'Anderer Browser'},
+];
+export function erkenneBrowser(userAgent: string, platform: string, touchPoints = 0): BookmarkBrowser {
+  if (/iPhone|iPad|iPod/.test(userAgent) || (/Mac/.test(platform) && touchPoints > 1)) {
+    if (/CriOS/.test(userAgent)) return 'ios-chrome';
+    return /Safari/.test(userAgent) && !/FxiOS|EdgiOS|OPiOS/.test(userAgent) ? 'ios-safari' : 'other';
+  }
+  if (/Android/.test(userAgent)) {
+    if (/Firefox/.test(userAgent)) return 'android-firefox';
+    return /Chrome/.test(userAgent) && !/SamsungBrowser|EdgA|OPR/.test(userAgent) ? 'android-chrome' : 'other';
+  }
+  if (/Mac/.test(platform)) return 'mac';
+  return /Win|Linux|X11/.test(platform + userAgent) ? 'windows' : 'other';
 }
-
-export interface BrowserErkennung {
-  browser: BrowserName;
-  mobil: MobilArt;
-  mac: boolean;
-}
-
-export type HinweisPosition = 'links' | 'rechts' | 'menue' | 'unbekannt';
-
-export type HinweisSymbol = 'stern' | 'herz' | 'teilen' | 'menue' | null;
-
-export type Tastenkombi = ['Strg', 'D'] | ['⌘', 'D'];
-
-export interface LesezeichenAnleitung {
-  position: HinweisPosition;
-  symbol: HinweisSymbol;
-  tastenkombi: Tastenkombi;
-  hinweis: string;
-}
-
-function erkenneMobil(userAgent: string, platform: string, mobile: boolean): MobilArt {
-  const text = `${userAgent} ${platform}`;
-  if (/iPhone|iPad|iPod/i.test(text)) {
-    return 'ios';
-  }
-  if (/Android/i.test(userAgent)) {
-    return 'android';
-  }
-  if (mobile) {
-    return 'android';
-  }
-  return null;
-}
-
-function erkenneName(userAgent: string, brave: boolean): BrowserName {
-  if (brave) {
-    return 'brave';
-  }
-  if (/Edg\//.test(userAgent)) {
-    return 'edge';
-  }
-  if (/OPR\//.test(userAgent)) {
-    return 'opera';
-  }
-  if (/Vivaldi\//.test(userAgent)) {
-    return 'vivaldi';
-  }
-  if (/Firefox\//.test(userAgent)) {
-    return 'firefox';
-  }
-  if (/Chrome\//.test(userAgent)) {
-    return 'chrome';
-  }
-  if (/Safari\//.test(userAgent)) {
-    return 'safari';
-  }
-  return 'unbekannt';
-}
-
-export function erkenneBrowser(eingabe: BrowserEingabe): BrowserErkennung {
-  const mobil = erkenneMobil(eingabe.userAgent, eingabe.platform, eingabe.mobile);
-  const mac =
-    mobil === 'ios'
-      ? false
-      : /Mac/i.test(eingabe.platform) || /Macintosh/i.test(eingabe.userAgent);
-  return {
-    browser: erkenneName(eingabe.userAgent, eingabe.brave),
-    mobil,
-    mac,
-  };
-}
-
-export interface KartenPosition {
-  seite: 'links' | 'rechts' | 'menue';
-  top?: string;
-  left?: string;
-  right?: string;
-  pfeilLinks: boolean;
-}
-
-export function kartenPosition(anleitung: LesezeichenAnleitung): KartenPosition {
-  if (anleitung.position === 'menue') {
-    return { seite: 'menue', pfeilLinks: false };
-  }
-  if (anleitung.position === 'links') {
-    return {
-      seite: 'links',
-      top: '16px',
-      left: 'max(16px, calc(50% - 560px))',
-      pfeilLinks: true,
-    };
-  }
-  if (anleitung.position === 'rechts' && anleitung.symbol === 'teilen') {
-    return { seite: 'rechts', top: '16px', right: '60px', pfeilLinks: false };
-  }
-  return { seite: 'rechts', top: '16px', right: '140px', pfeilLinks: false };
-}
-
-export function lesezeichenAnleitung(erkennung: BrowserErkennung): LesezeichenAnleitung {
-  const tastenkombi: Tastenkombi = erkennung.mac ? ['⌘', 'D'] : ['Strg', 'D'];
-
-  if (erkennung.mobil === 'android') {
-    return {
-      position: 'menue',
-      symbol: 'menue',
-      tastenkombi,
-      hinweis: 'Öffne das Menü mit den drei Punkten oben rechts und tippe auf den Stern.',
-    };
-  }
-
-  if (erkennung.mobil === 'ios') {
-    return {
-      position: 'menue',
-      symbol: 'teilen',
-      tastenkombi,
-      hinweis: 'Tippe auf das Teilen-Symbol und dann auf "Zum Home-Bildschirm".',
-    };
-  }
-
-  switch (erkennung.browser) {
-    case 'brave':
-      return {
-        position: 'links',
-        symbol: 'stern',
-        tastenkombi,
-        hinweis: 'Klicke auf den Stern links neben der Adresse.',
-      };
-    case 'opera':
-      return {
-        position: 'rechts',
-        symbol: 'herz',
-        tastenkombi,
-        hinweis: 'Klicke auf das Herz rechts in der Adressleiste.',
-      };
-    case 'safari':
-      return {
-        position: 'rechts',
-        symbol: 'teilen',
-        tastenkombi,
-        hinweis: 'Klicke oben rechts auf den Teilen-Knopf und dann auf "Lesezeichen hinzufügen".',
-      };
-    case 'chrome':
-    case 'edge':
-    case 'firefox':
-    case 'vivaldi':
-      return {
-        position: 'rechts',
-        symbol: 'stern',
-        tastenkombi,
-        hinweis: 'Klicke auf den Stern rechts in der Adressleiste.',
-      };
-    default:
-      return {
-        position: 'unbekannt',
-        symbol: null,
-        tastenkombi,
-        hinweis: '',
-      };
+// Herstelleranleitungen geprüft am 09.09.2026; absichtlich keine feste Symbolposition.
+export function lesezeichenAnleitung(browser: BookmarkBrowser): string {
+  switch (browser) {
+    case 'windows': return 'Drücke Strg + D und bestätige das Lesezeichen im Browser.';
+    case 'mac': return 'Drücke ⌘ + D und bestätige das Lesezeichen im Browser.';
+    case 'ios-safari': return 'Öffne in Safari das Menü „Mehr“ und wähle „Lesezeichen hinzufügen“. Je nach Safari-Ansicht findest du die Aktion auch im Teilen-Menü. Bestätige mit „Sichern“.';
+    case 'ios-chrome': return 'Öffne in Chrome das Teilen-Menü und wähle „Zu Lesezeichen hinzufügen“.';
+    case 'android-chrome': return 'Öffne in Chrome das Menü mit den drei Punkten und tippe auf „Zu Lesezeichen hinzufügen“ (Stern).';
+    case 'android-firefox': return 'Öffne das Firefox-Menü und tippe auf „Lesezeichen hinzufügen“ (Stern).';
+    default: return 'Öffne das Menü deines Browsers und wähle „Lesezeichen hinzufügen“ oder „Zu Favoriten hinzufügen“.';
   }
 }

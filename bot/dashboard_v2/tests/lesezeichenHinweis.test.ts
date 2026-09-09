@@ -1,174 +1,57 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { lesezeichenAnleitung } from '../src/utils/browserErkennung';
+import { canonicalBookmarkLocation, nextStep, stepState } from '../src/components/onboarding/steps';
 
-import { erkenneBrowser, kartenPosition, lesezeichenAnleitung } from '../src/utils/browserErkennung';
-
-const CHROME_WIN =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const CHROME_MAC =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const EDGE_WIN = `${CHROME_WIN} Edg/120.0.0.0`;
-const OPERA_WIN = `${CHROME_WIN} OPR/106.0.0.0`;
-const VIVALDI_WIN = `${CHROME_WIN} Vivaldi/6.5.3206.63`;
-const FIREFOX_WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0';
-const SAFARI_MAC =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
-const ANDROID_CHROME =
-  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
-const IOS_SAFARI =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
-
-const anleitungFuer = (eingabe: {
-  userAgent: string;
-  brave?: boolean;
-  platform?: string;
-  mobile?: boolean;
-}) =>
-  lesezeichenAnleitung(
-    erkenneBrowser({
-      userAgent: eingabe.userAgent,
-      brave: eingabe.brave ?? false,
-      platform: eingabe.platform ?? 'Win32',
-      mobile: eingabe.mobile ?? false,
-    }),
-  );
-
-test('Brave erkennt den Stern links neben der Adresse', () => {
-  const erkennung = erkenneBrowser({
-    userAgent: CHROME_WIN,
-    brave: true,
-    platform: 'Win32',
-    mobile: false,
-  });
-  assert.equal(erkennung.browser, 'brave');
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.position, 'links');
-  assert.equal(anleitung.symbol, 'stern');
-});
-
-test('Chrome, Edge, Firefox und Vivaldi zeigen den Stern rechts', () => {
-  for (const userAgent of [CHROME_WIN, EDGE_WIN, FIREFOX_WIN, VIVALDI_WIN]) {
-    const anleitung = anleitungFuer({ userAgent });
-    assert.equal(anleitung.position, 'rechts', userAgent);
-    assert.equal(anleitung.symbol, 'stern', userAgent);
+test('Desktop erklärt die echte Browser-Aktion mit Tastatur statt einer Sternposition', () => {
+  for (const platform of ['windows', 'mac'] as const) {
+    const text = lesezeichenAnleitung(platform);
+    assert.match(text, /Lesezeichen/);
+    assert.match(text, platform === 'mac' ? /⌘.*D/ : /Strg.*D/);
+    assert.doesNotMatch(text, /links|rechts|kopieren/i);
   }
-  assert.equal(erkenneBrowser({ userAgent: EDGE_WIN, brave: false, platform: 'Win32', mobile: false }).browser, 'edge');
-  assert.equal(
-    erkenneBrowser({ userAgent: VIVALDI_WIN, brave: false, platform: 'Win32', mobile: false }).browser,
-    'vivaldi',
-  );
-  assert.equal(
-    erkenneBrowser({ userAgent: FIREFOX_WIN, brave: false, platform: 'Win32', mobile: false }).browser,
-    'firefox',
-  );
-  assert.equal(
-    erkenneBrowser({ userAgent: CHROME_WIN, brave: false, platform: 'Win32', mobile: false }).browser,
-    'chrome',
-  );
+});
+test('Mobil legt ein Lesezeichen an, keine andere Aktion auf dem Startbildschirm', () => {
+  for (const platform of ['ios-safari', 'ios-chrome', 'android-chrome', 'android-firefox', 'other'] as const) {
+    const text = lesezeichenAnleitung(platform);
+    assert.match(text, /Lesezeichen|Favoriten/);
+    assert.doesNotMatch(text, /Home-Bildschirm|Startbildschirm|oben rechts/);
+  }
+});
+test('Lesezeichen nur an kanonischer Adresse ohne OAuth- oder Fragmentreste', () => {
+  const canonical = {origin: 'https://deutsche-deadlock-community.de', pathname: '/twitch/dashboard', search: '', hash: ''};
+  assert.equal(canonicalBookmarkLocation(canonical), true);
+  for (const change of [{search:'?ok=1'}, {search:'?state=private'}, {hash:'#feedback'}, {pathname:'/twitch/verwaltung'}, {origin:'http://localhost'}]) {
+    assert.equal(canonicalBookmarkLocation({...canonical, ...change}), false);
+  }
+});
+test('Rundgang hält Discord vor Steam; Aufrufen oder überspringen bestätigt keine Verbindung', () => {
+  assert.equal(nextStep('discord'), 'steam');
+  const status = {completed_step_ids: ['discord','steam','chat'] as any, discord_status: 'missing', steam_status: 'error'};
+  assert.equal(stepState('discord', status), 'open');
+  assert.equal(stepState('steam', status), 'error');
+  assert.equal(stepState('chat', status), 'done');
+  assert.equal(stepState('bookmark', status), 'open');
 });
 
-test('Opera zeigt das Herz rechts', () => {
-  const erkennung = erkenneBrowser({ userAgent: OPERA_WIN, brave: false, platform: 'Win32', mobile: false });
-  assert.equal(erkennung.browser, 'opera');
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.position, 'rechts');
-  assert.equal(anleitung.symbol, 'herz');
-});
-
-test('Safari auf macOS nutzt den Teilen-Knopf', () => {
-  const erkennung = erkenneBrowser({ userAgent: SAFARI_MAC, brave: false, platform: 'MacIntel', mobile: false });
-  assert.equal(erkennung.browser, 'safari');
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.symbol, 'teilen');
-  assert.deepEqual(anleitung.tastenkombi, ['⌘', 'D']);
-});
-
-test('Android bekommt den Menue-Text statt einer Pfeilkarte', () => {
-  const erkennung = erkenneBrowser({
-    userAgent: ANDROID_CHROME,
-    brave: false,
-    platform: 'Linux armv8l',
-    mobile: true,
-  });
-  assert.equal(erkennung.mobil, 'android');
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.position, 'menue');
-  assert.match(anleitung.hinweis, /Stern/);
-});
-
-test('iOS bekommt den Home-Bildschirm-Text', () => {
-  const erkennung = erkenneBrowser({
-    userAgent: IOS_SAFARI,
-    brave: false,
-    platform: 'iPhone',
-    mobile: true,
-  });
-  assert.equal(erkennung.mobil, 'ios');
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.position, 'menue');
-  assert.match(anleitung.hinweis, /Home-Bildschirm/);
-});
-
-test('macOS liefert das Cmd-Kuerzel, Windows das Strg-Kuerzel', () => {
-  const mac = anleitungFuer({ userAgent: CHROME_MAC, platform: 'MacIntel' });
-  assert.deepEqual(mac.tastenkombi, ['⌘', 'D']);
-  const win = anleitungFuer({ userAgent: CHROME_WIN, platform: 'Win32' });
-  assert.deepEqual(win.tastenkombi, ['Strg', 'D']);
-});
-
-test('Brave setzt die Karte links der Mitte mit Pfeil links', () => {
-  const pos = kartenPosition(anleitungFuer({ userAgent: CHROME_WIN, brave: true }));
-  assert.equal(pos.seite, 'links');
-  assert.equal(pos.top, '16px');
-  assert.equal(pos.left, 'max(16px, calc(50% - 560px))');
-  assert.equal(pos.right, undefined);
-  assert.equal(pos.pfeilLinks, true);
-});
-
-test('Chrome setzt die Karte rechts mit 140px Abstand und Pfeil rechts', () => {
-  const pos = kartenPosition(anleitungFuer({ userAgent: CHROME_WIN }));
-  assert.equal(pos.seite, 'rechts');
-  assert.equal(pos.top, '16px');
-  assert.equal(pos.right, '140px');
-  assert.equal(pos.left, undefined);
-  assert.equal(pos.pfeilLinks, false);
-});
-
-test('Safari setzt die Karte rechts mit 60px Abstand', () => {
-  const pos = kartenPosition(anleitungFuer({ userAgent: SAFARI_MAC, platform: 'MacIntel' }));
-  assert.equal(pos.seite, 'rechts');
-  assert.equal(pos.right, '60px');
-  assert.equal(pos.pfeilLinks, false);
-});
-
-test('Mobil bleibt beim Menue statt einer Pfeilkarte', () => {
-  const pos = kartenPosition(anleitungFuer({ userAgent: ANDROID_CHROME, platform: 'Linux armv8l', mobile: true }));
-  assert.equal(pos.seite, 'menue');
-  assert.equal(pos.top, undefined);
-  assert.equal(pos.pfeilLinks, false);
-});
-
-test('Desktop-Chrome mit userAgentData.mobile gilt als mobil', () => {
-  const erkennung = erkenneBrowser({ userAgent: CHROME_WIN, brave: false, platform: 'Win32', mobile: true });
-  assert.notEqual(erkennung.mobil, null);
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.position, 'menue');
-});
-
-test('Android-UA gilt auch ohne userAgentData.mobile als mobil', () => {
-  const erkennung = erkenneBrowser({ userAgent: ANDROID_CHROME, brave: false, platform: 'Linux armv8l', mobile: false });
-  assert.equal(erkennung.mobil, 'android');
-});
-
-test('Unbekannter Browser bleibt ohne Positionsangabe', () => {
-  const erkennung = erkenneBrowser({
-    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) UnknownBrowser/1.0',
-    brave: false,
-    platform: 'Linux x86_64',
-    mobile: false,
-  });
-  assert.equal(erkennung.browser, 'unbekannt');
-  const anleitung = lesezeichenAnleitung(erkennung);
-  assert.equal(anleitung.position, 'unbekannt');
-  assert.equal(anleitung.symbol, null);
+test('Fortschritt sendet Session und CSRF; Pause bestätigt keinen Schritt', async () => {
+  const oldWindow = globalThis.window;
+  const oldFetch = globalThis.fetch;
+  try {
+    globalThis.window = {location: {origin: 'https://deutsche-deadlock-community.de', hostname: 'deutsche-deadlock-community.de', pathname: '/twitch/dashboard'}} as Window & typeof globalThis;
+    let request: RequestInit | undefined;
+    let requestUrl = '';
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(url); request = init;
+      return new Response(JSON.stringify({ok:true, progress:{paused:true}}), {status:200, headers:{'Content-Type':'application/json'}});
+    }) as typeof fetch;
+    const {saveOnboardingProgress} = await import('../src/api/onboarding');
+    await saveOnboardingProgress({paused:true}, 'test-csrf');
+    assert.equal(requestUrl, 'https://deutsche-deadlock-community.de/twitch/api/v2/streamer/onboarding');
+    assert.equal(request?.credentials, 'same-origin');
+    assert.equal(new Headers(request?.headers).get('X-CSRF-Token'), 'test-csrf');
+    assert.deepEqual(JSON.parse(String(request?.body)), {paused:true});
+    globalThis.fetch = (async () => new Response(JSON.stringify({error:'Speichern fehlgeschlagen'}), {status:503})) as typeof fetch;
+    await assert.rejects(() => saveOnboardingProgress({complete_step:'bookmark'}, 'test-csrf'), /Speichern fehlgeschlagen/);
+  } finally { globalThis.fetch = oldFetch; globalThis.window = oldWindow; }
 });

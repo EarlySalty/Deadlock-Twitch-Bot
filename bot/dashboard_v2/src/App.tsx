@@ -19,7 +19,10 @@ import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
+import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
+import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
+import { FeedbackBox } from '@/components/feedback/FeedbackBox';
+import { FeedbackPage } from '@/pages/feedback/FeedbackPage';
 import { PlanProvider } from '@/context/PlanContext';
 import { LanguageProvider, useT } from '@/context/LanguageContext';
 import { DashboardAssistent } from '@/components/assistent/DashboardAssistent';
@@ -264,7 +267,6 @@ function AnalyticsDashboard() {
           isLocalhost={authStatus?.isLocalhost ?? false}
           isDemoMode={isDemoMode}
         >
-          <AnalyticsTour />
           <TrialExpiryModal />
           <TrialBanner />
 
@@ -357,7 +359,9 @@ function PricingRoute() {
 
 export default function App() {
   const path = normalizePathname(window.location.pathname);
-  const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE;
+  const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
+  const isHelpRoute = path === '/twitch/hilfe';
+  const isFeedbackRoute = path === '/twitch/feedback';
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
@@ -366,7 +370,6 @@ export default function App() {
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
     path === '/analyse' ||
-    path === '/twitch/onboarding' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
 
@@ -384,10 +387,15 @@ export default function App() {
           Bundles, auch fuer die Fehlergrenze. */}
       <LanguageProvider>
         <ErrorBoundary>
+        <OnboardingProvider>
           {isSocialMediaAdminRoute ? (
             <DashboardShell activeRoute="social">
               <SocialMediaAdminDashboard />
             </DashboardShell>
+          ) : isHelpRoute ? (
+            <DashboardShell activeRoute="hilfe"><EinrichtungCard help /><FeedbackBox area="Hilfe" /></DashboardShell>
+          ) : isFeedbackRoute ? (
+            <DashboardShell activeRoute="feedback"><FeedbackPage /></DashboardShell>
           ) : isVerwaltungRoute ? (
             <DashboardShell activeRoute="verwaltung">
               <VerwaltungPage />
@@ -411,6 +419,7 @@ export default function App() {
           ) : (
             <AnalyticsDashboard />
           )}
+        </OnboardingProvider>
         </ErrorBoundary>
         {zeigeAssistent && <DashboardAssistent imDokumentfluss={isUplinkRoute} />}
       </LanguageProvider>

@@ -43,16 +43,13 @@ test('SocialMediaAdmin nennt Analyse-Dashboard nur im Kommentar', () => {
   assert.match(zeilen[0], /^\s*\*/);
 });
 
-test('die Home-Seite mountet den Lesezeichen-Hinweis vor der WelcomeTour', () => {
+test('Home und Hilfe verwenden dieselbe Einrichtung statt unabhängiger Dialoge', () => {
   const home = read('src/pages/InternalHomeLanding.tsx');
-  assert.match(home, /<LesezeichenHinweis onErledigt=\{\(\) => setHinweisErledigt\(true\)\} \/>/);
-  assert.match(home, /startErlaubt=\{hinweisErledigt\}/);
-});
-
-test('die WelcomeTour bietet die Prop startErlaubt mit Default an', () => {
-  const tour = read('src/components/onboarding/WelcomeTour.tsx');
-  assert.match(tour, /startErlaubt\?:\s*boolean/);
-  assert.match(tour, /startErlaubt = true/);
+  const app = read('src/App.tsx');
+  assert.match(home, /<EinrichtungCard/);
+  assert.match(app, /<OnboardingProvider>/);
+  assert.match(app, /<EinrichtungCard help/);
+  assert.doesNotMatch(home + app, /WelcomeTour|PricingTour|AnalyticsTour|pricing-tour-pending/);
 });
 
 test('der Backlink im Woerterbuch heißt Partner Dashboard', () => {

@@ -360,6 +360,10 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
   return (
     <motion.section
+      tabIndex={-1}
+      data-tour-id="onboarding-advertising"
+      data-tour-ready="true"
+      data-unsaved={!settingsEqual(draft, baseline)}
       className="panel-card rounded-2xl p-5 md:p-6"
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}

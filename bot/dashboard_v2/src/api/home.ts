@@ -51,6 +51,7 @@ export interface InternalHomeDiscordStatus {
 }
 
 export interface InternalHomeSteamStatus {
+  status?: 'connected' | 'missing' | 'error';
   connected: boolean;
   connectUrl: string | null;
 }
@@ -576,6 +577,7 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
       lastCheckedAt: discord.last_checked_at || raw.generated_at || null,
     },
     steam: {
+      status: steam.status === 'error' ? 'error' : steamConnected ? 'connected' : 'missing',
       connected: steamConnected,
       connectUrl: steamConnectUrl,
     },

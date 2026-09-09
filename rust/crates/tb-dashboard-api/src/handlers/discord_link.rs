@@ -20,8 +20,7 @@
 //!        `discord_display_name`/`is_on_discord` (member-Flag = Rollen vorhanden).
 //!     5. `302` auf den normalisierten `next`-Pfad mit `?ok=`/`?err=`.
 //!
-//! Secret: Broker-Token aus Env (`TWITCH_INTERNAL_API_TOKEN`/`MASTER_BROKER_TOKEN`/
-//! `MAIN_BOT_INTERNAL_TOKEN`, via Infisical) — nie geloggt. Fehlt es → 503-Redirect.
+//! Secret: bestehender Broker-Token aus dem Infisical-RAM-Vertrag — nie geloggt. Fehlt es → 503-Redirect.
 
 use std::time::Duration;
 
@@ -146,9 +145,7 @@ pub async fn link_complete_handler(
         .trim()
         .to_string();
     let login_mismatch = !expected_login.is_empty() && expected_login != twitch_login.to_ascii_lowercase();
-    let user_mismatch = !expected_user_id.is_empty()
-        && !twitch_user_id.is_empty()
-        && expected_user_id != twitch_user_id;
+    let user_mismatch = expected_user_id.is_empty() || expected_user_id != twitch_user_id;
     if login_mismatch || user_mismatch {
         return redirect_status(&next_path, None, Some("Discord-Link passt nicht zur aktiven Twitch-Session."));
     }
@@ -202,17 +199,17 @@ pub fn build_discord_link_router(pool: PgPool) -> Router {
 fn partner_identity(auth: &DashboardAuthLevel) -> Option<(String, String)> {
     if let DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } = auth {
         let login = twitch_login.trim().to_ascii_lowercase();
-        if !login.is_empty() {
+        if !login.is_empty() && !twitch_user_id.is_empty() && twitch_user_id.bytes().all(|c| c.is_ascii_digit()) {
             return Some((login, twitch_user_id.trim().to_string()));
         }
     }
     None
 }
 
-/// Broker-Token aus dem Prozess-Env (Infisical). Nie geloggt.
+/// Bestehender Infisical-RAM-Vertrag, keine Environment-Variablen. Nie geloggt.
 fn broker_token() -> Option<String> {
     for key in ["TWITCH_INTERNAL_API_TOKEN", "MASTER_BROKER_TOKEN", "MAIN_BOT_INTERNAL_TOKEN"] {
-        if let Ok(value) = std::env::var(key) {
+        if let Some(value) = crate::uplink_config::platform_value(key) {
             let value = value.trim();
             if !value.is_empty() {
                 return Some(value.to_string());
@@ -226,6 +223,8 @@ fn broker_token() -> Option<String> {
 async fn broker_post(path: &str, token: &str, payload: &Value) -> Option<Value> {
     let url = format!("{}{}", BROKER_BASE_URL.trim_end_matches('/'), path);
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .timeout(Duration::from_secs(20))
         .build()
         .ok()?;
@@ -254,17 +253,16 @@ async fn broker_post(path: &str, token: &str, payload: &Value) -> Option<Value> 
 /// muss mit genau einem `/` beginnen (kein `//`, kein Scheme/Host), sonst
 /// Fallback. Spiegelt Pythons `_safe_internal_redirect`/`_canonical_post_login`.
 fn normalize_next(raw: Option<&str>) -> String {
-    let candidate = raw.unwrap_or("").trim();
-    if candidate.starts_with('/') && !candidate.starts_with("//") {
-        candidate.to_string()
-    } else {
+    let path = crate::auth::oauth_login::sanitize_next_path(raw);
+    if path == crate::auth::oauth_login::DEFAULT_POST_LOGIN_PATH {
         FALLBACK_PATH.to_string()
-    }
+    } else { path }
 }
 
 /// Redirect auf `path` mit optionalem `?ok=`/`?err=` (URL-kodiert). Hängt korrekt
 /// an bestehende Query-Strings an (`?` vs. `&`).
 fn redirect_status(path: &str, ok: Option<&str>, err: Option<&str>) -> Response {
+    let (path, fragment) = path.split_once('#').map_or((path, None), |(p, f)| (p, Some(f)));
     let mut url = path.to_string();
     let sep = if url.contains('?') { '&' } else { '?' };
     if let Some(msg) = ok {
@@ -274,6 +272,7 @@ fn redirect_status(path: &str, ok: Option<&str>, err: Option<&str>) -> Response 
         let enc: String = url::form_urlencoded::byte_serialize(msg.as_bytes()).collect();
         url = format!("{url}{sep}err={enc}");
     }
+    if let Some(fragment) = fragment { url.push('#'); url.push_str(fragment); }
     Redirect::to(&url).into_response()
 }
 
@@ -304,6 +303,8 @@ mod tests {
         assert_eq!(partner_identity(&partner("Nani", "42")), Some(("nani".into(), "42".into())));
         assert_eq!(partner_identity(&DashboardAuthLevel::admin()), None);
         assert_eq!(partner_identity(&DashboardAuthLevel::None), None);
+        assert_eq!(partner_identity(&partner("nani", "")), None);
+        assert_eq!(partner_identity(&partner("nani", "name")), None);
     }
 
     #[test]
@@ -315,6 +316,14 @@ mod tests {
         let r2 = redirect_status("/x?a=1", None, Some("Fehler"));
         let loc2 = r2.headers().get("location").unwrap().to_str().unwrap();
         assert!(loc2.starts_with("/x?a=1&err="));
+    }
+
+    #[test]
+    fn discord_rueckkehr_setzt_meldung_vor_konto_fragment() {
+        let response = redirect_status("/twitch/verwaltung#konto", Some("Verbunden"), None);
+        let location = response.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/twitch/verwaltung?ok=Verbunden#konto");
+        assert_eq!(normalize_next(Some("/\\evil.test")), FALLBACK_PATH);
     }
 
     /// Unauth → Login-Redirect (kein Broker-Call).

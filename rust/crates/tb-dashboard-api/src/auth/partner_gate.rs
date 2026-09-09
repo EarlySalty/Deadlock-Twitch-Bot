@@ -24,6 +24,10 @@ use crate::auth::session::DashboardAuthState;
 /// Python `_PASSIVE_ALLOWED_EXACT_PATHS`.
 const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
     "/twitch/verwaltung",
+    "/twitch/hilfe",
+    "/twitch/feedback",
+    "/twitch/api/v2/feedback",
+    "/twitch/api/v2/streamer/onboarding",
     "/twitch/uplink",
     "/twitch/uplink/connect/kick",
     "/twitch/uplink/connect/youtube",
@@ -53,6 +57,7 @@ const PASSIVE_ALLOWED_EXACT_PATHS: &[&str] = &[
 
 /// Python `_PASSIVE_ALLOWED_PREFIXES`.
 const PASSIVE_ALLOWED_PREFIXES: &[&str] = &[
+    "/twitch/api/v2/feedback/",
     "/twitch/auth/",
     "/callback/twitch",
     "/callback/discord",

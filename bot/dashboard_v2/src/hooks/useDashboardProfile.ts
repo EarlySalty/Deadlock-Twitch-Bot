@@ -56,7 +56,7 @@ export function useDashboardProfile() {
     isLoading: loadingProfile,
     isPlaceholderData,
   } = useQuery({
-    queryKey: ['internal-home', null],
+    queryKey: ['internal-home', null, authStatus?.twitchUserId],
     queryFn: () => fetchInternalHome(null),
     staleTime: 5 * 60 * 1000,
     enabled: canRequestInternalHome,

@@ -307,6 +307,7 @@ async fn partner_response(
         "isLocalhost": false,
         "canViewAllStreamers": false,
         "twitchLogin": login,
+        "twitchUserId": user_id,
         "adminDefaultStreamer": null,
         "displayName": null,     // in PartnerSession nicht gespeichert; Frontend liest aus twitchLogin
         "partnerStatus": access.partner_status,
@@ -482,6 +483,7 @@ mod tests {
 
         assert_eq!(value["csrfToken"], "partner-csrf");
         assert_eq!(value["csrf_token"], "partner-csrf");
+        assert_eq!(value["twitchUserId"], "99");
     }
 
     #[tokio::test]
