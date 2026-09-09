@@ -11,8 +11,6 @@ import {
   profilNameFuer,
   holeUplinkStreamKey,
   saveUplinkDestination,
-  twitchAudioFormular,
-  TWITCH_AUDIO_LABEL,
   trenneUplinkPlattform,
   TRENNEN_HINWEIS,
   VERBINDEN_HINWEIS,
@@ -27,7 +25,6 @@ import type {
   UplinkPlattformVerbindung,
   UplinkProfilAnsicht,
   UplinkProfilName,
-  UplinkTwitchAudioMode,
 } from '@/api/uplink';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import { profilText, zielBetrieb } from '@/uplinkBetrieb';
@@ -319,9 +316,6 @@ export function ZielKarte({
 
   const [rtmpUrl, setRtmpUrl] = useState(ziel?.rtmp_url || rtmpVorgabe);
   const [streamKey, setStreamKey] = useState('');
-  // null ist keine neue Wahl. Ein unberührter Altbestand bleibt beim Speichern erhalten.
-  const [audioEntwurf, setAudioEntwurf] = useState<UplinkTwitchAudioMode | null>(null);
-  const audio = twitchAudioFormular(ziel, audioEntwurf);
   const [modus, setModus] = useState<Modus>('stufe');
   const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
   const [manuell, setManuell] = useState({
@@ -476,9 +470,6 @@ export function ZielKarte({
         body.stream_key = key;
       }
       if (enabled !== undefined) body.enabled = enabled;
-      if (platform === 'twitch' && audioEntwurf !== null) {
-        body.twitch_audio_mode = audioEntwurf;
-      }
       // Die Qualitaet geht immer mit, auch beim Pausieren. Sonst verliert ein
       // Klick auf "Ziel pausieren" die Stufe, die daneben im Formular steht,
       // wortlos: die Auswahl bliebe stehen, gespeichert waere sie nicht.
@@ -540,8 +531,7 @@ export function ZielKarte({
   // gespeichert" ueber einem 1440p-Ziel waere schlicht falsch.
   const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
   const ungespeichert =
-    (eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
-    || (platform === 'twitch' && audio.geaendert);
+    eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt);
   const betrieb = zielBetrieb(ziel, chat?.status);
   const kartenStatus = betrieb.state;
   const statusText = betrieb.label;
@@ -677,52 +667,16 @@ export function ZielKarte({
         )}
 
         {platform === 'twitch' ? (
-          <fieldset
-            aria-describedby={`${basisId}-audio-hinweis`}
-            className="space-y-3 rounded-xl border border-border/60 bg-background/40 p-3"
-          >
-            <legend className="px-1 text-xs font-semibold text-white">Twitch-Ton</legend>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(['live', 'separate_vod'] as const).map((wert) => (
-                <label key={wert} className={`flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border p-3 ${audio.auswahl === wert ? 'border-primary/60 bg-primary/10' : 'border-border bg-background/70'}`}>
-                  <input
-                    type="radio"
-                    name={`${basisId}-twitch-audio`}
-                    value={wert}
-                    checked={audio.auswahl === wert}
-                    onChange={() => {
-                      setAudioEntwurf(wert);
-                      angefasst();
-                    }}
-                    className="mt-0.5 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
-                  />
-                  <span className="space-y-1">
-                    <span className="block text-sm font-semibold text-white">{TWITCH_AUDIO_LABEL[wert]}</span>
-                    <span className="block text-xs text-text-secondary">
-                      {wert === 'live'
-                        ? 'Eine Audiomischung für den Livestream und das Twitch-VOD.'
-                        : 'Eigener Mix für das Twitch-VOD. Benötigt eine zweite Audiomischung aus OBS.'}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <p id={`${basisId}-audio-hinweis`} className="text-xs text-text-secondary">
-              Änderungen gelten ab dem nächsten Stream. Bei separatem VOD-Ton wird der Live-Mix niemals als Ersatz verwendet.
+          <section aria-label="Ton" className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
+            <h3 className="text-xs font-semibold text-white">Ton</h3>
+            <p className="text-xs text-text-secondary" aria-live="polite">
+              {ziel?.audio?.source_tracks == null
+                ? 'Sobald du streamst, steht hier, welchen Ton das Twitch-VOD bekommt.'
+                : ziel.audio.source_tracks === 1
+                  ? 'Ton aus OBS: 1 Spur. Livestream und Twitch-VOD bekommen denselben Ton.'
+                  : `Ton aus OBS: ${ziel.audio.source_tracks} Spuren. Spur 1 läuft live, Spur 2 wird der Ton im Twitch-VOD.`}
             </p>
-            {(audio.auswahl ?? audio.naechsterStream) === 'separate_vod' ? (
-              <p className="text-xs text-text-secondary">
-                Kommt nur eine Audiomischung an, bleibt dieser Twitch-Ausgang angehalten. Wähle dann bewusst Live-Ton oder richte die zweite Mischung in OBS ein.
-              </p>
-            ) : null}
-            <div className="space-y-1 text-xs text-text-secondary" aria-live="polite">
-              <p>{audio.gespeichert ? `Gespeichert: ${TWITCH_AUDIO_LABEL[audio.gespeichert]}.`
-                : 'Noch keine eigene Audiowahl gespeichert. Die bisherige Einstellung bleibt erhalten.'}</p>
-              <p>Für den nächsten Stream: {audio.naechsterStream ? TWITCH_AUDIO_LABEL[audio.naechsterStream] : 'noch nicht bestätigt'}.</p>
-              <p>Laufender Twitch-Ton: {audio.aktiv ? TWITCH_AUDIO_LABEL[audio.aktiv] : 'noch nicht bestätigt'}.</p>
-              {audio.geaendert ? <p className="text-primary">Audiowahl noch nicht gespeichert.</p> : null}
-            </div>
-          </fieldset>
+          </section>
         ) : null}
 
         <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">

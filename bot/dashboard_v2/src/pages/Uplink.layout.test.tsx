@@ -3,12 +3,57 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createServer } from 'vite';
+import '../api/uplink.test';
 
 const PAGES_ROOT = import.meta.dirname;
 const UPLINK = readFileSync(join(PAGES_ROOT, 'Uplink.tsx'), 'utf8');
 const ZIEL = readFileSync(join(PAGES_ROOT, 'UplinkZiel.tsx'), 'utf8');
 const FIXTURES = readFileSync(join(PAGES_ROOT, '../preview/fixtures.ts'), 'utf8');
 const UPLINK_API = readFileSync(join(PAGES_ROOT, '../api/uplink.ts'), 'utf8');
+
+test('die gerenderte Twitch-Karte zeigt automatisch genau einen Tonabsatz', async (t) => {
+  const vite = await createServer({
+    configFile: false,
+    envDir: false,
+    root: join(PAGES_ROOT, '../..'),
+    resolve: { alias: { '@': join(PAGES_ROOT, '..') } },
+    server: { middlewareMode: true },
+  });
+  try {
+    const { ZielKarte } = await vite.ssrLoadModule('/src/pages/UplinkZiel.tsx');
+    for (const [source_tracks, vod, text] of [
+      [null, null, 'Sobald du streamst, steht hier, welchen Ton das Twitch-VOD bekommt.'],
+      [1, 'gleich', 'Ton aus OBS: 1 Spur. Livestream und Twitch-VOD bekommen denselben Ton.'],
+      [2, 'zweite_spur', 'Ton aus OBS: 2 Spuren. Spur 1 läuft live, Spur 2 wird der Ton im Twitch-VOD.'],
+      [3, 'zweite_spur', 'Ton aus OBS: 3 Spuren. Spur 1 läuft live, Spur 2 wird der Ton im Twitch-VOD.'],
+    ] as const) {
+      await t.test(`Quellspuren: ${source_tracks ?? 'kein Stream'}`, () => {
+        const client = new QueryClient();
+        try {
+          const html = renderToStaticMarkup(createElement(QueryClientProvider, { client },
+            createElement(ZielKarte, {
+              platform: 'twitch', label: 'Twitch', rtmpVorgabe: '', caps: undefined, offenStart: true,
+              ziel: { platform: 'twitch', rtmp_url: '', enabled: true, audio: { source_tracks, vod } },
+            })));
+          const abschnitt = html.match(/<section[^>]*aria-label="Ton"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+          assert.ok(abschnitt, 'Die Twitch-Karte braucht einen Abschnitt Ton.');
+          assert.equal(abschnitt.match(/<p\b/g)?.length, 1);
+          assert.ok(abschnitt.includes(text), `Der Tonabsatz muss lauten: ${text}`);
+          assert.doesNotMatch(abschnitt, /<(?:input|button|fieldset)\b/);
+          assert.doesNotMatch(html, /type="radio"|Audiowahl|twitch_audio_mode/);
+        } finally {
+          client.clear();
+        }
+      });
+    }
+  } finally {
+    await vite.close();
+  }
+});
 
 test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzustände', () => {
   assert.doesNotMatch(UPLINK, /data-section="uplink-status"/);

@@ -523,12 +523,10 @@ export interface UplinkLiveQualitaet {
   message: string;
 }
 
-export type UplinkTwitchAudioMode = 'live' | 'separate_vod';
-
-export const TWITCH_AUDIO_LABEL: Record<UplinkTwitchAudioMode, string> = {
-  live: 'Live-Ton',
-  separate_vod: 'Separater Twitch-VOD-Ton',
-};
+export interface UplinkAudioStatus {
+  source_tracks: number | null;
+  vod: 'gleich' | 'zweite_spur' | null;
+}
 
 /**
  * Ein Ziel speichern. Drei Faelle, alle ueber denselben Aufruf:
@@ -548,8 +546,6 @@ export function saveUplinkDestination(body: {
   profil?: UplinkProfilName;
   manuell?: UplinkManuellesProfil;
   enabled?: boolean;
-  /** Nur für Twitch; weglassen erhält die bisherige Wahl, auch einen Altbestand ohne Wahl. */
-  twitch_audio_mode?: UplinkTwitchAudioMode;
 }): Promise<{ destinations: UplinkDestination[]; live_quality?: UplinkLiveQualitaet }> {
   return fetchJson('/twitch/api/v2/uplink/destinations', withCookieCredentials({
     method: 'PUT',
@@ -588,12 +584,7 @@ export interface UplinkDestination extends ZielBetriebsdaten {
   platform: string;
   rtmp_url: string;
   enabled: boolean;
-  /** Ausdrücklich gespeichert; null bedeutet weiterhin die bisherige Servereinstellung. */
-  twitch_audio_mode?: UplinkTwitchAudioMode | null;
-  /** Vom Dienst bestätigte Wahl oder bisherige Einstellung für den nächsten Stream. */
-  effective_audio_mode?: UplinkTwitchAudioMode | null;
-  /** Nur aus dem tatsächlich sendenden Graph, nie aus dem gespeicherten Wunsch. */
-  active_audio_mode?: UplinkTwitchAudioMode | null;
+  audio?: UplinkAudioStatus;
   /** Gespeicherter Wunsch. Die tatsächliche Ausgabe steht in active_profile. */
   requested?: UplinkProfilAnsicht;
   /**
@@ -603,25 +594,6 @@ export interface UplinkDestination extends ZielBetriebsdaten {
    * zeigt sie wieder einen anderen Wert an, als im Eingabefeld steht.
    */
   effective?: UplinkProfilAnsicht;
-}
-
-/** Ein lokaler Entwurf bleibt bei Refetch bestehen; er ändert keine laufende Ausgabe. */
-export function twitchAudioFormular(
-  ziel: UplinkDestination | undefined,
-  entwurf: UplinkTwitchAudioMode | null,
-) {
-  const bekannt = (wert: unknown): UplinkTwitchAudioMode | null =>
-    wert === 'live' || wert === 'separate_vod' ? wert : null;
-  const twitch = ziel?.platform === 'twitch' ? ziel : undefined;
-  const gespeichert = bekannt(twitch?.twitch_audio_mode);
-  return {
-    auswahl: entwurf ?? gespeichert,
-    gespeichert,
-    naechsterStream: bekannt(twitch?.effective_audio_mode),
-    aktiv: twitch?.output_state === 'sending' && !twitch.blocked
-      ? bekannt(twitch.active_audio_mode) : null,
-    geaendert: entwurf !== null && entwurf !== gespeichert,
-  };
 }
 
 export function fetchUplinkDestinations(): Promise<{ destinations: UplinkDestination[] }> {
