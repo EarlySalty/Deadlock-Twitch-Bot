@@ -2541,16 +2541,16 @@ impl PromoEngine {
             return;
         }
 
-        let session_id: i64 = sqlx::query_scalar!(
+        let session_id: i64 = match sqlx::query_scalar!(
             "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = $1",
             login,
         )
         .fetch_optional(&self.pool)
         .await
-        .ok()
-        .flatten()
-        .flatten()
-        .unwrap_or(0);
+        {
+            Ok(row) => row.flatten().unwrap_or(0),
+            Err(_) => return,
+        };
 
         let antworten = {
             let state_ref = self
@@ -2580,10 +2580,21 @@ impl PromoEngine {
             "@{} bei den Kanalpunkten, Belohnung Lurker Steuer. Danach bist du frei.",
             event.chatter_user_login
         );
-        let _ = self
+        let sent = self
             .api
             .send_message(&event.broadcaster_user_id, &text)
-            .await;
+            .await
+            .is_ok();
+        if !sent {
+            let state_ref = self
+                .channel_states
+                .entry(login.clone())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            if state.lurker_followup_answered.0 == session_id {
+                state.lurker_followup_answered.1.remove(&chatter);
+            }
+        }
     }
 
     pub async fn thank_lurker_tax_redeemer(
@@ -3537,63 +3548,6 @@ mod tests {
         assert!(
             gesehen.len() >= 2,
             "es sollten mehrere Dank-Varianten vorkommen: {gesehen:?}"
-        );
-    }
-
-    fn followup_event(channel_login: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
-        ChatMessageEvent {
-            broadcaster_user_id: "bid".to_string(),
-            broadcaster_user_login: channel_login.to_string(),
-            chatter_user_id: "cid".to_string(),
-            chatter_user_login: chatter_login.to_string(),
-            message: crate::types::ChatMessageBody {
-                text: text.to_string(),
-                fragments: Vec::new(),
-            },
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn lurker_followup_antwortet_einmal_je_session() {
-        let api = Arc::new(MockApi::default());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
-        {
-            let state_ref = engine
-                .channel_states
-                .entry("kanal".to_string())
-                .or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state
-                .lurker_reminded_at
-                .1
-                .insert("lurk".to_string(), Instant::now());
-        }
-        let event = followup_event("kanal", "lurk", "wo finde ich das?");
-        engine.maybe_answer_lurker_followup(&event).await;
-        assert_eq!(
-            api.message_count().await,
-            1,
-            "erste Nachfrage eines erinnerten Zuschauers wird beantwortet"
-        );
-        engine.maybe_answer_lurker_followup(&event).await;
-        assert_eq!(
-            api.message_count().await,
-            1,
-            "zweite Nachfrage in derselben Session bleibt still"
-        );
-    }
-
-    #[tokio::test]
-    async fn lurker_followup_ignoriert_nicht_erinnerte() {
-        let api = Arc::new(MockApi::default());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
-        let event = followup_event("kanal", "fremd", "wo denn?");
-        engine.maybe_answer_lurker_followup(&event).await;
-        assert_eq!(
-            api.message_count().await,
-            0,
-            "nicht erinnerter Zuschauer bekommt keine Antwort"
         );
     }
 
@@ -6519,6 +6473,68 @@ mod db_tests {
             api.message_count().await,
             1,
             "zweiter Dank je Zuschauer und Session unterbleibt"
+        );
+    }
+
+    fn followup_event(channel_id: &str, channel_login: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: channel_id.to_string(),
+            broadcaster_user_login: channel_login.to_string(),
+            chatter_user_id: "cid".to_string(),
+            chatter_user_login: chatter_login.to_string(),
+            message: crate::types::ChatMessageBody {
+                text: text.to_string(),
+                fragments: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn lurker_followup_antwortet_einmal_je_session() {
+        let pool = pool_or_skip!("promo_followup_einmal");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let session_id = seed_live_channel(&pool, "fkanal", "u-f").await;
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("fkanal".to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.lurker_reminded_at = (session_id, HashMap::new());
+            state
+                .lurker_reminded_at
+                .1
+                .insert("lurk".to_string(), Instant::now());
+        }
+        let event = followup_event("u-f", "fkanal", "lurk", "wo finde ich das?");
+        engine.maybe_answer_lurker_followup(&event).await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "erste Nachfrage eines erinnerten Zuschauers wird beantwortet"
+        );
+        engine.maybe_answer_lurker_followup(&event).await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "zweite Nachfrage in derselben Session bleibt still"
+        );
+    }
+
+    #[tokio::test]
+    async fn lurker_followup_ignoriert_nicht_erinnerte() {
+        let pool = pool_or_skip!("promo_followup_fremd");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        seed_live_channel(&pool, "fkanal", "u-f").await;
+        let event = followup_event("u-f", "fkanal", "fremd", "wo denn?");
+        engine.maybe_answer_lurker_followup(&event).await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "nicht erinnerter Zuschauer bekommt keine Antwort"
         );
     }
 
