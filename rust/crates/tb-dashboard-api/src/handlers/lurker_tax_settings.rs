@@ -396,6 +396,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn req7_readiness_via_bot_kapabilitaet_ohne_streamer_scope() {
+        let Some(pool) = make_pool("t_lurkertax_botcap").await else {
+            return;
+        };
+        sqlx::query(
+            "CREATE TABLE twitch_bot_capabilities (\
+             id SMALLINT PRIMARY KEY DEFAULT 1, \
+             has_chatters_scope BOOLEAN NOT NULL, \
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO twitch_bot_capabilities (id, has_chatters_scope) VALUES (1, FALSE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(
+            j["has_moderator_read_chatters"], false,
+            "ohne Streamer-Scope und ohne Bot-Kapabilität fehlt die Berechtigung"
+        );
+
+        sqlx::query("UPDATE twitch_bot_capabilities SET has_chatters_scope = TRUE WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (_s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            j["has_moderator_read_chatters"], true,
+            "gesetzte Bot-Kapabilität genügt auch ohne Streamer-Scope"
+        );
+    }
+
+    #[tokio::test]
     async fn unauth_401_und_admin_braucht_streamer() {
         let Some(pool) = make_pool("t_lurkertax_auth").await else {
             return;

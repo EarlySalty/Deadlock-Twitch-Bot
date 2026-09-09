@@ -3231,6 +3231,70 @@ mod tests {
         assert!(!text.contains("@c"), "Mehr als 2 Mentions nicht erlaubt");
     }
 
+    #[tokio::test]
+    async fn req2_lurker_tax_text_ein_name_nennt_belohnung() {
+        let engine = make_engine_no_db();
+        let text = engine.build_lurker_tax_text(&["xy".to_string()]);
+        assert_eq!(
+            text,
+            "Hey @xy, schön dass du da bist! Vergiss nicht, deine Lurker Steuer zu zahlen: Belohnung 'Lurker Steuer' einlösen."
+        );
+    }
+
+    #[tokio::test]
+    async fn req2_lurker_tax_text_zwei_namen_ein_satz() {
+        let engine = make_engine_no_db();
+        let text = engine.build_lurker_tax_text(&["alice".to_string(), "bob".to_string()]);
+        assert!(text.contains("@alice"), "erste Erwähnung fehlt: {text}");
+        assert!(text.contains("@bob"), "zweite Erwähnung fehlt: {text}");
+        assert!(
+            text.contains("Belohnung 'Lurker Steuer' einlösen."),
+            "Belohnungshinweis fehlt: {text}"
+        );
+        assert!(
+            !text.contains('—') && !text.contains('–'),
+            "keine Gedankenstriche erlaubt: {text}"
+        );
+        assert!(
+            !text.contains("Channel-Points"),
+            "alter Reminder-Text darf nicht mehr erscheinen: {text}"
+        );
+        assert_eq!(
+            text.matches('!').count(),
+            1,
+            "beide Erwähnungen gehören in einen Satz: {text}"
+        );
+    }
+
+    #[test]
+    fn req1_lurker_tax_title_matches_erkennt_varianten() {
+        assert!(lurker_tax_title_matches("Lurker Steuer"));
+        assert!(lurker_tax_title_matches("lurker steuern"));
+        assert!(lurker_tax_title_matches("LURKER STEUER "));
+        assert!(lurker_tax_title_matches("LURKER STEUER 10"));
+        assert!(lurker_tax_title_matches("Lurker  Steuer"));
+        assert!(!lurker_tax_title_matches("Steuer"));
+        assert!(!lurker_tax_title_matches("Lurker"));
+        assert!(!lurker_tax_title_matches(""));
+    }
+
+    #[tokio::test]
+    async fn req3_dank_hoechstens_einmal_je_zuschauer_und_session() {
+        let api = Arc::new(MockApi::default());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+        engine
+            .thank_lurker_tax_redeemer("u-tax", "taxkanal", "xy")
+            .await;
+        engine
+            .thank_lurker_tax_redeemer("u-tax", "taxkanal", "xy")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "Dank je Zuschauer und Session höchstens einmal"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Neue Chatter im Fenster
     // -----------------------------------------------------------------------
@@ -5853,6 +5917,203 @@ mod db_tests {
 
         let candidates = engine.get_lurker_tax_candidates("renamekanal").await;
         assert_eq!(candidates, vec!["newlogin".to_string()]);
+    }
+
+    async fn create_channel_points_table(pool: &PgPool) {
+        sqlx::query(
+            "CREATE TABLE twitch_channel_points_events (
+                id BIGSERIAL PRIMARY KEY,
+                session_id BIGINT,
+                twitch_user_id TEXT NOT NULL,
+                user_login TEXT,
+                reward_id TEXT,
+                reward_title TEXT,
+                reward_cost INTEGER,
+                user_input TEXT,
+                redeemed_at TEXT NOT NULL
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_live_channel(pool: &PgPool, login: &str, uid: &str) -> i64 {
+        let live_session_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
+             VALUES ($1, 10.0)
+             RETURNING id",
+        )
+        .bind(login)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, active_session_id)
+             VALUES ($1, $2, 1, $3)",
+        )
+        .bind(uid)
+        .bind(login)
+        .bind(live_session_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        live_session_id
+    }
+
+    async fn seed_qualifying_lurker(
+        pool: &PgPool,
+        login: &str,
+        live_session_id: i64,
+        chatter: &str,
+        chatter_id: &str,
+    ) {
+        for s in 0i64..3 {
+            let sid: i64 = sqlx::query_scalar(
+                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
+                 VALUES ($1, NOW() - ($2 || ' hours')::INTERVAL, 5.0)
+                 RETURNING id",
+            )
+            .bind(login)
+            .bind(s + 2)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO twitch_session_chatters
+                 (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api,
+                  first_message_at, last_seen_at)
+                 VALUES ($1, $2, $3, $4, 0, TRUE,
+                  NOW() - INTERVAL '6 hours', NOW() - INTERVAL '4 hours 30 minutes')",
+            )
+            .bind(sid)
+            .bind(login)
+            .bind(chatter)
+            .bind(chatter_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters
+             (session_id, streamer_login, chatter_login, chatter_id, messages, seen_via_chatters_api,
+              first_message_at, last_seen_at)
+             VALUES ($1, $2, $3, $4, 0, TRUE,
+              NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '1 minute')",
+        )
+        .bind(live_session_id)
+        .bind(login)
+        .bind(chatter)
+        .bind(chatter_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn req4_eingeloester_zuschauer_nicht_mehr_erinnert() {
+        let pool = pool_or_skip!("promo_lurker_redeemed");
+        create_channel_points_table(&pool).await;
+        let engine = make_engine(pool.clone());
+        let live = seed_live_channel(&pool, "steuerkanal", "u-steuer").await;
+        seed_qualifying_lurker(&pool, "steuerkanal", live, "steuerzahler", "id-zahler").await;
+        seed_qualifying_lurker(&pool, "steuerkanal", live, "lurkerin", "id-lurkerin").await;
+
+        sqlx::query(
+            "INSERT INTO twitch_channel_points_events
+             (session_id, twitch_user_id, user_login, reward_title, redeemed_at)
+             VALUES ($1, 'u-steuer', 'steuerzahler', 'Lurker Steuer', '2026-09-09T00:00:00Z')",
+        )
+        .bind(live)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_channel_points_events
+             (session_id, twitch_user_id, user_login, reward_title, redeemed_at)
+             VALUES ($1, 'u-steuer', 'lurkerin', 'Highlight My Message', '2026-09-09T00:00:00Z')",
+        )
+        .bind(live)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let candidates = engine.get_lurker_tax_candidates("steuerkanal").await;
+        assert!(
+            candidates.contains(&"lurkerin".to_string()),
+            "Wer eine andere Belohnung einlöst, bleibt Kandidatin: {candidates:?}"
+        );
+        assert!(
+            !candidates.contains(&"steuerzahler".to_string()),
+            "Wer die Lurker Steuer dieser Session eingelöst hat, darf nicht mehr erinnert werden: {candidates:?}"
+        );
+    }
+
+    struct FakeReward(bool);
+
+    #[async_trait]
+    impl LurkerRewardChecker for FakeReward {
+        async fn active_lurker_reward_exists(&self, _broadcaster_id: &str) -> bool {
+            self.0
+        }
+    }
+
+    async fn seed_sending_channel(pool: &PgPool, login: &str, uid: &str) {
+        let live = seed_live_channel(pool, login, uid).await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
+             VALUES ($1, $2, 1, 'raid_boost')",
+        )
+        .bind(uid)
+        .bind(login)
+        .execute(pool)
+        .await
+        .unwrap();
+        seed_qualifying_lurker(pool, login, live, "lurker1", "uid-lurker1").await;
+    }
+
+    #[tokio::test]
+    async fn req5_reminder_blockt_wenn_belohnung_fehlt() {
+        let pool = pool_or_skip!("promo_lurker_reward_absent");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                "moderator:read:chatters".into(),
+            ])))
+            .set_lurker_reward_checker(Arc::new(FakeReward(false)));
+        seed_sending_channel(&pool, "rewardkanal", "u-reward").await;
+
+        engine
+            .maybe_send_lurker_tax_reminder("rewardkanal", "u-reward", Instant::now())
+            .await;
+
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "ohne aktive Belohnung darf keine Erinnerung gehen"
+        );
+    }
+
+    #[tokio::test]
+    async fn req5_reminder_sendet_wenn_belohnung_aktiv() {
+        let pool = pool_or_skip!("promo_lurker_reward_present");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                "moderator:read:chatters".into(),
+            ])))
+            .set_lurker_reward_checker(Arc::new(FakeReward(true)));
+        seed_sending_channel(&pool, "rewardkanal2", "u-reward2").await;
+
+        engine
+            .maybe_send_lurker_tax_reminder("rewardkanal2", "u-reward2", Instant::now())
+            .await;
+
+        assert_eq!(
+            api.announcement_count().await,
+            1,
+            "mit aktiver Belohnung muss die Erinnerung gehen"
+        );
     }
 
     #[tokio::test]
