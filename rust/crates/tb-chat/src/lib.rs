@@ -103,9 +103,9 @@ pub use pipeline::{
     SCAM_PITCH_TIMEOUT_REASON,
 };
 pub use promo_pitch::{
-    build_channel_promo_text, parse_pitch_response, pitch_filter_reject, ChannelPromoContext,
-    FireworksPitchJudge, FireworksPitchTextGen, PitchJudge, PitchJudgeInput, PitchOccasion,
-    PitchRejectReason, PitchResponse, PitchTextGen,
+    build_channel_promo_text, build_targeted_pitch_text, parse_pitch_response, pitch_filter_reject,
+    ChannelPromoContext, FireworksPitchJudge, FireworksPitchTextGen, PitchJudge, PitchJudgeInput,
+    PitchOccasion, PitchRejectReason, PitchResponse, PitchTextGen, TargetedPitchContext,
 };
 pub use promos::{
     promo_invite_fallback, NoopSuppressionCheck, PartnerChannelCheck, PitchReviewSink, PromoEngine,
