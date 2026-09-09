@@ -3,19 +3,19 @@ import {
   EARLYSALTY_WEBSITE_URL,
   TWITCH_AGB_URL,
   TWITCH_DATENSCHUTZ_URL,
+  TWITCH_DASHBOARD_URL,
   TWITCH_DEMO_DASHBOARD_URL,
   TWITCH_FAQ_URL,
   TWITCH_IMPRESSUM_URL,
   TWITCH_ONBOARDING_URL,
-  buildTwitchDashboardLoginUrl,
 } from "@/data/externalLinks";
 
 const FOOTER_LINKS = [
   { label: "Streamer-Vergleich", href: "/streamer/vergleich/" },
   { label: "Onboarding", href: TWITCH_ONBOARDING_URL },
   { label: "FAQ", href: TWITCH_FAQ_URL },
-  { label: "Login", href: buildTwitchDashboardLoginUrl() },
-  { label: "Demo", href: TWITCH_DEMO_DASHBOARD_URL },
+  { label: "Partner-Dashboard", href: TWITCH_DASHBOARD_URL },
+  { label: "Dashboard-Demo", href: TWITCH_DEMO_DASHBOARD_URL },
   { label: "Website", href: EARLYSALTY_WEBSITE_URL },
   { label: "Discord", href: DISCORD_INVITE_URL },
   { label: "Impressum", href: TWITCH_IMPRESSUM_URL },

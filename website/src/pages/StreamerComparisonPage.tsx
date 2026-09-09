@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { PublicInfoFooter } from "@/components/layout/PublicInfoFooter";
 import { PublicInfoHeader } from "@/components/layout/PublicInfoHeader";
+import { TWITCH_DASHBOARD_URL } from "@/data/externalLinks";
 
 type Days = 7 | 30 | 90;
 type SortKey =
@@ -403,7 +404,7 @@ export function StreamerComparisonPage() {
           { label: "Methodik", href: "#methodik" },
         ]}
         primaryAction={{ label: "Streamer werden", href: "/twitch/onboarding" }}
-        secondaryAction={{ label: "Dashboard", href: "/analyse" }}
+        secondaryAction={{ label: "Partner-Dashboard", href: TWITCH_DASHBOARD_URL }}
       />
 
       <main className="overflow-hidden pt-16">
