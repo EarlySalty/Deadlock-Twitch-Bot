@@ -1339,9 +1339,12 @@ impl DashboardAuthState {
             return Ok(None);
         }
         let row = sqlx::query_as::<_, (String, String)>(
-            "SELECT twitch_login, twitch_user_id FROM twitch_partners
-             WHERE twitch_user_id = $1
-               AND LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'",
+            "SELECT twitch_login, twitch_user_id FROM (
+                SELECT * FROM twitch_partners WHERE twitch_user_id = $1
+                ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END,
+                    COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
+                LIMIT 1
+             ) current_partner WHERE LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -1387,7 +1390,12 @@ impl DashboardAuthState {
                     WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
                     THEN NULL ELSE technical_pause_reason
                 END
-            WHERE twitch_user_id = $2
+            WHERE id = (
+                SELECT id FROM twitch_partners WHERE twitch_user_id = $2
+                ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END,
+                    COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
+                LIMIT 1 FOR UPDATE
+              )
               AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
               -- Signup-Block: wer nicht ins Partnerprogramm gehoert, heilt sich
               -- auch nicht per Login zurueck. Eigenstaendiger Zustand, deshalb
@@ -1876,7 +1884,10 @@ impl DashboardAuthState {
                 AND COALESCE(manual_partner_opt_out, 0) = 0
                 AND COALESCE(technical_pause_reason, '') = ''
                 AND admin_archived_at IS NULL
-             FROM twitch_partners WHERE twitch_user_id = $1",
+             FROM twitch_partners WHERE twitch_user_id = $1
+             ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END,
+                 COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
+             LIMIT 1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -2968,7 +2979,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_partners (
-                twitch_login TEXT,
+                id BIGSERIAL PRIMARY KEY, twitch_login TEXT,
                 twitch_user_id TEXT,
                 status TEXT,
                 technical_pause_reason TEXT,
@@ -3147,7 +3158,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         };
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
-                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT, status TEXT,
                 technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
                 departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
                 partnered_at TIMESTAMPTZ, raid_bot_enabled INTEGER,
@@ -3231,7 +3242,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         ensure_sessions_table(&pool).await;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
-                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT, status TEXT,
                 technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
                 departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
                 partnered_at TIMESTAMPTZ)",
@@ -3300,7 +3311,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         };
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
-                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT, status TEXT,
                 technical_pause_reason TEXT, manual_partner_opt_out INTEGER,
                 departnered_at TIMESTAMPTZ, admin_archived_at TIMESTAMPTZ,
                 partnered_at TIMESTAMPTZ)",
@@ -3548,10 +3559,12 @@ mod identity_regression_tests {
     #[tokio::test]
     async fn recycled_login_never_changes_authenticated_id_in_either_session_type() {
         let db = crate::test_database::Database::new().await;
-        sqlx::raw_sql("CREATE TABLE twitch_partners(twitch_login TEXT NOT NULL,twitch_user_id TEXT PRIMARY KEY,status TEXT,technical_pause_reason TEXT,manual_partner_opt_out INTEGER,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
+        sqlx::raw_sql("CREATE TABLE twitch_partners(id BIGSERIAL PRIMARY KEY,twitch_login TEXT NOT NULL,twitch_user_id TEXT,status TEXT,technical_pause_reason TEXT,manual_partner_opt_out INTEGER,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
             CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL);
             CREATE TABLE twitch_partner_signup_denylist(twitch_user_id TEXT,twitch_login TEXT);
-            INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,manual_partner_opt_out) VALUES ('recycled','111','active',0),('old_name','222','archived',0);")
+            INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,manual_partner_opt_out) VALUES ('recycled','111','active',0),('old_name','222','archived',0),('older_name','222','departnered',0),('former','111','archived',0);
+            CREATE UNIQUE INDEX one_active_partner_per_id ON twitch_partners(twitch_user_id) WHERE status='active';
+            INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,technical_pause_reason) VALUES('blocked_current','403','active','blocked'),('allowed_old','403','archived',NULL);")
             .execute(&db.pool).await.unwrap();
         let state = DashboardAuthState::new(
             db.pool.clone(),
@@ -3577,6 +3590,16 @@ mod identity_regression_tests {
             .unwrap()
             .is_none());
         assert!(!state.is_partner_active("recycled", "222").await);
+        assert!(state.is_partner_active("other_name", "111").await);
+        assert!(state
+            .find_partner_for_login("allowed_old", "403")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!state
+            .reactivate_partner("allowed_old", "403")
+            .await
+            .unwrap());
         let regular = state
             .create_partner_session("recycled", "222", "New name")
             .await

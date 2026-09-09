@@ -76,6 +76,21 @@ pub struct LinkBody {
     pub next: Option<String>,
 }
 
+async fn partner_link_target(pool: &PgPool, login: &str) -> Result<Option<String>, sqlx::Error> {
+    let ids = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT twitch_user_id FROM twitch_partners WHERE LOWER(twitch_login)=$1
+         AND twitch_user_id ~ '^[0-9]+$' LIMIT 2",
+    )
+    .bind(login)
+    .fetch_all(pool)
+    .await?;
+    Ok(if ids.len() == 1 {
+        ids.into_iter().next()
+    } else {
+        None
+    })
+}
+
 /// `POST /twitch/auth/partner/link` — Admin/Localhost erzeugt einen Einmal-Link.
 pub async fn link_handler(
     auth: DashboardAuthLevel,
@@ -133,15 +148,27 @@ pub async fn link_handler(
     };
     // Der Admin wählt den Zielpartner. Die Berechtigung wird ab hier an seine ID
     // gebunden und beim Einlösen niemals erneut aus einem Namen abgeleitet.
-    let targets = sqlx::query_scalar::<_, String>(
-        "SELECT twitch_user_id FROM twitch_partners WHERE LOWER(twitch_login)=$1
-         AND twitch_user_id ~ '^[0-9]+$' AND LOWER(COALESCE(technical_pause_reason,'')) <> 'blocked' LIMIT 2")
-        .bind(&login).fetch_all(&pool).await;
-    let twitch_user_id = match targets {
-        Ok(ids) if ids.len() == 1 => ids[0].clone(),
-        Ok(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Partner nicht eindeutig gefunden. Bitte die Partnerzuordnung prüfen."}))).into_response(),
+    let twitch_user_id = match partner_link_target(&pool, &login).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Partner nicht eindeutig gefunden. Bitte die Partnerzuordnung prüfen."}))).into_response(),
         Err(error) => { warn!(%error, "Partnerziel konnte nicht geladen werden"); return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error":"Partner konnte gerade nicht geprüft werden."}))).into_response(); }
     };
+    match state.find_partner_for_login(&login, &twitch_user_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Dieser Partner ist nicht für den Dashboard-Zugang freigegeben."})),
+        )
+            .into_response(),
+        Err(error) => {
+            warn!(%error, "Partnerstatus konnte nicht geprüft werden");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error":"Partner konnte gerade nicht geprüft werden."})),
+            )
+                .into_response();
+        }
+    }
     let next_path = sanitize_next_path(body.next.as_deref());
 
     let now = unix_now();
@@ -655,5 +682,41 @@ mod tests {
         assert_eq!(extract_token("token=abc%2Edef").as_deref(), Some("abc.def"));
         assert_eq!(extract_token("nothing=here").as_deref(), None);
         assert_eq!(extract_token("").as_deref(), None);
+    }
+}
+
+#[cfg(test)]
+mod target_identity_tests {
+    use super::*;
+    #[tokio::test]
+    async fn historical_rows_are_one_target_but_recycled_names_are_ambiguous() {
+        let db = crate::test_database::Database::new().await;
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_partners(twitch_login TEXT,twitch_user_id TEXT);
+            INSERT INTO twitch_partners VALUES('same','42'),('same','42'),('unknown_id',NULL);",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            partner_link_target(&db.pool, "same")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("42")
+        );
+        assert!(partner_link_target(&db.pool, "unknown_id")
+            .await
+            .unwrap()
+            .is_none());
+        sqlx::query("INSERT INTO twitch_partners VALUES('same','43')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(partner_link_target(&db.pool, "same")
+            .await
+            .unwrap()
+            .is_none());
+        db.close().await;
     }
 }

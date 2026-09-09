@@ -520,7 +520,9 @@ async fn apply_update(
     } else {
         None
     };
-    sqlx::query("UPDATE dashboard_feedback SET shared_updated_at=CASE WHEN (status,result_path,roadmap_id,duplicate_of,decision_reason) IS DISTINCT FROM ($2,$3,$4,$5,$6) THEN clock_timestamp() ELSE shared_updated_at END,status=$2,result_path=$3,roadmap_id=$4,duplicate_of=$5,decision_reason=$6,revision=revision+1,updated_at=clock_timestamp(),admin_read=TRUE WHERE id=$1")
+    // Bei gleicher Roadmap ist deren Status bereits öffentlich sichtbar. Seine lokale
+    // Synchronisation anlässlich einer privaten Antwort ist kein neues Ereignis für Duplikate.
+    sqlx::query("UPDATE dashboard_feedback SET shared_updated_at=CASE WHEN (CASE WHEN roadmap_id IS NOT NULL AND roadmap_id IS NOT DISTINCT FROM $4 THEN $2 ELSE status END,result_path,roadmap_id,duplicate_of,decision_reason) IS DISTINCT FROM ($2,$3,$4,$5,$6) THEN clock_timestamp() ELSE shared_updated_at END,status=$2,result_path=$3,roadmap_id=$4,duplicate_of=$5,decision_reason=$6,revision=revision+1,updated_at=clock_timestamp(),admin_read=TRUE WHERE id=$1")
         .bind(id).bind(&status).bind(&body.result_path).bind(body.roadmap_id).bind(body.duplicate_of).bind(reason).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO dashboard_feedback_events(feedback_id,request_id,request_payload,status,reply,result_path,decision_reason) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(id).bind(&body.request_id).bind(payload).bind(status).bind(&body.reply).bind(&body.result_path).bind(reason).execute(&mut **tx).await?;

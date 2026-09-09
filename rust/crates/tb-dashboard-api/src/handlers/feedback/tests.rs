@@ -374,7 +374,7 @@ async fn duplicates_and_roadmap_expose_only_public_progress() {
             DashboardAuthLevel::admin(),
             State(db.pool.clone()),
             Path(a),
-            Json(main_update)
+            Json(main_update.clone())
         )
         .await
         .status(),
@@ -404,8 +404,42 @@ async fn duplicates_and_roadmap_expose_only_public_progress() {
     assert!(visible.get("duplicate_of").is_none());
     assert!(visible.get("owner_id").is_none());
     assert!(!visible.to_string().contains("Private Antwort für A"));
+    assert_eq!(
+        mark_read(
+            partner("456"),
+            State(db.pool.clone()),
+            Path(b),
+            Json(ReadBody {
+                observed_at: serde_json::from_value(visible["observed_at"].clone()).unwrap(),
+                inbox: false
+            })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    main_update.request_id = uuid::Uuid::new_v4().to_string();
+    main_update.expected_revision = 2;
+    main_update.reply = "Private Nachfrage nach bereits gelesenem Roadmap-Abschluss".into();
+    assert_eq!(
+        update(
+            DashboardAuthLevel::admin(),
+            State(db.pool.clone()),
+            Path(a),
+            Json(main_update)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let (_, after_private) =
+        json(detail(partner("456"), State(db.pool.clone()), Path(b)).await).await;
+    assert_eq!(after_private["status"], "done");
+    assert_eq!(after_private["observed_at"], visible["observed_at"]);
+    assert_eq!(after_private["unread"], false);
+
     body.request_id = uuid::Uuid::new_v4().to_string();
-    body.expected_revision = 2;
+    body.expected_revision = 3;
     body.duplicate_of = Some(b);
     assert_eq!(
         update(
