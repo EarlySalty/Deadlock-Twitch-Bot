@@ -35,6 +35,8 @@ const ALLOWED_NEXT_PREFIXES: &[&str] = &[
     "/twitch/abo",
     "/twitch/stats",
     "/twitch/verwaltung",
+    "/twitch/hilfe",
+    "/twitch/feedback",
     "/twitch/uplink",
     "/twitch/pricing",
     "/twitch/raid/auth",
@@ -49,7 +51,7 @@ const ALLOWED_NEXT_PREFIXES: &[&str] = &[
 pub fn sanitize_next_path(raw: Option<&str>) -> String {
     let candidate = raw.map(str::trim).unwrap_or("");
     // Protocol-relative (`//evil`) und absolute (`http://…`) URLs sind nie intern.
-    if candidate.is_empty() || candidate.starts_with("//") || !candidate.starts_with('/') {
+    if candidate.is_empty() || candidate.starts_with("//") || !candidate.starts_with('/') || candidate.contains('\\') || candidate.chars().any(char::is_control) {
         return DEFAULT_POST_LOGIN_PATH.to_string();
     }
     // Pfadteil (vor `?`) gegen die Whitelist prüfen.

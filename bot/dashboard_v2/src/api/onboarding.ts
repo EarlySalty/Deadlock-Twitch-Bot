@@ -1,78 +1,36 @@
 import { DASHBOARD_V2_LOGIN_FALLBACK, fetchJson, withCookieCredentials } from './core';
+import type { OnboardingStepId } from '../components/onboarding/steps';
 
 const ONBOARDING_PATH = '/twitch/api/v2/streamer/onboarding';
-const TIP_SETTINGS_PATH = '/twitch/api/v2/streamer/tip-settings';
-
-export interface OnboardingStatus {
+export type ConnectionStatus = 'connected' | 'missing' | 'error';
+export interface OnboardingProgress {
   current_step: number;
   completed: boolean;
+  active_step: OnboardingStepId;
+  completed_step_ids: OnboardingStepId[];
+  paused: boolean;
+}
+export interface OnboardingStatus extends OnboardingProgress {
   discord_linked: boolean;
   steam_linked: boolean;
+  discord_status: ConnectionStatus;
+  steam_status: ConnectionStatus;
 }
-
 export interface OnboardingUpdate {
-  current_step?: number;
-  completed?: boolean;
+  active_step?: OnboardingStepId;
+  complete_step?: OnboardingStepId;
+  paused?: boolean;
+  completed?: true;
 }
-
-export interface OnboardingSaveResponse {
-  ok: boolean;
-  current_step: number;
-  completed: boolean;
-}
-
-export interface TipSettings {
-  opt_out: boolean;
-}
-
 export async function fetchOnboardingStatus(): Promise<OnboardingStatus> {
-  return fetchJson<OnboardingStatus>(
-    new URL(ONBOARDING_PATH, window.location.origin),
-    withCookieCredentials({
-      headers: { Accept: 'application/json' },
-    }),
-    { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK },
-  );
+  return fetchJson(new URL(ONBOARDING_PATH, window.location.origin), withCookieCredentials({
+    headers: { Accept: 'application/json' },
+  }), { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK });
 }
-
-export async function saveOnboardingProgress(
-  update: OnboardingUpdate,
-): Promise<OnboardingSaveResponse> {
-  return fetchJson<OnboardingSaveResponse>(
-    new URL(ONBOARDING_PATH, window.location.origin),
-    withCookieCredentials({
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(update),
-    }),
-    { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK },
-  );
-}
-
-export async function fetchTipSettings(): Promise<TipSettings> {
-  return fetchJson<TipSettings>(
-    new URL(TIP_SETTINGS_PATH, window.location.origin),
-    withCookieCredentials({
-      headers: { Accept: 'application/json' },
-    }),
-    { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK },
-  );
-}
-
-export async function saveTipSettings(settings: TipSettings): Promise<TipSettings> {
-  return fetchJson<TipSettings>(
-    new URL(TIP_SETTINGS_PATH, window.location.origin),
-    withCookieCredentials({
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(settings),
-    }),
-    { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK },
-  );
+export async function saveOnboardingProgress(update: OnboardingUpdate, csrfToken?: string | null): Promise<{ok: boolean; progress: OnboardingProgress}> {
+  return fetchJson(new URL(ONBOARDING_PATH, window.location.origin), withCookieCredentials({
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
+    body: JSON.stringify(update),
+  }), { loginFallback: DASHBOARD_V2_LOGIN_FALLBACK });
 }

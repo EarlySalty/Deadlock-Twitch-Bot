@@ -142,6 +142,31 @@ BEGIN
 END
 $dienstmatrix$;
 
+-- Private Kritik/Wünsche gehören ausschließlich ins Dashboard. Die allgemeine
+-- Legacy-Rolle und der Bot brauchen weder Texte noch Sequenzstände. Der Verlauf
+-- ist auch für die Dashboard-Laufzeit nur lesbar und ergänzbar.
+DO $rueckmeldungen$
+DECLARE
+    feedback_table text;
+    feedback_sequence text;
+BEGIN
+    FOREACH feedback_table IN ARRAY ARRAY['dashboard_feedback', 'dashboard_feedback_events']
+    LOOP
+        IF to_regclass(format('public.%I', feedback_table)) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON TABLE public.%I FROM twitchbot, twitchlegacy', feedback_table);
+            EXECUTE format('REVOKE DELETE ON TABLE public.%I FROM twitchdash', feedback_table);
+            feedback_sequence := pg_get_serial_sequence(format('public.%I', feedback_table), 'id');
+            IF feedback_sequence IS NOT NULL THEN
+                EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM twitchbot, twitchlegacy', feedback_sequence);
+            END IF;
+        END IF;
+    END LOOP;
+    IF to_regclass('public.dashboard_feedback_events') IS NOT NULL THEN
+        REVOKE UPDATE ON public.dashboard_feedback_events FROM twitchdash;
+    END IF;
+END
+$rueckmeldungen$;
+
 -- Laufzeitprozesse dürfen weder den Migrationsstand noch Sicherungstabellen
 -- manipulieren. Die fachliche Spalte schema_version ist davon nicht betroffen.
 DO $optional_revoke$

@@ -262,6 +262,9 @@ fn partner_or_admin(
     partner: crate::auth::session::PartnerSession,
     admin_mode_active: bool,
 ) -> DashboardAuthLevel {
+    if partner.twitch_user_id.is_empty() || !partner.twitch_user_id.bytes().all(|c| c.is_ascii_digit()) {
+        return DashboardAuthLevel::None;
+    }
     let login = partner.twitch_login.trim().to_lowercase();
     if is_admin_login(&login) && admin_mode_active {
         // senderauth-01: Twitch-Session-Identität an den Admin durchreichen, damit
@@ -410,6 +413,9 @@ where
                     if twitch_user_id.is_empty() {
                         *twitch_user_id = state.resolve_admin_user_id(twitch_login).await;
                     }
+                }
+                if matches!(&auth, DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id.is_empty()) {
+                    return Ok(DashboardAuthLevel::None);
                 }
                 return Ok(auth);
             }
@@ -561,6 +567,16 @@ mod tests {
         let req = axum::http::Request::builder().body(()).unwrap();
         let (parts, _) = req.into_parts();
         assert_eq!(extract_cookie(&parts, "any"), None);
+    }
+
+    #[test]
+    fn partner_session_ohne_plattform_id_bleibt_unangemeldet() {
+        for id in ["", "name", " 42"] {
+            let session = crate::auth::session::PartnerSession { twitch_login: "earlysalty".into(), twitch_user_id: id.into(), display_name: String::new() };
+            assert!(matches!(partner_or_admin(session, true), DashboardAuthLevel::None));
+        }
+        let session = crate::auth::session::PartnerSession { twitch_login: "partner".into(), twitch_user_id: "42".into(), display_name: String::new() };
+        assert!(matches!(partner_or_admin(session, false), DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id == "42"));
     }
 
     #[test]

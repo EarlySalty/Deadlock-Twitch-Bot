@@ -12,6 +12,7 @@ export interface AuthStatus {
   /** `true`, solange der Admin-Vollzugriff per Schalter aktiv ist. */
   adminMode?: boolean;
   canViewAllStreamers: boolean;
+  twitchUserId?: string | null;
   twitchLogin?: string | null;
   adminDefaultStreamer?: string | null;
   displayName?: string | null;

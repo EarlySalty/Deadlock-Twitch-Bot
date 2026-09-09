@@ -522,3 +522,10 @@ svg.icon-duotone {
     transition: none !important;
   }
 }
+
+/* Der gemeinsame Rundgang markiert echte Karten, ohne die Bedienung zu verdecken. */
+[data-onboarding-highlight="true"] {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+  scroll-margin-top: 6rem;
+}

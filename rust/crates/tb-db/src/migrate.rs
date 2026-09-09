@@ -166,3 +166,18 @@ mod tests {
         assert_eq!(applied_but_missing(&[1, 99, 3], &known), vec![99]);
     }
 }
+
+#[cfg(test)]
+mod migration_version_regression {
+    #[test]
+    fn embedded_migration_versions_are_unique() {
+        let mut versions = std::collections::HashSet::new();
+        for migration in super::MIGRATOR.iter() {
+            assert!(
+                versions.insert(migration.version),
+                "Doppelte Migrationsversion: {}",
+                migration.version
+            );
+        }
+    }
+}

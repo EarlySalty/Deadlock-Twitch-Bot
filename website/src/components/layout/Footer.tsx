@@ -1,7 +1,8 @@
 import {
   DISCORD_INVITE_URL,
   TWITCH_FAQ_URL,
-  TWITCH_ONBOARDING_URL,
+  TWITCH_DASHBOARD_URL,
+  TWITCH_DEMO_DASHBOARD_URL,
 } from "@/data/externalLinks";
 import { AFFILIATE_PROGRAM_PATH, WEBSITE_HOME_PATH } from "@/data/sitePaths";
 
@@ -17,10 +18,10 @@ const NAV_SECTION_LINKS: FooterLink[] = [
 ];
 
 const MORE_LINKS: FooterLink[] = [
-  { label: 'Streamer Onboarding', href: TWITCH_ONBOARDING_URL, external: true },
+  { label: 'Partner-Dashboard', href: TWITCH_DASHBOARD_URL },
   { label: 'Bot FAQ', href: TWITCH_FAQ_URL, external: true },
   { label: 'Affiliate-Programm', href: AFFILIATE_PROGRAM_PATH },
-  { label: 'Demo Dashboard', href: 'https://deutsche-deadlock-community.de/demo/twitch/demo/', external: true },
+  { label: 'Dashboard-Demo', href: TWITCH_DEMO_DASHBOARD_URL, external: true },
   { label: 'Discord beitreten', href: DISCORD_INVITE_URL, external: true },
   { label: 'Impressum', href: 'https://deutsche-deadlock-community.de/twitch/impressum', external: true },
   { label: 'Datenschutz', href: 'https://deutsche-deadlock-community.de/twitch/datenschutz', external: true },

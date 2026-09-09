@@ -3,6 +3,9 @@ import { motion } from 'framer-motion';
 import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
+import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
+import { useOnboarding } from '@/components/onboarding/onboardingState';
+import { FeedbackBox } from '@/components/feedback/FeedbackBox';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
@@ -42,6 +45,21 @@ interface VerwaltungTabDef {
 
 export function VerwaltungPage() {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
+  const onboarding = useOnboarding();
+  const [connectionNotice, setConnectionNotice] = useState('');
+  const [returnMessage] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const failed = params.has('err');
+    return params.has('ok') || failed ? {failed, text: failed ? 'Die Discord-Verknüpfung wurde nicht abgeschlossen. Du kannst sie hier erneut starten.' : 'Discord wurde verknüpft. Der aktuelle Status wird geprüft.'} : null;
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('ok') && !params.has('err')) return;
+    params.delete('ok'); params.delete('err');
+    const query = params.toString();
+    window.history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+  }, []);
 
   // Tab im Hash halten: Reload und geteilte Links landen wieder im selben Bereich.
   const [tab, setTab] = useState<VerwaltungTabId>(() =>
@@ -54,10 +72,11 @@ export function VerwaltungPage() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['internal-home', null],
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+    queryKey: ['internal-home', null, authStatus?.twitchUserId],
     queryFn: () => fetchInternalHome(null),
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
+    refetchOnWindowFocus: 'always',
     enabled: !loadingAuth,
   });
 
@@ -72,7 +91,7 @@ export function VerwaltungPage() {
     );
   }
 
-  if (isError) {
+  if (isError && !data) {
     const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
     return (
       <div className="panel-card rounded-2xl p-6 md:p-8">
@@ -103,6 +122,16 @@ export function VerwaltungPage() {
     : '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
   const reconnectUrl = home.oauth?.reconnectUrl || oauthFallbackUrl;
   const discordConnected = Boolean(home.discord?.connected);
+  const discordError = isError || home.discord?.status === 'error';
+  const steamError = isError || home.steam?.status === 'error';
+  const checkConnections = async () => {
+    setConnectionNotice('Verbindungen werden geprüft …');
+    onboarding.refresh();
+    const result = await refetch();
+    const status = (service: 'discord' | 'steam') => result.isError || result.data?.[service]?.status === 'error'
+      ? 'gerade nicht prüfbar' : result.data?.[service]?.connected ? 'verbunden' : 'nicht verbunden';
+    setConnectionNotice(`Prüfung abgeschlossen. Discord ${status('discord')}. Steam ${status('steam')}.`);
+  };
   const discordConnectUrl = home.discord?.connectUrl || null;
   const steamConnected = Boolean(home.steam?.connected);
   const steamConnectUrl = home.steam?.connectUrl || null;
@@ -196,6 +225,9 @@ export function VerwaltungPage() {
 
       {/* Discord Section */}
       <motion.section
+        tabIndex={-1}
+        data-tour-id="onboarding-discord"
+        data-tour-ready="true"
         className="panel-card rounded-2xl p-5 md:p-6"
         initial={{ opacity: 0, y: 16 }}
         whileInView={{ opacity: 1, y: 0 }}
@@ -214,16 +246,16 @@ export function VerwaltungPage() {
             </div>
             <div className="min-w-0 flex-1">
               <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
-                {discordConnected ? 'Verbunden' : 'Nicht verbunden'}
+                {isFetching ? 'Wird geprüft …' : discordError ? 'Gerade nicht prüfbar' : discordConnected ? 'Verbunden' : 'Nicht verbunden'}
               </p>
               <p className="mt-0.5 text-xs text-text-secondary">
-                {discordConnected ? 'Discord-Verknüpfung erkannt.' : 'Noch kein Discord-Profil verknüpft.'}
+                {discordError ? 'Der Status konnte nicht geprüft werden. Das bedeutet nicht, dass deine Verbindung fehlt.' : discordConnected ? 'Dein Discord-Konto ist mit Twitch verknüpft.' : 'Verbinde Discord zuerst, damit du danach Steam zuordnen kannst.'}
               </p>
             </div>
           </div>
         </div>
 
-        {discordConnectUrl ? (
+        {discordConnectUrl && !discordError ? (
           <a
             href={discordConnectUrl}
             className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
@@ -239,11 +271,11 @@ export function VerwaltungPage() {
               className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
             >
               <MessageSquare className="h-4 w-4" />
-              {discordConnected ? 'Discord verbunden' : 'Discord-Link nicht im Self-Service verfügbar'}
+              {discordError || isFetching ? 'Status prüfen' : discordConnected ? 'Discord verbunden' : 'Discord-Verbindung nicht verfügbar'}
             </button>
-            {!discordConnected && (
+            {!discordConnected && !discordError && !isFetching && (
               <p className="text-xs text-text-secondary">
-                Discord-Verknüpfungen laufen nicht über den Admin-Login und sind auf dieser Seite aktuell nicht als Self-Service freigeschaltet.
+                Öffne deine persönliche Partner-Ansicht, um Discord zu verbinden.
               </p>
             )}
           </div>
@@ -252,6 +284,9 @@ export function VerwaltungPage() {
 
       {/* Steam Section */}
       <motion.section
+        tabIndex={-1}
+        data-tour-id="onboarding-steam"
+        data-tour-ready="true"
         className="panel-card rounded-2xl p-5 md:p-6"
         initial={{ opacity: 0, y: 16 }}
         whileInView={{ opacity: 1, y: 0 }}
@@ -270,16 +305,16 @@ export function VerwaltungPage() {
             </div>
             <div className="min-w-0 flex-1">
               <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
-                {steamConnected ? 'Verbunden' : 'Nicht verbunden'}
+                {isFetching ? 'Wird geprüft …' : steamError ? 'Gerade nicht prüfbar' : steamConnected ? 'Verbunden' : 'Nicht verbunden'}
               </p>
               <p className="mt-0.5 text-xs text-text-secondary">
-                {steamConnected ? 'Steam-Account verknüpft.' : 'Noch kein Steam-Account verknüpft.'}
+                {steamError ? 'Der Status konnte nicht geprüft werden. Eine bestehende Verbindung kann weiterhin gültig sein.' : steamConnected ? 'Dein Steam-Account ist verknüpft.' : discordConnected ? 'Verknüpfe Steam für deinen Deadlock-Rang und deine Spielstatistiken.' : 'Verbinde zuerst Discord, danach Steam.'}
               </p>
             </div>
           </div>
         </div>
 
-        {steamConnectUrl ? (
+        {steamConnectUrl && !steamError ? (
           <a
             href={steamConnectUrl}
             className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
@@ -298,11 +333,15 @@ export function VerwaltungPage() {
               Steam verknüpfen
             </button>
             <p className="text-xs text-text-secondary">
-              Verknüpfe zuerst deinen Discord-Account — die Steam-Verknüpfung läuft darüber.
+              {steamError || isFetching ? 'Bitte prüfe den Status erneut, bevor du ein Konto neu verknüpfst.' : discordConnected ? 'Der Verbindungslink ist gerade nicht verfügbar. Bitte prüfe den Status erneut.' : 'Verknüpfe zuerst deinen Discord-Account. Die Steam-Verknüpfung läuft darüber.'}
             </p>
           </div>
         )}
       </motion.section>
+
+      <button type="button" onClick={checkConnections} disabled={isFetching} className="min-h-11 w-fit rounded-lg border border-primary/50 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">Status prüfen</button>
+
+      <p role="status" aria-atomic="true" className="text-sm text-text-secondary">{connectionNotice}</p>
 
       {/* Profile Section */}
       <motion.section
@@ -363,6 +402,9 @@ export function VerwaltungPage() {
 
   const overlayTab = (
     <motion.section
+      tabIndex={-1}
+      data-tour-id="onboarding-overlay"
+      data-tour-ready="true"
       className="panel-card rounded-2xl p-5 md:p-6"
       initial={{ opacity: 0, y: 16 }}
       whileInView={{ opacity: 1, y: 0 }}
@@ -440,13 +482,15 @@ export function VerwaltungPage() {
           </Rise>
         ) : null}
 
+        {returnMessage && <p role="status" className={`rounded-xl border p-4 text-sm ${returnMessage.failed ? 'border-warning/40 text-warning' : 'border-success/40 text-success'}`}>{returnMessage.text}</p>}
+        {isError && data && <p role="alert" className="text-sm text-warning">Der aktuelle Kontostatus konnte nicht geladen werden. <button onClick={checkConnections} className="underline">Status prüfen</button></p>}
         <Rise as="section" className="panel-card rounded-2xl p-5 md:p-6">
           <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
             Konto
           </div>
-          <h1 className="display-font text-2xl font-extrabold text-white">Dein Konto verwalten</h1>
+          <h1 className="display-font text-2xl font-extrabold text-white">Dein Bot, deine Einstellungen</h1>
           <p className="mt-2 max-w-2xl text-sm text-text-secondary">
-            Verbindungen, Chat-Befehle, Bot-Verhalten, Overlay und Werbung, nach Bereichen getrennt.
+            Hier verbindest du deine Konten und schaltest Funktionen an oder aus. Wähle einen Bereich und passe den Bot an deinen Kanal an.
           </p>
         </Rise>
 
@@ -470,7 +514,10 @@ export function VerwaltungPage() {
           })}
         </nav>
 
+        {onboarding.status?.paused && onboarding.error && <p role="alert" className="rounded-lg border border-warning/40 p-3 text-sm text-warning">{onboarding.error} <button type="button" onClick={() => void onboarding.save({paused: true})} className="underline">Pause speichern</button></p>}
+        <OnboardingGuide tab={activeTab.id} />
         <div className="space-y-4 md:space-y-5">{activeTab.render()}</div>
+        <FeedbackBox area={`Verwaltung: ${activeTab.label}`} />
     </>
   );
 }

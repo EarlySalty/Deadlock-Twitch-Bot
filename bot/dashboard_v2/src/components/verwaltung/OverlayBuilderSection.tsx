@@ -98,6 +98,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [recentN, setRecentN] = useState<number>(10);
   const [modules, setModules] = useState<Record<ModuleKey, boolean>>(DEFAULT_MODULES);
   const [copied, setCopied] = useState(false);
+  const [retainedUrl, setRetainedUrl] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const overlayUrl = useMemo(() => {
     const origin = typeof window === 'undefined' ? '' : window.location.origin;
@@ -114,6 +116,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     return `${origin}/twitch/overlay?${params.toString()}`;
   }, [normalizedLogin, theme, layout, mode, opacity, recentN, modules]);
   const debouncedUrl = useDebouncedValue(overlayUrl, 300);
+  const customized = theme !== 'dark' || layout !== 'box' || mode !== 'all' || opacity !== 85 || recentN !== 10 || MODULES.some(({key}) => modules[key] !== DEFAULT_MODULES[key]);
+  const unsaved = customized && retainedUrl !== overlayUrl;
 
   useEffect(() => {
     setCopied(false);
@@ -127,9 +131,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     try {
       await navigator.clipboard.writeText(overlayUrl);
       setCopied(true);
+      setRetainedUrl(overlayUrl);
+      setCopyFailed(false);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
       setCopied(false);
+      setCopyFailed(true);
+      const input = document.getElementById('overlay-url') as HTMLInputElement | null;
+      input?.focus(); input?.select();
     }
   };
 
@@ -162,6 +171,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
   return (
     <motion.section
+      tabIndex={-1}
+      data-tour-id="onboarding-overlay"
+      data-tour-ready="true"
+      data-unsaved={unsaved}
+      data-unsaved-hint="Dein Overlay ist angepasst. Kopiere zuerst die neue OBS-Adresse oder bestätige unten, dass du sie übernommen hast. Du kannst auch den Rundgang pausieren und hierbleiben."
       className="panel-card rounded-2xl p-5 md:p-6"
       initial={{ opacity: 0, y: 16 }}
       whileInView={{ opacity: 1, y: 0 }}
@@ -340,6 +354,9 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               </button>
             </div>
           </div>
+
+          {copyFailed && <p role="alert" className="text-sm text-warning">Die Adresse konnte nicht kopiert werden. Kopiere sie aus dem markierten Feld und übernimm sie in OBS.</p>}
+          {unsaved && <button type="button" onClick={() => setRetainedUrl(overlayUrl)} className="min-h-11 text-sm text-primary underline underline-offset-4">Adresse in OBS übernommen</button>}
 
           {/* OBS */}
           <div className="space-y-2">

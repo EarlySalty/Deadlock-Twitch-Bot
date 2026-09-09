@@ -9,7 +9,7 @@ import { ApiHttpError } from './httpError';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
-const LIVE_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2';
+const LIVE_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
 
 export const DASHBOARD_V2_LOGIN_FALLBACK = isPreviewModeEnabled()
   ? PREVIEW_HOME_ROUTE

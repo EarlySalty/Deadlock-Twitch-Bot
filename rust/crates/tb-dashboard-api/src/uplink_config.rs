@@ -51,6 +51,12 @@ impl std::fmt::Debug for UplinkRuntime {
 }
 
 impl UplinkRuntime {
+    pub(crate) fn platform_value(&self, name: &str) -> Option<String> {
+        self.platform
+            .get(name)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string())
+    }
     pub(crate) fn secret(&self, path: &str) -> &str {
         if path.starts_with("/v1/admin/") {
             &self.admin
@@ -66,12 +72,7 @@ pub(crate) fn runtime() -> Result<&'static UplinkRuntime, &'static str> {
 
 /// Ausschließlich bekannte Uplink-Integrationswerte, aus derselben RAM-Quelle.
 pub(crate) fn platform_value(name: &str) -> Option<String> {
-    runtime()
-        .ok()?
-        .platform
-        .get(name)
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.trim().to_string())
+    runtime().ok()?.platform_value(name)
 }
 
 pub fn install(runtime: UplinkRuntime) -> Result<(), &'static str> {
@@ -287,6 +288,9 @@ async fn fetch(config: &UplinkConfig, token: &str) -> Result<UplinkRuntime, &'st
             "GOOGLE_CLIENT_SECRET",
             "YOUTUBE_CLIENT_ID",
             "YOUTUBE_CLIENT_SECRET",
+            "TWITCH_INTERNAL_API_TOKEN",
+            "MASTER_BROKER_TOKEN",
+            "MAIN_BOT_INTERNAL_TOKEN",
         ]
         .contains(&entry.name.as_str())
         {
@@ -540,6 +544,41 @@ mod tests {
         assert_eq!(runtime.secret("/v1/me"), "synthetic-api");
         assert_eq!(runtime.secret("/v1/admin/waitlist"), "synthetic-admin");
         assert!(!format!("{runtime:?}").contains("synthetic"));
+    }
+
+    #[tokio::test]
+    async fn existing_broker_tokens_survive_loader_and_reach_discord() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/secrets/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "secrets": [
+                    {"secretKey":"RS_RELAY_API_SECRET","secretValue":"synthetic-api"},
+                    {"secretKey":"RS_RELAY_ADMIN_SECRET","secretValue":"synthetic-admin"},
+                    {"secretKey":"TWITCH_INTERNAL_API_TOKEN","secretValue":"synthetic-broker"},
+                    {"secretKey":"MASTER_BROKER_TOKEN","secretValue":"synthetic-fallback"},
+                    {"secretKey":"MAIN_BOT_INTERNAL_TOKEN","secretValue":"synthetic-last"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let peer = infisical_test::InfisicalMock::start(&server);
+        let mut loaded = fetch(&config(server.uri(), &peer), "synthetic-bootstrap")
+            .await
+            .unwrap();
+        for (key, expected) in [
+            ("TWITCH_INTERNAL_API_TOKEN", "synthetic-broker"),
+            ("MASTER_BROKER_TOKEN", "synthetic-fallback"),
+            ("MAIN_BOT_INTERNAL_TOKEN", "synthetic-last"),
+        ] {
+            assert_eq!(crate::handlers::discord_link::broker_token_from(|name| loaded.platform_value(name)).as_deref(), Some(expected));
+            loaded.platform.remove(key);
+        }
+        assert!(crate::handlers::discord_link::broker_token_from(
+            |name| loaded.platform_value(name)
+        )
+        .is_none());
     }
 
     #[tokio::test]

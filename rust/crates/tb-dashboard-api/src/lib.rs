@@ -19,6 +19,9 @@ mod test_postgres;
 pub mod uplink_config;
 
 pub use auth::csrf::csrf_protect;
+
+#[cfg(test)]
+pub(crate) mod test_database;
 pub use auth::discord_admin_login::{discord_admin_login_config_from_env, DiscordAdminLoginConfig};
 pub use auth::level::DashboardAuthLevel;
 pub use auth::oauth_login::{HelixOAuthClient, TwitchIdentity, TwitchOAuthClient};
@@ -170,7 +173,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
-        dashboard_assistent, engagement_mode, engagement_settings, exp_analytics, follower_funnel,
+        dashboard_assistent, engagement_mode, engagement_settings, exp_analytics, feedback, follower_funnel,
         greeting_settings, internal_home, leaderboard, loyalty_curve, lurk_command_settings,
         lurker_analysis, lurker_tax_settings, moderation_settings, monetization, onboarding,
         overview, performance, plattform_connect, raid_analytics, raid_history, rankings,
@@ -389,6 +392,21 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/onboarding",
             get(onboarding::get_status).post(onboarding::post_status),
+        )
+        .route(
+            "/twitch/api/v2/feedback",
+            get(feedback::list).post(feedback::create)
+                .layer(axum::extract::DefaultBodyLimit::max(24 * 1024)),
+        )
+        .route("/twitch/api/v2/feedback/counts", get(feedback::counts))
+        .route("/twitch/api/v2/feedback/:id", get(feedback::detail))
+        .route(
+            "/twitch/api/v2/feedback/:id/read",
+            post(feedback::mark_read).layer(axum::extract::DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/twitch/api/v2/feedback/:id/update",
+            post(feedback::update).layer(axum::extract::DefaultBodyLimit::max(24 * 1024)),
         )
         // Streamer-Selbstbedienung: Conversation-Scam-Guard konfigurieren
         // (enabled, mode, threshold, suggestion_floor).
@@ -1617,6 +1635,14 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
             get(spa::main_domain_spa_shell_gated_handler),
         )
         .route(
+            "/twitch/hilfe",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
+        .route(
+            "/twitch/feedback",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
+        .route(
             "/twitch/uplink",
             get(spa::main_domain_spa_shell_gated_handler),
         )
@@ -2099,6 +2125,14 @@ mod router_wiring_tests {
             (
                 "/twitch/verwaltung",
                 "/twitch/auth/login?next=%2Ftwitch%2Fverwaltung",
+            ),
+            (
+                "/twitch/hilfe",
+                "/twitch/auth/login?next=%2Ftwitch%2Fhilfe",
+            ),
+            (
+                "/twitch/feedback",
+                "/twitch/auth/login?next=%2Ftwitch%2Ffeedback",
             ),
             (
                 "/twitch/uplink",

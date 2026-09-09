@@ -66,6 +66,15 @@ jobs:
           cargo test --locked -j2 -p tb-dashboard-api handlers::auth_login::tests::callback_ --lib
           cargo run --locked -j2 -p tb-dashboard-api --example uplink_start_probe
 
+      - name: Einrichtung, private Rückmeldungen und verifizierte Identitäten
+        run: |
+          cargo test --locked -j2 -p tb-db embedded_migration_versions_are_unique --lib
+          cargo test --locked -j2 -p tb-dashboard-api handlers::onboarding::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api handlers::feedback::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api handlers::discord_link::tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api identity_regression_tests --lib
+          cargo test --locked -j2 -p tb-dashboard-api target_identity_tests --lib
+
   offline-build:
     name: "offline-build"
     runs-on: ubuntu-latest

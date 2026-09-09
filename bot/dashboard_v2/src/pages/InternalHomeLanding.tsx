@@ -8,7 +8,6 @@ import {
 import { setAdminMode } from '@/api/auth';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import {
-  PREVIEW_PRICING_ROUTE,
   analyticsTabHref,
 } from '@/preview/routes';
 import { formatNumber, formatDuration } from '@/utils/formatters';
@@ -23,8 +22,8 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
-import { LesezeichenHinweis } from '@/components/onboarding/LesezeichenHinweis';
+import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
+import { FeedbackBox } from '@/components/feedback/FeedbackBox';
 import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
 import { useT } from '@/context/LanguageContext';
 
@@ -244,7 +243,6 @@ export function InternalHomeLanding() {
     initialInternalHomeStreamer
   );
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
-  const [hinweisErledigt, setHinweisErledigt] = useState(false);
   const t = useT();
 
   const partnerStreamers = useMemo(
@@ -273,7 +271,7 @@ export function InternalHomeLanding() {
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ['internal-home', streamerOverride],
+    queryKey: ['internal-home', streamerOverride, authStatus?.twitchUserId],
     queryFn: () => fetchInternalHome(streamerOverride),
     staleTime: Number.POSITIVE_INFINITY,
     enabled: canRequestInternalHome,
@@ -460,16 +458,7 @@ export function InternalHomeLanding() {
 
   return (
     <>
-      <LesezeichenHinweis onErledigt={() => setHinweisErledigt(true)} />
-      <WelcomeTour
-        startErlaubt={hinweisErledigt}
-        completionLabel="Zur Abo-Seite"
-        onComplete={() => {
-          localStorage.removeItem('pricing-tour-dismissed');
-          localStorage.setItem('pricing-tour-pending', '1');
-          window.location.href = PREVIEW_PRICING_ROUTE;
-        }}
-      />
+      {!isAdminView && <EinrichtungCard />}
 
       <div className="grid gap-4 md:gap-5 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="min-w-0 space-y-4 md:space-y-5">
@@ -799,6 +788,8 @@ export function InternalHomeLanding() {
             />
         </div>
 
+        <div className="space-y-4 md:space-y-5">
+          <div id="feedback"><FeedbackBox area="Übersicht" /></div>
         <Rise
           step={{ seconds: 0.16 }}
           as="aside"
@@ -848,6 +839,7 @@ export function InternalHomeLanding() {
               </div>
             )}
         </Rise>
+        </div>
       </div>
     </>
   );

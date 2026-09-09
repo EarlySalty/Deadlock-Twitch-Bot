@@ -72,7 +72,7 @@ const ANALYTICS_BLOCKED_PARTNER_STATUSES: &[&str] = &[
 
 const INTERNAL_HOME_LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard";
 const INTERNAL_HOME_DISCORD_CONNECT_URL: &str =
-    "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung";
+    "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung%23konto";
 const STEAM_LINK_DEFAULT_BASE_URL: &str = "https://deutsche-deadlock-community.de/link";
 
 struct CachedAvatar {
@@ -636,7 +636,7 @@ pub async fn get_handler(
     let has_admin_access = auth.is_privileged();
 
     // Identity-Resolve (DB): twitch_streamer_identities (internal_home.py:403-446)
-    let (resolved_login, resolved_user_id, discord_connected) =
+    let (resolved_login, resolved_user_id, _) =
         identity_block(&pool, &identity.twitch_login, &identity.twitch_user_id).await;
     let avatar_url = match avatar_cache {
         Some(Extension(cache)) => cache.profile_image_url(&resolved_login).await,
@@ -668,19 +668,11 @@ pub async fn get_handler(
     let viewers_over_time = viewers_over_time_block(&pool, &resolved_login).await;
     let live_status = live_status_block(&pool, &resolved_login, &resolved_user_id).await;
 
-    // Steam-Verknüpfung läuft über die Discord-ID (Vorbild: onboarding.rs).
-    // Ohne aufgelöste Discord-ID gar kein fetch_rank-Call (kein unnötiger I/O).
-    let steam_discord_id = tb_chat::stats::resolve_discord_id(&pool, &resolved_user_id).await;
-    let steam_connected = match steam_discord_id.as_deref() {
-        Some(discord_id) => tb_chat::stats::fetch_rank(discord_id, false)
-            .await
-            .map(|rank| rank.linked)
-            .unwrap_or(false),
-        None => false,
-    };
-    let steam_connect_url = steam_discord_id
-        .as_deref()
-        .map(|discord_id| format!("{}/steam/login?uid={}", steam_link_base(), discord_id));
+    let links = super::onboarding::account_links(&pool, &resolved_user_id).await;
+    let discord_connected = links.discord_status == super::onboarding::LinkStatus::Connected;
+    let steam_connected = links.steam_status == super::onboarding::LinkStatus::Connected;
+    let steam_connect_url = links.discord_id.as_deref()
+        .map(|id| format!("{}/steam/login?uid={}", steam_link_base(), id));
 
     let autoban_events = load_autoban_events(&resolved_login, since);
     let service_warning_events = load_service_warning_events(&resolved_login, since);
@@ -756,13 +748,13 @@ pub async fn get_handler(
             },
             "discord": {
                 "connected": discord_connected,
-                "status": if discord_connected { "connected" } else { "missing" },
+                "status": links.discord_status,
                 "connect_url": INTERNAL_HOME_DISCORD_CONNECT_URL,
                 "last_checked_at": generated_at,
             },
             "steam": {
                 "connected": steam_connected,
-                "status": if steam_connected { "connected" } else { "missing" },
+                "status": links.steam_status,
                 "connect_url": steam_connect_url,
             },
             "raid_status": { "state": "active", "read_only": true },
@@ -864,8 +856,8 @@ async fn identity_block(
                 ELSE 0
             END AS discord_connected
         FROM twitch_streamer_identities
-        WHERE (COALESCE($1, '') != '' AND LOWER(twitch_login) = $2)
-           OR (COALESCE($3, '') != '' AND twitch_user_id = $4)
+        WHERE (COALESCE($3, '') != '' AND twitch_user_id = $4)
+           OR (COALESCE($3, '') = '' AND COALESCE($1, '') != '' AND LOWER(twitch_login) = $2)
         ORDER BY CASE
             WHEN (COALESCE($1, '') != '' AND LOWER(twitch_login) = $2) THEN 0
             ELSE 1

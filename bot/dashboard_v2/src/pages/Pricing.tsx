@@ -6,8 +6,6 @@ import PricingHero from '../components/pricing/PricingHero';
 import PlanStufen from '../components/pricing/PlanStufen';
 import MySubscriptionCard from '../components/pricing/MySubscriptionCard';
 import BillingStatusBanner from '../components/pricing/BillingStatusBanner';
-import { PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
-import { PricingTour } from '../components/onboarding/PricingTour';
 import { isActivePaidSubscription } from '../types/billing';
 
 const faqData = [
@@ -75,11 +73,6 @@ export default function Pricing() {
 
   return (
     <>
-      <PricingTour onComplete={() => {
-        localStorage.removeItem('analytics-tour-dismissed');
-        localStorage.setItem('analytics-tour-pending', '1');
-        window.location.href = PREVIEW_ANALYTICS_ROUTE;
-      }} />
 
       {/* Billing-Redirect-Hinweis (?invoice=… / ?cancel=…) in Klartext */}
       <BillingStatusBanner />

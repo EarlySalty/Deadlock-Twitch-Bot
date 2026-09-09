@@ -55,6 +55,7 @@ pub mod discord_link;
 pub mod engagement_mode;
 pub mod engagement_settings;
 pub mod exp_analytics;
+pub mod feedback;
 pub mod follower_funnel;
 pub mod forward_auth;
 pub mod health_probe;
