@@ -10,7 +10,8 @@ description = "Fremd- und Build-Artefakte, kein eigener Code."
 paths = [
   "(.*/)?node_modules/.*",
   "(.*/)?dist/.*",
-  "(.*/)?build/.*"
+  "(.*/)?build/.*",
+  "(.*/)?target/.*"
 ]
 
 # Ausnahmen zu den mitgelieferten Default-Regeln. Ohne sie meldet der Lauf ueber
