@@ -171,6 +171,7 @@ impl PitchRejectReason {
 const ICH_FORM_MARKER: &[&str] = &[
     "ich spiele",
     "ich zocke",
+    "ich zock ",
     "ich hab bock",
     "ich habe bock",
     "ich hab gespielt",
@@ -180,6 +181,12 @@ const ICH_FORM_MARKER: &[&str] = &[
     "bin grad",
     "wieder da",
     "tage weg",
+    "war weg",
+    "war gestern weg",
+    "war kurz weg",
+    "war eben weg",
+    "war lange weg",
+    "war ne weile weg",
     "wir spielen",
     "wir zocken",
     "mein rank",
@@ -859,6 +866,8 @@ mod tests {
             "mein build ist eh besser",
             "ich habe gestern noch eine runde gespielt",
             "wir haben das gestern zusammen gezockt",
+            "ich zock heute noch ein bisschen",
+            "war gestern weg, jetzt wieder hier",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
