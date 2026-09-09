@@ -772,6 +772,17 @@ pub async fn promote_streamer_to_partner(
     let identity_display_name = non_empty(args.discord_display_name.as_deref());
     let identity_is_on_discord = Some(bool_int(Some(i64::from(args.is_on_discord)), 0));
 
+    sqlx::query!(
+        r#"
+        DELETE FROM twitch_raid_blacklist
+        WHERE target_id = $1
+          AND reason LIKE 'confirmed_external_recruitment_limit%'
+        "#,
+        &normalized_user_id
+    )
+    .execute(&mut **tx)
+    .await?;
+
     upsert_streamer_identity(
         tx,
         &normalized_user_id,
@@ -1249,5 +1260,165 @@ mod tests {
         assert_eq!(non_empty(Some("  x  ")), Some("x".to_string()));
         assert_eq!(non_empty(Some("   ")), None);
         assert_eq!(non_empty(None), None);
+    }
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn testpool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for ddl in [
+            r#"CREATE TABLE twitch_partners (
+                id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT,
+                require_discord_link INTEGER, last_description TEXT, last_link_ok INTEGER,
+                added_by TEXT, last_link_checked_at TEXT, next_link_check_at TEXT,
+                manual_partner_opt_out INTEGER, raid_bot_enabled INTEGER, silent_ban INTEGER,
+                silent_raid INTEGER, live_ping_role_id BIGINT, live_ping_enabled INTEGER,
+                partnered_at TEXT, departnered_at TEXT, status TEXT, admin_archived_at TEXT,
+                technical_pause_reason TEXT
+            )"#,
+            r#"CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, discord_user_id TEXT,
+                discord_display_name TEXT, is_on_discord INTEGER, created_at TEXT, updated_at TEXT
+            )"#,
+            r#"CREATE TABLE twitch_streamers (
+                id BIGSERIAL PRIMARY KEY, twitch_login TEXT UNIQUE NOT NULL,
+                twitch_user_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+            )"#,
+            r#"CREATE TABLE twitch_partner_signup_denylist (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL, reason TEXT NOT NULL,
+                public_message TEXT, added_by TEXT NOT NULL, added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+            r#"CREATE TABLE twitch_raid_blacklist (
+                target_login TEXT PRIMARY KEY, target_id TEXT, reason TEXT, added_at TEXT
+            )"#,
+            r#"CREATE TABLE twitch_raid_auth (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT)"#,
+            r#"CREATE TABLE streamer_plans (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, first_login_at TEXT
+            )"#,
+            r#"CREATE TABLE twitch_partner_raid_scores (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT
+            )"#,
+            r#"CREATE TABLE twitch_live_state (
+                twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL
+            )"#,
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    fn promote_args(login: &str, uid: &str) -> PromotePartnerArgs {
+        PromotePartnerArgs {
+            twitch_login: login.to_string(),
+            twitch_user_id: uid.to_string(),
+            discord_user_id: None,
+            discord_display_name: None,
+            is_on_discord: 0,
+            activate_partner_features: true,
+            clear_source: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn promote_loescht_recruitment_blacklist_und_bewahrt_hard_grund() {
+        let Some(pool) = testpool("ps_bl_cleanup_ok").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at) VALUES
+             ('ismile_e', '58819840', 'confirmed_external_recruitment_limit_grace_expired: count=4 limit=4', '2026-04-24T13:14:33+00:00'),
+             ('ismile_e_hard', '58819840', 'partner_raid_bot_banned: kein Zugriff', '2026-05-01T00:00:00+00:00'),
+             ('fremd', '99999999', 'confirmed_external_recruitment_limit_grace_expired: count=9 limit=4', '2026-04-01T00:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let result =
+            promote_streamer_to_partner(&mut tx, &promote_args("ismile_e", "58819840"), Utc::now())
+                .await
+                .unwrap();
+        tx.commit().await.unwrap();
+        assert!(result.reactivated, "Promotion muss die Guards passieren");
+
+        let reste: Vec<String> = sqlx::query_scalar(
+            "SELECT target_login FROM twitch_raid_blacklist ORDER BY target_login",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            reste,
+            vec!["fremd".to_string(), "ismile_e_hard".to_string()],
+            "recruitment-Zeile des Partners geloescht, Hard-Grund und fremde ID bleiben"
+        );
+    }
+
+    #[tokio::test]
+    async fn signup_block_noop_loescht_recruitment_blacklist_nicht() {
+        let Some(pool) = testpool("ps_bl_cleanup_noop").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_partner_signup_denylist (twitch_user_id, twitch_login, reason, added_by)
+             VALUES ('58819840', 'ismile_e', 'owner_decision:test', 'test')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at)
+             VALUES ('ismile_e', '58819840', 'confirmed_external_recruitment_limit_grace_expired: count=4 limit=4', '2026-04-24T13:14:33+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let result =
+            promote_streamer_to_partner(&mut tx, &promote_args("ismile_e", "58819840"), Utc::now())
+                .await
+                .unwrap();
+        tx.commit().await.unwrap();
+        assert!(
+            result.signup_block.is_some(),
+            "Signup-Block muss die No-op-Abweisung ausloesen"
+        );
+        assert!(!result.reactivated);
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_raid_blacklist \
+             WHERE target_id = '58819840' AND reason LIKE 'confirmed_external_recruitment_limit%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1, "No-op-Abweisung darf nichts loeschen");
     }
 }

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM twitch_raid_blacklist\n        WHERE target_id = $1\n          AND reason LIKE 'confirmed_external_recruitment_limit%'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "debd2a0a7e7dd6095dd734cb251c83d3c75b872b866c64557b5b1e0621ea2d6d"
+}
