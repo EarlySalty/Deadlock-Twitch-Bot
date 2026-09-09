@@ -56,7 +56,12 @@ export function LurkerTaxSection() {
 
   const enabled = Boolean(settings?.lurker_tax_enabled);
   const scopeReady = Boolean(settings?.has_moderator_read_chatters);
-  const rewardPresent = Boolean(settings?.reward_present);
+  const rewardStatus: 'found' | 'missing' | 'unknown' =
+    settings?.reward_present === true
+      ? 'found'
+      : settings?.reward_present === false
+        ? 'missing'
+        : 'unknown';
 
   return (
     <motion.section
@@ -147,15 +152,20 @@ export function LurkerTaxSection() {
                 <Gift className="h-4 w-4 text-primary shrink-0" />
                 <p className="text-base font-bold text-white">Belohnung zum Einlösen</p>
               </div>
-              {rewardPresent ? (
+              {rewardStatus === 'found' ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" />
                   Belohnung gefunden
                 </span>
-              ) : (
+              ) : rewardStatus === 'missing' ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning">
                   <CircleAlert className="h-3.5 w-3.5" />
                   Belohnung fehlt
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/40 px-2.5 py-1 text-xs font-semibold text-text-secondary">
+                  <CircleAlert className="h-3.5 w-3.5" />
+                  Status unbekannt
                 </span>
               )}
             </div>
@@ -181,6 +191,12 @@ export function LurkerTaxSection() {
                 <span className="font-semibold text-white">Lurker Steuer</span>.
               </li>
             </ol>
+            {rewardStatus === 'unknown' && (
+              <p className="text-xs text-text-secondary mt-3">
+                Wir konnten gerade nicht prüfen, ob die Belohnung schon da ist. Sobald die
+                Verbindung wieder klappt, siehst du hier den Status.
+              </p>
+            )}
           </div>
 
           {enabled && !scopeReady && (

@@ -27,7 +27,7 @@ Verhalten im Abo-Bereich:
 
 - `raid_free`: gesperrte Teaser-Karte mit Upgrade-Hinweis
 - Bezahlplan: Toggle für aktiv/inaktiv
-- Vorlage-Karte: Name "Lurker Steuer", Preisvorschlag 10 Punkte, Kurzanleitung (Twitch Creator-Dashboard, Zuschauerbelohnungen, Punkte und Belohnungen, Individuelle Belohnung hinzufügen) plus Status "Belohnung gefunden" oder "Belohnung fehlt"
+- Vorlage-Karte: Name "Lurker Steuer", Preisvorschlag 10 Punkte, Kurzanleitung (Twitch Creator-Dashboard, Zuschauerbelohnungen, Punkte und Belohnungen, Individuelle Belohnung hinzufügen) plus Status "Belohnung gefunden", "Belohnung fehlt" oder "Status unbekannt". Der Status kommt live aus Helix `GET channel_points/custom_rewards` mit dem Streamer-Token (60 s gecacht); fällt der Abruf aus, steht "Status unbekannt" statt einer Falschaussage
 - Readiness: die Karte spiegelt dieselbe Bedingung wie die Laufzeit. Der Scope `moderator:read:chatters` ist eine Kapabilität des zentralen Bots und wird in `twitch_bot_capabilities` gespiegelt. Der Warnhinweis sagt bei echtem Fehlen, dass sich der Betrieb darum kümmert, statt dem Streamer ein wirkungsloses Neu-Verbinden zu empfehlen
 
 ## Laufzeitlogik

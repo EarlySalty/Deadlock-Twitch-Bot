@@ -13,15 +13,21 @@
 //! Auth: Partner setzt das Flag des EIGENEN Kanals (Login + User-ID aus der
 //! Session); Admin/Localhost dürfen via `?streamer=` einen Kanal adressieren.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::{PgPool, Row};
+use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -121,23 +127,63 @@ async fn bot_capability_has_chatters(pool: &PgPool) -> bool {
     .unwrap_or(false)
 }
 
-async fn lurker_reward_present(pool: &PgPool, user_id: &str) -> bool {
+type RewardCache = Mutex<HashMap<String, (Instant, Option<bool>)>>;
+
+fn reward_cache() -> &'static RewardCache {
+    static CACHE: OnceLock<RewardCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+const REWARD_CACHE_TTL: Duration = Duration::from_secs(60);
+
+async fn lurker_reward_status(pool: &PgPool, user_id: &str) -> Option<bool> {
     if user_id.is_empty() {
-        return false;
+        return None;
     }
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS ( \
-           SELECT 1 FROM twitch_channel_points_events \
-            WHERE twitch_user_id = $1 \
-              AND LOWER(reward_title) LIKE 'lurker steuer%' \
-         )",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false)
+    if let Ok(cache) = reward_cache().lock() {
+        if let Some((seen, value)) = cache.get(user_id) {
+            if seen.elapsed() < REWARD_CACHE_TTL {
+                return *value;
+            }
+        }
+    }
+    let status = fetch_lurker_reward_status(pool, user_id).await;
+    if let Ok(mut cache) = reward_cache().lock() {
+        cache.insert(user_id.to_string(), (Instant::now(), status));
+    }
+    status
+}
+
+async fn fetch_lurker_reward_status(pool: &PgPool, user_id: &str) -> Option<bool> {
+    let config = super::platform_token::platform_token_config_from_runtime()?;
+    let uid: i64 = user_id.parse().ok()?;
+    let (tokens, _scopes) =
+        super::platform_token::gueltiger_twitch_token(pool, &config, uid, Utc::now())
+            .await
+            .ok()?;
+    let helix = build_reward_helix()?;
+    match helix
+        .get_custom_rewards(&uid.to_string(), &tokens.access_token)
+        .await
+    {
+        Ok(rewards) => Some(
+            rewards
+                .iter()
+                .any(|r| r.is_enabled && tb_chat::lurker_tax_title_matches(&r.title)),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "lurker-tax: custom_rewards nicht lesbar");
+            None
+        }
+    }
+}
+
+fn build_reward_helix() -> Option<HelixClient> {
+    let client_id =
+        crate::uplink_config::platform_value("TWITCH_CLIENT_ID").filter(|s| !s.trim().is_empty())?;
+    let client_secret = crate::uplink_config::platform_value("TWITCH_CLIENT_SECRET")
+        .filter(|s| !s.trim().is_empty())?;
+    HelixClient::new(HelixConfig::new(&client_id, &client_secret)).ok()
 }
 
 /// `GET …/lurker-tax-settings` — aktuellen Flag-Wert lesen.
@@ -153,7 +199,7 @@ pub async fn get_handler(
     // P2.109: Readiness-Signal — feuert die Lurker-Steuer überhaupt? Ohne den
     // Scope ist der Toggle ein Dead-Toggle; das Dashboard kann so warnen.
     let scope_ready = has_moderator_read_chatters(&pool, &login).await;
-    let reward_present = lurker_reward_present(&pool, &user_id).await;
+    let reward_present = lurker_reward_status(&pool, &user_id).await;
 
     match sqlx::query(SELECT_SQL)
         .bind(&login)
