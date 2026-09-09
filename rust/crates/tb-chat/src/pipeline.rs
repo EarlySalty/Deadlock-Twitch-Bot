@@ -1736,7 +1736,7 @@ impl ChatPipeline {
             return false;
         }
 
-        let silent = self.is_silent_ban(channel_login).await;
+        let silent = self.is_silent_ban(&event.broadcaster_user_id).await;
 
         let enforced = p
             .moderation
@@ -1823,13 +1823,13 @@ impl ChatPipeline {
 
     /// `silent_ban`-Flag des Partners (moderation.py Z. 1775–1790 via
     /// `load_active_partner`; View-Spalte ist INTEGER). Fail-safe: false.
-    async fn is_silent_ban(&self, channel_login: &str) -> bool {
-        sqlx::query_scalar!(
-            "SELECT COALESCE(silent_ban, 0) AS \"silent_ban!\" \
+    async fn is_silent_ban(&self, broadcaster_id: &str) -> bool {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT COALESCE(silent_ban, 0) \
              FROM twitch_streamers_partner_state \
-             WHERE LOWER(twitch_login) = $1",
-            channel_login,
+             WHERE twitch_user_id = $1 AND TRIM($1) <> ''",
         )
+        .bind(broadcaster_id)
         .fetch_optional(&self.parts.pool)
         .await
         .unwrap_or(None)

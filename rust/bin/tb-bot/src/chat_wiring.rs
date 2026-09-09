@@ -2779,6 +2779,93 @@ mod chat_notification_tests {
     use tb_chat::types::ChatMessageBody;
     use tb_chat::{AutobanEntry, MentionResolver};
 
+    #[tokio::test]
+    async fn regression_silentban_command_wirkt_in_autoban_pipeline_nach_rename() {
+        let db = invite_test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_partners (id BIGSERIAL, twitch_user_id TEXT, twitch_login TEXT, status TEXT, silent_ban INTEGER DEFAULT 0, silent_raid INTEGER DEFAULT 0);
+            INSERT INTO twitch_partners (twitch_user_id,twitch_login,status) VALUES ('broadcaster-id','oldname','active'), ('foreign','newname','active');
+            CREATE VIEW twitch_streamers_partner_state AS SELECT *, 1 AS is_partner_active, 1 AS raid_bot_enabled, 0 AS manual_partner_opt_out FROM twitch_partners;
+            CREATE TABLE twitch_streamers (twitch_user_id TEXT, twitch_login TEXT);
+            CREATE TABLE twitch_raid_auth (twitch_user_id TEXT, raid_enabled BOOLEAN, needs_reauth BOOLEAN);
+            INSERT INTO twitch_raid_auth VALUES ('broadcaster-id',true,false);
+            CREATE TABLE twitch_live_state (twitch_user_id TEXT, streamer_login TEXT, is_live INTEGER, last_game TEXT, active_session_id BIGINT);
+            CREATE TABLE twitch_stream_sessions (id BIGINT, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, game_name TEXT);
+            CREATE TABLE twitch_moderation_settings (channel_user_id TEXT, global_ban_enabled BOOLEAN, scam_pitch_enabled BOOLEAN, spam_autoban_enabled BOOLEAN, sus_invite_enabled BOOLEAN);
+            CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT, reason TEXT);
+            INSERT INTO twitch_chatter_global_ban VALUES ('viewer','chatter-id','test');
+            CREATE TABLE twitch_chatter_global_ban_applied (chatter_login TEXT, broadcaster_id TEXT, applied_at TIMESTAMPTZ, PRIMARY KEY (chatter_login,broadcaster_id));
+            CREATE TABLE twitch_chat_messages (id BIGSERIAL, session_id BIGINT, streamer_login TEXT, chatter_login TEXT, chatter_id TEXT, message_id TEXT, message_ts TIMESTAMPTZ, is_command BOOLEAN, content TEXT, moderation_action TEXT, moderation_reason TEXT);
+            CREATE TABLE tb_chat_autoban_log (id BIGSERIAL, channel_login TEXT, chatter_id TEXT, chatter_login TEXT, content TEXT, banned_at TIMESTAMPTZ, action TEXT, source_path TEXT, reason TEXT, score REAL, account_age_days BIGINT);
+            CREATE TABLE twitch_ban_events (id BIGSERIAL, twitch_user_id TEXT, event_type TEXT, target_login TEXT, target_id TEXT, reason TEXT, received_at TIMESTAMPTZ DEFAULT NOW());")
+            .execute(&db.pool).await.unwrap();
+        let api = Arc::new(FakeChatApi::new(Ok(SendOutcome::Sent)));
+        let pipeline = pipeline_for_non_partner(api.clone(), db.pool.clone());
+        let commands = CommandEngine::new(
+            db.pool.clone(),
+            api.clone(),
+            Arc::new(RaidCommandAdapter {
+                manual: None,
+                pool: db.pool.clone(),
+            }),
+            Arc::new(NoopDiscordLink),
+            Arc::new(NoopInvite),
+            Arc::new(NoopSuperMod),
+            Arc::new(NoopAutoban),
+        );
+        let mut event = non_partner_chat_event();
+        event.broadcaster_user_login = "newname".into();
+        pipeline.handle(&event).await;
+        assert_eq!(
+            api.sent_messages().len(),
+            1,
+            "Kontrolle: Auto-Ban gibt ohne Silentflag einen Hinweis aus"
+        );
+        let mut command = event.clone();
+        command.chatter_user_id = command.broadcaster_user_id.clone();
+        command.badges.push(tb_chat::types::ChatBadge {
+            set_id: "broadcaster".into(),
+            id: "1".into(),
+            info: String::new(),
+        });
+        command.message.text = "!silentban".into();
+        assert!(commands.handle(&command).await);
+        assert_eq!(
+            api.sent_messages().len(),
+            2,
+            "Command bestätigt die Umschaltung"
+        );
+        let values: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT twitch_user_id,silent_ban FROM twitch_partners ORDER BY twitch_user_id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            values,
+            vec![("broadcaster-id".into(), 1), ("foreign".into(), 0)]
+        );
+        event.message_id = "after-silentban".into();
+        pipeline.handle(&event).await;
+        assert_eq!(
+            api.sent_messages().len(),
+            2,
+            "eigene Stummschaltung muss trotz fremdem aktuellen Namen wirken"
+        );
+        event.message_id = "foreign-channel".into();
+        event.broadcaster_user_id = "foreign".into();
+        pipeline.handle(&event).await;
+        assert_eq!(
+            api.sent_messages().len(),
+            3,
+            "fremder Kanal bleibt unabhängig nicht stumm"
+        );
+        let bans: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tb_chat_autoban_log")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(bans, 3, "alle drei Nachrichten werden weiterhin moderiert");
+    }
+
     struct FakeChatApi {
         send_message_outcome: Mutex<Result<SendOutcome, String>>,
         sent_messages: Mutex<Vec<(String, String)>>,

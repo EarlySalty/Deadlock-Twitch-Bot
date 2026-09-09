@@ -2241,18 +2241,18 @@ impl PromoEngine {
             return;
         }
 
-        if !self.lurker_tax_channel_gate(login).await {
+        if !self.lurker_tax_channel_gate(channel_id).await {
             return;
         }
 
         // has_moderator_read_chatters: Scope muss im Auth-Store vorliegen (promos.py:1410).
         // Prüft twitch_raid_auth.scopes für diesen Streamer.
-        let auth_scopes = sqlx::query_scalar!(
-            "SELECT scopes AS \"scopes?\" FROM twitch_raid_auth
-              WHERE LOWER(COALESCE(twitch_login,'')) = $1
+        let auth_scopes = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT scopes FROM twitch_raid_auth
+              WHERE twitch_user_id = $1
               LIMIT 1",
-            login.to_lowercase(),
         )
+        .bind(channel_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -2280,16 +2280,16 @@ impl PromoEngine {
         }
 
         // Kandidaten holen (promos.py:408).
-        let candidates = self.get_lurker_tax_candidates(login).await;
+        let candidates = self.get_lurker_tax_candidates(channel_id).await;
         if candidates.is_empty() {
             return;
         }
 
         // Aktive Session-ID fürs Per-Session-Dedup.
-        let session_id: i64 = sqlx::query_scalar!(
-            "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = $1",
-            login,
+        let session_id: i64 = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",
         )
+        .bind(channel_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -2385,7 +2385,10 @@ impl PromoEngine {
     }
 
     /// Lurker-Tax-Kandidaten aus DB (promos.py:408: `_get_lurker_tax_candidates`).
-    async fn get_lurker_tax_candidates(&self, login: &str) -> Vec<String> {
+    async fn get_lurker_tax_candidates(&self, broadcaster_id: &str) -> Vec<String> {
+        if broadcaster_id.trim().is_empty() {
+            return Vec::new();
+        }
         // twitch_session_chatters.seen_via_chatters_api = boolean (prod schema)
         // twitch_session_chatters.messages = integer (prod schema)
         //
@@ -2411,7 +2414,7 @@ impl PromoEngine {
                              END), 0) AS estimated_lurk_minutes
                   FROM twitch_session_chatters sc
                   JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                 WHERE LOWER(sc.streamer_login) = LOWER($1)
+                 WHERE s.twitch_user_id = $1
                    AND s.ended_at IS NOT NULL
                    AND COALESCE(sc.messages, 0) = 0
                    AND sc.seen_via_chatters_api = TRUE
@@ -2428,9 +2431,8 @@ impl PromoEngine {
                           ELSE 'login:' || LOWER(sc.chatter_login)
                         END AS chatter_identity_key
                    FROM twitch_session_chatters sc
-                   JOIN twitch_live_state ls ON LOWER(ls.streamer_login) = LOWER($1) AND ls.active_session_id = sc.session_id
-                  WHERE LOWER(sc.streamer_login) = LOWER($1)
-                    AND sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
+                   JOIN twitch_live_state ls ON ls.twitch_user_id = $1 AND ls.active_session_id = sc.session_id
+                  WHERE sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
                     AND COALESCE(sc.messages, 0) = 0
                     AND sc.seen_via_chatters_api = TRUE
                )
@@ -2447,7 +2449,7 @@ impl PromoEngine {
             current_bot_clause = current_bot_clause,
         );
         let mut query = sqlx::query_as::<_, (String,)>(&sql)
-            .bind(login)
+            .bind(broadcaster_id)
             .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
             .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
             .bind(LURKER_TAX_CANDIDATE_FETCH);
@@ -2460,7 +2462,7 @@ impl PromoEngine {
             Err(error) => {
                 tracing::warn!(
                     %error,
-                    login,
+                    broadcaster_id,
                     "Lurker-Tax-Kandidaten konnten nicht geladen werden"
                 );
                 Vec::new()
@@ -2469,9 +2471,9 @@ impl PromoEngine {
 
         let mut logins: Vec<String> = rows.into_iter().map(|(l,)| l).collect();
         let session_id: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
+            "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",
         )
-        .bind(login)
+        .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -2541,10 +2543,13 @@ impl PromoEngine {
             return;
         }
 
-        let session_id: i64 = match sqlx::query_scalar!(
-            "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = $1",
-            login,
+        if event.broadcaster_user_id.trim().is_empty() {
+            return;
+        }
+        let session_id: i64 = match sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",
         )
+        .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await
         {
@@ -2606,13 +2611,13 @@ impl PromoEngine {
         if redeemer_login.trim().is_empty() {
             return;
         }
-        if !self.lurker_tax_channel_gate(broadcaster_login).await {
+        if !self.lurker_tax_channel_gate(broadcaster_id).await {
             return;
         }
         let session_id: i64 = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
+            "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",
         )
-        .bind(broadcaster_login)
+        .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -2769,23 +2774,29 @@ impl PromoEngine {
         }
     }
 
-    async fn lurker_tax_channel_gate(&self, login: &str) -> bool {
-        let settings = match sqlx::query!(
-            "SELECT p.lurker_tax_enabled AS \"lurker_tax_enabled?\",
-                    COALESCE(p.twitch_user_id, '') AS \"twitch_user_id!\"
+    async fn lurker_tax_channel_gate(&self, broadcaster_id: &str) -> bool {
+        if broadcaster_id.trim().is_empty() {
+            return false;
+        }
+        let settings = match sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT p.lurker_tax_enabled
                FROM streamer_plans p
-              WHERE LOWER(COALESCE(p.twitch_login,'')) = $1
+              WHERE p.twitch_user_id = $1
               LIMIT 1",
-            login.to_lowercase(),
         )
+        .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await
         {
             Ok(row) => row,
             Err(error) => {
-                if self.plan_gate_error_warned.insert(login.to_string(), ()).is_none() {
+                if self
+                    .plan_gate_error_warned
+                    .insert(broadcaster_id.to_string(), ())
+                    .is_none()
+                {
                     warn!(
-                        login,
+                        broadcaster_id,
                         %error,
                         "Lurker-Tax: Plan-Gate-Abfrage fehlgeschlagen, Aktion wird nicht gesendet"
                     );
@@ -2793,42 +2804,23 @@ impl PromoEngine {
                 return false;
             }
         };
-        let Some(row) = settings else {
-            return false;
-        };
-        if row.lurker_tax_enabled.unwrap_or(0) == 0 {
+        if settings.flatten().unwrap_or(0) == 0 {
             return false;
         }
-        let user_id = if !row.twitch_user_id.is_empty() {
-            row.twitch_user_id
-        } else {
-            sqlx::query_scalar!(
-                "SELECT twitch_user_id AS \"twitch_user_id?\" FROM twitch_streamer_identities
-                  WHERE LOWER(twitch_login) = $1 LIMIT 1",
-                login.to_lowercase(),
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten()
-            .flatten()
-            .unwrap_or_default()
-        };
-        self.lurker_tax_is_paid_plan(login, &user_id).await
+        self.lurker_tax_is_paid_plan(broadcaster_id).await
     }
 
     /// Lurker-Tax `is_paid_plan`-Gate (promos.py:355: der Plan muss das
     /// Entitlement `chat.lurker_tax` tragen). Nutzt die volle Snapshot-Resolution,
     /// damit abgelaufene Pläne (`manual_plan_expires_at` in der Vergangenheit) das
     /// kostenpflichtige Lurker-Tax-Feature NICHT mehr freischalten.
-    /// `user_id` priorisiert den Override-Match (CASE-Order in der Resolution).
-    async fn lurker_tax_is_paid_plan(&self, login: &str, user_id: &str) -> bool {
-        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, login, user_id).await {
+    /// Nur die verifizierte Kanal-ID als Planreferenz, kein Namensfallback.
+    async fn lurker_tax_is_paid_plan(&self, user_id: &str) -> bool {
+        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, "", user_id).await {
             Ok(snapshot) => snapshot.entitlements.contains(&"chat.lurker_tax"),
             Err(error) => {
                 tracing::warn!(
                     %error,
-                    login,
                     user_id,
                     "Lurker-Tax-Plan konnte nicht aufgeloest werden"
                 );
@@ -5882,7 +5874,9 @@ mod db_tests {
     async fn lurker_tax_is_paid_plan_respektiert_ablauf() {
         // Aktiver raid_boost → chat.lurker_tax → is_paid_plan true.
         // Abgelaufener raid_boost → raid_free → is_paid_plan false.
-        let pool = pool_or_skip!("promo_lurker_paid_plan");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
         let engine = make_engine(pool.clone());
 
         sqlx::query(
@@ -5906,11 +5900,11 @@ mod db_tests {
         .unwrap();
 
         assert!(
-            engine.lurker_tax_is_paid_plan("paidkanal", "upaid").await,
+            engine.lurker_tax_is_paid_plan("upaid").await,
             "aktiver raid_boost → chat.lurker_tax → is_paid_plan"
         );
         assert!(
-            !engine.lurker_tax_is_paid_plan("expkanal", "uexp").await,
+            !engine.lurker_tax_is_paid_plan("uexp").await,
             "abgelaufener raid_boost → raid_free → kein is_paid_plan"
         );
     }
@@ -6052,13 +6046,15 @@ mod db_tests {
 
     #[tokio::test]
     async fn lurker_tax_kandidaten_filterung() {
-        let pool = pool_or_skip!("promo_lurker");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
         let engine = make_engine(pool.clone());
 
         // Live-Session anlegen (ended_at = NULL → ist live).
         let live_session_id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
-             VALUES ('lurkerkanal', 10.0)
+            "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, avg_viewers)
+             VALUES ('lurkerkanal', 'u4', 10.0)
              RETURNING id",
         )
         .fetch_one(&pool)
@@ -6078,8 +6074,8 @@ mod db_tests {
         // 3 abgeschlossene historische Sessions für prior_lurk_sessions ≥ 3.
         for s in 0i64..3 {
             let sid: i64 = sqlx::query_scalar(
-                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
-                 VALUES ('lurkerkanal', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
+                "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, ended_at, avg_viewers)
+                 VALUES ('lurkerkanal', 'u4', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
                  RETURNING id",
             )
             .bind(s + 2)
@@ -6116,7 +6112,7 @@ mod db_tests {
         .await
         .unwrap();
 
-        let candidates = engine.get_lurker_tax_candidates("lurkerkanal").await;
+        let candidates = engine.get_lurker_tax_candidates("u4").await;
         assert!(
             !candidates.is_empty(),
             "Lurker-Kandidat sollte gefunden werden: {candidates:?}"
@@ -6126,12 +6122,14 @@ mod db_tests {
 
     #[tokio::test]
     async fn lurker_tax_kandidaten_joinen_ueber_chatter_identity_key() {
-        let pool = pool_or_skip!("promo_lurker_identity_key");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
         let engine = make_engine(pool.clone());
 
         let live_session_id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
-             VALUES ('renamekanal', 10.0)
+            "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, avg_viewers)
+             VALUES ('renamekanal', 'u-rename', 10.0)
              RETURNING id",
         )
         .fetch_one(&pool)
@@ -6149,8 +6147,8 @@ mod db_tests {
 
         for s in 0i64..3 {
             let sid: i64 = sqlx::query_scalar(
-                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
-                 VALUES ('renamekanal', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
+                "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, ended_at, avg_viewers)
+                 VALUES ('renamekanal', 'u-rename', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
                  RETURNING id",
             )
             .bind(s + 2)
@@ -6183,7 +6181,7 @@ mod db_tests {
         .await
         .unwrap();
 
-        let candidates = engine.get_lurker_tax_candidates("renamekanal").await;
+        let candidates = engine.get_lurker_tax_candidates("u-rename").await;
         assert_eq!(candidates, vec!["newlogin".to_string()]);
     }
 
@@ -6208,11 +6206,12 @@ mod db_tests {
 
     async fn seed_live_channel(pool: &PgPool, login: &str, uid: &str) -> i64 {
         let live_session_id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
-             VALUES ($1, 10.0)
+            "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, avg_viewers)
+             VALUES ($1, $2, 10.0)
              RETURNING id",
         )
         .bind(login)
+        .bind(uid)
         .fetch_one(pool)
         .await
         .unwrap();
@@ -6238,12 +6237,13 @@ mod db_tests {
     ) {
         for s in 0i64..3 {
             let sid: i64 = sqlx::query_scalar(
-                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
-                 VALUES ($1, NOW() - ($2 || ' hours')::INTERVAL, 5.0)
+                "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, ended_at, avg_viewers)
+                 VALUES ($1, (SELECT twitch_user_id FROM twitch_stream_sessions WHERE id=$3), NOW() - ($2 || ' hours')::INTERVAL, 5.0)
                  RETURNING id",
             )
             .bind(login)
             .bind(s + 2)
+            .bind(live_session_id)
             .fetch_one(pool)
             .await
             .unwrap();
@@ -6280,7 +6280,9 @@ mod db_tests {
 
     #[tokio::test]
     async fn req4_eingeloester_zuschauer_nicht_mehr_erinnert() {
-        let pool = pool_or_skip!("promo_lurker_redeemed");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
         create_channel_points_table(&pool).await;
         let engine = make_engine(pool.clone());
         let live = seed_live_channel(&pool, "steuerkanal", "u-steuer").await;
@@ -6306,7 +6308,7 @@ mod db_tests {
         .await
         .unwrap();
 
-        let candidates = engine.get_lurker_tax_candidates("steuerkanal").await;
+        let candidates = engine.get_lurker_tax_candidates("u-steuer").await;
         assert!(
             candidates.contains(&"lurkerin".to_string()),
             "Wer eine andere Belohnung einlöst, bleibt Kandidatin: {candidates:?}"
@@ -6338,6 +6340,92 @@ mod db_tests {
         .await
         .unwrap();
         seed_qualifying_lurker(pool, login, live, "lurker1", "uid-lurker1").await;
+    }
+
+    #[tokio::test]
+    async fn regression_lurker_quellen_scopes_session_und_plan_bleiben_beim_kanal() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        let pool = &db.pool;
+        apply_ddl(pool).await;
+        create_channel_points_table(pool).await;
+        seed_sending_channel(pool, "oldname", "own").await;
+        let foreign_live = seed_live_channel(pool, "newname", "foreign").await;
+        seed_qualifying_lurker(
+            pool,
+            "newname",
+            foreign_live,
+            "foreign-lurker",
+            "foreign-viewer",
+        )
+        .await;
+        sqlx::raw_sql("INSERT INTO streamer_plans (twitch_user_id,twitch_login,lurker_tax_enabled,manual_plan_id) VALUES ('foreign','newname',1,'raid_boost');
+            INSERT INTO twitch_raid_auth (twitch_user_id,twitch_login,scopes) VALUES ('own','oldname',''), ('foreign','newname','moderator:read:chatters');")
+            .execute(pool).await.unwrap();
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_lurker_reward_checker(Arc::new(FakeReward(true)));
+        engine
+            .maybe_send_lurker_tax_reminder("newname", "own", Instant::now())
+            .await;
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "fremder Scope darf nicht berechtigen"
+        );
+        sqlx::query("UPDATE twitch_raid_auth SET scopes=CASE WHEN twitch_user_id='own' THEN 'moderator:read:chatters' ELSE '' END").execute(pool).await.unwrap();
+        // Fremde Einlösung und Live-State dürfen den eigenen Kandidaten nicht entfernen.
+        sqlx::query("INSERT INTO twitch_channel_points_events (session_id,twitch_user_id,user_login,reward_title,redeemed_at) VALUES ($1,'foreign','lurker1','Lurker Steuer','2026-09-09T00:00:00Z')").bind(foreign_live).execute(pool).await.unwrap();
+        engine
+            .maybe_send_lurker_tax_reminder("newname", "own", Instant::now())
+            .await;
+        assert_eq!(
+            api.announcement_count().await,
+            1,
+            "eigener Scope und eigene historische Sessions bleiben gültig"
+        );
+        let texts = api.announcement_texts().await;
+        assert!(texts[0].contains("@lurker1"), "{texts:?}");
+        assert!(!texts[0].contains("foreign-lurker"));
+        let own_live: i64 = sqlx::query_scalar(
+            "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id='own'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let state = engine.channel_states.get("newname").unwrap();
+        assert_eq!(state.lock().await.lurker_mentions.0, own_live);
+        drop(state);
+        engine
+            .thank_lurker_tax_redeemer("own", "newname", "paid")
+            .await;
+        assert_eq!(api.message_count().await, 1);
+        let state = engine.channel_states.get("newname").unwrap();
+        assert_eq!(state.lock().await.thanked_redeemers.0, own_live);
+        drop(state);
+        // Aktives fremdes Abo darf keinen abgelaufenen eigenen Plan ersetzen.
+        sqlx::query("UPDATE streamer_plans SET manual_plan_expires_at='2020-01-01T00:00:00Z' WHERE twitch_user_id='own'").execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (customer_reference,plan_id,status,current_period_end) VALUES ('newname','raid_boost','active',NOW()+INTERVAL '1 day')").execute(pool).await.unwrap();
+        engine
+            .thank_lurker_tax_redeemer("own", "newname", "expired")
+            .await;
+        engine
+            .thank_lurker_tax_redeemer("", "newname", "missing-id")
+            .await;
+        engine
+            .thank_lurker_tax_redeemer("missing", "newname", "missing-plan")
+            .await;
+        assert_eq!(api.message_count().await, 1);
+        // Der bisherige Stripe-Weg funktioniert weiterhin mit eigener ID.
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (customer_reference,plan_id,status,current_period_end) VALUES ('own','raid_boost','active',NOW()+INTERVAL '1 day')").execute(pool).await.unwrap();
+        engine
+            .thank_lurker_tax_redeemer("own", "newname", "billing")
+            .await;
+        assert_eq!(api.message_count().await, 2);
+        pool.close().await;
+        engine
+            .thank_lurker_tax_redeemer("own", "newname", "db-error")
+            .await;
+        assert_eq!(api.message_count().await, 2);
     }
 
     #[tokio::test]
@@ -6540,7 +6628,9 @@ mod db_tests {
 
     #[tokio::test]
     async fn lurker_tax_sendet_orange_announcement_ohne_plain_fallback() {
-        let pool = pool_or_skip!("promo_lurker_announcement_drop");
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
         let api = Arc::new(super::tests::MockApi::announcement_dropped());
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
@@ -6549,8 +6639,8 @@ mod db_tests {
             .set_lurker_reward_checker(Arc::new(FakeReward(true)));
 
         let live_session_id: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_stream_sessions (streamer_login, avg_viewers)
-             VALUES ('taxkanal', 10.0)
+            "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, avg_viewers)
+             VALUES ('taxkanal', 'u-tax', 10.0)
              RETURNING id",
         )
         .fetch_one(&pool)
@@ -6574,8 +6664,8 @@ mod db_tests {
 
         for s in 0i64..3 {
             let sid: i64 = sqlx::query_scalar(
-                "INSERT INTO twitch_stream_sessions (streamer_login, ended_at, avg_viewers)
-                 VALUES ('taxkanal', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
+                "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, ended_at, avg_viewers)
+                 VALUES ('taxkanal', 'u-tax', NOW() - ($1 || ' hours')::INTERVAL, 5.0)
                  RETURNING id",
             )
             .bind(s + 2)

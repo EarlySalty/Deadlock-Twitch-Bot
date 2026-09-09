@@ -458,6 +458,11 @@ impl CommandEngine {
                 Ok(Some(false)) => return true,
                 Err(error) => {
                     crate::stat_commands::warn_read_failure(&error);
+                    self.reply(
+                        event,
+                        "Die Statistik kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                    )
+                    .await;
                     return true;
                 }
                 Ok(_) => {}
@@ -3986,9 +3991,18 @@ mod tests {
             .await
             .unwrap();
         assert!(engine.handle(&make_event("!rank", false, false)).await);
-        assert_eq!(api.message_count().await, count, "DB-Fehler bleibt still");
+        assert_eq!(
+            api.message_count().await,
+            count + 1,
+            "DB-Fehler wird gemeldet"
+        );
+        assert!(api
+            .last_message()
+            .await
+            .unwrap()
+            .contains("gerade nicht abrufen"));
         // Geschützte Commands passieren diesen Schalter auch ohne Einstellungstabelle.
         assert!(engine.handle(&make_event("!commands", false, false)).await);
-        assert_eq!(api.message_count().await, count + 1);
+        assert_eq!(api.message_count().await, count + 2);
     }
 }

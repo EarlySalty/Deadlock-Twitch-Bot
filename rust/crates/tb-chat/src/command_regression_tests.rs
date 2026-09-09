@@ -1,4 +1,125 @@
 #[tokio::test]
+async fn regression_statistik_settings_ausfall_antwortet_default_und_optout_bleiben() {
+    let db = crate::test_postgres::TestPostgres::start().await;
+    apply_ddl(&db.pool).await;
+    let api = MockApi::new();
+    let engine = make_engine_with_pool(db.pool.clone(), api.clone());
+    let commands = [
+        "!rank",
+        "!wins",
+        "!winrate",
+        "!mmr",
+        "!climb",
+        "!live",
+        "!lastmatch",
+        "!last",
+        "!streak",
+        "!mostplayed",
+        "!main",
+    ];
+    // Keine Planzeile: jeder Befehl erreicht den echten Handler.
+    for command in commands {
+        let before = api.message_count().await;
+        assert!(engine.handle(&make_event(command, false, false)).await);
+        assert_eq!(api.message_count().await, before + 1);
+    }
+    sqlx::query("INSERT INTO streamer_plans (twitch_user_id,stat_command_settings) VALUES ('bc123', '{\"rank\":false,\"wins\":false,\"winrate\":false,\"mmr\":false,\"live\":false,\"lastmatch\":false,\"streak\":false,\"mostplayed\":false}')").execute(&db.pool).await.unwrap();
+    let before = api.message_count().await;
+    for command in commands {
+        assert!(engine.handle(&make_event(command, false, false)).await);
+    }
+    assert_eq!(
+        api.message_count().await,
+        before,
+        "bewusst abgeschaltet bleibt still"
+    );
+    // Relationsfehler und Gesamtausfall müssen beide eine Antwort liefern.
+    sqlx::query("DROP TABLE streamer_plans")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for closed in [false, true] {
+        if closed {
+            db.pool.close().await;
+        }
+        for command in commands {
+            let before = api.message_count().await;
+            assert!(engine.handle(&make_event(command, false, false)).await);
+            assert_eq!(
+                api.message_count().await,
+                before + 1,
+                "{command}, closed={closed}"
+            );
+            let text = api.last_message().await.unwrap();
+            assert!(text.contains("gerade nicht abrufen"), "{text}");
+            assert!(!text.contains("keinen Steam-Account"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn regression_lurker_command_abschaltung_wirkt_im_verbraucher_bei_rename() {
+    let db = crate::test_postgres::TestPostgres::start().await;
+    apply_ddl(&db.pool).await;
+    seed_lurker_partner(&db.pool, 1, true).await;
+    sqlx::query("UPDATE streamer_plans SET twitch_login='oldchannel' WHERE twitch_user_id='bc123'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_streamers_partner_state SET twitch_login='oldchannel' WHERE twitch_user_id='bc123'").execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO streamer_plans (twitch_user_id,twitch_login,lurker_tax_enabled,manual_plan_id) VALUES ('foreign','testchannel',1,'raid_boost')").execute(&db.pool).await.unwrap();
+    let api = MockApi::new();
+    let engine = make_engine_with_pool(db.pool.clone(), api.clone());
+    let promos = crate::promos::PromoEngine::new(
+        db.pool.clone(),
+        api.clone(),
+        Arc::new(crate::promos::NoopSuppressionCheck),
+    );
+    promos
+        .thank_lurker_tax_redeemer("bc123", "testchannel", "before")
+        .await;
+    assert_eq!(
+        api.message_count().await,
+        1,
+        "aktivierter eigener Plan erlaubt bestehenden Dank"
+    );
+    assert!(
+        engine
+            .handle(&make_event("!lurkersteuer_off", false, true))
+            .await
+    );
+    assert!(api
+        .last_message()
+        .await
+        .unwrap()
+        .contains("Lurker Steuer deaktiviert"));
+    let before = api.message_count().await;
+    promos
+        .thank_lurker_tax_redeemer("bc123", "testchannel", "after")
+        .await;
+    assert_eq!(
+        api.message_count().await,
+        before,
+        "bestätigtes Abschalten muss den Verbraucher stoppen"
+    );
+    let foreign: i32 = sqlx::query_scalar(
+        "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id='foreign'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(foreign, 1);
+    // Fehlende ID/Planzeile bleibt bei diesem Opt-in-Verbraucher aus.
+    promos
+        .thank_lurker_tax_redeemer("", "testchannel", "missing-id")
+        .await;
+    promos
+        .thank_lurker_tax_redeemer("missing", "testchannel", "missing-plan")
+        .await;
+    assert_eq!(api.message_count().await, before);
+}
+
+#[tokio::test]
 async fn regression_statistik_db_fehler_ist_keine_fehlende_verknuepfung() {
     let database = crate::test_postgres::TestPostgres::start().await;
     apply_ddl(&database.pool).await;

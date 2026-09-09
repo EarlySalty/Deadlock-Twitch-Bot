@@ -8,6 +8,11 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 use crate::types::SendOutcome;
 
@@ -24,28 +29,66 @@ pub async fn send_reply(api: &dyn ChatApi, broadcaster_id: &str, text: &str) -> 
         Ok(SendOutcome::HttpError { .. }) => "http_error",
         Err(_) => "transport_error",
     };
-    // Gleichartige Fehler je Kanal höchstens einmal pro Minute melden.
+    // Gleichartige Fehler je Kanal höchstens einmal pro Tag und zweimal je
+    // rollenden sieben Tagen melden, unterdrückte Wiederholungen mitzählen.
     // Keine Antworttexte, HTTP-Bodies oder Zugangsdaten in diesem Log.
-    use std::{
-        collections::HashMap,
-        sync::{Mutex, OnceLock},
-        time::{Duration, Instant},
-    };
-    type Failures = HashMap<(String, &'static str), Instant>;
-    static FAILURES: OnceLock<Mutex<Failures>> = OnceLock::new();
+    static FAILURES: OnceLock<Mutex<ReplyFailures>> = OnceLock::new();
     let mut failures = FAILURES
-        .get_or_init(|| Mutex::new(HashMap::new()))
+        .get_or_init(|| Mutex::new(ReplyFailures::default()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let now = Instant::now();
-    failures.retain(|_, at| now.duration_since(*at) < Duration::from_secs(60));
-    if let std::collections::hash_map::Entry::Vacant(entry) =
-        failures.entry((broadcaster_id.into(), kind))
-    {
-        entry.insert(now);
-        tracing::warn!(broadcaster_id, kind, "Command-Antwort nicht zugestellt");
+    if let Some(suppressed) = failures.record(broadcaster_id, kind, Instant::now()) {
+        tracing::warn!(
+            broadcaster_id,
+            kind,
+            suppressed,
+            "Command-Antwort nicht zugestellt"
+        );
     }
     false
+}
+
+#[derive(Default)]
+struct ReplyFailures(HashMap<(String, &'static str), ReplyFailureWindow>);
+
+#[derive(Default)]
+struct ReplyFailureWindow {
+    warnings: std::collections::VecDeque<Instant>,
+    suppressed: u64,
+}
+
+impl ReplyFailures {
+    fn record(&mut self, broadcaster_id: &str, kind: &'static str, now: Instant) -> Option<u64> {
+        const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+        const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+        // Offene Wiederholungszahlen bis zur nächsten Meldung erhalten.
+        self.0.retain(|_, window| {
+            window.suppressed != 0
+                || window
+                    .warnings
+                    .back()
+                    .is_some_and(|at| now.duration_since(*at) < WEEK)
+        });
+        let window = self.0.entry((broadcaster_id.into(), kind)).or_default();
+        while window
+            .warnings
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= WEEK)
+        {
+            window.warnings.pop_front();
+        }
+        if window.warnings.len() >= 2
+            || window
+                .warnings
+                .back()
+                .is_some_and(|at| now.duration_since(*at) < DAY)
+        {
+            window.suppressed = window.suppressed.saturating_add(1);
+            return None;
+        }
+        window.warnings.push_back(now);
+        Some(std::mem::take(&mut window.suppressed))
+    }
 }
 
 /// Port für ausgehende Chat-/Moderations-Aktionen mit dem Bot-Token.
@@ -132,4 +175,44 @@ pub trait ChatApi: Send + Sync {
 
     /// Bot-User-ID (sender_id/moderator_id für alle Aktionen).
     async fn bot_user_id(&self) -> String;
+}
+
+#[cfg(test)]
+mod reply_failure_tests {
+    use super::*;
+
+    #[test]
+    fn regression_sendelog_tages_wochenlimit_und_wiederholungszahl() {
+        let mut failures = ReplyFailures::default();
+        let start = Instant::now();
+        let day = Duration::from_secs(86400);
+        assert_eq!(failures.record("own", "dropped", start), Some(0));
+        assert_eq!(
+            failures.record("own", "dropped", start + Duration::from_secs(61)),
+            None
+        );
+        assert_eq!(
+            failures.record("own", "dropped", start + day - Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(failures.record("own", "dropped", start + day), Some(2));
+        assert_eq!(failures.record("own", "dropped", start + day * 2), None);
+        assert_eq!(
+            failures.record("own", "dropped", start + day * 7 - Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            failures.record("other", "dropped", start + day * 7),
+            Some(0)
+        );
+        assert_eq!(
+            failures.record("own", "http_error", start + day * 7),
+            Some(0)
+        );
+        assert_eq!(failures.record("own", "dropped", start + day * 7), Some(2));
+        assert_eq!(failures.record("own", "dropped", start + day * 8), Some(0));
+        assert_eq!(failures.record("own", "dropped", start + day * 9), None);
+        // Auch lange ruhende Einträge dürfen unterdrückte Fehler nicht vergessen.
+        assert_eq!(failures.record("own", "dropped", start + day * 30), Some(1));
+    }
 }
