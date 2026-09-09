@@ -1308,6 +1308,10 @@ async fn main() {
                 handle,
                 pool.clone(),
                 chat_wiring::ChatRuntimePorts {
+                    subscription_status: chat_wiring::build_subscription_status(
+                        helix.as_ref().clone().map(Arc::new),
+                        follower_streamer_token_provider.clone(),
+                    ),
                     manual_raid: manual_raid_port.clone(),
                     clip_port,
                     bot_ban_handler: Some(bot_ban_handler.clone()),

@@ -113,6 +113,15 @@ BEGIN
             ON public.twitch_billing_subscriptions TO twitchbot;
     END IF;
 
+    -- Abo-Zustimmung legt nur der Chatbot auf Zuschauerwunsch an. Das Dashboard
+    -- darf beim Ausschalten des Kanals offene Erinnerungen zurücknehmen.
+    IF to_regclass('public.twitch_sub_reminders') IS NOT NULL THEN
+        REVOKE ALL PRIVILEGES ON TABLE public.twitch_sub_reminders FROM twitchbot, twitchdash;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_sub_reminders TO twitchbot;
+        GRANT SELECT ON TABLE public.twitch_sub_reminders TO twitchdash;
+        GRANT UPDATE (ended_at, end_message_id) ON TABLE public.twitch_sub_reminders TO twitchdash;
+    END IF;
+
     -- EventSub-Transporttabellen werden ausschließlich vom Bot geschrieben.
     -- Das Dashboard darf den Kapazitätsstand und Fehlerzustand weiterhin lesen.
     FOREACH ingest_table IN ARRAY ARRAY[

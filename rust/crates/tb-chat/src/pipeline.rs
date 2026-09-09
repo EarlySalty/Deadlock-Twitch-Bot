@@ -1095,6 +1095,7 @@ impl ChatPipeline {
 
         // Schritt 8b: Feste Antworten ohne KI (Gruß kanalweit, Release-Frage
         // nur live). Trifft eine, entfallen die Deadlock-Detektoren.
+        p.commands.remind_subscriber(event).await;
         let standard_replies = Arc::clone(&p.standard_replies);
         let event_for_step = event.clone();
         let standard_channel = channel_login.clone();

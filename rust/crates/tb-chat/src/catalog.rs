@@ -42,6 +42,13 @@ pub fn catalog() -> &'static [CommandInfo] {
     use CommandGroup::*;
     &[
         CommandInfo {
+            name: "!sub",
+            aliases: &[],
+            group: Fun,
+            deadlock_only: false,
+            summary: "Abo-Link für diesen Kanal. Freiwillige Erinnerung: !sub erinnerung an/aus/status.",
+        },
+        CommandInfo {
             name: "!rank",
             aliases: &[],
             group: Stats,

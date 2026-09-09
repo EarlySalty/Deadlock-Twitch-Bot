@@ -51,6 +51,12 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         .await
         .expect("connect");
 
+    create_schema(&pool).await;
+    Some(pool)
+}
+
+#[allow(dead_code)]
+pub async fn create_schema(pool: &PgPool) {
     for ddl in [
         // Betriebstabellen, die der Rename per stabiler ID mitzieht.
         "CREATE TABLE twitch_engagement_log (
@@ -282,7 +288,7 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
             event_type TEXT, user_login TEXT, tier TEXT, is_gift BOOLEAN DEFAULT FALSE,
             gifter_login TEXT, cumulative_months INTEGER, streak_months INTEGER,
-            message TEXT, total_gifted INTEGER, received_at TIMESTAMPTZ
+            message TEXT, total_gifted INTEGER, received_at TIMESTAMPTZ, viewer_user_id TEXT
         )",
         "CREATE TABLE twitch_ad_break_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
@@ -353,9 +359,8 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         "ALTER TABLE twitch_engagement_channel_profile ADD COLUMN IF NOT EXISTS channel_user_id TEXT",
         "ALTER TABLE twitch_live_announcement_configs ADD COLUMN IF NOT EXISTS twitch_user_id TEXT",
     ] {
-        sqlx::query(ddl).execute(&pool).await.unwrap();
+        sqlx::query(ddl).execute(pool).await.unwrap();
     }
-    Some(pool)
 }
 
 /// Prod-treues Fixture für die Chatters/Presence-Poller- und Raid-Retention-

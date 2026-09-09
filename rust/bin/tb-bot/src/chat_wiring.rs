@@ -623,6 +623,7 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<C
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
+    pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     pub clip_port: Option<Arc<dyn ClipPort>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
@@ -642,6 +643,7 @@ pub async fn build_runtime(
     supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
+        subscription_status,
         manual_raid,
         clip_port,
         bot_ban_handler,
@@ -776,7 +778,9 @@ pub async fn build_runtime(
         Arc::new(DbInvitePort { pool: pool.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
-    );
+    ).set_sub_reminder(Arc::new(tb_chat::sub_reminder::SubReminder::new(
+        pool.clone(), Arc::clone(&api), subscription_status,
+    )));
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
     }
@@ -1292,6 +1296,30 @@ async fn mark_chat_subscription_ok(
 // ---------------------------------------------------------------------------
 
 const LURKER_REWARD_SCOPE: &str = "channel:read:redemptions";
+struct HelixSubscriptionStatus {
+    helix: Option<Arc<HelixClient>>,
+    token_provider: Option<Arc<TokenProvider>>,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::sub_reminder::SubscriptionStatus for HelixSubscriptionStatus {
+    async fn active(&self, broadcaster_id: &str, viewer_id: &str) -> Option<bool> {
+        let helix = self.helix.as_ref()?;
+        let provider = self.token_provider.as_ref()?;
+        let token = provider.get_valid_token_unrestricted_with_scope(
+            broadcaster_id, chrono::Utc::now(), tb_chat::sub_reminder::SUB_SCOPE,
+        ).await.ok()??;
+        tokio::time::timeout(Duration::from_secs(8),
+            helix.broadcaster_subscription_active(broadcaster_id, viewer_id, &token))
+            .await.ok()?.ok()
+    }
+}
+
+pub fn build_subscription_status(
+    helix: Option<Arc<HelixClient>>, token_provider: Option<Arc<TokenProvider>>,
+) -> Arc<dyn tb_chat::sub_reminder::SubscriptionStatus> {
+    Arc::new(HelixSubscriptionStatus { helix, token_provider })
+}
 const LURKER_REWARD_CACHE_TTL: Duration = Duration::from_secs(60);
 
 struct HelixLurkerRewardChecker {

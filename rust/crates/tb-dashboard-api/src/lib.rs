@@ -177,7 +177,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings,
         social_media, spa, stat_command_settings, stream_report, streamer_disconnect, streamers,
         tag_analysis,
-        tip_settings, title, title_command_settings, title_performance, uplink, viewer_timeline,
+        tip_settings, title, title_command_settings, sub_reminder_settings, title_performance, uplink, viewer_timeline,
         viewers, watch_time,
     };
 
@@ -440,6 +440,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/streamer/title-command-settings",
             get(title_command_settings::get_handler).post(title_command_settings::post_handler),
         )
+        .route("/twitch/api/v2/streamer/sub-reminder-settings", get(sub_reminder_settings::get_handler).post(sub_reminder_settings::post_handler))
         .route(
             "/twitch/api/v2/streamer/stat-command-settings",
             get(stat_command_settings::get_handler).post(stat_command_settings::post_handler),

@@ -28,6 +28,7 @@ pub mod channel_classifier;
 pub mod channel_policy;
 pub mod chatter_tracking;
 pub mod commands;
+pub mod sub_reminder;
 pub mod conversation_scam;
 pub mod crew_guard;
 pub mod fun_responses;

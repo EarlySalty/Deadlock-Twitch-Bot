@@ -113,29 +113,40 @@ impl TelemetryStore {
             _ => int_field(event, &["total", "gift_total"]).filter(|v| *v != 0),
         };
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query!(
+        let mut transaction = self.pool.begin().await?;
+        let viewer_id = if event_type == "gift" { None } else {
+            event.get("user_id").and_then(Value::as_str).filter(|id| !id.trim().is_empty())
+        };
+        sqlx::query(
             r#"
             INSERT INTO twitch_subscription_events
                 (session_id, twitch_user_id, event_type, user_login, tier,
                  is_gift, gifter_login, cumulative_months, streak_months,
-                 message, total_gifted, received_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 message, total_gifted, received_at, viewer_user_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
-            session_id,
-            broadcaster_user_id,
-            event_type,
-            user_login,
-            tier,
-            is_gift,
-            gifter_login,
-            cumulative_months,
-            streak_months,
-            message,
-            total_gifted,
-            now,
         )
-        .execute(&self.pool)
+        .bind(session_id).bind(broadcaster_user_id).bind(event_type).bind(user_login)
+        .bind(tier).bind(is_gift).bind(gifter_login).bind(cumulative_months)
+        .bind(streak_months).bind(message).bind(total_gifted).bind(now).bind(viewer_id)
+        .execute(&mut *transaction)
         .await?;
+        // Keine Ableitung aus Login, Monaten, Prime oder Empfangszeit.
+        // Gift-Batches nennen den Schenker, nicht den Empfänger.
+        if matches!(event_type, "end" | "subscribe" | "resub") {
+            if let (Some(viewer), Some(event_id), Some(timestamp)) = (
+                viewer_id,
+                event.get("_sub_message_id").and_then(Value::as_str).filter(|s| !s.is_empty()),
+                event.get("_sub_event_timestamp").and_then(Value::as_str)
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|t| t.with_timezone(&Utc)),
+            ) {
+                if timestamp <= now + chrono::Duration::seconds(30) {
+                    tb_chat::sub_reminder::record_subscription_event(&mut transaction,
+                        broadcaster_user_id, viewer, event_id, timestamp, event_type=="end").await?;
+                }
+            }
+        }
+        transaction.commit().await?;
         Ok(())
     }
 

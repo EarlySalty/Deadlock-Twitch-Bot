@@ -349,6 +349,8 @@ streamer_plans|promo_disabled|integer|NO|0
 streamer_plans|promo_message|text|YES|
 streamer_plans|raid_boost_enabled|integer|NO|0
 streamer_plans|stat_command_settings|jsonb|NO|'{}'::jsonb
+streamer_plans|sub_reminder_enabled_at|timestamp with time zone|YES|
+streamer_plans|sub_reminder_enabled|integer|NO|0
 streamer_plans|title_command_enabled|integer|NO|1
 streamer_plans|trial_ever_granted|integer|NO|0
 streamer_plans|twitch_login|text|YES|
@@ -1616,6 +1618,15 @@ twitch_streamers_partner_state|twitch_user_id|text|YES|
 twitch_streamers|created_at|timestamp with time zone|YES|now()
 twitch_streamers|twitch_login|text|NO|
 twitch_streamers|twitch_user_id|text|YES|
+twitch_sub_reminders|broadcaster_user_id|text|NO|
+twitch_sub_reminders|consent_at|timestamp with time zone|NO|now()
+twitch_sub_reminders|consumed_message_id|text|YES|
+twitch_sub_reminders|enabled|boolean|NO|false
+twitch_sub_reminders|end_message_id|text|YES|
+twitch_sub_reminders|ended_at|timestamp with time zone|YES|
+twitch_sub_reminders|last_event_at|timestamp with time zone|YES|
+twitch_sub_reminders|retry_after|timestamp with time zone|YES|
+twitch_sub_reminders|viewer_user_id|text|NO|
 twitch_subscription_events|cumulative_months|integer|YES|
 twitch_subscription_events|event_type|text|NO|
 twitch_subscription_events|gifter_login|text|YES|
@@ -1629,6 +1640,7 @@ twitch_subscription_events|tier|text|YES|
 twitch_subscription_events|total_gifted|integer|YES|
 twitch_subscription_events|twitch_user_id|text|NO|
 twitch_subscription_events|user_login|text|YES|
+twitch_subscription_events|viewer_user_id|text|YES|
 twitch_subscriptions_snapshot|id|bigint|NO|nextval('twitch_subscriptions_snapshot_id_seq'::regclass)
 twitch_subscriptions_snapshot|points|integer|YES|0
 twitch_subscriptions_snapshot|snapshot_at|timestamp with time zone|NO|now()

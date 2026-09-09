@@ -52,6 +52,8 @@ fn is_transient_error(err: &reqwest::Error) -> bool {
 /// Fehlertyp für Helix-Operationen.
 #[derive(Debug, Error)]
 pub enum HelixError {
+    #[error("Ungültige Helix-Antwort: {0}")]
+    InvalidResponse(&'static str),
     #[error("Token-Fehler: {0}")]
     Token(#[from] TokenError),
     #[error("HTTP-Fehler: {0}")]

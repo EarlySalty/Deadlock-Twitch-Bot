@@ -3240,6 +3240,7 @@ dependencies = [
  "tb-analytics",
  "tb-chat",
  "tb-transport-twitch",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

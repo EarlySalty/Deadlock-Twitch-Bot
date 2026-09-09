@@ -246,7 +246,7 @@ async fn handle_callback(
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    let parsed: Value = match serde_json::from_slice(&body) {
+    let mut parsed: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("eventsub_receiver: Body kein JSON: {e}");
@@ -279,6 +279,10 @@ async fn handle_callback(
             StatusCode::NO_CONTENT.into_response()
         }
         MSG_TYPE_NOTIFICATION => {
+            let Some(object) = parsed.as_object_mut() else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            object.insert("metadata".into(), serde_json::json!({"message_timestamp": timestamp}));
             let sub_type = parsed
                 .pointer("/subscription/type")
                 .and_then(Value::as_str)

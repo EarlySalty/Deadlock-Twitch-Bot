@@ -1424,3 +1424,33 @@ async fn stream_offline_armt_reannounce_cooldown_gegen_flap_doppelpost() {
         "stream.offline muss die Reannounce-Sperre armen, damit ein schneller Reconnect refresht statt neu zu posten"
     );
 }
+
+#[path = "../../../test-support/postgres.rs"]
+mod isolated_postgres;
+
+#[tokio::test]
+async fn sub_reminder_subscription_dbfehler_retry_und_originalzeit() {
+    let db=isolated_postgres::TestPostgres::start().await;
+    support::create_schema(&db.pool).await;
+    sqlx::query("CREATE TABLE streamer_plans(twitch_user_id text PRIMARY KEY,twitch_login text)").execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../../../migrations/20260909220000_sub_reminders.sql")).execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO streamer_plans(twitch_user_id,sub_reminder_enabled,sub_reminder_enabled_at) VALUES('b',1,now()-interval '1 hour')").execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_sub_reminders(broadcaster_user_id,viewer_user_id,enabled,consent_at) VALUES('b','u',true,now()-interval '1 hour')").execute(&db.pool).await.unwrap();
+    let hooks=Arc::new(RecordingHooks::default());
+    let (dispatcher,runtime,_)=build_stack(&db.pool,hooks);
+    let payload=serde_json::json!({"subscription":{"type":"channel.subscription.end"},"metadata":{"message_timestamp":chrono::Utc::now().to_rfc3339()},"event":{"broadcaster_user_id":"b","user_id":"u","user_login":"old_name","tier":"1000","is_gift":false}});
+    // DB-Fehler nach dem Telemetrie-Insert rollt BEIDE Schreibpfade zurück.
+    sqlx::query("ALTER TABLE twitch_sub_reminders RENAME TO unavailable_reminders").execute(&db.pool).await.unwrap();
+    assert!(dispatcher.dispatch("channel.subscription.end",Some("end-1"),&payload).await.is_err());
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM twitch_subscription_events").fetch_one(&db.pool).await.unwrap(),0);
+    sqlx::query("ALTER TABLE unavailable_reminders RENAME TO twitch_sub_reminders").execute(&db.pool).await.unwrap();
+    let retry=dispatcher.dispatch("channel.subscription.end",Some("end-1"),&payload).await.unwrap();
+    assert!(!retry.duplicate);
+    assert_eq!(sqlx::query_scalar::<_,String>("SELECT end_message_id FROM twitch_sub_reminders").fetch_one(&db.pool).await.unwrap(),"end-1");
+    assert_eq!(sqlx::query_scalar::<_,String>("SELECT viewer_user_id FROM twitch_subscription_events").fetch_one(&db.pool).await.unwrap(),"u");
+    assert!(dispatcher.dispatch("channel.subscription.end",Some("end-1"),&payload).await.unwrap().duplicate);
+    let mut missing_time=payload.clone();missing_time.as_object_mut().unwrap().remove("metadata");
+    dispatcher.dispatch("channel.subscription.end",Some("end-no-time"),&missing_time).await.unwrap();
+    assert_eq!(sqlx::query_scalar::<_,String>("SELECT end_message_id FROM twitch_sub_reminders").fetch_one(&db.pool).await.unwrap(),"end-1");
+    runtime.shutdown().await;
+}

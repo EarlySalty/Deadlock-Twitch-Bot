@@ -688,7 +688,22 @@ impl EventSubDispatcher {
         body: &Value,
     ) -> Result<DispatchOutcome, sqlx::Error> {
         let fallback = sub_type.trim().to_lowercase();
-        let context = extract_context(body, &fallback);
+        let mut context = extract_context(body, &fallback);
+        // Webhook und Bridge reichen den ursprünglichen EventSub-Zeitpunkt
+        // durch. Ohne ihn keine Abo-Erinnerung aus möglicherweise altem Replay.
+        if let Some(event) = context.event.as_object_mut() {
+            event.remove("_sub_event_timestamp");
+            event.remove("_sub_message_id");
+            if let Some(timestamp) = body.pointer("/metadata/message_timestamp")
+                .or_else(|| body.pointer("/payload/metadata/message_timestamp"))
+                .and_then(Value::as_str)
+            {
+                event.insert("_sub_event_timestamp".into(), Value::String(timestamp.into()));
+            }
+            if let Some(id) = message_id {
+                event.insert("_sub_message_id".into(), Value::String(id.into()));
+            }
+        }
         let effective_type = if context.sub_type.is_empty() {
             fallback.clone()
         } else {
@@ -837,7 +852,7 @@ impl EventSubDispatcher {
                 outcome.processed = true;
             }
             _ => {
-                outcome.processed = self.store_telemetry(sub_type, context).await;
+                outcome.processed = self.store_telemetry(sub_type, context).await?;
             }
         }
         Ok(outcome)
@@ -884,9 +899,9 @@ impl EventSubDispatcher {
         true
     }
 
-    /// Telemetrie-Insert; Fehler werden (wie Pythons Inline-Callbacks)
-    /// geloggt und verschluckt. `true` = Typ war bekannt.
-    async fn store_telemetry(&self, sub_type: &str, context: &NotificationContext) -> bool {
+    /// Subscription-Lifecycle-Fehler werden vor dem Ack propagiert. Übrige
+    /// Telemetrie behält ihr bisheriges Logging. `true` = Typ war bekannt.
+    async fn store_telemetry(&self, sub_type: &str, context: &NotificationContext) -> Result<bool, sqlx::Error> {
         let user_id = context.broadcaster_id.as_str();
         let event = &context.event;
         let now = epoch_to_datetime((self.clock)());
@@ -985,13 +1000,16 @@ impl EventSubDispatcher {
             }
             other => {
                 tracing::debug!(sub_type = other, "EventSub: kein Handler für Sub-Typ");
-                return false;
+                return Ok(false);
             }
         };
         if let Err(error) = result {
+            if matches!(sub_type, "channel.subscribe" | "channel.subscription.message" | "channel.subscription.end") {
+                return Err(error);
+            }
             tracing::error!(%error, sub_type, "EventSub: Telemetrie-Insert fehlgeschlagen");
         }
-        true
+        Ok(true)
     }
 }
 

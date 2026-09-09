@@ -393,6 +393,26 @@ impl HelixClient {
         check_status_and_json(resp).await
     }
 
+    /// Einzelstatus mit Broadcaster-Grant. Gefilterte Antworten haben null
+    /// total/points; der Summensnapshot-Typ eignet sich deshalb hier nicht.
+    pub async fn broadcaster_subscription_active(
+        &self, broadcaster_id: &str, viewer_id: &str, user_token: &str,
+    ) -> Result<bool, HelixError> {
+        #[derive(Deserialize)]
+        struct Subscriber { user_id: String, broadcaster_id: String }
+        #[derive(Deserialize)]
+        struct Response { data: Vec<Subscriber> }
+        let resp = self.get_with_user_token("/subscriptions", user_token)
+            .query(&[("broadcaster_id", broadcaster_id), ("user_id", viewer_id)])
+            .send().await?;
+        let response: Response = check_status_and_json(resp).await?;
+        match response.data.as_slice() {
+            [] => Ok(false),
+            [sub] if sub.user_id==viewer_id && sub.broadcaster_id==broadcaster_id => Ok(true),
+            _ => Err(HelixError::InvalidResponse("Abo-Antwort stimmt nicht mit angefragten Twitch-IDs überein")),
+        }
+    }
+
     /// Werbe-Schedule eines Broadcasters via `GET /channels/ads` (`data[0]`).
     /// Braucht ein **User-Token** des Broadcasters. `Ok(None)` = leeres
     /// `data`-Array (Helix lieferte keinen Schedule).
@@ -974,6 +994,27 @@ mod tests {
         assert!(thumb.starts_with("https://static-cdn.jtvnw.net/vod/thumb-1280x720.jpg?rand="));
         assert!(!thumb.contains("%{width}"));
         assert!(!thumb.contains("%{height}"));
+    }
+
+    #[tokio::test]
+    async fn sub_reminder_status_strikt_und_null_summen() {
+        for (body, expected) in [
+            (serde_json::json!({"data":[],"total":null,"points":null}),Some(false)),
+            (serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"b"}],"total":null}),Some(true)),
+            (serde_json::json!({"data":[{}]}),None),
+            (serde_json::json!({"data":null}),None),
+            (serde_json::json!({}),None),
+            (serde_json::json!({"data":[{"user_id":"other","broadcaster_id":"b"}]}),None),
+            (serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"other"}]}),None),
+        ] {
+            let server=MockServer::start().await;
+            let client=client_with(&server).await;
+            Mock::given(method("GET")).and(path("/helix/subscriptions"))
+                .and(query_param("broadcaster_id","b")).and(query_param("user_id","u"))
+                .and(header("Authorization","Bearer user-tok"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body)).expect(1).mount(&server).await;
+            assert_eq!(client.broadcaster_subscription_active("b","u","user-tok").await.ok(),expected);
+        }
     }
 
     #[tokio::test]

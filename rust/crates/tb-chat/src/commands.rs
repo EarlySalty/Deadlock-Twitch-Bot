@@ -296,6 +296,7 @@ pub trait ScamGuardCommandPort: Send + Sync {
 }
 
 pub struct CommandEngine {
+    sub_reminder: Option<Arc<crate::sub_reminder::SubReminder>>,
     pool: PgPool,
     api: Arc<dyn ChatApi>,
     raid: Arc<dyn RaidCommandPort>,
@@ -331,6 +332,7 @@ impl CommandEngine {
         autoban: Arc<dyn LastAutobanStore>,
     ) -> Self {
         Self {
+            sub_reminder: None,
             pool,
             api,
             raid,
@@ -344,6 +346,17 @@ impl CommandEngine {
             invite_cooldowns: Mutex::new(HashMap::new()),
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
             clip_cooldowns: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn set_sub_reminder(mut self, reminder: Arc<crate::sub_reminder::SubReminder>) -> Self {
+        self.sub_reminder = Some(reminder);
+        self
+    }
+
+    pub async fn remind_subscriber(&self, event: &ChatMessageEvent) {
+        if let Some(reminder) = &self.sub_reminder {
+            reminder.on_message(event).await;
         }
     }
 
@@ -405,6 +418,12 @@ impl CommandEngine {
         }
 
         match cmd {
+            "!sub" => {
+                if let Some(reminder) = &self.sub_reminder {
+                    reminder.command(event, args).await;
+                }
+                true
+            }
             "!ping" | "!health" | "!status" | "!bot" => {
                 self.cmd_ping(event).await;
                 true
@@ -1991,6 +2010,7 @@ impl CommandEngine {
 
 #[cfg(test)]
 mod tests {
+    include!("sub_reminder_tests.rs");
     use super::*;
     use crate::api::BanOutcome;
     use crate::types::{
