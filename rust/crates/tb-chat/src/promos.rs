@@ -2205,49 +2205,7 @@ impl PromoEngine {
             return;
         }
 
-        // Lurker-Tax-Settings prüfen (promos.py:193: _load_lurker_tax_settings).
-        // streamer_plans.lurker_tax_enabled = integer (Opt-in-Flag, default 0).
-        let settings = sqlx::query!(
-            "SELECT p.lurker_tax_enabled AS \"lurker_tax_enabled?\",
-                    COALESCE(p.twitch_user_id, '') AS \"twitch_user_id!\"
-               FROM streamer_plans p
-              WHERE LOWER(COALESCE(p.twitch_login,'')) = $1
-              LIMIT 1",
-            login.to_lowercase(),
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
-
-        let (enabled, plan_user_id) = match settings {
-            Some(row) => (row.lurker_tax_enabled.unwrap_or(0) != 0, row.twitch_user_id),
-            None => return,
-        };
-        if !enabled {
-            return;
-        }
-
-        // is_paid_plan: effektiver Plan muss chat.lurker_tax-Entitlement haben
-        // (promos.py:355). Volle Snapshot-Resolution → abgelaufene Pläne taxen
-        // nicht mehr. user_id (aus streamer_plans oder identities) priorisiert
-        // den Override-Match.
-        let user_id = if !plan_user_id.is_empty() {
-            plan_user_id
-        } else {
-            sqlx::query_scalar!(
-                "SELECT twitch_user_id AS \"twitch_user_id?\" FROM twitch_streamer_identities
-                  WHERE LOWER(twitch_login) = $1 LIMIT 1",
-                login.to_lowercase(),
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten()
-            .flatten()
-            .unwrap_or_default()
-        };
-        if !self.lurker_tax_is_paid_plan(login, &user_id).await {
+        if !self.lurker_tax_channel_gate(login).await {
             return;
         }
 
@@ -2520,6 +2478,9 @@ impl PromoEngine {
         if redeemer_login.trim().is_empty() {
             return;
         }
+        if !self.lurker_tax_channel_gate(broadcaster_login).await {
+            return;
+        }
         let session_id: i64 = sqlx::query_scalar::<_, Option<i64>>(
             "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
         )
@@ -2678,6 +2639,45 @@ impl PromoEngine {
                 false
             } // Fail-open.
         }
+    }
+
+    async fn lurker_tax_channel_gate(&self, login: &str) -> bool {
+        let settings = match sqlx::query!(
+            "SELECT p.lurker_tax_enabled AS \"lurker_tax_enabled?\",
+                    COALESCE(p.twitch_user_id, '') AS \"twitch_user_id!\"
+               FROM streamer_plans p
+              WHERE LOWER(COALESCE(p.twitch_login,'')) = $1
+              LIMIT 1",
+            login.to_lowercase(),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(row) => row,
+            Err(_) => return true,
+        };
+        let Some(row) = settings else {
+            return false;
+        };
+        if row.lurker_tax_enabled.unwrap_or(0) == 0 {
+            return false;
+        }
+        let user_id = if !row.twitch_user_id.is_empty() {
+            row.twitch_user_id
+        } else {
+            sqlx::query_scalar!(
+                "SELECT twitch_user_id AS \"twitch_user_id?\" FROM twitch_streamer_identities
+                  WHERE LOWER(twitch_login) = $1 LIMIT 1",
+                login.to_lowercase(),
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten()
+            .unwrap_or_default()
+        };
+        self.lurker_tax_is_paid_plan(login, &user_id).await
     }
 
     /// Lurker-Tax `is_paid_plan`-Gate (promos.py:355: der Plan muss das
@@ -6258,6 +6258,44 @@ mod db_tests {
             api.announcement_count().await,
             0,
             "ohne verdrahteten Reward-Checker darf die Erinnerung nicht gehen"
+        );
+    }
+
+    #[tokio::test]
+    async fn thank_blockt_bei_schalter_aus_oder_raid_free() {
+        let pool = pool_or_skip!("promo_thank_gate");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
+             VALUES ('u-off', 'offkanal', 0, 'raid_boost')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .thank_lurker_tax_redeemer("u-off", "offkanal", "xy")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "Schalter aus: kein Dank"
+        );
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
+             VALUES ('u-free', 'freekanal', 1, 'raid_free')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .thank_lurker_tax_redeemer("u-free", "freekanal", "yz")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "raid_free ist kein bezahlter Plan: kein Dank"
         );
     }
 
