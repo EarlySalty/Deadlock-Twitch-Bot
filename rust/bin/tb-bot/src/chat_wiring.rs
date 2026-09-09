@@ -33,7 +33,8 @@ use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
 use tb_chat::promos::{
-    InviteResolver, PartnerChannelCheck, PitchCardKind, PitchReviewSink, PromoEngine,
+    InviteResolver, LurkerRewardChecker, PartnerChannelCheck, PitchCardKind, PitchReviewSink,
+    PromoEngine,
 };
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
@@ -630,6 +631,7 @@ pub struct ChatRuntimePorts {
     pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
     pub raid_greeting: Option<Arc<RaidGreetingMonitor>>,
+    pub lurker_reward_checker: Option<Arc<dyn LurkerRewardChecker>>,
 }
 
 pub async fn build_runtime(
@@ -648,6 +650,7 @@ pub async fn build_runtime(
         member_relay,
         scam_notifier,
         raid_greeting,
+        lurker_reward_checker,
     } = ports;
     let ChatApiHandle {
         api,
@@ -743,6 +746,10 @@ pub async fn build_runtime(
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
             .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
+        if let Some(checker) = lurker_reward_checker {
+            engine = engine.set_lurker_reward_checker(checker);
+            tracing::info!("lurker-tax: Reward-Checker verdrahtet");
+        }
         if let Some(sink) = pitch_review_sink {
             engine = engine.set_pitch_review_sink(sink);
         }
@@ -1283,6 +1290,71 @@ async fn mark_chat_subscription_ok(
 // ---------------------------------------------------------------------------
 // EventSubHooks-Wrapper — delegiert alles, fängt channel.chat.message ab
 // ---------------------------------------------------------------------------
+
+const LURKER_REWARD_SCOPE: &str = "channel:read:redemptions";
+const LURKER_REWARD_CACHE_TTL: Duration = Duration::from_secs(60);
+
+struct HelixLurkerRewardChecker {
+    helix: Arc<HelixClient>,
+    token_provider: Arc<TokenProvider>,
+    cache: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, bool)>>,
+}
+
+impl HelixLurkerRewardChecker {
+    fn new(helix: Arc<HelixClient>, token_provider: Arc<TokenProvider>) -> Self {
+        Self {
+            helix,
+            token_provider,
+            cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LurkerRewardChecker for HelixLurkerRewardChecker {
+    async fn active_lurker_reward_exists(&self, broadcaster_id: &str) -> bool {
+        if let Ok(cache) = self.cache.lock() {
+            if let Some((seen, value)) = cache.get(broadcaster_id) {
+                if seen.elapsed() < LURKER_REWARD_CACHE_TTL {
+                    return *value;
+                }
+            }
+        }
+        let token = match self
+            .token_provider
+            .get_valid_token_unrestricted_with_scope(
+                broadcaster_id,
+                chrono::Utc::now(),
+                LURKER_REWARD_SCOPE,
+            )
+            .await
+        {
+            Ok(Some(token)) => token,
+            _ => return false,
+        };
+        let exists = match self.helix.get_custom_rewards(broadcaster_id, &token).await {
+            Ok(rewards) => rewards
+                .iter()
+                .any(|r| r.is_enabled && tb_chat::lurker_tax_title_matches(&r.title)),
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "lurker-tax: custom_rewards nicht lesbar");
+                return false;
+            }
+        };
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(broadcaster_id.to_string(), (std::time::Instant::now(), exists));
+        }
+        exists
+    }
+}
+
+pub fn build_lurker_reward_checker(
+    helix: Option<Arc<HelixClient>>,
+    token_provider: Option<Arc<TokenProvider>>,
+) -> Option<Arc<dyn LurkerRewardChecker>> {
+    let (helix, token_provider) = (helix?, token_provider?);
+    Some(Arc::new(HelixLurkerRewardChecker::new(helix, token_provider)) as Arc<dyn LurkerRewardChecker>)
+}
 
 struct ChatHooks {
     inner: Arc<dyn EventSubHooks>,

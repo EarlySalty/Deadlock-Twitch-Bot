@@ -1316,6 +1316,10 @@ async fn main() {
                     member_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
                     raid_greeting: raid_greeting_monitor.clone(),
+                    lurker_reward_checker: chat_wiring::build_lurker_reward_checker(
+                        helix.as_ref().clone().map(Arc::new),
+                        follower_streamer_token_provider.clone(),
+                    ),
                 },
                 eventsub_hooks.clone(),
                 supervisor.clone(),
