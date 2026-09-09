@@ -52,6 +52,9 @@ jobs:
         run: |
           cargo test --locked -j2 -p tb-chat title_command_toggle --lib
           cargo test --locked -j2 -p tb-dashboard-api title_command_settings --lib
+          cargo test --locked -j2 -p tb-chat statistik_schalter --lib
+          cargo test --locked -j2 -p tb-chat stat_commands --lib
+          cargo test --locked -j2 -p tb-dashboard-api stat_command_settings --lib
 
       - name: Broker, Uplink disconnect and normal startup
         run: |

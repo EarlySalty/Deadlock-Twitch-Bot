@@ -120,3 +120,5 @@ pub mod viewer_timeline;
 pub mod viewers;
 pub mod watch_time;
 pub mod website;
+
+pub mod stat_command_settings;

@@ -382,6 +382,24 @@ impl CommandEngine {
             (text_lower.as_str(), "")
         };
 
+        if let Some(command) = crate::stat_commands::StatCommand::from_chat(cmd) {
+            let enabled = sqlx::query_scalar::<_, bool>(
+                "SELECT CASE WHEN NOT (stat_command_settings ? $2) THEN true ELSE stat_command_settings -> $2 = 'true'::jsonb END FROM streamer_plans WHERE twitch_user_id = $1",
+            )
+            .bind(&event.broadcaster_user_id)
+            .bind(command.key())
+            .fetch_optional(&self.pool)
+            .await;
+            match enabled {
+                Ok(Some(false)) => return true,
+                Err(error) => {
+                    crate::stat_commands::warn_read_failure(&error);
+                    return true;
+                }
+                Ok(_) => {}
+            }
+        }
+
         if !deadlock_live && crate::catalog::deadlock_only(cmd) {
             return false;
         }
@@ -2582,6 +2600,7 @@ mod tests {
                 lurker_tax_enabled INTEGER DEFAULT 0,
                 lurk_command_enabled INTEGER DEFAULT 1,
                 title_command_enabled INTEGER DEFAULT 1,
+                stat_command_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
                 clip_command_enabled INTEGER DEFAULT 1,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
@@ -3592,5 +3611,93 @@ mod tests {
         assert!(handled);
         assert_eq!(api.message_count().await, 0);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn statistik_schalter_alle_befehle_aliase_und_sofort_wieder_an() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+        let commands = [
+            "!rank",
+            "!wins",
+            "!winrate",
+            "!mmr",
+            "!climb",
+            "!live",
+            "!lastmatch",
+            "!last",
+            "!streak",
+            "!mostplayed",
+            "!main",
+        ];
+        let mut count = 0;
+        for text in commands {
+            assert!(engine.handle(&make_event(text, false, false), true).await);
+            count += 1;
+            assert_eq!(api.message_count().await, count, "Standard aktiv: {text}");
+        }
+        let flags: serde_json::Value = crate::stat_commands::StatCommand::ALL
+            .into_iter()
+            .map(|command| (command.key().to_string(), serde_json::Value::Bool(false)))
+            .collect();
+        sqlx::query("INSERT INTO streamer_plans (twitch_user_id,twitch_login,stat_command_settings) VALUES ('bc123','alter_name',$1), ('fremd','testchannel','{}')")
+            .bind(flags).execute(&pool).await.unwrap();
+        for text in commands {
+            for live in [true, false] {
+                assert!(engine.handle(&make_event(text, false, false), live).await);
+                assert_eq!(api.message_count().await, count, "Aus bleibt still: {text}");
+            }
+        }
+        for text in commands {
+            let key = crate::stat_commands::StatCommand::from_chat(text)
+                .unwrap()
+                .key();
+            sqlx::query("UPDATE streamer_plans SET stat_command_settings=jsonb_set(stat_command_settings,ARRAY[$1], 'true') WHERE twitch_user_id='bc123'")
+                .bind(key).execute(&pool).await.unwrap();
+            assert!(engine.handle(&make_event(text, false, false), true).await);
+            count += 1;
+            assert_eq!(
+                api.message_count().await,
+                count,
+                "Sofort wieder aktiv: {text}"
+            );
+        }
+        for invalid in [
+            serde_json::json!(null),
+            serde_json::json!("true"),
+            serde_json::json!("yes"),
+            serde_json::json!(1),
+        ] {
+            sqlx::query("UPDATE streamer_plans SET stat_command_settings=jsonb_build_object('rank',$1::jsonb) WHERE twitch_user_id='bc123'").bind(invalid).execute(&pool).await.unwrap();
+            assert!(
+                engine
+                    .handle(&make_event("!rank", false, false), true)
+                    .await
+            );
+            assert_eq!(
+                api.message_count().await,
+                count,
+                "Ungültiger Flag bleibt still"
+            );
+        }
+        sqlx::query("DROP TABLE streamer_plans")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            engine
+                .handle(&make_event("!rank", false, false), true)
+                .await
+        );
+        assert_eq!(api.message_count().await, count, "DB-Fehler bleibt still");
+        // Geschützte Commands passieren diesen Schalter auch ohne Einstellungstabelle.
+        assert!(
+            engine
+                .handle(&make_event("!commands", false, false), true)
+                .await
+        );
+        assert_eq!(api.message_count().await, count + 1);
     }
 }

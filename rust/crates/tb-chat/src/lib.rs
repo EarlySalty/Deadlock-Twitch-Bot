@@ -48,6 +48,7 @@ pub mod secret_sink;
 pub mod spam_filter;
 pub mod standard_replies;
 pub mod stats;
+pub mod stat_commands;
 pub mod steam_lookup;
 pub mod style_score;
 pub mod suppression_guard;
