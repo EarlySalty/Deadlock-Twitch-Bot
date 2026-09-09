@@ -1,6 +1,6 @@
 # Commands
 
-Stand: `2026-03-13`
+Stand Twitch-Chat: `2026-09-09`
 
 ## Grundsaetze
 
@@ -14,8 +14,6 @@ Stand: `2026-03-13`
 
 | Command | Alias | Wer darf | Zweck | Wichtige Bedingungen |
 | --- | --- | --- | --- | --- |
-| `!raid_enable` | `!raidbot` | Broadcaster oder Mod | Auto-Raid aktivieren | Wenn OAuth fehlt, kommt stattdessen der Auth-Link |
-| `!raid_disable` | `!raidbot_off` | Broadcaster oder Mod | Auto-Raid deaktivieren | Schaltet `raid_enabled` und `raid_bot_enabled` aus |
 | `!raid_status` | `!raidbot_status` | jeder im Kanal | Status, Autorisierung und Raid-Stats anzeigen | Kanal muss als Partner registriert sein |
 | `!raid_history` | `!raidbot_history` | jeder im Kanal | letzte 3 Raids anzeigen | rein lesend |
 | `!raid` | `!traid` | Broadcaster oder Mod | sofortigen manuellen Raid starten | Stream muss live und raid-faehig sein |
@@ -27,12 +25,6 @@ Stand: `2026-03-13`
 | `!lurkersteuer_off` | `!lurkersteuer_aus`, `!lurker_tax_off` | nur Broadcaster | Lurker Steuer dauerhaft deaktivieren | nur in Paid-Plaenen verfuegbar |
 
 ## Wichtige Details zu einzelnen Chat-Commands
-
-### `!raid_enable`
-
-- Aktiviert Auto-Raid, falls bereits eine gueltige Twitch-Autorisierung vorliegt.
-- Wenn noch keine Autorisierung existiert, sendet der Bot einen OAuth-Link.
-- Der Hinweistext nennt aktuell Auto-Raid, Chat Guard und Discord Auto-Post als abhaengige Funktionen.
 
 ### `!raid`
 
@@ -46,10 +38,10 @@ Der manuelle Raid liefert je nach Zustand unterschiedliche Rueckmeldungen:
 
 ### `!clip`
 
-- Erstellt einen Clip von etwa 60 Sekunden.
+- Erstellt einen Clip aus dem laufenden Stream.
 - Nutzt bevorzugt das Broadcaster-Token.
 - Faellt notfalls auf ein Bot-Token zurueck.
-- Wenn gar kein nutzbares Token verfuegbar ist, verweist der Bot auf `!raid_enable`.
+- Wenn die Twitch-Verbindung fehlt, bittet der Bot darum, sie erneut herzustellen.
 
 ### `!lurkersteuer_off`
 

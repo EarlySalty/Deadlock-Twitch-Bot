@@ -11,9 +11,42 @@ use chrono::{DateTime, Utc};
 
 use crate::types::SendOutcome;
 
+pub use tb_transport_twitch::AnnouncementOutcome;
 /// Ban-/Timeout-Ergebnis: kanonisch im Transport definiert.
 pub use tb_transport_twitch::BanOutcome;
-pub use tb_transport_twitch::AnnouncementOutcome;
+
+/// Gemeinsamer Command-Antwortweg. Nur eine bestätigte Zustellung ist Erfolg.
+/// Keine Wiederholung mutierender Commands; der Aufrufer entscheidet über Sperren.
+pub async fn send_reply(api: &dyn ChatApi, broadcaster_id: &str, text: &str) -> bool {
+    let kind = match api.send_message(broadcaster_id, text).await {
+        Ok(SendOutcome::Sent) => return true,
+        Ok(SendOutcome::Dropped { .. }) => "dropped",
+        Ok(SendOutcome::HttpError { .. }) => "http_error",
+        Err(_) => "transport_error",
+    };
+    // Gleichartige Fehler je Kanal höchstens einmal pro Minute melden.
+    // Keine Antworttexte, HTTP-Bodies oder Zugangsdaten in diesem Log.
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+        time::{Duration, Instant},
+    };
+    type Failures = HashMap<(String, &'static str), Instant>;
+    static FAILURES: OnceLock<Mutex<Failures>> = OnceLock::new();
+    let mut failures = FAILURES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = Instant::now();
+    failures.retain(|_, at| now.duration_since(*at) < Duration::from_secs(60));
+    if let std::collections::hash_map::Entry::Vacant(entry) =
+        failures.entry((broadcaster_id.into(), kind))
+    {
+        entry.insert(now);
+        tracing::warn!(broadcaster_id, kind, "Command-Antwort nicht zugestellt");
+    }
+    false
+}
 
 /// Port für ausgehende Chat-/Moderations-Aktionen mit dem Bot-Token.
 #[async_trait]

@@ -36,6 +36,54 @@ pub const TOP_N: i64 = 3;
 /// Ein Tick je Zuschauer je 30 Sekunden, also eine halbe Minute je Tick.
 const MINUTEN_JE_TICK: f64 = 0.5;
 
+/// Erfasste Anwesenheit einer Twitch-ID in genau einem Kanal.
+/// Die laufende Session ist bereits im Gesamtwert enthalten.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZuschauerWatchtime {
+    pub gesamt_minuten: f64,
+    pub laufend_minuten: Option<f64>,
+}
+
+/// Historische Logins dienen nur als Verknüpfung innerhalb derselben
+/// ID-gebundenen Session. Gleiche Zeitpunkte unter mehreren Namen zählen einmal.
+pub async fn zuschauer_watchtime(
+    pool: &PgPool,
+    broadcaster_id: &str,
+    chatter_id: &str,
+) -> Result<ZuschauerWatchtime, sqlx::Error> {
+    let (gesamt, laufend, session): (i64, i64, Option<i64>) = sqlx::query_as(
+        r#"WITH namen AS MATERIALIZED (
+               SELECT DISTINCT sc.session_id, sc.chatter_login
+               FROM twitch_session_chatters sc
+               JOIN twitch_stream_sessions s ON s.id = sc.session_id
+               WHERE sc.chatter_id = $2 AND s.twitch_user_id = $1
+                 AND $1 <> '' AND $2 <> ''
+           ), ticks AS (
+               SELECT DISTINCT n.session_id, p.tick_at
+               FROM namen n
+               CROSS JOIN LATERAL (
+                   SELECT p.tick_at FROM twitch_viewer_presence_ticks p
+                   WHERE p.session_id = n.session_id AND p.viewer_login = n.chatter_login
+                   GROUP BY p.tick_at
+               ) p
+           ), live AS (
+               SELECT (SELECT active_session_id FROM twitch_live_state
+                       WHERE twitch_user_id = $1 AND is_live = 1) AS session_id
+           )
+           SELECT COUNT(t.tick_at), COUNT(t.tick_at) FILTER (WHERE t.session_id = l.session_id),
+                  l.session_id
+           FROM live l LEFT JOIN ticks t ON true GROUP BY l.session_id"#,
+    )
+    .bind(broadcaster_id)
+    .bind(chatter_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(ZuschauerWatchtime {
+        gesamt_minuten: gesamt as f64 * MINUTEN_JE_TICK,
+        laufend_minuten: session.map(|_| laufend as f64 * MINUTEN_JE_TICK),
+    })
+}
+
 /// So lange gilt ein Gesamt-Wert als frisch genug.
 pub const GESAMT_CACHE_FRIST: Duration = Duration::from_secs(5 * 60);
 

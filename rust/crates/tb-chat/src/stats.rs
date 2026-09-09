@@ -7,6 +7,35 @@ use std::time::Duration;
 use serde::Deserialize;
 use sqlx::PgPool;
 
+#[derive(Debug, Clone, Copy)]
+pub struct StatsError;
+
+impl std::fmt::Display for StatsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Statistikquelle nicht verfügbar")
+    }
+}
+
+impl std::error::Error for StatsError {}
+
+pub fn command_reply<T>(
+    name: &str,
+    result: Result<Option<T>, StatsError>,
+    render: fn(&str, Option<&T>) -> String,
+) -> String {
+    match result {
+        Ok(info) => render(name, info.as_ref()),
+        Err(_) => {
+            "Die Spielstatistik kann ich gerade nicht abrufen. Versuch es gleich nochmal.".into()
+        }
+    }
+}
+
+/// Kompatibilität für den Dashboard-Verbindungsstatus: None bedeutet unbekannt.
+pub async fn fetch_rank(discord_id: &str, include_stats: bool) -> Option<RankInfo> {
+    fetch_rank_checked(discord_id, include_stats).await.ok()
+}
+
 const DEFAULT_STEAM_BOT_RANK_URL: &str = "http://127.0.0.1:8783/rank";
 const DEFAULT_STEAM_BOT_MATCHES_URL: &str = "http://127.0.0.1:8783/player-matches";
 const DEFAULT_STEAM_BOT_MMR_TREND_URL: &str = "http://127.0.0.1:8783/player-mmr-trend";
@@ -43,7 +72,6 @@ pub struct MatchEntry {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MatchHistory {
-    #[serde(default)]
     pub linked: bool,
     #[serde(default)]
     pub matches: Vec<MatchEntry>,
@@ -51,7 +79,6 @@ pub struct MatchHistory {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MmrTrend {
-    #[serde(default)]
     pub linked: bool,
     #[serde(default)]
     pub current_rank_name: Option<String>,
@@ -65,7 +92,6 @@ pub struct MmrTrend {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LiveStatus {
-    #[serde(default)]
     pub linked: bool,
     #[serde(default)]
     pub live: bool,
@@ -79,185 +105,93 @@ pub struct LiveStatus {
     pub stage: Option<String>,
 }
 
-pub async fn resolve_discord_id(pool: &PgPool, twitch_user_id: &str) -> Option<String> {
-    let discord_user_id = sqlx::query_scalar!(
-        "SELECT discord_user_id \
-         FROM twitch_streamer_identities \
-         WHERE twitch_user_id = $1",
-        twitch_user_id,
+pub async fn resolve_discord_id(
+    pool: &PgPool,
+    twitch_user_id: &str,
+) -> Result<Option<String>, StatsError> {
+    let id: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT discord_user_id FROM twitch_streamer_identities WHERE twitch_user_id = $1",
     )
+    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten();
-
-    discord_user_id
+    .map_err(|error| {
+        tracing::warn!(%error, "Statistik: Identität nicht abrufbar");
+        StatsError
+    })?;
+    Ok(id
         .flatten()
-        .map(|discord_user_id| discord_user_id.trim().to_string())
-        .filter(|discord_user_id| !discord_user_id.is_empty())
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty()))
 }
 
-pub async fn fetch_rank(discord_id: &str, include_stats: bool) -> Option<RankInfo> {
-    let rank_url = steam_bot_rank_url();
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(if include_stats { 8 } else { 5 }))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "Steam-Bot Rank: HTTP-Client konnte nicht gebaut werden");
-            return None;
-        }
-    };
-    let mut request = client.get(rank_url).query(&[("discord_id", discord_id)]);
+pub async fn fetch_rank_checked(
+    discord_id: &str,
+    include_stats: bool,
+) -> Result<RankInfo, StatsError> {
+    fetch_rank_at(&steam_bot_rank_url(), discord_id, include_stats).await
+}
+
+pub(crate) async fn fetch_rank_at(
+    url: &str,
+    discord_id: &str,
+    include_stats: bool,
+) -> Result<RankInfo, StatsError> {
+    let mut params = vec![("discord_id", discord_id)];
     if include_stats {
-        request = request.query(&[("include_stats", "1")]);
+        params.push(("include_stats", "1"));
     }
-    let response = match request.send().await {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot Rank: Request fehlgeschlagen");
-            return None;
-        }
-    };
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            discord_id,
-            "Steam-Bot Rank: Non-2xx"
-        );
-        return None;
-    }
-    match response.json::<RankInfo>().await {
-        Ok(info) => Some(info),
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot Rank: JSON nicht lesbar");
-            None
-        }
-    }
+    fetch_json(url, &params, if include_stats { 8 } else { 5 }).await
 }
 
-pub async fn fetch_matches(discord_id: &str) -> Option<MatchHistory> {
-    let matches_url = steam_bot_matches_url();
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "Steam-Bot Matches: HTTP-Client konnte nicht gebaut werden");
-            return None;
-        }
-    };
-    let response = match client
-        .get(matches_url)
-        .query(&[("discord_id", discord_id), ("limit", "150")])
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot Matches: Request fehlgeschlagen");
-            return None;
-        }
-    };
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            discord_id,
-            "Steam-Bot Matches: Non-2xx"
-        );
-        return None;
-    }
-    match response.json::<MatchHistory>().await {
-        Ok(history) => Some(history),
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot Matches: JSON nicht lesbar");
-            None
-        }
-    }
+pub async fn fetch_matches(discord_id: &str) -> Result<MatchHistory, StatsError> {
+    fetch_json(
+        &steam_bot_matches_url(),
+        &[("discord_id", discord_id), ("limit", "150")],
+        8,
+    )
+    .await
 }
 
-pub async fn fetch_mmr_trend(discord_id: &str) -> Option<MmrTrend> {
-    let trend_url = steam_bot_mmr_trend_url();
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "Steam-Bot MMR-Trend: HTTP-Client konnte nicht gebaut werden");
-            return None;
-        }
-    };
-    let response = match client
-        .get(trend_url)
-        .query(&[("discord_id", discord_id), ("days", "7")])
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot MMR-Trend: Request fehlgeschlagen");
-            return None;
-        }
-    };
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            discord_id,
-            "Steam-Bot MMR-Trend: Non-2xx"
-        );
-        return None;
-    }
-    match response.json::<MmrTrend>().await {
-        Ok(trend) => Some(trend),
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot MMR-Trend: JSON nicht lesbar");
-            None
-        }
-    }
+pub async fn fetch_mmr_trend(discord_id: &str) -> Result<MmrTrend, StatsError> {
+    fetch_json(
+        &steam_bot_mmr_trend_url(),
+        &[("discord_id", discord_id), ("days", "7")],
+        8,
+    )
+    .await
 }
 
-pub async fn fetch_live(discord_id: &str) -> Option<LiveStatus> {
-    let live_url = steam_bot_live_url();
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "Steam-Bot Live: HTTP-Client konnte nicht gebaut werden");
-            return None;
-        }
-    };
-    let response = match client
-        .get(live_url)
-        .query(&[("discord_id", discord_id)])
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot Live: Request fehlgeschlagen");
-            return None;
-        }
-    };
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            discord_id,
-            "Steam-Bot Live: Non-2xx"
-        );
-        return None;
+pub async fn fetch_live(discord_id: &str) -> Result<LiveStatus, StatsError> {
+    fetch_live_at(&steam_bot_live_url(), discord_id).await
+}
+
+pub(crate) async fn fetch_live_at(url: &str, discord_id: &str) -> Result<LiveStatus, StatsError> {
+    fetch_json(url, &[("discord_id", discord_id)], 8).await
+}
+
+async fn fetch_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+    params: &[(&str, &str)],
+    timeout_secs: u64,
+) -> Result<T, StatsError> {
+    let result = async {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()?
+            .get(url)
+            .query(params)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<T>()
+            .await
     }
-    match response.json::<LiveStatus>().await {
-        Ok(live) => Some(live),
-        Err(error) => {
-            tracing::warn!(%error, discord_id, "Steam-Bot Live: JSON nicht lesbar");
-            None
-        }
-    }
+    .await;
+    result.map_err(|error: reqwest::Error| {
+        tracing::warn!(status = ?error.status(), "Steam-Statistik nicht abrufbar oder ungültig");
+        StatsError
+    })
 }
 
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
@@ -541,6 +475,7 @@ fn scored(m: &[MatchEntry]) -> Vec<&MatchEntry> {
 
 #[cfg(test)]
 mod tests {
+    include!("stats_http_tests.rs");
     use super::*;
 
     fn linked_history(matches: Vec<MatchEntry>) -> MatchHistory {

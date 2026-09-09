@@ -62,13 +62,7 @@ impl SubReminder {
                 "Das hat gerade nicht geklappt. Versuch es bitte später nochmal.".into()
             }
         };
-        if let Err(error) = self
-            .api
-            .send_message(&event.broadcaster_user_id, &text)
-            .await
-        {
-            tracing::warn!(%error, "Sub-Befehlsantwort nicht gesendet");
-        }
+        crate::api::send_reply(self.api.as_ref(), &event.broadcaster_user_id, &text).await;
     }
 
     async fn command_result(

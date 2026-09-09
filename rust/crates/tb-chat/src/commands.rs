@@ -32,7 +32,7 @@ use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
 
 use crate::api::ChatApi;
-use crate::types::{ChatMessageEvent, SendOutcome};
+use crate::types::ChatMessageEvent;
 
 // ---------------------------------------------------------------------------
 // Konstanten — exakt aus dem Vertrag
@@ -48,6 +48,7 @@ const INVITE_COOLDOWN_SECS: u64 = 3600;
 /// stellt dieselbe Nachricht in jedem Kanal der Session zu, der Bot sieht sie
 /// also mehrfach und würde ohne Sperre mehrere Clips erzeugen.
 const CLIP_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
+const WATCHTIME_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
 
 const CLIP_TITLE_MAX_LEN: usize = 60;
 const CLIP_TITLE_TRIM_LEN: usize = 57;
@@ -104,6 +105,18 @@ fn knowledge_base() -> &'static KnowledgeBase {
 /// unlesbare Textwand, die Website erklärt jeden Befehl richtig.
 fn commands_reply() -> String {
     format!("Alle Befehle mit Erklärung findest du hier: {COMMANDS_URL}")
+}
+
+fn watchtime_dauer(minuten: f64) -> String {
+    if minuten > 0.0 && minuten < 1.0 {
+        return "unter 1 Min".into();
+    }
+    let minuten = minuten as u64;
+    match (minuten / 60, minuten % 60) {
+        (0, m) => format!("{m} Min"),
+        (h, 0) => format!("{h} Std"),
+        (h, m) => format!("{h} Std {m} Min"),
+    }
 }
 
 fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
@@ -166,11 +179,11 @@ pub trait RaidCommandPort: Send + Sync {
     /// Toggled `silent_ban`-Flag für den Partner (via twitch_partners).
     /// Gibt den neuen Wert zurück (0 oder 1).
     /// `commands.py:423`
-    async fn toggle_silent_ban(&self, twitch_login: &str) -> Result<i32, String>;
+    async fn toggle_silent_ban(&self, broadcaster_id: &str) -> Result<i32, String>;
 
     /// Toggled `silent_raid`-Flag für den Partner.
     /// `commands.py:479`
-    async fn toggle_silent_raid(&self, twitch_login: &str) -> Result<i32, String>;
+    async fn toggle_silent_raid(&self, broadcaster_id: &str) -> Result<i32, String>;
 }
 
 /// Raid-Status-Info für `!raid_status`.
@@ -184,6 +197,7 @@ pub struct RaidStatusInfo {
     pub last_raid_login: Option<String>,
     pub last_raid_viewers: Option<i64>,
     pub last_raid_at: Option<DateTime<Utc>>,
+    pub last_raid_success: Option<bool>,
 }
 
 /// Port für Discord-Invite-Links.
@@ -192,7 +206,7 @@ pub struct RaidStatusInfo {
 pub trait DiscordLinkPort: Send + Sync {
     /// Gibt den Discord-Invite-Link für den Kanal zurück.
     /// `None` = kein Link hinterlegt; `Err` = technischer Fehler → stilles Return.
-    async fn discord_invite(&self, channel_login: &str) -> Result<Option<String>, String>;
+    async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String>;
 }
 
 /// Port für den `!invite`-Command-Handler.
@@ -203,7 +217,7 @@ pub trait InvitePort: Send + Sync {
     /// `None` = kein Reply (Rust-Seite entscheidet gegen Antwort).
     async fn invite_line(
         &self,
-        channel_login: &str,
+        broadcaster_id: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String>;
 }
@@ -319,6 +333,7 @@ pub struct CommandEngine {
     /// Auslösung bei Twitch Shared Chat (Stream Together liefert dieselbe
     /// Nachricht über beide Kanal-Abos) und gegen Clip-Spam.
     clip_cooldowns: Mutex<HashMap<String, Instant>>,
+    watchtime_cooldowns: Mutex<HashMap<(String, String), Instant>>,
 }
 
 impl CommandEngine {
@@ -346,6 +361,7 @@ impl CommandEngine {
             invite_cooldowns: Mutex::new(HashMap::new()),
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
             clip_cooldowns: Mutex::new(HashMap::new()),
+            watchtime_cooldowns: Mutex::new(HashMap::new()),
         }
     }
 
@@ -414,6 +430,21 @@ impl CommandEngine {
             (text_lower.as_str(), "")
         };
 
+        if cmd != "!watchtime"
+            && (event.broadcaster_user_id.trim().is_empty()
+                || event.chatter_user_id.trim().is_empty())
+            && crate::catalog::catalog()
+                .iter()
+                .any(|entry| entry.name == cmd || entry.aliases.contains(&cmd))
+        {
+            self.reply(
+                event,
+                "Deine Twitch-ID fehlt gerade. Bitte versuch es später nochmal.",
+            )
+            .await;
+            return true;
+        }
+
         if let Some(command) = crate::stat_commands::StatCommand::from_chat(cmd) {
             let enabled = sqlx::query_scalar::<_, bool>(
                 "SELECT CASE WHEN NOT (stat_command_settings ? $2) THEN true ELSE stat_command_settings -> $2 = 'true'::jsonb END FROM streamer_plans WHERE twitch_user_id = $1",
@@ -433,6 +464,10 @@ impl CommandEngine {
         }
 
         match cmd {
+            "!watchtime" => {
+                self.cmd_watchtime(event).await;
+                true
+            }
             "!sub" => {
                 if let Some(reminder) = &self.sub_reminder {
                     reminder.command(event, args).await;
@@ -611,53 +646,18 @@ impl CommandEngine {
     /// - `twitch_login` = text
     /// - `twitch_user_id` = text
     /// - `raid_bot_enabled` = integer
-    async fn get_partner(&self, channel_login: &str) -> Option<PartnerRow> {
-        let normalized = Self::normalize_channel_login(channel_login);
-        sqlx::query_as!(
-            PartnerRow,
-            r#"
-            SELECT twitch_login AS "twitch_login!",
-                   twitch_user_id AS "twitch_user_id!",
-                   COALESCE(raid_bot_enabled, 0) AS "raid_bot_enabled!"
-            FROM twitch_streamers_partner_state
-            WHERE LOWER(twitch_login) = $1
-              AND is_partner_active = 1
-            LIMIT 1
-            "#,
-            normalized,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None)
+    async fn get_partner(&self, broadcaster_id: &str) -> Result<Option<PartnerRow>, sqlx::Error> {
+        sqlx::query_as::<_, PartnerRow>("SELECT twitch_login, twitch_user_id, COALESCE(raid_bot_enabled, 0) AS raid_bot_enabled FROM twitch_streamers_partner_state WHERE twitch_user_id = $1 AND TRIM($1) <> '' AND is_partner_active = 1 LIMIT 1")
+            .bind(broadcaster_id).fetch_optional(&self.pool).await
     }
 
     /// Channel-Classifier-Parität (`channel_classifier.rs`): ein Kanal ist nur
     /// dann Partner, wenn `is_partner_active = 1` UND er NICHT `is_monitored_only`
     /// ist. Ein reiner Scout-/Monitoring-Kanal (z. B. sagetheman_) ist KEIN
     /// Partner — anders als `get_partner`, das `is_monitored_only` nicht prüft.
-    async fn is_partner_channel(&self, channel_login: &str) -> bool {
-        let normalized = Self::normalize_channel_login(channel_login);
-        let row = sqlx::query_scalar!(
-            r#"
-            SELECT COUNT(*) AS "count!"
-            FROM twitch_streamers_partner_state ps
-            WHERE LOWER(ps.twitch_login) = $1
-              AND ps.is_partner_active = 1
-              AND NOT EXISTS (
-                  SELECT 1 FROM twitch_streamers s
-                  WHERE LOWER(s.twitch_login) = LOWER(ps.twitch_login)
-                    AND NOT EXISTS (
-                        SELECT 1 FROM twitch_partners pp
-                        WHERE pp.twitch_user_id = s.twitch_user_id
-                           OR LOWER(pp.twitch_login) = LOWER(s.twitch_login)
-                  )
-              )
-            "#,
-            normalized,
-        )
-        .fetch_one(&self.pool)
-        .await;
-        matches!(row, Ok(n) if n > 0)
+    async fn is_partner_channel(&self, broadcaster_id: &str) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_streamers_partner_state ps WHERE ps.twitch_user_id = $1 AND ps.is_partner_active = 1 AND NOT EXISTS (SELECT 1 FROM twitch_streamers s WHERE s.twitch_user_id = ps.twitch_user_id AND NOT EXISTS (SELECT 1 FROM twitch_partners pp WHERE pp.twitch_user_id = s.twitch_user_id)))")
+            .bind(broadcaster_id).fetch_one(&self.pool).await
     }
 
     /// `analytics/legacy_token.py:14` — `needs_reauth == FALSE` → vollständig
@@ -697,59 +697,77 @@ impl CommandEngine {
 
     /// Sendet eine Antwort mit `@<chatter>`-Prefix.
     async fn reply(&self, event: &ChatMessageEvent, text: &str) {
-        let msg = format!("@{} {}", event.chatter_user_login, text);
-        if let Err(e) = self
-            .api
-            .send_message(&event.broadcaster_user_id, &msg)
-            .await
-        {
-            tracing::warn!(
-                channel = %event.broadcaster_user_login,
-                err = %e,
-                "reply send fehlgeschlagen"
-            );
-        }
+        self.reply_plain(event, &format!("@{} {}", event.chatter_user_login, text))
+            .await;
     }
 
     /// Sendet eine Antwort ohne `@`-Prefix.
     async fn reply_plain(&self, event: &ChatMessageEvent, text: &str) -> bool {
-        match self
-            .api
-            .send_message(&event.broadcaster_user_id, text)
-            .await
-        {
-            Ok(SendOutcome::Sent) => true,
-            Ok(SendOutcome::Dropped { code, message }) => {
-                tracing::warn!(
-                    channel = %event.broadcaster_user_login,
-                    code = %code,
-                    message = %message,
-                    "reply_plain von Twitch verworfen"
-                );
-                false
-            }
-            Ok(SendOutcome::HttpError { status, body }) => {
-                tracing::warn!(
-                    channel = %event.broadcaster_user_login,
-                    status = status,
-                    body = %body,
-                    "reply_plain HTTP-Fehler"
-                );
-                false
-            }
-            Err(e) => {
-                tracing::warn!(
-                    channel = %event.broadcaster_user_login,
-                    err = %e,
-                    "reply_plain send fehlgeschlagen"
-                );
-                false
-            }
-        }
+        crate::api::send_reply(self.api.as_ref(), &event.broadcaster_user_id, text).await
     }
 
     async fn cmd_commands(&self, event: &ChatMessageEvent) {
         self.reply(event, &commands_reply()).await;
+    }
+
+    async fn cmd_watchtime(&self, event: &ChatMessageEvent) {
+        if event.broadcaster_user_id.trim().is_empty() || event.chatter_user_id.trim().is_empty() {
+            self.reply_plain(
+                event,
+                &format!(
+                    "@{} Deine Zuschauerzeit kann ich gerade nicht zuordnen.",
+                    event.chatter_user_login
+                ),
+            )
+            .await;
+            return;
+        }
+        let key = (
+            event.broadcaster_user_id.clone(),
+            event.chatter_user_id.clone(),
+        );
+        let reservation = Instant::now();
+        {
+            let mut cooldowns = self.watchtime_cooldowns.lock().await;
+            cooldowns.retain(|_, at| reservation.duration_since(*at) < WATCHTIME_COOLDOWN);
+            if cooldowns.contains_key(&key) {
+                return;
+            }
+            cooldowns.insert(key.clone(), reservation);
+        }
+        let text = match tb_analytics::stream_kennzahlen::zuschauer_watchtime(
+            &self.pool, &key.0, &key.1,
+        )
+        .await
+        {
+            Ok(time) if time.gesamt_minuten == 0.0 => {
+                "Für dich ist hier noch keine Zuschauerzeit erfasst.".to_string()
+            }
+            Ok(time) => {
+                let total = watchtime_dauer(time.gesamt_minuten);
+                match time.laufend_minuten {
+                    Some(current) => format!(
+                        "Hier bisher erfasst: ca. {total}, davon {} in diesem Stream.",
+                        watchtime_dauer(current)
+                    ),
+                    None => format!("Hier bisher erfasst: ca. {total}."),
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id = %key.0, "!watchtime Abruf fehlgeschlagen");
+                "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal."
+                    .to_string()
+            }
+        };
+        if !self
+            .reply_plain(event, &format!("@{} {text}", event.chatter_user_login))
+            .await
+        {
+            let mut cooldowns = self.watchtime_cooldowns.lock().await;
+            if cooldowns.get(&key) == Some(&reservation) {
+                cooldowns.remove(&key);
+            }
+        }
     }
 
     async fn cmd_help(&self, event: &ChatMessageEvent, args: &str) {
@@ -759,12 +777,19 @@ impl CommandEngine {
     async fn cmd_rank(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_rank(&discord_id, false).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, false)
+                    .await
+                    .map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::rank_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::rank_reply,
+            ),
         )
         .await;
     }
@@ -772,12 +797,19 @@ impl CommandEngine {
     async fn cmd_wins(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_rank(&discord_id, true).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, true)
+                    .await
+                    .map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::wins_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::wins_reply,
+            ),
         )
         .await;
     }
@@ -785,12 +817,17 @@ impl CommandEngine {
     async fn cmd_winrate(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_matches(&discord_id).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::winrate_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::winrate_reply,
+            ),
         )
         .await;
     }
@@ -798,12 +835,17 @@ impl CommandEngine {
     async fn cmd_mmr(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_mmr_trend(&discord_id).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_mmr_trend(&discord_id).await.map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::mmr_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::mmr_reply,
+            ),
         )
         .await;
     }
@@ -811,12 +853,17 @@ impl CommandEngine {
     async fn cmd_live(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_live(&discord_id).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_live(&discord_id).await.map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::live_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::live_reply,
+            ),
         )
         .await;
     }
@@ -824,12 +871,17 @@ impl CommandEngine {
     async fn cmd_lastmatch(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_matches(&discord_id).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::lastmatch_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::lastmatch_reply,
+            ),
         )
         .await;
     }
@@ -837,12 +889,17 @@ impl CommandEngine {
     async fn cmd_streak(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_matches(&discord_id).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::streak_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::streak_reply,
+            ),
         )
         .await;
     }
@@ -850,12 +907,17 @@ impl CommandEngine {
     async fn cmd_mostplayed(&self, event: &ChatMessageEvent, _args: &str) {
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Some(discord_id) => crate::stats::fetch_matches(&discord_id).await,
-                None => None,
+                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
         self.reply(
             event,
-            &crate::stats::mostplayed_reply(&event.broadcaster_user_name, info.as_ref()),
+            &crate::stats::command_reply(
+                &event.broadcaster_user_name,
+                info,
+                crate::stats::mostplayed_reply,
+            ),
         )
         .await;
     }
@@ -943,20 +1005,12 @@ impl CommandEngine {
                 }
             };
             let Some(row) = row else {
-                if let Err(error) = api
-                    .send_message(
-                        &streamer_id,
-                        "Streamer nicht gefunden – bitte Onboarding prüfen.",
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        %error,
-                        channel = %channel,
-                        streamer_id = %streamer_id,
-                        "!title Onboarding-Hinweis konnte nicht gesendet werden"
-                    );
-                }
+                crate::api::send_reply(
+                    api.as_ref(),
+                    &streamer_id,
+                    "Streamer nicht gefunden. Bitte Onboarding prüfen.",
+                )
+                .await;
                 return;
             };
             let discord_id = row
@@ -991,7 +1045,7 @@ impl CommandEngine {
                 })
                 .collect();
 
-            // Rang und Live-State kommen aus Central Postgres.
+            // Optionaler Kontext aus derselben Steam-HTTP-Quelle wie die Statistik.
             let mut rank_display: Option<String> = None;
             let mut live: Option<crate::title_ai::PromptLiveState> = None;
             if let Some(did) = discord_id {
@@ -1053,9 +1107,7 @@ impl CommandEngine {
                 ),
                 Err(_) => "Fehler beim Generieren. Bitte später erneut versuchen.".to_string(),
             };
-            if let Err(e) = api.send_message(&streamer_id, &reply).await {
-                tracing::warn!(channel = %channel, err = %e, "!title-Antwort-Send fehlgeschlagen");
-            }
+            crate::api::send_reply(api.as_ref(), &streamer_id, &reply).await;
         });
         tokio::spawn(async move {
             if let Err(error) = handle.await {
@@ -1088,22 +1140,24 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_lurk(&self, event: &ChatMessageEvent) {
-        let enabled: bool = sqlx::query_scalar(
+        let enabled = sqlx::query_scalar(
             "SELECT COALESCE(lurk_command_enabled, 1)
                FROM streamer_plans
-              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
-                 OR twitch_user_id = $2
+              WHERE twitch_user_id = $1
               LIMIT 1",
         )
-        .bind(&event.broadcaster_user_login)
         .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
-        .await
-        .map(|value: Option<i32>| value.unwrap_or(1) != 0)
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, channel = %event.broadcaster_user_login, "!lurk Toggle konnte nicht gelesen werden");
-            true
-        });
+        .await;
+        let enabled = match enabled {
+            Ok(value) => value.unwrap_or(1) != 0,
+            Err(error) => {
+                tracing::warn!(%error, channel = %event.broadcaster_user_login, "!lurk Toggle konnte nicht gelesen werden");
+                self.reply(event, "Die Einstellung kann ich gerade nicht abrufen.")
+                    .await;
+                return;
+            }
+        };
         if !enabled {
             return;
         }
@@ -1116,9 +1170,18 @@ impl CommandEngine {
 
     async fn cmd_raid_history(&self, event: &ChatMessageEvent) {
         // kein Partner → stilles Return — commands.py:253
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => return,
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => return,
         };
 
         // Prod-Schema: executed_at = TIMESTAMPTZ, success = boolean, viewer_count = integer
@@ -1145,8 +1208,16 @@ impl CommandEngine {
             &partner.twitch_user_id,
         )
         .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
+        .await;
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "Raid-Historie nicht abrufbar");
+                self.reply(event, "Die Raid-Historie kann ich gerade nicht abrufen.")
+                    .await;
+                return;
+            }
+        };
 
         if rows.is_empty() {
             self.reply_plain(event, "Noch keine Raids durchgeführt.")
@@ -1182,9 +1253,18 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_raid_status(&self, event: &ChatMessageEvent) {
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply_plain(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1199,6 +1279,8 @@ impl CommandEngine {
                     err = %e,
                     "raid_status fehlgeschlagen"
                 );
+                self.reply(event, "Den Raidstatus kann ich gerade nicht abrufen.")
+                    .await;
                 return;
             }
         };
@@ -1223,10 +1305,10 @@ impl CommandEngine {
             info.last_raid_viewers,
             info.last_raid_at,
         ) {
-            let icon = if info.successful_raids > 0 {
-                "✅"
-            } else {
-                "❌"
+            let icon = match info.last_raid_success {
+                Some(true) => "✅",
+                Some(false) => "❌",
+                None => "❔",
             };
             let formatted = at.format("%Y-%m-%d %H:%M").to_string();
             format!(" | Letzter Raid {icon}: {login} ({viewers} Viewer) am {formatted}")
@@ -1243,9 +1325,18 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_uban(&self, event: &ChatMessageEvent) {
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1322,9 +1413,18 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_raid(&self, event: &ChatMessageEvent) {
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1396,7 +1496,7 @@ impl CommandEngine {
         // Cooldown pro Kanal (10s): der zweite Aufruf innerhalb des Fensters
         // wird still verworfen — kein Helix-Call, keine Chat-Antwort, sonst
         // stünde die Cooldown-Meldung selbst doppelt im Chat.
-        let cooldown_key = event.broadcaster_user_login.to_lowercase();
+        let cooldown_key = event.broadcaster_user_id.clone();
         {
             let mut cooldowns = self.clip_cooldowns.lock().await;
             let now = Instant::now();
@@ -1415,29 +1515,40 @@ impl CommandEngine {
         // Dashboard-Toggle (streamer_plans.clip_command_enabled). Aus heißt:
         // kein Helix-Call und keine Antwort im Chat. DB-Fehler lassen den
         // Command an, damit ein Ausfall der Abfrage kein Feature abschaltet.
-        let enabled: bool = sqlx::query_scalar(
+        let enabled = sqlx::query_scalar(
             "SELECT COALESCE(clip_command_enabled, 1)
                FROM streamer_plans
-              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
-                 OR twitch_user_id = $2
+              WHERE twitch_user_id = $1
               LIMIT 1",
         )
-        .bind(&event.broadcaster_user_login)
         .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
-        .await
-        .map(|value: Option<i32>| value.unwrap_or(1) != 0)
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Toggle konnte nicht gelesen werden");
-            true
-        });
+        .await;
+        let enabled = match enabled {
+            Ok(value) => value.unwrap_or(1) != 0,
+            Err(error) => {
+                tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Toggle konnte nicht gelesen werden");
+                self.reply(event, "Die Einstellung kann ich gerade nicht abrufen.")
+                    .await;
+                return;
+            }
+        };
         if !enabled {
             return;
         }
 
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1541,9 +1652,18 @@ impl CommandEngine {
             return;
         }
 
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1570,25 +1690,26 @@ impl CommandEngine {
 
         // Schreibpfad — commands.py:585: lurker_tax_enabled = 0. Vorzustand für die
         // Antwort prüfen (war sie überhaupt an?).
-        let was_enabled: bool = sqlx::query_scalar!(
-            "SELECT lurker_tax_enabled AS \"lurker_tax_enabled?\" FROM streamer_plans
-              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1) LIMIT 1",
-            &partner.twitch_login,
+        let was_enabled: bool = match sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id = $1",
         )
+        .bind(&partner.twitch_user_id)
         .fetch_optional(&self.pool)
         .await
-        .ok()
-        .flatten()
-        .flatten()
-        .map(|v| v != 0)
-        .unwrap_or(false);
+        {
+            Ok(value) => value.flatten().unwrap_or(0) != 0,
+            Err(error) => {
+                tracing::warn!(%error, "Lurker-Steuer nicht abrufbar");
+                self.reply(event, "Die Einstellung kann ich gerade nicht abrufen.")
+                    .await;
+                return;
+            }
+        };
 
-        let updated = sqlx::query!(
-            "UPDATE streamer_plans
-                SET lurker_tax_enabled = 0
-              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)",
-            &partner.twitch_login,
+        let updated = sqlx::query(
+            "UPDATE streamer_plans SET lurker_tax_enabled = 0 WHERE twitch_user_id = $1",
         )
+        .bind(&partner.twitch_user_id)
         .execute(&self.pool)
         .await;
 
@@ -1621,9 +1742,18 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_silentban(&self, event: &ChatMessageEvent) {
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1639,7 +1769,7 @@ impl CommandEngine {
             return;
         }
 
-        match self.raid.toggle_silent_ban(&partner.twitch_login).await {
+        match self.raid.toggle_silent_ban(&partner.twitch_user_id).await {
             Ok(1) => {
                 // commands.py:467 — silent_ban=1 → Benachrichtigung stumm
                 self.reply(
@@ -1659,6 +1789,8 @@ impl CommandEngine {
                     err = %e,
                     "toggle_silent_ban fehlgeschlagen"
                 );
+                self.reply(event, "Die Einstellung konnte ich gerade nicht ändern.")
+                    .await;
             }
         }
     }
@@ -1668,9 +1800,18 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_silentraid(&self, event: &ChatMessageEvent) {
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
+        let partner = match self.get_partner(&event.broadcaster_user_id).await {
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(
+                    event,
+                    "Den Kanalstatus kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                )
+                .await;
+                return;
+            }
+            Ok(Some(p)) => p,
+            Ok(None) => {
                 self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
                     .await;
                 return;
@@ -1686,7 +1827,7 @@ impl CommandEngine {
             return;
         }
 
-        match self.raid.toggle_silent_raid(&partner.twitch_login).await {
+        match self.raid.toggle_silent_raid(&partner.twitch_user_id).await {
             Ok(1) => {
                 // commands.py:523 — silent_raid=1 → Benachrichtigung stumm
                 self.reply(
@@ -1706,6 +1847,8 @@ impl CommandEngine {
                     err = %e,
                     "toggle_silent_raid fehlgeschlagen"
                 );
+                self.reply(event, "Die Einstellung konnte ich gerade nicht ändern.")
+                    .await;
             }
         }
     }
@@ -1717,20 +1860,22 @@ impl CommandEngine {
     async fn cmd_dldc(&self, event: &ChatMessageEvent) {
         let channel_login = event.broadcaster_user_login.to_lowercase();
 
-        match self.discord_link.discord_invite(&channel_login).await {
+        match self
+            .discord_link
+            .discord_invite(&event.broadcaster_user_id)
+            .await
+        {
             Ok(Some(url)) if !url.is_empty() => {
                 self.reply(event, &format!("Discord: {url}")).await;
             }
-            Ok(None) => {
+            Ok(None) | Ok(Some(_)) => {
                 self.reply(event, "Kein Discord-Link für diesen Streamer hinterlegt.")
                     .await;
             }
-            Ok(Some(_)) => {
-                // URL leer — stilles Return (commands.py:301)
-            }
             Err(e) => {
                 tracing::debug!(channel = %channel_login, err = %e, "discord_invite Fehler");
-                // stilles Return (commands.py:300)
+                self.reply(event, "Den Discord-Link kann ich gerade nicht abrufen.")
+                    .await;
             }
         }
     }
@@ -1749,13 +1894,23 @@ impl CommandEngine {
         // (bot.py:1816), NICHT über die Whitelist-Bot-Verzweigung. Ohne diesen
         // Gate könnte ein gewhitelisteter Bot mit "!invite" eine Antwort auf einem
         // reinen monitored-only Kanal auslösen (breiterer Scope als Python).
-        if !self.is_partner_channel(&event.broadcaster_user_login).await {
-            return;
+        match self.is_partner_channel(&event.broadcaster_user_id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(%error, "Partnerstatus nicht abrufbar");
+                self.reply(event, "Den Kanalstatus kann ich gerade nicht abrufen.")
+                    .await;
+                return;
+            }
         }
 
         let channel_login = event.broadcaster_user_login.to_lowercase();
         let chatter_login = event.chatter_user_login.to_lowercase();
-        let cooldown_key = (channel_login.clone(), chatter_login.clone());
+        let cooldown_key = (
+            event.broadcaster_user_id.clone(),
+            event.chatter_user_id.clone(),
+        );
 
         // Cooldown-Check: 1h pro (channel, chatter) — bot.py:345
         {
@@ -1769,7 +1924,7 @@ impl CommandEngine {
 
         match self
             .invite
-            .invite_line(&channel_login, &chatter_login)
+            .invite_line(&event.broadcaster_user_id, &chatter_login)
             .await
         {
             Ok(Some(reply)) if !reply.is_empty() => {
@@ -1784,7 +1939,8 @@ impl CommandEngine {
                 }
             }
             Ok(_) => {
-                // Kein Reply — stilles Return
+                self.reply(event, "Kein Einladungslink für diesen Kanal hinterlegt.")
+                    .await;
             }
             Err(e) => {
                 tracing::debug!(
@@ -1793,6 +1949,8 @@ impl CommandEngine {
                     err = %e,
                     "invite_line Fehler"
                 );
+                self.reply(event, "Den Einladungslink kann ich gerade nicht abrufen.")
+                    .await;
             }
         }
     }
@@ -1815,26 +1973,19 @@ impl CommandEngine {
             Some(event.chatter_user_id.as_str())
         };
 
-        let result = sqlx::query(
-            r#"
-            INSERT INTO twitch_engagement_settings
-                (channel_login, enabled, enabled_at, enabled_by, updated_at)
-            VALUES ($1, $2, NOW(), $3, NOW())
-            ON CONFLICT (channel_login) DO UPDATE SET
-                enabled = EXCLUDED.enabled,
-                enabled_at = CASE
-                    WHEN EXCLUDED.enabled THEN NOW()
-                    ELSE twitch_engagement_settings.enabled_at
-                END,
-                enabled_by = COALESCE(EXCLUDED.enabled_by, twitch_engagement_settings.enabled_by),
-                updated_at = NOW()
-            "#,
-        )
-        .bind(&channel_login)
-        .bind(enabled)
-        .bind(actor_id)
-        .execute(&self.pool)
-        .await;
+        let result: Result<(), sqlx::Error> = async {
+            let mut tx = self.pool.begin().await?;
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(format!("engagement:{}", event.broadcaster_user_id)).execute(&mut *tx).await?;
+            let updated = sqlx::query("UPDATE twitch_engagement_settings SET enabled=$2, enabled_at=CASE WHEN $2 THEN NOW() ELSE enabled_at END, enabled_by=COALESCE($3,enabled_by), updated_at=NOW() WHERE channel_user_id=$1")
+                .bind(&event.broadcaster_user_id).bind(enabled).bind(actor_id).execute(&mut *tx).await?;
+            if updated.rows_affected() == 0 {
+                let inserted = sqlx::query("INSERT INTO twitch_engagement_settings (channel_login,channel_user_id,enabled,enabled_at,enabled_by,updated_at) VALUES ($1,$2,$3,NOW(),$4,NOW()) ON CONFLICT (channel_login) DO NOTHING")
+                    .bind(&channel_login).bind(&event.broadcaster_user_id).bind(enabled).bind(actor_id).execute(&mut *tx).await?;
+                if inserted.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound); }
+            }
+            tx.commit().await
+        }.await;
 
         match result {
             Ok(_) => {
@@ -1872,10 +2023,10 @@ impl CommandEngine {
     async fn cmd_engagement_status(&self, event: &ChatMessageEvent) {
         let channel_login = event.broadcaster_user_login.to_lowercase();
 
-        let settings_result = sqlx::query_scalar!(
-            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = $1",
-            &channel_login,
+        let settings_result = sqlx::query_scalar::<_, bool>(
+            "SELECT enabled FROM twitch_engagement_settings WHERE channel_user_id = $1 LIMIT 1",
         )
+        .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await;
 
@@ -1909,17 +2060,8 @@ impl CommandEngine {
             ts: Option<DateTime<Utc>>,
         }
 
-        let log_result = sqlx::query_as!(
-            LogRow,
-            r#"
-            SELECT decision AS "decision?", response_text, ts AS "ts?"
-            FROM twitch_engagement_log
-            WHERE channel_login = $1
-            ORDER BY ts DESC
-            LIMIT 1
-            "#,
-            &channel_login,
-        )
+        let log_result = sqlx::query_as::<_, LogRow>("SELECT decision, response_text, ts FROM twitch_engagement_log WHERE channel_user_id=$1 ORDER BY ts DESC LIMIT 1")
+        .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await;
 
@@ -2047,6 +2189,8 @@ impl CommandEngine {
 #[cfg(test)]
 mod tests {
     include!("sub_reminder_tests.rs");
+    include!("watchtime_tests.rs");
+    include!("command_regression_tests.rs");
     use super::*;
     use crate::api::BanOutcome;
     use crate::types::{
@@ -2061,6 +2205,7 @@ mod tests {
     struct MockApi {
         sent: Mutex<Vec<(String, String)>>,
         fail_next_sends: Mutex<usize>,
+        outcomes: Mutex<Vec<SendOutcome>>,
     }
 
     impl MockApi {
@@ -2068,6 +2213,7 @@ mod tests {
             Arc::new(Self {
                 sent: Mutex::new(vec![]),
                 fail_next_sends: Mutex::new(0),
+                outcomes: Mutex::new(Vec::new()),
             })
         }
 
@@ -2097,6 +2243,9 @@ mod tests {
                 return Err("mock send failed".to_string());
             }
             drop(fail_next);
+            if let Some(outcome) = self.outcomes.lock().await.pop() {
+                return Ok(outcome);
+            }
             self.sent
                 .lock()
                 .await
@@ -2191,6 +2340,7 @@ mod tests {
                 last_raid_login: Some("streamerx".to_string()),
                 last_raid_viewers: Some(42),
                 last_raid_at: Some(Utc::now()),
+                last_raid_success: Some(false),
             })
         }
         async fn toggle_silent_ban(&self, _: &str) -> Result<i32, String> {
@@ -2557,6 +2707,7 @@ mod tests {
             // twitch_engagement_settings — prod-treu: enabled BOOLEAN, timestamps TIMESTAMPTZ
             r#"CREATE TABLE twitch_engagement_settings (
                 channel_login TEXT PRIMARY KEY,
+                channel_user_id TEXT,
                 enabled BOOLEAN DEFAULT FALSE,
                 steam_id TEXT,
                 persona_override TEXT,
@@ -2570,6 +2721,7 @@ mod tests {
             r#"CREATE TABLE twitch_engagement_log (
                 id BIGSERIAL PRIMARY KEY,
                 channel_login TEXT,
+                channel_user_id TEXT,
                 triggered_by_msg_id TEXT,
                 decision TEXT,
                 response_text TEXT,
@@ -3208,10 +3360,15 @@ mod tests {
 
         let event = make_event("!invite", false, false);
         engine.handle(&event).await;
-        assert_eq!(api.message_count().await, 0);
+        assert_eq!(api.message_count().await, 1);
+        assert!(api
+            .last_message()
+            .await
+            .unwrap()
+            .contains("Kein Einladungslink"));
 
         engine.handle(&event).await;
-        assert_eq!(api.message_count().await, 1);
+        assert_eq!(api.message_count().await, 2);
         let msg = api.last_message().await.unwrap();
         assert!(msg.contains("invite-ok"), "Meldung: {msg}");
     }

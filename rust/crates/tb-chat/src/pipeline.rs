@@ -36,7 +36,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -51,14 +51,14 @@ use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
-use crate::crew_guard::{CrewGuard, CrewJudge, crew_guard_enabled};
+use crate::crew_guard::{crew_guard_enabled, CrewGuard, CrewJudge};
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::invite_question::InviteQuestionResponder;
 use crate::lfg_pitch::LfgPitchResponder;
-use crate::mention_scoring::{MentionResolver, WHITELISTED_BOTS, score_mention_patterns};
+use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
 use crate::moderation::{
-    AutoBanRequest, BAN_REASON_GLOBAL, BAN_REASON_SPAM, ModerationEngine, ModerationEvidence,
+    AutoBanRequest, ModerationEngine, ModerationEvidence, BAN_REASON_GLOBAL, BAN_REASON_SPAM,
     NOTICE_GLOBAL_BAN,
 };
 use crate::moderation_settings::ModerationSettingsCache;
@@ -67,8 +67,8 @@ use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
 };
 use crate::spam_filter::{
-    SPAM_MIN_MATCHES, SpamAction, SpamContext, SpamFilter, matches_safe_wording,
-    normalize_exact_spam_message, spam_signal_ist_nur_viewer_muster,
+    matches_safe_wording, normalize_exact_spam_message, spam_signal_ist_nur_viewer_muster,
+    SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES,
 };
 use crate::standard_replies::StandardReplies;
 use crate::sus_invite::SusInviteCheck;
@@ -1995,8 +1995,8 @@ async fn is_first_message_for_streamer(
 mod tests {
     use super::*;
     use std::str::FromStr;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
 
     /// Der Kern des Safe-Wording-Verhaltens: der Judge urteilt immer, aber ein
     /// Text mit harmlosem Umgangssprache-Muster wird nur bei klarem Urteil
@@ -2058,9 +2058,9 @@ mod tests {
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use tb_engagement::crew_review::{RICKY_TWITCH_USER_ID, RickyChatInput};
+    use tb_engagement::crew_review::{RickyChatInput, RICKY_TWITCH_USER_ID};
     use tb_engagement::llm_chat::EngagementLlmClient;
-    use tokio::time::{Duration, sleep};
+    use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2207,6 +2207,7 @@ mod tests {
                 last_raid_login: None,
                 last_raid_viewers: None,
                 last_raid_at: None,
+                last_raid_success: None,
             })
         }
 
@@ -2576,6 +2577,11 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
+        moderation_test_ddl(&pool).await;
+        Some(pool)
+    }
+
+    async fn moderation_test_ddl(pool: &PgPool) {
         for ddl in [
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, is_partner_active INTEGER NOT NULL DEFAULT 0, silent_ban INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE twitch_partners (twitch_login TEXT, twitch_user_id TEXT)",
@@ -2592,15 +2598,52 @@ mod tests {
             "CREATE TABLE twitch_chatter_global_ban_applied (chatter_login TEXT NOT NULL, broadcaster_id TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (chatter_login, broadcaster_id))",
             "CREATE TABLE twitch_moderation_settings (channel_user_id TEXT PRIMARY KEY, global_ban_enabled BOOLEAN NOT NULL DEFAULT TRUE, scam_pitch_enabled BOOLEAN NOT NULL DEFAULT TRUE, spam_autoban_enabled BOOLEAN NOT NULL DEFAULT TRUE, sus_invite_enabled BOOLEAN NOT NULL DEFAULT TRUE)",
         ] {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            sqlx::query(ddl).execute(pool).await.unwrap();
         }
         sqlx::query(
             "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('channel', 'broadcaster-id')",
         )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn regression_pipeline_partner_id_und_cache_trotz_namenswechsel() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        moderation_test_ddl(&pool).await;
+        seed_active_pipeline_channel(&pool).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = pipeline_for_non_partner(api.clone(), pool);
+        let mut event = strong_timeout_event();
+        event.message.text = "!ping".into();
+        event.broadcaster_user_login = "renamed-channel".into();
+        event.badges.push(crate::types::ChatBadge {
+            set_id: "moderator".into(),
+            id: "1".into(),
+            info: String::new(),
+        });
+        pipeline.handle(&event).await;
+        assert!(
+            api.calls()
+                .iter()
+                .any(|c| c.starts_with("send:broadcaster-id:")),
+            "Partner-ID muss die Engine erreichen"
+        );
+        let before = api.calls().len();
+        event.message_id = "foreign-command".into();
+        event.broadcaster_user_id = "foreign-id".into();
+        // Cache darf auch bei identischem neuem Namen keine Rechte übertragen.
+        pipeline.handle(&event).await;
+        event.message_id = "recycled-command".into();
+        event.broadcaster_user_login = "channel".into();
+        pipeline.handle(&event).await;
+        assert_eq!(
+            api.calls().len(),
+            before,
+            "fremde ID darf keine Partneraktionen bekommen"
+        );
     }
 
     #[tokio::test]

@@ -2215,8 +2215,9 @@ impl RaidCommandPort for RaidCommandAdapter {
             Option<String>,
             Option<i32>,
             Option<chrono::DateTime<chrono::Utc>>,
+            Option<bool>,
         )> = sqlx::query_as(
-            "SELECT to_broadcaster_login, viewer_count, executed_at \
+            "SELECT to_broadcaster_login, viewer_count, executed_at, success \
                  FROM twitch_raid_history WHERE from_broadcaster_id = $1 \
                  ORDER BY executed_at DESC LIMIT 1",
         )
@@ -2226,7 +2227,8 @@ impl RaidCommandPort for RaidCommandAdapter {
         .map_err(|e| e.to_string())?;
 
         let (raid_enabled, authorized_at) = auth.unwrap_or((None, None));
-        let (last_login, last_viewers, last_at) = last.unwrap_or((None, None, None));
+        let (last_login, last_viewers, last_at, last_success) =
+            last.unwrap_or((None, None, None, None));
         Ok(RaidStatusInfo {
             raid_enabled,
             authorized_at,
@@ -2235,34 +2237,39 @@ impl RaidCommandPort for RaidCommandAdapter {
             last_raid_login: last_login,
             last_raid_viewers: last_viewers.map(i64::from),
             last_raid_at: last_at,
+            last_raid_success: last_success,
         })
     }
 
-    async fn toggle_silent_ban(&self, twitch_login: &str) -> Result<i32, String> {
-        toggle_partner_flag(&self.pool, twitch_login, "silent_ban").await
+    async fn toggle_silent_ban(&self, broadcaster_id: &str) -> Result<i32, String> {
+        toggle_partner_flag(&self.pool, broadcaster_id, "silent_ban").await
     }
 
-    async fn toggle_silent_raid(&self, twitch_login: &str) -> Result<i32, String> {
-        toggle_partner_flag(&self.pool, twitch_login, "silent_raid").await
+    async fn toggle_silent_raid(&self, broadcaster_id: &str) -> Result<i32, String> {
+        toggle_partner_flag(&self.pool, broadcaster_id, "silent_raid").await
     }
 }
 
 /// Toggle eines INTEGER-Flags auf dem aktiven Partner (`status = 'active'`,
 /// jüngste Zeile — wie `load_active_partner` + `set_partner_silent_flags`,
 /// partner_registry.py Z. 1808). Gibt den neuen Wert zurück.
-async fn toggle_partner_flag(pool: &PgPool, twitch_login: &str, flag: &str) -> Result<i32, String> {
+async fn toggle_partner_flag(
+    pool: &PgPool,
+    broadcaster_id: &str,
+    flag: &str,
+) -> Result<i32, String> {
     // flag ist eine interne Konstante ("silent_ban"/"silent_raid") — kein Injection-Risiko.
     let sql = format!(
         "UPDATE twitch_partners SET {flag} = CASE WHEN COALESCE({flag}, 0) = 0 THEN 1 ELSE 0 END \
          WHERE id = ( \
              SELECT id FROM twitch_partners \
-             WHERE LOWER(twitch_login) = $1 AND status = 'active' \
+             WHERE twitch_user_id = $1 AND status = 'active' \
              ORDER BY id DESC LIMIT 1 \
          ) \
          RETURNING {flag}"
     );
     let new_value: Option<i32> = sqlx::query_scalar(&sql)
-        .bind(twitch_login.to_lowercase())
+        .bind(broadcaster_id)
         .fetch_optional(pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -2276,11 +2283,11 @@ struct DbDiscordLink {
 
 #[async_trait::async_trait]
 impl DiscordLinkPort for DbDiscordLink {
-    async fn discord_invite(&self, channel_login: &str) -> Result<Option<String>, String> {
+    async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String> {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites WHERE LOWER(streamer_login) = $1",
+            "SELECT invite_url FROM twitch_streamer_invites WHERE twitch_user_id = $1",
         )
-        .bind(channel_login)
+        .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -2324,14 +2331,14 @@ struct DbInvitePort {
 impl InvitePort for DbInvitePort {
     async fn invite_line(
         &self,
-        channel_login: &str,
+        broadcaster_id: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String> {
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE LOWER(streamer_login) = $1 LIMIT 1",
+             WHERE twitch_user_id = $1 LIMIT 1",
         )
-        .bind(channel_login)
+        .bind(broadcaster_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -2919,6 +2926,7 @@ mod chat_notification_tests {
                 last_raid_login: None,
                 last_raid_viewers: None,
                 last_raid_at: None,
+                last_raid_success: None,
             })
         }
 
@@ -3189,10 +3197,7 @@ mod chat_notification_tests {
         async fn send_rich_message(
             &self,
             payload: SendRichMessage,
-        ) -> Result<
-            tb_transport_discord::SendResult,
-            tb_transport_discord::DiscordError,
-        > {
+        ) -> Result<tb_transport_discord::SendResult, tb_transport_discord::DiscordError> {
             *self.last.lock().unwrap() = Some(payload);
             Ok(tb_transport_discord::SendResult {
                 ok: true,
@@ -3219,20 +3224,14 @@ mod chat_notification_tests {
         async fn send_user_dm(
             &self,
             _payload: tb_transport_discord::SendUserDm,
-        ) -> Result<
-            tb_transport_discord::SendResult,
-            tb_transport_discord::DiscordError,
-        > {
+        ) -> Result<tb_transport_discord::SendResult, tb_transport_discord::DiscordError> {
             unimplemented!()
         }
 
         async fn send_alert_embed(
             &self,
             _payload: tb_transport_discord::SendAlertEmbed,
-        ) -> Result<
-            tb_transport_discord::SendResult,
-            tb_transport_discord::DiscordError,
-        > {
+        ) -> Result<tb_transport_discord::SendResult, tb_transport_discord::DiscordError> {
             unimplemented!()
         }
 
@@ -3719,7 +3718,7 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT, twitch_user_id TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3781,7 +3780,7 @@ mod invite_offline_tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamer_invites VALUES ('testchannel', 'https://discord.gg/test')",
+            "INSERT INTO twitch_streamer_invites VALUES ('oldchannel', 'https://discord.gg/test', 'channel-id'), ('testchannel', 'https://discord.gg/foreign', 'foreign-id')",
         )
         .execute(&pool)
         .await
@@ -3805,11 +3804,72 @@ mod invite_offline_tests {
                 .await
                 .unwrap();
             let reply = port
-                .invite_line("testchannel", "viewer")
+                .invite_line("channel-id", "viewer")
                 .await
                 .unwrap()
                 .unwrap();
             assert!(reply.contains("https://discord.gg/test"));
         }
+    }
+}
+
+#[cfg(test)]
+mod command_adapter_regressions {
+    use super::*;
+
+    #[tokio::test]
+    async fn command_adapter_raid_status_und_flags_sind_id_gebunden() {
+        let db = invite_test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_raid_auth (twitch_user_id TEXT, raid_enabled BOOLEAN, authorized_at TIMESTAMPTZ);
+            CREATE TABLE twitch_raid_history (from_broadcaster_id TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, executed_at TIMESTAMPTZ, success BOOLEAN);
+            CREATE TABLE twitch_partners (id BIGSERIAL, twitch_user_id TEXT, twitch_login TEXT, status TEXT, silent_ban INTEGER, silent_raid INTEGER);
+            INSERT INTO twitch_raid_history VALUES ('own','older',10,'2026-09-08',true), ('own','latest',20,'2026-09-09',false), ('other','foreign',30,'2026-09-10',true);
+            INSERT INTO twitch_partners (twitch_user_id,twitch_login,status,silent_ban,silent_raid) VALUES ('own','oldname','active',0,0), ('other','newname','active',0,0);")
+            .execute(&db.pool).await.unwrap();
+        let adapter = RaidCommandAdapter {
+            manual: None,
+            pool: db.pool.clone(),
+        };
+        let status = adapter.raid_status("own").await.unwrap();
+        assert_eq!((status.total_raids, status.successful_raids), (2, 1));
+        assert_eq!(status.last_raid_login.as_deref(), Some("latest"));
+        assert_eq!(status.last_raid_success, Some(false));
+        sqlx::query(
+            "UPDATE twitch_raid_history SET success=NOT success WHERE from_broadcaster_id='own'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            adapter.raid_status("own").await.unwrap().last_raid_success,
+            Some(true)
+        );
+        assert_eq!(adapter.toggle_silent_ban("own").await.unwrap(), 1);
+        assert_eq!(adapter.toggle_silent_raid("own").await.unwrap(), 1);
+        let foreign: (i32, i32) = sqlx::query_as(
+            "SELECT silent_ban,silent_raid FROM twitch_partners WHERE twitch_user_id='other'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(foreign, (0, 0));
+        assert!(adapter.toggle_silent_ban("newname").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn command_adapter_discord_invite_waehlt_nur_echte_id() {
+        let db = invite_test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, twitch_user_id TEXT, invite_url TEXT);
+            INSERT INTO twitch_streamer_invites VALUES ('oldname','own','https://discord.gg/own'), ('newname','other','https://discord.gg/other');")
+            .execute(&db.pool).await.unwrap();
+        let port = DbDiscordLink {
+            pool: db.pool.clone(),
+        };
+        assert_eq!(
+            port.discord_invite("own").await.unwrap().as_deref(),
+            Some("https://discord.gg/own")
+        );
+        assert!(port.discord_invite("newname").await.unwrap().is_none());
+        assert!(port.discord_invite("").await.unwrap().is_none());
     }
 }

@@ -1,42 +1,14 @@
-//! Steam-/Rang-/Live-Lookup für den `!title`-Generator (B11).
-//!
-//! Steam-Links, Rang und Live-Daten kommen aus Central Postgres.
+//! Optionaler Rang-/Live-Kontext für Titelvorschläge in Chat und Dashboard.
+//! Nutzt dieselbe ID-basierte Steam-HTTP-Quelle wie die Spielstatistikbefehle.
 
+use crate::stats::{self, StatsError};
 use sqlx::PgPool;
 
-/// Presence gilt als aktuell, solange sie hoechstens so alt ist. Gleicher Wert
-/// wie `LIVE_STATUS_FRESH_SECS` im Steam-Bot (`steam-web/src/routes/rank.rs`),
-/// der die Live-Antwort dort ebenfalls gegen veraltete Zustaende absichert.
-const LIVE_STATUS_FRESH_SECS: i64 = 600;
-
-/// Deadlock-Rangnamen 0..11 (Python `_RANK_NAMES`; 10 und 11 = Eternus).
-fn rank_name(rank_num: i64) -> &'static str {
-    match rank_num {
-        0 => "Obscurus",
-        1 => "Seeker",
-        2 => "Alchemist",
-        3 => "Arcanist",
-        4 => "Ritualist",
-        5 => "Emissary",
-        6 => "Archon",
-        7 => "Oracle",
-        8 => "Phantom",
-        9 => "Ascendant",
-        10 | 11 => "Eternus",
-        _ => "Unknown",
-    }
-}
-
-/// Rang-Info eines Discord-Users (Python `get_rank_for_discord_user`).
 #[derive(Debug, Clone)]
 pub struct RankInfo {
-    pub rank_name: String,
-    pub rank_num: i64,
-    pub subrank: i64,
     pub rank_display: String,
 }
 
-/// Live-In-Game-Zustand (Python `get_live_state_for_discord_user`).
 #[derive(Debug, Clone)]
 pub struct LiveState {
     pub in_match: bool,
@@ -45,427 +17,107 @@ pub struct LiveState {
     pub stage: Option<String>,
 }
 
-/// Rang-Info für einen Discord-User; `None` wenn kein Link oder keine Rangdaten.
-pub async fn get_rank_for_discord_user(pool: &PgPool, user_id: i64) -> Option<RankInfo> {
-    let row = sqlx::query_as::<_, (Option<i32>, Option<i32>)>(
-        "SELECT deadlock_rank, deadlock_subrank
-         FROM core.steam_links
-         WHERE discord_id = $1
-         ORDER BY primary_account DESC, verified DESC, linked_at DESC NULLS LAST, steam_id ASC
-         LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await;
-    let (rank, subrank) = match row {
-        Ok(Some(row)) => row,
-        Ok(None) => return None,
+// Pool-Parameter bleibt für die bestehenden Chat-/Dashboard-Aufrufer kompatibel.
+// Steam-Tabellen werden ausdrücklich nicht im Twitch-Pool gesucht.
+pub async fn get_rank_for_discord_user(_pool: &PgPool, user_id: i64) -> Option<RankInfo> {
+    rank_context(stats::fetch_rank_checked(&user_id.to_string(), false).await)
+}
+
+fn rank_context(result: Result<stats::RankInfo, StatsError>) -> Option<RankInfo> {
+    let info = match result {
+        Ok(info) => info,
         Err(error) => {
-            tracing::warn!(
-                %error,
-                discord_id_tail = user_id.rem_euclid(10_000),
-                "!title Steam-Rank-Abfrage fehlgeschlagen; der Titel wird ohne Rang erzeugt"
-            );
+            tracing::warn!(%error, "Titel wird ohne optionalen Rang erzeugt");
             return None;
         }
     };
-    let rank_num = i64::from(rank.unwrap_or(0));
-    let subrank = i64::from(subrank.unwrap_or(0));
-    let name = rank_name(rank_num);
-    // Python: f"{name} {subrank or ''}".strip() — subrank 0/None → nur Name.
-    let rank_display = if subrank != 0 {
-        format!("{name} {subrank}")
-    } else {
-        name.to_string()
+    if !info.linked {
+        return None;
+    }
+    let rank = info.rank_name.filter(|name| !name.trim().is_empty())?;
+    let rank_display = match info.subrank {
+        Some(subrank @ 1..=6) => format!("{rank} {subrank}"),
+        _ => rank,
     };
-    Some(RankInfo {
-        rank_name: name.to_string(),
-        rank_num,
-        subrank,
-        rank_display,
-    })
+    Some(RankInfo { rank_display })
 }
 
-/// Live-Zustand falls aktuell in Deadlock, sonst `None` (Python
-/// `get_live_state_for_discord_user`: `not in_deadlock_now` → None).
 pub async fn get_live_state_for_discord_user(
-    pool: &PgPool,
+    _pool: &PgPool,
     user_id: i64,
-) -> Result<Option<LiveState>, sqlx::Error> {
-    let row = sqlx::query_as::<
-        _,
-        (
-            Option<bool>,
-            Option<bool>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        // Presence zaehlt nur frisch. Der Steam-Bot definiert das kanonisch als
-        // COALESCE(deadlock_updated_at, last_seen_at) hoechstens LIVE_STATUS_FRESH_SECS
-        // alt; ohne diese Schranke laendet ein Tage alter Zustand als aktueller
-        // Held im Titel-Prompt.
-        "SELECT lps.in_deadlock_now, lps.in_match_now_strict, lps.deadlock_hero,
-                lps.deadlock_party_hint, lps.deadlock_stage
-         FROM core.steam_links sl
-         JOIN activity.live_player_state lps ON sl.steam_id = lps.steam_id
-         WHERE sl.discord_id = $1
-           AND COALESCE(lps.deadlock_updated_at, lps.last_seen_at)
-               >= now() - make_interval(secs => $2::double precision)
-         ORDER BY sl.primary_account DESC, sl.verified DESC, sl.linked_at DESC NULLS LAST, sl.steam_id ASC
-         LIMIT 1",
-    )
-    .bind(user_id)
-    .bind(LIVE_STATUS_FRESH_SECS as f64)
-    .fetch_optional(pool)
-    .await?;
+) -> Result<Option<LiveState>, StatsError> {
+    live_context(stats::fetch_live(&user_id.to_string()).await)
+}
 
-    let Some((in_deadlock, in_match, hero, party_hint, stage)) = row else {
-        return Ok(None);
-    };
-    if !in_deadlock.unwrap_or(false) {
+fn live_context(
+    result: Result<stats::LiveStatus, StatsError>,
+) -> Result<Option<LiveState>, StatsError> {
+    let info = result?;
+    // Der bestehende Steam-Endpunkt prüft die Aktualität und liefert live=false
+    // bei altem Zustand. Alte Hero-Felder allein begründen keinen Live-Kontext.
+    if !info.linked || !info.live || !info.in_deadlock {
         return Ok(None);
     }
     Ok(Some(LiveState {
-        in_match: in_match.unwrap_or(false),
-        hero,
-        party_hint,
-        stage,
+        in_match: true,
+        hero: info.hero,
+        // Der vorhandene HTTP-Vertrag enthält keinen Partystatus.
+        party_hint: None,
+        stage: info.stage,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::postgres::PgPoolOptions;
-    use sqlx::PgPool;
-
-    async fn make_pg_pool() -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .connect(&dsn)
-            .await
-            .unwrap();
-        sqlx::query("CREATE SCHEMA IF NOT EXISTS core")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("CREATE SCHEMA IF NOT EXISTS activity")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS core.users (
-                discord_id BIGINT PRIMARY KEY,
-                username TEXT,
-                global_name TEXT,
-                avatar TEXT,
-                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
-                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
-                raw JSONB
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS core.steam_links (
-                discord_id BIGINT NOT NULL,
-                steam_id TEXT NOT NULL,
-                steam_id64 BIGINT,
-                verified BOOLEAN NOT NULL DEFAULT false,
-                primary_account BOOLEAN NOT NULL DEFAULT false,
-                linked_at TIMESTAMPTZ,
-                deadlock_rank INTEGER,
-                deadlock_subrank INTEGER,
-                deadlock_rank_name TEXT,
-                deadlock_rank_updated_at TIMESTAMPTZ,
-                PRIMARY KEY (discord_id, steam_id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS activity.live_player_state (
-                steam_id TEXT PRIMARY KEY,
-                in_deadlock_now BOOLEAN,
-                in_match_now_strict BOOLEAN,
-                deadlock_stage TEXT,
-                deadlock_hero TEXT,
-                deadlock_party_hint TEXT,
-                deadlock_minutes INTEGER,
-                deadlock_updated_at TIMESTAMPTZ,
-                last_seen_at TIMESTAMPTZ
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        Some(pool)
-    }
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     #[tokio::test]
-    async fn rank_lookup_namen_und_subrank() {
-        let Some(pool) = make_pg_pool().await else {
-            return;
-        };
-        let ranked_discord_id = 8_200_000_000_000_101_i64;
-        let unrated_discord_id = 8_200_000_000_000_102_i64;
-        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = ANY($1)")
-            .bind([ranked_discord_id, unrated_discord_id])
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO core.steam_links (
-                discord_id, steam_id, deadlock_rank, deadlock_subrank
-             )
-             VALUES
-                ($1, 'rank-contract', 6, 3),
-                ($2, 'rank-null-contract', NULL, NULL)",
+    async fn titel_kontext_aus_bestehender_http_quelle_ohne_fremde_db_tabellen() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rank"))
+            .and(query_param("discord_id", "42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"linked":true,"rank_name":"Emissary","subrank":6}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let rank = rank_context(
+            stats::fetch_rank_at(&format!("{}/rank", server.uri()), "42", false).await,
         )
-        .bind(ranked_discord_id)
-        .bind(unrated_discord_id)
-        .execute(&pool)
-        .await
         .unwrap();
-
-        let rank = get_rank_for_discord_user(&pool, ranked_discord_id)
-            .await
-            .unwrap();
-        assert_eq!(rank.rank_name, "Archon");
-        assert_eq!(rank.subrank, 3);
-        assert_eq!(rank.rank_display, "Archon 3");
-
-        let unrated = get_rank_for_discord_user(&pool, unrated_discord_id)
-            .await
-            .unwrap();
-        assert_eq!(unrated.rank_display, "Obscurus");
-        assert!(get_rank_for_discord_user(&pool, 8_200_000_000_000_199_i64)
-            .await
-            .is_none());
-    }
-
-    /// Ein alter Presence-Zustand darf nicht als aktueller Held im Titel-Prompt
-    /// landen. Freshness-Grenze wie im Steam-Bot: LIVE_STATUS_FRESH_SECS.
-    #[tokio::test]
-    async fn live_state_ignoriert_veraltete_presence() {
-        let Some(pool) = make_pg_pool().await else {
-            return;
-        };
-        let discord_id = 8_200_000_000_000_301_i64;
-        let steam_id = "76561197960265999";
-        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
-            .bind(discord_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
-            .bind(steam_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO core.steam_links (discord_id, steam_id, primary_account)
-             VALUES ($1, $2, true)",
+        assert_eq!(rank.rank_display, "Emissary 6");
+        Mock::given(method("GET"))
+            .and(path("/player-live"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"linked":true,"live":true,"in_deadlock":true,"hero":"Haze"}),
+            ))
+            .mount(&server)
+            .await;
+        let live = live_context(
+            stats::fetch_live_at(&format!("{}/player-live", server.uri()), "42").await,
         )
-        .bind(discord_id)
-        .bind(steam_id)
-        .execute(&pool)
-        .await
+        .unwrap()
         .unwrap();
-        sqlx::query(
-            "INSERT INTO activity.live_player_state (
-                steam_id, in_deadlock_now, in_match_now_strict, deadlock_hero,
-                deadlock_updated_at
-             )
-             VALUES ($1, true, true, 'Haze', now() - interval '2 hours')",
-        )
-        .bind(steam_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        assert!(get_live_state_for_discord_user(&pool, discord_id)
-            .await
-            .unwrap()
-            .is_none());
-
-        // Frisch derselbe Zustand: jetzt zaehlt er.
-        sqlx::query(
-            "UPDATE activity.live_player_state SET deadlock_updated_at = now()
-             WHERE steam_id = $1",
-        )
-        .bind(steam_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        let live = get_live_state_for_discord_user(&pool, discord_id)
-            .await
-            .unwrap()
-            .expect("frische Presence");
         assert_eq!(live.hero.as_deref(), Some("Haze"));
+        assert!(live.party_hint.is_none());
     }
 
-    #[tokio::test]
-    async fn live_state_nur_wenn_in_deadlock() {
-        let Some(pool) = make_pg_pool().await else {
-            return;
-        };
-        let discord_id = 9_223_372_036_854_774_000_i64;
-        let verified_steam_id64 = 76_561_197_960_265_733_i64;
-        let unverified_steam_id64 = 76_561_197_960_265_734_i64;
-        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
-            .bind(discord_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = ANY($1)")
-            .bind([
-                verified_steam_id64.to_string(),
-                unverified_steam_id64.to_string(),
-            ])
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO core.users (discord_id) VALUES ($1)
-             ON CONFLICT (discord_id) DO NOTHING",
+    #[test]
+    fn titel_ohne_rang_bleibt_moeglich_und_alter_hero_ist_kein_live_kontext() {
+        assert!(rank_context(Err(StatsError)).is_none());
+        let prompt = crate::title_ai::build_title_prompt("ranked grind", &[], &[], None, 0.0, None);
+        assert!(prompt.contains("ranked grind"));
+        let old: stats::LiveStatus = serde_json::from_value(
+            serde_json::json!({"linked":true,"live":false,"in_deadlock":true,"hero":"Haze"}),
         )
-        .bind(discord_id)
-        .execute(&pool)
-        .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO core.steam_links (discord_id, steam_id, steam_id64, verified, linked_at)
-             VALUES
-                ($1, $2::text, $2, true, '2026-07-28T10:00:00Z'),
-                ($1, $3::text, $3, false, '2026-07-28T11:00:00Z')
-             ON CONFLICT (discord_id, steam_id) DO UPDATE
-             SET verified = EXCLUDED.verified, linked_at = EXCLUDED.linked_at",
-        )
-        .bind(discord_id)
-        .bind(verified_steam_id64)
-        .bind(unverified_steam_id64)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO activity.live_player_state (
-                steam_id, in_deadlock_now, in_match_now_strict,
-                deadlock_hero, deadlock_party_hint, deadlock_stage,
-                deadlock_updated_at
-             )
-             VALUES
-                ($1, true, true, 'Haze', 'solo', 'laning', now()),
-                ($2, true, false, 'Seven', 'duo', 'mid', now())
-             ON CONFLICT (steam_id) DO UPDATE SET
-                in_deadlock_now = EXCLUDED.in_deadlock_now,
-                in_match_now_strict = EXCLUDED.in_match_now_strict,
-                deadlock_hero = EXCLUDED.deadlock_hero,
-                deadlock_party_hint = EXCLUDED.deadlock_party_hint,
-                deadlock_stage = EXCLUDED.deadlock_stage",
-        )
-        .bind(verified_steam_id64.to_string())
-        .bind(unverified_steam_id64.to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let ls = get_live_state_for_discord_user(&pool, discord_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(ls.in_match);
-        assert_eq!(ls.hero.as_deref(), Some("Haze"));
-        assert_eq!(ls.stage.as_deref(), Some("laning"));
-
-        // in_deadlock_now = 0 → None.
-        sqlx::query(
-            "UPDATE activity.live_player_state
-             SET in_deadlock_now = false
-             WHERE steam_id = $1",
-        )
-        .bind(verified_steam_id64.to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
-        assert!(get_live_state_for_discord_user(&pool, discord_id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn live_state_sortiert_linked_at_null_nach_hinten() {
-        let Some(pool) = make_pg_pool().await else {
-            return;
-        };
-        let discord_id = 8_200_000_000_000_001_i64;
-        let dated_steam_id64 = 76_561_197_960_265_823_i64;
-        let undated_steam_id64 = 76_561_197_960_265_824_i64;
-        sqlx::query("DELETE FROM core.steam_links WHERE discord_id = $1")
-            .bind(discord_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = ANY($1)")
-            .bind([dated_steam_id64.to_string(), undated_steam_id64.to_string()])
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO core.steam_links
-                (discord_id, steam_id, steam_id64, verified, linked_at)
-             VALUES
-                ($1, $2::text, $2, true, '2026-07-28T10:00:00Z'),
-                ($1, $3::text, $3, true, NULL)",
-        )
-        .bind(discord_id)
-        .bind(dated_steam_id64)
-        .bind(undated_steam_id64)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO activity.live_player_state (
-                steam_id, in_deadlock_now, in_match_now_strict,
-                deadlock_hero, deadlock_party_hint, deadlock_stage,
-                deadlock_updated_at
-             )
-             VALUES
-                ($1, true, true, 'Haze', 'solo', 'laning', now()),
-                ($2, true, true, 'Seven', 'duo', 'mid', now())
-             ON CONFLICT (steam_id) DO UPDATE SET
-                in_deadlock_now = EXCLUDED.in_deadlock_now,
-                in_match_now_strict = EXCLUDED.in_match_now_strict,
-                deadlock_hero = EXCLUDED.deadlock_hero,
-                deadlock_party_hint = EXCLUDED.deadlock_party_hint,
-                deadlock_stage = EXCLUDED.deadlock_stage",
-        )
-        .bind(dated_steam_id64.to_string())
-        .bind(undated_steam_id64.to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let live = get_live_state_for_discord_user(&pool, discord_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(live.hero.as_deref(), Some("Haze"));
-    }
-
-    #[tokio::test]
-    async fn live_state_queryfehler_ist_fehler() {
-        let Some(pool) = make_pg_pool().await else {
-            return;
-        };
-        pool.close().await;
-
-        assert!(get_live_state_for_discord_user(&pool, 200).await.is_err());
+        assert!(live_context(Ok(old)).unwrap().is_none());
+        assert!(live_context(Err(StatsError)).is_err());
     }
 }

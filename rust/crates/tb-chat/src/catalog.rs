@@ -41,6 +41,12 @@ pub fn catalog() -> &'static [CommandInfo] {
     use CommandGroup::*;
     &[
         CommandInfo {
+            name: "!watchtime",
+            aliases: &[],
+            group: Fun,
+            summary: "Zeigt deine hier erfasste Zuschauerzeit insgesamt und im laufenden Stream.",
+        },
+        CommandInfo {
             name: "!sub",
             aliases: &[],
             group: Fun,
@@ -51,49 +57,49 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!rank",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt deinen aktuellen Deadlock-Rang im Chat.",
+            summary: "Zeigt den aktuellen Deadlock-Rang des Streamers.",
         },
         CommandInfo {
             name: "!wins",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt deine Deadlock-Karriere-Siege im Chat.",
+            summary: "Zeigt die Deadlock-Karriere-Siege des Streamers.",
         },
         CommandInfo {
             name: "!winrate",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt deine Deadlock-Winrate der letzten Spiele.",
+            summary: "Zeigt die Deadlock-Winrate des Streamers in den letzten Spielen.",
         },
         CommandInfo {
             name: "!mmr",
             aliases: &["!climb"],
             group: Stats,
-            summary: "Zeigt deinen aktuellen Rang und Trend der letzten Tage.",
+            summary: "Zeigt Rang und Trend des Streamers in den letzten Tagen.",
         },
         CommandInfo {
             name: "!live",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt, ob du gerade live in einem Deadlock-Match bist.",
+            summary: "Zeigt, ob der Streamer gerade in einem Deadlock-Match ist.",
         },
         CommandInfo {
             name: "!lastmatch",
             aliases: &["!last"],
             group: Stats,
-            summary: "Zeigt dein letztes Deadlock-Spiel (Ergebnis, Hero, KDA).",
+            summary: "Zeigt das letzte Deadlock-Spiel des Streamers (Ergebnis, Hero, KDA).",
         },
         CommandInfo {
             name: "!streak",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt deine aktuelle Sieges- oder Pechsträhne.",
+            summary: "Zeigt die aktuelle Sieges- oder Pechsträhne des Streamers.",
         },
         CommandInfo {
             name: "!mostplayed",
             aliases: &["!main"],
             group: Stats,
-            summary: "Zeigt deinen meistgespielten Hero der letzten Spiele.",
+            summary: "Zeigt den meistgespielten Hero des Streamers in den letzten Spielen.",
         },
         CommandInfo {
             name: "!clip",
@@ -117,7 +123,7 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!commands",
             aliases: &[],
             group: Fun,
-            summary: "Zeigt die Befehle im Chat, plus Link zur vollen Übersicht.",
+            summary: "Verlinkt die Übersicht aller Befehle.",
         },
         CommandInfo {
             name: "!help",
@@ -141,13 +147,13 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!engagement_ignore_me",
             aliases: &[],
             group: Fun,
-            summary: "Nimmt dich aus dem Engagement-Tracking raus.",
+            summary: "Nimmt dich aus den Engagement-Antworten des Bots heraus.",
         },
         CommandInfo {
             name: "!engagement_remember_me",
             aliases: &[],
             group: Fun,
-            summary: "Nimmt dich wieder ins Engagement-Tracking auf.",
+            summary: "Nimmt dich wieder in die Engagement-Antworten des Bots auf.",
         },
         CommandInfo {
             name: "!raid",

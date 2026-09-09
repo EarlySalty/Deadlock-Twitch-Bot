@@ -21,14 +21,13 @@ use chrono::Utc;
 use dashmap::DashMap;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // Typen
 // ---------------------------------------------------------------------------
 
 /// Klassifizierung eines Twitch-Channels für die Chat-Pipeline.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ChannelClass {
     /// Echter Partner (nicht monitored-only) — volle Bot-Funktionen (bot.py Z. 1568–1572).
     pub is_partner: bool,
@@ -52,7 +51,7 @@ struct CacheEntry {
 
 pub struct ChannelClassifier {
     pool: PgPool,
-    /// In-Memory-Cache: broadcaster_login (lowercase) → CacheEntry.
+    /// In-Memory-Cache: broadcaster_id → CacheEntry.
     /// TTL: 60 Sekunden.
     cache: Arc<DashMap<String, CacheEntry>>,
 }
@@ -71,21 +70,25 @@ impl ChannelClassifier {
     }
 
     /// Klassifiziert einen Channel. Ergebnis wird 60s gecacht.
-    pub async fn classify(&self, broadcaster_login: &str, _broadcaster_id: &str) -> ChannelClass {
-        let login = broadcaster_login.to_lowercase();
-        let now_secs = Utc::now().timestamp();
-
-        // Cache-Treffer prüfen
-        if let Some(entry) = self.cache.get(&login) {
-            if now_secs - entry.inserted_at_secs < CACHE_TTL_SECS {
-                debug!(channel = %login, "channel_classifier: cache hit");
-                return entry.class.clone();
-            }
+    pub async fn classify(&self, _broadcaster_login: &str, broadcaster_id: &str) -> ChannelClass {
+        if broadcaster_id.trim().is_empty() {
+            return ChannelClass::default();
         }
-
-        let class = self.classify_from_db(&login).await;
+        let now_secs = Utc::now().timestamp();
+        self.cache
+            .retain(|_, entry| now_secs - entry.inserted_at_secs < CACHE_TTL_SECS);
+        if let Some(entry) = self.cache.get(broadcaster_id) {
+            return entry.class.clone();
+        }
+        let class = match self.classify_from_db(broadcaster_id).await {
+            Ok(class) => class,
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Kanalstatus nicht abrufbar");
+                return ChannelClass::default();
+            }
+        };
         self.cache.insert(
-            login.clone(),
+            broadcaster_id.into(),
             CacheEntry {
                 class: class.clone(),
                 inserted_at_secs: now_secs,
@@ -94,81 +97,23 @@ impl ChannelClassifier {
         class
     }
 
-    async fn classify_from_db(&self, login: &str) -> ChannelClass {
-        // --- is_monitored_only: Streamer ohne Partner-Eintrag ---
-        let is_monitored_only = sqlx::query_scalar!(
-            "SELECT NOT EXISTS ( \
-                 SELECT 1 FROM twitch_partners p \
-                 WHERE p.twitch_user_id = s.twitch_user_id \
-                    OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
-             ) AS \"is_monitored_only!\" \
-             FROM twitch_streamers s \
-             WHERE LOWER(s.twitch_login) = $1",
-            login,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(false);
-
-        // --- is_partner_channel_for_chat_tracking (partner_utils.py Z. 153–181)
-        //     bot.py Z. 746–753: monitored-only → True für Tracking-Gate, aber KEIN Partner
-        //     is_partner = aktiver Partner UND NICHT monitored-only (bot.py Z. 1568–1572) ---
-        let is_partner_active = sqlx::query_scalar!(
-            "SELECT COALESCE(is_partner_active, 0) AS \"is_partner_active!\" \
-             FROM twitch_streamers_partner_state \
-             WHERE LOWER(twitch_login) = $1",
-            login,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(0)
-            != 0;
-
-        // Partner = is_partner_active UND nicht monitored-only (bot.py Z. 1568–1572)
-        let is_partner = is_partner_active && !is_monitored_only;
-
-        // --- is_deadlock_live (bot.py Z. 755–761, moderation.py Z. 2008–2080)
-        //     is_live = integer, last_game = text (Prod-Schema) ---
-        let is_deadlock_live = match sqlx::query!(
-            "SELECT COALESCE(is_live, 0) AS \"is_live!\", last_game \
-             FROM twitch_live_state \
-             WHERE streamer_login = $1",
-            login,
-        )
-        .fetch_optional(&self.pool)
-        .await
-        {
-            Ok(Some(row)) => {
-                row.is_live != 0
-                    && row
-                        .last_game
-                        .as_deref()
-                        .map(|game| game.trim().to_lowercase() == "deadlock")
-                        .unwrap_or(false)
-            }
-            _ => false,
-        };
-
-        debug!(
-            channel = %login,
-            is_partner,
-            is_monitored_only,
-            is_deadlock_live,
-            "channel_classifier: DB-Lookup"
-        );
-
-        ChannelClass {
-            is_partner,
-            is_monitored_only,
-            is_deadlock_live,
-        }
+    async fn classify_from_db(&self, broadcaster_id: &str) -> Result<ChannelClass, sqlx::Error> {
+        let (active, monitored, live): (bool, bool, bool) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM twitch_streamers_partner_state WHERE twitch_user_id=$1 AND is_partner_active=1),
+                    EXISTS (SELECT 1 FROM twitch_streamers s WHERE s.twitch_user_id=$1
+                            AND NOT EXISTS (SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id=s.twitch_user_id)),
+                    EXISTS (SELECT 1 FROM twitch_live_state WHERE twitch_user_id=$1 AND is_live=1 AND LOWER(TRIM(last_game))='deadlock')"
+        ).bind(broadcaster_id).fetch_one(&self.pool).await?;
+        Ok(ChannelClass {
+            is_partner: active && !monitored,
+            is_monitored_only: monitored,
+            is_deadlock_live: live,
+        })
     }
 
     /// Cache für einen Channel invalidieren (z.B. nach Konfigurationsänderung).
-    pub fn invalidate(&self, broadcaster_login: &str) {
-        self.cache.remove(&broadcaster_login.to_lowercase());
+    pub fn invalidate(&self, broadcaster_id: &str) {
+        self.cache.remove(broadcaster_id);
     }
 }
 

@@ -360,7 +360,7 @@ fn history_line(item: &PromptHistoryItem) -> String {
 /// nach (relative_perf, engagement_rate) absteigend für die Top-Referenzen.
 ///
 /// Hinweis: Für `Hero`/`Party` greift bei `None` der Python-Default
-/// (`unbekannt`/`solo`) — der `.get(key, default)` in Python war für genau
+/// (`unbekannt`) — fehlender Kontext darf keine Gruppengröße erfinden.
 /// diesen Fall gedacht (Live-Feld vorhanden aber leer).
 pub fn build_title_prompt(
     keywords: &str,
@@ -414,7 +414,7 @@ pub fn build_title_prompt(
             format!(
                 "\nAktuelle Live-Daten: Hero={}, Party={}",
                 ls.hero.as_deref().unwrap_or("unbekannt"),
-                ls.party_hint.as_deref().unwrap_or("solo"),
+                ls.party_hint.as_deref().unwrap_or("unbekannt"),
             )
         })
         .unwrap_or_default();
@@ -1002,8 +1002,8 @@ mod tests {
         };
         let p = build_title_prompt("ranked", &hist, &[], Some("Archon 3"), 0.0, Some(&live));
         assert!(p.contains("Streamer-Rang: Archon 3"));
-        // party_hint None → Python-Default "solo".
-        assert!(p.contains("Aktuelle Live-Daten: Hero=Haze, Party=solo"));
+        // Der HTTP-Kontext enthält keinen Partystatus: keine Solo-Behauptung.
+        assert!(p.contains("Aktuelle Live-Daten: Hero=Haze, Party=unbekannt"));
         // Top-Referenzen sind nach Perf sortiert: "Stark" (2.0) vor "Schwach" (0.5).
         assert!(p.find("Stark").unwrap() < p.find("Schwach").unwrap());
     }
