@@ -293,6 +293,12 @@ const LURKER_TAX_MAX_MENTIONS: usize = 2;
 /// Mehr Kandidaten holen als am Ende erwähnt werden, damit nach dem Per-Session-
 /// Dedup die nächstrangigen Lurker nachrücken (promos.py: fetch > MAX, dann kappen).
 const LURKER_TAX_CANDIDATE_FETCH: i64 = 25;
+pub const LURKER_TAX_REWARD_TITLE: &str = "Lurker Steuer";
+
+pub fn lurker_tax_title_matches(title: &str) -> bool {
+    let normalized = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.to_lowercase().starts_with("lurker steuer")
+}
 /// Keine Promo in den ersten N Minuten nach Go-Live (constants.py: PROMO_STREAM_START_DELAY_MIN).
 const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 
@@ -350,6 +356,11 @@ impl BotScopeProvider for crate::token::BotTokenManager {
     async fn bot_scopes(&self) -> Vec<String> {
         self.scopes().await
     }
+}
+
+#[async_trait]
+pub trait LurkerRewardChecker: Send + Sync {
+    async fn active_lurker_reward_exists(&self, broadcaster_id: &str) -> bool;
 }
 
 /// Baut das `AND LOWER(<col>) NOT IN ($start, $start+1, …)`-Fragment für die
@@ -456,6 +467,7 @@ struct ChannelState {
     /// (promos.py:564-584). Bei Session-Wechsel zurückgesetzt — verhindert, dass
     /// derselbe ruhige Zuschauer mehrfach pro Session gepingt wird.
     lurker_mentions: (i64, HashSet<String>),
+    thanked_redeemers: (i64, HashSet<String>),
 }
 
 impl ChannelState {
@@ -471,6 +483,7 @@ impl ChannelState {
             seen_chatters: HashMap::new(),
             last_accessed: Instant::now(),
             lurker_mentions: (0, HashSet::new()),
+            thanked_redeemers: (0, HashSet::new()),
         }
     }
 }
@@ -503,6 +516,7 @@ pub struct PromoEngine {
     suppression: Arc<dyn OutboundSuppressionCheck>,
     suppression_writer: Option<Arc<dyn OutboundSuppressionWriter>>,
     bot_scope_provider: Option<Arc<dyn BotScopeProvider>>,
+    reward_checker: Option<Arc<dyn LurkerRewardChecker>>,
     invite_resolver: Arc<dyn InviteResolver>,
     partner_check: Arc<dyn PartnerChannelCheck>,
     pitch_judge: Arc<dyn PitchJudge>,
@@ -547,6 +561,7 @@ impl PromoEngine {
             suppression,
             suppression_writer: None,
             bot_scope_provider: None,
+            reward_checker: None,
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
             pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
@@ -592,6 +607,11 @@ impl PromoEngine {
     // bot-zentrierte Scope-Fallback greift.
     pub fn set_bot_scope_provider(mut self, p: Arc<dyn BotScopeProvider>) -> Self {
         self.bot_scope_provider = Some(p);
+        self
+    }
+
+    pub fn set_lurker_reward_checker(mut self, checker: Arc<dyn LurkerRewardChecker>) -> Self {
+        self.reward_checker = Some(checker);
         self
     }
 
@@ -2246,6 +2266,12 @@ impl PromoEngine {
             return;
         }
 
+        if let Some(checker) = self.reward_checker.as_ref() {
+            if !checker.active_lurker_reward_exists(channel_id).await {
+                return;
+            }
+        }
+
         // Kandidaten holen (promos.py:408).
         let candidates = self.get_lurker_tax_candidates(login).await;
         if candidates.is_empty() {
@@ -2424,20 +2450,102 @@ impl PromoEngine {
             }
         };
 
-        rows.into_iter().map(|(l,)| l).collect()
+        let mut logins: Vec<String> = rows.into_iter().map(|(l,)| l).collect();
+        let session_id: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
+        )
+        .bind(login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+        if let Some(session_id) = session_id {
+            let redeemed: Vec<String> = sqlx::query_scalar::<_, String>(
+                "SELECT LOWER(user_login) FROM twitch_channel_points_events \
+                  WHERE session_id = $1 AND user_login IS NOT NULL \
+                    AND LOWER(reward_title) LIKE 'lurker steuer%'",
+            )
+            .bind(session_id)
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+            if !redeemed.is_empty() {
+                let redeemed: HashSet<String> = redeemed.into_iter().collect();
+                logins.retain(|l| !redeemed.contains(&l.to_lowercase()));
+            }
+        }
+        logins
     }
 
     /// Lurker-Tax-Text bauen (promos.py:401: `_build_lurker_tax_text`).
     fn build_lurker_tax_text(&self, candidates: &[String]) -> String {
-        let mentions: String = candidates
+        let mentions: Vec<String> = candidates
             .iter()
             .take(LURKER_TAX_MAX_MENTIONS)
             .map(|l| format!("@{l}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!(
-            "Lurker Steuer: {mentions} falls ihr gerade entspannt mitlest, denkt gern an eure Channel-Points."
+            .collect();
+        if mentions.len() <= 1 {
+            let name = mentions.first().cloned().unwrap_or_default();
+            format!(
+                "Hey {name}, schön dass du da bist! Vergiss nicht, deine Lurker Steuer zu zahlen: Belohnung '{LURKER_TAX_REWARD_TITLE}' einlösen."
+            )
+        } else {
+            let joined = mentions.join(" und ");
+            format!(
+                "Hey {joined}, schön dass ihr da seid! Vergesst nicht, eure Lurker Steuer zu zahlen: Belohnung '{LURKER_TAX_REWARD_TITLE}' einlösen."
+            )
+        }
+    }
+
+    pub async fn thank_lurker_tax_redeemer(
+        &self,
+        broadcaster_id: &str,
+        broadcaster_login: &str,
+        redeemer_login: &str,
+    ) {
+        if redeemer_login.trim().is_empty() {
+            return;
+        }
+        let session_id: i64 = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
         )
+        .bind(broadcaster_login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0);
+
+        let key = redeemer_login.to_lowercase();
+        let already = {
+            let state_ref = self
+                .channel_states
+                .entry(broadcaster_login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            if state.thanked_redeemers.0 != session_id {
+                state.thanked_redeemers = (session_id, HashSet::new());
+            }
+            !state.thanked_redeemers.1.insert(key.clone())
+        };
+        if already {
+            return;
+        }
+
+        let text = format!("@{redeemer_login} hat die Lurker Steuer bezahlt. Vorbildlich, danke!");
+        let sent = self.api.send_message(broadcaster_id, &text).await.is_ok();
+        if !sent {
+            let state_ref = self
+                .channel_states
+                .entry(broadcaster_login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            if state.thanked_redeemers.0 == session_id {
+                state.thanked_redeemers.1.remove(&key);
+            }
+        }
     }
 
     /// Stream-Start-Verzögerung prüfen (constants.py: PROMO_STREAM_START_DELAY_MIN = 10 min).
@@ -3220,7 +3328,10 @@ mod tests {
         let text = engine.build_lurker_tax_text(&candidates);
         assert!(text.contains("@alice"), "Mention alice fehlt");
         assert!(text.contains("@bob"), "Mention bob fehlt");
-        assert!(text.contains("Channel-Points"), "Channel-Points fehlt");
+        assert!(
+            text.contains("Belohnung 'Lurker Steuer' einlösen."),
+            "Belohnungshinweis fehlt: {text}"
+        );
     }
 
     #[tokio::test]
