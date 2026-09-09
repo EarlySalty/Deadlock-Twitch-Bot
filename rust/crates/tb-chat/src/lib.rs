@@ -40,6 +40,8 @@ pub mod mention_scoring;
 pub mod moderation;
 pub mod moderation_settings;
 pub mod pipeline;
+pub mod pitch_beispiele;
+pub mod pitch_bewertung;
 pub mod promo_pitch;
 pub mod promos;
 pub mod safe_list;

@@ -74,6 +74,8 @@ Zwischenzustand: Reaktionen landen als Bewertung in der DB und wirken über M3.
 Validierung: `cargo test -p tb-chat --lib pitch_bewertung` grün; `cargo check --workspace` sauber; `cargo test -p tb-bot` grün gegen die bekannte Baseline.
 Stop-Regel: Emoji-Format des Brokers weicht ab (Name statt Unicode) → an der Live-Antwort messen (Python-Helfer, kein curl), Mapping anpassen, nicht raten.
 
+Status: erledigt (Commit folgt). Neues Modul pitch_bewertung mit ReaktionsQuelle-Trait; bewerte_offene_karten wertet Daumen hoch/runter (mit Hautton-Prefix), beides gleich schlecht, keine Reaktion bleibt offen, geloeschte Karte wird ohne Bewertung geschlossen. Timer alle 10 Minuten in build_runtime (chat_wiring, Konstante), Quelle ueber den vorhandenen BrokerRelay.get_message_reactions. tb-chat 793 passed (nur bekannte rote Baseline pipeline::invite_antwort_ueberspringt_lfg_pitch_bei_doppelintent), pitch_bewertung-Unit- und DB-Tests gruen. Abweichung vom Plan: Trait-Methode in backend.rs nicht noetig, der Reaktions-GET liegt schon als BrokerRelay-Inherent-Methode in main vor; Timer sitzt in chat_wiring (supervisor/pool/relay dort), nicht in main.rs. chat_wiring traegt hier auch die M4-Kartenaenderung.
+
 ## M6 Abschluss
 
 - Migration auf Prod von Hand als `postgres` anwenden, Rechte an `twitchbot` und `twitchdash`, Eintrag in `_sqlx_migrations` mit sha384-Checksumme (Memory `twitch-release-deploy-weg`, Infrastruktur-Fakten).

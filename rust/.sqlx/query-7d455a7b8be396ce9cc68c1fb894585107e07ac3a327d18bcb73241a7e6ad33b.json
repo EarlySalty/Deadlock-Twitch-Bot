@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT bewertung, bewertet_at IS NOT NULL AS \"abgeschlossen!\"\n                 FROM twitch_promo_pitch_log WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bewertung",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "abgeschlossen!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "7d455a7b8be396ce9cc68c1fb894585107e07ac3a327d18bcb73241a7e6ad33b"
+}
