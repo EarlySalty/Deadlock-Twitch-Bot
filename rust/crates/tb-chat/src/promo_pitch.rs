@@ -187,14 +187,9 @@ const ICH_FORM_MARKER: &[&str] = &[
     "gespielt hab",
     "bin gerade",
     "bin grad",
-    "wieder da",
-    "tage weg",
-    "war weg",
-    "war gestern weg",
-    "war kurz weg",
-    "war eben weg",
-    "war lange weg",
-    "war ne weile weg",
+    "bin wieder da",
+    "ich bin wieder da",
+    "sind wieder da",
     "wir spielen",
     "wir zocken",
     "mein rank",
@@ -233,6 +228,10 @@ const ICH_VERB_NAH: &[&str] = &[
     "gegrindet",
 ];
 
+const ABWESENHEIT_STARTER: &[&str] = &["war", "waren"];
+
+const ABWESENHEIT_ZIEL: &[&str] = &["weg"];
+
 const BELEIDIGUNG_MARKER: &[&str] = &[
     "arschloch",
     "hurensohn",
@@ -266,18 +265,18 @@ const BELEIDIGUNG_MARKER: &[&str] = &[
 
 const ICH_SPIEL_VERB: &[&str] = &["gespielt", "gezockt"];
 
-fn verb_nahe_starter(lower: &str) -> bool {
+fn phrase_nahe(lower: &str, starter: &[&str], ziele: &[&str]) -> bool {
     let tokens: Vec<&str> = lower
         .split_whitespace()
         .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
         .collect();
     for (index, token) in tokens.iter().enumerate() {
-        if !ICH_STARTER.contains(token) {
+        if !starter.contains(token) {
             continue;
         }
         let ende = (index + 4).min(tokens.len().saturating_sub(1));
         for folge in &tokens[(index + 1).min(tokens.len())..=ende] {
-            if ICH_VERB_NAH.contains(folge) {
+            if ziele.contains(folge) {
                 return true;
             }
         }
@@ -301,7 +300,8 @@ pub fn ich_form_reject(text: &str) -> bool {
     if ICH_BIN_RANG.iter().any(|needle| lower.contains(needle)) {
         return true;
     }
-    verb_nahe_starter(&lower)
+    phrase_nahe(&lower, ICH_STARTER, ICH_VERB_NAH)
+        || phrase_nahe(&lower, ABWESENHEIT_STARTER, ABWESENHEIT_ZIEL)
 }
 
 pub fn beleidigung_reject(text: &str) -> bool {
@@ -999,6 +999,8 @@ mod tests {
             "hab gerankt",
             "ich bin archon",
             "mein hero ist grey talon",
+            "bin wieder da",
+            "war ne woche weg",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
@@ -1015,6 +1017,9 @@ mod tests {
             "wie lange hast du gezockt heute",
             "ich bin nur der bot hier",
             "ich glaub die community mag das",
+            "schön, dass du wieder da bist",
+            "cool dass du wieder zockst",
+            "du warst lange weg",
         ] {
             assert_eq!(
                 pitch_filter_reject(text),
