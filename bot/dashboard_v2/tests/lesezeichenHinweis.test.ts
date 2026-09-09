@@ -55,3 +55,59 @@ test('Fortschritt sendet Session und CSRF; Pause bestätigt keinen Schritt', asy
     await assert.rejects(() => saveOnboardingProgress({complete_step:'bookmark'}, 'test-csrf'), /Speichern fehlgeschlagen/);
   } finally { globalThis.fetch = oldFetch; globalThis.window = oldWindow; }
 });
+
+test('Pause gewinnt gegen laufendes Weiter und wird als letzter Zustand gespeichert', async () => {
+  const { ProgressCoordinator } = await import('../src/components/onboarding/progressCoordinator');
+  const writes: unknown[] = [];
+  let release!: (value: boolean) => void;
+  let navigations = 0;
+  const coordinator = new ProgressCoordinator(update => {
+    writes.push(update);
+    return writes.length === 1 ? new Promise(resolve => { release = resolve; }) : Promise.resolve(true);
+  });
+  const opening = coordinator.resume({ active_step: 'discord', complete_step: 'bookmark', paused: false }, () => { navigations++; });
+  await Promise.resolve();
+  const pause = coordinator.pause();
+  release(true);
+  await Promise.all([opening, pause]);
+  assert.equal(navigations, 0);
+  assert.deepEqual(writes, [{active_step:'discord',complete_step:'bookmark',paused:false},{paused:true}]);
+  await coordinator.resume({active_step:'discord',paused:false}, () => { navigations++; });
+  assert.equal(navigations, 1);
+});
+
+test('Fehlgeschlagene Anfrage blockiert Pause nicht; Kontowechsel entwertet Navigation', async () => {
+  const { ProgressCoordinator } = await import('../src/components/onboarding/progressCoordinator');
+  let release!: (value: boolean) => void;
+  let navigations = 0;
+  let calls = 0;
+  const coordinator = new ProgressCoordinator(async () => { if (++calls === 1) throw new Error('offline'); return true; });
+  await coordinator.resume({active_step:'chat'}, () => { navigations++; });
+  assert.equal(await coordinator.pause(), true);
+  assert.equal(navigations, 0);
+  const other = new ProgressCoordinator(() => new Promise(resolve => { release = resolve; }));
+  const pending = other.resume({active_step:'chat'}, () => { navigations++; });
+  await Promise.resolve(); other.invalidate(); release(true); await pending;
+  assert.equal(navigations, 0);
+});
+
+test('Kontowechsel verwirft noch nicht gestartete Schreibvorgänge des alten Kontos', async () => {
+  const { ProgressCoordinator } = await import('../src/components/onboarding/progressCoordinator');
+  let release!: (value: boolean) => void;
+  let writes = 0;
+  const coordinator = new ProgressCoordinator(() => { writes++; return new Promise(resolve => { release = resolve; }); });
+  const first = coordinator.save({active_step:'discord'});
+  await Promise.resolve();
+  const queuedPause = coordinator.pause();
+  coordinator.dispose();
+  release(true);
+  assert.equal(await first, true);
+  assert.equal(await queuedPause, false);
+  assert.equal(writes, 1);
+  // React StrictMode darf den Effekt erneut aktivieren, verworfene Arbeit bleibt verworfen.
+  coordinator.activate();
+  const next = coordinator.save({paused:true});
+  await Promise.resolve(); release(true);
+  assert.equal(await next, true);
+  assert.equal(writes, 2);
+});

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Menu, X, MessageCircle } from 'lucide-react';
 import { useScrollSpy } from '@/hooks/useScrollSpy';
 import { AFFILIATE_PROGRAM_PATH } from '@/data/sitePaths';
@@ -32,6 +32,7 @@ function scrollToId(id: string) {
 export function Navbar() {
   const [glassy, setGlassy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const activeId = useScrollSpy(SECTION_IDS);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export function Navbar() {
       if (window.innerWidth >= 1720) setMenuOpen(false);
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setMenuOpen(false);
+      if (event.key === 'Escape' && menuButton.current?.getAttribute('aria-expanded') === 'true') { setMenuOpen(false); menuButton.current.focus(); }
     }
     window.addEventListener('resize', handleResize);
     window.addEventListener('keydown', handleKeyDown);
@@ -137,6 +138,7 @@ export function Navbar() {
           onClick={() => setMenuOpen((prev) => !prev)}
           aria-label={menuOpen ? 'Navigation schließen' : 'Navigation öffnen'}
           aria-expanded={menuOpen}
+          ref={menuButton}
           aria-controls="streamer-mobile-navigation"
         >
           {menuOpen ? <X size={22} /> : <Menu size={22} />}

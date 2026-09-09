@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Pause, RefreshCw, X } from 'lucide-react';
-import { useOnboarding } from './OnboardingContext';
-import { canonicalBookmarkLocation, isConnectionStep, nextStep, stepDefinition, stepState, type OnboardingStepId } from './steps';
+import { useOnboarding } from './onboardingState';
+import { canonicalBookmarkLocation, isConnectionStep, stepDefinition, stepState, type OnboardingStepId } from './steps';
 import { LesezeichenHinweis } from './LesezeichenHinweis';
 
 const descriptions: Record<Exclude<OnboardingStepId, 'bookmark'>, string[]> = {
@@ -15,7 +15,7 @@ const descriptions: Record<Exclude<OnboardingStepId, 'bookmark'>, string[]> = {
 };
 
 export function OnboardingGuide({ home = false, tab, overlayBuilder = false }: {home?: boolean; tab?: string; overlayBuilder?: boolean}) {
-  const {status, error, pending, loading, save, open, pause, refresh} = useOnboarding();
+  const {status, error, pending, loading, advance: saveAdvance, open, pause, refresh} = useOnboarding();
   const id = status?.active_step ?? 'bookmark';
   const step = stepDefinition(id);
   const active = Boolean(status && !status.paused);
@@ -27,7 +27,7 @@ export function OnboardingGuide({ home = false, tab, overlayBuilder = false }: {
 
   useEffect(() => {
     if (!active || !matches) return;
-    const esc = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); void pause(); } };
+    const esc = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented && panel.current?.contains(event.target as Node) && !(event.target instanceof HTMLSelectElement)) { event.preventDefault(); void pause(); } };
     window.addEventListener('keydown', esc);
     return () => window.removeEventListener('keydown', esc);
   }, [active, matches, pause]);
@@ -63,10 +63,7 @@ export function OnboardingGuide({ home = false, tab, overlayBuilder = false }: {
   const canConfirm = targetState === 'ready' && (!isConnectionStep(id) || connected) && (id !== 'bookmark' || canonicalBookmarkLocation(window.location));
   const advance = async (confirm: boolean) => {
     if (dirty || document.querySelector('[data-unsaved="true"]')) return;
-    const next = nextStep(id);
-    if (confirm && !isConnectionStep(id) && !(await save({complete_step: id}))) return;
-    if (next) await open(next);
-    else await save({completed: true, paused: true});
+    await saveAdvance(id, confirm);
   };
   const showTarget = () => {
     const target = document.querySelector<HTMLElement>(`[data-tour-id="${step.anchor}"]`);

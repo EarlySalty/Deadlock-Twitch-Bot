@@ -1,5 +1,5 @@
 export const ONBOARDING_STEPS = [
-  { id: 'bookmark', title: 'Dashboard als Lesezeichen speichern', short: 'Dashboard wiederfinden', path: '/twitch/dashboard', anchor: 'onboarding-bookmark' },
+  { id: 'bookmark', title: 'Dashboard als Lesezeichen speichern', short: 'Dashboard als Lesezeichen speichern', path: '/twitch/dashboard', anchor: 'onboarding-bookmark' },
   { id: 'discord', title: 'Zuerst Discord verbinden', short: 'Discord verbinden', path: '/twitch/verwaltung#konto', anchor: 'onboarding-discord' },
   { id: 'steam', title: 'Danach Steam verbinden', short: 'Steam verbinden', path: '/twitch/verwaltung#konto', anchor: 'onboarding-steam' },
   { id: 'chat', title: 'Dein Chat, deine Einstellungen', short: 'Chat-Befehle kennenlernen', path: '/twitch/verwaltung#chat', anchor: 'onboarding-chat' },

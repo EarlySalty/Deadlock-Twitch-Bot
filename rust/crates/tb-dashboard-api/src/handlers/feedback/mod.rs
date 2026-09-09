@@ -159,9 +159,9 @@ SELECT f.*, COALESCE(root.status, f.status) AS base_status,
        COALESCE(root.result_path, f.result_path) AS effective_result,
        COALESCE(root.decision_reason, f.decision_reason) AS effective_reason,
        r.id AS public_roadmap_id, r.title AS roadmap_title, r.status AS roadmap_status,
-       GREATEST(f.updated_at, root.updated_at, r.updated_at) AS observed_at,
-       (f.revision > 0 OR root.revision > 0 OR r.updated_at > f.created_at)
-         AND GREATEST(f.updated_at, root.updated_at, r.updated_at) > f.owner_seen_at AS unread
+       GREATEST(f.updated_at, root.shared_updated_at, r.updated_at) AS observed_at,
+       (f.revision > 0 OR root.shared_updated_at > f.created_at OR r.updated_at > f.created_at)
+         AND GREATEST(f.updated_at, root.shared_updated_at, r.updated_at) > f.owner_seen_at AS unread
 FROM dashboard_feedback f
 LEFT JOIN dashboard_feedback root ON root.id = f.duplicate_of
 LEFT JOIN twitch_roadmap_items r ON r.id = COALESCE(root.roadmap_id, f.roadmap_id)
@@ -520,7 +520,7 @@ async fn apply_update(
     } else {
         None
     };
-    sqlx::query("UPDATE dashboard_feedback SET status=$2,result_path=$3,roadmap_id=$4,duplicate_of=$5,decision_reason=$6,revision=revision+1,updated_at=clock_timestamp(),admin_read=TRUE WHERE id=$1")
+    sqlx::query("UPDATE dashboard_feedback SET shared_updated_at=CASE WHEN (status,result_path,roadmap_id,duplicate_of,decision_reason) IS DISTINCT FROM ($2,$3,$4,$5,$6) THEN clock_timestamp() ELSE shared_updated_at END,status=$2,result_path=$3,roadmap_id=$4,duplicate_of=$5,decision_reason=$6,revision=revision+1,updated_at=clock_timestamp(),admin_read=TRUE WHERE id=$1")
         .bind(id).bind(&status).bind(&body.result_path).bind(body.roadmap_id).bind(body.duplicate_of).bind(reason).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO dashboard_feedback_events(feedback_id,request_id,request_payload,status,reply,result_path,decision_reason) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(id).bind(&body.request_id).bind(payload).bind(status).bind(&body.reply).bind(&body.result_path).bind(reason).execute(&mut **tx).await?;

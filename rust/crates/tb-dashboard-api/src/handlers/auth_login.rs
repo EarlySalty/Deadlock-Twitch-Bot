@@ -393,11 +393,11 @@ async fn callback_handler_inner(
         Err(error) => warn!(%error, "Partner-Reaktivierung beim Login fehlgeschlagen"),
     }
 
-    // Session anlegen (kanonischer Login/User-ID aus twitch_partners bevorzugt).
+    // Die echte Twitch-Identität aus Helix bleibt auch im Session-Payload maßgeblich.
     let session = match state
         .create_partner_session(
-            &partner.twitch_login,
-            &partner.twitch_user_id,
+            &identity.twitch_login,
+            &identity.twitch_user_id,
             &identity.display_name,
         )
         .await

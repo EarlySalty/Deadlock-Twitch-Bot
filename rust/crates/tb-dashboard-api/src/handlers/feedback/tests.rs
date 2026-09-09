@@ -334,6 +334,7 @@ async fn duplicates_and_roadmap_expose_only_public_progress() {
         .status(),
         StatusCode::OK
     );
+    let mut main_update = body.clone();
     body.request_id = uuid::Uuid::new_v4().to_string();
     body.reply = "Dein Wunsch ist gebündelt.".into();
     body.roadmap_id = None;
@@ -350,6 +351,46 @@ async fn duplicates_and_roadmap_expose_only_public_progress() {
         .status(),
         StatusCode::OK
     );
+    let (_, before) = json(detail(partner("456"), State(db.pool.clone()), Path(b)).await).await;
+    assert_eq!(
+        mark_read(
+            partner("456"),
+            State(db.pool.clone()),
+            Path(b),
+            Json(ReadBody {
+                observed_at: serde_json::from_value(before["observed_at"].clone()).unwrap(),
+                inbox: false
+            })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    main_update.request_id = uuid::Uuid::new_v4().to_string();
+    main_update.expected_revision = 1;
+    main_update.reply = "Noch eine private Antwort nur für A".into();
+    assert_eq!(
+        update(
+            DashboardAuthLevel::admin(),
+            State(db.pool.clone()),
+            Path(a),
+            Json(main_update)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let (_, unchanged) = json(detail(partner("456"), State(db.pool.clone()), Path(b)).await).await;
+    assert_eq!(unchanged["unread"], false);
+    assert_eq!(unchanged["observed_at"], before["observed_at"]);
+    let deletion = crate::handlers::roadmap::delete_handler(
+        tb_http_core::AuthLevel::Admin,
+        State(db.pool.clone()),
+        Path(1),
+    )
+    .await
+    .into_response();
+    assert_eq!(deletion.status(), StatusCode::CONFLICT);
     sqlx::query(
         "UPDATE twitch_roadmap_items SET status='done',updated_at=clock_timestamp() WHERE id=1",
     )
@@ -364,7 +405,7 @@ async fn duplicates_and_roadmap_expose_only_public_progress() {
     assert!(visible.get("owner_id").is_none());
     assert!(!visible.to_string().contains("Private Antwort für A"));
     body.request_id = uuid::Uuid::new_v4().to_string();
-    body.expected_revision = 1;
+    body.expected_revision = 2;
     body.duplicate_of = Some(b);
     assert_eq!(
         update(

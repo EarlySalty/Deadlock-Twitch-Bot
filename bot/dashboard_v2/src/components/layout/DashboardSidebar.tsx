@@ -12,7 +12,7 @@ import {
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
 } from '@/preview/routes';
-import { useOnboarding } from '@/components/onboarding/OnboardingContext';
+import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
 import {
   BarChart3,
@@ -215,7 +215,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
               <button
                 type="button"
                 onClick={() =>
-                  adminModeMutation.mutate(!adminMode, {
+                  (!document.querySelector('[data-unsaved="true"]') || window.confirm('Ungespeicherte Änderungen verwerfen und die Ansicht wechseln?')) && adminModeMutation.mutate(!adminMode, {
                     onSuccess: () =>
                       queryClient.invalidateQueries({
                         predicate: (query) => {
@@ -270,6 +270,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
           </a>
           {onboarding.enabled && <button
             type="button"
+            data-onboarding-restart
             disabled={onboarding.pending}
             onClick={() => {
               void onboarding.open('bookmark');

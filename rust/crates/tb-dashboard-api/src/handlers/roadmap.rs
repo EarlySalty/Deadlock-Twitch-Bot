@@ -312,6 +312,9 @@ pub async fn delete_handler(
         .await
     {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23503") => {
+            json_err(StatusCode::CONFLICT, "Diesem Roadmap-Punkt sind noch Wünsche zugeordnet. Löse zuerst diese Zuordnungen in der Betreiber-Inbox.")
+        }
         Err(e) => {
             tracing::error!("roadmap delete fehlgeschlagen: {e}");
             json_err(StatusCode::INTERNAL_SERVER_ERROR, "DB-Fehler")

@@ -542,6 +542,7 @@ impl DashboardAuthState {
             "twitch_user_id": twitch_user_id,
             "display_name": display,
             "is_partner": true,
+            "identity_version": 1,
             "csrf_token": csrf_token,
             "created_at": now as f64,
             "expires_at": expires_at,
@@ -633,6 +634,7 @@ impl DashboardAuthState {
             "twitch_user_id": twitch_user_id,
             "display_name": display,
             "is_partner": true,
+            "identity_version": 1,
             "auth_type": PARTNER_ACCESS_SESSION_TYPE,
             "csrf_token": csrf_token,
             "user_agent_family": fp.family_str(),
@@ -1232,6 +1234,7 @@ impl DashboardAuthState {
         &self,
         state_id: &str,
         login: &str,
+        twitch_user_id: &str,
         next_path: &str,
         ttl_secs: u64,
     ) -> Result<(), sqlx::Error> {
@@ -1239,6 +1242,8 @@ impl DashboardAuthState {
         let expires_at = now as f64 + ttl_secs as f64;
         let payload = serde_json::json!({
             "login": login,
+            "twitch_user_id": twitch_user_id,
+            "identity_version": 1,
             "next_path": next_path,
             "created_at": now as f64,
             "expires_at": expires_at,
@@ -1254,12 +1259,12 @@ impl DashboardAuthState {
     }
 
     /// Verbraucht einen Partner-Login-State atomar + einmalig (DELETE … RETURNING,
-    /// Replay-Schutz). Liefert `(login, next_path)` zurück; ein zweiter Aufruf
+    /// Replay-Schutz). Liefert `(login, twitch_user_id, next_path)` zurück; ein zweiter Aufruf
     /// oder ein abgelaufener State → `None`.
     pub async fn consume_partner_login_state(
         &self,
         state_id: &str,
-    ) -> Result<Option<(String, String)>, sqlx::Error> {
+    ) -> Result<Option<(String, String, String)>, sqlx::Error> {
         let now = unix_now();
         let session_key = session_lookup_key(state_id);
         let row = sqlx::query!(
@@ -1298,6 +1303,16 @@ impl DashboardAuthState {
         if payload_expired(&payload, now) {
             return Ok(None);
         }
+        let user_id = payload
+            .get("twitch_user_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1)
+            || user_id.is_empty()
+            || !user_id.bytes().all(|c| c.is_ascii_digit())
+        {
+            return Ok(None);
+        }
         let login = payload
             .get("login")
             .and_then(|v| v.as_str())
@@ -1308,52 +1323,32 @@ impl DashboardAuthState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        Ok(Some((login, next_path)))
+        Ok(Some((login, user_id.to_string(), next_path)))
     }
 
-    /// Schlägt den kanonischen `twitch_partners`-Eintrag für einen Login bzw.
-    /// User-ID nach (Pendant zu Python `_is_partner_allowed`, auth_mixin.py:741-780).
-    /// Liefert `(twitch_login, twitch_user_id)` aus der DB, wenn ein nicht-`blocked`
-    /// Partner existiert; bevorzugt `active` vor `archived`/`departnered`. Dient als
-    /// Partner-Gate beim OAuth-Login — kein Treffer → kein Dashboard-Zugang (403).
+    /// Partnerberechtigung ausschließlich für die authentifizierte Twitch-ID.
+    /// Login-Namen können wechseln oder neu vergeben werden und sind keine Identität.
+    /// Alte Sessions ohne ID müssen sich erneut über Twitch anmelden.
     pub async fn find_partner_for_login(
         &self,
-        login: &str,
+        _login: &str,
         user_id: &str,
     ) -> Result<Option<PartnerSession>, sqlx::Error> {
-        let login = login.trim().to_lowercase();
         let user_id = user_id.trim();
-        if login.is_empty() && user_id.is_empty() {
+        if user_id.is_empty() || !user_id.bytes().all(|c| c.is_ascii_digit()) {
             return Ok(None);
         }
-        let row = sqlx::query!(
-            r#"
-            SELECT p.twitch_login, p.twitch_user_id
-            FROM twitch_partners p
-            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
-              AND (
-                  LOWER(p.twitch_login) = LOWER($1)
-                  OR ($2 <> '' AND p.twitch_user_id = $2)
-              )
-            ORDER BY CASE
-                WHEN COALESCE(p.status, '') = 'active' THEN 0
-                WHEN COALESCE(p.status, '') = 'archived' THEN 1
-                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
-                ELSE 3
-            END,
-            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
-            LIMIT 1
-            "#,
-            login,
-            user_id
+        let row = sqlx::query_as::<_, (String, String)>(
+            "SELECT twitch_login, twitch_user_id FROM twitch_partners
+             WHERE twitch_user_id = $1
+               AND LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'",
         )
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|row| PartnerSession {
-            twitch_login: row.twitch_login,
-            twitch_user_id: row.twitch_user_id,
-            // Login-Gate (vor Session-Erstellung) kennt keinen display_name; der
-            // echte Helix-Snapshot landet erst beim create_partner_session-Payload.
+        Ok(row.map(|(twitch_login, twitch_user_id)| PartnerSession {
+            twitch_login,
+            twitch_user_id,
             display_name: String::new(),
         }))
     }
@@ -1375,10 +1370,10 @@ impl DashboardAuthState {
     ) -> Result<bool, sqlx::Error> {
         let login = login.trim().to_lowercase();
         let user_id = user_id.trim();
-        if login.is_empty() && user_id.is_empty() {
+        if user_id.is_empty() || !user_id.bytes().all(|c| c.is_ascii_digit()) {
             return Ok(false);
         }
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             UPDATE twitch_partners
             SET status = 'active',
@@ -1392,10 +1387,7 @@ impl DashboardAuthState {
                     WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
                     THEN NULL ELSE technical_pause_reason
                 END
-            WHERE (
-                    LOWER(twitch_login) = $1
-                    OR ($2 <> '' AND twitch_user_id = $2)
-                )
+            WHERE twitch_user_id = $2
               AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
               -- Signup-Block: wer nicht ins Partnerprogramm gehoert, heilt sich
               -- auch nicht per Login zurueck. Eigenstaendiger Zustand, deshalb
@@ -1414,9 +1406,9 @@ impl DashboardAuthState {
                     OR LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%'
                   )
             "#,
-            login,
-            user_id
         )
+        .bind(login)
+        .bind(user_id)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -1700,6 +1692,12 @@ impl DashboardAuthState {
         };
 
         // Payload-expires_at zusätzlich zur DB-Spalte prüfen (Python: services.py:213-220)
+        // Vor der ID-Härtung konnte ein Login-Nachschlag eine fremde ID speichern.
+        // Alte Payloads werden nie beim Lesen zu verifizierten Sessions aufgewertet.
+        if payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1) {
+            self.delete_session(session_id).await;
+            return Ok(None);
+        }
         if payload_expired(&payload, now) {
             self.delete_session(session_id).await;
             return Ok(None);
@@ -1740,30 +1738,7 @@ impl DashboardAuthState {
             return Ok(None);
         }
 
-        // Partner-Gate (auth_mixin.py:741-780)
-        let partner_row = sqlx::query!(
-            r#"
-            SELECT p.twitch_login, p.twitch_user_id
-            FROM twitch_partners p
-            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
-              AND (
-                  LOWER(p.twitch_login) = LOWER($1)
-                  OR ($2 <> '' AND p.twitch_user_id = $2)
-              )
-            ORDER BY CASE
-                WHEN COALESCE(p.status, '') = 'active' THEN 0
-                WHEN COALESCE(p.status, '') = 'archived' THEN 1
-                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
-                ELSE 3
-            END,
-            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
-            LIMIT 1
-            "#,
-            login,
-            user_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let partner_row = self.find_partner_for_login(&login, &user_id).await?;
 
         let Some(partner_row) = partner_row else {
             return Ok(None);
@@ -1821,6 +1796,12 @@ impl DashboardAuthState {
             return Ok(None);
         };
 
+        // Vor der ID-Härtung konnte ein Login-Nachschlag eine fremde ID speichern.
+        // Alte Payloads werden nie beim Lesen zu verifizierten Sessions aufgewertet.
+        if payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1) {
+            self.delete_session(session_id).await;
+            return Ok(None);
+        }
         if payload_expired(&payload, now) {
             self.delete_session(session_id).await;
             return Ok(None);
@@ -1866,30 +1847,7 @@ impl DashboardAuthState {
             return Ok(None);
         }
 
-        // Partner-Gate (auth_mixin.py:741-780) — identisch zu load_partner_session.
-        let partner_row = sqlx::query!(
-            r#"
-            SELECT p.twitch_login, p.twitch_user_id
-            FROM twitch_partners p
-            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
-              AND (
-                  LOWER(p.twitch_login) = LOWER($1)
-                  OR ($2 <> '' AND p.twitch_user_id = $2)
-              )
-            ORDER BY CASE
-                WHEN COALESCE(p.status, '') = 'active' THEN 0
-                WHEN COALESCE(p.status, '') = 'archived' THEN 1
-                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
-                ELSE 3
-            END,
-            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
-            LIMIT 1
-            "#,
-            login,
-            user_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let partner_row = self.find_partner_for_login(&login, &user_id).await?;
 
         let Some(partner_row) = partner_row else {
             return Ok(None);
@@ -1908,42 +1866,23 @@ impl DashboardAuthState {
     /// `technical_pause_reason=''` UND `admin_archived_at IS NULL`.
     /// Keine Zeile ODER DB-Fehler → `false` (passive) — 1:1 Python (gibt dort
     /// „passive" zurück). Der `partner_status_gate` nutzt das für active-only-Routen.
-    pub async fn is_partner_active(&self, login: &str, user_id: &str) -> bool {
-        let login = login.trim().to_lowercase();
+    pub async fn is_partner_active(&self, _login: &str, user_id: &str) -> bool {
         let user_id = user_id.trim();
-        if login.is_empty() && user_id.is_empty() {
+        if user_id.is_empty() || !user_id.bytes().all(|c| c.is_ascii_digit()) {
             return false;
         }
-        let row = sqlx::query_scalar!(
-            r#"
-            SELECT CASE
-                WHEN COALESCE(p.status, '') = 'active'
-                     AND COALESCE(p.manual_partner_opt_out, 0) = 0
-                     AND COALESCE(p.technical_pause_reason, '') = ''
-                     AND p.admin_archived_at IS NULL
-                THEN 1 ELSE 0
-            END AS "is_active!"
-            FROM twitch_partners p
-            WHERE (
-                  LOWER(p.twitch_login) = $1
-                  OR ($2 <> '' AND p.twitch_user_id = $2)
-              )
-            ORDER BY CASE
-                WHEN COALESCE(p.status, '') = 'active' THEN 0
-                WHEN COALESCE(p.status, '') = 'archived' THEN 1
-                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
-                ELSE 3
-            END,
-            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
-            LIMIT 1
-            "#,
-            login,
-            user_id
+        let row = sqlx::query_scalar::<_, bool>(
+            "SELECT COALESCE(status, '') = 'active'
+                AND COALESCE(manual_partner_opt_out, 0) = 0
+                AND COALESCE(technical_pause_reason, '') = ''
+                AND admin_archived_at IS NULL
+             FROM twitch_partners WHERE twitch_user_id = $1",
         )
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await;
         match row {
-            Ok(Some(is_active)) => is_active == 1,
+            Ok(Some(active)) => active,
             Ok(None) => false,
             Err(error) => {
                 debug!(%error, "is_partner_active-Query fehlgeschlagen → passive");
@@ -3141,7 +3080,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .ok();
 
         let found = state
-            .find_partner_for_login("GateTest_User", "")
+            .find_partner_for_login("GateTest_User", "888001")
             .await
             .unwrap();
         assert_eq!(
@@ -3189,7 +3128,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
         assert_eq!(
             state
-                .find_partner_for_login("blocked_user", "")
+                .find_partner_for_login("blocked_user", "888002")
                 .await
                 .unwrap(),
             None
@@ -3253,19 +3192,23 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
         assert!(
-            state.is_partner_active("active_raid_off", "").await,
+            state.is_partner_active("active_raid_off", "901001").await,
             "raid_bot_enabled=0 darf nicht deaktivieren"
         );
         assert!(
-            !state.is_partner_active("admin_archived_gate", "").await,
+            !state
+                .is_partner_active("admin_archived_gate", "901002")
+                .await,
             "admin_archived_at ist Operator-Deaktivierung"
         );
         assert!(
-            !state.is_partner_active("tech_pause_gate", "").await,
+            !state.is_partner_active("tech_pause_gate", "901003").await,
             "jede technical_pause_reason deaktiviert"
         );
         assert!(
-            state.is_partner_active("inactive_info_gate", "").await,
+            state
+                .is_partner_active("inactive_info_gate", "901004")
+                .await,
             "Inaktivitaet ist nur Anzeigezustand"
         );
 
@@ -3384,7 +3327,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .execute(&pool)
         .await
         .unwrap();
-        assert!(state.reactivate_partner("HealMe", "").await.unwrap());
+        assert!(state.reactivate_partner("HealMe", "770001").await.unwrap());
         let (status, reason, optout, departed): (String, Option<String>, Option<i32>, Option<chrono::DateTime<Utc>>) =
             sqlx::query_as("SELECT status, technical_pause_reason, manual_partner_opt_out, departnered_at FROM twitch_partners WHERE twitch_login='healme'")
                 .fetch_one(&pool).await.unwrap();
@@ -3401,7 +3344,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .execute(&pool)
         .await
         .unwrap();
-        assert!(!state.reactivate_partner("blockme", "").await.unwrap());
+        assert!(!state.reactivate_partner("blockme", "770002").await.unwrap());
         let blocked_status: String =
             sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_login='blockme'")
                 .fetch_one(&pool)
@@ -3417,7 +3360,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .execute(&pool)
         .await
         .unwrap();
-        assert!(!state.reactivate_partner("optout", "").await.unwrap());
+        assert!(!state.reactivate_partner("optout", "770003").await.unwrap());
         let (optout_status, optout_flag): (String, Option<i32>) = sqlx::query_as(
             "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE twitch_login='optout'",
         )
@@ -3595,5 +3538,225 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .execute(&admin_pool)
             .await
             .ok();
+    }
+}
+
+#[cfg(test)]
+mod identity_regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn recycled_login_never_changes_authenticated_id_in_either_session_type() {
+        let db = crate::test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE twitch_partners(twitch_login TEXT NOT NULL,twitch_user_id TEXT PRIMARY KEY,status TEXT,technical_pause_reason TEXT,manual_partner_opt_out INTEGER,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
+            CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL);
+            CREATE TABLE twitch_partner_signup_denylist(twitch_user_id TEXT,twitch_login TEXT);
+            INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,manual_partner_opt_out) VALUES ('recycled','111','active',0),('old_name','222','archived',0);")
+            .execute(&db.pool).await.unwrap();
+        let state = DashboardAuthState::new(
+            db.pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".into(),
+        );
+        assert_eq!(
+            state
+                .find_partner_for_login("recycled", "222")
+                .await
+                .unwrap()
+                .unwrap()
+                .twitch_user_id,
+            "222"
+        );
+        assert!(state
+            .find_partner_for_login("recycled", "333")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(state
+            .find_partner_for_login("recycled", "")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!state.is_partner_active("recycled", "222").await);
+        let regular = state
+            .create_partner_session("recycled", "222", "New name")
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .load_partner_session(&regular.session_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .twitch_user_id,
+            "222"
+        );
+        let access = state
+            .create_partner_access_session("recycled", "222", "New name", "")
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .load_partner_access_session(&access.session_id, "")
+                .await
+                .unwrap()
+                .unwrap()
+                .twitch_user_id,
+            "222"
+        );
+        let legacy = state
+            .create_partner_session("recycled", "", "Old")
+            .await
+            .unwrap();
+        assert!(state
+            .load_partner_session(&legacy.session_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(state.reactivate_partner("recycled", "222").await.unwrap());
+        assert!(state.is_partner_active("recycled", "222").await);
+        assert!(!state.reactivate_partner("recycled", "333").await.unwrap());
+        let now = unix_now() as f64;
+        // Eine schon früher falsch gespeicherte numerische ID wird nicht aufgewertet.
+        for kind in ["twitch", PARTNER_ACCESS_SESSION_TYPE] {
+            let sid = format!("legacy-{kind}");
+            state
+                .persist_new_session(
+                    &sid,
+                    kind,
+                    &serde_json::json!({
+                        "twitch_login":"recycled", "twitch_user_id":"111", "expires_at":now+60.0
+                    }),
+                    now,
+                    now + 60.0,
+                )
+                .await
+                .unwrap();
+            let session = if kind == "twitch" {
+                state.load_partner_session(&sid).await
+            } else {
+                state.load_partner_access_session(&sid, "").await
+            };
+            assert!(session.unwrap().is_none());
+            assert!(state
+                .fetch_session_payload(&sid, kind, unix_now())
+                .await
+                .unwrap()
+                .is_none());
+        }
+        state
+            .persist_new_session(
+                "old-link",
+                PARTNER_LOGIN_STATE_TYPE,
+                &serde_json::json!({
+                    "login":"recycled", "next_path":"/twitch/dashboard", "expires_at":now+60.0
+                }),
+                now,
+                now + 60.0,
+            )
+            .await
+            .unwrap();
+        assert!(state
+            .consume_partner_login_state("old-link")
+            .await
+            .unwrap()
+            .is_none());
+        state
+            .save_partner_login_state("new-link", "recycled", "222", "/twitch/dashboard", 60)
+            .await
+            .unwrap();
+        let (login, user_id, next) = state
+            .consume_partner_login_state("new-link")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next, "/twitch/dashboard");
+        assert_eq!(
+            state
+                .find_partner_for_login(&login, &user_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .twitch_user_id,
+            "222"
+        );
+        assert!(state
+            .consume_partner_login_state("new-link")
+            .await
+            .unwrap()
+            .is_none());
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn discord_profile_uses_verified_id_and_rolls_back_deduplication_on_failure() {
+        let db = crate::test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamers(twitch_login TEXT NOT NULL,twitch_user_id TEXT);
+            CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY,twitch_login TEXT,discord_user_id TEXT,discord_display_name TEXT CHECK(discord_display_name <> 'reject-test'),is_on_discord INTEGER,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
+            INSERT INTO twitch_streamers VALUES('recycled','111'),('previous_name','222');
+            INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login,discord_user_id) VALUES('111','recycled','888');")
+            .execute(&db.pool).await.unwrap();
+        let write = |name| {
+            tb_analytics::streamers_crud::set_discord_profile(
+                &db.pool,
+                "recycled",
+                Some("888"),
+                Some(name),
+                true,
+                Some("222"),
+            )
+        };
+        assert!(write("reject-test").await.is_err());
+        let owner: String = sqlx::query_scalar(
+            "SELECT twitch_user_id FROM twitch_streamer_identities WHERE discord_user_id='888'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(owner, "111");
+        assert!(write("Linked").await.unwrap());
+        let owner: String = sqlx::query_scalar(
+            "SELECT twitch_user_id FROM twitch_streamer_identities WHERE discord_user_id='888'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(owner, "222");
+        assert!(!tb_analytics::streamers_crud::set_discord_profile(
+            &db.pool,
+            "recycled",
+            Some("999"),
+            Some("Unknown"),
+            true,
+            Some("333")
+        )
+        .await
+        .unwrap());
+        let (a, b) = tokio::join!(
+            tb_analytics::streamers_crud::set_discord_profile(
+                &db.pool,
+                "recycled",
+                Some("777"),
+                Some("A"),
+                true,
+                Some("111")
+            ),
+            tb_analytics::streamers_crud::set_discord_profile(
+                &db.pool,
+                "old",
+                Some("777"),
+                Some("B"),
+                true,
+                Some("222")
+            )
+        );
+        assert!(a.unwrap() && b.unwrap());
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_streamer_identities WHERE discord_user_id='777'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        db.close().await;
     }
 }

@@ -842,14 +842,9 @@ pub async fn set_discord_flag(
 
 // ── POST /streamers/{login}/discord-profile ───────────────────────────────────
 
-/// Setzt Discord-User-ID + Display-Name für einen Streamer.
-///
-/// Schreibt in `twitch_streamer_identities`; `twitch_streamers` liefert nur die
-/// Twitch-User-ID zum Login und wird bei bekannter ID nachgetragen.
-///
-/// Deduplizierung: Andere Identity-Einträge mit gleicher `discord_user_id` werden genullt.
-///
-/// Gibt `false` zurück wenn Login unbekannt.
+/// Schreibt Discord-Profil und Deduplizierung in einer Transaktion.
+/// Eine übergebene Twitch-ID ist verbindlich; der Login dient dann nur als Anzeige.
+/// Der administrative Legacy-Pfad ohne ID löst zuerst eine bestehende Streamer-ID auf.
 pub async fn set_discord_profile(
     pool: &PgPool,
     login: &str,
@@ -858,89 +853,58 @@ pub async fn set_discord_profile(
     mark_member: bool,
     twitch_user_id: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
-    let is_on_discord: i32 = if mark_member { 1 } else { 0 };
-    // Aufgelöste Twitch-User-ID (Python `resolved_user_id`) — wird, sofern
-    // vorhanden, auf der Streamer-Zeile nachgetragen (nur wenn dort noch leer).
-    let resolved_uid: Option<&str> = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
-
-    if let Some(uid) = resolved_uid {
-        sqlx::query!(
-            "UPDATE twitch_streamers \
-             SET twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $2) \
-             WHERE LOWER(twitch_login) = LOWER($1)",
-            login,
-            uid
+    let mut tx = pool.begin().await?;
+    let target = if let Some(uid) = twitch_user_id {
+        let uid = uid.trim();
+        if uid.is_empty() || !uid.bytes().all(|c| c.is_ascii_digit()) {
+            return Ok(false);
+        }
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1")
+            .bind(uid).fetch_optional(&mut *tx).await?
+    } else {
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1")
+            .bind(login).fetch_optional(&mut *tx).await?
+            .and_then(|(name, id)| id.map(|id| (name, id)))
+    };
+    let Some((name, uid)) = target else {
+        return Ok(false);
+    };
+    if uid.is_empty() || !uid.bytes().all(|c| c.is_ascii_digit()) {
+        return Ok(false);
+    }
+    if let Some(did) = discord_user_id.filter(|id| !id.is_empty()) {
+        // Gleiche Discord-ID auch bei gleichzeitigem Rücksprung aus zwei Tabs nur einmal binden.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 92301))")
+            .bind(did)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE twitch_streamer_identities
+             SET discord_user_id = NULL, discord_display_name = NULL,
+                 is_on_discord = 0, updated_at = NOW()
+             WHERE discord_user_id = $1 AND twitch_user_id <> $2",
         )
-        .execute(pool)
+        .bind(did)
+        .bind(&uid)
+        .execute(&mut *tx)
         .await?;
     }
-
-    let target = sqlx::query!(
-        "SELECT twitch_login AS \"twitch_login!\", twitch_user_id \
-         FROM twitch_streamers \
-         WHERE LOWER(twitch_login) = LOWER($1) \
-         LIMIT 1",
-        login
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    let Some(target) = target else {
-        return Ok(false);
-    };
-    let Some(uid) = target.twitch_user_id else {
-        return Ok(false);
-    };
-    let uid = uid.trim();
-    if uid.is_empty() {
-        return Ok(false);
-    }
-
-    // Deduplizierung: Andere Identity-Einträge mit gleicher discord_user_id nullen
-    if let Some(did) = discord_user_id {
-        if !did.is_empty() {
-            sqlx::query!(
-                r#"
-                UPDATE twitch_streamer_identities
-                SET discord_user_id = NULL,
-                    discord_display_name = NULL,
-                    is_on_discord = 0,
-                    updated_at = NOW()
-                WHERE discord_user_id = $1
-                  AND twitch_user_id <> $2
-                "#,
-                did,
-                uid
-            )
-            .execute(pool)
-            .await?;
-        }
-    }
-
-    let rows = sqlx::query!(
-        r#"
-        INSERT INTO twitch_streamer_identities (
+    let rows = sqlx::query(
+        "INSERT INTO twitch_streamer_identities (
             twitch_user_id, twitch_login, discord_user_id, discord_display_name,
             is_on_discord, created_at, updated_at
-        )
-        VALUES ($1, LOWER($2), $3, $4, $5, NOW(), NOW())
+        ) VALUES ($1, LOWER($2), $3, $4, $5, NOW(), NOW())
         ON CONFLICT (twitch_user_id) DO UPDATE SET
             twitch_login = EXCLUDED.twitch_login,
             discord_user_id = COALESCE(EXCLUDED.discord_user_id, twitch_streamer_identities.discord_user_id),
             discord_display_name = COALESCE(EXCLUDED.discord_display_name, twitch_streamer_identities.discord_display_name),
             is_on_discord = EXCLUDED.is_on_discord,
-            updated_at = NOW()
-        "#,
-        uid,
-        &target.twitch_login,
-        discord_user_id,
-        discord_display_name,
-        is_on_discord
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-
+            updated_at = NOW()")
+        .bind(&uid).bind(name).bind(discord_user_id).bind(discord_display_name)
+        .bind(i32::from(mark_member)).execute(&mut *tx).await?.rows_affected();
+    tx.commit().await?;
     Ok(rows > 0)
 }
 
@@ -1921,14 +1885,16 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_discord_profile").await;
 
-        add_streamer(&pool, "profileuser", None).await.unwrap();
+        add_streamer(&pool, "profileuser", Some("999001"))
+            .await
+            .unwrap();
         let ok = set_discord_profile(
             &pool,
             "profileuser",
             Some("123456789"),
             Some("TestName"),
             true,
-            Some("uid999"),
+            Some("999001"),
         )
         .await
         .unwrap();
@@ -1946,8 +1912,8 @@ mod tests {
         assert_eq!(row.0.as_deref(), Some("123456789"));
         assert_eq!(row.1.as_deref(), Some("TestName"));
         assert_eq!(row.2, Some(1));
-        // twitch_user_id wird nachgetragen, weil die Streamer-Zeile noch keine hatte.
-        assert_eq!(row.3.as_deref(), Some("uid999"));
+        // Die verifizierte Twitch-ID bleibt beim Profilschreiben unverändert.
+        assert_eq!(row.3.as_deref(), Some("999001"));
     }
 
     #[tokio::test]

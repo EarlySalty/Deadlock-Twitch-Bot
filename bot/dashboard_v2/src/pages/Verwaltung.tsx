@@ -4,7 +4,7 @@ import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
-import { useOnboarding } from '@/components/onboarding/OnboardingContext';
+import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { FeedbackBox } from '@/components/feedback/FeedbackBox';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
@@ -46,11 +46,20 @@ interface VerwaltungTabDef {
 export function VerwaltungPage() {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const onboarding = useOnboarding();
+  const [connectionNotice, setConnectionNotice] = useState('');
   const [returnMessage] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const failed = params.has('err');
     return params.has('ok') || failed ? {failed, text: failed ? 'Die Discord-Verknüpfung wurde nicht abgeschlossen. Du kannst sie hier erneut starten.' : 'Discord wurde verknüpft. Der aktuelle Status wird geprüft.'} : null;
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('ok') && !params.has('err')) return;
+    params.delete('ok'); params.delete('err');
+    const query = params.toString();
+    window.history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+  }, []);
 
   // Tab im Hash halten: Reload und geteilte Links landen wieder im selben Bereich.
   const [tab, setTab] = useState<VerwaltungTabId>(() =>
@@ -115,7 +124,14 @@ export function VerwaltungPage() {
   const discordConnected = Boolean(home.discord?.connected);
   const discordError = isError || home.discord?.status === 'error';
   const steamError = isError || home.steam?.status === 'error';
-  const checkConnections = () => { void refetch(); onboarding.refresh(); };
+  const checkConnections = async () => {
+    setConnectionNotice('Verbindungen werden geprüft …');
+    onboarding.refresh();
+    const result = await refetch();
+    const status = (service: 'discord' | 'steam') => result.isError || result.data?.[service]?.status === 'error'
+      ? 'gerade nicht prüfbar' : result.data?.[service]?.connected ? 'verbunden' : 'nicht verbunden';
+    setConnectionNotice(`Prüfung abgeschlossen. Discord ${status('discord')}. Steam ${status('steam')}.`);
+  };
   const discordConnectUrl = home.discord?.connectUrl || null;
   const steamConnected = Boolean(home.steam?.connected);
   const steamConnectUrl = home.steam?.connectUrl || null;
@@ -239,7 +255,7 @@ export function VerwaltungPage() {
           </div>
         </div>
 
-        {discordConnectUrl && !discordError && !isFetching ? (
+        {discordConnectUrl && !discordError ? (
           <a
             href={discordConnectUrl}
             className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
@@ -298,7 +314,7 @@ export function VerwaltungPage() {
           </div>
         </div>
 
-        {steamConnectUrl && !steamError && !isFetching ? (
+        {steamConnectUrl && !steamError ? (
           <a
             href={steamConnectUrl}
             className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
@@ -324,6 +340,8 @@ export function VerwaltungPage() {
       </motion.section>
 
       <button type="button" onClick={checkConnections} disabled={isFetching} className="min-h-11 w-fit rounded-lg border border-primary/50 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">Status prüfen</button>
+
+      <p role="status" aria-atomic="true" className="text-sm text-text-secondary">{connectionNotice}</p>
 
       {/* Profile Section */}
       <motion.section

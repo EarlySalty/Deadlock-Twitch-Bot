@@ -9,6 +9,9 @@ import { useFeedbackIdentity } from '../../components/feedback/useFeedbackCounts
 import { FeedbackBadge } from '../../components/feedback/FeedbackBadge';
 import '../../components/feedback/feedback.css';
 
+function confirmLeave() {
+  return !document.querySelector('[data-unsaved="true"]') || window.confirm('Ungesendeten Text und ungespeicherte Änderungen verwerfen?');
+}
 function ErrorNotice({ error }: { error: unknown }) {
   return <p className="feedback-notice mt-4" role="alert">{error instanceof Error ? error.message : 'Das hat gerade nicht geklappt. Bitte versuche es erneut.'}</p>;
 }
@@ -101,13 +104,16 @@ function EntryDetail({ id, inbox, identityKey, csrfToken, onBack }: { id: number
     readAttempt.current = key; mark(current.observed_at);
   }, [detail.data, id, inbox, mark]);
   const entry = detail.data;
+  const heading = useRef<HTMLHeadingElement>(null);
+  const entryId = entry?.id;
+  useEffect(() => { if (entryId != null) heading.current?.focus(); }, [entryId]);
   return <section className="panel-card feedback-card rounded-2xl p-5 md:p-6">
     <button type="button" className="feedback-button mb-5" onClick={onBack}><ArrowLeft className="h-4 w-4" aria-hidden="true" />Zur Übersicht</button>
     {detail.isPending && <p role="status" className="text-text-secondary">Rückmeldung wird geladen …</p>}
     {detail.isError && <><ErrorNotice error={detail.error} /><button className="feedback-button mt-3" onClick={() => void detail.refetch()}>Erneut laden</button></>}
     {entry && <>
       <div className="flex flex-wrap items-center gap-2"><Status status={entry.status} /><span className="text-xs text-text-secondary">{entry.kind === 'feature' ? 'Feature-Wunsch' : 'Feedback'} · {dateLabel(entry.created_at)}</span></div>
-      <h2 className="feedback-text mt-4 text-2xl font-bold text-white">{entry.title}</h2>
+      <h2 ref={heading} tabIndex={-1} className="feedback-text mt-4 text-2xl font-bold text-white">{entry.title}</h2>
       {entry.area && <p className="feedback-text mt-2 text-sm text-text-secondary">Bereich: {entry.area}</p>}
       {inbox && <p className="feedback-text mt-2 text-sm text-text-secondary">#{entry.id} · {entry.author_label} · Twitch-ID {entry.owner_id}</p>}
       <p className="feedback-text mt-5 text-sm leading-7">{entry.body}</p>
@@ -123,7 +129,17 @@ function EntryDetail({ id, inbox, identityKey, csrfToken, onBack }: { id: number
   </section>;
 }
 function EntryListItem({ entry, inbox, onOpen }: { entry: FeedbackEntry; inbox: boolean; onOpen: () => void }) {
-  return <li><button type="button" className="w-full rounded-xl border border-border bg-background p-4 text-left transition-colors hover:border-primary" onClick={onOpen}><div className="flex flex-wrap items-center gap-2"><Status status={entry.status} />{(inbox ? entry.admin_unread : entry.unread) && <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-black">{inbox ? 'Neu' : 'Ungelesen'}</span>}<span className="text-xs text-text-secondary">{entry.kind === 'feature' ? 'Wunsch' : 'Feedback'}</span></div><p className="feedback-text mt-3 font-semibold text-white">{entry.title}</p><p className="mt-2 text-xs text-text-secondary">{inbox ? `#${entry.id} · ${entry.author_label} · ` : ''}{dateLabel(entry.created_at)}</p></button></li>;
+  return <li>
+    <button type="button" data-feedback-entry={entry.id} className="w-full rounded-xl border border-border bg-background p-4 text-left transition-colors hover:border-primary" onClick={onOpen}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Status status={entry.status} />
+        {(inbox ? entry.admin_unread : entry.unread) && <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-black">{inbox ? 'Neu' : 'Ungelesen'}</span>}
+        <span className="text-xs text-text-secondary">{entry.kind === 'feature' ? 'Wunsch' : 'Feedback'}</span>
+      </div>
+      <p className="feedback-text mt-3 font-semibold text-white">{entry.title}</p>
+      <p className="mt-2 text-xs text-text-secondary">{inbox ? `#${entry.id} · ${entry.author_label} · ` : ''}{dateLabel(entry.created_at)}</p>
+    </button>
+  </li>;
 }
 
 function FeedbackContent({ isAdmin, csrfToken, identityKey, hasUserId }: { isAdmin: boolean; csrfToken?: string | null; identityKey: string; hasUserId: boolean }) {
@@ -132,23 +148,37 @@ function FeedbackContent({ isAdmin, csrfToken, identityKey, hasUserId }: { isAdm
   const [form, setForm] = useState<FeedbackKind | null>(initialKind === 'feature' || initialKind === 'feedback' ? initialKind : null);
   const [selected, setSelected] = useState<number | null>(null);
   const [saved, setSaved] = useState(false);
+  const lastEntry = useRef<number | null>(null);
+  const restoreFocus = () => requestAnimationFrame(() => {
+    const target = document.querySelector<HTMLElement>(`[data-feedback-entry="${lastEntry.current}"]`)
+      ?? document.querySelector<HTMLElement>('[data-feedback-list-title]');
+    target?.focus();
+  });
+  const changeView = (change: () => void) => { if (confirmLeave()) { change(); requestAnimationFrame(() => { if (!document.querySelector('[aria-labelledby="feedback-form-title"]')) restoreFocus(); }); } };
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (document.querySelector('[data-unsaved="true"]')) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, []);
   const [inbox, setInbox] = useState(isAdmin && !hasUserId);
   const entries = useInfiniteQuery({ queryKey: ['feedback', identityKey, 'list', inbox], queryFn: ({ pageParam }) => fetchFeedback(inbox, pageParam), initialPageParam: undefined as number | undefined, getNextPageParam: page => page.next ?? undefined, enabled: inbox || hasUserId, retry: 1, refetchOnWindowFocus: true });
   const allEntries = entries.data?.pages.flatMap(page => page.items) ?? [];
   return <div className="feedback-card mx-auto w-full max-w-5xl space-y-5">
     <section className="panel-card rounded-2xl p-5 md:p-6"><div className="flex items-start gap-3"><MessageSquare className="mt-1 h-7 w-7 shrink-0 text-primary" aria-hidden="true" /><div><h1 className="text-2xl font-bold text-white">Kritik und Wünsche</h1><p className="mt-2 text-sm leading-6 text-text-secondary"><strong className="text-white">Kritik ist ausdrücklich erwünscht.</strong> Was fehlt dir? Was nervt? Sag es uns.</p></div></div>
       <p className="mt-3 text-sm leading-6 text-text-secondary">Deine Rückmeldungen bleiben privat. Antworten und den aktuellen Stand findest du auf dieser Seite.</p>
-      {!form && hasUserId && <div className="mt-5 flex flex-wrap gap-3"><button className="feedback-button feedback-primary" onClick={() => { setSelected(null); setSaved(false); setForm('feedback'); }}>Feedback geben</button><button className="feedback-button" onClick={() => { setSelected(null); setSaved(false); setForm('feature'); }}><Lightbulb className="h-4 w-4" aria-hidden="true" />Feature wünschen</button></div>}
-      {isAdmin && !form && <div className="mt-5 flex flex-wrap gap-2" aria-label="Rückmeldungsansicht">{hasUserId && <button className={`feedback-button ${!inbox ? 'feedback-primary' : ''}`} aria-pressed={!inbox} onClick={() => { setInbox(false); setSelected(null); }}>Meine Rückmeldungen <FeedbackBadge /></button>}<button className={`feedback-button ${inbox ? 'feedback-primary' : ''}`} aria-pressed={inbox} onClick={() => { setInbox(true); setSelected(null); }}><Inbox className="h-4 w-4" aria-hidden="true" />Betreiber-Inbox <FeedbackBadge isAdmin /></button></div>}
+      {!form && hasUserId && <div className="mt-5 flex flex-wrap gap-3"><button className="feedback-button feedback-primary" onClick={() => changeView(() => { setSelected(null); setSaved(false); setForm('feedback'); })}>Feedback geben</button><button className="feedback-button" onClick={() => changeView(() => { setSelected(null); setSaved(false); setForm('feature'); })}><Lightbulb className="h-4 w-4" aria-hidden="true" />Feature wünschen</button></div>}
+      {isAdmin && !form && <div className="mt-5 flex flex-wrap gap-2" aria-label="Rückmeldungsansicht">{hasUserId && <button className={`feedback-button ${!inbox ? 'feedback-primary' : ''}`} aria-pressed={!inbox} onClick={() => changeView(() => { setInbox(false); setSelected(null); })}>Meine Rückmeldungen <FeedbackBadge /></button>}<button className={`feedback-button ${inbox ? 'feedback-primary' : ''}`} aria-pressed={inbox} onClick={() => changeView(() => { setInbox(true); setSelected(null); })}><Inbox className="h-4 w-4" aria-hidden="true" />Betreiber-Inbox <FeedbackBadge isAdmin /></button></div>}
     </section>
     {saved && <p role="status" className="feedback-notice flex items-center gap-2"><Check className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />Deine Rückmeldung ist gespeichert. Danke, dass du uns sagst, was besser werden kann.</p>}
-    {form && hasUserId ? <FeedbackForm initialKind={form} csrfToken={csrfToken} onCancel={() => setForm(null)} onSaved={id => { setForm(null); setSelected(id); setInbox(false); setSaved(true); void queryClient.invalidateQueries({ queryKey: ['feedback', identityKey] }); }} />
-      : selected !== null ? <EntryDetail key={`${selected}:${inbox}`} id={selected} inbox={inbox} identityKey={identityKey} csrfToken={csrfToken} onBack={() => setSelected(null)} />
-        : <section className="panel-card rounded-2xl p-5 md:p-6"><h2 className="text-xl font-bold text-white">{inbox ? 'Betreiber-Inbox' : 'Meine Rückmeldungen'}</h2>
+    {form && hasUserId ? <FeedbackForm initialKind={form} csrfToken={csrfToken} onCancel={() => { setForm(null); restoreFocus(); }} onSaved={id => { setForm(null); setSelected(id); setInbox(false); setSaved(true); void queryClient.invalidateQueries({ queryKey: ['feedback', identityKey] }); }} />
+      : selected !== null ? <EntryDetail key={`${selected}:${inbox}`} id={selected} inbox={inbox} identityKey={identityKey} csrfToken={csrfToken} onBack={() => changeView(() => setSelected(null))} />
+        : <section className="panel-card rounded-2xl p-5 md:p-6"><h2 data-feedback-list-title tabIndex={-1} className="text-xl font-bold text-white">{inbox ? 'Betreiber-Inbox' : 'Meine Rückmeldungen'}</h2>
           {entries.isPending && <p className="mt-4 text-sm text-text-secondary" role="status">Rückmeldungen werden geladen …</p>}
           {entries.isError && <><ErrorNotice error={entries.error} /><button className="feedback-button mt-3" onClick={() => void entries.refetch()}>Erneut laden</button></>}
           {!entries.isPending && !entries.isError && allEntries.length === 0 && <p className="mt-4 text-sm leading-6 text-text-secondary">{inbox ? 'Bisher sind keine Rückmeldungen eingegangen.' : 'Du hast noch keine Rückmeldung gesendet. Wenn dich etwas stört oder dir etwas fehlt, kannst du es oben direkt sagen.'}</p>}
-          <ul className="mt-4 space-y-3">{allEntries.map(entry => <EntryListItem key={entry.id} entry={entry} inbox={inbox} onOpen={() => { setSelected(entry.id); setSaved(false); }} />)}</ul>
+          <ul className="mt-4 space-y-3">{allEntries.map(entry => <EntryListItem key={entry.id} entry={entry} inbox={inbox} onOpen={() => { lastEntry.current = entry.id; setSelected(entry.id); setSaved(false); }} />)}</ul>
           {entries.hasNextPage && <button className="feedback-button mt-4" disabled={entries.isFetchingNextPage} onClick={() => void entries.fetchNextPage()}>{entries.isFetchingNextPage ? 'Wird geladen …' : 'Ältere Rückmeldungen laden'}</button>}
         </section>}
   </div>;

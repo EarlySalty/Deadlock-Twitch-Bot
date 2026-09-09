@@ -262,7 +262,7 @@ mod tests {
         .unwrap();
         sqlx::query("INSERT INTO streamer_onboarding (twitch_user_id,twitch_login,current_step,completed) VALUES ('90','alt',2,TRUE)").execute(&db.pool).await.unwrap();
         sqlx::raw_sql(include_str!(
-            "../../../../migrations/20260909210000_dashboard_onboarding_steps.sql"
+            "../../../../migrations/20260909230000_dashboard_onboarding_steps.sql"
         ))
         .execute(&db.pool)
         .await

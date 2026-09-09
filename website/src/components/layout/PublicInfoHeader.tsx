@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 
 interface NavLink {
@@ -45,6 +45,7 @@ export function PublicInfoHeader({
 }: PublicInfoHeaderProps) {
   const [glassy, setGlassy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     function handleScroll() {
@@ -57,7 +58,7 @@ export function PublicInfoHeader({
       }
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key === 'Escape' && menuButton.current?.getAttribute('aria-expanded') === 'true') { setMenuOpen(false); menuButton.current.focus(); }
     }
 
     window.addEventListener("scroll", handleScroll, { passive: true });
@@ -105,6 +106,7 @@ export function PublicInfoHeader({
           onClick={() => setMenuOpen((value) => !value)}
           aria-label={menuOpen ? "Navigation schließen" : "Navigation öffnen"}
           aria-expanded={menuOpen}
+          ref={menuButton}
           aria-controls="public-mobile-navigation"
         >
           {menuOpen ? <X size={22} /> : <Menu size={22} />}
