@@ -3402,23 +3402,6 @@ mod tests {
         assert!(!lurker_tax_title_matches(""));
     }
 
-    #[tokio::test]
-    async fn req3_dank_hoechstens_einmal_je_zuschauer_und_session() {
-        let api = Arc::new(MockApi::default());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
-        engine
-            .thank_lurker_tax_redeemer("u-tax", "taxkanal", "xy")
-            .await;
-        engine
-            .thank_lurker_tax_redeemer("u-tax", "taxkanal", "xy")
-            .await;
-        assert_eq!(
-            api.message_count().await,
-            1,
-            "Dank je Zuschauer und Session höchstens einmal"
-        );
-    }
-
     // -----------------------------------------------------------------------
     // Neue Chatter im Fenster
     // -----------------------------------------------------------------------
@@ -6296,6 +6279,39 @@ mod db_tests {
             api.message_count().await,
             0,
             "raid_free ist kein bezahlter Plan: kein Dank"
+        );
+    }
+
+    #[tokio::test]
+    async fn req3_dank_hoechstens_einmal_je_zuschauer_und_session() {
+        let pool = pool_or_skip!("promo_thank_einmal");
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        seed_live_channel(&pool, "dankkanal", "u-dank").await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
+             VALUES ('u-dank', 'dankkanal', 1, 'raid_boost')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        engine
+            .thank_lurker_tax_redeemer("u-dank", "dankkanal", "xy")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "erster Dank geht raus"
+        );
+
+        engine
+            .thank_lurker_tax_redeemer("u-dank", "dankkanal", "xy")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "zweiter Dank je Zuschauer und Session unterbleibt"
         );
     }
 
