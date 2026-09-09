@@ -1,5 +1,6 @@
 //! tb-transport-twitch — Helix-Client und App-Token-Manager.
 
+pub mod channel_points;
 pub mod chat;
 pub mod client;
 pub mod clips;
@@ -10,6 +11,7 @@ pub mod streams;
 pub mod token;
 pub mod user_token;
 
+pub use channel_points::HelixCustomReward;
 pub use chat::{
     parse_created_at, AnnouncementOutcome, BanOutcome, Chatter, HelixUserInfo, SendOutcome,
     WhisperOutcome,
