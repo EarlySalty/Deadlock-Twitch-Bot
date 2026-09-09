@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -80,16 +80,13 @@ pub async fn get_handler(
         Err(resp) => return resp,
     };
 
-    match sqlx::query(SELECT_SQL)
+    match sqlx::query_scalar::<_, i32>(SELECT_SQL)
         .bind(&login)
         .bind(&user_id)
         .fetch_optional(&pool)
         .await
     {
-        Ok(Some(row)) => {
-            let enabled: i32 = row.try_get("enabled").unwrap_or(1);
-            Json(json!({ "title_command_enabled": enabled != 0 })).into_response()
-        }
+        Ok(Some(enabled)) => Json(json!({ "title_command_enabled": enabled != 0 })).into_response(),
         Ok(None) => Json(json!({ "title_command_enabled": true })).into_response(),
         Err(error) => {
             tracing::error!(%error, "title-command-settings GET DB-Fehler");
@@ -169,45 +166,21 @@ mod tests {
         Json,
     };
     use serde_json::Value;
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use sqlx::PgPool;
-    use std::str::FromStr;
 
     use crate::auth::level::DashboardAuthLevel;
 
-    async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = "postgresql:///title_command_test?host=/var/run/postgresql";
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-
-        let opts = PgConnectOptions::from_str(&dsn)
-            .unwrap()
-            .options([("search_path", schema)]);
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .connect_with(opts)
-            .await
-            .unwrap();
+    async fn make_pool() -> crate::test_postgres::TestPostgres {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = &database.pool;
         sqlx::query(
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
              plan_name TEXT DEFAULT 'free' NOT NULL, title_command_enabled INTEGER DEFAULT 1 NOT NULL)",
         )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-        Some(pool)
+        database
     }
 
     fn partner(login: &str, uid: &str) -> DashboardAuthLevel {
@@ -229,9 +202,8 @@ mod tests {
 
     #[tokio::test]
     async fn partner_toggle_roundtrip_default_an() {
-        let Some(pool) = make_pool("t_titlecmd_partner").await else {
-            return;
-        };
+        let database = make_pool().await;
+        let pool = database.pool.clone();
 
         let (s, j) = body_of(
             get_handler(
@@ -274,9 +246,8 @@ mod tests {
 
     #[tokio::test]
     async fn admin_toggle_roundtrip_per_streamer_query() {
-        let Some(pool) = make_pool("t_titlecmd_admin").await else {
-            return;
-        };
+        let database = make_pool().await;
+        let pool = database.pool.clone();
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, title_command_enabled) \
              VALUES ('99', 'target', 1)",
@@ -320,9 +291,8 @@ mod tests {
 
     #[tokio::test]
     async fn unauthorized_returns_401() {
-        let Some(pool) = make_pool("t_titlecmd_auth").await else {
-            return;
-        };
+        let database = make_pool().await;
+        let pool = database.pool.clone();
         let (s, _) = body_of(
             get_handler(
                 DashboardAuthLevel::None,
@@ -336,7 +306,8 @@ mod tests {
     }
     #[tokio::test]
     async fn partner_liest_nur_eigene_id_und_ignoriert_fremdes_ziel() {
-        let pool = make_pool("t_titlecmd_identity").await.unwrap();
+        let database = make_pool().await;
+        let pool = database.pool.clone();
         sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, title_command_enabled) VALUES ('42', 'alter_login', 0), ('99', 'nani', 1)").execute(&pool).await.unwrap();
         let query = || {
             Query(TitleCommandQuery {

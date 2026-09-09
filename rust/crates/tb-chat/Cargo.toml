@@ -30,3 +30,4 @@ tb-llm      = { workspace = true }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { workspace = true }
 wiremock           = { workspace = true }
+tempfile = "3"

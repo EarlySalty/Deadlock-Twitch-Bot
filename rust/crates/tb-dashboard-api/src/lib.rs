@@ -14,6 +14,7 @@ pub mod process_info;
 pub mod proxy;
 pub mod query_int;
 #[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
 pub mod uplink_config;
 

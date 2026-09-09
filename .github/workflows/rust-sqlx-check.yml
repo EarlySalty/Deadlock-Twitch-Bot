@@ -48,6 +48,11 @@ jobs:
           cargo test --locked -j2 -p tb-bot raid_oauth_impl::callback_tests
           cargo test --locked -j2 -p tb-internal-api handlers::raid_oauth::tests --lib
 
+      - name: Titelbefehl und Dashboard-Schalter
+        run: |
+          cargo test --locked -j2 -p tb-chat title_command_toggle --lib
+          cargo test --locked -j2 -p tb-dashboard-api title_command_settings --lib
+
       - name: Broker, Uplink disconnect and normal startup
         run: |
           cargo test --locked -j2 -p tb-dashboard-api handlers::platform_token::tests --lib

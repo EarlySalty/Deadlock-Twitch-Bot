@@ -2984,6 +2984,7 @@ dependencies = [
  "tb-knowledge",
  "tb-llm",
  "tb-transport-twitch",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

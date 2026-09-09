@@ -3413,11 +3413,8 @@ mod tests {
 
     #[tokio::test]
     async fn title_command_toggle_nach_id_und_vor_jeder_antwort() {
-        let pool = pool_in_schema(
-            "postgresql:///title_command_test?host=/var/run/postgresql",
-            "cmd_title_toggle",
-        )
-        .await;
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
