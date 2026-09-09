@@ -1,6 +1,12 @@
 # Lurker Steuer
 
-Die Lurker Steuer ist eine Chat-Automation für bezahlte Pläne. Sie erinnert bekannte aktuell anwesende Lurker sanft im Twitch-Chat, ohne Punktestände oder Reward-Kosten zu behaupten.
+Die Lurker Steuer ist eine Chat-Automation für bezahlte Pläne. Sie erinnert bekannte aktuell anwesende Lurker sanft im Twitch-Chat, genau eine Kanalpunkte-Belohnung mit dem Standardnamen "Lurker Steuer" einzulösen. Wer sie einlöst, bekommt eine kurze Dankes-Antwort und wird in dieser Session nicht mehr erinnert. Der Bot behauptet keine Punktestände und keine Kosten.
+
+## Belohnung als Vorlage
+
+- Standardname der Belohnung ist "Lurker Steuer". Die Erkennung ist unabhängig von Groß- und Kleinschreibung und akzeptiert auch "Lurker Steuern" (Präfixvergleich auf dem normalisierten Titel).
+- Den Preis legt der Streamer selbst fest, zum Beispiel 10 Punkte. Der Bot legt die Belohnung nicht selbst an.
+- Die Erinnerung wird nur gesendet, wenn diese Belohnung im Kanal existiert und aktiv ist (Helix `GET channel_points/custom_rewards` mit dem bestehenden Streamer-Token, Scope `channel:read:redemptions` liegt im Basisprofil).
 
 ## Verfügbarkeit
 
@@ -21,7 +27,8 @@ Verhalten im Abo-Bereich:
 
 - `raid_free`: gesperrte Teaser-Karte mit Upgrade-Hinweis
 - Bezahlplan: Toggle für aktiv/inaktiv
-- Wenn der zentrale Bot-Scope `moderator:read:chatters` fehlt oder noch nicht geladen ist, zeigt die Karte einen Readiness-Hinweis; ohne diesen Zugriff feuert das Feature nicht
+- Vorlage-Karte: Name "Lurker Steuer", Preisvorschlag 10 Punkte, Kurzanleitung (Twitch Creator-Dashboard, Zuschauerbelohnungen, Punkte und Belohnungen, Individuelle Belohnung hinzufügen) plus Status "Belohnung gefunden" oder "Belohnung fehlt"
+- Readiness: die Karte spiegelt dieselbe Bedingung wie die Laufzeit. Der Scope `moderator:read:chatters` ist eine Kapabilität des zentralen Bots und wird in `twitch_bot_capabilities` gespiegelt. Der Warnhinweis sagt bei echtem Fehlen, dass sich der Betrieb darum kümmert, statt dem Streamer ein wirkungsloses Neu-Verbinden zu empfehlen
 
 ## Laufzeitlogik
 
@@ -34,7 +41,10 @@ Ein Reminder wird nur gesendet, wenn alle Bedingungen erfüllt sind:
 - der Streamer hat einen bezahlten Plan
 - `lurker_tax_enabled = true`
 - der zentrale Bot-Zugriff fuer `moderator:read:chatters` ist verfuegbar
+- die Belohnung "Lurker Steuer" existiert im Kanal und ist aktiv
 - es gibt frische Präsenzdaten in `twitch_session_chatters`
+
+Wer in der laufenden Session die Belohnung bereits eingelöst hat (`twitch_channel_points_events` mit passendem Reward-Titel), fällt aus der Kandidatenliste. Bei einer Einlösung (`channel.channel_points_custom_reward_redemption.add` mit passendem Titel) antwortet der Bot einmal je Zuschauer und Session mit einem kurzen Dank.
 
 ## Kandidatenlogik
 
@@ -65,16 +75,15 @@ Es werden nur frühere Sessions summiert, in denen der Viewer als Lurker erkannt
 
 ## Reminder-Copy
 
-- der Reminder nennt klar den Feature-Namen `Lurker Steuer`
-- die Formulierung bleibt weich und direkt, ohne Shaming oder Druck
-- es gibt keine Aussage wie "du hast genug Punkte"
-- V1 behauptet weder Reward-Titel noch Reward-Kosten
+- Ein Name: `Hey @xy, schön dass du da bist! Vergiss nicht, deine Lurker Steuer zu zahlen: Belohnung 'Lurker Steuer' einlösen.`
+- Zwei Namen: beide Erwähnungen in einem Satz, `Hey @a und @b, schön dass ihr da seid! Vergesst nicht, eure Lurker Steuer zu zahlen: Belohnung 'Lurker Steuer' einlösen.`
+- Dank: `@xy hat die Lurker Steuer bezahlt. Vorbildlich, danke!`
+- echte Umlaute, keine Gedankenstriche, keine Aussage über Punktestände oder Kosten
 
-## V1-Annahmen
+## Annahmen
 
-- V1 nutzt keine exakte Channel-Points-Balance, weil dafür keine verlässliche Twitch-Datenquelle eingeplant ist
-- V1 arbeitet ohne Reward-Titel oder Reward-Kosten; `Lurker Steuer` ist ein generischer user-facing Name
-- die Direkt-Erwähnungs-Dedupe lebt nur im Runtime-State pro Live-Session; ein Bot-Neustart kann diese Session-Dedupe verlieren
+- der Bot nutzt keine exakte Channel-Points-Balance, sondern nennt nur die Belohnung zum Einlösen
+- die Direkt-Erwähnungs-Dedupe und die Dank-Dedupe leben nur im Runtime-State pro Live-Session; ein Bot-Neustart kann diese Session-Dedupe verlieren
 
 ## Chat-Command
 

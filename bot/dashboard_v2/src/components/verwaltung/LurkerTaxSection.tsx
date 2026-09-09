@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Power, PowerOff } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Gift, Loader2, Power, PowerOff } from 'lucide-react';
 import {
   fetchLurkerTaxSettings,
   toggleLurkerTax,
@@ -44,6 +44,7 @@ export function LurkerTaxSection() {
         lurker_tax_enabled: data.lurker_tax_enabled,
         has_moderator_read_chatters:
           current?.has_moderator_read_chatters ?? settings.has_moderator_read_chatters,
+        reward_present: current?.reward_present ?? settings.reward_present,
       }));
       setSuccess('Gespeichert.');
     } catch {
@@ -55,6 +56,7 @@ export function LurkerTaxSection() {
 
   const enabled = Boolean(settings?.lurker_tax_enabled);
   const scopeReady = Boolean(settings?.has_moderator_read_chatters);
+  const rewardPresent = Boolean(settings?.reward_present);
 
   return (
     <motion.section
@@ -73,7 +75,7 @@ export function LurkerTaxSection() {
         </h2>
         <p className="text-sm text-text-secondary">
           Erinnert deine ruhigsten Stamm-Lurker ab und zu mit einem freundlichen @-Hinweis
-          daran, mal wieder Hallo zu sagen — höchstens zwei pro Erinnerung und nur bei
+          daran, mal wieder Hallo zu sagen. Höchstens zwei pro Erinnerung und nur bei
           langjährigen Zuschauern. Standardmäßig aus.
         </p>
       </div>
@@ -139,11 +141,52 @@ export function LurkerTaxSection() {
             </div>
           </div>
 
+          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <Gift className="h-4 w-4 text-primary shrink-0" />
+                <p className="text-base font-bold text-white">Belohnung zum Einlösen</p>
+              </div>
+              {rewardPresent ? (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Belohnung gefunden
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning">
+                  <CircleAlert className="h-3.5 w-3.5" />
+                  Belohnung fehlt
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-text-secondary mb-3">
+              Damit deine Lurker etwas zum Antippen haben, legst du in Twitch eine
+              Kanalpunkte-Belohnung mit genau diesem Namen an. Den Preis bestimmst du selbst,
+              zum Beispiel 10 Punkte.
+            </p>
+            <div className="rounded-lg border border-border bg-background/40 px-3 py-2 mb-3">
+              <p className="text-xs text-text-secondary mb-0.5">Name der Belohnung</p>
+              <p className="text-sm font-semibold text-white">Lurker Steuer</p>
+            </div>
+            <p className="text-xs font-semibold text-text-secondary mb-1.5">
+              So legst du sie in Twitch an:
+            </p>
+            <ol className="list-decimal pl-5 space-y-1 text-sm text-text-secondary">
+              <li>Öffne dein Twitch Creator-Dashboard.</li>
+              <li>Geh zu Zuschauerbelohnungen.</li>
+              <li>Öffne Punkte und Belohnungen.</li>
+              <li>
+                Wähle Individuelle Belohnung hinzufügen und nenn sie genau
+                {' '}
+                <span className="font-semibold text-white">Lurker Steuer</span>.
+              </li>
+            </ol>
+          </div>
+
           {enabled && !scopeReady && (
             <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
-              Der Schalter ist an, aber die nötige Chatter-Leseberechtigung fehlt — bis du
-              deinen Kanal mit den aktuellen Berechtigungen neu verbindest, bleibt die
-              Lurker-Steuer wirkungslos.
+              Der Schalter ist an, aber der Community-Bot braucht dafür noch die Leseberechtigung
+              für deine Zuschauerliste. Darum kümmern wir uns, du musst nichts tun.
             </div>
           )}
         </>

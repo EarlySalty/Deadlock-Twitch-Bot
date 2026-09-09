@@ -1,6 +1,7 @@
 export interface LurkerTaxSettingsResponse {
   lurker_tax_enabled: boolean;
   has_moderator_read_chatters: boolean;
+  reward_present?: boolean;
 }
 
 export interface LurkerTaxUpdateResponse {
