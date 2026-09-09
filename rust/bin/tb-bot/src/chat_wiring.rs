@@ -3718,7 +3718,7 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT, twitch_user_id TEXT)")
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3775,7 +3775,7 @@ mod invite_offline_tests {
     async fn echter_invite_port_antwortet_offline_und_bei_anderem_spiel() {
         let database = invite_test_postgres::TestPostgres::start().await;
         let pool = database.pool.clone();
-        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT, twitch_user_id TEXT)")
             .execute(&pool)
             .await
             .unwrap();
