@@ -1547,6 +1547,36 @@ impl EventSubHooks for ChatHooks {
             .on_channel_moderate(broadcaster_id, login, event)
             .await;
     }
+    async fn on_channel_points_redemption(
+        &self,
+        broadcaster_id: &str,
+        broadcaster_login: &str,
+        event: &Value,
+    ) {
+        self.inner
+            .on_channel_points_redemption(broadcaster_id, broadcaster_login, event)
+            .await;
+        let title = event
+            .get("reward")
+            .and_then(|r| r.get("title"))
+            .and_then(|v| v.as_str())
+            .or_else(|| event.get("reward_title").and_then(|v| v.as_str()))
+            .unwrap_or_default();
+        if !tb_chat::lurker_tax_title_matches(title) {
+            return;
+        }
+        let redeemer = event
+            .get("user_login")
+            .and_then(|v| v.as_str())
+            .or_else(|| event.get("user_name").and_then(|v| v.as_str()))
+            .unwrap_or_default();
+        if redeemer.is_empty() {
+            return;
+        }
+        self.promos
+            .thank_lurker_tax_redeemer(broadcaster_id, broadcaster_login, redeemer)
+            .await;
+    }
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.on_stream_went_live_with_stream_id(twitch_user_id, login, None)
             .await;

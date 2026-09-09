@@ -243,6 +243,14 @@ pub trait EventSubHooks: Send + Sync {
     /// Prod-Impl `RaidEventSubHooks` koppelt das an
     /// `tb_raid::signal_correlation::plan_chat_unraid`.
     async fn on_chat_unraid_notification(&self, _event: &Value, _message_id: Option<&str>) {}
+
+    async fn on_channel_points_redemption(
+        &self,
+        _broadcaster_id: &str,
+        _broadcaster_login: &str,
+        _event: &Value,
+    ) {
+    }
 }
 
 /// Hooks ohne Wirkung (bis zur Verdrahtung in 4f).
@@ -391,6 +399,17 @@ impl EventSubHooks for ChatSubscriptionTelemetryHooks {
     async fn on_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
         self.inner
             .on_chat_unraid_notification(event, message_id)
+            .await;
+    }
+
+    async fn on_channel_points_redemption(
+        &self,
+        broadcaster_id: &str,
+        broadcaster_login: &str,
+        event: &Value,
+    ) {
+        self.inner
+            .on_channel_points_redemption(broadcaster_id, broadcaster_login, event)
             .await;
     }
 }
@@ -945,14 +964,24 @@ impl EventSubDispatcher {
                     .store_first_message_event(user_id, &context.broadcaster_login, event, now)
                     .await
             }
-            // Channel-Points-Redemptions (Python eventsub_mixin.py:2477-2493): die
-            // Insert-Funktion existierte, wurde aber nie verdrahtet → Telemetrie ging
-            // still verloren, weil der native Receiver die geteilte Callback-URL bedient.
-            "channel.channel_points_automatic_reward_redemption.add"
-            | "channel.channel_points_custom_reward_redemption.add" => {
+            "channel.channel_points_automatic_reward_redemption.add" => {
                 self.telemetry
                     .store_channel_points_event(user_id, event, now)
                     .await
+            }
+            "channel.channel_points_custom_reward_redemption.add" => {
+                let stored = self
+                    .telemetry
+                    .store_channel_points_event(user_id, event, now)
+                    .await;
+                self.hooks
+                    .on_channel_points_redemption(
+                        &context.broadcaster_id,
+                        &context.broadcaster_login,
+                        event,
+                    )
+                    .await;
+                stored
             }
             other => {
                 tracing::debug!(sub_type = other, "EventSub: kein Handler für Sub-Typ");
