@@ -205,7 +205,8 @@ pub struct RaidStatusInfo {
 #[async_trait]
 pub trait DiscordLinkPort: Send + Sync {
     /// Gibt den Discord-Invite-Link für den Kanal zurück.
-    /// `None` = kein Link hinterlegt; `Err` = technischer Fehler → stilles Return.
+    /// `None` = kein Link hinterlegt; `Err` = technischer Fehler.
+    /// Der Handler antwortet mit einem passenden Leer- oder Fehlerhinweis.
     async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String>;
 }
 
@@ -214,7 +215,7 @@ pub trait DiscordLinkPort: Send + Sync {
 #[async_trait]
 pub trait InvitePort: Send + Sync {
     /// Gibt die Antwortzeile für `!invite` zurück.
-    /// `None` = kein Reply (Rust-Seite entscheidet gegen Antwort).
+    /// `None` = kein Einladungslink; der Handler meldet den Leerzustand.
     async fn invite_line(
         &self,
         broadcaster_id: &str,
@@ -325,7 +326,7 @@ pub struct CommandEngine {
     /// Optionaler Seam: erfolgreicher `!invite`-Reply belegt Promo-Cooldown.
     invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     /// In-memory Cooldown-Tabelle für `!invite`.
-    /// `bot.py:781` — 1h pro (channel_login, chatter_login).
+    /// Eine Stunde pro (Broadcaster-ID, Chatter-ID).
     invite_cooldowns: Mutex<HashMap<(String, String), Instant>>,
     /// Rate-Limiter für `!title` (B11): 5/600s pro streamer:source.
     title_rate_limiter: Arc<crate::title_ai::TitleRateLimiter>,
@@ -1513,8 +1514,8 @@ impl CommandEngine {
         }
 
         // Dashboard-Toggle (streamer_plans.clip_command_enabled). Aus heißt:
-        // kein Helix-Call und keine Antwort im Chat. DB-Fehler lassen den
-        // Command an, damit ein Ausfall der Abfrage kein Feature abschaltet.
+        // kein Helix-Call und keine Antwort im Chat. Bei DB-Fehlern erklärt
+        // eine Antwort den Ausfall; eine fehlende Zeile behält den Default an.
         let enabled = sqlx::query_scalar(
             "SELECT COALESCE(clip_command_enabled, 1)
                FROM streamer_plans
