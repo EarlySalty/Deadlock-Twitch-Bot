@@ -258,6 +258,8 @@ fn spawn_collect_loop(
 
     // Collector EINMAL bauen → Self-Heal- + Bot-nicht-Mod-Backoff-Cooldowns
     // werden über alle 30s-Ticks geteilt.
+    let cap_pool = pool.clone();
+    let cap_auth = Arc::clone(&auth);
     let collector = ChattersCollector::new(pool, auth, streamer_tokens, fetcher, provisioner);
 
     supervisor.spawn("chatters_collect", async move {
@@ -266,6 +268,19 @@ fn spawn_collect_loop(
         loop {
             tick.tick().await;
             let stats = collector.run_cycle().await;
+            let has_scope = cap_auth.has_chatters_scope().await;
+            if let Err(error) = sqlx::query(
+                "INSERT INTO twitch_bot_capabilities (id, has_chatters_scope, updated_at) \
+                 VALUES (1, $1, NOW()) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   has_chatters_scope = EXCLUDED.has_chatters_scope, updated_at = NOW()",
+            )
+            .bind(has_scope)
+            .execute(&cap_pool)
+            .await
+            {
+                tracing::warn!(%error, "chatters: Bot-Kapabilitaet konnte nicht persistiert werden");
+            }
             tracing::info!(
                 live_streamers = stats.live_streamers,
                 bot_path_success = stats.bot_path_success,

@@ -538,6 +538,9 @@ twitch_bot_ban_klassifikation|meldungen|integer|NO|1
 twitch_bot_ban_klassifikation|seit|timestamp with time zone|NO|now()
 twitch_bot_ban_klassifikation|twitch_login|text|NO|
 twitch_bot_ban_klassifikation|twitch_user_id|text|NO|
+twitch_bot_capabilities|has_chatters_scope|boolean|NO|true
+twitch_bot_capabilities|id|smallint|NO|1
+twitch_bot_capabilities|updated_at|timestamp with time zone|NO|now()
 twitch_channel_match_state|channel_login|text|NO|
 twitch_channel_match_state|channel_user_id|text|YES|
 twitch_channel_match_state|hero_id|integer|YES|
@@ -1652,6 +1655,9 @@ twitch_token_blacklist|role_removed|integer|YES|0
 twitch_token_blacklist|twitch_login|text|NO|
 twitch_token_blacklist|twitch_user_id|text|NO|
 twitch_token_blacklist|user_dm_sent|integer|YES|0
+twitch_uplink_auth_intent|enabled|boolean|NO|
+twitch_uplink_auth_intent|last_disconnected_at|timestamp with time zone|YES|
+twitch_uplink_auth_intent|twitch_user_id|text|NO|
 twitch_user_engagement_optout|opted_out_at|timestamp with time zone|NO|now()
 twitch_user_engagement_optout|twitch_user_id|text|NO|
 twitch_user_profile|channels|jsonb|NO|'[]'::jsonb
@@ -1712,3 +1718,9 @@ twitch_zuschauer_register|first_seen_at|timestamp with time zone|YES|
 twitch_zuschauer_register|signals|jsonb|NO|'{}'::jsonb
 twitch_zuschauer_register|twitch_login|text|YES|
 twitch_zuschauer_register|twitch_user_id|text|NO|
+uplink_target_generations|disconnect_pending|boolean|NO|false
+uplink_target_generations|enabled|boolean|NO|
+uplink_target_generations|generation|bigint|NO|
+uplink_target_generations|last_disconnected_at|timestamp with time zone|YES|
+uplink_target_generations|platform|text|NO|
+uplink_target_generations|twitch_user_id|text|NO|

@@ -100,10 +100,44 @@ async fn has_moderator_read_chatters(pool: &PgPool, login: &str) -> bool {
     .ok()
     .flatten();
 
-    scopes
+    let streamer_has = scopes
         .unwrap_or_default()
         .split_whitespace()
-        .any(|s| s.eq_ignore_ascii_case(CHATTERS_SCOPE))
+        .any(|s| s.eq_ignore_ascii_case(CHATTERS_SCOPE));
+    if streamer_has {
+        return true;
+    }
+    bot_capability_has_chatters(pool).await
+}
+
+async fn bot_capability_has_chatters(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT has_chatters_scope FROM twitch_bot_capabilities WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
+async fn lurker_reward_present(pool: &PgPool, user_id: &str) -> bool {
+    if user_id.is_empty() {
+        return false;
+    }
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS ( \
+           SELECT 1 FROM twitch_channel_points_events \
+            WHERE twitch_user_id = $1 \
+              AND LOWER(reward_title) LIKE 'lurker steuer%' \
+         )",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
 }
 
 /// `GET …/lurker-tax-settings` — aktuellen Flag-Wert lesen.
@@ -119,6 +153,7 @@ pub async fn get_handler(
     // P2.109: Readiness-Signal — feuert die Lurker-Steuer überhaupt? Ohne den
     // Scope ist der Toggle ein Dead-Toggle; das Dashboard kann so warnen.
     let scope_ready = has_moderator_read_chatters(&pool, &login).await;
+    let reward_present = lurker_reward_present(&pool, &user_id).await;
 
     match sqlx::query(SELECT_SQL)
         .bind(&login)
@@ -131,6 +166,7 @@ pub async fn get_handler(
             Json(json!({
                 "lurker_tax_enabled": lt != 0,
                 "has_moderator_read_chatters": scope_ready,
+                "reward_present": reward_present,
             }))
             .into_response()
         }
@@ -138,6 +174,7 @@ pub async fn get_handler(
         Ok(None) => Json(json!({
             "lurker_tax_enabled": false,
             "has_moderator_read_chatters": scope_ready,
+            "reward_present": reward_present,
         }))
         .into_response(),
         Err(error) => {
