@@ -175,7 +175,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         overview, performance, plattform_connect, raid_analytics, raid_history, rankings,
         retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings,
         social_media, spa, stream_report, streamer_disconnect, streamers, tag_analysis,
-        tip_settings, title, title_performance, uplink, viewer_timeline, viewers, watch_time,
+        tip_settings, title, title_command_settings, title_performance, uplink, viewer_timeline,
+        viewers, watch_time,
     };
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
@@ -432,6 +433,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/lurk-command-settings",
             get(lurk_command_settings::get_handler).post(lurk_command_settings::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/title-command-settings",
+            get(title_command_settings::get_handler).post(title_command_settings::post_handler),
         )
         // Streamer-Selbstbedienung: !clip-Command-Toggle. Default aktiviert
         // (bestehendes Verhalten), Spalte streamer_plans.clip_command_enabled.

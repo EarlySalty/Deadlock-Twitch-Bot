@@ -348,6 +348,7 @@ streamer_plans|plan_name|text|NO|'free'::text
 streamer_plans|promo_disabled|integer|NO|0
 streamer_plans|promo_message|text|YES|
 streamer_plans|raid_boost_enabled|integer|NO|0
+streamer_plans|title_command_enabled|integer|NO|1
 streamer_plans|trial_ever_granted|integer|NO|0
 streamer_plans|twitch_login|text|YES|
 streamer_plans|twitch_user_id|text|NO|

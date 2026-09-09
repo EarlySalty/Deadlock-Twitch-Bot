@@ -7,6 +7,7 @@ import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
+import { TitleCommandSection } from '@/components/verwaltung/TitleCommandSection';
 import { ClipCommandSection } from '@/components/verwaltung/ClipCommandSection';
 import { DisconnectBotSection } from '@/components/verwaltung/DisconnectBotSection';
 import { GreetingSection } from '@/components/verwaltung/GreetingSection';
@@ -341,6 +342,7 @@ export function VerwaltungPage() {
       <GreetingSection />
       <LurkCommandSection />
       <ClipCommandSection />
+      <TitleCommandSection />
       <LurkerTaxSection />
     </>
   );

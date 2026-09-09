@@ -820,6 +820,20 @@ impl CommandEngine {
         if !event.is_mod_or_broadcaster() {
             return;
         }
+        let enabled = sqlx::query_scalar::<_, i32>(
+            "SELECT title_command_enabled FROM streamer_plans WHERE twitch_user_id = $1",
+        )
+        .bind(&event.broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await;
+        match enabled {
+            Ok(Some(0)) => return,
+            Err(error) => {
+                tracing::warn!(%error, streamer_id = %event.broadcaster_user_id, "!title Einstellung konnte nicht gelesen werden");
+                return;
+            }
+            Ok(_) => {}
+        }
         let raw_args = args.trim();
         if raw_args.is_empty() {
             self.reply_plain(
@@ -2567,6 +2581,7 @@ mod tests {
                 plan_name TEXT,
                 lurker_tax_enabled INTEGER DEFAULT 0,
                 lurk_command_enabled INTEGER DEFAULT 1,
+                title_command_enabled INTEGER DEFAULT 1,
                 clip_command_enabled INTEGER DEFAULT 1,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
@@ -3395,6 +3410,63 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn title_command_toggle_nach_id_und_vor_jeder_antwort() {
+        let pool = pool_in_schema(
+            "postgresql:///title_command_test?host=/var/run/postgresql",
+            "cmd_title_toggle",
+        )
+        .await;
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+        // Ohne gespeicherten Schalter bleibt das bestehende Verhalten aktiv.
+        engine
+            .cmd_title(&make_event("!title", false, true), "")
+            .await;
+        assert_eq!(api.message_count().await, 1);
+        sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, title_command_enabled) VALUES ('bc123', 'alter_login', 0), ('andere_id', 'testchannel', 1)").execute(&pool).await.unwrap();
+        // Auch umbenannte Kanäle bleiben aus; weder Hilfe noch Ack/LLM-Task.
+        engine
+            .handle(&make_event("!title", false, true), true)
+            .await;
+        engine
+            .handle(&make_event("!titel ranked", true, false), true)
+            .await;
+        assert_eq!(api.message_count().await, 1);
+        sqlx::query(
+            "UPDATE streamer_plans SET title_command_enabled = 1 WHERE twitch_user_id = 'bc123'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .handle(&make_event("!title", false, true), true)
+            .await;
+        assert_eq!(api.message_count().await, 2);
+        engine
+            .cmd_title(&make_event("!title", false, false), "")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            2,
+            "Zuschauer bleiben ausgeschlossen"
+        );
+        sqlx::query("DROP TABLE streamer_plans")
+            .execute(&pool)
+            .await
+            .unwrap();
+        engine
+            .cmd_title(&make_event("!title ranked", false, true), "ranked")
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            2,
+            "DB-Fehler startet keinen Titelauftrag"
+        );
+    }
+
     // !clip-Toggle (streamer_plans.clip_command_enabled)
     // -----------------------------------------------------------------------
 

@@ -112,6 +112,7 @@ pub mod system;
 pub mod tag_analysis;
 pub mod tip_settings;
 pub mod title;
+pub mod title_command_settings;
 pub mod uplink;
 pub mod title_performance;
 pub(crate) mod viewer_exclusion;
