@@ -912,17 +912,20 @@ mod tests {
             publish_token_antwort(&pool, &config, 5101, jetzt).await,
             Err(TokenFehler::KeineVerbindung)
         ));
-        sqlx::query("UPDATE uplink_target_generations SET disconnect_pending=true WHERE twitch_user_id='5101'").execute(&pool).await.unwrap();
+        let disconnected = tb_raid::target_generation::begin_disconnect(&pool, "5101", "twitch")
+            .await
+            .unwrap();
         assert!(matches!(
             publish_token_antwort(&pool, &config, 5101, jetzt).await,
             Err(TokenFehler::KeineVerbindung)
         ));
-        sqlx::query(
-            "UPDATE uplink_target_generations SET enabled=false WHERE twitch_user_id='5101'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        tb_raid::target_generation::disconnect_transaction(&pool, "5101", "twitch", disconnected)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit()
+            .await
+            .unwrap();
         assert!(matches!(
             publish_token_antwort(&pool, &config, 5101, jetzt).await,
             Err(TokenFehler::KeineVerbindung)
