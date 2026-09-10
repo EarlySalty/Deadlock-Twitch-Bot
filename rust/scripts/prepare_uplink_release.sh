@@ -19,7 +19,7 @@ for binary in tb-bot tb-dashboard; do
   fi
 done
 source_root=$(dirname -- "$(dirname -- "$(dirname -- "$(realpath -- "$0")")")")
-if [ ! -f "$source_root/bot/dashboard_v2/dist/index.html" ]; then
+if [ ! -f "$source_root/bot/analytics/dashboard_v2/dist/index.html" ]; then
   echo 'Gebautes Dashboard fehlt.' >&2
   exit 1
 fi
@@ -34,6 +34,6 @@ install -m 0600 -- "$source_root/rust/deployment/uplink.json.example" "$2/rust/d
 for migration in 20260908210000_twitch_uplink_intent.sql 20260908220000_uplink_target_generations.sql; do
   install -m 0644 -- "$source_root/rust/migrations/$migration" "$2/rust/migrations/$migration"
 done
-cp -R -- "$source_root/bot/dashboard_v2/dist" "$2/bot/analytics/dashboard_v2/dist"
+cp -R -- "$source_root/bot/analytics/dashboard_v2/dist" "$2/bot/analytics/dashboard_v2/dist"
 (cd -- "$2" && find rust bot -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 echo 'Gekoppeltes Bot-/Dashboard-Paket erstellt; nichts aktiviert.'
