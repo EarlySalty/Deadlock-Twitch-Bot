@@ -3,6 +3,7 @@ import { normalisiereCaps } from '../uplinkEmpfehlung';
 import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
 import type { ZielBetriebsdaten } from '../uplinkBetrieb';
 import type { EingangsSession } from '../uplinkBetrieb';
+import type { UplinkTwitchOutputMode } from '../uplinkOutputMode';
 
 /**
  * `live_status` kommt nicht vom Relay, sondern aus der Twitch-Beobachtung des
@@ -550,6 +551,8 @@ export function saveUplinkDestination(body: {
   enabled?: boolean;
   /** Nur für Twitch; weglassen erhält die bisherige Wahl, auch einen Altbestand ohne Wahl. */
   twitch_audio_mode?: UplinkTwitchAudioMode;
+  /** Nur für Twitch; weglassen bewahrt die gespeicherte Betriebsart. */
+  twitch_output_mode?: UplinkTwitchOutputMode;
 }): Promise<{ destinations: UplinkDestination[]; live_quality?: UplinkLiveQualitaet }> {
   return fetchJson('/twitch/api/v2/uplink/destinations', withCookieCredentials({
     method: 'PUT',
@@ -588,6 +591,9 @@ export interface UplinkDestination extends ZielBetriebsdaten {
   platform: string;
   rtmp_url: string;
   enabled: boolean;
+  requested_output_mode?: UplinkTwitchOutputMode | null;
+  active_output_mode?: UplinkTwitchOutputMode | null;
+  fallback_reason?: string | null;
   /** Ausdrücklich gespeichert; null bedeutet weiterhin die bisherige Servereinstellung. */
   twitch_audio_mode?: UplinkTwitchAudioMode | null;
   /** Vom Dienst bestätigte Wahl oder bisherige Einstellung für den nächsten Stream. */

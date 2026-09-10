@@ -31,6 +31,9 @@ import type {
 } from '@/api/uplink';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import { profilText, zielBetrieb } from '@/uplinkBetrieb';
+import { twitchOutputFormular, twitchOutputPayload } from '../uplinkOutputMode';
+import type { UplinkTwitchOutputMode } from '../uplinkOutputMode';
+import { UplinkOutputMode } from './UplinkOutputMode';
 
 type Modus = 'stufe' | 'manuell';
 
@@ -322,6 +325,9 @@ export function ZielKarte({
   // null ist keine neue Wahl. Ein unberührter Altbestand bleibt beim Speichern erhalten.
   const [audioEntwurf, setAudioEntwurf] = useState<UplinkTwitchAudioMode | null>(null);
   const audio = twitchAudioFormular(ziel, audioEntwurf);
+  const [outputEntwurf, setOutputEntwurf] = useState<UplinkTwitchOutputMode | null>(null);
+  const output = twitchOutputFormular(ziel, outputEntwurf);
+  const enhancedGewaehlt = platform === 'twitch' && output.auswahl === 'enhanced';
   const [modus, setModus] = useState<Modus>('stufe');
   const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
   const [manuell, setManuell] = useState({
@@ -470,7 +476,7 @@ export function ZielKarte({
           'Die Serveradresse können wir nur zusammen mit dem Stream-Schlüssel ändern. Trag beides ein.',
         );
       }
-      const body: Parameters<typeof saveUplinkDestination>[0] = { platform };
+      const body: Parameters<typeof saveUplinkDestination>[0] = { platform, ...twitchOutputPayload(platform, outputEntwurf) };
       if (key) {
         body.rtmp_url = url;
         body.stream_key = key;
@@ -479,20 +485,26 @@ export function ZielKarte({
       if (platform === 'twitch' && audioEntwurf !== null) {
         body.twitch_audio_mode = audioEntwurf;
       }
-      // Die Qualitaet geht immer mit, auch beim Pausieren. Sonst verliert ein
-      // Klick auf "Ziel pausieren" die Stufe, die daneben im Formular steht,
-      // wortlos: die Auswahl bliebe stehen, gespeichert waere sie nicht.
-      if (modus === 'manuell') {
-        const geprueft = manuellPruefen();
-        if (typeof geprueft === 'string') throw new Error(geprueft);
-        body.manuell = geprueft;
-      } else {
-        body.profil = profil;
+      // Enhanced verwendet die echte Quelle und Twitch-Freigabe. Gespeicherte
+      // Einzelwerte bleiben unangetastet als Rückfallprofil erhalten.
+      if (!enhancedGewaehlt) {
+        // Die Qualitaet geht im Einzelmodus auch beim Pausieren mit. Sonst verliert ein
+        // Klick auf "Ziel pausieren" die Stufe, die daneben im Formular steht,
+        // wortlos: die Auswahl bliebe stehen, gespeichert waere sie nicht.
+        if (modus === 'manuell') {
+          const geprueft = manuellPruefen();
+          if (typeof geprueft === 'string') throw new Error(geprueft);
+          body.manuell = geprueft;
+        } else {
+          body.profil = profil;
+        }
       }
       return saveUplinkDestination(body);
     },
     onSuccess: (antwort, _enabled, gesendeteRevision) => {
       const unveraendert = gesendeteRevision === revision.current;
+      queryClient.setQueryData(['uplink-destinations'], { destinations: antwort.destinations });
+      if (unveraendert) setOutputEntwurf(null);
       if (unveraendert) setStreamKey('');
       setFehlertext('');
       setGespeichert(unveraendert);
@@ -540,8 +552,8 @@ export function ZielKarte({
   // gespeichert" ueber einem 1440p-Ziel waere schlicht falsch.
   const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
   const ungespeichert =
-    (eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
-    || (platform === 'twitch' && audio.geaendert);
+    (!enhancedGewaehlt && eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
+    || (platform === 'twitch' && (audio.geaendert || output.geaendert));
   const betrieb = zielBetrieb(ziel, chat?.status);
   const kartenStatus = betrieb.state;
   const statusText = betrieb.label;
@@ -591,7 +603,7 @@ export function ZielKarte({
             </span>
             <span className="mt-0.5 block text-xs font-normal text-text-secondary">
               {eingerichtet && kopfWerte
-                ? `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
+                ? enhancedGewaehlt ? 'Gewünscht: Enhanced Broadcasting' : `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
@@ -725,7 +737,10 @@ export function ZielKarte({
           </fieldset>
         ) : null}
 
-        <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
+        {platform === 'twitch' ? <UplinkOutputMode ziel={ziel} entwurf={outputEntwurf} disabled={speichern.isPending}
+          onChange={(mode) => { setOutputEntwurf(mode); angefasst(); }} /> : null}
+
+        {!enhancedGewaehlt ? <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
               Gewünschte Ausgabe für {label}
@@ -840,6 +855,8 @@ export function ZielKarte({
           )}
         </div>
 
+        : <p className="text-xs text-text-secondary">Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.</p>}
+
         {fehlertext && <p id={fehlerId} role="alert" className="text-xs text-warning">{fehlertext}</p>}
         {livetext && <p role="status" className="text-xs text-text-secondary">{livetext}</p>}
 
@@ -883,7 +900,7 @@ export function ZielKarte({
                 : 'Schlüssel liegt verschlüsselt bei uns.'}
               {bestellt ? (
                 <>
-                  {' '}Gespeicherter Wunsch: {profilText(bestellt)}.
+                  {' '}{enhancedGewaehlt ? 'Gespeichertes Einzelprofil' : 'Gespeicherter Wunsch'}: {profilText(bestellt)}.
                 </>
               ) : null}
               {ungespeichert ? (
