@@ -22,7 +22,8 @@ use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 use tb_analytics::admin_config::{
-    bulk_update_partner_flags, load_streamer_config_snapshots, parse_admin_scope, PartnerFlagUpdate,
+    bulk_update_partner_flags, load_raid_history, load_streamer_config_snapshots, parse_admin_scope,
+    PartnerFlagUpdate,
 };
 use tb_analytics::promo_mode::{evaluate_global_promo_mode, load_global_promo_mode};
 
@@ -82,9 +83,8 @@ pub struct OverviewQuery {
 /// ausgewerteter Promo-Modus + Raid-/Chat-Flag-Snapshots (Python
 /// `_api_admin_config_overview`). `announcements` spiegelt die Promo-Config,
 /// `csrfToken`/`csrf_token` sind `null` (CSRF im Rust-Dashboard nicht portiert).
-///
-/// Der Python-Snapshot-Loader baut zusätzlich changelog/raid_history, die der
-/// Overview-Endpoint aber NICHT in seine Antwort übernimmt — daher hier weggelassen.
+/// Die letzten Raid-Ereignisse gehören zum Raid-Snapshot, damit die
+/// Aktivitätsseite denselben Datenpfad wie die Konfiguration verwendet.
 pub async fn config_overview_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -103,10 +103,13 @@ pub async fn config_overview_handler(
     let promo_config = load_global_promo_mode(&pool).await.map_err(db_error)?;
     let evaluation = evaluate_global_promo_mode(&promo_config.to_json(), None);
     let snaps = load_streamer_config_snapshots(&pool, &scope).await.map_err(db_error)?;
+    let history = load_raid_history(&pool).await.map_err(db_error)?;
+    let mut raids = snaps.raid_snapshot();
+    raids["history"] = json!(history);
 
     Ok(Json(json!({
         "promo": evaluation.to_json(),
-        "raids": snaps.raid_snapshot(),
+        "raids": raids,
         "chat": snaps.chat_snapshot(),
         // announcements = Promo-Config-Sub-Objekt (Python promo.get("config", {})).
         "announcements": evaluation.config.to_json(),
@@ -262,6 +265,14 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            "CREATE TABLE twitch_raid_history (\
+                from_broadcaster_login TEXT, to_broadcaster_login TEXT, \
+                viewer_count INTEGER, executed_at TIMESTAMPTZ, reason TEXT, success BOOLEAN)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "CREATE TABLE twitch_global_promo_modes (\
                 config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
                 custom_message TEXT, starts_at TEXT, ends_at TEXT, \
@@ -323,12 +334,23 @@ mod tests {
     #[tokio::test]
     async fn overview_aggregiert_promo_raids_chat() {
         let Some(pool) = make_pool("t_acfg_overview").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_raid_history \
+                (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, reason, success) \
+             VALUES ('quelle', 'ziel', 42, NOW(), 'automatisch', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // scope=None → active. Das Testschema bildet die Migration bereits ab.
         let r = config_overview_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(OverviewQuery { scope: None })).await;
         let (s, j) = body_json(r).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["promo"]["status"], "standard"); // Default ohne gesetzten Modus
         assert_eq!(j["raids"]["totalManagedStreamers"], 1);
+        assert_eq!(j["raids"]["history"][0]["streamer"], "quelle");
+        assert_eq!(j["raids"]["history"][0]["target"], "ziel");
+        assert_eq!(j["raids"]["history"][0]["viewers"], 42);
         assert_eq!(j["chat"]["totalManagedStreamers"], 1);
         assert!(j["announcements"].is_object());
         assert!(j["csrfToken"].is_null());

@@ -13,6 +13,8 @@ type RaidEntry = {
   streamer: string;
   target: string;
   startedAt?: string;
+  viewers?: number;
+  reason?: string;
   status: string;
 };
 
@@ -60,29 +62,24 @@ function readNumber(record: Record<string, unknown>, ...keys: string[]) {
   return undefined;
 }
 
-function readStringArray(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    const entries = coerceArray<unknown>(value)
-      .map((entry) => String(entry || '').trim())
-      .filter(Boolean);
-    if (entries.length) {
-      return entries;
-    }
-  }
-  return [];
+function renderValue(value: string) {
+  return <span className="text-white">{value}</span>;
 }
 
-function renderValueWithBadge(value: string, hasValue: boolean) {
-  if (!hasValue) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-white">—</span>
-        <StatusBadge status="warning" />
-      </div>
-    );
+function readRaidStatus(record: Record<string, unknown>) {
+  const rawStatus = readString(record, 'status', 'state', 'result').toLowerCase();
+  if (['success', 'succeeded', 'completed'].includes(rawStatus)) {
+    return 'ok';
   }
-  return <span className="text-white">{value}</span>;
+  if (['failed', 'error', 'rejected'].includes(rawStatus)) {
+    return 'error';
+  }
+
+  const success = readBoolean(record, 'success', 'ok');
+  if (success !== undefined) {
+    return success ? 'ok' : 'error';
+  }
+  return readBoolean(record, 'active', 'running', 'isActive', 'is_active') ? 'active' : 'unknown';
 }
 
 function extractRaidEntries(raw: Record<string, unknown>, keys: string[]) {
@@ -99,16 +96,15 @@ function extractRaidEntries(raw: Record<string, unknown>, keys: string[]) {
         readString(record, 'target', 'targetLogin', 'target_login', 'toBroadcaster', 'to_broadcaster', 'raidTarget') || '—';
       const startedAt =
         readString(record, 'startedAt', 'started_at', 'executedAt', 'executed_at', 'createdAt', 'created_at') || undefined;
-      const status =
-        readString(record, 'status', 'state', 'result') ||
-        (readBoolean(record, 'active', 'running', 'isActive', 'is_active') ? 'active' : 'unknown');
 
       return {
         id: `${key}-${index}-${streamer}-${target}`,
         streamer,
         target,
         startedAt,
-        status,
+        viewers: readNumber(record, 'viewers', 'viewerCount', 'viewer_count'),
+        reason: readString(record, 'reason', 'errorMessage', 'error_message') || undefined,
+        status: readRaidStatus(record),
       };
     });
   }
@@ -123,84 +119,51 @@ export default function RaidsActivityPage() {
   const raidRaw = coerceRecord(raidSnapshot?.raw);
 
   const configFields = useMemo(() => {
-    const enabled = readBoolean(raidRaw, 'enabled', 'is_enabled', 'raidBotEnabled', 'raid_bot_enabled', 'allRaidBotEnabled');
-    const autoRaidEnabled = readBoolean(
-      raidRaw,
-      'autoRaidEnabled',
-      'auto_raid_enabled',
-      'livePingEnabled',
-      'live_ping_enabled',
-      'allLivePingEnabled',
-    );
-    const defaultDelay = readNumber(
-      raidRaw,
-      'defaultDelay',
-      'default_delay',
-      'defaultDelaySeconds',
-      'default_delay_seconds',
-    );
-    const requiredViewerCount = readNumber(
-      raidRaw,
-      'requiredViewerCount',
-      'required_viewer_count',
-      'minimumViewerCount',
-      'minimum_viewer_count',
-    );
-    const channelAllowlist = readStringArray(raidRaw, 'channelAllowlist', 'channel_allowlist', 'allowlist');
     const totalManagedStreamers =
       raidSnapshot?.totalManagedStreamers ?? readNumber(raidRaw, 'totalManagedStreamers', 'total_managed_streamers');
     const raidBotEnabledCount =
       raidSnapshot?.raidBotEnabledCount ?? readNumber(raidRaw, 'raidBotEnabledCount', 'raid_bot_enabled_count');
     const livePingEnabledCount =
       raidSnapshot?.livePingEnabledCount ?? readNumber(raidRaw, 'livePingEnabledCount', 'live_ping_enabled_count');
+    const allRaidBotEnabled =
+      raidSnapshot?.allRaidBotEnabled ?? readBoolean(raidRaw, 'allRaidBotEnabled', 'all_raid_bot_enabled');
+    const allLivePingEnabled =
+      raidSnapshot?.allLivePingEnabled ?? readBoolean(raidRaw, 'allLivePingEnabled', 'all_live_ping_enabled');
 
     return [
-      { label: 'Enabled', value: enabled === undefined ? '—' : enabled ? 'Ja' : 'Nein', hasValue: enabled !== undefined },
       {
-        label: 'Auto Raid Enabled',
-        value: autoRaidEnabled === undefined ? '—' : autoRaidEnabled ? 'Ja' : 'Nein',
-        hasValue: autoRaidEnabled !== undefined,
+        label: 'Raid-Bot bei allen aktiv',
+        value: allRaidBotEnabled === undefined ? 'Nicht verfügbar' : allRaidBotEnabled ? 'Ja' : 'Nein',
       },
       {
-        label: 'Default Delay',
-        value: defaultDelay === undefined ? '—' : `${formatNumber(defaultDelay)} s`,
-        hasValue: defaultDelay !== undefined,
+        label: 'Live-Ping bei allen aktiv',
+        value: allLivePingEnabled === undefined ? 'Nicht verfügbar' : allLivePingEnabled ? 'Ja' : 'Nein',
       },
       {
-        label: 'Required Viewer Count',
-        value: requiredViewerCount === undefined ? '—' : formatNumber(requiredViewerCount),
-        hasValue: requiredViewerCount !== undefined,
+        label: 'Verwaltete Streamer',
+        value: totalManagedStreamers === undefined ? 'Nicht verfügbar' : formatNumber(totalManagedStreamers),
       },
       {
-        label: 'Channel Allowlist',
-        value: channelAllowlist.length ? channelAllowlist.join(', ') : '—',
-        hasValue: channelAllowlist.length > 0,
+        label: 'Raid-Bot aktiv',
+        value: raidBotEnabledCount === undefined ? 'Nicht verfügbar' : formatNumber(raidBotEnabledCount),
       },
       {
-        label: 'Managed Streamers',
-        value: totalManagedStreamers === undefined ? '—' : formatNumber(totalManagedStreamers),
-        hasValue: totalManagedStreamers !== undefined,
-      },
-      {
-        label: 'Raid Bot Enabled Count',
-        value: raidBotEnabledCount === undefined ? '—' : formatNumber(raidBotEnabledCount),
-        hasValue: raidBotEnabledCount !== undefined,
-      },
-      {
-        label: 'Live Ping Enabled Count',
-        value: livePingEnabledCount === undefined ? '—' : formatNumber(livePingEnabledCount),
-        hasValue: livePingEnabledCount !== undefined,
+        label: 'Live-Ping aktiv',
+        value: livePingEnabledCount === undefined ? 'Nicht verfügbar' : formatNumber(livePingEnabledCount),
       },
     ];
-  }, [raidRaw, raidSnapshot?.livePingEnabledCount, raidSnapshot?.raidBotEnabledCount, raidSnapshot?.totalManagedStreamers]);
+  }, [raidRaw, raidSnapshot]);
 
   const activeEntries = useMemo(
     () => extractRaidEntries(raidRaw, ['activeSessions', 'active_sessions', 'runningSessions', 'running_sessions']),
     [raidRaw],
   );
   const historyEntries = useMemo(
-    () => extractRaidEntries(raidRaw, ['history', 'raidHistory', 'raid_history', 'recentHistory', 'recent_history']),
-    [raidRaw],
+    () =>
+      raidSnapshot?.history?.length
+        ? extractRaidEntries({ history: raidSnapshot.history }, ['history'])
+        : extractRaidEntries(raidRaw, ['history', 'raidHistory', 'raid_history', 'recentHistory', 'recent_history']),
+    [raidRaw, raidSnapshot?.history],
   );
 
   const columns: TableColumn<RaidEntry>[] = [
@@ -220,10 +183,24 @@ export default function RaidsActivityPage() {
     },
     {
       key: 'startedAt',
-      title: 'Gestartet vor',
+      title: 'Zeitpunkt',
       sortable: true,
       sortValue: (row) => (row.startedAt ? new Date(row.startedAt).getTime() : 0),
       render: (row) => (row.startedAt ? formatRelativeTime(row.startedAt) : '—'),
+    },
+    {
+      key: 'viewers',
+      title: 'Zuschauer',
+      sortable: true,
+      sortValue: (row) => row.viewers ?? 0,
+      render: (row) => (row.viewers === undefined ? '—' : formatNumber(row.viewers)),
+    },
+    {
+      key: 'reason',
+      title: 'Grund',
+      sortable: true,
+      sortValue: (row) => row.reason ?? '',
+      render: (row) => row.reason || '—',
     },
     {
       key: 'status',
@@ -275,18 +252,18 @@ export default function RaidsActivityPage() {
         }
       />
 
-      <Section title="Raid-Konfiguration" hint="Globale Defaults">
+      <Section title="Raid-Konfiguration" hint="Aktueller Partnerbestand">
         <div className="space-y-5">
           <div className="grid gap-4 lg:grid-cols-2">
             {configFields.map((field) => (
               <article key={field.label} className="rounded-[1.4rem] border border-white/10 bg-white/[0.03] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">{field.label}</p>
-                <div className="mt-3">{renderValueWithBadge(field.value, field.hasValue)}</div>
+                <div className="mt-3">{renderValue(field.value)}</div>
               </article>
             ))}
           </div>
-          <div className="rounded-[1.4rem] border border-warning/20 bg-warning/[0.04] p-4 text-sm text-text-secondary">
-            Konfiguration wird im finalen Visual-Pass auf editierbar gestellt.
+          <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.03] p-4 text-sm text-text-secondary">
+            Die Zähler stammen aus dem aktuellen Partnerbestand. Die Historie zeigt die letzten 50 abgeschlossenen Raid-Ereignisse.
           </div>
         </div>
       </Section>
@@ -298,7 +275,7 @@ export default function RaidsActivityPage() {
           <EmptyState
             icon={Clock3}
             title="Keine aktiven Raid-Sessions"
-            description="Der aktuelle Payload enthält keine laufenden Raids oder noch keinen dedizierten Live-Feed."
+            description="Für laufende Raids gibt es derzeit keinen eigenen Session-Feed. Abgeschlossene Ereignisse stehen in der Historie."
           />
         )}
       </Section>
@@ -310,7 +287,7 @@ export default function RaidsActivityPage() {
           <EmptyState
             icon={SearchX}
             title="Keine Raid-Historie"
-            description="Im ConfigOverview-Payload wurden keine abgeschlossenen Raid-Einträge gefunden."
+            description="In der Datenbank sind keine abgeschlossenen Raid-Ereignisse vorhanden."
           />
         )}
       </Section>

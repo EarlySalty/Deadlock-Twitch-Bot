@@ -330,12 +330,23 @@ export interface ErrorLogsResponse {
   entries: ErrorLogEntry[];
 }
 
+export interface RaidHistoryEntry {
+  streamer?: string;
+  target?: string;
+  viewers?: number;
+  executedAt?: string;
+  reason?: string;
+  success?: boolean;
+  status?: string;
+}
+
 export interface RaidConfigSnapshot {
   totalManagedStreamers?: number;
   raidBotEnabledCount?: number;
   livePingEnabledCount?: number;
   allRaidBotEnabled?: boolean;
   allLivePingEnabled?: boolean;
+  history?: RaidHistoryEntry[];
   scope?: AdminConfigScope;
   raw?: Record<string, unknown>;
 }

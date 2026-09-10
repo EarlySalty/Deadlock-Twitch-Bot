@@ -39,6 +39,7 @@ import type {
   PiiReadiness,
   RaidConfigSnapshot,
   RaidConfigUpdatePayload,
+  RaidHistoryEntry,
   ResearchResponse,
   ResearchSuggestionsResponse,
   ScopeStatusResponse,
@@ -515,12 +516,25 @@ async function adminFirst<T>(suffixes: string[]): Promise<T | null> {
 }
 
 function parseRaidSnapshot(record: Record<string, unknown>): RaidConfigSnapshot {
+  const history = coerceArray<Record<string, unknown>>(record.history).map(
+    (entry): RaidHistoryEntry => ({
+      streamer: readString(entry, 'streamer', 'streamerLogin', 'streamer_login') || undefined,
+      target: readString(entry, 'target', 'targetLogin', 'target_login') || undefined,
+      viewers: readNumber(entry, 'viewers', 'viewerCount', 'viewer_count'),
+      executedAt: readString(entry, 'executedAt', 'executed_at') || undefined,
+      reason: readString(entry, 'reason', 'errorMessage', 'error_message') || undefined,
+      success: readBoolean(entry, 'success', 'ok'),
+      status: readString(entry, 'status', 'state', 'result') || undefined,
+    }),
+  );
+
   return {
     totalManagedStreamers: readNumber(record, 'totalManagedStreamers', 'total_managed_streamers'),
     raidBotEnabledCount: readNumber(record, 'raidBotEnabledCount', 'raid_bot_enabled_count'),
     livePingEnabledCount: readNumber(record, 'livePingEnabledCount', 'live_ping_enabled_count'),
     allRaidBotEnabled: readBoolean(record, 'allRaidBotEnabled', 'all_raid_bot_enabled'),
     allLivePingEnabled: readBoolean(record, 'allLivePingEnabled', 'all_live_ping_enabled'),
+    history,
     scope: readScope(record, 'scope', 'defaultScope', 'default_scope'),
     raw: record,
   };
