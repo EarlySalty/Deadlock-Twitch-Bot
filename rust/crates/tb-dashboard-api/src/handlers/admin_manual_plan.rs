@@ -148,12 +148,16 @@ async fn set_manual_plan(
     if normalized_login.is_empty() {
         return Err(ManualPlanError::LoginRequired);
     }
-    // Nur Plan-IDs aus dem Billing-Katalog sind gültig, seit dem Umbau also
-    // free/plus/pro. Die alten IDs bleiben lesbar (sie stehen in der DB), aber
-    // ein Admin-Geschenk wird ab jetzt auf einer aktuellen Stufe eingetragen.
-    let normalized_plan_id = tb_analytics::billing::find_plan(plan_id.trim())
-        .map(|plan| plan.id)
-        .ok_or(ManualPlanError::UnknownPlanId)?;
+    // Aktuelle und historische Plan-IDs sind für Admin-Overrides gültig. Die
+    // historischen IDs bleiben absichtlich unverändert in der DB, damit ihre
+    // alten Entitlements weiter funktionieren und alte Daten nicht verloren
+    // gehen.
+    let normalized_plan_id = plan_id.trim();
+    if tb_analytics::billing::find_plan(normalized_plan_id).is_none()
+        && !is_legacy_plan_id(normalized_plan_id)
+    {
+        return Err(ManualPlanError::UnknownPlanId);
+    }
     let expires_at_iso = parse_datetime_value(expires_at);
     let notes_value: String = notes.trim().chars().take(MAX_NOTES_LEN).collect();
     let updated_at_iso = now_iso();
@@ -208,6 +212,20 @@ async fn set_manual_plan(
     refresh_partner_raid_score(pool, &canonical_login).await;
 
     Ok(effective_plan_id(pool, &canonical_login, &twitch_user_id).await)
+}
+
+fn is_legacy_plan_id(plan_id: &str) -> bool {
+    matches!(
+        plan_id,
+        "raid_free"
+            | "chat_quiet"
+            | "raid_boost"
+            | "analysis_dashboard"
+            | "bundle_chat_quiet_raid_boost"
+            | "bundle_werbefrei_analyse"
+            | "bundle_komplett"
+            | "bundle_analysis_raid_boost"
+    )
 }
 
 /// Entfernt den manuellen Plan-Override; gibt die effektive Plan-ID zurück.
@@ -365,6 +383,23 @@ fn redirect_err(message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historische_plan_ids_bleiben_fuer_admin_overrides_gueltig() {
+        for plan_id in [
+            "raid_free",
+            "chat_quiet",
+            "raid_boost",
+            "analysis_dashboard",
+            "bundle_chat_quiet_raid_boost",
+            "bundle_werbefrei_analyse",
+            "bundle_komplett",
+            "bundle_analysis_raid_boost",
+        ] {
+            assert!(is_legacy_plan_id(plan_id), "{plan_id} muss gültig bleiben");
+        }
+        assert!(!is_legacy_plan_id("unbekannt"));
+    }
 
     #[test]
     fn parse_datetime_date_only_wird_tagesende() {

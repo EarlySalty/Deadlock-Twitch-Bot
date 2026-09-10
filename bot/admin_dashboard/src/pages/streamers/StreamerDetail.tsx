@@ -8,6 +8,7 @@ import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { ConfirmTypedDialog } from '@/components/shared/ConfirmTypedDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
 import { EmptyState } from '@/components/shared/EmptyState';
+import { GermanDatePicker } from '@/components/shared/GermanDatePicker';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
 import {
@@ -38,14 +39,17 @@ import { coerceRecord, formatDateTime, formatNumber, formatRelativeTime } from '
 import { findPartnerAccessEntry } from '@/utils/partnerAccess';
 
 const PLAN_OPTIONS = [
-  { value: 'raid_free', label: 'Raid Free' },
-  { value: 'chat_quiet', label: 'Werbefrei' },
-  { value: 'raid_boost', label: 'Raid Boost' },
-  { value: 'analysis_dashboard', label: 'Analyse Dashboard' },
-  { value: 'bundle_chat_quiet_raid_boost', label: 'Bundle: Werbefrei + Raid Boost' },
-  { value: 'bundle_werbefrei_analyse', label: 'Bundle: Werbefrei + Analyse' },
-  { value: 'bundle_komplett', label: 'Bundle Komplett' },
-  { value: 'bundle_analysis_raid_boost', label: 'Bundle: Analyse + Raid Boost' },
+  { value: 'free', label: 'Netzwerk Free (neu)' },
+  { value: 'plus', label: 'Netzwerk Plus (neu)' },
+  { value: 'pro', label: 'Creator Pro (neu)' },
+  { value: 'raid_free', label: 'Raid Free (alt)' },
+  { value: 'chat_quiet', label: 'Werbefrei (alt)' },
+  { value: 'raid_boost', label: 'Raid Boost (alt)' },
+  { value: 'analysis_dashboard', label: 'Analyse Dashboard (alt)' },
+  { value: 'bundle_chat_quiet_raid_boost', label: 'Bundle: Werbefrei + Raid Boost (alt)' },
+  { value: 'bundle_werbefrei_analyse', label: 'Bundle: Werbefrei + Analyse (alt)' },
+  { value: 'bundle_komplett', label: 'Bundle Komplett (alt)' },
+  { value: 'bundle_analysis_raid_boost', label: 'Bundle: Analyse + Raid Boost (alt)' },
 ];
 
 const VERIFY_OPTIONS: Array<{ value: LegacyVerifyMode; label: string }> = [
@@ -550,12 +554,7 @@ export function StreamerDetailPage() {
               </label>
               <label className="text-sm text-text-secondary">
                 Ablaufdatum
-                <input
-                  type="date"
-                  className="admin-input mt-2"
-                  value={manualPlanExpiresAt}
-                  onChange={(event) => setManualPlanExpiresAt(event.target.value)}
-                />
+                <GermanDatePicker value={manualPlanExpiresAt} onChange={setManualPlanExpiresAt} />
               </label>
             </div>
             <label className="text-sm text-text-secondary">
