@@ -440,16 +440,16 @@ impl AutoRaidPipeline {
 
     pub async fn run(&self, req: &AutoRaidRequest) -> AutoRaidPipelineOutcome {
         let flow_start = Instant::now();
-        let (hard_blacklist_ids, hard_blacklist_logins) = match self.blacklist.load_hard_bans().await
-        {
-            Ok(sets) => sets,
-            Err(error) => {
-                tracing::error!(%error, "Raid-Pipeline blockiert: Blacklist nicht ladbar");
-                return AutoRaidPipelineOutcome::Blocked {
-                    error: "blacklist_unavailable".to_string(),
-                };
-            }
-        };
+        let (hard_blacklist_ids, hard_blacklist_logins) =
+            match self.blacklist.load_hard_bans().await {
+                Ok(sets) => sets,
+                Err(error) => {
+                    tracing::error!(%error, "Raid-Pipeline blockiert: Blacklist nicht ladbar");
+                    return AutoRaidPipelineOutcome::Blocked {
+                        error: "blacklist_unavailable".to_string(),
+                    };
+                }
+            };
         let (full_blacklist_ids, full_blacklist_logins) = if req.respect_soft_raid_blacklist {
             match self.blacklist.load_all().await {
                 Ok(sets) => sets,
@@ -874,8 +874,12 @@ impl AutoRaidPipeline {
         // Filter → Follower-Anreicherung (nur auf dem gefilterten Pool, nicht
         // allen 50 Streams) → Tie-Break. Python: `attach_followers_totals(pool)`
         // vor der Sortierung in `select_fairest_candidate`.
-        let mut pool =
-            filter_fallback_pool(streams, full_blacklist_ids, full_blacklist_logins, exclude_ids);
+        let mut pool = filter_fallback_pool(
+            streams,
+            full_blacklist_ids,
+            full_blacklist_logins,
+            exclude_ids,
+        );
         if let Some(enricher) = &self.follower_enricher {
             if self.observability_analytics.is_some() {
                 let observation = enricher.enrich_with_observability(&mut pool).await;
