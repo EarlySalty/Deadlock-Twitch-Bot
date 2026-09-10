@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const MONTHS = [
@@ -14,8 +14,11 @@ function toIso(date: Date): string {
 function fromIso(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return null;
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return Number.isNaN(date.getTime()) ? null : date;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(year, month, day);
+  return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
 }
 
 function displayDate(value: string): string {
@@ -23,11 +26,42 @@ function displayDate(value: string): string {
   return date ? `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()}` : '';
 }
 
+function parseGermanDate(value: string): Date | null {
+  const match = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(value.trim());
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const year = Number(match[3]);
+  const date = new Date(year, month, day);
+  return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
+}
+
+function clampDate(year: number, month: number, day: number): Date {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(day, lastDay));
+}
+
+function segmentForCursor(cursor: number | null): { index: number; start: number; length: number } {
+  if ((cursor ?? 0) <= 2) return { index: 0, start: 0, length: 2 };
+  if ((cursor ?? 0) <= 5) return { index: 1, start: 3, length: 2 };
+  return { index: 2, start: 6, length: 4 };
+}
+
 export function GermanDatePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const selected = fromIso(value);
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(() => selected ?? new Date());
+  const [inputText, setInputText] = useState(() => displayDate(value));
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setInputText(displayDate(value));
+  }, [value]);
+
+  useEffect(() => {
+    const date = fromIso(value);
+    if (date && !open) setMonth(date);
+  }, [value, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -48,6 +82,66 @@ export function GermanDatePicker({ value, onChange }: { value: string; onChange:
     });
   }, [month]);
 
+  const commitDate = (date: Date) => {
+    const nextValue = toIso(date);
+    setInputText(displayDate(nextValue));
+    onChange(nextValue);
+  };
+
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      const parsed = parseGermanDate(inputText);
+      if (parsed) commitDate(parsed);
+      return;
+    }
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+
+    const input = event.currentTarget;
+    const current = parseGermanDate(inputText) ?? selected ?? new Date();
+    const segment = segmentForCursor(input.selectionStart);
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const nextIndex = Math.max(0, Math.min(2, segment.index + (event.key === 'ArrowLeft' ? -1 : 1)));
+      const starts = [0, 3, 6];
+      const lengths = [2, 2, 4];
+      const nextStart = starts[nextIndex];
+      input.setSelectionRange(nextStart, nextStart + lengths[nextIndex]);
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.key === 'ArrowUp' ? 1 : -1;
+    let nextDate: Date;
+    if (segment.index === 0) {
+      nextDate = new Date(current.getFullYear(), current.getMonth(), current.getDate() + direction);
+    } else if (segment.index === 1) {
+      nextDate = clampDate(current.getFullYear(), current.getMonth() + direction, current.getDate());
+    } else {
+      nextDate = clampDate(current.getFullYear() + direction, current.getMonth(), current.getDate());
+    }
+    commitDate(nextDate);
+    requestAnimationFrame(() => {
+      const nextSegment = segmentForCursor(segment.start);
+      input.focus();
+      input.setSelectionRange(nextSegment.start, nextSegment.start + nextSegment.length);
+    });
+  };
+
+  const handleInputBlur = () => {
+    if (!inputText.trim()) {
+      setInputText('');
+      onChange('');
+      return;
+    }
+    const parsed = parseGermanDate(inputText);
+    if (parsed) {
+      commitDate(parsed);
+    } else {
+      setInputText(displayDate(value));
+    }
+  };
+
   return (
     <div ref={containerRef} className="relative">
       <div className="relative">
@@ -55,10 +149,15 @@ export function GermanDatePicker({ value, onChange }: { value: string; onChange:
           type="text"
           inputMode="numeric"
           className="admin-input mt-2 pr-11"
-          value={displayDate(value)}
+          value={inputText}
           placeholder="TT.MM.JJJJ"
-          readOnly
           aria-label="Ablaufdatum (TT.MM.JJJJ)"
+          onChange={(event) => {
+            const nextText = event.target.value;
+            setInputText(nextText);
+          }}
+          onKeyDown={handleInputKeyDown}
+          onBlur={handleInputBlur}
           onClick={() => setOpen(true)}
         />
         <button type="button" className="absolute right-2 top-4 rounded-lg p-1 text-text-secondary hover:text-white" aria-label="Kalender öffnen" onClick={() => setOpen((current) => !current)}>
@@ -81,14 +180,14 @@ export function GermanDatePicker({ value, onChange }: { value: string; onChange:
                 key={toIso(day)}
                 type="button"
                 className={`rounded-lg py-1.5 ${value === toIso(day) ? 'bg-primary font-semibold text-black' : 'text-white hover:bg-white/10'}`}
-                onClick={() => { onChange(toIso(day)); setOpen(false); }}
+                onClick={() => { commitDate(day); setOpen(false); }}
               >
                 {day.getDate()}
               </button>
             ) : <span key={`empty-${index}`} />)}
           </div>
           <div className="mt-2 flex justify-end border-t border-white/10 pt-2">
-            <button type="button" className="text-xs font-semibold text-primary hover:text-white" onClick={() => { onChange(''); setOpen(false); }}>Leeren</button>
+            <button type="button" className="text-xs font-semibold text-primary hover:text-white" onClick={() => { setInputText(''); onChange(''); setOpen(false); }}>Leeren</button>
           </div>
         </div>
       ) : null}
