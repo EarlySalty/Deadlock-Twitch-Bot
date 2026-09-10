@@ -6,8 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use tb_analytics::ad_manager::{
     decide, ActionKind, AdManagerStore, DecisionAction, DecisionInput, ManagedChannel,
     QueuedAction, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
-};
-use tb_raid::{RaidAuthStore, TokenProvider};
+};use tb_raid::{RaidAuthStore, TokenProvider};
 use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule, HelixClient, HelixError};
 
 use crate::task_supervisor::TaskSupervisor;
@@ -208,6 +207,20 @@ async fn process_channel(
             let quiet = store
                 .quiet_messages(session, now, channel.settings.quiet_window_minutes)
                 .await?;
+            // Steam-Match-Status ist optional: ohne frische Presence entscheidet
+            // der Entscheider unverändert nach Chat-Ruhe.
+            let steam_match_state = match store.steam_match_summary(&channel.twitch_login, now).await
+            {
+                Ok(summary) => summary.state,
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        login = %channel.twitch_login,
+                        "Werbemanager: Steam-Match-Status nicht lesbar; Fallback auf Chat-Ruhe"
+                    );
+                    None
+                }
+            };
             let input = DecisionInput {
                 now,
                 settings: channel.settings.clone(),
@@ -217,6 +230,7 @@ async fn process_channel(
                 snooze_count: schedule.snooze_count,
                 quiet_chat_messages: quiet,
                 chat_ingest_healthy,
+                steam_match_state,
             };
             Some(decide(&input))
         } else {
@@ -610,5 +624,28 @@ mod tests {
         assert!(token_branch
             .find("return Ok(RunHealth::Degraded)")
             .is_some());
+    }
+
+    #[test]
+    fn steam_status_wird_vor_der_entscheidung_gelesen_und_ist_optional() {
+        let source = include_str!("ad_manager_wiring.rs");
+        let process = &source[source.find("async fn process_channel").unwrap()
+            ..source.find("async fn execute").unwrap()];
+        let summary = process
+            .find(".steam_match_summary")
+            .expect("Steam-Lookup im Kanal-Pfad");
+        let decide = process
+            .find("Some(decide(&input))")
+            .expect("Entscheidung nach dem Lookup");
+        assert!(summary < decide, "Match-Status zuerst lesen, dann entscheiden");
+        let between = &process[summary..decide];
+        assert!(
+            between.contains("Err(error)"),
+            "Lookup-Fehler darf den Lauf nicht abbrechen"
+        );
+        assert!(
+            between.contains("None"),
+            "Ohne Status läuft der Chat-Ruhe-Fallback"
+        );
     }
 }

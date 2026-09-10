@@ -9,6 +9,7 @@ Dieser Guide wurde gegen den aktuellen Codebestand geprueft. Er beschreibt die S
 - [Dashboard und Seiten](DASHBOARD.md)
 - [Commands](COMMANDS.md)
 - [Features und Workflows](FEATURES.md)
+- [Werbemanager](WERBEMANAGER.md)
 - [Chat-Netzwerk deaktiviert](CHAT_NETWORK_DISABLED.md)
 - [Chat Penetration deaktiviert](CHAT_PENETRATION_DISABLED.md)
 

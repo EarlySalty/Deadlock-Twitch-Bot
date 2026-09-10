@@ -5,6 +5,7 @@ import {
   Clock3,
   ExternalLink,
   FlaskConical,
+  Gamepad2,
   Loader2,
   PauseCircle,
   Play,
@@ -25,6 +26,7 @@ import {
   saveAdManagerSettings,
   type AdManagerResponse,
   type AdManagerSettingsInput,
+  type AdManagerSteamStatus,
   type AdManagerStrategy,
 } from '@/api/adManager';
 import { ApiHttpError } from '@/api/httpError';
@@ -51,9 +53,60 @@ const STRATEGIES: Array<{
   {
     id: 'smart',
     label: 'Intelligent steuern',
-    description: 'Der Bot verschiebt Werbung oder startet sie nach deinen Grenzen in einer geschätzten Chat-Ruhephase.',
+    description:
+      'Mit Steam-Anbindung hält der Bot Werbung aus deinen Matches und startet sie in deiner Queue. Ohne Steam-Status nutzt er ruhige Chat-Phasen.',
   },
 ];
+
+function steamStatusView(steam: AdManagerSteamStatus): {
+  value: string;
+  hint: string;
+  tone: string;
+} {
+  if (!steam.linked) {
+    return {
+      value: 'Nicht verbunden',
+      hint: 'Hinterlege deine SteamID64 im Tab Bot & Schutz bei der KI-Engagement.',
+      tone: 'text-text-secondary',
+    };
+  }
+  switch (steam.state) {
+    case 'in_match':
+      return {
+        value: 'Im Match',
+        hint: steam.hero
+          ? `${steam.hero}. Werbung wird so lange wie möglich verschoben.`
+          : 'Werbung wird so lange wie möglich verschoben.',
+        tone: 'text-warning',
+      };
+    case 'in_queue':
+      return {
+        value: 'In der Queue',
+        hint: 'Gutes Werbefenster: Fällt Werbung an, startet sie jetzt.',
+        tone: 'text-success',
+      };
+    case 'out_of_game':
+      return {
+        value: 'Nicht im Spiel',
+        hint: 'Werbung ist gerade unkritisch.',
+        tone: 'text-text-secondary',
+      };
+    case 'stale':
+      return {
+        value: 'Status zu alt',
+        hint: steam.observedAt
+          ? `Letzter Stand: ${formatDateTime(steam.observedAt)}. Der Bot nutzt vorerst die Chat-Ruhe.`
+          : 'Der Bot nutzt vorerst die Chat-Ruhe.',
+        tone: 'text-warning',
+      };
+    default:
+      return {
+        value: 'Warten auf Status',
+        hint: 'Sobald Steam-Daten ankommen, erscheint hier dein Match-Status.',
+        tone: 'text-text-secondary',
+      };
+  }
+}
 
 function settingsEqual(a: AdManagerSettingsInput | null, b: AdManagerSettingsInput | null): boolean {
   return a !== null && b !== null && JSON.stringify(a) === JSON.stringify(b);
@@ -376,7 +429,8 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           </p>
           <h2 className="display-font text-2xl font-bold text-white">Intelligenter Werbemanager</h2>
           <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Beobachtet deinen Twitch-Werbeplan, nutzt verfügbare Pausen oder legt Werbung nach deinen Regeln in ruhige Chat-Phasen.
+            Beobachtet deinen Twitch-Werbeplan, nutzt verfügbare Pausen oder legt Werbung in
+            ruhige Momente: mit Steam-Anbindung in deine Queue, sonst in ruhige Chat-Phasen.
           </p>
         </div>
         <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${
@@ -501,6 +555,20 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             tone="text-text-secondary"
           />
         </div>
+        {(() => {
+          const steamView = steamStatusView(status.steam);
+          return (
+            <div className="mt-3">
+              <StatusCard
+                icon={<Gamepad2 className="h-4 w-4" />}
+                label="Match-Status (Steam)"
+                value={steamView.value}
+                hint={steamView.hint}
+                tone={steamView.tone}
+              />
+            </div>
+          );
+        })()}
       </div>
 
       {status.lastAction ? (
@@ -622,7 +690,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           />
           <NumberSetting
             label="Chat-Ruhefenster"
-            description="So lange muss ungefähr keine neue Chat-Nachricht kommen. Streaminhalt und Audio werden nicht erkannt."
+            description="So lange muss ungefähr keine neue Chat-Nachricht kommen. Gilt, wenn dein Steam-Status gerade nicht frisch ist."
             value={draft.quietWindowMinutes}
             min={0}
             max={60}

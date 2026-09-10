@@ -55,6 +55,13 @@ const response: AdManagerResponse = {
     workerHeartbeatAt: '2026-09-01T09:59:58Z',
     lastAction: null,
     scopes: { read: true, snooze: true, commercial: true },
+    steam: {
+      linked: true,
+      state: 'in_queue',
+      hero: 'Seven',
+      stage: null,
+      observedAt: '2026-09-01T09:59:40Z',
+    },
   },
 };
 
@@ -80,6 +87,48 @@ test('liest den Werbemanager aus der angemeldeten Session', async () => {
   assert.equal(result.settings.strategy, 'smart');
   assert.equal(result.status.workerHealthy, true);
   assert.equal(result.status.workerHeartbeatAt, '2026-09-01T09:59:58Z');
+  assert.equal(result.status.steam.linked, true);
+  assert.equal(result.status.steam.state, 'in_queue');
+});
+
+test('Steam-Status ist verpflichtender Teil des Statusvertrags', async () => {
+  const fixture = getPreviewPathFixture(
+    '/twitch/api/v2/streamer/ad-manager',
+  ) as AdManagerResponse;
+
+  assert.equal(typeof fixture.status.steam.linked, 'boolean');
+  assert.ok(
+    fixture.status.steam.state === null ||
+      ['in_match', 'in_queue', 'out_of_game', 'stale'].includes(fixture.status.steam.state),
+  );
+});
+
+test('Werbemanager-UI zeigt Match-Status und nennt den Queue-Pfad', () => {
+  assert.match(
+    adManagerSectionSource,
+    /Match-Status \(Steam\)/,
+    'die Status-Karte für die Steam-Anbindung muss existieren',
+  );
+  assert.match(
+    adManagerSectionSource,
+    /steamStatusView\(status\.steam\)/,
+    'die Karte muss aus dem Statusvertrag gespeist werden',
+  );
+  assert.match(
+    adManagerSectionSource,
+    /Bot & Schutz/,
+    'ohne Steam-Anbindung muss der Pflegeort genannt werden',
+  );
+  assert.match(
+    adManagerSectionSource,
+    /startet sie in deiner Queue/,
+    'die Smart-Strategie muss das Queue-Verhalten beschreiben',
+  );
+  assert.match(
+    adManagerSectionSource,
+    /vorerst die Chat-Ruhe/,
+    'der Fallback bei veraltetem Status muss benannt sein',
+  );
 });
 
 test('übernimmt einen ausgefallenen Worker ehrlich statt Aktivität abzuleiten', async () => {
