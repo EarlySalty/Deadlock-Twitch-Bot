@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Menu, X, MessageCircle } from 'lucide-react';
 import { useScrollSpy } from '@/hooks/useScrollSpy';
-import { AFFILIATE_PROGRAM_PATH } from '@/data/sitePaths';
 import { DISCORD_INVITE_URL, TWITCH_DASHBOARD_URL } from '@/data/externalLinks';
 import { openSiteChatbot } from '@/components/layout/SiteChatbot';
 import { DiscordLogo } from '@/components/ui/DiscordLogo';
@@ -20,7 +19,6 @@ const NAV_LINKS: NavLink[] = [
   { label: 'Community', id: 'community' },
   { label: 'Sicherheit', id: 'sicherheit' },
   { label: 'Streamer-Zahlen', href: '/streamer/vergleich/' },
-  { label: 'Vertriebler', href: AFFILIATE_PROGRAM_PATH },
 ];
 
 const SECTION_IDS = NAV_LINKS.flatMap((link) => (link.id ? [link.id] : []));
