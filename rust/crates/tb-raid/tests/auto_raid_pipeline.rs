@@ -946,12 +946,11 @@ async fn blacklist_und_quelle_werden_nie_geraidet() {
     seed_source_token(&pool, "100").await;
     seed_score(&pool, "200", 0.9, 1).await;
     sqlx::query(
-        "INSERT INTO twitch_raid_blacklist (target_login, target_id) VALUES ('boese', '200')",
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) VALUES ('boese', '200')",
     )
     .execute(&pool)
     .await
     .unwrap();
-    // Quelle selbst als "Partner" (Roster filtert das normal schon) + Blacklist-Ziel.
     let h = build(&pool, HashMap::new(), vec![]);
     let outcome = h
         .pipeline
@@ -1171,4 +1170,86 @@ async fn outreach_boost_gewinnt_vor_partner_und_wird_verbraucht() {
     .await
     .unwrap();
     assert!(used.is_some(), "raid_used_at gesetzt");
+}
+
+#[tokio::test]
+async fn partner_bleibt_ziel_trotz_weicher_raid_blacklist() {
+    let pool = pool_or_skip!("t6w_pipe_partner_soft_exempt");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at) \
+         VALUES ('ziel', '200', 'confirmed_external_recruitment_limit', 'now')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+
+    let outcome = h.pipeline.run(&request(vec![partner("200", "ziel")])).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "ziel".to_string(),
+            is_partner_raid: true,
+        },
+        "aktiver Partner darf nicht an der weichen Raid-Blacklist haengen"
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200"]);
+}
+
+#[tokio::test]
+async fn partner_bleibt_ausgeschlossen_bei_hartem_global_ban() {
+    let pool = pool_or_skip!("t6w_pipe_partner_hard_ban");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id) \
+         VALUES ('ziel', '200')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![]);
+
+    let outcome = h.pipeline.run(&request(vec![partner("200", "ziel")])).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::NoTarget,
+        "harter globaler Ban schliesst auch einen Partner aus"
+    );
+    assert!(h.api.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn fallback_filtert_nicht_partner_weiter_gegen_weiche_blacklist() {
+    let pool = pool_or_skip!("t6w_pipe_fallback_soft_filter");
+    seed_source_token(&pool, "100").await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason) \
+         VALUES ('geblockter_kanal', '300', 'raid blacklist')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut geblockt = fairness("300", "geblockter_kanal");
+    geblockt.viewer_count = 1;
+    let mut erlaubt = fairness("600", "erlaubter_kanal");
+    erlaubt.viewer_count = 20;
+    let h = build(&pool, HashMap::new(), vec![geblockt, erlaubt]);
+
+    let outcome = h.pipeline.run(&request(vec![])).await;
+
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "erlaubter_kanal".to_string(),
+            is_partner_raid: false,
+        },
+        "der Kategorie-Fallback filtert weiche Blacklist-Eintraege unveraendert"
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
 }

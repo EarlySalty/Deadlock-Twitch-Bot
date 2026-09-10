@@ -440,12 +440,8 @@ impl AutoRaidPipeline {
 
     pub async fn run(&self, req: &AutoRaidRequest) -> AutoRaidPipelineOutcome {
         let flow_start = Instant::now();
-        let blacklist_sets = if req.respect_soft_raid_blacklist {
-            self.blacklist.load_all().await
-        } else {
-            self.blacklist.load_hard_bans().await
-        };
-        let (blacklist_ids, blacklist_logins) = match blacklist_sets {
+        let (hard_blacklist_ids, hard_blacklist_logins) = match self.blacklist.load_hard_bans().await
+        {
             Ok(sets) => sets,
             Err(error) => {
                 tracing::error!(%error, "Raid-Pipeline blockiert: Blacklist nicht ladbar");
@@ -453,6 +449,19 @@ impl AutoRaidPipeline {
                     error: "blacklist_unavailable".to_string(),
                 };
             }
+        };
+        let (full_blacklist_ids, full_blacklist_logins) = if req.respect_soft_raid_blacklist {
+            match self.blacklist.load_all().await {
+                Ok(sets) => sets,
+                Err(error) => {
+                    tracing::error!(%error, "Raid-Pipeline blockiert: Blacklist nicht ladbar");
+                    return AutoRaidPipelineOutcome::Blocked {
+                        error: "blacklist_unavailable".to_string(),
+                    };
+                }
+            }
+        } else {
+            (hard_blacklist_ids.clone(), hard_blacklist_logins.clone())
         };
 
         // Score-Cache einmal für alle Partner-Kandidaten laden.
@@ -520,8 +529,10 @@ impl AutoRaidPipeline {
                     &scores,
                     raider_class,
                     &boost_logins,
-                    &blacklist_ids,
-                    &blacklist_logins,
+                    &hard_blacklist_ids,
+                    &hard_blacklist_logins,
+                    &full_blacklist_ids,
+                    &full_blacklist_logins,
                     &exclude_ids,
                     &mut cached_fallback,
                     attempt,
@@ -757,8 +768,10 @@ impl AutoRaidPipeline {
         // Courtesy-Klasse des raidenden Streamers (Matching-Präferenz).
         raider_class: Option<CourtesyClass>,
         boost_logins: &HashSet<String>,
-        blacklist_ids: &HashSet<String>,
-        blacklist_logins: &HashSet<String>,
+        hard_blacklist_ids: &HashSet<String>,
+        hard_blacklist_logins: &HashSet<String>,
+        full_blacklist_ids: &HashSet<String>,
+        full_blacklist_logins: &HashSet<String>,
         exclude_ids: &HashSet<String>,
         cached_fallback: &mut Option<Vec<FairnessCandidate>>,
         attempt: usize,
@@ -788,8 +801,8 @@ impl AutoRaidPipeline {
             if let Some(target) = resolve_boost_target(
                 cached_fallback.as_deref().unwrap_or(&[]),
                 boost_logins,
-                blacklist_ids,
-                blacklist_logins,
+                full_blacklist_ids,
+                full_blacklist_logins,
                 exclude_ids,
             ) {
                 tracing::info!(
@@ -805,8 +818,8 @@ impl AutoRaidPipeline {
         let partner = resolve_partner_target(
             &req.partners,
             scores,
-            blacklist_ids,
-            blacklist_logins,
+            hard_blacklist_ids,
+            hard_blacklist_logins,
             exclude_ids,
             raider_class,
         );
@@ -861,7 +874,8 @@ impl AutoRaidPipeline {
         // Filter → Follower-Anreicherung (nur auf dem gefilterten Pool, nicht
         // allen 50 Streams) → Tie-Break. Python: `attach_followers_totals(pool)`
         // vor der Sortierung in `select_fairest_candidate`.
-        let mut pool = filter_fallback_pool(streams, blacklist_ids, blacklist_logins, exclude_ids);
+        let mut pool =
+            filter_fallback_pool(streams, full_blacklist_ids, full_blacklist_logins, exclude_ids);
         if let Some(enricher) = &self.follower_enricher {
             if self.observability_analytics.is_some() {
                 let observation = enricher.enrich_with_observability(&mut pool).await;
