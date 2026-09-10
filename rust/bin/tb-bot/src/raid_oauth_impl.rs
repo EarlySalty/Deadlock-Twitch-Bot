@@ -2914,6 +2914,13 @@ mod callback_tests {
                 twitch_user_id TEXT PRIMARY KEY,
                 streamer_login TEXT NOT NULL
             )"#,
+            // Die Partner-Reaktivierung entfernt frühere Recruitment-Sperren.
+            r#"CREATE TABLE twitch_raid_blacklist (
+                target_login TEXT PRIMARY KEY,
+                target_id TEXT,
+                reason TEXT,
+                added_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )"#,
             r#"CREATE TABLE twitch_stats_category (
                 ts_utc TIMESTAMPTZ NOT NULL,
                 streamer TEXT NOT NULL,
