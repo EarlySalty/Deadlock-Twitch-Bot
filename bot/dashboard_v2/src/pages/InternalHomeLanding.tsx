@@ -789,7 +789,6 @@ export function InternalHomeLanding() {
         </div>
 
         <div className="space-y-4 md:space-y-5">
-          <div id="feedback"><FeedbackBox area="Übersicht" /></div>
         <Rise
           step={{ seconds: 0.16 }}
           as="aside"
@@ -839,6 +838,7 @@ export function InternalHomeLanding() {
               </div>
             )}
         </Rise>
+          <div id="feedback"><FeedbackBox area="Übersicht" /></div>
         </div>
       </div>
     </>

@@ -6,6 +6,8 @@ import { OnboardingGuide } from './OnboardingGuide';
 export function EinrichtungCard({ help = false }: { help?: boolean }) {
   const {enabled, status, error, loading, pending, refresh, open} = useOnboarding();
   if (!enabled) return help ? <section className="panel-card rounded-2xl p-6"><h1 className="text-2xl font-bold text-white">Hilfe & Einrichtung</h1><p className="mt-3 text-text-secondary">Öffne deine persönliche Partner-Ansicht, um deine Konten zu verbinden und den Rundgang zu nutzen.</p><a className="mt-3 inline-block text-primary underline" href="/twitch/verwaltung">Zur Verwaltung</a></section> : null;
+  // Abgeschlossener Rundgang bleibt geschlossen; Neustart nur über die Hilfe-Panel-Karte bzw. die Seitenleiste.
+  if (!help && status?.completed && status.paused) return null;
   return <section id="einrichtung" className="panel-card rounded-2xl p-5 md:p-6">
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="mb-1 text-xs font-bold uppercase tracking-wider text-primary">Dein Einstieg</p><h2 className="text-xl font-bold text-white">Hier richtest du deinen Bot ein</h2><p className="mt-2 max-w-2xl text-sm leading-relaxed text-text-secondary">Speichere dieses Dashboard als Lesezeichen im Browser. So findest du es später mit einem Klick wieder. Verbinde danach deine Konten und entscheide selbst, was der Bot macht. Wir zeigen dir die Einstellungen direkt in der Verwaltung.</p></div>

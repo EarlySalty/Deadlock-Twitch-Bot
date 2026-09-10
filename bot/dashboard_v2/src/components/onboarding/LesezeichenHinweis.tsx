@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Bookmark } from 'lucide-react';
-import { BOOKMARK_BROWSERS, erkenneBrowser, lesezeichenAnleitung, type BookmarkBrowser } from '@/utils/browserErkennung';
+import { BOOKMARK_BROWSERS, erkenneBrowser, lesezeichenAnleitung, type BookmarkBrowser } from '../../utils/browserErkennung';
 import { canonicalBookmarkLocation } from './steps';
 
 /** Die Anleitung ist Teil der gemeinsamen Einrichtung, kein eigener Dialog/Browsermarker. */

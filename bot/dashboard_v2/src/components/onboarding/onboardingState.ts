@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react';
 import type { OnboardingStatus, OnboardingUpdate } from '../../api/onboarding';
 import type { OnboardingStepId } from './steps';
 
-type OnboardingContextValue = {
+export type OnboardingContextValue = {
   enabled: boolean;
   status?: OnboardingStatus;
   loading: boolean;
