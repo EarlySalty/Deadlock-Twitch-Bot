@@ -1,4 +1,5 @@
-import type { UplinkDestination } from './api/uplink';
+import type { QueryClient } from '@tanstack/react-query';
+import type { UplinkDestination, UplinkDestinationSaveAck } from './api/uplink';
 import { profilText } from './uplinkBetrieb';
 
 export type UplinkTwitchOutputMode = 'single' | 'enhanced';
@@ -31,4 +32,17 @@ export function twitchOutputFormular(ziel: UplinkDestination | undefined, entwur
 /** Unberührte Wahl und andere Plattformen bleiben bei Teiländerungen unangetastet. */
 export function twitchOutputPayload(platform: string, entwurf: UplinkTwitchOutputMode | null) {
   return platform === 'twitch' && entwurf !== null ? { twitch_output_mode: entwurf } : {};
+}
+
+/** PUT bestätigt die Speicherung. Erst ein neuer GET darf den Zielcache ersetzen. */
+export async function bestaetigeUplinkSpeichern(
+  ack: UplinkDestinationSaveAck,
+  client: QueryClient,
+  laden: () => Promise<{ destinations: UplinkDestination[] }>,
+) {
+  if (ack.ok !== true) throw new Error('Speichern wurde nicht bestätigt.');
+  const queryKey = ['uplink-destinations'];
+  await client.cancelQueries({ queryKey });
+  await client.invalidateQueries({ queryKey, refetchType: 'none' });
+  return client.fetchQuery({ queryKey, queryFn: laden, staleTime: 0, retry: false });
 }

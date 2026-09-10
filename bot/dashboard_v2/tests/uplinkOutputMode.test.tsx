@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
+import { QueryClient } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { UplinkDestination } from '../src/api/uplink';
-import { twitchOutputFormular, twitchOutputPayload } from '../src/uplinkOutputMode';
+import { bestaetigeUplinkSpeichern, twitchOutputFormular, twitchOutputPayload } from '../src/uplinkOutputMode';
 import { UplinkOutputMode } from '../src/pages/UplinkOutputMode';
 
 const profil = { width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 };
@@ -13,6 +14,58 @@ const ziel: UplinkDestination = {
   output_state: 'sending', active_profiles: [profil],
   fallback_reason: 'Twitch hat keine zusätzlichen Qualitätsstufen freigegeben.',
 };
+
+test('Speicher-ACK ersetzt keinen Zielcache; nur bestätigter GET aktualisiert die Ausgabe', async () => {
+  const client = new QueryClient();
+  const vorher = { destinations: [{ ...ziel, requested_output_mode: 'single' as const }] };
+  client.setQueryData(['uplink-destinations'], vorher);
+  let fertig!: (value: { destinations: UplinkDestination[] }) => void;
+  const geladen = new Promise<{ destinations: UplinkDestination[] }>((resolve) => { fertig = resolve; });
+  const gespeichert = bestaetigeUplinkSpeichern({ ok: true, connection_generations: { twitch: 2 } }, client, () => geladen);
+  assert.deepEqual(client.getQueryData(['uplink-destinations']), vorher);
+  const nachher = { destinations: [ziel] };
+  fertig(nachher);
+  assert.deepEqual(await gespeichert, nachher);
+  assert.deepEqual(client.getQueryData(['uplink-destinations']), nachher);
+  client.clear();
+});
+
+test('GET-Fehler nach erfolgreichem ACK bewahrt letzten gültigen Cache und Modusentwurf', async () => {
+  const client = new QueryClient();
+  const vorher = { destinations: [{ ...ziel, requested_output_mode: 'single' as const }] };
+  client.setQueryData(['uplink-destinations'], vorher);
+  await assert.rejects(bestaetigeUplinkSpeichern(
+    { ok: true, connection_generations: { twitch: 2 } }, client,
+    async () => { throw new Error('GET nicht erreichbar'); },
+  ), /GET nicht erreichbar/);
+  assert.deepEqual(client.getQueryData(['uplink-destinations']), vorher);
+  const state = twitchOutputFormular(vorher.destinations[0], 'enhanced');
+  assert.equal(state.auswahl, 'enhanced');
+  assert.equal(state.geaendert, true);
+  assert.equal(state.aktiv, 'single');
+  client.clear();
+});
+
+test('ein vor dem PUT gestarteter Poll kann den neuen GET nicht ersetzen', async () => {
+  const client = new QueryClient();
+  const vorher = { destinations: [{ ...ziel, requested_output_mode: 'single' as const }] };
+  client.setQueryData(['uplink-destinations'], vorher);
+  let alterPollFertig!: (value: typeof vorher) => void;
+  const alterPoll = client.fetchQuery({ queryKey: ['uplink-destinations'], staleTime: 0,
+    queryFn: () => new Promise<typeof vorher>((resolve) => { alterPollFertig = resolve; }),
+  }).catch(() => undefined);
+  let neuGeladen = 0;
+  const nachher = { destinations: [ziel] };
+  await bestaetigeUplinkSpeichern({ ok: true, connection_generations: { twitch: 2 } }, client, async () => {
+    neuGeladen++;
+    return nachher;
+  });
+  alterPollFertig(vorher);
+  await alterPoll;
+  assert.equal(neuGeladen, 1);
+  assert.deepEqual(client.getQueryData(['uplink-destinations']), nachher);
+  client.clear();
+});
 
 test('gespeicherter Enhanced-Wunsch bleibt beim tatsächlichen Einzelstream samt Grund sichtbar', () => {
   const state = twitchOutputFormular(ziel, null);

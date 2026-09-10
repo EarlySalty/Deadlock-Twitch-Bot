@@ -542,6 +542,12 @@ export const TWITCH_AUDIO_LABEL: Record<UplinkTwitchAudioMode, string> = {
  * `profil` und `manuell` schliessen sich aus; der Server lehnt beides
  * zusammen mit 400 ab, statt sich still fuer eins zu entscheiden.
  */
+export interface UplinkDestinationSaveAck {
+  ok: boolean;
+  connection_generations: Partial<Record<UplinkPlattform, number>>;
+  live_quality?: UplinkLiveQualitaet;
+}
+
 export function saveUplinkDestination(body: {
   platform: UplinkPlattform;
   rtmp_url?: string;
@@ -553,7 +559,7 @@ export function saveUplinkDestination(body: {
   twitch_audio_mode?: UplinkTwitchAudioMode;
   /** Nur für Twitch; weglassen bewahrt die gespeicherte Betriebsart. */
   twitch_output_mode?: UplinkTwitchOutputMode;
-}): Promise<{ destinations: UplinkDestination[]; live_quality?: UplinkLiveQualitaet }> {
+}): Promise<UplinkDestinationSaveAck> {
   return fetchJson('/twitch/api/v2/uplink/destinations', withCookieCredentials({
     method: 'PUT',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },

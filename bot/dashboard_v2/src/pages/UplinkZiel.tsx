@@ -11,6 +11,7 @@ import {
   profilNameFuer,
   holeUplinkStreamKey,
   saveUplinkDestination,
+  fetchUplinkDestinations,
   twitchAudioFormular,
   TWITCH_AUDIO_LABEL,
   trenneUplinkPlattform,
@@ -31,7 +32,7 @@ import type {
 } from '@/api/uplink';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import { profilText, zielBetrieb } from '@/uplinkBetrieb';
-import { twitchOutputFormular, twitchOutputPayload } from '../uplinkOutputMode';
+import { bestaetigeUplinkSpeichern, twitchOutputFormular, twitchOutputPayload } from '../uplinkOutputMode';
 import type { UplinkTwitchOutputMode } from '../uplinkOutputMode';
 import { UplinkOutputMode } from './UplinkOutputMode';
 
@@ -501,16 +502,21 @@ export function ZielKarte({
       }
       return saveUplinkDestination(body);
     },
-    onSuccess: (antwort, _enabled, gesendeteRevision) => {
+    onSuccess: async (antwort, _enabled, gesendeteRevision) => {
+      if (gesendeteRevision === revision.current) setStreamKey('');
+      try {
+        await bestaetigeUplinkSpeichern(antwort, queryClient, fetchUplinkDestinations);
+      } catch {
+        setGespeichert(false);
+        setFehlertext('Gespeichert, aber der aktuelle Zielstatus konnte nicht geladen werden. Deine Auswahl bleibt sichtbar; bitte den Status erneut laden.');
+        return;
+      }
       const unveraendert = gesendeteRevision === revision.current;
-      queryClient.setQueryData(['uplink-destinations'], { destinations: antwort.destinations });
       if (unveraendert) setOutputEntwurf(null);
-      if (unveraendert) setStreamKey('');
       setFehlertext('');
       setGespeichert(unveraendert);
       setLivetext(unveraendert ? antwort.live_quality?.message ?? ''
         : 'Der vorherige Stand wurde gespeichert. Deine neuen Änderungen sind noch offen.');
-      queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
     onError: (e) =>
