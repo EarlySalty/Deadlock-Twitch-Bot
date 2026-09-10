@@ -907,6 +907,8 @@ pub struct DestinationBody {
     pub enabled: Option<bool>,
     /// Nur Twitch, ausdrücklich gespeichert; ausgelassen bleibt unverändert.
     pub twitch_audio_mode: Option<String>,
+    /// Nur Twitch; bei Teilupdates bleibt die gespeicherte Betriebsart erhalten.
+    pub twitch_output_mode: Option<String>,
 }
 
 fn fehler(status: StatusCode, text: &str) -> Response {
@@ -963,6 +965,16 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
             ));
         }
         felder.insert("twitch_audio_mode".into(), json!(mode));
+    }
+
+    if let Some(mode) = body.twitch_output_mode.as_deref() {
+        if body.platform.trim() != "twitch" || !matches!(mode, "single" | "enhanced") {
+            return Err(fehler(
+                StatusCode::BAD_REQUEST,
+                "Twitch-Betriebsart ist ungültig.",
+            ));
+        }
+        felder.insert("twitch_output_mode".into(), json!(mode));
     }
 
     let werte = match (&body.profil, body.manuell) {
@@ -1709,6 +1721,36 @@ mod tests {
             manuell: None,
             enabled: None,
             twitch_audio_mode: None,
+            twitch_output_mode: None,
+        }
+    }
+
+    #[test]
+    fn twitch_output_mode_is_explicit_and_does_not_replace_saved_profile() {
+        for mode in ["single", "enhanced"] {
+            let request: DestinationBody =
+                serde_json::from_value(json!({"platform":"twitch","twitch_output_mode":mode}))
+                    .unwrap();
+            assert_eq!(
+                ziel_nutzlast(&request).unwrap(),
+                json!({"platform":"twitch","twitch_output_mode":mode})
+            );
+        }
+        let mut unchanged = body("twitch");
+        unchanged.enabled = Some(false);
+        assert!(ziel_nutzlast(&unchanged)
+            .unwrap()
+            .get("twitch_output_mode")
+            .is_none());
+        for (platform, mode) in [
+            ("kick", "enhanced"),
+            ("youtube", "single"),
+            ("twitch", "automatic"),
+        ] {
+            let request: DestinationBody =
+                serde_json::from_value(json!({"platform":platform,"twitch_output_mode":mode}))
+                    .unwrap();
+            assert!(ziel_nutzlast(&request).is_err());
         }
     }
 

@@ -15,6 +15,8 @@ export interface ZielBetriebsdaten {
   output_state?: 'unknown' | 'starting' | 'sending' | 'failed' | 'finished';
   reason?: string | null;
   active_profile?: LaufendesProfil | null;
+  /** Ausschließlich tatsächlich laufende Qualitätsstufen aus dem Sendegraph. */
+  active_profiles?: LaufendesProfil[] | null;
   publication_confirmed?: boolean;
 }
 
