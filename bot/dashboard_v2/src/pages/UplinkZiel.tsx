@@ -561,6 +561,17 @@ export function ZielKarte({
     (!enhancedGewaehlt && eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
     || (platform === 'twitch' && (audio.geaendert || output.geaendert));
   const betrieb = zielBetrieb(ziel, chat?.status);
+  const eingangsCodec = ziel?.input_codec === 'h264' ? 'H.264'
+    : ziel?.input_codec === 'hevc' ? 'HEVC'
+    : ziel?.input_codec === 'av1' ? 'AV1' : null;
+  const eingangsBitrate = typeof ziel?.input_bitrate_kbps === 'number'
+    && Number.isFinite(ziel.input_bitrate_kbps) && ziel.input_bitrate_kbps >= 0
+    ? ziel.input_bitrate_kbps.toLocaleString('de-DE', { maximumFractionDigits: 0 }) : null;
+  const eingangsMessung = eingangsCodec !== null || eingangsBitrate !== null
+    ? `Eingang: ${eingangsCodec ?? 'Codec wird ermittelt'} · ${eingangsBitrate !== null
+      ? `Upload Ø ${eingangsBitrate} kbit/s seit Streamstart (Bild und Ton)` : 'Upload wird gemessen'}`
+    : betrieb.state === 'starting' || betrieb.state === 'sending'
+      ? 'Eingang wird gemessen' : 'Eingang: noch kein Messwert';
   const kartenStatus = betrieb.state;
   const statusText = betrieb.label;
   const liveBestaetigt = betrieb.tone === 'success';
@@ -616,6 +627,7 @@ export function ZielKarte({
             <span className="mt-1 block text-xs font-normal text-text-secondary">
               {betrieb.activeProfile ? `${betrieb.activeProfile.profile_origin === 'running_graph' ? 'Laufendes Encoderprofil' : 'Aktuelle Ausgabe'}: ${profilText(betrieb.activeProfile)}` : 'Aktuelle Ausgabe: noch nicht bestätigt'}
             </span>
+            {eingerichtet ? <span className="mt-1 block text-xs font-normal text-text-secondary">{eingangsMessung}</span> : null}
             {betrieb.reason ? <span className="mt-1 block text-xs font-normal text-warning">{betrieb.reason}</span> : null}
             {chat ? <PlattformVerbindung chat={chat} csrfToken={csrfToken ?? null} /> : null}
           </span>

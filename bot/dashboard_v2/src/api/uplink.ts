@@ -597,6 +597,10 @@ export interface UplinkDestination extends ZielBetriebsdaten {
   platform: string;
   rtmp_url: string;
   enabled: boolean;
+  /** Gemessener Codec des laufenden OBS-Eingangs; ohne Messung oder Session null. */
+  input_codec?: string | null;
+  /** Gemittelte Eingangsbitrate seit Streamstart, einschließlich Ton, in kbit/s. */
+  input_bitrate_kbps?: number | null;
   requested_output_mode?: UplinkTwitchOutputMode | null;
   active_output_mode?: UplinkTwitchOutputMode | null;
   fallback_reason?: string | null;
