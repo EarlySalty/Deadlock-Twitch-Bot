@@ -124,12 +124,12 @@ test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Ste
     'ohne Steam-Anbindung muss der Pflegeort genannt werden',
   );
   assert.match(adManagerSectionSource, /Nur Twitch-Pausen nutzen/);
-  assert.match(adManagerSectionSource, /Startet selbst keine Werbung/);
+  assert.match(adManagerSectionSource, /Keine Werbung durch den Bot/);
   assert.match(adManagerSectionSource, /Match schützen & Queue nutzen/);
   assert.match(adManagerSectionSource, /Empfohlen/);
-  assert.match(adManagerSectionSource, /Im Match → Werbung verschieben/);
-  assert.match(adManagerSectionSource, /Queue oder Menü → Werbung starten/);
-  assert.match(adManagerSectionSource, /Ohne Steam-Status → ruhige Chat-Phase nutzen/);
+  assert.match(adManagerSectionSource, /Im Match: Werbung verschieben/);
+  assert.match(adManagerSectionSource, /Queue oder Menü: Werbung starten/);
+  assert.match(adManagerSectionSource, /Ohne Steam: ruhige Chat-Phase nutzen/);
   assert.doesNotMatch(adManagerSectionSource, /Werbung möglichst verschieben/);
   assert.doesNotMatch(adManagerSectionSource, />Intelligent steuern</);
   assert.match(
