@@ -13,7 +13,7 @@ fn steam_state(in_match: bool) -> SteamMatchState {
         in_match,
         in_deadlock: true,
         hero: Some("Haze".into()),
-        stage: Some("laning".into()).filter(|_| in_match),
+        stage: in_match.then_some("laning".into()),
         observed_at: now() - Duration::seconds(30),
     }
 }

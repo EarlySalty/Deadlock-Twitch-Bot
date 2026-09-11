@@ -210,18 +210,18 @@ async fn process_channel(
                 .await?;
             // Steam-Match-Status ist optional: ohne frische Presence entscheidet
             // der Entscheider unverändert nach Chat-Ruhe.
-            let steam_match_state = match store.steam_match_summary(&channel.twitch_login, now).await
-            {
-                Ok(summary) => summary.state,
-                Err(error) => {
-                    tracing::debug!(
-                        %error,
-                        login = %channel.twitch_login,
-                        "Werbemanager: Steam-Match-Status nicht lesbar; Fallback auf Chat-Ruhe"
-                    );
-                    None
-                }
-            };
+            let steam_match_state =
+                match store.steam_match_summary(&channel.twitch_login, now).await {
+                    Ok(summary) => summary.state,
+                    Err(error) => {
+                        tracing::debug!(
+                            %error,
+                            login = %channel.twitch_login,
+                            "Werbemanager: Steam-Match-Status nicht lesbar; Fallback auf Chat-Ruhe"
+                        );
+                        None
+                    }
+                };
             let input = DecisionInput {
                 now,
                 settings: channel.settings.clone(),
@@ -638,7 +638,10 @@ mod tests {
         let decide = process
             .find("Some(decide(&input))")
             .expect("Entscheidung nach dem Lookup");
-        assert!(summary < decide, "Match-Status zuerst lesen, dann entscheiden");
+        assert!(
+            summary < decide,
+            "Match-Status zuerst lesen, dann entscheiden"
+        );
         let between = &process[summary..decide];
         assert!(
             between.contains("Err(error)"),
