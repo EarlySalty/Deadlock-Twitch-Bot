@@ -6,7 +6,8 @@ use chrono::{DateTime, Duration, Utc};
 use tb_analytics::ad_manager::{
     decide, ActionKind, AdManagerStore, DecisionAction, DecisionInput, ManagedChannel,
     QueuedAction, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
-};use tb_raid::{RaidAuthStore, TokenProvider};
+};
+use tb_raid::{RaidAuthStore, TokenProvider};
 use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule, HelixClient, HelixError};
 
 use crate::task_supervisor::TaskSupervisor;
