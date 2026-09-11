@@ -39,22 +39,35 @@ const STRATEGIES: Array<{
   id: AdManagerStrategy;
   label: string;
   description: string;
+  badge?: string;
+  emphasis?: 'passive' | 'recommended';
+  points?: string[];
 }> = [
   {
     id: 'monitor',
     label: 'Nur überwachen',
-    description: 'Der Bot liest den Twitch-Zeitplan, führt aber selbst keine Werbeaktion aus.',
+    description: 'Der Bot liest den Twitch-Werbeplan, greift aber nicht ein.',
+    points: ['Keine Twitch-Pausen', 'Startet keine Werbung'],
   },
   {
     id: 'snooze',
-    label: 'Werbung möglichst verschieben',
-    description: 'Verfügbare Twitch-Pausen werden kurz vor der nächsten geplanten Werbung genutzt.',
+    label: 'Nur Twitch-Pausen nutzen',
+    badge: 'Passiv',
+    emphasis: 'passive',
+    description: 'Wenn Werbung fällig wird, nutzt der Bot verfügbare Twitch-Snoozes.',
+    points: ['Verschiebt fällige Werbung', 'Startet selbst keine Werbung'],
   },
   {
     id: 'smart',
-    label: 'Intelligent steuern',
-    description:
-      'Mit Steam-Anbindung hält der Bot Werbung aus deinen Matches und startet sie in deiner Queue. Ohne Steam-Status nutzt er ruhige Chat-Phasen.',
+    label: 'Match schützen & Queue nutzen',
+    badge: 'Empfohlen',
+    emphasis: 'recommended',
+    description: 'Der Bot sucht aktiv den ruhigsten Moment für fällige Werbung.',
+    points: [
+      'Im Match → Werbung verschieben',
+      'Queue oder Menü → Werbung starten',
+      'Ohne Steam-Status → ruhige Chat-Phase nutzen',
+    ],
   },
 ];
 
@@ -173,14 +186,14 @@ function StatusCard({
   tone?: string;
 }) {
   return (
-    <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
-      <div className={`mb-2 flex items-center gap-2 ${tone}`}>
+    <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3">
+      <div className={`mb-1.5 flex items-center gap-2 ${tone}`}>
         {icon}
         <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
           {label}
         </span>
       </div>
-      <p className={`text-lg font-bold ${tone}`}>{value}</p>
+      <p className={`text-base font-bold ${tone}`}>{value}</p>
       {hint ? <p className="mt-0.5 text-xs text-text-secondary">{hint}</p> : null}
     </div>
   );
@@ -210,10 +223,10 @@ function NumberSetting({
   const unitId = `${inputId}-einheit`;
 
   return (
-    <div className={`rounded-xl border border-border bg-background/50 p-4 ${disabled ? 'opacity-50' : ''}`}>
+    <div className={`rounded-xl border border-border bg-background/50 p-3 ${disabled ? 'opacity-50' : ''}`}>
       <label htmlFor={inputId} className="block text-sm font-semibold text-white">{label}</label>
-      <p id={descriptionId} className="mt-0.5 min-h-8 text-xs text-text-secondary">{description}</p>
-      <span className="mt-3 flex items-center gap-2">
+      <p id={descriptionId} className="mt-0.5 text-xs leading-relaxed text-text-secondary">{description}</p>
+      <span className="mt-2 flex items-center gap-2">
         <input
           id={inputId}
           type="number"
@@ -224,7 +237,7 @@ function NumberSetting({
           disabled={disabled}
           aria-describedby={`${descriptionId} ${unitId}`}
           onChange={(event) => onChange(Number(event.target.value))}
-          className="min-h-11 min-w-0 flex-1 rounded-lg border border-border-strong bg-card px-3 py-2 text-sm font-semibold text-white outline-none transition-colors focus:border-primary disabled:cursor-not-allowed"
+          className="min-h-10 min-w-0 flex-1 rounded-lg border border-border-strong bg-card px-3 py-2 text-sm font-semibold text-white outline-none transition-colors focus:border-primary disabled:cursor-not-allowed"
         />
         <span id={unitId} className="w-10 text-xs text-text-secondary">{unit}</span>
       </span>
@@ -399,7 +412,6 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
   const { status } = data;
   const nextAd = formatNextAd(status.nextAdAt);
-  const selectedStrategy = STRATEGIES.find((item) => item.id === draft.strategy) ?? STRATEGIES[0];
   const missingScopeLabels = [
     !status.scopes.read ? 'Werbeplan lesen' : null,
     !status.scopes.snooze ? 'Werbung pausieren' : null,
@@ -417,20 +429,20 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       data-tour-id="onboarding-advertising"
       data-tour-ready="true"
       data-unsaved={!settingsEqual(draft, baseline)}
-      className="panel-card rounded-2xl p-5 md:p-6"
+      className="panel-card rounded-2xl p-4 md:p-5"
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32 }}
     >
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="mb-1 flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-primary">
             <FlaskConical className="h-4 w-4" /> Experimentell
           </p>
           <h2 className="display-font text-2xl font-bold text-white">Intelligenter Werbemanager</h2>
           <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Beobachtet deinen Twitch-Werbeplan, nutzt verfügbare Pausen oder legt Werbung in
-            ruhige Momente: mit Steam-Anbindung in deine Queue, sonst in ruhige Chat-Phasen.
+            Du entscheidest, wie stark der Bot eingreift: nur beobachten, nur Twitch-Snoozes nutzen
+            oder Matches schützen und Queue oder Menü aktiv als Werbefenster verwenden.
           </p>
         </div>
         <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${
@@ -447,7 +459,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       </div>
 
       {data.settings.enabled && !status.workerHealthy ? (
-        <div role="alert" className="mb-5 rounded-xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
+        <div role="alert" className="mb-4 rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
           <p className="font-semibold">Die Automatik meldet sich gerade nicht.</p>
           <p className="mt-1 text-xs text-text-secondary">
             Bis der Bot wieder arbeitet, werden keine Werbepausen oder intelligenten Werbungen ausgelöst.
@@ -456,7 +468,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
       ) : null}
 
-      <div className="mb-5 rounded-xl border border-warning/35 bg-warning/10 p-4">
+      <div className="mb-4 rounded-xl border border-warning/35 bg-warning/10 p-3">
         <div className="flex items-start gap-3">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
           <div>
@@ -485,7 +497,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       ) : null}
 
       {needsReauth ? (
-        <div className="mb-5 rounded-xl border border-warning/40 bg-warning/10 p-4">
+        <div className="mb-4 rounded-xl border border-warning/40 bg-warning/10 p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="flex items-center gap-2 text-sm font-semibold text-warning">
@@ -508,7 +520,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
       ) : null}
 
-      <div className="mb-6">
+      <div className="mb-5">
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {status.isLive ? 'Stream läuft.' : 'Stream ist offline.'}{' '}
           {status.nextAdAt ? `Nächste Werbung: ${formatDateTime(status.nextAdAt)}.` : 'Keine nächste Werbung gemeldet.'}{' '}
@@ -526,7 +538,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             {status.isLive ? 'Stream läuft' : 'Offline'}
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <StatusCard
             icon={<Clock3 className="h-4 w-4" />}
             label="Nächste Werbung"
@@ -558,7 +570,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         {(() => {
           const steamView = steamStatusView(status.steam);
           return (
-            <div className="mt-3">
+            <div className="mt-2">
               <StatusCard
                 icon={<Gamepad2 className="h-4 w-4" />}
                 label="Match-Status (Steam)"
@@ -572,7 +584,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       </div>
 
       {status.lastAction ? (
-        <div className="mb-6 rounded-xl border border-border bg-background/50 px-4 py-3 text-sm">
+        <div className="mb-4 rounded-xl border border-border bg-background/50 px-3 py-2.5 text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-semibold text-white">Letzte Bot-Aktion: {actionKindLabel(status.lastAction.kind)}</span>
             <span className="text-xs text-text-secondary">{formatDateTime(status.lastAction.at)}</span>
@@ -583,8 +595,8 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
       ) : null}
 
-      <div className="mb-6 rounded-xl border border-border bg-background/50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-4 rounded-xl border border-border bg-background/50 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-base font-bold text-white">Werbemanager aktiv</p>
             <p className="mt-0.5 text-xs text-text-secondary">
@@ -597,57 +609,83 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             aria-checked={draft.enabled}
             aria-label="Werbemanager aktiv"
             onClick={() => patch({ enabled: !draft.enabled })}
-            className={`relative inline-flex h-11 w-14 shrink-0 items-center rounded-full transition-colors ${
+            className={`relative inline-flex h-9 w-12 shrink-0 items-center rounded-full transition-colors ${
               draft.enabled ? 'bg-primary' : 'bg-border'
             }`}
           >
-            <span className={`inline-block h-6 w-6 rounded-full bg-white transition-transform ${
-              draft.enabled ? 'translate-x-7' : 'translate-x-1'
+            <span className={`inline-block h-5 w-5 rounded-full bg-white transition-transform ${
+              draft.enabled ? 'translate-x-6' : 'translate-x-1'
             }`} />
           </button>
         </div>
       </div>
 
-      <div className="mb-6">
+      <div className="mb-4">
         <h3 className="mb-1 text-base font-bold text-white">Strategie</h3>
-        <p className="mb-3 text-xs text-text-secondary">{selectedStrategy.description}</p>
-        <div className="grid gap-3 md:grid-cols-3">
+        <p className="mb-2 text-xs leading-relaxed text-text-secondary">
+          Passiv verschieben nutzt nur Twitch-Snoozes. Die empfohlene Steuerung schützt Matches und nutzt Queue oder Menü aktiv als Werbefenster.
+        </p>
+        <div className="grid gap-2 md:grid-cols-3">
           {STRATEGIES.map((strategy) => {
             const selected = strategy.id === draft.strategy;
+            const recommended = strategy.emphasis === 'recommended';
             return (
               <button
                 key={strategy.id}
                 type="button"
                 aria-pressed={selected}
                 onClick={() => patch({ strategy: strategy.id })}
-                className={`rounded-xl border p-4 text-left transition-colors ${
+                className={`rounded-xl border p-3 text-left transition-colors ${
                   selected
-                    ? 'border-primary bg-primary/15'
-                    : 'border-border bg-background/50 hover:border-border-hover'
+                    ? 'border-primary bg-primary/15 shadow-[inset_0_0_0_1px_rgba(197,160,89,0.18)]'
+                    : recommended
+                      ? 'border-primary/45 bg-primary/[0.06] hover:border-primary/70'
+                      : 'border-border bg-background/50 hover:border-border-hover'
                 }`}
               >
-                <span className={`mb-2 flex h-9 w-9 items-center justify-center rounded-lg ${
-                  selected ? 'bg-primary text-bg' : 'bg-card text-text-secondary'
-                }`}>
-                  {strategy.id === 'monitor' ? <Radio className="h-4 w-4" /> : strategy.id === 'snooze' ? <PauseCircle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
+                <span className="mb-2 flex items-start justify-between gap-2">
+                  <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                    selected ? 'bg-primary text-bg' : recommended ? 'bg-primary/15 text-primary' : 'bg-card text-text-secondary'
+                  }`}>
+                    {strategy.id === 'monitor' ? <Radio className="h-4 w-4" /> : strategy.id === 'snooze' ? <PauseCircle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
+                  </span>
+                  {strategy.badge ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                      recommended
+                        ? 'border-primary/40 bg-primary/10 text-primary'
+                        : 'border-border bg-card text-text-secondary'
+                    }`}>
+                      {strategy.badge}
+                    </span>
+                  ) : null}
                 </span>
-                <span className={`block text-sm font-bold ${selected ? 'text-primary' : 'text-white'}`}>
+                <span className={`block text-sm font-bold ${selected || recommended ? 'text-primary' : 'text-white'}`}>
                   {strategy.label}
                 </span>
                 <span className="mt-1 block text-xs leading-relaxed text-text-secondary">
                   {strategy.description}
                 </span>
+                {strategy.points ? (
+                  <span className="mt-2 grid gap-1 border-t border-border/70 pt-2">
+                    {strategy.points.map((point) => (
+                      <span key={point} className="flex items-start gap-1.5 text-[11px] leading-4 text-text-secondary">
+                        <span className={`mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full ${recommended ? 'bg-primary' : 'bg-text-secondary/60'}`} />
+                        <span>{point}</span>
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="mb-6">
-        <h3 className="mb-3 text-base font-bold text-white">Vorgaben</h3>
-        <div className="mb-3 rounded-xl border border-border bg-background/50 p-4">
-          <p className="mb-1 text-sm font-semibold text-white">Werbedauer</p>
-          <p className="mb-3 text-xs text-text-secondary">Gilt für intelligente und manuell gestartete Werbung.</p>
+      <div className="mb-4">
+        <h3 className="mb-2 text-base font-bold text-white">Vorgaben</h3>
+        <div className="mb-2 rounded-xl border border-border bg-background/50 p-3">
+          <p className="mb-0.5 text-sm font-semibold text-white">Werbedauer</p>
+          <p className="mb-2 text-xs text-text-secondary">Gilt für die empfohlene Steuerung und manuell gestartete Werbung.</p>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {AD_DURATION_OPTIONS.map((seconds) => (
               <button
@@ -655,7 +693,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                 type="button"
                 aria-pressed={draft.adDurationSeconds === seconds}
                 onClick={() => patch({ adDurationSeconds: seconds })}
-                className={`min-h-11 rounded-lg border px-2 py-2 text-sm font-semibold transition-colors ${
+                className={`min-h-10 rounded-lg border px-2 py-2 text-sm font-semibold transition-colors ${
                   draft.adDurationSeconds === seconds
                     ? 'border-primary bg-primary/15 text-primary'
                     : 'border-border bg-card text-text-secondary hover:text-white'
@@ -667,7 +705,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-2 sm:grid-cols-2">
           <NumberSetting
             label="Mindestabstand"
             description="So viele Minuten liegen mindestens zwischen zwei Werbungen – auch wenn Twitch die vorige automatisch gestartet hat."
@@ -711,17 +749,17 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
         {smartFieldsDisabled ? (
           <p className="mt-2 text-xs text-text-secondary">
-            Mindestabstand, Startschutz und Chat-Ruhefenster gelten nur für „Intelligent steuern“.
+            Mindestabstand, Startschutz und Chat-Ruhefenster gelten nur für „Match schützen & Queue nutzen“.
           </p>
         ) : null}
       </div>
 
-      <div className="mb-6 flex flex-wrap items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <button
           type="button"
           disabled={!dirty || saving}
           onClick={() => void save()}
-          className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           Einstellungen speichern
@@ -733,17 +771,17 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         ) : null}
       </div>
 
-      <div className="border-t border-border pt-5">
+      <div className="border-t border-border pt-4">
         <div className="mb-3">
           <h3 className="text-base font-bold text-white">Manuelle Aktionen</h3>
           <p className="mt-0.5 text-xs text-text-secondary">Funktionieren unabhängig vom Automatik-Schalter, aber nur während eines laufenden Streams.</p>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             disabled={!canSnooze || actionPending !== null}
             onClick={() => void queueAction('snooze')}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-2 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {actionPending === 'snooze' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Nächste Werbung 5 Min. pausieren
@@ -752,7 +790,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             type="button"
             disabled={!canRunCommercial || actionPending !== null}
             onClick={() => void queueAction('commercial')}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3.5 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {actionPending === 'commercial' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             Jetzt {draft.adDurationSeconds} Sek. Werbung

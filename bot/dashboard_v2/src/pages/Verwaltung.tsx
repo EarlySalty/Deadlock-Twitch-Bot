@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
-import { FeedbackBox } from '@/components/feedback/FeedbackBox';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
@@ -517,7 +516,6 @@ export function VerwaltungPage() {
         {onboarding.status?.paused && onboarding.error && <p role="alert" className="rounded-lg border border-warning/40 p-3 text-sm text-warning">{onboarding.error} <button type="button" onClick={() => void onboarding.save({paused: true})} className="underline">Pause speichern</button></p>}
         <OnboardingGuide tab={activeTab.id} />
         <div className="space-y-4 md:space-y-5">{activeTab.render()}</div>
-        <FeedbackBox area={`Verwaltung: ${activeTab.label}`} />
     </>
   );
 }
