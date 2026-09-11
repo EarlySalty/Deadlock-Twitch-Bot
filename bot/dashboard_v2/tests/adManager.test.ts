@@ -24,6 +24,10 @@ const adManagerSectionSource = readFileSync(
   join(import.meta.dirname, '../src/components/verwaltung/AdManagerSection.tsx'),
   'utf8',
 );
+const verwaltungSource = readFileSync(
+  join(import.meta.dirname, '../src/pages/Verwaltung.tsx'),
+  'utf8',
+);
 
 const originalFetch = globalThis.fetch;
 
@@ -103,7 +107,7 @@ test('Steam-Status ist verpflichtender Teil des Statusvertrags', async () => {
   );
 });
 
-test('Werbemanager-UI zeigt Match-Status und nennt den Queue-Pfad', () => {
+test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Steuerung', () => {
   assert.match(
     adManagerSectionSource,
     /Match-Status \(Steam\)/,
@@ -119,16 +123,24 @@ test('Werbemanager-UI zeigt Match-Status und nennt den Queue-Pfad', () => {
     /Bot & Schutz/,
     'ohne Steam-Anbindung muss der Pflegeort genannt werden',
   );
-  assert.match(
-    adManagerSectionSource,
-    /startet sie in deiner Queue/,
-    'die Smart-Strategie muss das Queue-Verhalten beschreiben',
-  );
+  assert.match(adManagerSectionSource, /Nur Twitch-Pausen nutzen/);
+  assert.match(adManagerSectionSource, /Startet selbst keine Werbung/);
+  assert.match(adManagerSectionSource, /Match schützen & Queue nutzen/);
+  assert.match(adManagerSectionSource, /Empfohlen/);
+  assert.match(adManagerSectionSource, /Im Match → Werbung verschieben/);
+  assert.match(adManagerSectionSource, /Queue oder Menü → Werbung starten/);
+  assert.match(adManagerSectionSource, /Ohne Steam-Status → ruhige Chat-Phase nutzen/);
+  assert.doesNotMatch(adManagerSectionSource, /Werbung möglichst verschieben/);
+  assert.doesNotMatch(adManagerSectionSource, />Intelligent steuern</);
   assert.match(
     adManagerSectionSource,
     /vorerst die Chat-Ruhe/,
     'der Fallback bei veraltetem Status muss benannt sein',
   );
+});
+
+test('Verwaltungs-Unterseiten wiederholen die globale Feedback-Box nicht', () => {
+  assert.doesNotMatch(verwaltungSource, /FeedbackBox/);
 });
 
 test('übernimmt einen ausgefallenen Worker ehrlich statt Aktivität abzuleiten', async () => {
