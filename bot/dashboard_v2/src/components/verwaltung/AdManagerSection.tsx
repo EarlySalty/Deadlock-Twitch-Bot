@@ -46,27 +46,27 @@ const STRATEGIES: Array<{
   {
     id: 'monitor',
     label: 'Nur überwachen',
-    description: 'Der Bot liest den Twitch-Werbeplan, greift aber nicht ein.',
-    points: ['Keine Twitch-Pausen', 'Startet keine Werbung'],
+    description: 'Zeigt Werbeplan und Status. Der Bot greift nicht ein.',
+    points: ['Keine Twitch-Pausen', 'Keine Werbung durch den Bot'],
   },
   {
     id: 'snooze',
     label: 'Nur Twitch-Pausen nutzen',
     badge: 'Passiv',
     emphasis: 'passive',
-    description: 'Wenn Werbung fällig wird, nutzt der Bot verfügbare Twitch-Snoozes.',
-    points: ['Verschiebt fällige Werbung', 'Startet selbst keine Werbung'],
+    description: 'Verschiebt fällige Werbung, wenn Twitch eine Pause anbietet.',
+    points: ['Twitch-Pausen nutzen', 'Keine Werbung durch den Bot'],
   },
   {
     id: 'smart',
     label: 'Match schützen & Queue nutzen',
     badge: 'Empfohlen',
     emphasis: 'recommended',
-    description: 'Der Bot sucht aktiv den ruhigsten Moment für fällige Werbung.',
+    description: 'Schützt Matches und nutzt Queue oder Menü als Werbefenster.',
     points: [
-      'Im Match → Werbung verschieben',
-      'Queue oder Menü → Werbung starten',
-      'Ohne Steam-Status → ruhige Chat-Phase nutzen',
+      'Im Match: Werbung verschieben',
+      'Queue oder Menü: Werbung starten',
+      'Ohne Steam: ruhige Chat-Phase nutzen',
     ],
   },
 ];
@@ -79,7 +79,7 @@ function steamStatusView(steam: AdManagerSteamStatus): {
   if (!steam.linked) {
     return {
       value: 'Nicht verbunden',
-      hint: 'Hinterlege deine SteamID64 im Tab Bot & Schutz bei der KI-Engagement.',
+      hint: 'Hinterlege deine SteamID64 unter Bot & Schutz.',
       tone: 'text-text-secondary',
     };
   }
@@ -188,15 +188,15 @@ function StatusCard({
   className?: string;
 }) {
   return (
-    <div className={`min-w-0 bg-background/60 px-3.5 py-3 ${className}`}>
-      <div className={`mb-1.5 flex items-center gap-1.5 ${tone}`}>
+    <div className={`min-w-0 rounded-xl border border-border bg-background/60 px-4 py-3.5 ${className}`}>
+      <div className={`mb-2 flex items-center gap-2 ${tone}`}>
         {icon}
-        <span className="truncate text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
+        <span className="truncate text-xs font-semibold uppercase tracking-wider text-text-secondary">
           {label}
         </span>
       </div>
-      <p className={`truncate text-base font-bold ${tone}`}>{value}</p>
-      {hint ? <p className="mt-0.5 truncate text-[11px] text-text-secondary" title={hint}>{hint}</p> : null}
+      <p className={`truncate text-lg font-bold leading-tight ${tone}`}>{value}</p>
+      {hint ? <p className="mt-1 text-xs leading-5 text-text-secondary" title={hint}>{hint}</p> : null}
     </div>
   );
 }
@@ -446,8 +446,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           </p>
           <h2 className="display-font text-2xl font-bold text-white">Intelligenter Werbemanager</h2>
           <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Du entscheidest, wie stark der Bot eingreift: nur beobachten, nur Twitch-Snoozes nutzen
-            oder Matches schützen und Queue oder Menü aktiv als Werbefenster verwenden.
+            Wähle, was der Bot tun darf: nur beobachten, Twitch-Pausen nutzen oder Werbung in Queue und Menü starten.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -490,12 +489,18 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
       ) : null}
 
-      <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-text-secondary">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-        <p>
-          <span className="font-semibold text-warning">Twitch kann Werbefreiheit nicht garantieren.</span>{' '}
-          Snoozes verschieben die nächste Werbung nur um fünf Minuten und sind begrenzt verfügbar.
-        </p>
+      <div className="mb-4 grid overflow-hidden rounded-xl border border-warning/35 bg-warning/10 text-sm md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <div className="flex items-center gap-2.5 px-4 py-3.5">
+          <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />
+          <div>
+            <p className="font-semibold text-warning">Twitch entscheidet, wann Werbung fällig wird.</p>
+            <p className="mt-0.5 text-xs leading-5 text-text-secondary">Der Bot kann Werbung nur im Rahmen der Twitch-Funktionen verschieben oder starten.</p>
+          </div>
+        </div>
+        <div className="border-t border-warning/25 px-4 py-3.5 md:border-l md:border-t-0">
+          <p className="text-xs font-semibold uppercase tracking-wider text-warning">Twitch-Pausen</p>
+          <p className="mt-1 text-sm leading-5 text-text-secondary">Eine Pause verschiebt die nächste Werbung um fünf Minuten. Die Anzahl ist begrenzt.</p>
+        </div>
       </div>
 
       {error ? (
@@ -544,12 +549,12 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           {status.nextAdAt ? `Nächste Werbung: ${formatDateTime(status.nextAdAt)}.` : 'Keine nächste Werbung gemeldet.'}{' '}
           {status.snoozeCount === null ? 'Verfügbare Pausen unbekannt.' : `${status.snoozeCount} Pausen verfügbar.`}
         </p>
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-baseline gap-2">
-            <h3 className="text-base font-bold text-white">Live-Status</h3>
-            <span className="text-[11px] text-text-secondary">Twitch: {formatDateTime(status.observedAt)}</span>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-baseline gap-2.5">
+            <h3 className="text-lg font-bold text-white">Live-Status</h3>
+            <span className="text-xs text-text-secondary">Twitch: {formatDateTime(status.observedAt)}</span>
           </div>
-          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
             status.isLive ? 'bg-error/10 text-error' : 'bg-background/60 text-text-secondary'
           }`}>
             <span className={`h-1.5 w-1.5 rounded-full ${status.isLive ? 'animate-pulse bg-error' : 'bg-text-secondary'}`} />
@@ -559,41 +564,45 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         {(() => {
           const steamView = steamStatusView(status.steam);
           return (
-            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-5">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
               <StatusCard
-                icon={<Clock3 className="h-3.5 w-3.5" />}
+                icon={<Clock3 className="h-4 w-4" />}
                 label="Nächste Werbung"
                 value={nextAd.primary}
                 hint={nextAd.secondary}
+                className="lg:col-span-2"
               />
               <StatusCard
-                icon={<PauseCircle className="h-3.5 w-3.5" />}
+                icon={<PauseCircle className="h-4 w-4" />}
                 label="Pausen"
                 value={status.snoozeCount === null ? '–' : `${status.snoozeCount}`}
                 hint={status.snoozeRefreshAt ? `Neue ab ${formatDateTime(status.snoozeRefreshAt)}` : null}
                 tone={(status.snoozeCount ?? 0) > 0 ? 'text-success' : 'text-warning'}
+                className="lg:col-span-2"
               />
               <StatusCard
-                icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                icon={<ShieldCheck className="h-4 w-4" />}
                 label="Preroll-frei"
                 value={formatRemaining(status.prerollFreeSeconds)}
                 hint="verbleibend"
                 tone="text-success"
+                className="sm:col-span-2 lg:col-span-2"
               />
               <StatusCard
-                icon={<Timer className="h-3.5 w-3.5" />}
+                icon={<Timer className="h-4 w-4" />}
                 label="Letzte Werbung"
                 value={formatDateTime(status.lastAdAt)}
                 hint={status.durationSeconds === null ? null : `${status.durationSeconds} Sekunden`}
                 tone="text-text-secondary"
+                className="lg:col-span-3"
               />
               <StatusCard
-                icon={<Gamepad2 className="h-3.5 w-3.5" />}
+                icon={<Gamepad2 className="h-4 w-4" />}
                 label="Match-Status (Steam)"
                 value={steamView.value}
                 hint={steamView.hint}
                 tone={steamView.tone}
-                className="col-span-2 lg:col-span-1"
+                className="lg:col-span-3"
               />
             </div>
           );
@@ -612,12 +621,12 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
       ) : null}
 
-      <div className="mb-4">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-base font-bold text-white">Strategie</h3>
-          <p className="text-[11px] text-text-secondary">Empfohlen: Matches schützen, Queue als Werbefenster nutzen.</p>
+      <div className="mb-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-lg font-bold text-white">Strategie</h3>
+          <p className="text-xs text-text-secondary">Empfohlen: Match schützen & Queue nutzen</p>
         </div>
-        <div className="grid gap-2 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-3">
           {STRATEGIES.map((strategy) => {
             const selected = strategy.id === draft.strategy;
             const recommended = strategy.emphasis === 'recommended';
@@ -628,7 +637,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                 aria-pressed={selected}
                 title={strategy.description}
                 onClick={() => patch({ strategy: strategy.id })}
-                className={`rounded-xl border px-3.5 py-3 text-left transition-colors ${
+                className={`rounded-xl border px-4 py-3.5 text-left transition-colors ${
                   selected
                     ? 'border-primary bg-primary/15 shadow-[inset_0_0_0_1px_rgba(197,160,89,0.18)]'
                     : recommended
@@ -636,15 +645,15 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                       : 'border-border bg-background/50 hover:border-border-hover'
                 }`}
               >
-                <span className="flex items-center gap-2">
+                <span className="flex items-center gap-2.5">
                   <span className={selected || recommended ? 'text-primary' : 'text-text-secondary'}>
-                    {strategy.id === 'monitor' ? <Radio className="h-4 w-4" /> : strategy.id === 'snooze' ? <PauseCircle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
+                    {strategy.id === 'monitor' ? <Radio className="h-5 w-5" /> : strategy.id === 'snooze' ? <PauseCircle className="h-5 w-5" /> : <Zap className="h-5 w-5" />}
                   </span>
-                  <span className={`text-sm font-bold ${selected || recommended ? 'text-primary' : 'text-white'}`}>
+                  <span className={`text-[15px] font-bold ${selected || recommended ? 'text-primary' : 'text-white'}`}>
                     {strategy.label}
                   </span>
                   {strategy.badge ? (
-                    <span className={`ml-auto rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                    <span className={`ml-auto rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider ${
                       recommended
                         ? 'border-primary/40 bg-primary/10 text-primary'
                         : 'border-border bg-card text-text-secondary'
@@ -653,9 +662,9 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                     </span>
                   ) : null}
                 </span>
-                <span className="mt-1 block text-[11px] leading-4 text-text-secondary">{strategy.description}</span>
+                <span className="mt-1.5 block text-xs leading-5 text-text-secondary">{strategy.description}</span>
                 {strategy.points ? (
-                  <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2 text-[11px] leading-4 text-text-secondary">
+                  <span className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 border-t border-border/70 pt-2.5 text-xs leading-5 text-text-secondary">
                     {strategy.points.map((point) => (
                       <span key={point} className="inline-flex items-center gap-1.5">
                         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${recommended ? 'bg-primary' : 'bg-text-secondary/60'}`} />
