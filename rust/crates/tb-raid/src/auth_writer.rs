@@ -23,7 +23,7 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use tb_crypto::{aad, FieldCipher};
 
-use crate::scope_profiles::scopes_for_profile;
+use crate::scope_profiles::{hat_alle_uplink_scopes, scopes_for_profile};
 use crate::util::mask_log_identifier as mask;
 
 /// Eingabe für [`AuthWriter::store_new_auth`].
@@ -208,20 +208,29 @@ impl AuthWriter {
                     Ok(old) => {
                         let old_scopes: BTreeSet<String> = old.scopes.into_iter().collect();
                         if !old_scopes.is_subset(&selected_scopes) {
-                            if !selected_scopes.is_subset(&old_scopes) {
-                                return Err(AuthWriteError::ConflictingGrant);
+                            if selected_scopes.is_subset(&old_scopes) {
+                                access = old_token;
+                                refresh = old_refresh.and_then(|blob| {
+                                    self.cipher
+                                        .decrypt_field(
+                                            &blob,
+                                            &aad::raid_auth("refresh_token", uid, version),
+                                        )
+                                        .ok()
+                                });
+                                selected_scopes = old_scopes;
+                                expires_at = validated_expiry(old_verified_at, old.expires_in)?;
+                            } else {
+                                let alt_ist_uplink = hat_alle_uplink_scopes(
+                                    &old_scopes.iter().cloned().collect::<Vec<_>>(),
+                                );
+                                let neu_ist_uplink = hat_alle_uplink_scopes(
+                                    &selected_scopes.iter().cloned().collect::<Vec<_>>(),
+                                );
+                                if alt_ist_uplink && !neu_ist_uplink {
+                                    return Err(AuthWriteError::ConflictingGrant);
+                                }
                             }
-                            access = old_token;
-                            refresh = old_refresh.and_then(|blob| {
-                                self.cipher
-                                    .decrypt_field(
-                                        &blob,
-                                        &aad::raid_auth("refresh_token", uid, version),
-                                    )
-                                    .ok()
-                            });
-                            selected_scopes = old_scopes;
-                            expires_at = validated_expiry(old_verified_at, old.expires_in)?;
                         }
                     }
                     Err(AuthWriteError::InvalidToken) => (),

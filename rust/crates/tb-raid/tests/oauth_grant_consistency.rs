@@ -356,6 +356,77 @@ async fn unknown_old_validity_or_incomparable_rights_do_not_silently_overwrite()
     }
 }
 
+struct LegacyOld;
+#[async_trait::async_trait]
+impl TwitchTokenClient for LegacyOld {
+    async fn validate_token(
+        &self,
+        token: &str,
+        uid: &str,
+    ) -> Result<TokenValidation, RefreshError> {
+        let scopes: Vec<String> = if token.contains("legacy") {
+            let mut s: Vec<String> = tb_raid::scope_profiles::scopes_for_profile("base")
+                .iter()
+                .map(|x| (*x).into())
+                .collect();
+            s.push("analytics:read:games".into());
+            s.push("chat:read".into());
+            s.push("moderator:manage:banned_users".into());
+            s
+        } else {
+            tb_raid::scope_profiles::scopes_for_profile("dashboard_reauth")
+                .iter()
+                .map(|x| (*x).into())
+                .collect()
+        };
+        Ok(TokenValidation {
+            client_id: "test-client".into(),
+            twitch_user_id: uid.into(),
+            scopes,
+            expires_in: 7200,
+        })
+    }
+    async fn refresh(&self, _: &str) -> Result<TokenResponse, RefreshError> {
+        unreachable!()
+    }
+    async fn exchange_code(&self, _: &str) -> Result<TokenResponse, RefreshError> {
+        unreachable!()
+    }
+    async fn token_owner(&self, _: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        unreachable!()
+    }
+}
+#[tokio::test]
+async fn legacy_partner_kann_ueber_den_normalen_weg_neu_autorisieren() {
+    let db = Database::new().await;
+    let cipher = cipher();
+    let writer = AuthWriter::new(db.pool.clone(), cipher.clone());
+    writer
+        .store_new_auth(
+            &grant("42", "base", "synthetic-legacy"),
+            &LegacyOld,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    writer
+        .store_new_auth(
+            &grant("42", "dashboard_reauth", "synthetic-fresh"),
+            &LegacyOld,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let (tokens, scopes) = snapshot(&db).await;
+    assert_eq!(
+        tokens.access_token, "synthetic-fresh",
+        "Neu-Autorisierung eines Legacy-Partners wurde blockiert"
+    );
+    assert!(scopes.iter().any(|s| s == "channel:manage:broadcast"));
+    assert!(!scopes.iter().any(|s| s == "analytics:read:games"));
+    db.close().await;
+}
+
 struct PausedClient {
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
