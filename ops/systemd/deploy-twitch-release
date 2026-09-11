@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+usage() {
+  cat >&2 <<'EOF'
+Aufruf:
+  deploy-twitch-release <40-stelliger-git-sha> [quell-checkout]
+  deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart <dienst> [--restart <dienst> ...]
+
+Ohne --restart werden wie bisher Dashboard, Bot und Coaching-Watch neu gestartet.
+Mit --restart werden nur die explizit genannten Twitch-Dienste neu gestartet.
+
+Erlaubte Restart-Ziele:
+  twitch-dashboard
+  twitch-bot
+  twitch-audit
+  coaching-watch
+  all
+EOF
+}
+
+# Hebt sich bei Bedarf genau einmal per sudo nach root. So braucht die
+# codex-mcp-Allowlist nur diesen einen Befehl statt generisches sudo.
+if [[ $EUID -ne 0 ]]; then
+  exec sudo -n /usr/local/bin/deploy-twitch-release "$@"
+fi
+
+sha="${1:-}"
+if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+  usage
+  exit 1
+fi
+shift
+
+src=""
+restart_explicit=0
+declare -a restart_targets=()
+declare -A restart_seen=()
+
+add_restart_target() {
+  local raw="$1"
+  local canonical=""
+  case "$raw" in
+    twitch-dashboard|dashboard|deadlock-twitch-dashboard-rust|deadlock-twitch-dashboard-rust.service)
+      canonical="twitch-dashboard"
+      ;;
+    twitch-bot|bot|deadlock-twitch-bot-rust|deadlock-twitch-bot-rust.service)
+      canonical="twitch-bot"
+      ;;
+    twitch-audit|coaching-watch|twitch-coaching-watch|deadlock-twitch-stream-coaching-watch|deadlock-twitch-stream-coaching-watch.service)
+      canonical="coaching-watch"
+      ;;
+    all)
+      add_restart_target twitch-dashboard
+      add_restart_target twitch-bot
+      add_restart_target coaching-watch
+      return
+      ;;
+    *)
+      echo "Restart-Ziel nicht erlaubt: $raw" >&2
+      usage
+      exit 1
+      ;;
+  esac
+
+  if [[ -z "${restart_seen[$canonical]:-}" ]]; then
+    restart_seen[$canonical]=1
+    restart_targets+=("$canonical")
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --restart)
+      if [[ $# -lt 2 ]]; then
+        echo "--restart braucht ein Ziel." >&2
+        usage
+        exit 1
+      fi
+      if [[ $restart_explicit -eq 0 ]]; then
+        restart_explicit=1
+        restart_targets=()
+        restart_seen=()
+      fi
+      add_restart_target "$2"
+      shift 2
+      ;;
+    --restart=*)
+      if [[ $restart_explicit -eq 0 ]]; then
+        restart_explicit=1
+        restart_targets=()
+        restart_seen=()
+      fi
+      add_restart_target "${1#--restart=}"
+      shift
+      ;;
+    --)
+      shift
+      if [[ $# -gt 1 ]]; then
+        echo "Zu viele Positionsargumente." >&2
+        usage
+        exit 1
+      fi
+      if [[ $# -eq 1 ]]; then
+        if [[ -n "$src" ]]; then
+          echo "Quell-Checkout wurde mehrfach angegeben." >&2
+          usage
+          exit 1
+        fi
+        src="$1"
+        shift
+      fi
+      ;;
+    -*)
+      echo "Unbekannte Option: $1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      if [[ -n "$src" ]]; then
+        echo "Zu viele Positionsargumente: $1" >&2
+        usage
+        exit 1
+      fi
+      src="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ $restart_explicit -eq 0 ]]; then
+  add_restart_target all
+fi
+if [[ ${#restart_targets[@]} -eq 0 ]]; then
+  echo "Mindestens ein Restart-Ziel ist erforderlich." >&2
+  exit 1
+fi
+
+src="${src:-/home/nathanael/repos/twitch-release-$sha}"
+dest="/opt/deadlock/twitch/builds/$sha"
+
+if [[ ! -d "$src" ]]; then
+  echo "Quell-Checkout fehlt: $src" >&2
+  exit 1
+fi
+if [[ -e "$dest" || -L "$dest" ]]; then
+  echo "Zielverzeichnis existiert schon: $dest" >&2
+  exit 1
+fi
+
+mv -- "$src" "$dest"
+chown -R root:root "$dest"
+chmod -R go-w "$dest"
+
+/usr/local/sbin/install-twitch-release "$dest" "$sha"
+
+for target in "${restart_targets[@]}"; do
+  case "$target" in
+    twitch-dashboard)
+      systemctl restart deadlock-twitch-dashboard-rust.service
+      ;;
+    twitch-bot)
+      systemctl restart deadlock-twitch-bot-rust.service
+      ;;
+    coaching-watch)
+      systemctl restart deadlock-twitch-stream-coaching-watch.service
+      ;;
+  esac
+done
+
+printf 'Twitch-Deploy fertig: %s\n' "$sha"
+printf 'Neu gestartet:'
+printf ' %s' "${restart_targets[@]}"
+printf '\n'
