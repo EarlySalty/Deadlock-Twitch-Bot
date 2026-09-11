@@ -1,8 +1,18 @@
 # Review: Werbemanager Queue-Phase
 
-status: aktiv
+status: erledigt
 datum: 2026-09-10
 art: Orchestrator-Selbstprüfung nach Wirkungs-Prüfer-Checkliste
+
+Nachtrag 2026-09-11: Der frische Fremd-Review (F8) ist gelaufen, Ergebnis in
+REVIEW-F8.md: keine BLOCKER, keine MAJOR; F8-1 (clippy some_filter) und F8-2
+(fmt-Verstöße) sind in der Merge-Vorbereitung behoben (Commits 36261e38,
+c42441d6), F8-4 bleibt im bewussten Basis-Stil der Suppress-Direktive. Der
+Diff wurde dafür auf den neuen Stand von main (acc5028d) überführt (Cherry-Pick
+b2c1133d) und auf dem Merge-Worktree erneut getestet: tb-analytics 496 grün,
+tb-bot 306 grün, tb-dashboard-api --lib 1168 grün / 4 Baseline-Fails (auf purem
+origin/main identisch rot belegt), dashboard_v2 276/278 (2 Palette-Fails aus
+upstream), tsc und vite-Build grün, clippy tb-analytics --tests grün.
 
 Hinweis: Der vorgesehene frische rust-reviewer-Subagent ist nach 32 Modellaufrufen
 an das 5-Stunden-Rate-Limit gefahren (429, Reset 2026-09-11 05:18). Statt den

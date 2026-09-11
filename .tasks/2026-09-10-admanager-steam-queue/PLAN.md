@@ -2,7 +2,9 @@
 
 status: aktiv
 datum: 2026-09-10
-stand: 2026-09-10 — M1 bis M4 verifiziert grün, M5 läuft (Review + Merge/Deploy)
+stand: 2026-09-11 — M1 bis M4 verifiziert grün, M5: frischer Review gelaufen (REVIEW-F8.md,
+Findings behoben), Merge auf akutem main vorbereitet (Cherry-Pick b2c1133d + Nacharbeit
+auf acc5028d); offen: Push/Merge, Deploy, Live-Prüfung
 
 Ziel steht im Contract (`.tasks/2026-09-10-admanager-steam-queue/CONTRACT.md`).
 
