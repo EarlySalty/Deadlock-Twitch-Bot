@@ -10,7 +10,6 @@ import {
   disconnectBotFromChannel,
   fetchMarketShare,
   fetchScopeStatus,
-  fetchAnnouncements,
   fetchAffiliateDetail,
   fetchAffiliateGutschriften,
   fetchAffiliatesList,
@@ -33,7 +32,6 @@ import {
   fetchRoadmap,
   generateGutschriften,
   saveManualPlanOverride,
-  saveAnnouncements,
   saveLegalPage,
   saveRoadmap,
   setAffiliateCommissionRate,
@@ -151,14 +149,6 @@ export function useConfigOverview(scope?: AdminConfigScope) {
   });
 }
 
-export function useAnnouncements() {
-  return useQuery({
-    queryKey: ['admin-announcements'],
-    queryFn: fetchAnnouncements,
-    staleTime: 30_000,
-  });
-}
-
 export function useGlobalBans() {
   return useQuery({
     queryKey: ['admin-global-bans'],
@@ -225,17 +215,6 @@ export function useSetGlobalBanChannelEnforcement() {
     mutationFn: ({ login, enabled }: { login: string; enabled: boolean }) =>
       setGlobalBanChannelEnforcement(login, enabled),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-global-bans'] }),
-  });
-}
-
-export function useSaveAnnouncements() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: string) => saveAnnouncements(body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-announcements'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
-    },
   });
 }
 

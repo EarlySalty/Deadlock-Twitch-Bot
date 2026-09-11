@@ -4,7 +4,6 @@ import { Dashboard } from '@/pages/Dashboard';
 import { Affiliates } from '@/pages/billing/Affiliates';
 import { Gutschriften } from '@/pages/billing/Gutschriften';
 import { Subscriptions } from '@/pages/billing/Subscriptions';
-import { BotConfig } from '@/pages/config/BotConfig';
 import { ChatConfig } from '@/pages/config/ChatConfig';
 import { RaidConfig } from '@/pages/config/RaidConfig';
 import { DatabaseStats } from '@/pages/monitoring/DatabaseStats';
@@ -76,7 +75,7 @@ const router = createBrowserRouter(
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },
         { path: 'content/legal', element: <LegalPage /> },
-        { path: 'config', element: <BotConfig /> },
+        { path: 'config', element: <Navigate to="/content/announcements" replace /> },
         { path: 'config/raids', element: <RaidConfig /> },
         { path: 'config/chat', element: <ChatConfig /> },
         { path: 'money', element: <Navigate to="/money/subscriptions" replace /> },

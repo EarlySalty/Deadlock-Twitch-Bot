@@ -139,12 +139,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const payload = await parsePayload(response);
   if (!response.ok) {
     const record = coerceRecord(payload);
+    const validationList = Array.isArray(record.validation) ? record.validation : [];
+    const firstValidation = validationList.length > 0 ? coerceRecord(validationList[0]) : null;
     const message =
       typeof record.message === 'string'
         ? record.message
-        : typeof record.error === 'string'
-          ? record.error
-          : `HTTP ${response.status}`;
+        : firstValidation && typeof firstValidation.message === 'string'
+          ? firstValidation.message
+          : typeof record.error === 'string'
+            ? record.error
+            : `HTTP ${response.status}`;
     if (response.status === 401 || response.status === 403) {
       const loginUrl =
         typeof record.loginUrl === 'string'
@@ -818,11 +822,6 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
   };
 }
 
-export async function fetchAnnouncements(): Promise<AdminTextDocument> {
-  const payload = await admin<Record<string, unknown>>('/announcements');
-  return parseAdminTextDocument(payload);
-}
-
 export function fetchGlobalBans(): Promise<GlobalBanAdminData> {
   return admin<GlobalBanAdminData>('/global-bans');
 }
@@ -871,11 +870,6 @@ export function setGlobalBanChannelEnforcement(
   enabled: boolean,
 ): Promise<{ twitch_login: string; global_ban_enforcement_enabled: boolean }> {
   return postAdminJson(`/global-bans/channels/${encodeURIComponent(login)}`, { enabled });
-}
-
-export async function saveAnnouncements(body: string): Promise<AdminTextDocument> {
-  const payload = await postAdminJson<Record<string, unknown>>('/announcements', { body });
-  return parseAdminTextDocument(payload);
 }
 
 export async function fetchRoadmap(): Promise<AdminTextDocument> {
