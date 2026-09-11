@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Power, PowerOff } from 'lucide-react';
+import { Loader2, Power, PowerOff, Save } from 'lucide-react';
 import {
   fetchEngagementLog,
   fetchEngagementSettings,
   toggleEngagement,
+  updateEngagement,
   type EngagementLogEntry,
   type EngagementSettings,
 } from '@/api/engagement';
@@ -85,6 +86,37 @@ export function AIEngagementSection() {
 
   const enabled = Boolean(settings?.enabled);
 
+  const steamIdFromSettings = settings?.steamId ?? '';
+  const [steamDraft, setSteamDraft] = useState<string>(steamIdFromSettings);
+  const [steamBaseline, setSteamBaseline] = useState<string>(steamIdFromSettings);
+  const [steamSaving, setSteamSaving] = useState(false);
+  const steamDirty = steamDraft.trim() !== steamBaseline;
+
+  // Nachgeladene Einstellungen in den Entwurf übernehmen, ohne laufende
+  // Eingaben zu überschreiben.
+  useEffect(() => {
+    setSteamDraft((current) => (current === steamBaseline ? settings?.steamId ?? '' : current));
+    setSteamBaseline(settings?.steamId ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.steamId]);
+
+  const saveSteamId = async () => {
+    if (!channelLogin) return;
+    setSteamSaving(true);
+    setError(null);
+    try {
+      const trimmed = steamDraft.trim();
+      await updateEngagement(channelLogin, { steamId: trimmed === '' ? null : trimmed });
+      await load();
+      setSteamBaseline(trimmed);
+      setSteamDraft(trimmed);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Steam-ID konnte nicht gespeichert werden');
+    } finally {
+      setSteamSaving(false);
+    }
+  };
+
   return (
     <motion.section
       className="panel-card rounded-2xl p-5 md:p-6"
@@ -159,6 +191,43 @@ export function AIEngagementSection() {
                   <Power className="h-4 w-4" />
                 )}
                 {enabled ? 'AI deaktivieren' : 'AI aktivieren'}
+              </button>
+            </div>
+          </div>
+
+          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
+            <label htmlFor="steam-id-eingabe" className="block text-sm font-semibold text-white">
+              Steam-Anbindung
+            </label>
+            <p className="mt-0.5 text-xs text-text-secondary">
+              Deine SteamID64 verbindet deinen Kanal mit deinem Deadlock-Account. Sie macht
+              deinen Match-Status auslesbar, etwa für den Werbemanager, der Werbung in deine
+              Warteschlange legt. Deine SteamID64 steht in deinem Steam-Profil (Rechtsklick,
+              Steam-ID kopieren).
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                id="steam-id-eingabe"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="7656119..."
+                value={steamDraft}
+                onChange={(event) => setSteamDraft(event.target.value)}
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-border-strong bg-card px-3 py-2 text-sm font-semibold text-white outline-none transition-colors focus:border-primary"
+              />
+              <button
+                type="button"
+                disabled={!steamDirty || steamSaving}
+                onClick={() => void saveSteamId()}
+                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {steamSaving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Speichern
               </button>
             </div>
           </div>

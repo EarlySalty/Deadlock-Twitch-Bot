@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use tb_analytics::ad_manager::{
-    AdManagerStore, EnqueueOutcome, Settings, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
+    AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE, READ_SCOPE,
+    SNOOZE_SCOPE,
 };
 
 use crate::auth::level::DashboardAuthLevel;
@@ -98,6 +99,45 @@ struct ScopeStatus {
     commercial: bool,
 }
 
+/// Steam-Match-Anbindung des Kanals: `state` ist null ohne Verknüpfung oder
+/// ohne je gesehenen Status, "stale" bei veralteter Presence. Die Automatik
+/// fällt in diesen Fällen auf Chat-Ruhe zurück.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamStatus {
+    linked: bool,
+    state: Option<&'static str>,
+    hero: Option<String>,
+    stage: Option<String>,
+    observed_at: Option<String>,
+}
+
+fn steam_status(summary: Option<SteamMatchSummary>) -> SteamStatus {
+    let Some(summary) = summary else {
+        return SteamStatus {
+            linked: false,
+            state: None,
+            hero: None,
+            stage: None,
+            observed_at: None,
+        };
+    };
+    let state = match summary.state.as_ref() {
+        Some(state) if state.in_match => Some("in_match"),
+        Some(state) if state.in_deadlock => Some("in_queue"),
+        Some(_) => Some("out_of_game"),
+        None if summary.observed_at.is_some() => Some("stale"),
+        None => None,
+    };
+    SteamStatus {
+        linked: summary.steam_linked,
+        state,
+        hero: summary.state.as_ref().and_then(|state| state.hero.clone()),
+        stage: summary.state.as_ref().and_then(|state| state.stage.clone()),
+        observed_at: summary.observed_at.map(|at| at.to_rfc3339()),
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LastAction {
@@ -122,6 +162,7 @@ struct StatusResponse {
     worker_heartbeat_at: Option<String>,
     last_action: Option<LastAction>,
     scopes: ScopeStatus,
+    steam: SteamStatus,
 }
 
 fn iso(value: Option<DateTime<Utc>>) -> Option<String> {
@@ -145,7 +186,11 @@ fn apply_saved_settings(
     });
 }
 
-async fn response(pool: &PgPool, uid: &str) -> Result<serde_json::Value, sqlx::Error> {
+async fn response(
+    pool: &PgPool,
+    uid: &str,
+    login: &str,
+) -> Result<serde_json::Value, sqlx::Error> {
     let store = AdManagerStore::new(pool.clone());
     let (settings, updated) = store
         .load_settings(uid)
@@ -153,6 +198,16 @@ async fn response(pool: &PgPool, uid: &str) -> Result<serde_json::Value, sqlx::E
         .map(|(s, t)| (s, Some(t.to_rfc3339())))
         .unwrap_or((Settings::default(), None));
     let granted = scopes(pool, uid).await?;
+    // Steam-Status ist Zusatzinformation: ein Fehler hier darf den
+    // Werbemanager-Status nicht sprengen, das UI zeigt dann "nicht verbunden".
+    let steam_summary = match store.steam_match_summary(login, Utc::now()).await {
+        Ok(summary) => Some(summary),
+        Err(error) => {
+            tracing::warn!(%error, "Werbemanager: Steam-Match-Status nicht lesbar");
+            None
+        }
+    };
+    let steam = steam_status(steam_summary);
     let row=sqlx::query("SELECT is_live,next_ad_at,last_ad_at,duration_seconds,preroll_free_seconds,snooze_count,snooze_refresh_at,observed_at,worker_heartbeat_at,last_action_kind,last_action_outcome,last_action_detail,last_action_at FROM twitch_ad_manager_state WHERE twitch_user_id=$1").bind(uid).fetch_optional(pool).await?;
     let status = if let Some(r) = row {
         let last_at: Option<DateTime<Utc>> = r.try_get("last_action_at")?;
@@ -186,6 +241,7 @@ async fn response(pool: &PgPool, uid: &str) -> Result<serde_json::Value, sqlx::E
                 snooze: has(&granted, SNOOZE_SCOPE),
                 commercial: has(&granted, COMMERCIAL_SCOPE),
             },
+            steam: steam.clone(),
         }
     } else {
         StatusResponse {
@@ -205,17 +261,18 @@ async fn response(pool: &PgPool, uid: &str) -> Result<serde_json::Value, sqlx::E
                 snooze: has(&granted, SNOOZE_SCOPE),
                 commercial: has(&granted, COMMERCIAL_SCOPE),
             },
+            steam,
         }
     };
     Ok(json!({"settings":SettingsResponse{value:settings,updated_at:updated},"status":status}))
 }
 
 pub async fn get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
-    let (uid, _) = match identity(auth) {
+    let (uid, login) = match identity(auth) {
         Ok(v) => v,
         Err(error) => return error.into_response(),
     };
-    match response(&pool, &uid).await {
+    match response(&pool, &uid, &login).await {
         Ok(body) => Json(body).into_response(),
         Err(error) => {
             tracing::error!(%error,"Werbemanager konnte nicht gelesen werden");
@@ -253,7 +310,7 @@ pub async fn save_handler(
             return reauth(absent);
         }
     }
-    let mut body = match response(&pool, &uid).await {
+    let mut body = match response(&pool, &uid, &login).await {
         Ok(body) => body,
         Err(error) => {
             tracing::error!(%error,"Werbemanager-Status konnte vor dem Speichern nicht gelesen werden");
@@ -390,6 +447,55 @@ pub async fn action_handler(
 mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
+    use tb_analytics::ad_manager::{SteamMatchState, SteamMatchSummary};
+
+    #[test]
+    fn steam_status_ordnet_zustaende_wahrheitsgetreu() {
+        let now = Utc::now();
+        let state = |in_match: bool, in_deadlock: bool| SteamMatchState {
+            in_match,
+            in_deadlock,
+            hero: Some("Haze".into()),
+            stage: None,
+            observed_at: now,
+        };
+        let summary = |linked: bool, state: Option<SteamMatchState>, seen: Option<chrono::DateTime<Utc>>| {
+            SteamMatchSummary {
+                steam_linked: linked,
+                state,
+                observed_at: seen,
+            }
+        };
+
+        // Frisch im Match und frisch im Queue-Fenster.
+        assert_eq!(
+            steam_status(Some(summary(true, Some(state(true, true)), Some(now)))).state,
+            Some("in_match")
+        );
+        assert_eq!(
+            steam_status(Some(summary(true, Some(state(false, true)), Some(now)))).state,
+            Some("in_queue")
+        );
+        // Frisch, aber in einem anderen Spiel.
+        assert_eq!(
+            steam_status(Some(summary(true, Some(state(false, false)), Some(now)))).state,
+            Some("out_of_game")
+        );
+        // Verknüpft, aber Presence veraltet oder noch nie gesehen.
+        assert_eq!(
+            steam_status(Some(summary(true, None, Some(now - chrono::Duration::hours(2))))).state,
+            Some("stale")
+        );
+        let waiting = steam_status(Some(summary(true, None, None)));
+        assert_eq!(waiting.state, None);
+        assert!(waiting.linked);
+        // Ohne Steam-Anknüpfung ist nichts belegt.
+        let unlinked = steam_status(Some(summary(false, None, None)));
+        assert!(!unlinked.linked);
+        assert_eq!(unlinked.state, None);
+        // Lookup-Fehler wird zum neutralen Block, nicht zum Fehler.
+        assert!(!steam_status(None).linked);
+    }
 
     #[test]
     fn partner_und_twitch_admin_sind_stets_auf_die_session_id_begrenzt() {

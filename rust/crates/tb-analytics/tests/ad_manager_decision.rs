@@ -1,11 +1,21 @@
 use chrono::{Duration, TimeZone, Utc};
 use tb_analytics::ad_manager::{
-    decide, DecisionAction, DecisionInput, LiveState, Settings, Strategy, COMMERCIAL_SCOPE,
-    READ_SCOPE, SNOOZE_SCOPE,
+    decide, DecisionAction, DecisionInput, LiveState, Settings, SteamMatchState, Strategy,
+    COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
 };
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap()
+}
+
+fn steam_state(in_match: bool) -> SteamMatchState {
+    SteamMatchState {
+        in_match,
+        in_deadlock: true,
+        hero: Some("Haze".into()),
+        stage: in_match.then_some("laning".into()),
+        observed_at: now() - Duration::seconds(30),
+    }
 }
 
 fn input(strategy: Strategy) -> DecisionInput {
@@ -23,6 +33,7 @@ fn input(strategy: Strategy) -> DecisionInput {
         snooze_count: 1,
         quiet_chat_messages: 0,
         chat_ingest_healthy: true,
+        steam_match_state: None,
     }
 }
 
@@ -230,6 +241,61 @@ fn smart_ist_bei_unbekanntem_streamstart_oder_krankem_chat_fail_closed() {
         decide(&value).action,
         DecisionAction::Commercial { .. }
     ));
+}
+
+#[test]
+fn smart_im_match_verschiebt_und_achtet_chatruhe_nicht() {
+    let mut value = input(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(true));
+    assert_eq!(decide(&value).action, DecisionAction::Snooze);
+    assert_eq!(decide(&value).reason, "in_match");
+
+    // Aktives und krankes Chat-Fenster dürfen den Match-Befund nicht drehen:
+    // Die Steam-Presence ist von der Chat-Pipeline unabhängig.
+    value.quiet_chat_messages = 0;
+    value.chat_ingest_healthy = false;
+    assert_eq!(decide(&value).reason, "in_match");
+
+    value.snooze_count = 0;
+    assert_eq!(decide(&value).action, DecisionAction::None);
+    assert_eq!(decide(&value).reason, "in_match_no_snooze");
+}
+
+#[test]
+fn smart_in_queue_ist_das_werbefenster() {
+    let mut value = input(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(false));
+    assert!(matches!(
+        decide(&value).action,
+        DecisionAction::Commercial { .. }
+    ));
+    assert_eq!(decide(&value).reason, "in_queue");
+
+    // Mindestabstand läuft noch: verschieben statt doppelt werben, und ohne
+    // Snooze-Vorrat nichts tun.
+    value.last_ad_at = Some(value.now - Duration::minutes(30) + Duration::seconds(1));
+    assert_eq!(decide(&value).action, DecisionAction::Snooze);
+    assert_eq!(decide(&value).reason, "in_queue_cooldown");
+
+    value.snooze_count = 0;
+    assert_eq!(decide(&value).action, DecisionAction::None);
+    assert_eq!(decide(&value).reason, "in_queue_cooldown_no_snooze");
+}
+
+#[test]
+fn startschutz_und_snooze_strategie_gelten_weiter_unabhaengig_vom_match() {
+    let mut value = input(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(false));
+    value.settings.startup_delay_minutes = 15;
+    value.stream_started_at = Some(value.now - Duration::minutes(15) + Duration::seconds(1));
+    assert_eq!(decide(&value).reason, "startup_protection");
+
+    // Die Snooze-Strategie bleibt Match-blind: nur verschieben, sobald fällig.
+    let snooze = input(Strategy::Snooze);
+    value = snooze;
+    value.steam_match_state = Some(steam_state(false));
+    assert_eq!(decide(&value).action, DecisionAction::Snooze);
+    assert_eq!(decide(&value).reason, "snooze_due");
 }
 
 #[test]

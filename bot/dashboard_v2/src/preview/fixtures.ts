@@ -489,7 +489,31 @@ const AD_MANAGER_FIXTURE: AdManagerResponse = {
       snooze: true,
       commercial: true,
     },
+    steam: {
+      linked: true,
+      state: 'in_match',
+      hero: 'Haze',
+      stage: 'laning',
+      observedAt: NOW_ISO,
+    },
   },
+};
+
+const ENGAGEMENT_SETTINGS_FIXTURE = {
+  settings: [
+    {
+      channelLogin: 'midcore_live',
+      enabled: true,
+      steamId: '76561198000000000',
+      personaOverride: null,
+      tabuTopics: [],
+      enabledAt: NOW_ISO,
+      enabledBy: 'earlysalty',
+      updatedAt: NOW_ISO,
+    },
+  ],
+  isSuperMod: false,
+  actorLogin: 'midcore_live',
 };
 
 /**
@@ -503,6 +527,7 @@ const AD_MANAGER_FIXTURE: AdManagerResponse = {
  */
 export function getPreviewPathFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
+  if (pathname === '/twitch/api/v2/engagement/settings') return ENGAGEMENT_SETTINGS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;

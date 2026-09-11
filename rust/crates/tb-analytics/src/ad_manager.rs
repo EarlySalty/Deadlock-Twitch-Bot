@@ -13,6 +13,11 @@ pub const READ_SCOPE: &str = "channel:read:ads";
 pub const SNOOZE_SCOPE: &str = "channel:manage:ads";
 pub const COMMERCIAL_SCOPE: &str = "channel:edit:commercial";
 pub const LIVE_STATE_MAX_AGE: Duration = Duration::minutes(5);
+/// Frische-Schranke für den Steam-Match-Status in Werbeentscheidungen. Bewusst
+/// enger als die Presence-Toleranz des Titel-Generators (600 s, siehe
+/// tb-chat/steam_lookup.rs), weil Queue-Phasen kurz sind; bei Überschreitung
+/// greift der Chat-Ruhe-Fallback.
+pub const MATCH_STATUS_FRESH_SECS: i64 = 180;
 pub const UNRESOLVED_DETAIL: &str =
     "Ausgang konnte nach 15 Minuten nicht eindeutig bestätigt werden; Sperre wurde aufgehoben.";
 
@@ -73,6 +78,214 @@ mod tests {
             Some(121),
             now,
         ));
+    }
+}
+
+#[cfg(test)]
+mod steam_tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn connect(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        Some(
+            PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with(opts)
+                .await
+                .unwrap(),
+        )
+    }
+
+    async fn with_tables(pool: &PgPool) {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS twitch_engagement_settings (
+                channel_login TEXT PRIMARY KEY,
+                enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                steam_id TEXT
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS activity")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS activity.live_player_state (
+                steam_id TEXT PRIMARY KEY,
+                in_deadlock_now BOOLEAN,
+                in_match_now_strict BOOLEAN,
+                deadlock_stage TEXT,
+                deadlock_hero TEXT,
+                deadlock_party_hint TEXT,
+                deadlock_minutes INTEGER,
+                deadlock_updated_at TIMESTAMPTZ,
+                last_seen_at TIMESTAMPTZ
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // activity.live_player_state liegt außerhalb des Test-Schemas und wird von
+    // allen Steam-Tests geteilt: Jeder Test braucht seine eigene steam_id.
+    const LOGIN: &str = "steamtest";
+
+    fn steam_id(tag: &str) -> String {
+        format!("76_561_199_{tag}")
+    }
+
+    async fn profile(pool: &PgPool, steam_id: Option<&str>) {
+        sqlx::query("DELETE FROM twitch_engagement_settings WHERE channel_login = $1")
+            .bind(LOGIN)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled, steam_id)
+             VALUES ($1, TRUE, $2)",
+        )
+        .bind(LOGIN)
+        .bind(steam_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn presence(pool: &PgPool, steam_id: &str, in_match: bool, updated_at: Option<DateTime<Utc>>) {
+        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
+            .bind(steam_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO activity.live_player_state (
+                steam_id, in_deadlock_now, in_match_now_strict,
+                deadlock_hero, deadlock_stage, deadlock_updated_at, last_seen_at
+             )
+             VALUES ($1, TRUE, $2, 'Haze', 'laning', $3, $3)",
+        )
+        .bind(steam_id)
+        .bind(in_match)
+        .bind(updated_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ohne_engagement_profil_ist_nichts_verknuepft() {
+        let Some(pool) = connect("t_adm_steam_none").await else {
+            return;
+        };
+        with_tables(&pool).await;
+        let summary = AdManagerStore::new(pool)
+            .steam_match_summary("niemand", Utc::now())
+            .await
+            .unwrap();
+        assert!(!summary.steam_linked);
+        assert!(summary.state.is_none());
+        assert!(summary.observed_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn frische_presence_liefert_match_status() {
+        let Some(pool) = connect("t_adm_steam_fresh").await else {
+            return;
+        };
+        with_tables(&pool).await;
+        let id = steam_id("fresh");
+        profile(&pool, Some(&id)).await;
+        presence(&pool, &id, true, Some(Utc::now() - Duration::seconds(30))).await;
+
+        let summary = AdManagerStore::new(pool)
+            .steam_match_summary(LOGIN, Utc::now())
+            .await
+            .unwrap();
+        assert!(summary.steam_linked);
+        let state = summary.state.expect("frische Presence");
+        assert!(state.in_match);
+        assert!(state.in_deadlock);
+        assert_eq!(state.hero.as_deref(), Some("Haze"));
+        assert_eq!(state.stage.as_deref(), Some("laning"));
+    }
+
+    #[tokio::test]
+    async fn veraltete_presence_faellt_auf_fallback_zurueck_und_zeigt_das_alter() {
+        let Some(pool) = connect("t_adm_steam_stale").await else {
+            return;
+        };
+        with_tables(&pool).await;
+        let id = steam_id("stale");
+        profile(&pool, Some(&id)).await;
+        let stale = Utc::now() - Duration::seconds(MATCH_STATUS_FRESH_SECS + 60);
+        presence(&pool, &id, false, Some(stale)).await;
+
+        let summary = AdManagerStore::new(pool)
+            .steam_match_summary(LOGIN, Utc::now())
+            .await
+            .unwrap();
+        assert!(summary.steam_linked);
+        assert!(summary.state.is_none(), "veraltete Presence entscheidet nicht");
+        let observed = summary.observed_at.expect("Stale-Zeit bleibt sichtbar");
+        assert!(
+            (observed - stale).num_seconds().abs() <= 1,
+            "observed_at {observed} ~ {stale}"
+        );
+    }
+
+    #[tokio::test]
+    async fn steam_id_ohne_presence_zusaetze_ist_verknuepft_ohne_status() {
+        let Some(pool) = connect("t_adm_steam_nopresence").await else {
+            return;
+        };
+        with_tables(&pool).await;
+        profile(&pool, Some(&steam_id("nopresence"))).await;
+
+        let summary = AdManagerStore::new(pool)
+            .steam_match_summary(LOGIN, Utc::now())
+            .await
+            .unwrap();
+        assert!(summary.steam_linked);
+        assert!(summary.state.is_none());
+        assert!(summary.observed_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn leerer_steam_id_eintrag_ist_nicht_verknuepft() {
+        let Some(pool) = connect("t_adm_steam_empty").await else {
+            return;
+        };
+        with_tables(&pool).await;
+        profile(&pool, Some("   ")).await;
+
+        let summary = AdManagerStore::new(pool)
+            .steam_match_summary(LOGIN, Utc::now())
+            .await
+            .unwrap();
+        assert!(!summary.steam_linked);
+        assert!(summary.state.is_none());
     }
 }
 
@@ -148,6 +361,29 @@ impl Settings {
     }
 }
 
+/// Frischer Steam-Match-Status eines Streamers. Quelle ist die vom Steam-Bot
+/// gepflegte `activity.live_player_state`, anknüpfung über die im
+/// Engagement-Profil hinterlegte Steam-ID. `in_deadlock` ist für die Anzeige
+/// (Queue oder Menü gegen anderes Spiel); die Entscheidung liest nur `in_match`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteamMatchState {
+    pub in_match: bool,
+    pub in_deadlock: bool,
+    pub hero: Option<String>,
+    pub stage: Option<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
+/// Steam-Anknüpfung eines Kanals samt Zustand; `state` ist nur gesetzt, solange
+/// die Presence frisch ist. Der Dashboard-Status zeigt auch den veralteten
+/// Stand, der Entscheider fällt dann auf Chat-Ruhe zurück.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SteamMatchSummary {
+    pub steam_linked: bool,
+    pub state: Option<SteamMatchState>,
+    pub observed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DecisionInput {
     pub now: DateTime<Utc>,
@@ -158,6 +394,7 @@ pub struct DecisionInput {
     pub snooze_count: i64,
     pub quiet_chat_messages: i64,
     pub chat_ingest_healthy: bool,
+    pub steam_match_state: Option<SteamMatchState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +461,43 @@ pub fn decide(input: &DecisionInput) -> Decision {
             }
         } else {
             none("startup_protection_no_snooze")
+        };
+    }
+    // Mit frischem Steam-Match-Status entscheidet allein der Match-Zustand:
+    // im Match wird verschoben, außerhalb davon ist das Werbefenster. Ohne
+    // frischen Status gilt unverändert die Chat-Ruhe-Logik als Fallback.
+    if let Some(state) = input.steam_match_state.as_ref() {
+        if state.in_match {
+            return if input.snooze_count > 0 {
+                Decision {
+                    action: DecisionAction::Snooze,
+                    reason: "in_match",
+                }
+            } else {
+                none("in_match_no_snooze")
+            };
+        }
+        let cooldown_ready = input
+            .last_ad_at
+            .map(|last| {
+                input.now >= last + Duration::minutes(i64::from(input.settings.min_interval_minutes))
+            })
+            .unwrap_or(true);
+        if cooldown_ready {
+            return Decision {
+                action: DecisionAction::Commercial {
+                    duration_seconds: input.settings.ad_duration_seconds,
+                },
+                reason: "in_queue",
+            };
+        }
+        return if input.snooze_count > 0 {
+            Decision {
+                action: DecisionAction::Snooze,
+                reason: "in_queue_cooldown",
+            }
+        } else {
+            none("in_queue_cooldown_no_snooze")
         };
     }
     if input.settings.quiet_window_minutes > 0 && !input.chat_ingest_healthy {
@@ -541,6 +815,65 @@ impl AdManagerStore {
             lag,
             now,
         ))
+    }
+
+    /// Steam-Anknüpfung eines Kanals: Die Steam-ID wird im Engagement-Profil
+    /// gepflegt, die Presence vom Steam-Bot in der zentralen
+    /// `activity.live_player_state`. Schreibend wird hier nichts angerührt;
+    /// fehlt Anknüpfung oder Presence, bleibt `steam_linked`/`state` leer und
+    /// die Entscheidung fällt auf Chat-Ruhe zurück.
+    pub async fn steam_match_summary(
+        &self,
+        channel_login: &str,
+        now: DateTime<Utc>,
+    ) -> Result<SteamMatchSummary, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT (tes.steam_id IS NOT NULL AND BTRIM(tes.steam_id) <> '') AS steam_linked, \
+             lps.in_deadlock_now, lps.in_match_now_strict, lps.deadlock_hero, lps.deadlock_stage, \
+             COALESCE(lps.deadlock_updated_at, lps.last_seen_at) AS observed_at \
+             FROM twitch_engagement_settings tes \
+             LEFT JOIN activity.live_player_state lps ON lps.steam_id = BTRIM(tes.steam_id) \
+             WHERE tes.channel_login = $1",
+        )
+        .bind(channel_login)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(SteamMatchSummary {
+                steam_linked: false,
+                state: None,
+                observed_at: None,
+            });
+        };
+        let steam_linked = row.try_get::<Option<bool>, _>("steam_linked")?.unwrap_or(false);
+        let observed_at: Option<DateTime<Utc>> = row.try_get("observed_at")?;
+        let fresh = observed_at
+            .map(|seen| {
+                now.signed_duration_since(seen)
+                    <= Duration::seconds(MATCH_STATUS_FRESH_SECS)
+                    && seen <= now + Duration::minutes(1)
+            })
+            .unwrap_or(false);
+        let state = fresh
+            .then(|| {
+                Ok::<_, sqlx::Error>(SteamMatchState {
+                    in_match: row
+                        .try_get::<Option<bool>, _>("in_match_now_strict")?
+                        .unwrap_or(false),
+                    in_deadlock: row
+                        .try_get::<Option<bool>, _>("in_deadlock_now")?
+                        .unwrap_or(false),
+                    hero: row.try_get("deadlock_hero")?,
+                    stage: row.try_get("deadlock_stage")?,
+                    observed_at: observed_at.expect("fresh erfordert observed_at"),
+                })
+            })
+            .transpose()?;
+        Ok(SteamMatchSummary {
+            steam_linked,
+            state,
+            observed_at,
+        })
     }
 
     pub async fn enqueue(

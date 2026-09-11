@@ -25,6 +25,16 @@ export interface AdManagerLastAction {
   at: string;
 }
 
+export type AdManagerSteamState = 'in_match' | 'in_queue' | 'out_of_game' | 'stale';
+
+export interface AdManagerSteamStatus {
+  linked: boolean;
+  state: AdManagerSteamState | null;
+  hero: string | null;
+  stage: string | null;
+  observedAt: string | null;
+}
+
 export interface AdManagerStatus {
   isLive: boolean;
   nextAdAt: string | null;
@@ -42,6 +52,7 @@ export interface AdManagerStatus {
     snooze: boolean;
     commercial: boolean;
   };
+  steam: AdManagerSteamStatus;
 }
 
 export interface AdManagerResponse {
