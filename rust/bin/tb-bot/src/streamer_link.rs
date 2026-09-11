@@ -1,15 +1,12 @@
-//! Automatischer Streamer↔Discord-Abgleich (Rust-Port des Python StreamerLinkMatcher-Cog).
+//! Automatischer Streamer↔Discord-Abgleich.
 //!
 //! Läuft alle 6h als Hintergrund-Task. Wenn keine neuen unverknüpften Partner vorhanden
 //! sind, beendet er sich still ohne Discord-Post.
 //!
-//! Schwellen:
-//!   Score ≥ AUTO_THRESHOLD (90) → automatisch verknüpfen + Rolle vergeben
-//!   Score ≥ REVIEW_THRESHOLD (70) → "Manual-Link-Prompt" in den Notify-Kanal
-//!   darunter → verwerfen, als geprüft markieren
-//!
-//! State-Datei (JSON) teilt denselben Pfad wie der Python-Cog →
-//! nahtlose Übergabe ohne Re-Scan beim Umstieg.
+//! Kein Raten: verknüpft wird ausschließlich bei eindeutigem exaktem
+//! Namensmatch nach Normalisierung (Unicode→ASCII, Kleinbuchstaben,
+//! Leet-Speak, Streaming-Affixe). Alles andere wird still als geprüft
+//! markiert; manuelle Verknüpfung bleibt im Dashboard möglich.
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,9 +21,6 @@ use unicode_normalization::UnicodeNormalization;
 
 // ── Konfiguration ────────────────────────────────────────────────────────────
 
-const AUTO_THRESHOLD: i32 = 90;
-const REVIEW_THRESHOLD: i32 = 70;
-const FUZZY_FLOOR: f64 = 0.62;
 const SCAN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 static AFFIXES: &[&str] = &[
@@ -64,9 +58,7 @@ impl StreamerLinkConfig {
         let state_path = std::env::var("STREAMER_LINK_STATE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                PathBuf::from(
-                    "/home/naniadm/Documents/Deadlock-Bots/data/streamer_link_state.json",
-                )
+                PathBuf::from("/home/naniadm/Documents/Deadlock-Bots/data/streamer_link_state.json")
             });
         Self {
             notify_channel_id: env_u64("STREAMER_LINK_NOTIFY_CHANNEL_ID", 1374364800817303632),
@@ -194,8 +186,7 @@ fn norm_key(value: &str) -> String {
         let bytes = ascii.as_bytes();
         let mut i = 0;
         while i <= bytes.len() {
-            let boundary = i == bytes.len()
-                || !(bytes[i].is_ascii_alphanumeric());
+            let boundary = i == bytes.len() || !(bytes[i].is_ascii_alphanumeric());
             if boundary {
                 if i > start {
                     result.push(&ascii[start..i]);
@@ -215,29 +206,6 @@ fn norm_key(value: &str) -> String {
 
     let used = if kept.is_empty() { &tokens } else { &kept };
     used.join("")
-}
-
-fn similarity(a: &str, b: &str) -> f64 {
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
-    }
-    if a == b {
-        return 1.0;
-    }
-    strsim::jaro_winkler(a, b)
-}
-
-fn fallback_score(ratio: f64, exact_unique: bool) -> i32 {
-    if exact_unique && ratio >= 0.999 {
-        return 92;
-    }
-    if ratio >= 0.93 {
-        return 80;
-    }
-    if ratio >= 0.82 {
-        return 72;
-    }
-    (ratio * 70.0).round() as i32
 }
 
 // ── Member-Index ─────────────────────────────────────────────────────────────
@@ -265,21 +233,19 @@ impl MemberIndex {
         Self { exact }
     }
 
-    fn best_match(&self, login_key: &str) -> Option<(GuildMember, f64, bool)> {
-        if let Some(members) = self.exact.get(login_key) {
-            let exact_unique = members.len() == 1;
-            return Some((members[0].clone(), 1.0, exact_unique));
+    fn exact_match(&self, login_key: &str) -> Option<ExactMatch> {
+        match self.exact.get(login_key) {
+            Some(members) if members.len() == 1 => Some(ExactMatch::Unique(members[0].clone())),
+            Some(_) => Some(ExactMatch::Ambiguous),
+            None => None,
         }
-        // Fuzzy-Suche über alle Keys
-        let mut best: Option<(GuildMember, f64)> = None;
-        for (key, members) in &self.exact {
-            let ratio = similarity(login_key, key);
-            if ratio > best.as_ref().map(|(_, r)| *r).unwrap_or(0.0) {
-                best = Some((members[0].clone(), ratio));
-            }
-        }
-        best.map(|(m, r)| (m, r, false))
     }
+}
+
+/// Ergebnis der exakten Suche: nur ein eindeutiger Treffer wird verknüpft.
+enum ExactMatch {
+    Unique(GuildMember),
+    Ambiguous,
 }
 
 // ── Broker-Helfer ────────────────────────────────────────────────────────────
@@ -324,7 +290,13 @@ async fn grant_role(relay: &BrokerRelay, guild_id: u64, user_id: u64, role_id: u
     }
 }
 
-async fn notify_embed(relay: &BrokerRelay, channel_id: u64, title: &str, description: &str, color: u32) {
+async fn notify_embed(
+    relay: &BrokerRelay,
+    channel_id: u64,
+    title: &str,
+    description: &str,
+    color: u32,
+) {
     let payload = SendRichMessage {
         channel_id: channel_id as i64,
         content: None,
@@ -372,7 +344,10 @@ async fn run_scan(
         return;
     }
 
-    tracing::info!(count = new_candidates.len(), "streamer_link: neue Kandidaten gefunden");
+    tracing::info!(
+        count = new_candidates.len(),
+        "streamer_link: neue Kandidaten gefunden"
+    );
 
     // Discord-Member-Index aufbauen
     let members = match relay.list_members().await {
@@ -385,7 +360,7 @@ async fn run_scan(
     let index = MemberIndex::build(&members);
 
     let mut used_member_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut stats = (0u32, 0u32, 0u32, 0u32); // checked, auto, review, skipped
+    let mut stats = (0u32, 0u32, 0u32); // checked, auto, skipped
 
     for entry in &new_candidates {
         let login = entry.twitch_login.to_lowercase();
@@ -393,110 +368,89 @@ async fn run_scan(
 
         let login_key = norm_key(&login);
         if login_key.is_empty() {
-            state.mark(&login, "no_match", serde_json::json!({"reason": "leerer Schlüssel"}));
-            stats.3 += 1;
+            state.mark(
+                &login,
+                "no_match",
+                serde_json::json!({"reason": "leerer Schlüssel"}),
+            );
+            stats.2 += 1;
             continue;
         }
 
-        let Some((member, ratio, exact_unique)) = index.best_match(&login_key) else {
-            state.mark(&login, "no_match", serde_json::json!({"reason": format!("kein Member")}));
-            stats.3 += 1;
-            notify_embed(
-                relay,
-                config.notify_channel_id,
-                "🔗 Kein Discord-Match",
-                &format!(
-                    "**Twitch:** `{login}`\nKein Discord-Account automatisch gefunden.\nManuelle Verknüpfung über das Dashboard."
-                ),
-                0xE67E22,
-            )
-            .await;
-            continue;
+        // Kein Raten: ausschließlich eindeutige exakte Treffer verknüpfen.
+        let member = match index.exact_match(&login_key) {
+            Some(ExactMatch::Unique(member)) => member,
+            Some(ExactMatch::Ambiguous) => {
+                state.mark(
+                    &login,
+                    "no_match",
+                    serde_json::json!({"reason": "mehrdeutiger exakter Treffer"}),
+                );
+                stats.2 += 1;
+                continue;
+            }
+            None => {
+                state.mark(
+                    &login,
+                    "no_match",
+                    serde_json::json!({"reason": "kein exakter Discord-Treffer"}),
+                );
+                stats.2 += 1;
+                continue;
+            }
         };
 
-        if ratio < FUZZY_FLOOR {
-            state.mark(&login, "no_match", serde_json::json!({"reason": format!("Ähnlichkeit {ratio:.2} < {FUZZY_FLOOR}")}));
-            stats.3 += 1;
-            continue;
-        }
-
         if used_member_ids.contains(&member.id) {
-            state.mark(&login, "no_match", serde_json::json!({"reason": "Member-Kollision"}));
-            stats.3 += 1;
+            state.mark(
+                &login,
+                "no_match",
+                serde_json::json!({"reason": "Member-Kollision"}),
+            );
+            stats.2 += 1;
             continue;
         }
 
-        let score = fallback_score(ratio, exact_unique);
         let display = member
             .global_name
             .as_deref()
             .unwrap_or(&member.name)
             .to_string();
 
-        if score >= AUTO_THRESHOLD {
-            match link_discord_profile(internal_base, token, &login, &member.id, &display).await {
-                Ok(()) => {
-                    let member_id: u64 = member.id.parse().unwrap_or(0);
-                    let role_note =
-                        grant_role(relay, config.guild_id, member_id, config.streamer_role_id)
-                            .await;
-                    state.mark(
-                        &login,
-                        "auto_linked",
-                        serde_json::json!({"discord_user_id": member.id, "score": score}),
-                    );
-                    used_member_ids.insert(member.id.clone());
-                    stats.1 += 1;
-                    notify_embed(
-                        relay,
-                        config.notify_channel_id,
-                        "✅ Auto-verknüpft",
-                        &format!(
-                            "**Twitch:** `{login}`\n**Discord:** `{display}` (`{}`)\n**Score:** {score}%\n{role_note}",
-                            member.name
-                        ),
-                        0x2ECC71,
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    tracing::error!("streamer_link: Auto-Link-Fehler für {login}: {e}");
-                    notify_embed(
-                        relay,
-                        config.notify_channel_id,
-                        "⚠️ Streamer-Link Fehler",
-                        &format!("Auto-Link für `{login}` → `{display}` fehlgeschlagen: {e}"),
-                        0xE74C3C,
-                    )
-                    .await;
-                }
+        match link_discord_profile(internal_base, token, &login, &member.id, &display).await {
+            Ok(()) => {
+                let member_id: u64 = member.id.parse().unwrap_or(0);
+                let role_note =
+                    grant_role(relay, config.guild_id, member_id, config.streamer_role_id).await;
+                state.mark(
+                    &login,
+                    "auto_linked",
+                    serde_json::json!({"discord_user_id": member.id}),
+                );
+                used_member_ids.insert(member.id.clone());
+                stats.1 += 1;
+                notify_embed(
+                    relay,
+                    config.notify_channel_id,
+                    "✅ Auto-verknüpft",
+                    &format!(
+                        "**Twitch:** `{login}`\n**Discord:** `{display}` (`{}`)\n{role_note}",
+                        member.name
+                    ),
+                    0x2ECC71,
+                )
+                .await;
             }
-        } else if score >= REVIEW_THRESHOLD {
-            state.mark(
-                &login,
-                "review_posted",
-                serde_json::json!({"discord_user_id": member.id, "score": score}),
-            );
-            used_member_ids.insert(member.id.clone());
-            stats.2 += 1;
-            notify_embed(
-                relay,
-                config.notify_channel_id,
-                "❓ Möglicher Streamer-Match",
-                &format!(
-                    "**Twitch:** `{login}`\n**Discord:** `{display}` (`{}`)\n**Score:** {score}%\n\nManuelle Bestätigung: Dashboard → Streamer → Discord verknüpfen.",
-                    member.name
-                ),
-                0xF1C40F,
-            )
-            .await;
-        } else {
-            state.mark(
-                &login,
-                "no_match",
-                serde_json::json!({"reason": format!("Score {score} < {REVIEW_THRESHOLD}")}),
-            );
-            stats.3 += 1;
+            Err(e) => {
+                tracing::error!("streamer_link: Auto-Link-Fehler für {login}: {e}");
+                notify_embed(
+                    relay,
+                    config.notify_channel_id,
+                    "⚠️ Streamer-Link Fehler",
+                    &format!("Auto-Link für `{login}` → `{display}` fehlgeschlagen: {e}"),
+                    0xE74C3C,
+                )
+                .await;
+            }
         }
 
         tokio::task::yield_now().await;
@@ -506,8 +460,7 @@ async fn run_scan(
     tracing::info!(
         checked = stats.0,
         auto = stats.1,
-        review = stats.2,
-        skipped = stats.3,
+        skipped = stats.2,
         "streamer_link: Scan abgeschlossen"
     );
 }
@@ -535,5 +488,67 @@ pub async fn streamer_link_task(
         interval.tick().await;
         let mut state = LinkState::load(&config.state_path);
         run_scan(&pool, &relay, &config, &internal_base, &token, &mut state).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn member(id: &str, name: &str, global_name: Option<&str>, nick: Option<&str>) -> GuildMember {
+        GuildMember {
+            guild_id: None,
+            id: id.to_string(),
+            name: name.to_string(),
+            global_name: global_name.map(str::to_string),
+            nick: nick.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn normalisierung_entfernt_leet_und_affixe() {
+        assert_eq!(norm_key("Chiko_TTV"), "chiko");
+        assert_eq!(norm_key("N4ni"), "nani");
+        assert_eq!(norm_key("Dampfflocke"), "dampfflocke");
+    }
+
+    #[test]
+    fn exakter_eindeutiger_treffer_wird_gefunden() {
+        let index = MemberIndex::build(&[member("1", "chiko", None, None)]);
+        match index.exact_match("chiko") {
+            Some(ExactMatch::Unique(m)) => assert_eq!(m.id, "1"),
+            _ => panic!("erwartete eindeutigen Treffer"),
+        }
+    }
+
+    #[test]
+    fn mehrdeutiger_treffer_wird_nicht_verknuepft() {
+        let index = MemberIndex::build(&[
+            member("1", "chiko", None, None),
+            member("2", "Chiko", Some("chiko"), None),
+        ]);
+        assert!(matches!(
+            index.exact_match("chiko"),
+            Some(ExactMatch::Ambiguous)
+        ));
+    }
+
+    #[test]
+    fn ahnlicher_name_ist_kein_treffer_mehr() {
+        // „eisvanille" darf „evan" nicht mehr matchen — kein Fuzzy-Raten.
+        let index = MemberIndex::build(&[member("1", "evan", None, None)]);
+        assert!(index.exact_match("eisvanille").is_none());
+    }
+
+    #[test]
+    fn nick_und_global_name_gehen_in_den_schluessel_ein() {
+        let index = MemberIndex::build(&[member(
+            "1",
+            "fabianballe",
+            Some("Fabian Balle"),
+            Some("Chiko_TTV"),
+        )]);
+        assert!(index.exact_match("chiko").is_some());
+        assert!(index.exact_match("fabianballe").is_some());
     }
 }

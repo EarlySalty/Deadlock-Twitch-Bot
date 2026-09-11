@@ -46,7 +46,6 @@ tb-engagement            = { workspace = true }
 # Start auf, statt ihn einkompiliert altern zu lassen.
 tb-llm                   = { workspace = true }
 tb-vod-archive           = { workspace = true }
-strsim                   = { workspace = true }
 unicode-normalization    = { workspace = true }
 thiserror                = { workspace = true }
 
