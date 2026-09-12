@@ -124,3 +124,5 @@ pub mod watch_time;
 pub mod website;
 
 pub mod stat_command_settings;
+
+pub mod caster_overlay;

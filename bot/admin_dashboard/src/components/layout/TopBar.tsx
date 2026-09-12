@@ -25,6 +25,7 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   content: 'Content & Comms',
   announcements: 'Announcements',
   roadmap: 'Roadmap',
+  'caster-overlay': 'Caster-Overlay',
   changelog: 'Changelog',
   legal: 'Legal Pages',
   money: 'Money & Compliance',

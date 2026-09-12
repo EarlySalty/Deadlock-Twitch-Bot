@@ -131,6 +131,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/overlay",
             get(overlay::overlay_api_handler),
         )
+        .route("/twitch/api/v2/public/caster-overlay", get(crate::handlers::caster_overlay::public_handler))
         // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
         // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
         // denselben Pfad nicht in zwei gemergten Routern).
@@ -145,6 +146,8 @@ pub fn build_public_router(pool: PgPool) -> Router {
     // vergrößert nur die Angriffsfläche und löste den ZAP-CORS-Fund aus.
     let public_pages = Router::new()
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
+        .route("/twitch/caster-overlay", get(crate::handlers::caster_overlay::html_handler))
+        .route("/twitch/caster-overlay/background.png", get(crate::handlers::caster_overlay::background_handler))
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
@@ -1061,6 +1064,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/partner-signup-blocks/remove",
             post(admin_partner_signup_block::remove_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay",
+            get(crate::handlers::caster_overlay::get_handler).post(crate::handlers::caster_overlay::save_handler),
         )
         .route(
             "/twitch/api/admin/roadmap",

@@ -1353,3 +1353,9 @@ export async function fetchAdminResearch(login: string, days: number): Promise<R
 export async function fetchAdminResearchSuggestions(days: number): Promise<ResearchSuggestionsResponse> {
   return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
 }
+
+export interface CasterPerson { id: string; name: string; handle: string }
+export interface CasterScene { roster: CasterPerson[]; slots: [string | null, string | null] }
+export interface CasterDocument { revision: number; scene: CasterScene }
+export const fetchCasterOverlay = () => admin<CasterDocument>('/caster-overlay');
+export const saveCasterOverlay = (document: CasterDocument) => postAdminJson<CasterDocument, CasterDocument>('/caster-overlay', document);
