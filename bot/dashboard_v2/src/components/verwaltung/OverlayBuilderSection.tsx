@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Maximize, Minimize, RectangleHorizontal, X } from 'lucide-react';
 
 type OverlayTheme = 'dark' | 'light' | 'accent';
 type OverlayLayout = 'box' | 'bar' | 'canvas';
@@ -201,6 +201,10 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [activeSource, setActiveSource] = useState<ModuleKey | null>(null);
   const [touchSource, setTouchSource] = useState<ModuleKey | null>(null);
   const [previewHostWidth, setPreviewHostWidth] = useState(560);
+  const [previewHostHeight, setPreviewHostHeight] = useState(520);
+  const [theaterMode, setTheaterMode] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenNotice, setFullscreenNotice] = useState('');
   const [previewBackdrop, setPreviewBackdrop] = useState<'checker' | 'dark' | 'light'>('checker');
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -209,8 +213,58 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [copyFailed, setCopyFailed] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const previewHostRef = useRef<HTMLDivElement>(null);
+  const previewPanelRef = useRef<HTMLDivElement>(null);
+  const fullscreenPendingRef = useRef(false);
+  const fullscreenExitRef = useRef(0);
   const dragRef = useRef<DragState | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const expandedPreview = theaterMode || fullscreen;
+
+  const toggleFullscreen = async () => {
+    const panel = previewPanelRef.current;
+    if (!panel || fullscreenPendingRef.current) return;
+    fullscreenPendingRef.current = true;
+    setFullscreenNotice('');
+    try {
+      if (document.fullscreenElement === panel) {
+        await document.exitFullscreen();
+      } else {
+        panel.focus({ preventScroll: true });
+        if (!panel.requestFullscreen || !document.fullscreenEnabled) {
+          setTheaterMode(true);
+          setFullscreenNotice('Vollbild ist hier nicht verfügbar. Der Kino-Modus ist geöffnet.');
+          return;
+        }
+        await panel.requestFullscreen();
+      }
+    } catch {
+      if (document.fullscreenElement === panel) {
+        setFullscreenNotice('Vollbild konnte nicht beendet werden. Drücke Escape.');
+      } else {
+        setTheaterMode(true);
+        setFullscreenNotice('Vollbild wurde nicht zugelassen. Der Kino-Modus ist geöffnet.');
+      }
+    } finally {
+      fullscreenPendingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const panel = previewPanelRef.current;
+    if (!panel) return;
+    let wasFullscreen = document.fullscreenElement === panel;
+    const updateFullscreen = () => {
+      const active = document.fullscreenElement === panel;
+      setFullscreen(active);
+      if (wasFullscreen && !active) {
+        fullscreenExitRef.current = performance.now();
+        panel.focus({ preventScroll: true });
+      }
+      wasFullscreen = active;
+    };
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, [normalizedLogin]);
 
   const syncPreview = () => {
     iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
@@ -351,12 +405,22 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   useEffect(() => {
     const host = previewHostRef.current;
     if (!host) return;
-    const updateWidth = () => setPreviewHostWidth(Math.max(1, host.getBoundingClientRect().width));
-    updateWidth();
-    const observer = new ResizeObserver(updateWidth);
+    const updateSize = () => {
+      const bounds = host.getBoundingClientRect();
+      setPreviewHostWidth(Math.max(1, bounds.width));
+      setPreviewHostHeight(expandedPreview ? Math.max(1, bounds.height) : 520);
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
     observer.observe(host);
-    return () => observer.disconnect();
-  }, []);
+    window.addEventListener('resize', updateSize);
+    document.addEventListener('fullscreenchange', updateSize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateSize);
+      document.removeEventListener('fullscreenchange', updateSize);
+    };
+  }, [expandedPreview, normalizedLogin]);
 
   const toggleModule = (key: ModuleKey) => {
     setModules((current) => ({ ...current, [key]: !current[key] }));
@@ -498,7 +562,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   };
 
   const maxCanvasPreviewWidth = Math.max(1, previewHostWidth);
-  const canvasPreviewScale = Math.min(maxCanvasPreviewWidth / canvasWidth, 520 / canvasHeight);
+  const canvasPreviewScale = Math.min(maxCanvasPreviewWidth / canvasWidth, previewHostHeight / canvasHeight);
   const canvasPreviewWidth = canvasWidth * canvasPreviewScale;
   const canvasPreviewHeight = canvasHeight * canvasPreviewScale;
   const previewHeight = layout === 'bar' ? 300 : layout === 'canvas' ? canvasPreviewHeight : 660;
@@ -534,6 +598,32 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   return (
     <motion.section
       tabIndex={-1}
+      onKeyDown={(event) => {
+        const target = event.target;
+        if (event.defaultPrevented || event.repeat || event.nativeEvent.isComposing ||
+          !(target instanceof HTMLElement) || target.isContentEditable ||
+          target.closest('input, select, textarea, [role="textbox"]') ||
+          event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.key.toLowerCase() === 't' && event.altKey && !fullscreen) {
+          event.preventDefault();
+          event.stopPropagation();
+          setFullscreenNotice('');
+          setTheaterMode(current => !current);
+          previewPanelRef.current?.focus({ preventScroll: true });
+        } else if (event.key.toLowerCase() === 'f' && !event.altKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          void toggleFullscreen();
+        } else if (event.key === 'Escape' && !event.altKey && expandedPreview) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (fullscreen) void toggleFullscreen();
+          else if (performance.now() - fullscreenExitRef.current > 250) {
+            setTheaterMode(false);
+            setFullscreenNotice('');
+          }
+        }
+      }}
       data-tour-id="onboarding-overlay"
       data-tour-ready="true"
       onPointerDownCapture={() => setTouchSource(null)}
@@ -559,16 +649,42 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         </p>
       </div>
 
-      <div className="grid items-start gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
+      <div className={`grid items-start gap-5 ${expandedPreview ? 'grid-cols-1' : 'lg:grid-cols-[360px_minmax(0,1fr)]'}`}>
         {/* Mobil steht die Vorschau vor den Einstellungen. */}
-        <div ref={previewHostRef} className="min-w-0 space-y-3 lg:sticky lg:top-6 lg:col-start-2 lg:row-start-1">
-          <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3><select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select></div>
+        <div
+          ref={previewPanelRef}
+          tabIndex={0}
+          role="region"
+          aria-label="Overlay-Vorschau"
+          onPointerDown={(event) => {
+            if (event.target instanceof HTMLElement && !event.target.closest('button, input, select, textarea, [contenteditable]')) {
+              event.currentTarget.focus({ preventScroll: true });
+            }
+          }}
+          className={`min-w-0 flex flex-col gap-3 rounded-xl focus-visible:outline-2 focus-visible:outline-primary ${expandedPreview ? '' : 'lg:sticky lg:top-6 lg:col-start-2 lg:row-start-1'}`}
+          style={fullscreen ? { width: '100%', height: '100dvh', padding: 16, background: '#090a0d', overflow: 'auto' } : theaterMode ? { height: 'max(240px, calc(100dvh - 12rem))' } : undefined}
+        >
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select>
+              <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
+                <RectangleHorizontal aria-hidden="true" className="h-5 w-5" />
+              </button>
+              <button type="button" title={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-label={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-keyshortcuts="f" aria-pressed={fullscreen} onClick={() => void toggleFullscreen()} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                {fullscreen ? <Minimize aria-hidden="true" className="h-5 w-5" /> : <Maximize aria-hidden="true" className="h-5 w-5" />}
+              </button>
+              {expandedPreview && <button type="button" title={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} aria-label={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} onClick={() => { if (fullscreen) void toggleFullscreen(); else { setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
+            </div>
+          </div>
+          {fullscreenNotice && <p role="status" className="shrink-0 text-xs text-text-secondary">{fullscreenNotice}</p>}
+          <div ref={previewHostRef} className={expandedPreview ? 'flex min-h-0 flex-1 items-center justify-center overflow-hidden' : 'min-w-0'}>
           <div
             ref={editorRef}
             className={`relative overflow-hidden rounded-xl ring-1 ring-border bg-background/60 ${layout === 'canvas' ? 'touch-none select-none' : 'overflow-x-auto'}`}
             style={{
               ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }),
-              ...(layout === 'canvas' ? { width: `${canvasPreviewWidth}px`, height: `${canvasPreviewHeight}px`, marginInline: 'auto' } : {}),
+              ...(layout === 'canvas' ? { width: `${canvasPreviewWidth}px`, height: `${canvasPreviewHeight}px`, marginInline: 'auto', flexShrink: 0 } : { width: '100%', maxHeight: expandedPreview ? '100%' : undefined, overflowY: 'auto' }),
             }}
           >
             <iframe
@@ -615,10 +731,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               </div>
             )}
           </div>
-          <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Rahmen und Griffe erscheinen beim Darüberfahren, per Tastatur oder Antippen nur im Editor.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS.'}</p>
+          </div>
+          {!expandedPreview && <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Rahmen und Griffe erscheinen beim Darüberfahren, per Tastatur oder Antippen nur im Editor.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS.'}</p>}
         </div>
 
-        <div className="min-w-0 space-y-5 lg:col-start-1 lg:row-start-1 lg:max-h-[max(360px,calc(100dvh-16rem))] lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
+        <div hidden={expandedPreview} className="min-w-0 space-y-5 lg:col-start-1 lg:row-start-1 lg:max-h-[max(360px,calc(100dvh-16rem))] lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
           <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
             Module frei bearbeiten
           </button>
