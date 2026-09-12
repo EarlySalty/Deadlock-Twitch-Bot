@@ -1690,7 +1690,7 @@ mod tests {
         assert!(html.contains("--bg: rgba(13, 15, 20, var(--bg-alpha))"));
         // Param-Parsing + Defaults
         assert!(html.contains("oneOf('theme', ['dark', 'light', 'accent'], 'dark')"));
-        assert!(html.contains("oneOf('layout', ['box', 'bar'], 'box')"));
+        assert!(html.contains("oneOf('layout', ['box', 'bar', 'canvas'], 'box')"));
         assert!(html.contains("oneOf('mode', ['all', 'standard', 'brawl'], 'all')"));
         assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl')"));
         assert!(html.contains("clampInt('opacity', 0, 100, 85)"));
@@ -1727,6 +1727,9 @@ mod tests {
         assert!(html.contains("'Letzte Spiele · neuestes links'"));
         assert!(html.contains("Deutsche Deadlock"));
         assert!(html.contains("brandNode()"));
+        assert!(html.contains("/brand/logo/logo-192.png"));
+        assert!(html.contains("/brand/logo/wordmark.svg"));
+        assert!(!html.contains("Spielverlauf"));
         assert!(html.contains("hexColor('accent')"));
         assert!(html.contains("hexColor('background')"));
         assert!(html.contains("hexColor('text')"));
@@ -1756,6 +1759,10 @@ mod tests {
         assert!(html.contains("border-radius: 999px"));
         // Box-Layout-Container
         assert!(html.contains("#overlay-card.layout-box"));
+        // Freie OBS-Leinwand mit URL-gesteuerten Quellen
+        assert!(html.contains("#overlay-card.layout-canvas"));
+        assert!(html.contains("function canvasSource(key, label, content)"));
+        assert!(html.contains("canvasRect(key)"));
         // opacity wirkt auf Karten-Hintergrund via --bg-alpha
         assert!(html.contains("var(--bg-alpha)"));
         assert!(html.contains("--bg-alpha: 0.85"));
