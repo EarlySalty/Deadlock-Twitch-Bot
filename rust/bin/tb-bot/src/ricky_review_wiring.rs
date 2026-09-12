@@ -1265,6 +1265,8 @@ mod tests {
             r#"export RICKY_SHADOW_REVIEW_ENABLED="${RICKY_SHADOW_REVIEW_ENABLED:-1}""#,
             r#"export RICKY_SHADOW_REVIEW_CHANNEL_ID="${RICKY_SHADOW_REVIEW_CHANNEL_ID:-1374364800817303632}""#,
             r#"export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECONDS:-20}""#,
+            r#"export ENGAGEMENT_LEARN_IDLE_CHANNELS="${ENGAGEMENT_LEARN_IDLE_CHANNELS:-0}""#,
+            r#"export ENGAGEMENT_LEARN_MAX_CHANNELS="${ENGAGEMENT_LEARN_MAX_CHANNELS:-1}""#,
             r#"export FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}""#,
             r#"export FIREWORKS_BASE_URL="${FIREWORKS_BASE_URL:-https://api.fireworks.ai/inference/v1}""#,
             r#"export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-accounts/fireworks/models/deepseek-v4-flash}""#,
