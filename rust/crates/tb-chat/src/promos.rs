@@ -1892,7 +1892,17 @@ impl PromoEngine {
                 "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE channel_login = $1 AND pfad = 'periodic' AND sent_at IS NOT NULL")
                 .bind(login).fetch_one(&self.pool).await;
             return match count {
-                Ok(count) => Some((community_promo_text(count, invite), "purple".into())),
+                Ok(count) => {
+                    if let Some(event) = self.load_global_promo_message(invite).await {
+                        if count.rem_euclid(4) == 0 {
+                            Some(event)
+                        } else {
+                            Some((community_promo_text(count.rem_euclid(4) - 1, invite), "purple".into()))
+                        }
+                    } else {
+                        Some((community_promo_text(count, invite), "purple".into()))
+                    }
+                },
                 Err(error) => {
                     warn!(%error, login, "Community-Themenrotation konnte nicht geladen werden");
                     None
@@ -4591,6 +4601,16 @@ mod db_tests {
                 .await
         );
         assert_eq!(api.announcement_colors().await, vec!["purple", "green"]);
+        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,3)")
+            .execute(&pool).await.unwrap();
+        let active_event = engine.build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE).await.unwrap();
+        assert!(active_event.0.starts_with("Unser bestehender Hinweis"));
+        assert_eq!(active_event.1, "green");
+        sqlx::query("UPDATE twitch_global_promo_modes SET ends_at = '2000-01-01T00:00:00+00:00'")
+            .execute(&pool).await.unwrap();
+        let expired_event = engine.build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE).await.unwrap();
+        assert_eq!(expired_event.0, community_promo_text(4, DEFAULT_PROMO_DISCORD_INVITE));
+        assert_eq!(expired_event.1, "purple");
     }
 
     struct EmptyMembers;
