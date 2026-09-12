@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { motion } from 'framer-motion';
 import { Check, Copy, Maximize, Minimize, RectangleHorizontal, X } from 'lucide-react';
 import { OverlayCanvasGuides } from './OverlayCanvasGuides';
+import { moveSelection, selectionBounds, selectionIntersects, toggleSelection, type SnapHit } from './overlaySelection';
 
 type OverlayTheme = 'dark' | 'light' | 'accent';
 type OverlayLayout = 'box' | 'bar' | 'canvas';
-type OverlayMode = 'all' | 'standard' | 'brawl';
+type OverlayMode = 'all' | 'standard' | 'ranked' | 'brawl';
 type ModuleKey =
   | 'header'
   | 'rank'
@@ -34,6 +35,7 @@ const LAYOUTS: Array<{ value: OverlayLayout; label: string }> = [
 const MODES: Array<{ value: OverlayMode; label: string }> = [
   { value: 'all', label: 'Alle Modi' },
   { value: 'standard', label: 'Standard' },
+  { value: 'ranked', label: 'Ranked' },
   { value: 'brawl', label: 'Street Brawl' },
 ];
 
@@ -125,6 +127,16 @@ type DragState = {
   startX: number;
   startY: number;
   source: OverlaySource;
+  members: Array<{ key: ModuleKey; source: OverlaySource }>;
+  targets: OverlaySource[];
+};
+
+type MarqueeState = {
+  pointerId: number;
+  target: HTMLElement;
+  startX: number;
+  startY: number;
+  initial: ModuleKey[];
 };
 
 function clampSource(source: OverlaySource, canvasWidth: number, canvasHeight: number): OverlaySource {
@@ -199,8 +211,21 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [editingField, setEditingField] = useState<{ key: ModuleKey; field: SourceField } | null>(null);
   const [editingCanvasDimension, setEditingCanvasDimension] = useState<'width' | 'height' | null>(null);
   const [selectedSource, setSelectedSource] = useState<ModuleKey>('rank');
-  const [hasSelection, setHasSelection] = useState(true);
-  const selectSource = (key: ModuleKey) => { setSelectedSource(key); setHasSelection(true); };
+  const [selectedSources, setSelectedSources] = useState<ModuleKey[]>(['rank']);
+  const visibleSelection = selectedSources.filter(key => modules[key]);
+  const hasSelection = visibleSelection.length > 0;
+  const selectSource = (key: ModuleKey, additive = false) => {
+    const next = additive ? toggleSelection(visibleSelection, key) : [key];
+    setSelectedSource(next.includes(key) ? key : next[next.length - 1] || key);
+    setSelectedSources(next);
+  };
+  const [magnetEnabled, setMagnetEnabled] = useState(true);
+  const magnetRef = useRef(true);
+  const [snapHits, setSnapHits] = useState<SnapHit[]>([]);
+  const [marquee, setMarquee] = useState<OverlaySource | null>(null);
+  const marqueeRef = useRef<MarqueeState | null>(null);
+  const sceneRef = useRef({ sources, modules });
+  useEffect(() => { sceneRef.current = { sources, modules }; }, [sources, modules]);
   const [activeSource, setActiveSource] = useState<ModuleKey | null>(null);
   const [touchSource, setTouchSource] = useState<ModuleKey | null>(null);
   const [previewHostWidth, setPreviewHostWidth] = useState(560);
@@ -294,7 +319,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       // Alte feste Layouts öffnen frei; bereits kopierte OBS-URLs bleiben unverändert.
       setLayout(savedConfig.editorVersion === 2 && (savedConfig.layout === 'box' || savedConfig.layout === 'bar') ? savedConfig.layout : 'canvas');
       if (savedConfig.theme === 'dark' || savedConfig.theme === 'light' || savedConfig.theme === 'accent') setTheme(savedConfig.theme);
-      if (savedConfig.mode === 'all' || savedConfig.mode === 'standard' || savedConfig.mode === 'brawl') setMode(savedConfig.mode);
+      if (savedConfig.mode === 'all' || savedConfig.mode === 'standard' || savedConfig.mode === 'ranked' || savedConfig.mode === 'brawl') setMode(savedConfig.mode);
       if (Number.isFinite(savedConfig.opacity)) setOpacity(Math.min(100, Math.max(0, Math.round(Number(savedConfig.opacity)))));
       if (Number.isFinite(savedConfig.recentN)) setRecentN(Math.min(15, Math.max(1, Math.round(Number(savedConfig.recentN)))));
       if (Number.isFinite(savedConfig.radius)) setRadius(Math.min(32, Math.max(0, Math.round(Number(savedConfig.radius)))));
@@ -340,37 +365,84 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   }, [canvasHeight, canvasWidth, editingCanvasDimension]);
 
   useEffect(() => {
-    const handlePointerMove = (event: PointerEvent) => {
+    type PointerPosition = Pick<PointerEvent, 'clientX' | 'clientY' | 'pointerId' | 'altKey'>;
+    let lastPointer: PointerPosition | null = null;
+    const handlePointerMove = (event: PointerPosition) => {
       const drag = dragRef.current;
+      const box = marqueeRef.current;
       const preview = editorRef.current;
-      if (!drag || !preview || event.pointerId !== drag.pointerId) return;
+      if (!preview || (!drag && !box)) return;
       const bounds = preview.getBoundingClientRect();
       if (bounds.width <= 0 || bounds.height <= 0) return;
+      if (box && event.pointerId === box.pointerId) {
+        const x = Math.max(0, Math.min(canvasWidth, (event.clientX - bounds.left) / bounds.width * canvasWidth));
+        const y = Math.max(0, Math.min(canvasHeight, (event.clientY - bounds.top) / bounds.height * canvasHeight));
+        const rect = { x: Math.min(box.startX, x), y: Math.min(box.startY, y), width: Math.abs(x - box.startX), height: Math.abs(y - box.startY) };
+        setMarquee(rect);
+        const scene = sceneRef.current;
+        const members = MODULES.filter(({ key }) => scene.modules[key] && selectionIntersects(rect, scene.sources[key])).map(({ key }) => key);
+        const next = [...new Set([...box.initial, ...members])];
+        setSelectedSources(next);
+        if (next.length) setSelectedSource(next[next.length - 1]);
+        return;
+      }
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      lastPointer = event;
       const dx = (event.clientX - drag.startX) / bounds.width * canvasWidth;
       const dy = (event.clientY - drag.startY) / bounds.height * canvasHeight;
-      const next = drag.mode === 'move'
-        ? { ...drag.source, x: drag.source.x + dx, y: drag.source.y + dy }
-        : resizeSource(drag.source, drag.source.width + dx, drag.source.height + dy, canvasWidth, canvasHeight);
-      setSources(current => ({ ...current, [drag.key]: clampSource(next, canvasWidth, canvasHeight) }));
+      if (drag.mode === 'resize') {
+        const next = resizeSource(drag.source, drag.source.width + dx, drag.source.height + dy, canvasWidth, canvasHeight);
+        setSources(current => ({ ...current, [drag.key]: next }));
+        return;
+      }
+      const snap = magnetRef.current && !event.altKey;
+      const delta = moveSelection(drag.members.map(member => member.source), drag.targets, canvasWidth, canvasHeight, dx, dy,
+        snap ? 6 * canvasWidth / bounds.width : 0, snap ? 6 * canvasHeight / bounds.height : 0);
+      setSnapHits(delta.hits);
+      setSources(current => {
+        const next = { ...current };
+        for (const { key, source } of drag.members) next[key] = { ...source, x: source.x + delta.dx, y: source.y + delta.dy };
+        return next;
+      });
     };
     const handlePointerUp = (event: PointerEvent) => {
-      const drag = dragRef.current;
+      const drag = dragRef.current || marqueeRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
       dragRef.current = null;
+      lastPointer = null;
+      marqueeRef.current = null;
+      setMarquee(null);
+      setSnapHits([]);
       setActiveSource(null);
       if (drag.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
+    };
+    const handleAlt = (event: KeyboardEvent) => {
+      if (event.key === 'Alt' && lastPointer && dragRef.current?.mode === 'move') {
+        handlePointerMove({ clientX: lastPointer.clientX, clientY: lastPointer.clientY, pointerId: lastPointer.pointerId, altKey: event.type === 'keydown' });
+      }
+    };
+    const handleBlur = () => {
+      const active = dragRef.current || marqueeRef.current;
+      if (active) handlePointerUp({ pointerId: active.pointerId } as PointerEvent);
     };
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerUp);
     window.addEventListener('lostpointercapture', handlePointerUp);
+    window.addEventListener('keydown', handleAlt);
+    window.addEventListener('keyup', handleAlt);
+    window.addEventListener('blur', handleBlur);
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
       window.removeEventListener('lostpointercapture', handlePointerUp);
-      const drag = dragRef.current;
+      window.removeEventListener('keydown', handleAlt);
+      window.removeEventListener('keyup', handleAlt);
+      window.removeEventListener('blur', handleBlur);
+      const drag = dragRef.current || marqueeRef.current;
       dragRef.current = null;
+      marqueeRef.current = null;
       if (drag?.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
     };
   }, [canvasHeight, canvasWidth]);
@@ -433,6 +505,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   }, [expandedPreview, normalizedLogin]);
 
   const toggleModule = (key: ModuleKey) => {
+    if (modules[key]) {
+      const next = visibleSelection.filter(item => item !== key);
+      setSelectedSources(next);
+      if (next.length && selectedSource === key) setSelectedSource(next[next.length - 1]);
+    }
     setModules((current) => ({ ...current, [key]: !current[key] }));
   };
 
@@ -476,13 +553,20 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   };
 
   const beginSourceDrag = (event: React.PointerEvent<HTMLElement>, key: ModuleKey, mode: DragState['mode']) => {
-    if (event.button !== 0 || dragRef.current) return;
+    if (event.button !== 0 || dragRef.current || marqueeRef.current) return;
     event.preventDefault();
     event.stopPropagation();
+    previewPanelRef.current?.focus({ preventScroll: true });
     const source = sources[key] || DEFAULT_CANVAS_SOURCES[key];
     const bounds = editorRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    selectSource(key);
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+    const keys = mode === 'resize' ? [key] : additive ? toggleSelection(visibleSelection, key) : visibleSelection.includes(key) ? visibleSelection : [key];
+    setSelectedSources(keys);
+    setSelectedSource(keys.includes(key) ? key : keys[keys.length - 1] || key);
+    // Removing a member is only a toggle, never a drag of the remaining group.
+    if (!keys.includes(key)) return;
+    setSnapHits([]);
     setActiveSource(key);
     setTouchSource(event.pointerType === 'touch' ? key : null);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -494,7 +578,40 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       startX: event.clientX,
       startY: event.clientY,
       source,
+      members: keys.map(member => ({ key: member, source: sources[member] })),
+      targets: MODULES.filter(({ key: other }) => modules[other] && !keys.includes(other)).map(({ key: other }) => sources[other]),
     };
+  };
+
+  const beginMarquee = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget || event.button !== 0 || dragRef.current || marqueeRef.current) return;
+    const bounds = editorRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return;
+    event.preventDefault();
+    previewPanelRef.current?.focus({ preventScroll: true });
+    const initial = event.ctrlKey || event.metaKey || event.shiftKey ? visibleSelection : [];
+    const startX = (event.clientX - bounds.left) / bounds.width * canvasWidth;
+    const startY = (event.clientY - bounds.top) / bounds.height * canvasHeight;
+    setSelectedSources(initial);
+    setTouchSource(null);
+    setSnapHits([]);
+    setMarquee({ x: startX, y: startY, width: 0, height: 0 });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    marqueeRef.current = { pointerId: event.pointerId, target: event.currentTarget, startX, startY, initial };
+  };
+
+  const centerSelection = (axis: 'x' | 'y') => {
+    setSources(current => {
+      const rects = visibleSelection.map(key => current[key]);
+      const bounds = selectionBounds(rects);
+      if (!bounds) return current;
+      const delta = moveSelection(rects, [], canvasWidth, canvasHeight,
+        axis === 'x' ? (canvasWidth - bounds.width) / 2 - bounds.x : 0,
+        axis === 'y' ? (canvasHeight - bounds.height) / 2 - bounds.y : 0);
+      const next = { ...current };
+      for (const key of visibleSelection) next[key] = { ...current[key], x: current[key].x + delta.dx, y: current[key].y + delta.dy };
+      return next;
+    });
   };
 
   const updateSource = (key: ModuleKey, field: keyof OverlaySource, rawValue: number) => {
@@ -526,7 +643,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     setCanvasHeight(DEFAULT_CANVAS_HEIGHT);
     setSources(DEFAULT_CANVAS_SOURCES);
     setSelectedSource('rank');
-    setHasSelection(true);
+    setSelectedSources(['rank']);
   };
 
   const saveLayout = () => {
@@ -581,6 +698,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const selected = sources[selectedSource] || DEFAULT_CANVAS_SOURCES[selectedSource];
   const selectedDraft = sourceDrafts[selectedSource] || sourceDraft(selected);
   const selectedLabel = MODULES.find(({ key }) => key === selectedSource)?.label || selectedSource;
+  const groupBounds = selectionBounds(visibleSelection.map(key => sources[key]));
 
   if (!normalizedLogin) {
     return (
@@ -628,7 +746,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         }
         if (target.isContentEditable || target.closest('input, select, textarea, [role="textbox"]')) return;
         if (event.key === 'Escape' && !event.altKey) {
-          setHasSelection(false);
+          const active = dragRef.current || marqueeRef.current;
+          dragRef.current = null;
+          marqueeRef.current = null;
+          if (active?.target.hasPointerCapture(active.pointerId)) active.target.releasePointerCapture(active.pointerId);
+          setMarquee(null);
+          setSnapHits([]);
+          setActiveSource(null);
+          setSelectedSources([]);
           setTouchSource(null);
           previewPanelRef.current?.focus({ preventScroll: true });
           return;
@@ -687,6 +812,10 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-white">Baukasten & Live-Ausgabe</h3>
             <div className="flex flex-wrap items-center gap-2">
+              {layout === 'canvas' && <>
+                <span data-testid="overlay-selection-count" className="text-xs text-text-secondary">{visibleSelection.length} ausgewählt</span>
+                <button type="button" aria-label="Magnet" aria-pressed={magnetEnabled} onClick={() => { magnetRef.current = !magnetEnabled; setMagnetEnabled(!magnetEnabled); setSnapHits([]); }} className="min-h-11 rounded-lg border border-border px-3 text-xs text-primary aria-pressed:border-primary aria-pressed:bg-primary/10">Magnet {magnetEnabled ? 'an' : 'aus'}</button>
+              </>}
               <select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select>
               <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
                 <RectangleHorizontal aria-hidden="true" className="h-5 w-5" />
@@ -720,7 +849,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent"
             />
             {layout === 'canvas' && (
-              <div className="absolute inset-0 z-10" data-testid="overlay-editor-controls" onPointerDown={(event) => { if (event.target === event.currentTarget) { setHasSelection(false); setTouchSource(null); } }}>
+              <div className="absolute inset-0 z-10" data-testid="overlay-editor-controls" onPointerDown={beginMarquee}>
                 {MODULES.map(({ key, label }) => {
                   if (!modules[key]) return null;
                   const source = sources[key];
@@ -728,14 +857,15 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                     <div
                       key={key}
                       className="group/source absolute"
-                      data-chrome={(hasSelection && selectedSource === key) || activeSource === key || touchSource === key ? 'visible' : undefined}
-                      style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: selectedSource === key ? 2 : 1 }}
+                      data-chrome={visibleSelection.includes(key) || activeSource === key || touchSource === key ? 'visible' : undefined}
+                      style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: visibleSelection.includes(key) ? 2 : 1 }}
                     >
                       <button
                         type="button"
                         aria-label={`${label} verschieben und auswählen`}
+                        aria-pressed={visibleSelection.includes(key)}
                         title={`${label}: ziehen zum Verschieben`}
-                        onClick={() => selectSource(key)}
+                        onClick={(event) => { if (event.detail === 0) selectSource(key, event.ctrlKey || event.metaKey || event.shiftKey); }}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
                         className="absolute inset-0 touch-none cursor-move rounded border-2 border-transparent text-left group-hover/source:border-primary group-has-[:focus-visible]/source:border-primary group-data-[chrome=visible]/source:border-primary"
                       >
@@ -745,7 +875,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                         type="button"
                         aria-label={`${label}: Größe ändern`}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
-                        onClick={() => selectSource(key)}
+                        onClick={(event) => { if (event.detail === 0) selectSource(key); }}
                         className="pointer-events-none absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black opacity-0 group-hover/source:pointer-events-auto group-hover/source:opacity-100 group-has-[:focus-visible]/source:pointer-events-auto group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:pointer-events-auto group-data-[chrome=visible]/source:opacity-100"
                         title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
                       ><span aria-hidden="true">↘</span></button>
@@ -754,16 +884,21 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 })}
               </div>
             )}
-            {layout === 'canvas' && hasSelection && modules[selectedSource] && <OverlayCanvasGuides source={selected} canvasWidth={canvasWidth} canvasHeight={canvasHeight} scale={canvasPreviewScale} />}
+            {layout === 'canvas' && groupBounds && <OverlayCanvasGuides source={groupBounds} canvasWidth={canvasWidth} canvasHeight={canvasHeight} scale={canvasPreviewScale} />}
+            {layout === 'canvas' && visibleSelection.length > 1 && groupBounds && <div data-testid="overlay-group-bounds" aria-hidden="true" className="pointer-events-none absolute z-20 border border-dashed border-primary" style={{ left: `${groupBounds.x / canvasWidth * 100}%`, top: `${groupBounds.y / canvasHeight * 100}%`, width: `${groupBounds.width / canvasWidth * 100}%`, height: `${groupBounds.height / canvasHeight * 100}%` }} />}
+            {layout === 'canvas' && marquee && <div data-testid="overlay-selection-box" aria-hidden="true" className="pointer-events-none absolute z-30 border border-primary bg-primary/15" style={{ left: `${marquee.x / canvasWidth * 100}%`, top: `${marquee.y / canvasHeight * 100}%`, width: `${marquee.width / canvasWidth * 100}%`, height: `${marquee.height / canvasHeight * 100}%` }} />}
+            {layout === 'canvas' && snapHits.length > 0 && <svg data-testid="overlay-snap-guides" aria-hidden="true" className="pointer-events-none absolute inset-0 z-30" width="100%" height="100%">
+              {snapHits.map(hit => <line key={hit.axis} data-axis={hit.axis} data-position={hit.position} x1={hit.axis === 'x' ? `${hit.position / canvasWidth * 100}%` : 0} x2={hit.axis === 'x' ? `${hit.position / canvasWidth * 100}%` : '100%'} y1={hit.axis === 'y' ? `${hit.position / canvasHeight * 100}%` : 0} y2={hit.axis === 'y' ? `${hit.position / canvasHeight * 100}%` : '100%'} stroke="#4ade80" strokeWidth={1.5} />)}
+            </svg>}
           </div>
           </div>
-          {layout === 'canvas' && hasSelection && modules[selectedSource] && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-            <span>{selectedLabel} · {selected.width} × {selected.height} px</span>
-            <button type="button" onClick={() => updateSource(selectedSource, 'x', (canvasWidth - selected.width) / 2)} className="min-h-9 rounded border border-border px-2 text-primary">Horizontal zentrieren</button>
-            <button type="button" onClick={() => updateSource(selectedSource, 'y', (canvasHeight - selected.height) / 2)} className="min-h-9 rounded border border-border px-2 text-primary">Vertikal zentrieren</button>
-            <span data-testid="overlay-center-status">Horizontal {Math.abs(selected.x + selected.width / 2 - canvasWidth / 2) <= 0.5 ? 'mittig' : 'nicht mittig'} · Vertikal {Math.abs(selected.y + selected.height / 2 - canvasHeight / 2) <= 0.5 ? 'mittig' : 'nicht mittig'}</span>
+          {layout === 'canvas' && groupBounds && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <span>{visibleSelection.length > 1 ? `${visibleSelection.length} Module` : MODULES.find(({ key }) => key === visibleSelection[0])?.label} · {groupBounds.width} × {groupBounds.height} px</span>
+            <button type="button" onClick={() => centerSelection('x')} className="min-h-9 rounded border border-border px-2 text-primary">Horizontal zentrieren</button>
+            <button type="button" onClick={() => centerSelection('y')} className="min-h-9 rounded border border-border px-2 text-primary">Vertikal zentrieren</button>
+            <span data-testid="overlay-center-status">Horizontal {Math.abs(groupBounds.x + groupBounds.width / 2 - canvasWidth / 2) <= 0.5 ? 'mittig' : 'nicht mittig'} · Vertikal {Math.abs(groupBounds.y + groupBounds.height / 2 - canvasHeight / 2) <= 0.5 ? 'mittig' : 'nicht mittig'}</span>
           </div>}
-          <p className="text-xs text-text-secondary">Modul anklicken und ziehen. Klick auf die freie Fläche oder Escape hebt die Auswahl auf.</p>
+          <p className="text-xs text-text-secondary">Strg/⌘/Shift + Klick: Auswahl ändern. Rahmen auf freier Fläche ziehen, mit Strg/⌘/Shift ergänzen. Alt: ohne Magnet. Größengriff: nur ein Modul. Freier Klick oder Escape: Auswahl aufheben.</p>
           </div>
           <div className="flex min-w-0 flex-col gap-2">
             <h4 className="text-sm font-semibold text-white">Vorschau · So sieht es im Stream aus</h4>
@@ -781,7 +916,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
             Module frei bearbeiten
           </button>
-          {layout === 'canvas' && hasSelection && (
+          {layout === 'canvas' && hasSelection && visibleSelection.length === 1 && visibleSelection[0] === selectedSource && (
               <div className="rounded-lg border border-border bg-background/60 p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -996,9 +1131,10 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                       <button
                         key={key}
                         type="button"
-                        aria-pressed={hasSelection && selectedSource === key}
-                        onClick={() => selectSource(key)}
-                        className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors ${hasSelection && selectedSource === key ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
+                        aria-pressed={visibleSelection.includes(key)}
+                        disabled={!modules[key]}
+                        onClick={(event) => selectSource(key, event.ctrlKey || event.metaKey || event.shiftKey)}
+                        className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors disabled:opacity-40 ${visibleSelection.includes(key) ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
                       >
                         <span className="min-w-0 truncate">{label}</span>
                         <span className="shrink-0 font-mono text-xs">{Math.round(source.width)} × {Math.round(source.height)}</span>
