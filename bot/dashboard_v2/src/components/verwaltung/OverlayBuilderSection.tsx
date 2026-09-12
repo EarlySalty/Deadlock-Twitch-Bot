@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { flushSync } from 'react-dom';
+import { boundedGroupDelta, toggleSelection } from './overlaySelection';
 import { motion } from 'framer-motion';
 import { Check, Copy, Maximize, Minimize, RectangleHorizontal, X } from 'lucide-react';
 import { OverlayCanvasGuides } from './OverlayCanvasGuides';
 
+type EditorMode = 'simple' | 'advanced';
 type OverlayTheme = 'dark' | 'light' | 'accent';
 type OverlayLayout = 'box' | 'bar' | 'canvas';
 type OverlayMode = 'all' | 'standard' | 'brawl';
@@ -79,6 +82,7 @@ const sourceDraft = (source: OverlaySource): SourceDraft => ({
 
 type SavedOverlayConfig = {
   editorVersion?: number;
+  editorMode?: EditorMode;
   layout?: OverlayLayout;
   theme?: OverlayTheme;
   mode?: OverlayMode;
@@ -125,6 +129,7 @@ type DragState = {
   startX: number;
   startY: number;
   source: OverlaySource;
+  members: Array<{ key: ModuleKey; source: OverlaySource }>;
 };
 
 function clampSource(source: OverlaySource, canvasWidth: number, canvasHeight: number): OverlaySource {
@@ -178,6 +183,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const normalizedLogin = login.trim();
   const [theme, setTheme] = useState<OverlayTheme>('dark');
   const [layout, setLayout] = useState<OverlayLayout>('canvas');
+  const [editorMode, setEditorMode] = useState<EditorMode>('advanced');
   const [mode, setMode] = useState<OverlayMode>('all');
   const [opacity, setOpacity] = useState<number>(85);
   const [recentN, setRecentN] = useState<number>(10);
@@ -199,8 +205,17 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [editingField, setEditingField] = useState<{ key: ModuleKey; field: SourceField } | null>(null);
   const [editingCanvasDimension, setEditingCanvasDimension] = useState<'width' | 'height' | null>(null);
   const [selectedSource, setSelectedSource] = useState<ModuleKey>('rank');
-  const [hasSelection, setHasSelection] = useState(true);
-  const selectSource = (key: ModuleKey) => { setSelectedSource(key); setHasSelection(true); };
+  const [selectedSources, setSelectedSources] = useState<ModuleKey[]>(['rank']);
+  const visibleSelection = selectedSources.filter(key => modules[key]);
+  const hasSelection = visibleSelection.length > 0;
+  const selectSource = (key: ModuleKey, additive = false) => {
+    if (!modules[key]) return;
+    const next = additive ? toggleSelection(visibleSelection, key) : [key];
+    setSelectedSource(next.includes(key) ? key : next[next.length - 1] || key);
+    setSelectedSources(next);
+  };
+  const sceneRef = useRef(sources);
+  useLayoutEffect(() => { sceneRef.current = sources; }, [sources]);
   const [activeSource, setActiveSource] = useState<ModuleKey | null>(null);
   const [touchSource, setTouchSource] = useState<ModuleKey | null>(null);
   const [previewHostWidth, setPreviewHostWidth] = useState(560);
@@ -226,9 +241,17 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const outputIframeRef = useRef<HTMLIFrameElement>(null);
   const expandedPreview = theaterMode || fullscreen;
 
+  const endGesture = useCallback(() => {
+    const active = dragRef.current;
+    dragRef.current = null;
+    setActiveSource(null);
+    if (active?.target.hasPointerCapture(active.pointerId)) active.target.releasePointerCapture(active.pointerId);
+  }, []);
+
   const toggleFullscreen = async () => {
     const panel = previewPanelRef.current;
     if (!panel || fullscreenPendingRef.current) return;
+    endGesture();
     fullscreenPendingRef.current = true;
     setFullscreenNotice('');
     try {
@@ -260,6 +283,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     if (!panel) return;
     let wasFullscreen = document.fullscreenElement === panel;
     const updateFullscreen = () => {
+      endGesture();
       const active = document.fullscreenElement === panel;
       setFullscreen(active);
       if (wasFullscreen && !active) {
@@ -270,7 +294,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     };
     document.addEventListener('fullscreenchange', updateFullscreen);
     return () => document.removeEventListener('fullscreenchange', updateFullscreen);
-  }, [normalizedLogin]);
+  }, [normalizedLogin, endGesture]);
 
   const syncPreview = () => {
     iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
@@ -289,6 +313,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     try {
       const savedConfig = JSON.parse(window.localStorage.getItem(storageKey) || 'null') as SavedOverlayConfig | null;
       if (!savedConfig) return;
+      if (savedConfig.editorMode === 'simple' || savedConfig.editorMode === 'advanced') setEditorMode(savedConfig.editorMode);
       const storedWidth = Number.isFinite(savedConfig.canvasWidth) ? Math.min(3840, Math.max(320, Number(savedConfig.canvasWidth))) : DEFAULT_CANVAS_WIDTH;
       const storedHeight = Number.isFinite(savedConfig.canvasHeight) ? Math.min(2160, Math.max(180, Number(savedConfig.canvasHeight))) : DEFAULT_CANVAS_HEIGHT;
       // Alte feste Layouts öffnen frei; bereits kopierte OBS-URLs bleiben unverändert.
@@ -348,32 +373,37 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       if (bounds.width <= 0 || bounds.height <= 0) return;
       const dx = (event.clientX - drag.startX) / bounds.width * canvasWidth;
       const dy = (event.clientY - drag.startY) / bounds.height * canvasHeight;
-      const next = drag.mode === 'move'
-        ? { ...drag.source, x: drag.source.x + dx, y: drag.source.y + dy }
-        : resizeSource(drag.source, drag.source.width + dx, drag.source.height + dy, canvasWidth, canvasHeight);
-      setSources(current => ({ ...current, [drag.key]: clampSource(next, canvasWidth, canvasHeight) }));
+      if (drag.mode === 'resize') {
+        const next = resizeSource(drag.source, drag.source.width + dx, drag.source.height + dy, canvasWidth, canvasHeight);
+        setSources(current => ({ ...current, [drag.key]: next }));
+      } else {
+        const delta = boundedGroupDelta(drag.members.map(member => member.source), canvasWidth, canvasHeight, dx, dy);
+        setSources(current => {
+          const next = { ...current };
+          for (const { key, source } of drag.members) next[key] = { ...source, x: source.x + delta.dx, y: source.y + delta.dy };
+          return next;
+        });
+      }
     };
     const handlePointerUp = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
-      dragRef.current = null;
-      setActiveSource(null);
-      if (drag.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
+      endGesture();
     };
+    window.addEventListener('blur', endGesture);
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerUp);
     window.addEventListener('lostpointercapture', handlePointerUp);
     return () => {
+      window.removeEventListener('blur', endGesture);
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
       window.removeEventListener('lostpointercapture', handlePointerUp);
-      const drag = dragRef.current;
-      dragRef.current = null;
-      if (drag?.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
+      endGesture();
     };
-  }, [canvasHeight, canvasWidth]);
+  }, [canvasHeight, canvasWidth, endGesture]);
 
   const overlayUrl = useMemo(() => {
     const origin = typeof window === 'undefined' ? '' : window.location.origin;
@@ -433,6 +463,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   }, [expandedPreview, normalizedLogin]);
 
   const toggleModule = (key: ModuleKey) => {
+    endGesture();
+    if (modules[key]) {
+      const next = visibleSelection.filter(item => item !== key);
+      setSelectedSources(next);
+      if (next.length && selectedSource === key) setSelectedSource(next[next.length - 1]);
+    }
     setModules((current) => ({ ...current, [key]: !current[key] }));
   };
 
@@ -479,10 +515,18 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     if (event.button !== 0 || dragRef.current) return;
     event.preventDefault();
     event.stopPropagation();
-    const source = sources[key] || DEFAULT_CANVAS_SOURCES[key];
+    // Zahlenfelder erst übernehmen, dann die Startgeometrie der Geste festhalten.
+    flushSync(() => previewPanelRef.current?.focus({ preventScroll: true }));
+    const currentSources = sceneRef.current;
+    const source = currentSources[key] || DEFAULT_CANVAS_SOURCES[key];
     const bounds = editorRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    selectSource(key);
+    const additive = mode === 'move' && (event.ctrlKey || event.metaKey);
+    const keys = additive ? toggleSelection(visibleSelection, key) : visibleSelection.includes(key) ? visibleSelection : [key];
+    setSelectedSources(keys);
+    setSelectedSource(keys.includes(key) ? key : keys[keys.length - 1] || key);
+    // Abwählen startet keine Bewegung der übrigen Gruppe.
+    if (!keys.includes(key)) return;
     setActiveSource(key);
     setTouchSource(event.pointerType === 'touch' ? key : null);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -494,6 +538,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       startX: event.clientX,
       startY: event.clientY,
       source,
+      members: keys.map(member => ({ key: member, source: currentSources[member] })),
     };
   };
 
@@ -526,13 +571,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     setCanvasHeight(DEFAULT_CANVAS_HEIGHT);
     setSources(DEFAULT_CANVAS_SOURCES);
     setSelectedSource('rank');
-    setHasSelection(true);
+    setSelectedSources(['rank']);
   };
 
   const saveLayout = () => {
     try {
       window.localStorage.setItem(storageKey, JSON.stringify({
         editorVersion: 2,
+        editorMode,
         layout,
         theme,
         mode,
@@ -615,6 +661,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           !(target instanceof HTMLElement) ||
           event.ctrlKey || event.metaKey || event.shiftKey) return;
         if (event.key === 'Escape' && !event.altKey && expandedPreview) {
+          endGesture();
           // Native Auswahlmenüs verarbeiten Escape zuerst; geschlossener Feldfokus sperrt den Ausstieg nicht.
           if (target instanceof HTMLSelectElement && CSS.supports('selector(select:open)') && target.matches(':open')) return;
           event.preventDefault();
@@ -628,7 +675,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         }
         if (target.isContentEditable || target.closest('input, select, textarea, [role="textbox"]')) return;
         if (event.key === 'Escape' && !event.altKey) {
-          setHasSelection(false);
+          endGesture();
+          setSelectedSources([]);
           setTouchSource(null);
           previewPanelRef.current?.focus({ preventScroll: true });
           return;
@@ -637,6 +685,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           event.preventDefault();
           event.stopPropagation();
           setFullscreenNotice('');
+          endGesture();
           setTheaterMode(current => !current);
           previewPanelRef.current?.focus({ preventScroll: true });
         } else if (event.key.toLowerCase() === 'f' && !event.altKey) {
@@ -665,10 +714,25 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           Overlay für OBS zusammenstellen
         </h2>
         <p className="text-sm text-text-secondary">
-          Zieh deine Module direkt an die gewünschte Stelle und ändere ihre Größe am Griff unten rechts. Die Vorschau zeigt deine echten Spielwerte.
+          {editorMode === 'advanced' ? 'Zieh deine Module an die gewünschte Stelle. Strg oder ⌘ + Klick wählt mehrere aus; am Griff änderst du die Größe der aktiven Quelle.' : 'Wähle eine fertige Karte oder Leiste und passe Inhalte und Farbe an. Dein eigenes Layout bleibt beim Wechsel erhalten.'} Die Vorschau zeigt deine echten Spielwerte.
           Voraussetzung: ein über den Discord verknüpfter Steam-Account.
         </p>
       </div>
+
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div role="group" aria-label="Bedienmodus" className="inline-flex rounded-xl border border-border bg-background/60 p-1">
+          {([{ value: 'simple', label: 'Einfach' }, { value: 'advanced', label: 'Erweitert' }] as const).map(item => <button key={item.value} type="button" aria-pressed={editorMode === item.value} onClick={() => { endGesture(); setEditorMode(item.value); }} className={`min-h-11 rounded-lg px-4 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-primary ${editorMode === item.value ? 'bg-primary/15 text-primary' : 'text-text-secondary hover:text-white'}`}>{item.label}</button>)}
+        </div>
+        <p className="text-xs text-text-secondary">Der Modus ändert nur die Bedienung. Layout und OBS-Adresse bleiben gleich.</p>
+      </div>
+
+      {editorMode === 'simple' && <section className="mb-5 space-y-3 rounded-xl border border-border bg-background/40 p-4" aria-label="Fertige Vorlagen">
+        <h3 className="text-sm font-semibold text-white">Vorlage auswählen</h3>
+        {layout === 'canvas' && <p className="text-sm text-text-secondary">Aktuell: Eigenes Layout. Es bleibt erhalten, bis du ausdrücklich eine Vorlage auswählst. Unter „Erweitert“ kannst du es weiter bearbeiten.</p>}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {([{ value: 'box', label: 'Feste Karte', detail: 'Kompakte Übersicht · 440 × 660' }, { value: 'bar', label: 'Feste Leiste', detail: 'Breites Overlay · 960 × 300' }] as const).map(preset => <button key={preset.value} type="button" aria-pressed={layout === preset.value} onClick={() => setLayout(preset.value)} className={`flex min-h-20 items-center gap-4 rounded-xl border p-4 text-left focus-visible:outline-2 focus-visible:outline-primary ${layout === preset.value ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background text-text-secondary hover:border-primary/50'}`}><span aria-hidden="true" className={`shrink-0 rounded border-2 border-primary/60 bg-primary/10 ${preset.value === 'box' ? 'h-12 w-8' : 'h-6 w-16'}`} /><span><span className="block font-semibold">{preset.label}</span><span className="text-xs text-text-secondary">{preset.detail}</span></span></button>)}
+        </div>
+      </section>}
 
       <div className="grid min-w-0 items-start gap-4">
         <div
@@ -685,22 +749,22 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           style={fullscreen ? { width: '100%', height: '100dvh', padding: 16, background: '#090a0d', overflow: 'auto' } : theaterMode ? { height: 'max(240px, calc(100dvh - 12rem))' } : undefined}
         >
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-white">Baukasten & Live-Ausgabe</h3>
+            <h3 className="text-sm font-semibold text-white">{editorMode === 'advanced' ? 'Baukasten & Live-Ausgabe' : 'Deine Vorschau'}</h3>
             <div className="flex flex-wrap items-center gap-2">
               <select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select>
-              <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
+              <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { endGesture(); setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
                 <RectangleHorizontal aria-hidden="true" className="h-5 w-5" />
               </button>
               <button type="button" title={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-label={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-keyshortcuts="f" aria-pressed={fullscreen} onClick={() => void toggleFullscreen()} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
                 {fullscreen ? <Minimize aria-hidden="true" className="h-5 w-5" /> : <Maximize aria-hidden="true" className="h-5 w-5" />}
               </button>
-              {expandedPreview && <button type="button" title={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} aria-label={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} onClick={() => { if (fullscreen) void toggleFullscreen(); else { setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
+              {expandedPreview && <button type="button" title={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} aria-label={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} onClick={() => { if (fullscreen) void toggleFullscreen(); else { endGesture(); setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
             </div>
           </div>
           {fullscreenNotice && <p role="status" className="shrink-0 text-xs text-text-secondary">{fullscreenNotice}</p>}
-          <div className={`grid min-w-0 items-start content-start gap-4 lg:grid-cols-2 ${expandedPreview ? 'min-h-0 flex-1 overflow-auto' : ''}`}>
+          <div className={`grid min-w-0 items-start content-start gap-4 ${editorMode === 'advanced' ? 'lg:grid-cols-2' : ''} ${expandedPreview ? 'min-h-0 flex-1 overflow-auto' : ''}`}>
           <div className="flex min-w-0 flex-col gap-2">
-          <h4 className="text-sm font-semibold text-primary">Baukasten · Editor</h4>
+          <h4 className="text-sm font-semibold text-primary">{editorMode === 'advanced' ? 'Baukasten · Editor' : 'So erscheint dein Overlay in OBS'}</h4>
           <div ref={previewHostRef} className="min-w-0 shrink-0">
           <div
             ref={editorRef}
@@ -719,8 +783,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               style={{ width: renderWidth, height: renderHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' }}
               className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent"
             />
-            {layout === 'canvas' && (
-              <div className="absolute inset-0 z-10" data-testid="overlay-editor-controls" onPointerDown={(event) => { if (event.target === event.currentTarget) { setHasSelection(false); setTouchSource(null); } }}>
+            {editorMode === 'advanced' && layout === 'canvas' && (
+              <div className="absolute inset-0 z-10" data-testid="overlay-editor-controls" onPointerDown={(event) => { if (event.target === event.currentTarget) { setSelectedSources([]); setTouchSource(null); } }}>
                 {MODULES.map(({ key, label }) => {
                   if (!modules[key]) return null;
                   const source = sources[key];
@@ -728,14 +792,15 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                     <div
                       key={key}
                       className="group/source absolute"
-                      data-chrome={(hasSelection && selectedSource === key) || activeSource === key || touchSource === key ? 'visible' : undefined}
-                      style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: selectedSource === key ? 2 : 1 }}
+                      data-chrome={visibleSelection.includes(key) || activeSource === key || touchSource === key ? 'visible' : undefined}
+                      style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: visibleSelection.includes(key) ? 2 : 1 }}
                     >
                       <button
                         type="button"
                         aria-label={`${label} verschieben und auswählen`}
                         title={`${label}: ziehen zum Verschieben`}
-                        onClick={() => selectSource(key)}
+                        aria-pressed={visibleSelection.includes(key)}
+                        onClick={(event) => { if (event.detail === 0) selectSource(key, event.ctrlKey || event.metaKey); }}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
                         className="absolute inset-0 touch-none cursor-move rounded border-2 border-transparent text-left group-hover/source:border-primary group-has-[:focus-visible]/source:border-primary group-data-[chrome=visible]/source:border-primary"
                       >
@@ -745,7 +810,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                         type="button"
                         aria-label={`${label}: Größe ändern`}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
-                        onClick={() => selectSource(key)}
+                        onClick={(event) => { if (event.detail === 0) { if (!visibleSelection.includes(key)) selectSource(key); else setSelectedSource(key); } }}
                         className="pointer-events-none absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black opacity-0 group-hover/source:pointer-events-auto group-hover/source:opacity-100 group-has-[:focus-visible]/source:pointer-events-auto group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:pointer-events-auto group-data-[chrome=visible]/source:opacity-100"
                         title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
                       ><span aria-hidden="true">↘</span></button>
@@ -754,18 +819,18 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 })}
               </div>
             )}
-            {layout === 'canvas' && hasSelection && modules[selectedSource] && <OverlayCanvasGuides source={selected} canvasWidth={canvasWidth} canvasHeight={canvasHeight} scale={canvasPreviewScale} />}
+            {editorMode === 'advanced' && layout === 'canvas' && hasSelection && modules[selectedSource] && <OverlayCanvasGuides source={selected} canvasWidth={canvasWidth} canvasHeight={canvasHeight} scale={canvasPreviewScale} />}
           </div>
           </div>
-          {layout === 'canvas' && hasSelection && modules[selectedSource] && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-            <span>{selectedLabel} · {selected.width} × {selected.height} px</span>
+          {editorMode === 'advanced' && layout === 'canvas' && hasSelection && modules[selectedSource] && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <span>{visibleSelection.length > 1 ? `${visibleSelection.length} ausgewählt · Aktiv: ` : ''}{selectedLabel} · {selected.width} × {selected.height} px</span>
             <button type="button" onClick={() => updateSource(selectedSource, 'x', (canvasWidth - selected.width) / 2)} className="min-h-9 rounded border border-border px-2 text-primary">Horizontal zentrieren</button>
             <button type="button" onClick={() => updateSource(selectedSource, 'y', (canvasHeight - selected.height) / 2)} className="min-h-9 rounded border border-border px-2 text-primary">Vertikal zentrieren</button>
             <span data-testid="overlay-center-status">Horizontal {Math.abs(selected.x + selected.width / 2 - canvasWidth / 2) <= 0.5 ? 'mittig' : 'nicht mittig'} · Vertikal {Math.abs(selected.y + selected.height / 2 - canvasHeight / 2) <= 0.5 ? 'mittig' : 'nicht mittig'}</span>
           </div>}
-          <p className="text-xs text-text-secondary">Modul anklicken und ziehen. Klick auf die freie Fläche oder Escape hebt die Auswahl auf.</p>
+          <p hidden={editorMode === 'simple'} className="text-xs text-text-secondary">Modul anklicken und ziehen. Klick auf die freie Fläche oder Escape hebt die Auswahl auf.</p>
           </div>
-          <div className="flex min-w-0 flex-col gap-2">
+          <div hidden={editorMode === 'simple'} className="flex min-w-0 flex-col gap-2">
             <h4 className="text-sm font-semibold text-white">Vorschau · So sieht es im Stream aus</h4>
             <div ref={outputHostRef} data-testid="overlay-clean-output" className="relative min-w-0 shrink-0 overflow-hidden rounded-xl ring-1 ring-border" style={{ ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }), width: '100%', aspectRatio: layout === 'canvas' ? `${canvasWidth} / ${canvasHeight}` : layout === 'bar' ? '960 / 300' : '440 / 660' }}>
               <iframe ref={outputIframeRef} data-testid="overlay-output-frame" onLoad={syncPreview} src={debouncedUrl} title="Overlay-Live-Ausgabe ohne Bearbeitungshilfen" className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent" style={{ width: renderWidth, height: renderHeight, transform: `scale(${outputHostWidth / renderWidth})`, transformOrigin: 'top left' }} />
@@ -775,17 +840,17 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </div>
         </div>
 
-        <details hidden={expandedPreview} className="min-w-0 rounded-xl border border-border p-3 lg:w-[calc(50%-0.5rem)]">
+        <details hidden={expandedPreview} open={editorMode === 'simple' || undefined} className={`min-w-0 rounded-xl border border-border p-3 ${editorMode === 'advanced' ? 'lg:w-[calc(50%-0.5rem)]' : ''}`}>
         <summary className="cursor-pointer text-sm font-semibold text-primary">Optionen · Module, Farben und OBS-Adresse</summary>
         <div className="mt-3 min-w-0 space-y-4">
-          <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
+          <button hidden={editorMode === 'simple'} type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
             Module frei bearbeiten
           </button>
-          {layout === 'canvas' && hasSelection && (
+          {editorMode === 'advanced' && layout === 'canvas' && hasSelection && (
               <div className="rounded-lg border border-border bg-background/60 p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h3 className="text-sm font-semibold text-white">Ausgewählte Quelle: {selectedLabel}</h3>
+                    <h3 className="text-sm font-semibold text-white">{visibleSelection.length > 1 ? 'Aktive Quelle der Gruppe' : 'Ausgewählte Quelle'}: {selectedLabel}</h3>
                     <p className="text-xs text-text-secondary">X/Y = Position · Breite/Höhe = Größe</p>
                   </div>
                   <button type="button" onClick={() => resetSource(selectedSource)} className="min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-text-secondary hover:border-primary hover:text-primary">Quelle zurücksetzen</button>
@@ -820,7 +885,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               </select>
             </div>
 
-            <div className="space-y-2">
+            <div hidden={editorMode === 'simple'} className="space-y-2">
               <label htmlFor="overlay-layout" className="block text-sm font-semibold text-white">
                 Layout
               </label>
@@ -857,7 +922,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
             </div>
           </div>
 
-          <fieldset className="space-y-3">
+          <fieldset hidden={editorMode === 'simple'} className="space-y-3">
             <legend className="text-sm font-semibold text-white">Deine Farben</legend>
             <div className="flex flex-wrap gap-2">
               {[
@@ -908,7 +973,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </fieldset>
 
           {/* Slider */}
-          <div className="grid gap-4">
+          <div hidden={editorMode === 'simple'} className="grid gap-4">
             <div className="space-y-2">
               <label
                 htmlFor="overlay-recent-n"
@@ -951,7 +1016,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
             </div>
           </div>
 
-          {layout === 'canvas' && (
+          {editorMode === 'advanced' && layout === 'canvas' && (
             <fieldset className="space-y-4 rounded-xl border border-primary/30 bg-background/50 p-4">
               <legend className="px-1 text-sm font-semibold text-white">OBS-Leinwand und Quellen</legend>
               <p className="text-sm leading-relaxed text-text-secondary">
@@ -996,9 +1061,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                       <button
                         key={key}
                         type="button"
-                        aria-pressed={hasSelection && selectedSource === key}
-                        onClick={() => selectSource(key)}
-                        className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors ${hasSelection && selectedSource === key ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
+                        disabled={!modules[key]}
+                        title={!modules[key] ? 'Diese Quelle zuerst unter Inhalte einschalten.' : undefined}
+                        aria-pressed={visibleSelection.includes(key)}
+                        onClick={(event) => selectSource(key, event.ctrlKey || event.metaKey)}
+                        className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${visibleSelection.includes(key) ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
                       >
                         <span className="min-w-0 truncate">{label}</span>
                         <span className="shrink-0 font-mono text-xs">{Math.round(source.width)} × {Math.round(source.height)}</span>
