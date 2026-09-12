@@ -62,6 +62,12 @@ struct OverlayResponse {
     streamer: String,
     rank_name: Option<String>,
     badge_level: Option<i64>,
+    rank_subrank: Option<i64>,
+    rank_badge_url: Option<String>,
+    history_available: bool,
+    history_updated_at: Option<i64>,
+    history_stale: bool,
+    latest_match_at: Option<i64>,
     delta: Option<i64>,
     wins: Option<i64>,
     losses: Option<i64>,
@@ -100,16 +106,23 @@ struct RecentMatch {
 struct SteamMmrTrend {
     #[serde(default)]
     linked: Option<bool>,
-    #[serde(default, alias = "current_rank_name")]
-    rank_name: Option<String>,
-    #[serde(default)]
-    current_badge: Option<i64>,
     #[serde(default)]
     delta: Option<i64>,
 }
 
 #[derive(Deserialize)]
+struct SteamRank {
+    linked: bool,
+    rank_name: Option<String>,
+    badge_level: Option<i64>,
+}
+
+#[derive(Deserialize)]
 struct SteamMatchHistory {
+    #[serde(default)]
+    updated_at: Option<i64>,
+    #[serde(default)]
+    stale: bool,
     #[serde(default)]
     linked: Option<bool>,
     #[serde(default)]
@@ -398,6 +411,7 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
         }
     };
 
+    let rank_url = steam_bot_url("/rank");
     let trend_url = steam_bot_url("/player-mmr-trend");
     let matches_url = steam_bot_url("/player-matches");
     let live_url = steam_bot_url("/player-live");
@@ -406,13 +420,16 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let matches_query = [("discord_id", discord_id.as_str()), ("limit", "150")];
     let live_query = [("discord_id", discord_id.as_str())];
 
-    let (trend, matches, live, hero_icons) = tokio::join!(
+    let (rank, trend, matches, live, hero_icons) = tokio::join!(
+        fetch_steam_json::<SteamRank>(&client, &rank_url, &live_query),
         fetch_steam_json::<SteamMmrTrend>(&client, &trend_url, &trend_query),
         fetch_steam_json::<SteamMatchHistory>(&client, &matches_url, &matches_query),
         fetch_steam_json::<SteamLiveStatus>(&client, &live_url, &live_query),
         hero_icon_map(&client),
     );
 
+    let rank = rank.filter(|value| value.linked);
+    let badge = rank.as_ref().and_then(|value| value.badge_level);
     let trend = trend.filter(|value| value.linked != Some(false));
     let history = matches.filter(|value| value.linked != Some(false));
     let live = live.filter(|value| value.linked != Some(false));
@@ -425,7 +442,9 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let match_list = filter_by_mode(raw_matches, mode);
     let match_list = match_list.as_slice();
     let match_summary = summarize_matches(match_list);
-    let today = summarize_today(match_list, Utc::now());
+    let today = history
+        .as_ref()
+        .and_then(|_| summarize_today(match_list, Utc::now()));
     let kd = compute_kd(match_list);
     let mut recent = build_recent(match_list, 15);
 
@@ -443,10 +462,20 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let response = OverlayResponse {
         ok: true,
         streamer: login.to_string(),
-        rank_name: trend
+        rank_name: rank
             .as_ref()
             .and_then(|value| clean_string(&value.rank_name)),
-        badge_level: trend.as_ref().and_then(|value| value.current_badge),
+        badge_level: badge,
+        rank_subrank: badge.filter(|badge| *badge > 0).map(|badge| badge % 10),
+        rank_badge_url: rank_badge_url(badge),
+        history_available: history.is_some(),
+        history_updated_at: history.as_ref().and_then(|value| value.updated_at),
+        history_stale: history.as_ref().map(|value| value.stale).unwrap_or(false),
+        latest_match_at: match_list
+            .iter()
+            .map(|entry| entry.start_time)
+            .filter(|time| *time > 0)
+            .max(),
         delta: trend.as_ref().and_then(|value| value.delta),
         wins: match_summary.as_ref().map(|summary| summary.wins),
         losses: match_summary.as_ref().map(|summary| summary.losses),
@@ -573,6 +602,18 @@ fn clean_string(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn rank_badge_url(badge: Option<i64>) -> Option<String> {
+    let badge = badge?;
+    let tier = badge / 10;
+    let subrank = badge % 10;
+    if !(1..=11).contains(&tier) || !(1..=6).contains(&subrank) {
+        return None;
+    }
+    Some(format!(
+        "https://api.deadlock-api.com/v1/assets/ranks/{tier}/{subrank}/image"
+    ))
+}
+
 /// Normalisiert den Spielmodus-Param auf `all`, `standard` oder `brawl`.
 /// Unbekanntes/leeres → `all` (keine Filterung).
 fn normalize_mode(mode: Option<&str>) -> &'static str {
@@ -585,9 +626,9 @@ fn normalize_mode(mode: Option<&str>) -> &'static str {
 
 /// Reduziert die Match-Liste auf den gewählten Spielmodus, BEVOR Stats berechnet
 /// werden. `brawl` → nur Street Brawl (`game_mode == Some(4)`); `standard` →
-/// alles AUSSER Street Brawl (`game_mode != Some(4)`, inkl. fehlender/unbekannter
-/// game_modes — robust gegen alte Matches); `all`/unbekannt → unverändert.
-/// Damit gilt stets `all == standard + brawl`. Wirkt nur auf match-abgeleitete
+/// Normal (`game_mode == Some(1)`) und alte Matches ohne Modus;
+/// explizite Test-/Sandbox-Modi gehören nicht zu Standard. `all` → unverändert.
+/// Wirkt nur auf match-abgeleitete
 /// Stats, nicht auf rank/mmr-trend/live.
 fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
     const STREET_BRAWL: i64 = 4;
@@ -599,7 +640,7 @@ fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
             .collect(),
         "standard" => matches
             .iter()
-            .filter(|entry| entry.game_mode != Some(STREET_BRAWL))
+            .filter(|entry| matches!(entry.game_mode, None | Some(1)))
             .cloned()
             .collect(),
         _ => matches.to_vec(),
@@ -607,13 +648,15 @@ fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
 }
 
 /// Liefert die gewerteten Matches (`not_scored != true`, `match_result ∈ {0,1}`)
-/// in Eingabe-Reihenfolge (newest-first).
+/// nach Startzeit absteigend; bei gleicher Zeit bleibt die Quellreihenfolge.
 fn scored_matches(matches: &[SteamMatch]) -> Vec<&SteamMatch> {
-    matches
+    let mut scored: Vec<_> = matches
         .iter()
         .filter(|entry| entry.not_scored != Some(true))
         .filter(|entry| matches!(entry.match_result, Some(0 | 1)))
-        .collect()
+        .collect();
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.start_time));
+    scored
 }
 
 fn summarize_matches(matches: &[SteamMatch]) -> Option<MatchSummary> {
@@ -681,6 +724,7 @@ fn most_played(scored: &[&SteamMatch]) -> (Option<String>, Option<i64>) {
 
     let best = order
         .into_iter()
+        .rev()
         .max_by_key(|hero| counts.get(hero).copied().unwrap_or(0));
 
     match best {
@@ -712,7 +756,7 @@ fn summarize_today(matches: &[SteamMatch], now_utc: DateTime<Utc>) -> Option<Tod
     let mut wins = 0i64;
     let mut losses = 0i64;
     for entry in &scored {
-        if entry.start_time < cutoff {
+        if entry.start_time < cutoff || entry.start_time > now_utc.timestamp() {
             continue;
         }
         match entry.match_result {
@@ -723,11 +767,11 @@ fn summarize_today(matches: &[SteamMatch], now_utc: DateTime<Utc>) -> Option<Tod
     }
 
     let total = wins + losses;
-    if total == 0 {
-        return None;
-    }
-
-    let winrate = ((wins as f64 * 1000.0) / total as f64).round() / 10.0;
+    let winrate = if total == 0 {
+        0.0
+    } else {
+        ((wins as f64 * 1000.0) / total as f64).round() / 10.0
+    };
     Some(TodaySummary {
         wins,
         losses,
@@ -749,7 +793,7 @@ fn compute_kd(matches: &[SteamMatch]) -> Option<f64> {
     Some((kd * 100.0).round() / 100.0)
 }
 
-/// Letzte `n` gewertete Matches, newest-first (Eingabe-Reihenfolge), `n` auf 15 gecappt.
+/// Letzte `n` gewertete Matches, nach Startzeit absteigend, `n` auf 15 gecappt.
 fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
     let cap = n.min(15);
     scored_matches(matches)
@@ -1645,12 +1689,59 @@ mod tests {
     }
 
     #[test]
-    fn summarize_today_ohne_heutige_matches_ist_none() {
+    fn summarize_today_ohne_heutige_matches_ist_nullbilanz() {
         let matches = vec![
             sm(Some(1), false, BERLIN_TODAY_START_UTC - 1, "Haze", 0, 0, 0),
             sm(Some(1), true, BERLIN_TODAY_START_UTC + 5, "Haze", 0, 0, 0),
         ];
-        assert_eq!(summarize_today(&matches, now_berlin_noon()), None);
+        assert_eq!(
+            summarize_today(&matches, now_berlin_noon()),
+            Some(super::TodaySummary {
+                wins: 0,
+                losses: 0,
+                winrate: 0.0,
+                matches: 0
+            })
+        );
+    }
+
+    #[test]
+    fn serien_und_verlauf_folgen_der_zeit_statt_der_antwortreihenfolge() {
+        let matches = vec![
+            sm(Some(0), false, 100, "Haze", 0, 0, 0),
+            sm(Some(1), false, 300, "Wraith", 0, 0, 0),
+            sm(Some(1), false, 200, "Haze", 0, 0, 0),
+        ];
+        let summary = summarize_matches(&matches).unwrap();
+        assert_eq!(summary.streak_kind, "win");
+        assert_eq!(summary.streak_len, 2);
+        assert_eq!(summary.last_hero.as_deref(), Some("Wraith"));
+        assert_eq!(build_recent(&matches, 1)[0].hero.as_deref(), Some("Wraith"));
+    }
+
+    #[test]
+    fn meistgespielter_held_bei_gleichstand_ist_der_juengste() {
+        let matches = vec![
+            sm(Some(1), false, 200, "Wraith", 0, 0, 0),
+            sm(Some(1), false, 100, "Haze", 0, 0, 0),
+        ];
+        assert_eq!(
+            summarize_matches(&matches)
+                .unwrap()
+                .most_played_hero
+                .as_deref(),
+            Some("Wraith")
+        );
+    }
+
+    #[test]
+    fn rangbilder_nutzen_aktuelle_asset_api_und_keine_unbekannten_raenge() {
+        assert_eq!(
+            super::rank_badge_url(Some(76)).as_deref(),
+            Some("https://api.deadlock-api.com/v1/assets/ranks/7/6/image")
+        );
+        assert_eq!(super::rank_badge_url(Some(120)), None);
+        assert_eq!(super::rank_badge_url(Some(0)), None);
     }
 
     #[test]
@@ -1770,13 +1861,14 @@ mod tests {
             sm_mode(Some(0), Some(4), "Abrams"),   // Brawl -> raus
             sm_mode(Some(1), Some(1), "Vindicta"), // Standard
             sm_mode(Some(0), None, "Seven"),       // unbekannt -> zählt als Standard
+            sm_mode(Some(1), Some(2), "Sandbox"),  // expliziter anderer Modus -> raus
         ];
         let filtered = filter_by_mode(&matches, "standard");
         let heroes: Vec<_> = filtered
             .iter()
             .map(|m| m.hero_name.clone().unwrap())
             .collect();
-        // Standard = alles außer Street Brawl: nur Abrams (Brawl) fällt raus.
+        // Bekannte Nichtstandard-Modi zählen nicht als Standard.
         assert_eq!(
             heroes,
             vec![
@@ -2141,6 +2233,14 @@ mod tests {
         .unwrap();
 
         Mock::given(method("GET"))
+            .and(path("/rank"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "linked": true, "rank_name": "Oracle", "badge_level": 83
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
             .and(path("/player-mmr-trend"))
             .and(query_param("discord_id", "4242"))
             .and(query_param("days", "7"))
@@ -2205,7 +2305,7 @@ mod tests {
         assert_eq!(first["ok"], true);
         assert_eq!(first["streamer"], "streamerx");
         assert_eq!(first["rank_name"], "Oracle");
-        assert_eq!(first["badge_level"], 53);
+        assert_eq!(first["badge_level"], 83);
         assert_eq!(first["delta"], 3);
         assert_eq!(first["wins"], 3);
         assert_eq!(first["losses"], 1);
@@ -2230,8 +2330,8 @@ mod tests {
         assert_eq!(vindicta["hero_icon"], "https://cdn.example/vindicta.webp");
 
         mock_server.verify().await;
-        // 3 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
-        assert_eq!(mock_server.received_requests().await.unwrap().len(), 4);
+        // 4 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
+        assert_eq!(mock_server.received_requests().await.unwrap().len(), 5);
     }
 
     #[tokio::test]
