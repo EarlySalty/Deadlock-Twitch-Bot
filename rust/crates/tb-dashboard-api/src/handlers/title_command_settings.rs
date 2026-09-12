@@ -14,6 +14,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::auth::streamer_scope::resolve_settings_target as resolve_target;
 
 #[derive(Deserialize, Default)]
 pub struct TitleCommandQuery {
@@ -25,43 +26,6 @@ pub struct TitleCommandQuery {
 #[derive(Deserialize)]
 pub struct TitleCommandUpdate {
     pub title_command_enabled: bool,
-}
-
-#[allow(clippy::result_large_err)]
-fn resolve_target(
-    auth: &DashboardAuthLevel,
-    streamer: &Option<String>,
-) -> Result<(String, String), Response> {
-    match auth {
-        DashboardAuthLevel::Partner {
-            twitch_login,
-            twitch_user_id,
-            ..
-        } if !twitch_user_id.trim().is_empty() => Ok((
-            twitch_login.to_lowercase(),
-            twitch_user_id.trim().to_string(),
-        )),
-        DashboardAuthLevel::Partner { .. } => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response()),
-        DashboardAuthLevel::Admin { .. } => {
-            match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(s) => Ok((s.to_lowercase(), String::new())),
-                None => Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
-                )
-                    .into_response()),
-            }
-        }
-        DashboardAuthLevel::None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response()),
-    }
 }
 
 const SELECT_SQL: &str = "SELECT COALESCE(title_command_enabled, 1) AS enabled \

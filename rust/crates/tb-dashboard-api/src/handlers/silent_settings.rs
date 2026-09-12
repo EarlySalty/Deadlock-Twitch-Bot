@@ -20,6 +20,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::auth::streamer_scope::resolve_settings_target;
 
 #[derive(Deserialize, Default)]
 pub struct SilentQuery {
@@ -34,34 +35,11 @@ pub struct SilentUpdate {
     pub silent_raid: bool,
 }
 
-/// Ziel-Login auflösen: Partner → eigener Session-Login; Admin/Localhost →
-/// `?streamer=` (sonst 400); None → 401.
-#[allow(clippy::result_large_err)] // axum-Response als Err — lokal, selten aufgerufen.
-fn resolve_login(auth: &DashboardAuthLevel, streamer: &Option<String>) -> Result<String, Response> {
-    match auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => Ok(twitch_login.to_lowercase()),
-        DashboardAuthLevel::Admin { .. } => {
-            match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(s) => Ok(s.to_lowercase()),
-                None => Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
-                )
-                    .into_response()),
-            }
-        }
-        DashboardAuthLevel::None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response()),
-    }
-}
-
 /// Aktiver Partner (status='active', jüngste Zeile) — wie `toggle_partner_flag`.
 const SELECT_SQL: &str = "SELECT COALESCE(silent_ban, 0) AS sb, COALESCE(silent_raid, 0) AS sr
        FROM twitch_partners
-      WHERE LOWER(twitch_login) = $1 AND status = 'active'
+      WHERE (($2 <> '' AND twitch_user_id = $2)
+         OR ($2 = '' AND LOWER(twitch_login) = $1)) AND status = 'active'
       ORDER BY id DESC
       LIMIT 1";
 
@@ -71,12 +49,13 @@ pub async fn get_handler(
     State(pool): State<PgPool>,
     Query(query): Query<SilentQuery>,
 ) -> Response {
-    let login = match resolve_login(&auth, &query.streamer) {
+    let (login, user_id) = match resolve_settings_target(&auth, &query.streamer) {
         Ok(l) => l,
         Err(resp) => return resp,
     };
     match sqlx::query(SELECT_SQL)
         .bind(&login)
+        .bind(&user_id)
         .fetch_optional(&pool)
         .await
     {
@@ -105,22 +84,24 @@ pub async fn post_handler(
     Query(query): Query<SilentQuery>,
     Json(body): Json<SilentUpdate>,
 ) -> Response {
-    let login = match resolve_login(&auth, &query.streamer) {
+    let (login, user_id) = match resolve_settings_target(&auth, &query.streamer) {
         Ok(l) => l,
         Err(resp) => return resp,
     };
-    let result = sqlx::query!(
+    let result = sqlx::query(
         "UPDATE twitch_partners
             SET silent_ban = $2, silent_raid = $3
           WHERE id = (
               SELECT id FROM twitch_partners
-               WHERE LOWER(twitch_login) = $1 AND status = 'active'
+               WHERE (($4 <> '' AND twitch_user_id = $4)
+                  OR ($4 = '' AND LOWER(twitch_login) = $1)) AND status = 'active'
                ORDER BY id DESC LIMIT 1
           )",
-        login,
-        i32::from(body.silent_ban),
-        i32::from(body.silent_raid)
     )
+    .bind(&login)
+    .bind(i32::from(body.silent_ban))
+    .bind(i32::from(body.silent_raid))
+    .bind(&user_id)
     .execute(&pool)
     .await;
     match result {

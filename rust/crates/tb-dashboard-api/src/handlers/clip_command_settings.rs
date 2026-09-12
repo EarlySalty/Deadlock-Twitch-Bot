@@ -19,6 +19,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::auth::streamer_scope::resolve_settings_target as resolve_target;
 
 #[derive(Deserialize, Default)]
 pub struct ClipCommandQuery {
@@ -32,41 +33,9 @@ pub struct ClipCommandUpdate {
     pub clip_command_enabled: bool,
 }
 
-#[allow(clippy::result_large_err)]
-fn resolve_target(
-    auth: &DashboardAuthLevel,
-    streamer: &Option<String>,
-) -> Result<(String, String), Response> {
-    match auth {
-        DashboardAuthLevel::Partner {
-            twitch_login,
-            twitch_user_id,
-            ..
-        } => Ok((
-            twitch_login.to_lowercase(),
-            twitch_user_id.trim().to_string(),
-        )),
-        DashboardAuthLevel::Admin { .. } => {
-            match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(s) => Ok((s.to_lowercase(), String::new())),
-                None => Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
-                )
-                    .into_response()),
-            }
-        }
-        DashboardAuthLevel::None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response()),
-    }
-}
-
 const SELECT_SQL: &str = "SELECT COALESCE(clip_command_enabled, 1) AS enabled \
        FROM streamer_plans \
-      WHERE LOWER(COALESCE(twitch_login, '')) = $1 \
+      WHERE ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1) \
          OR ($2 <> '' AND twitch_user_id = $2) \
       LIMIT 1";
 
