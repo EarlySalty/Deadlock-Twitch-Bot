@@ -30,6 +30,7 @@ use sqlx::{PgPool, Row};
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::auth::streamer_scope::resolve_settings_target as resolve_target;
 
 #[derive(Deserialize, Default)]
 pub struct LurkerTaxQuery {
@@ -43,44 +44,10 @@ pub struct LurkerTaxUpdate {
     pub lurker_tax_enabled: bool,
 }
 
-/// Aufgelöstes Ziel: `(login, user_id)`. Partner → Session-Werte; Admin/Localhost
-/// → `?streamer=` (user_id leer, Match nur über Login); None → 401.
-#[allow(clippy::result_large_err)]
-fn resolve_target(
-    auth: &DashboardAuthLevel,
-    streamer: &Option<String>,
-) -> Result<(String, String), Response> {
-    match auth {
-        DashboardAuthLevel::Partner {
-            twitch_login,
-            twitch_user_id,
-            ..
-        } => Ok((
-            twitch_login.to_lowercase(),
-            twitch_user_id.trim().to_string(),
-        )),
-        DashboardAuthLevel::Admin { .. } => {
-            match streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(s) => Ok((s.to_lowercase(), String::new())),
-                None => Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "streamer required" })),
-                )
-                    .into_response()),
-            }
-        }
-        DashboardAuthLevel::None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response()),
-    }
-}
-
 /// Aktuellen Flag-Wert lesen (Login- ODER User-ID-Match).
 const SELECT_SQL: &str = "SELECT COALESCE(lurker_tax_enabled, 0) AS lt \
        FROM streamer_plans \
-      WHERE LOWER(COALESCE(twitch_login, '')) = $1 \
+      WHERE ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1) \
          OR ($2 <> '' AND twitch_user_id = $2) \
       LIMIT 1";
 
@@ -179,8 +146,8 @@ async fn fetch_lurker_reward_status(pool: &PgPool, user_id: &str) -> Option<bool
 }
 
 fn build_reward_helix() -> Option<HelixClient> {
-    let client_id =
-        crate::uplink_config::platform_value("TWITCH_CLIENT_ID").filter(|s| !s.trim().is_empty())?;
+    let client_id = crate::uplink_config::platform_value("TWITCH_CLIENT_ID")
+        .filter(|s| !s.trim().is_empty())?;
     let client_secret = crate::uplink_config::platform_value("TWITCH_CLIENT_SECRET")
         .filter(|s| !s.trim().is_empty())?;
     HelixClient::new(HelixConfig::new(&client_id, &client_secret)).ok()
@@ -493,10 +460,12 @@ mod tests {
         .await
         .unwrap();
 
-        sqlx::query("INSERT INTO twitch_bot_capabilities (id, has_chatters_scope) VALUES (1, FALSE)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_bot_capabilities (id, has_chatters_scope) VALUES (1, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let (s, j) = body_of(
             get_handler(
                 partner("nani", "42"),
