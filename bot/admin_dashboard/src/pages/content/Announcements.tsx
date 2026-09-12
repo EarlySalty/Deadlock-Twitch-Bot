@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react';
+import { Check, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
@@ -209,11 +209,14 @@ export default function AnnouncementsPage() {
               <legend className="mb-2 text-sm font-medium text-white">Announcement-Farbe</legend>
               <div className="flex flex-wrap gap-2">
                 {announcementColors.map(color => (
-                  <label key={color.value} className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm text-white ${draft.color === color.value ? 'border-white/70 bg-white/10' : 'border-white/15 bg-black/20'}`}>
-                    <input type="radio" name="announcement-color" value={color.value} checked={draft.color === color.value}
+                  <label key={color.value} className="relative cursor-pointer">
+                    <input type="radio" name="announcement-color" value={color.value} checked={draft.color === color.value} className="peer sr-only"
                       onChange={() => setDraft(current => ({ ...current, color: color.value }))} />
-                    <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: color.swatch }} />
-                    {color.label}
+                    <span className="relative flex min-h-11 items-center gap-2 overflow-hidden rounded-lg border border-white/15 bg-black/40 py-2 pl-5 pr-3 text-sm text-white peer-checked:border-white/70 peer-checked:bg-white/10 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-white">
+                      <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1.5" style={{ backgroundColor: color.swatch }} />
+                      {color.label}
+                      <Check aria-hidden="true" className={`h-4 w-4 ${draft.color === color.value ? 'opacity-100' : 'opacity-0'}`} />
+                    </span>
                   </label>
                 ))}
               </div>
@@ -254,7 +257,8 @@ export default function AnnouncementsPage() {
 
         <Section title="Vorschau" hint="Die Vorschau zeigt die gewählte Farbe ungefähr; die Darstellung im Chat übernimmt Twitch.">
           <div className="space-y-4">
-            <div className="rounded-[1.5rem] border border-white/10 border-l-4 bg-bg/35 p-5" style={{ borderLeftColor: announcementColors.find(color => color.value === draft.color)?.swatch }}>
+            <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/40 py-5 pl-6 pr-5">
+              <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1.5" style={{ backgroundColor: announcementColors.find(color => color.value === draft.color)?.swatch }} />
               <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">Announcement · {announcementColors.find(color => color.value === draft.color)?.label}</p>
               <TextPreview value={draft.body} emptyMessage="Noch kein Announcement-Text vorhanden." />
               {draft.color === 'primary' && <p className="mt-3 text-xs text-text-secondary">Die Kanalfarbe unterscheidet sich je Twitch-Kanal.</p>}
