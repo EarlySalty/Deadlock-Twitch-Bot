@@ -601,9 +601,21 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       onKeyDown={(event) => {
         const target = event.target;
         if (event.defaultPrevented || event.repeat || event.nativeEvent.isComposing ||
-          !(target instanceof HTMLElement) || target.isContentEditable ||
-          target.closest('input, select, textarea, [role="textbox"]') ||
+          !(target instanceof HTMLElement) ||
           event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.key === 'Escape' && !event.altKey && expandedPreview) {
+          // Native Auswahlmenüs verarbeiten Escape zuerst; geschlossener Feldfokus sperrt den Ausstieg nicht.
+          if (target instanceof HTMLSelectElement && CSS.supports('selector(select:open)') && target.matches(':open')) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (fullscreen) void toggleFullscreen();
+          else if (performance.now() - fullscreenExitRef.current > 250) {
+            setTheaterMode(false);
+            setFullscreenNotice('');
+          }
+          return;
+        }
+        if (target.isContentEditable || target.closest('input, select, textarea, [role="textbox"]')) return;
         if (event.key.toLowerCase() === 't' && event.altKey && !fullscreen) {
           event.preventDefault();
           event.stopPropagation();
@@ -614,14 +626,6 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           event.preventDefault();
           event.stopPropagation();
           void toggleFullscreen();
-        } else if (event.key === 'Escape' && !event.altKey && expandedPreview) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (fullscreen) void toggleFullscreen();
-          else if (performance.now() - fullscreenExitRef.current > 250) {
-            setTheaterMode(false);
-            setFullscreenNotice('');
-          }
         }
       }}
       data-tour-id="onboarding-overlay"
