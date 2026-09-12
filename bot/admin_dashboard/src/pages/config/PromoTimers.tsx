@@ -11,8 +11,8 @@ const fields: { key: keyof PromoTimerProfile; label: string; min: number; max: n
   { key: 'newChatters', label: 'Benötigte neue Chatter', min: 0, max: 100 },
   { key: 'attemptCooldownMinutes', label: 'Abstand zwischen Werbeversuchen (Minuten)', min: 1, max: 1440 },
   { key: 'viewerSpikeCooldownMinutes', label: 'Abstand bei Zuschauerzuwachs (Minuten)', min: 1, max: 1440 },
-  { key: 'pitchCooldownMinutes', label: 'Abstand zwischen Partner-Einladungen (Minuten)', min: 1, max: 1440 },
-  { key: 'pitchMaxPerStream', label: 'Partner-Einladungen je Stream höchstens', min: 1, max: 100 },
+  { key: 'pitchCooldownMinutes', label: 'Abstand zwischen persönlichen Einladungen (Minuten)', min: 1, max: 1440 },
+  { key: 'pitchMaxPerStream', label: 'Persönliche Einladungen je Stream höchstens', min: 1, max: 100 },
 ];
 
 export function PromoTimers() {
