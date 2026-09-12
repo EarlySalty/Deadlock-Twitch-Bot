@@ -1,7 +1,19 @@
 export type UplinkGpuHersteller = 'nvidia' | 'amd' | 'intel' | 'unbekannt';
+export type UplinkVideoCodec = 'AV1' | 'HEVC / H.265' | 'H.264';
+
+type HardwareCodec = 'av1' | 'hevc' | 'h264';
+
+interface HardwareEncoder {
+  hersteller: Exclude<UplinkGpuHersteller, 'unbekannt'>;
+  codec: HardwareCodec;
+  roh: string;
+}
 
 export interface UplinkEncoderAnalyse {
+  /** Der Adapter, auf dem OBS laut D3D11-Log tatsächlich rendert; sonst Adapter 0. */
   gpu: string | null;
+  /** Alle im OBS-Startlog gefundenen Grafikadapter. */
+  gpus: string[];
   hersteller: UplinkGpuHersteller;
   hardware: {
     av1: boolean;
@@ -13,7 +25,7 @@ export interface UplinkEncoderAnalyse {
 }
 
 export interface UplinkEncoderEmpfehlung {
-  codec: 'AV1' | 'HEVC / H.265' | 'H.264';
+  codec: UplinkVideoCodec;
   encoder: string;
   ratensteuerung: string;
   hinweise: string[];
@@ -30,88 +42,110 @@ function herstellerFuer(gpu: string | null): UplinkGpuHersteller {
   return 'unbekannt';
 }
 
-function enthaeltEncoder(encoders: string[], begriffe: string[]) {
-  return encoders.some((encoder) => {
-    const wert = encoder.toLowerCase();
-    return begriffe.every((begriff) => wert.includes(begriff));
+function encoderHersteller(encoder: string): HardwareEncoder['hersteller'] | null {
+  const wert = encoder.toLowerCase();
+  if (wert.includes('nvenc') || wert.includes('nvidia')) return 'nvidia';
+  if (wert.includes('amf') || wert.includes('amd hw') || wert.includes('amd hardware')) return 'amd';
+  if (wert.includes('qsv') || wert.includes('quicksync') || wert.includes('quick sync')) return 'intel';
+  return null;
+}
+
+function encoderCodec(encoder: string): HardwareCodec | null {
+  const wert = encoder.toLowerCase();
+  if (wert.includes('av1')) return 'av1';
+  if (wert.includes('hevc') || wert.includes('h265') || wert.includes('h.265')) return 'hevc';
+  if (wert.includes('h264') || wert.includes('h.264') || /\bavc\b/.test(wert)) return 'h264';
+  return null;
+}
+
+function hardwareEncoder(encoders: string[]): HardwareEncoder[] {
+  return encoders.flatMap((roh) => {
+    const hersteller = encoderHersteller(roh);
+    const codec = encoderCodec(roh);
+    return hersteller && codec ? [{ hersteller, codec, roh }] : [];
   });
 }
 
+function encoderName(hersteller: HardwareEncoder['hersteller'], codec: HardwareCodec) {
+  const codecText = codec === 'av1' ? 'AV1' : codec === 'hevc' ? 'HEVC' : 'H.264';
+  if (hersteller === 'nvidia') return `NVIDIA NVENC ${codecText}`;
+  if (hersteller === 'amd') return `AMD Hardware ${codecText}`;
+  return `Intel QuickSync ${codecText}`;
+}
+
+function ratensteuerung(hersteller: HardwareEncoder['hersteller']) {
+  if (hersteller === 'nvidia') return 'Variable Bitrate mit Zielqualität';
+  if (hersteller === 'amd') return 'HQCBR (falls in OBS angeboten), sonst CBR';
+  return 'VBR mit Maximalbitrate';
+}
+
+function waehleEncoder(
+  encoder: HardwareEncoder[],
+  codec: HardwareCodec,
+  aktiverHersteller: UplinkGpuHersteller,
+): HardwareEncoder | null {
+  const passend = encoder.filter((eintrag) => eintrag.codec === codec);
+  if (!passend.length) return null;
+
+  // Wenn OBS auf derselben GPU rendert, ist dieser Encoder der sauberste Weg.
+  // Gibt es dort den gewünschten Codec nicht, darf ein zweiter Hardwareencoder
+  // (z. B. Arc AV1 neben einer älteren NVIDIA-Karte) trotzdem genutzt werden.
+  const aktiv = aktiverHersteller === 'unbekannt'
+    ? null
+    : passend.find((eintrag) => eintrag.hersteller === aktiverHersteller);
+  return aktiv ?? passend[0];
+}
+
+function empfehlungFuerHardware(
+  eintrag: HardwareEncoder,
+  softwareAv1: boolean,
+  aktiverHersteller: UplinkGpuHersteller,
+): UplinkEncoderEmpfehlung {
+  const codec: UplinkVideoCodec = eintrag.codec === 'av1'
+    ? 'AV1'
+    : eintrag.codec === 'hevc'
+      ? 'HEVC / H.265'
+      : 'H.264';
+  const hinweise: string[] = [];
+
+  if (eintrag.codec === 'av1') {
+    hinweise.push('Hardware-AV1 verwenden; AOM AV1 und SVT-AV1 sind für den Live-Uplink kein automatischer Ersatz.');
+  } else if (softwareAv1) {
+    hinweise.push('AV1 ist nur als Softwareencoder sichtbar und wird deshalb nicht empfohlen.');
+  }
+
+  if (eintrag.hersteller === 'nvidia') {
+    hinweise.push('Zielqualität plus maximale Bitrate verwenden. Falls deine OBS-Version diese Auswahl nicht anbietet, auf VBR mit Maximalbitrate oder CBR zurückfallen.');
+  } else if (eintrag.hersteller === 'amd') {
+    hinweise.push('HQCBR nur wählen, wenn OBS es für genau diesen AMF-Encoder anbietet; unbegrenztes VBR wird nicht automatisch empfohlen.');
+  } else {
+    hinweise.push('Bei QuickSync ist für ein begrenztes Uploadbudget VBR mit gesetzter Maximalbitrate der sichere variable Weg; ICQ allein setzt in OBS kein Maximalbitratelimit.');
+  }
+
+  if (aktiverHersteller !== 'unbekannt' && eintrag.hersteller !== aktiverHersteller) {
+    hinweise.push('Der empfohlene Encoder sitzt auf einem anderen GPU-Hersteller als der OBS-Renderadapter. Das ist erlaubt, sollte aber im Preflight auf Kopierlast und Stabilität geprüft werden.');
+  }
+
+  return {
+    codec,
+    encoder: encoderName(eintrag.hersteller, eintrag.codec),
+    ratensteuerung: ratensteuerung(eintrag.hersteller),
+    status: eintrag.codec === 'h264' ? 'fallback' : 'optimal',
+    hinweise,
+  };
+}
+
 function empfehlung(
-  hersteller: UplinkGpuHersteller,
-  hardware: UplinkEncoderAnalyse['hardware'],
+  aktiverHersteller: UplinkGpuHersteller,
+  encoder: HardwareEncoder[],
   softwareAv1: boolean,
 ): UplinkEncoderEmpfehlung {
-  if (hersteller === 'amd' && hardware.av1) {
-    return {
-      codec: 'AV1',
-      encoder: 'AMD Hardware AV1',
-      ratensteuerung: 'HQCBR (falls in OBS angeboten)',
-      status: 'optimal',
-      hinweise: [
-        'Hardware-AV1 verwenden; AOM AV1 und SVT-AV1 sind für den Live-Uplink kein automatischer Ersatz.',
-        'HQCBR nur wählen, wenn OBS es für diesen AMF-Encoder tatsächlich anbietet.',
-      ],
-    };
-  }
-
-  if (hersteller === 'nvidia' && hardware.av1) {
-    return {
-      codec: 'AV1',
-      encoder: 'NVIDIA NVENC AV1',
-      ratensteuerung: 'Variable Bitrate mit Zielqualität',
-      status: 'optimal',
-      hinweise: [
-        'Zielqualität plus maximale Bitrate verwenden; so darf die Bitrate bei einfachen Szenen sinken.',
-        'AOM AV1 und SVT-AV1 nicht auswählen, solange NVENC AV1 verfügbar ist.',
-      ],
-    };
-  }
-
-  if (hersteller === 'nvidia' && hardware.hevc) {
-    return {
-      codec: 'HEVC / H.265',
-      encoder: 'NVIDIA NVENC HEVC',
-      ratensteuerung: 'Variable Bitrate mit Zielqualität',
-      status: 'optimal',
-      hinweise: [
-        'HEVC läuft über NVENC und vermeidet AV1-Softwareencoding auf der CPU.',
-        ...(softwareAv1 ? ['AV1 ist nur als Softwareencoder sichtbar und wird deshalb nicht empfohlen.'] : []),
-      ],
-    };
-  }
-
-  if (hersteller === 'amd' && hardware.hevc) {
-    return {
-      codec: 'HEVC / H.265',
-      encoder: 'AMD Hardware HEVC',
-      ratensteuerung: 'CBR/HQCBR nach tatsächlich angebotenen OBS-Optionen',
-      status: 'optimal',
-      hinweise: [
-        'HEVC ist der Hardware-Fallback, wenn auf dieser AMD-GPU kein Hardware-AV1 angeboten wird.',
-        'Unbegrenztes VBR wird nicht automatisch empfohlen.',
-      ],
-    };
-  }
-
-  if (hardware.h264) {
-    const encoder = hersteller === 'nvidia'
-      ? 'NVIDIA NVENC H.264'
-      : hersteller === 'amd'
-        ? 'AMD Hardware H.264'
-        : hersteller === 'intel'
-          ? 'Intel QSV H.264'
-          : 'Hardware H.264';
-    return {
-      codec: 'H.264',
-      encoder,
-      ratensteuerung: 'CBR',
-      status: 'fallback',
-      hinweise: [
-        'Kein besser geeigneter Hardware-AV1/HEVC-Weg wurde im Log nachgewiesen.',
-        ...(softwareAv1 ? ['Software-AV1 wurde erkannt, wird für Echtzeit aber nicht automatisch gewählt.'] : []),
-      ],
-    };
+  // Der Codec wird anhand dessen gewählt, was OBS auf diesem Rechner wirklich
+  // registriert hat, nicht anhand einer fest verdrahteten GPU-Generationsliste.
+  // Das deckt neue Generationen automatisch ab, sobald OBS/Treiber sie anbieten.
+  for (const codec of ['av1', 'hevc', 'h264'] as const) {
+    const kandidat = waehleEncoder(encoder, codec, aktiverHersteller);
+    if (kandidat) return empfehlungFuerHardware(kandidat, softwareAv1, aktiverHersteller);
   }
 
   return {
@@ -133,14 +167,21 @@ function empfehlung(
  */
 export function analysiereObsLog(text: string): UplinkEncoderAnalyse {
   const zeilen = text.split(/\r?\n/);
-  let gpu: string | null = null;
+  const gpus: string[] = [];
+  let aktiverAdapter: string | null = null;
   let inEncoderListe = false;
   let inVideoEncoder = false;
   const encoders: string[] = [];
 
   for (const zeile of zeilen) {
     const adapter = zeile.match(/Adapter\s+\d+:\s*(.+)$/i);
-    if (!gpu && adapter?.[1]) gpu = adapter[1].trim();
+    if (adapter?.[1]) {
+      const name = adapter[1].trim();
+      if (!gpus.includes(name)) gpus.push(name);
+    }
+
+    const d3dAdapter = zeile.match(/Loading up D3D11 on adapter\s+(.+?)(?:\s+\(\d+\))?$/i);
+    if (d3dAdapter?.[1]) aktiverAdapter = d3dAdapter[1].trim();
 
     if (/Available Encoders:/i.test(zeile)) {
       inEncoderListe = true;
@@ -157,30 +198,22 @@ export function analysiereObsLog(text: string): UplinkEncoderAnalyse {
     if (treffer?.[1]) encoders.push(treffer[1].trim());
   }
 
+  const gpu = aktiverAdapter ?? gpus[0] ?? null;
   const hersteller = herstellerFuer(gpu);
-  const nvidia = (codec: string) => enthaeltEncoder(encoders, ['nvenc', codec]);
-  const amd = (codec: string) => encoders.some((e) => {
-    const wert = e.toLowerCase();
-    return (wert.includes('amf') || wert.includes('amd')) && wert.includes(codec);
-  });
-  const intel = (codec: string) => encoders.some((e) => {
-    const wert = e.toLowerCase();
-    return (wert.includes('qsv') || wert.includes('quick sync')) && wert.includes(codec);
-  });
-  const hw = (codec: string) => nvidia(codec) || amd(codec) || intel(codec);
-
+  const hwEncoder = hardwareEncoder(encoders);
   const hardware = {
-    av1: hw('av1'),
-    hevc: hw('hevc') || hw('h265') || hw('h.265'),
-    h264: hw('h264') || hw('h.264'),
+    av1: hwEncoder.some((eintrag) => eintrag.codec === 'av1'),
+    hevc: hwEncoder.some((eintrag) => eintrag.codec === 'hevc'),
+    h264: hwEncoder.some((eintrag) => eintrag.codec === 'h264'),
   };
   const softwareAv1 = encoders.some((e) => /aom av1|svt-av1|ffmpeg_aom_av1|ffmpeg_svt_av1/i.test(e));
 
   return {
     gpu,
+    gpus,
     hersteller,
     hardware,
     softwareAv1,
-    empfehlung: empfehlung(hersteller, hardware, softwareAv1),
+    empfehlung: empfehlung(hersteller, hwEncoder, softwareAv1),
   };
 }

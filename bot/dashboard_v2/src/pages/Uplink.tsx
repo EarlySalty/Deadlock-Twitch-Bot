@@ -385,8 +385,13 @@ function ObsEncoderAnalyse() {
           </div>
           <dl className="grid gap-2 text-xs sm:grid-cols-2">
             <div>
-              <dt className="text-text-secondary">GPU</dt>
+              <dt className="text-text-secondary">OBS-Renderadapter</dt>
               <dd className="font-semibold text-white">{analyse.gpu ?? 'Nicht erkannt'}</dd>
+              {analyse.gpus.length > 1 ? (
+                <span className="block text-[11px] font-normal text-text-secondary">
+                  {analyse.gpus.length} Grafikadapter erkannt; die Encoderwahl berücksichtigt Multi-GPU.
+                </span>
+              ) : null}
             </div>
             <div>
               <dt className="text-text-secondary">Codec</dt>
