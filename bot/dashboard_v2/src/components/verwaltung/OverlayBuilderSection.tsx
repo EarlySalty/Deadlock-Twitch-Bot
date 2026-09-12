@@ -198,6 +198,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [editingField, setEditingField] = useState<{ key: ModuleKey; field: SourceField } | null>(null);
   const [editingCanvasDimension, setEditingCanvasDimension] = useState<'width' | 'height' | null>(null);
   const [selectedSource, setSelectedSource] = useState<ModuleKey>('rank');
+  const [activeSource, setActiveSource] = useState<ModuleKey | null>(null);
+  const [touchSource, setTouchSource] = useState<ModuleKey | null>(null);
   const [previewHostWidth, setPreviewHostWidth] = useState(560);
   const [previewBackdrop, setPreviewBackdrop] = useState<'checker' | 'dark' | 'light'>('checker');
   const [copied, setCopied] = useState(false);
@@ -293,6 +295,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       const drag = dragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
       dragRef.current = null;
+      setActiveSource(null);
       if (drag.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
     };
     window.addEventListener('pointermove', handlePointerMove);
@@ -406,6 +409,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     const bounds = editorRef.current?.getBoundingClientRect();
     if (!bounds) return;
     setSelectedSource(key);
+    setActiveSource(key);
+    setTouchSource(event.pointerType === 'touch' ? key : null);
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       pointerId: event.pointerId,
@@ -493,7 +498,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   };
 
   const maxCanvasPreviewWidth = Math.max(1, previewHostWidth);
-  const canvasPreviewScale = maxCanvasPreviewWidth / canvasWidth;
+  const canvasPreviewScale = Math.min(maxCanvasPreviewWidth / canvasWidth, 520 / canvasHeight);
   const canvasPreviewWidth = canvasWidth * canvasPreviewScale;
   const canvasPreviewHeight = canvasHeight * canvasPreviewScale;
   const previewHeight = layout === 'bar' ? 300 : layout === 'canvas' ? canvasPreviewHeight : 660;
@@ -531,6 +536,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       tabIndex={-1}
       data-tour-id="onboarding-overlay"
       data-tour-ready="true"
+      onPointerDownCapture={() => setTouchSource(null)}
+      onPointerMoveCapture={(event) => { if (event.pointerType === 'mouse') setTouchSource(null); }}
       data-unsaved={unsaved}
       data-unsaved-hint="Dein Overlay ist angepasst. Kopiere zuerst die neue OBS-Adresse oder bestätige unten, dass du sie übernommen hast. Du kannst auch den Rundgang pausieren und hierbleiben."
       className="panel-card rounded-2xl p-5 md:p-6"
@@ -552,12 +559,9 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         </p>
       </div>
 
-        {/* Vorschau */}
-        <div ref={previewHostRef} className="mb-6 min-w-0 space-y-3">
-          <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
-            Module frei bearbeiten
-          </button>
-          <p className="text-sm text-text-secondary">{layout === 'canvas' ? 'Modul ziehen · am goldenen Griff Größe ändern · fertige URL in OBS einfügen' : 'Feste Vorlage aktiv. Mit „Module frei bearbeiten“ kannst du jeden Inhalt einzeln verschieben und vergrößern.'}</p>
+      <div className="grid items-start gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
+        {/* Mobil steht die Vorschau vor den Einstellungen. */}
+        <div ref={previewHostRef} className="min-w-0 space-y-3 lg:sticky lg:top-6 lg:col-start-2 lg:row-start-1">
           <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3><select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select></div>
           <div
             ref={editorRef}
@@ -583,7 +587,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                   return (
                     <div
                       key={key}
-                      className="absolute"
+                      className="group/source absolute"
+                      data-chrome={activeSource === key || touchSource === key ? 'visible' : undefined}
                       style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: selectedSource === key ? 2 : 1 }}
                     >
                       <button
@@ -592,16 +597,16 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                         title={`${label}: ziehen zum Verschieben`}
                         onClick={() => setSelectedSource(key)}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
-                        className={`absolute inset-0 touch-none cursor-move rounded border-2 text-left ${selectedSource === key ? 'border-primary' : 'border-primary/25 hover:border-primary/70'}`}
+                        className="absolute inset-0 touch-none cursor-move rounded border-2 border-transparent text-left group-hover/source:border-primary group-has-[:focus-visible]/source:border-primary group-data-[chrome=visible]/source:border-primary"
                       >
-                        {selectedSource === key && <span className="pointer-events-none absolute left-0 bottom-full mb-1 whitespace-nowrap rounded bg-background/95 px-2 py-1 text-xs font-semibold text-primary">{label}</span>}
+                        <span className="pointer-events-none absolute left-0 bottom-full mb-1 whitespace-nowrap rounded bg-background/95 px-2 py-1 text-xs font-semibold text-primary opacity-0 group-hover/source:opacity-100 group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:opacity-100">{label}</span>
                       </button>
                       <button
                         type="button"
                         aria-label={`${label}: Größe ändern`}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
                         onClick={() => setSelectedSource(key)}
-                        className="absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black"
+                        className="pointer-events-none absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black opacity-0 group-hover/source:pointer-events-auto group-hover/source:opacity-100 group-has-[:focus-visible]/source:pointer-events-auto group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:pointer-events-auto group-data-[chrome=visible]/source:opacity-100"
                         title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
                       ><span aria-hidden="true">↘</span></button>
                     </div>
@@ -610,6 +615,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               </div>
             )}
           </div>
+          <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Rahmen und Griffe erscheinen beim Darüberfahren, per Tastatur oder Antippen nur im Editor.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS.'}</p>
+        </div>
+
+        <div className="min-w-0 space-y-5 lg:col-start-1 lg:row-start-1 lg:max-h-[max(360px,calc(100dvh-16rem))] lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
+          <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
+            Module frei bearbeiten
+          </button>
           {layout === 'canvas' && (
               <div className="rounded-lg border border-border bg-background/60 p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -619,7 +631,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                   </div>
                   <button type="button" onClick={() => resetSource(selectedSource)} className="min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-text-secondary hover:border-primary hover:text-primary">Quelle zurücksetzen</button>
                 </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3">
                   {(['x', 'y', 'width', 'height'] as const).map((field) => (
                     <label key={field} className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
                       {field === 'width' ? 'Breite' : field === 'height' ? 'Höhe' : field.toUpperCase()}
@@ -629,13 +641,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 </div>
               </div>
           )}
-          <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Zieh eine Quelle in der Vorschau oder nutze die X-/Y-/Breite-/Höhe-Felder. Speichere danach das Layout und kopiere die fertige URL für OBS.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS. Nach Änderungen die neue Adresse in OBS einsetzen.'}</p>
-        </div>
-
-      <div>
-        <div className="space-y-5">
           {/* Stil, Layout & Spielmodus */}
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <label htmlFor="overlay-theme" className="block text-sm font-semibold text-white">
                 Stil
@@ -701,7 +708,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 { name: 'Papier', accent: '#765321', background: '#f5f3ef', text: '#17191f' },
               ].map(preset => <button key={preset.name} type="button" onClick={() => { setAccent(preset.accent); setBackground(preset.background); setText(preset.text); setTheme(preset.name === 'Papier' ? 'light' : 'dark'); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-background/60 px-3 text-sm text-white hover:border-primary focus-visible:outline-2 focus-visible:outline-primary"><span className="h-3 w-3 rounded-full" style={{ background: preset.accent }} />{preset.name}</button>)}
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-2">
               {[{ key: 'accent', label: 'Akzent', value: accent, change: setAccent }, { key: 'background', label: 'Hintergrund', value: background, change: setBackground }, { key: 'text', label: 'Schrift', value: text, change: setText }].map(color => <label key={color.key} className="flex min-h-16 items-center gap-3 rounded-xl border border-border bg-background/60 p-3"><input aria-label={color.label} type="color" value={color.value} onChange={event => color.change(event.target.value)} className="h-9 w-10 cursor-pointer border-0 bg-transparent" /><span className="text-sm text-white">{color.label}<span className="block font-mono text-xs text-text-secondary">{color.value.toUpperCase()}</span></span></label>)}
             </div>
             <label className="block text-sm text-white" htmlFor="overlay-radius">Rundung <span className="text-text-secondary">{radius} px</span><input id="overlay-radius" type="range" min={0} max={32} value={radius} onChange={event => setRadius(Number(event.target.value))} className="mt-2 block w-full accent-primary" /></label>
@@ -710,7 +717,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           {/* Module */}
           <fieldset className="space-y-3">
             <legend className="text-sm font-semibold text-white">Inhalte</legend>
-            <div className="grid gap-2.5 sm:grid-cols-2">
+            <div className="grid gap-2">
               {MODULES.map(({ key, label }) => {
                 const enabled = modules[key];
                 return (
@@ -742,7 +749,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </fieldset>
 
           {/* Slider */}
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4">
             <div className="space-y-2">
               <label
                 htmlFor="overlay-recent-n"
@@ -805,7 +812,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 ))}
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-2 gap-3">
                 <label className="text-sm font-medium text-white">
                   Leinwand-Breite
                   <input type="number" min={320} max={3840} step={1} value={canvasWidthDraft} onFocus={() => setEditingCanvasDimension('width')} onChange={(event) => setCanvasWidthDraft(event.target.value)} onBlur={() => commitCanvasDimension('width')} className="mt-1 block w-full rounded-lg border border-border bg-background/70 px-3 py-2 font-mono text-sm text-white" />
@@ -823,7 +830,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                   <h3 className="text-sm font-semibold text-white">Quellen</h3>
                   <button type="button" onClick={resetCanvas} className="text-xs font-semibold text-text-secondary underline underline-offset-4 hover:text-primary">Leinwand zurücksetzen</button>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2">
                   {MODULES.map(({ key, label }) => {
                     const source = sources[key];
                     return (
@@ -849,7 +856,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
             <label htmlFor="overlay-url" className="block text-sm font-semibold text-white">
               Deine Overlay-URL
             </label>
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="flex flex-col gap-2">
               <input
                 id="overlay-url"
                 readOnly
