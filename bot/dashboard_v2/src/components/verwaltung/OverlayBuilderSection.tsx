@@ -19,13 +19,13 @@ type ModuleKey =
   | 'branding';
 
 const THEMES: Array<{ value: OverlayTheme; label: string }> = [
-  { value: 'dark', label: 'Dunkel' },
+  { value: 'dark', label: 'Nachtgold' },
   { value: 'light', label: 'Hell' },
   { value: 'accent', label: 'Akzent' },
 ];
 
 const LAYOUTS: Array<{ value: OverlayLayout; label: string }> = [
-  { value: 'box', label: 'Box (Karte)' },
+  { value: 'box', label: 'Karte' },
   { value: 'bar', label: 'Leiste' },
 ];
 
@@ -38,15 +38,15 @@ const MODES: Array<{ value: OverlayMode; label: string }> = [
 const MODULES: Array<{ key: ModuleKey; label: string }> = [
   { key: 'header', label: 'Spielername & Live-Badge' },
   { key: 'rank', label: 'Rang & Abzeichen' },
-  { key: 'winrate', label: 'Winrate (letzte Spiele)' },
+  { key: 'winrate', label: 'Siegquote (letzte Spiele)' },
   { key: 'today', label: 'Heute (Siege/Niederlagen)' },
   { key: 'streak', label: 'Aktuelle Serie' },
   { key: 'kd', label: 'K/D' },
   { key: 'lastmatch', label: 'Letztes Match' },
-  { key: 'mostplayed', label: 'Meistgespielter Hero' },
+  { key: 'mostplayed', label: 'Meistgespielter Held' },
   { key: 'recent', label: 'Match-Verlauf' },
-  { key: 'live', label: 'Live-Match (Hero & Minute)' },
-  { key: 'branding', label: 'Branding-Hinweis' },
+  { key: 'live', label: 'Laufendes Spiel (Held & Minute)' },
+  { key: 'branding', label: 'Community-Logo' },
 ];
 
 const DEFAULT_MODULES: Record<ModuleKey, boolean> = {
@@ -64,7 +64,7 @@ const DEFAULT_MODULES: Record<ModuleKey, boolean> = {
 };
 
 const CHECKER_STYLE: CSSProperties = {
-  backgroundColor: '#1A1210',
+  backgroundColor: '#101114',
   backgroundImage:
     'linear-gradient(45deg, rgba(255,255,255,0.08) 25%, transparent 25%), linear-gradient(-45deg, rgba(255,255,255,0.08) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.08) 75%), linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.08) 75%)',
   backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0',
@@ -97,6 +97,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [opacity, setOpacity] = useState<number>(85);
   const [recentN, setRecentN] = useState<number>(10);
   const [modules, setModules] = useState<Record<ModuleKey, boolean>>(DEFAULT_MODULES);
+  const [accent, setAccent] = useState('#d6b56c');
+  const [background, setBackground] = useState('#0d0f14');
+  const [text, setText] = useState('#f4f7fb');
+  const [radius, setRadius] = useState(18);
+  const [previewBackdrop, setPreviewBackdrop] = useState<'checker' | 'dark' | 'light'>('checker');
   const [copied, setCopied] = useState(false);
   const [retainedUrl, setRetainedUrl] = useState<string | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -110,13 +115,17 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     params.set('mode', mode);
     params.set('opacity', String(opacity));
     params.set('recent_n', String(recentN));
+    params.set('accent', accent);
+    params.set('background', background);
+    params.set('text', text);
+    params.set('radius', String(radius));
     for (const { key } of MODULES) {
       params.set(key, modules[key] ? '1' : '0');
     }
     return `${origin}/twitch/overlay?${params.toString()}`;
-  }, [normalizedLogin, theme, layout, mode, opacity, recentN, modules]);
+  }, [normalizedLogin, theme, layout, mode, opacity, recentN, modules, accent, background, text, radius]);
   const debouncedUrl = useDebouncedValue(overlayUrl, 300);
-  const customized = theme !== 'dark' || layout !== 'box' || mode !== 'all' || opacity !== 85 || recentN !== 10 || MODULES.some(({key}) => modules[key] !== DEFAULT_MODULES[key]);
+  const customized = accent !== '#d6b56c' || background !== '#0d0f14' || text !== '#f4f7fb' || radius !== 18 || theme !== 'dark' || layout !== 'box' || mode !== 'all' || opacity !== 85 || recentN !== 10 || MODULES.some(({key}) => modules[key] !== DEFAULT_MODULES[key]);
   const unsaved = customized && retainedUrl !== overlayUrl;
 
   useEffect(() => {
@@ -142,8 +151,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
   };
 
-  const previewHeight = layout === 'bar' ? 130 : 360;
-  const recommendedSize = layout === 'bar' ? '560 × 120' : '360 × 320';
+  const previewHeight = layout === 'bar' ? 300 : 660;
+  const recommendedSize = layout === 'bar' ? '960 × 300' : '440 × 660';
 
   if (!normalizedLogin) {
     return (
@@ -190,12 +199,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           Overlay für OBS zusammenstellen
         </h2>
         <p className="text-sm text-text-secondary">
-          Wähl Stil und Inhalte, kopier die URL und füg sie in OBS als Browser-Quelle ein.
+          Dein Stream, dein Look. Wähle Farben und Inhalte – die Vorschau zeigt deine echten Spielwerte.
           Voraussetzung: ein über den Discord verknüpfter Steam-Account.
         </p>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(440px,0.9fr)]">
         <div className="space-y-5">
           {/* Stil, Layout & Spielmodus */}
           <div className="grid gap-3 sm:grid-cols-3">
@@ -206,7 +215,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               <select
                 id="overlay-theme"
                 value={theme}
-                onChange={(event) => setTheme(event.target.value as OverlayTheme)}
+                onChange={(event) => { const next = event.target.value as OverlayTheme; setTheme(next); setAccent(next === 'light' ? '#765321' : next === 'accent' ? '#a78bfa' : '#d6b56c'); setBackground(next === 'light' ? '#f5f3ef' : next === 'accent' ? '#161020' : '#0d0f14'); setText(next === 'light' ? '#17191f' : '#f4f7fb'); }}
                 className="w-full rounded-lg border border-border bg-background/70 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
               >
                 {THEMES.map(({ value, label }) => (
@@ -253,6 +262,22 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               </select>
             </div>
           </div>
+
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold text-white">Deine Farben</legend>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { name: 'Nachtgold', accent: '#d6b56c', background: '#0d0f14', text: '#f4f7fb' },
+                { name: 'Eisblau', accent: '#67d8f3', background: '#101922', text: '#f3faff' },
+                { name: 'Flieder', accent: '#bca1ff', background: '#181322', text: '#f8f3ff' },
+                { name: 'Papier', accent: '#765321', background: '#f5f3ef', text: '#17191f' },
+              ].map(preset => <button key={preset.name} type="button" onClick={() => { setAccent(preset.accent); setBackground(preset.background); setText(preset.text); setTheme(preset.name === 'Papier' ? 'light' : 'dark'); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-background/60 px-3 text-sm text-white hover:border-primary focus-visible:outline-2 focus-visible:outline-primary"><span className="h-3 w-3 rounded-full" style={{ background: preset.accent }} />{preset.name}</button>)}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[{ key: 'accent', label: 'Akzent', value: accent, change: setAccent }, { key: 'background', label: 'Hintergrund', value: background, change: setBackground }, { key: 'text', label: 'Schrift', value: text, change: setText }].map(color => <label key={color.key} className="flex min-h-16 items-center gap-3 rounded-xl border border-border bg-background/60 p-3"><input aria-label={color.label} type="color" value={color.value} onChange={event => color.change(event.target.value)} className="h-9 w-10 cursor-pointer border-0 bg-transparent" /><span className="text-sm text-white">{color.label}<span className="block font-mono text-xs text-text-secondary">{color.value.toUpperCase()}</span></span></label>)}
+            </div>
+            <label className="block text-sm text-white" htmlFor="overlay-radius">Rundung <span className="text-text-secondary">{radius} px</span><input id="overlay-radius" type="range" min={0} max={32} value={radius} onChange={event => setRadius(Number(event.target.value))} className="mt-2 block w-full accent-primary" /></label>
+          </fieldset>
 
           {/* Module */}
           <fieldset className="space-y-3">
@@ -376,19 +401,20 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         </div>
 
         {/* Vorschau */}
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-white">Vorschau</h3>
+        <div className="space-y-3 xl:sticky xl:top-6 xl:self-start">
+          <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3><select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select></div>
           <div
-            className="overflow-hidden rounded-xl border border-border bg-background/60"
-            style={CHECKER_STYLE}
+            className="overflow-x-auto rounded-xl border border-border bg-background/60"
+            style={previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }}
           >
             <iframe
               src={debouncedUrl}
-              title="Vorschau"
+              title="Overlay mit deinen Spielwerten"
               style={{ height: `${previewHeight}px` }}
-              className="block w-full border-0 bg-transparent"
+              className="block min-w-[440px] w-full border-0 bg-transparent"
             />
           </div>
+          <p className="text-xs leading-relaxed text-text-secondary">Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS. Nach Änderungen die neue Adresse in OBS einsetzen.</p>
         </div>
       </div>
     </motion.section>

@@ -74,8 +74,10 @@ test('kein Hex-Wert ausserhalb der Industrial-Gold-Palette', () => {
   for (const app of APPS) {
     for (const file of sourceFiles(app)) {
       const src = readFileSync(file, 'utf8');
+      // OBS-Presets und Szenenvorschau dürfen frei gewählte Farben nutzen. Die Dashboard-Shell bleibt an die Marke gebunden.
+      const overlayPresets = file.endsWith('/components/verwaltung/OverlayBuilderSection.tsx') ? new Set(['#101114','#d6b56c','#0d0f14','#f4f7fb','#765321','#a78bfa','#f5f3ef','#161020','#17191f','#67d8f3','#101922','#f3faff','#bca1ff','#181322','#f8f3ff','#090a0d','#d8dce1']) : new Set<string>();
       for (const hex of src.match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
-        if (!ALLOWED_HEX.has(hex.toLowerCase())) strays.push(`${file}: ${hex}`);
+        if (!ALLOWED_HEX.has(hex.toLowerCase()) && !overlayPresets.has(hex.toLowerCase())) strays.push(`${file}: ${hex}`);
       }
     }
   }
