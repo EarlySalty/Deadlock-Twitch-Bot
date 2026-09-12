@@ -74,7 +74,7 @@ const navigationGroups: NavigationGroup[] = [
       { label: 'Streamer-Research', to: '/community/research', icon: Search },
       { label: 'Engagement AI', to: '/community/engagement', icon: Sparkles },
       { label: 'Chat Actions', to: '/community/chat', icon: MessageSquare },
-      { label: 'Chat und Timer', to: '/config/chat', icon: MessageSquare },
+      { label: 'Chat-Moderation', to: '/config/chat', icon: MessageSquare },
       { label: 'Globale Bans', to: '/community/global-bans', icon: ShieldAlert },
       { label: 'Partneraufnahme', to: '/community/partner-signup-blocks', icon: UserX },
     ],

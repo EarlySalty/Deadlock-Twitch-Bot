@@ -9,6 +9,7 @@ import { Toast } from '@/components/shared/Toast';
 import { useConfigOverview, usePromoConfigMutation } from '@/hooks/useAdmin';
 import { berlinLocalInputToUtcIso, berlinNowLocalInput, utcIsoToBerlinLocalInput } from '@/utils/berlinTime';
 import { coerceRecord, formatDateTime } from '@/utils/formatters';
+import { PromoTimers } from './PromoTimers';
 
 type ToastState = {
   open: boolean;
@@ -179,7 +180,7 @@ export default function AnnouncementsPage() {
     <section className="space-y-6">
       <PageHeader
         title="Announcements"
-        description="Globaler Announcement-Text mit Aktivierung und Zeitfenster (deutsche Ortszeit) für den Bot."
+        description="Community-Werbung und Timer einstellen. Globale Announcements mit Text, Farbe und Zeitfenster verwalten."
         primaryAction={
           <button
             className="admin-button admin-button-secondary"
@@ -280,6 +281,8 @@ export default function AnnouncementsPage() {
       >
         {lastSavedBy ? <span className="stat-pill">Zuletzt von {lastSavedBy}</span> : null}
       </StickyActionBar>
+
+      <PromoTimers />
 
       <Toast
         open={toast.open}
