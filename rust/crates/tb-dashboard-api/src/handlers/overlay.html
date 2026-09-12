@@ -149,6 +149,23 @@
       border-color: color-mix(in srgb, var(--accent) 85%, var(--border));
     }
 
+    /* Versionierte freie Module: Text und Bilder skalieren gemeinsam im Rahmen. */
+    .layout-canvas .ov-canvas-source.scalable {
+      padding: 0;
+    }
+
+    .ov-canvas-content {
+      position: absolute;
+      box-sizing: border-box;
+      padding: 16px;
+      transform-origin: top left;
+    }
+
+    .layout-canvas .ov-canvas-content .ov-cell,
+    .layout-canvas .ov-canvas-content .ov-brand {
+      height: auto;
+    }
+
     .layout-canvas .ov-canvas-source[data-module="rank"] .ov-value {
       font-size: 30px;
     }
@@ -594,6 +611,7 @@
 
     const theme = oneOf('theme', ['dark', 'light', 'accent'], 'dark');
     const layout = oneOf('layout', ['box', 'bar', 'canvas'], 'box');
+    const scalableCanvas = params.get('scene_v') === '2';
     const mode = oneOf('mode', ['all', 'standard', 'brawl'], 'all');
     const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl');
     const opacity = clampInt('opacity', 0, 100, 85);
@@ -628,8 +646,8 @@
       const fallback = defaultCanvasScene[key] || { x: 0, y: 0, width: 320, height: 100 };
       const candidate = canvasScene[key];
       const numberOr = (value, fallbackValue) => typeof value === 'number' && Number.isFinite(value) ? value : fallbackValue;
-      const width = Math.min(canvasWidth, Math.max(24, numberOr(candidate && candidate.width, fallback.width)));
-      const height = Math.min(canvasHeight, Math.max(24, numberOr(candidate && candidate.height, fallback.height)));
+      const width = Math.min(canvasWidth, Math.max(scalableCanvas ? 120 : 24, numberOr(candidate && candidate.width, fallback.width)));
+      const height = Math.min(canvasHeight, Math.max(scalableCanvas ? 48 : 24, numberOr(candidate && candidate.height, fallback.height)));
       const x = Math.min(Math.max(0, numberOr(candidate && candidate.x, fallback.x)), Math.max(0, canvasWidth - width));
       const y = Math.min(Math.max(0, numberOr(candidate && candidate.y, fallback.y)), Math.max(0, canvasHeight - height));
       return { x, y, width, height };
@@ -665,6 +683,7 @@
     function fitViewport() {
       if (layout === 'canvas') {
         card.style.transform = 'none';
+        fitCanvasSources();
         return;
       }
       const scale = Math.min(1, Math.max(1, window.innerWidth - 36) / Math.max(1, card.offsetWidth), Math.max(1, window.innerHeight - 36) / Math.max(1, card.offsetHeight));
@@ -963,16 +982,62 @@
       return bar.childElementCount ? bar : null;
     }
 
-    function canvasSource(key, label, content) {
-      const source = el('section', 'ov-canvas-source');
-      source.dataset.module = key;
-      source.setAttribute('aria-label', label);
-      const rect = canvasRect(key);
+    function positionCanvasSource(source) {
+      const rect = canvasRect(source.dataset.module);
       source.style.left = `${rect.x / canvasWidth * 100}%`;
       source.style.top = `${rect.y / canvasHeight * 100}%`;
       source.style.width = `${rect.width / canvasWidth * 100}%`;
       source.style.height = `${rect.height / canvasHeight * 100}%`;
-      source.appendChild(content);
+    }
+
+    function fitCanvasSources() {
+      if (!scalableCanvas) return;
+      card.querySelectorAll('.ov-canvas-source').forEach(source => {
+        const content = source.firstElementChild;
+        const base = defaultCanvasScene[source.dataset.module];
+        if (!content || !base) return;
+        // Auch umgebrochene Verläufe mit 15 Helden vollständig berücksichtigen.
+        const width = Math.max(base.width, content.scrollWidth);
+        const height = Math.max(base.height, content.scrollHeight);
+        const scale = Math.min(source.clientWidth / width, source.clientHeight / height);
+        content.style.transform = `scale(${scale})`;
+        content.style.left = `${(source.clientWidth - width * scale) / 2}px`;
+        content.style.top = `${(source.clientHeight - height * scale) / 2}px`;
+      });
+    }
+
+    // Nur die eingebettete Editor-Vorschau nimmt Geometrie vom eigenen Elternfenster an.
+    window.addEventListener('message', event => {
+      if (layout !== 'canvas' || !scalableCanvas || params.get('editor') !== '1') return;
+      if (event.source !== window.parent || event.origin !== window.location.origin) return;
+      const message = event.data;
+      if (!message || message.type !== 'ddc-overlay-scene' || !message.sources || typeof message.sources !== 'object' || Array.isArray(message.sources)) return;
+      const next = {};
+      for (const key of Object.keys(defaultCanvasScene)) {
+        const rect = message.sources[key];
+        if (!rect || !['x', 'y', 'width', 'height'].every(field => typeof rect[field] === 'number' && Number.isFinite(rect[field]))) return;
+        next[key] = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }
+      Object.assign(canvasScene, next);
+      card.querySelectorAll('.ov-canvas-source').forEach(positionCanvasSource);
+      fitCanvasSources();
+    });
+
+    function canvasSource(key, label, content) {
+      const source = el('section', 'ov-canvas-source');
+      source.dataset.module = key;
+      source.setAttribute('aria-label', label);
+      positionCanvasSource(source);
+      if (scalableCanvas) {
+        source.classList.add('scalable');
+        const inner = el('div', 'ov-canvas-content');
+        inner.style.width = `${defaultCanvasScene[key].width}px`;
+        inner.style.minHeight = `${defaultCanvasScene[key].height}px`;
+        inner.appendChild(content);
+        source.appendChild(inner);
+      } else {
+        source.appendChild(content);
+      }
       return source;
     }
 

@@ -25,9 +25,9 @@ const THEMES: Array<{ value: OverlayTheme; label: string }> = [
 ];
 
 const LAYOUTS: Array<{ value: OverlayLayout; label: string }> = [
-  { value: 'box', label: 'Karte' },
-  { value: 'bar', label: 'Leiste' },
-  { value: 'canvas', label: 'Freie OBS-Leinwand' },
+  { value: 'canvas', label: 'Module frei bearbeiten' },
+  { value: 'box', label: 'Feste Karte' },
+  { value: 'bar', label: 'Feste Leiste' },
 ];
 
 const MODES: Array<{ value: OverlayMode; label: string }> = [
@@ -77,6 +77,7 @@ const sourceDraft = (source: OverlaySource): SourceDraft => ({
 });
 
 type SavedOverlayConfig = {
+  editorVersion?: number;
   layout?: OverlayLayout;
   theme?: OverlayTheme;
   mode?: OverlayMode;
@@ -116,6 +117,8 @@ const CANVAS_PRESETS = [
 ] as const;
 
 type DragState = {
+  pointerId: number;
+  target: HTMLElement;
   key: ModuleKey;
   mode: 'move' | 'resize';
   startX: number;
@@ -124,14 +127,24 @@ type DragState = {
 };
 
 function clampSource(source: OverlaySource, canvasWidth: number, canvasHeight: number): OverlaySource {
-  const width = Math.min(canvasWidth, Math.max(120, Math.round(source.width)));
-  const height = Math.min(canvasHeight, Math.max(48, Math.round(source.height)));
+  const finite = (value: number, fallback: number) => typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;
+  const width = Math.min(canvasWidth, Math.max(120, finite(source.width, 120)));
+  const height = Math.min(canvasHeight, Math.max(48, finite(source.height, 48)));
   return {
-    x: Math.min(Math.max(0, Math.round(source.x)), Math.max(0, canvasWidth - width)),
-    y: Math.min(Math.max(0, Math.round(source.y)), Math.max(0, canvasHeight - height)),
+    x: Math.min(Math.max(0, finite(source.x, 0)), Math.max(0, canvasWidth - width)),
+    y: Math.min(Math.max(0, finite(source.y, 0)), Math.max(0, canvasHeight - height)),
     width,
     height,
   };
+}
+
+// Beim Ziehen der rechten unteren Ecke bleibt die linke obere Ecke fest.
+function resizeSource(source: OverlaySource, width: number, height: number, canvasWidth: number, canvasHeight: number): OverlaySource {
+  return clampSource({
+    ...source,
+    width: Math.min(canvasWidth - source.x, width),
+    height: Math.min(canvasHeight - source.y, height),
+  }, canvasWidth, canvasHeight);
 }
 
 const CHECKER_STYLE: CSSProperties = {
@@ -163,7 +176,7 @@ type OverlayBuilderSectionProps = {
 export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const normalizedLogin = login.trim();
   const [theme, setTheme] = useState<OverlayTheme>('dark');
-  const [layout, setLayout] = useState<OverlayLayout>('box');
+  const [layout, setLayout] = useState<OverlayLayout>('canvas');
   const [mode, setMode] = useState<OverlayMode>('all');
   const [opacity, setOpacity] = useState<number>(85);
   const [recentN, setRecentN] = useState<number>(10);
@@ -195,6 +208,15 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const previewHostRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const syncPreview = () => {
+    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
+  };
+
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
+  }, [sources]);
 
   const storageKey = `ddc-overlay-layout-v1:${normalizedLogin}`;
 
@@ -205,7 +227,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       if (!savedConfig) return;
       const storedWidth = Number.isFinite(savedConfig.canvasWidth) ? Math.min(3840, Math.max(320, Number(savedConfig.canvasWidth))) : DEFAULT_CANVAS_WIDTH;
       const storedHeight = Number.isFinite(savedConfig.canvasHeight) ? Math.min(2160, Math.max(180, Number(savedConfig.canvasHeight))) : DEFAULT_CANVAS_HEIGHT;
-      if (savedConfig.layout === 'box' || savedConfig.layout === 'bar' || savedConfig.layout === 'canvas') setLayout(savedConfig.layout);
+      // Alte feste Layouts öffnen frei; bereits kopierte OBS-URLs bleiben unverändert.
+      setLayout(savedConfig.editorVersion === 2 && (savedConfig.layout === 'box' || savedConfig.layout === 'bar') ? savedConfig.layout : 'canvas');
       if (savedConfig.theme === 'dark' || savedConfig.theme === 'light' || savedConfig.theme === 'accent') setTheme(savedConfig.theme);
       if (savedConfig.mode === 'all' || savedConfig.mode === 'standard' || savedConfig.mode === 'brawl') setMode(savedConfig.mode);
       if (Number.isFinite(savedConfig.opacity)) setOpacity(Math.min(100, Math.max(0, Math.round(Number(savedConfig.opacity)))));
@@ -256,24 +279,34 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     const handlePointerMove = (event: PointerEvent) => {
       const drag = dragRef.current;
       const preview = editorRef.current;
-      if (!drag || !preview) return;
+      if (!drag || !preview || event.pointerId !== drag.pointerId) return;
       const bounds = preview.getBoundingClientRect();
       if (bounds.width <= 0 || bounds.height <= 0) return;
       const dx = (event.clientX - drag.startX) / bounds.width * canvasWidth;
       const dy = (event.clientY - drag.startY) / bounds.height * canvasHeight;
       const next = drag.mode === 'move'
         ? { ...drag.source, x: drag.source.x + dx, y: drag.source.y + dy }
-        : { ...drag.source, width: drag.source.width + dx, height: drag.source.height + dy };
+        : resizeSource(drag.source, drag.source.width + dx, drag.source.height + dy, canvasWidth, canvasHeight);
       setSources(current => ({ ...current, [drag.key]: clampSource(next, canvasWidth, canvasHeight) }));
     };
-    const handlePointerUp = () => {
+    const handlePointerUp = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
       dragRef.current = null;
+      if (drag.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
     };
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    window.addEventListener('lostpointercapture', handlePointerUp);
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+      window.removeEventListener('lostpointercapture', handlePointerUp);
+      const drag = dragRef.current;
+      dragRef.current = null;
+      if (drag?.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
     };
   }, [canvasHeight, canvasWidth]);
 
@@ -291,6 +324,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     params.set('text', text);
     params.set('radius', String(radius));
     if (layout === 'canvas') {
+      params.set('scene_v', '2');
       params.set('canvas_w', String(canvasWidth));
       params.set('canvas_h', String(canvasHeight));
       params.set('scene', JSON.stringify(sources));
@@ -300,9 +334,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
     return `${origin}/twitch/overlay?${params.toString()}`;
   }, [normalizedLogin, theme, layout, mode, opacity, recentN, modules, accent, background, text, radius, canvasWidth, canvasHeight, sources]);
-  const debouncedUrl = useDebouncedValue(overlayUrl, 300);
-  const customized = accent !== '#d6b56c' || background !== '#0d0f14' || text !== '#f4f7fb' || radius !== 18 || theme !== 'dark' || layout !== 'box' || mode !== 'all' || opacity !== 85 || recentN !== 10 || canvasWidth !== DEFAULT_CANVAS_WIDTH || canvasHeight !== DEFAULT_CANVAS_HEIGHT || MODULES.some(({key}) => modules[key] !== DEFAULT_MODULES[key]);
-  const unsaved = customized && retainedUrl !== null && retainedUrl !== overlayUrl;
+  // Geometrie geht über die Bridge: Drag/Resize lädt weder iframe noch Live-Werte neu.
+  const previewUrl = new URL(overlayUrl, 'http://localhost');
+  previewUrl.searchParams.delete('scene');
+  previewUrl.searchParams.set('editor', '1');
+  const debouncedUrl = useDebouncedValue(previewUrl.toString(), 300);
+  const unsaved = retainedUrl !== null && retainedUrl !== overlayUrl;
 
   useEffect(() => {
     setCopied(false);
@@ -362,14 +399,17 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   };
 
   const beginSourceDrag = (event: React.PointerEvent<HTMLElement>, key: ModuleKey, mode: DragState['mode']) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || dragRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     const source = sources[key] || DEFAULT_CANVAS_SOURCES[key];
     const bounds = editorRef.current?.getBoundingClientRect();
     if (!bounds) return;
     setSelectedSource(key);
+    event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
+      pointerId: event.pointerId,
+      target: event.currentTarget,
       key,
       mode,
       startX: event.clientX,
@@ -381,7 +421,9 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const updateSource = (key: ModuleKey, field: keyof OverlaySource, rawValue: number) => {
     setSources(current => ({
       ...current,
-      [key]: clampSource({ ...current[key], [field]: Number.isFinite(rawValue) ? rawValue : current[key][field] }, canvasWidth, canvasHeight),
+      [key]: field === 'width' || field === 'height'
+        ? resizeSource(current[key], field === 'width' ? rawValue : current[key].width, field === 'height' ? rawValue : current[key].height, canvasWidth, canvasHeight)
+        : clampSource({ ...current[key], [field]: rawValue }, canvasWidth, canvasHeight),
     }));
   };
 
@@ -410,6 +452,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const saveLayout = () => {
     try {
       window.localStorage.setItem(storageKey, JSON.stringify({
+        editorVersion: 2,
         layout,
         theme,
         mode,
@@ -449,10 +492,10 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
   };
 
-  const maxCanvasPreviewWidth = Math.max(1, Math.min(previewHostWidth, 560));
-  const canvasPreviewScale = Math.min(maxCanvasPreviewWidth / canvasWidth, 560 / canvasHeight);
-  const canvasPreviewWidth = Math.max(1, Math.round(canvasWidth * canvasPreviewScale));
-  const canvasPreviewHeight = Math.max(1, Math.round(canvasHeight * canvasPreviewScale));
+  const maxCanvasPreviewWidth = Math.max(1, previewHostWidth);
+  const canvasPreviewScale = maxCanvasPreviewWidth / canvasWidth;
+  const canvasPreviewWidth = canvasWidth * canvasPreviewScale;
+  const canvasPreviewHeight = canvasHeight * canvasPreviewScale;
   const previewHeight = layout === 'bar' ? 300 : layout === 'canvas' ? canvasPreviewHeight : 660;
   const recommendedSize = layout === 'bar' ? '960 × 300' : layout === 'canvas' ? `${canvasWidth} × ${canvasHeight}` : '440 × 660';
   const selected = sources[selectedSource] || DEFAULT_CANVAS_SOURCES[selectedSource];
@@ -504,12 +547,92 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           Overlay für OBS zusammenstellen
         </h2>
         <p className="text-sm text-text-secondary">
-          Dein Stream, dein Look. Wähle Farben und Inhalte – die Vorschau zeigt deine echten Spielwerte.
+          Zieh deine Module direkt an die gewünschte Stelle und ändere ihre Größe am Griff unten rechts. Die Vorschau zeigt deine echten Spielwerte.
           Voraussetzung: ein über den Discord verknüpfter Steam-Account.
         </p>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(440px,0.9fr)]">
+        {/* Vorschau */}
+        <div ref={previewHostRef} className="mb-6 min-w-0 space-y-3">
+          <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
+            Module frei bearbeiten
+          </button>
+          <p className="text-sm text-text-secondary">{layout === 'canvas' ? 'Modul ziehen · am goldenen Griff Größe ändern · fertige URL in OBS einfügen' : 'Feste Vorlage aktiv. Mit „Module frei bearbeiten“ kannst du jeden Inhalt einzeln verschieben und vergrößern.'}</p>
+          <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3><select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select></div>
+          <div
+            ref={editorRef}
+            className={`relative overflow-hidden rounded-xl ring-1 ring-border bg-background/60 ${layout === 'canvas' ? 'touch-none select-none' : 'overflow-x-auto'}`}
+            style={{
+              ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }),
+              ...(layout === 'canvas' ? { width: `${canvasPreviewWidth}px`, height: `${canvasPreviewHeight}px`, marginInline: 'auto' } : {}),
+            }}
+          >
+            <iframe
+              ref={iframeRef}
+              onLoad={syncPreview}
+              src={debouncedUrl}
+              title="Overlay mit deinen Spielwerten"
+              style={layout === 'canvas' ? { width: canvasWidth, height: canvasHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' } : { height: `${previewHeight}px` }}
+              className={layout === 'canvas' ? 'pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent' : 'block min-w-[440px] w-full border-0 bg-transparent'}
+            />
+            {layout === 'canvas' && (
+              <div className="absolute inset-0 z-10">
+                {MODULES.map(({ key, label }) => {
+                  if (!modules[key]) return null;
+                  const source = sources[key];
+                  return (
+                    <div
+                      key={key}
+                      className="absolute"
+                      style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: selectedSource === key ? 2 : 1 }}
+                    >
+                      <button
+                        type="button"
+                        aria-label={`${label} verschieben und auswählen`}
+                        title={`${label}: ziehen zum Verschieben`}
+                        onClick={() => setSelectedSource(key)}
+                        onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
+                        className={`absolute inset-0 touch-none cursor-move rounded border-2 text-left ${selectedSource === key ? 'border-primary' : 'border-primary/25 hover:border-primary/70'}`}
+                      >
+                        {selectedSource === key && <span className="pointer-events-none absolute left-0 bottom-full mb-1 whitespace-nowrap rounded bg-background/95 px-2 py-1 text-xs font-semibold text-primary">{label}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`${label}: Größe ändern`}
+                        onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
+                        onClick={() => setSelectedSource(key)}
+                        className="absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black"
+                        title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
+                      ><span aria-hidden="true">↘</span></button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {layout === 'canvas' && (
+              <div className="rounded-lg border border-border bg-background/60 p-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">Ausgewählte Quelle: {selectedLabel}</h3>
+                    <p className="text-xs text-text-secondary">X/Y = Position · Breite/Höhe = Größe</p>
+                  </div>
+                  <button type="button" onClick={() => resetSource(selectedSource)} className="min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-text-secondary hover:border-primary hover:text-primary">Quelle zurücksetzen</button>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {(['x', 'y', 'width', 'height'] as const).map((field) => (
+                    <label key={field} className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                      {field === 'width' ? 'Breite' : field === 'height' ? 'Höhe' : field.toUpperCase()}
+                      <input type="number" min={field === 'width' ? 120 : field === 'height' ? 48 : 0} max={field === 'width' ? canvasWidth - selected.x : field === 'height' ? canvasHeight - selected.y : field === 'x' ? canvasWidth - selected.width : canvasHeight - selected.height} step={1} value={selectedDraft[field]} onFocus={() => setEditingField({ key: selectedSource, field })} onChange={(event) => setSourceDrafts(current => ({ ...current, [selectedSource]: { ...current[selectedSource], [field]: event.target.value } }))} onBlur={() => commitSourceField(selectedSource, field)} className="mt-1 block w-full rounded-lg border border-border bg-background px-2 py-2 font-mono text-sm font-normal normal-case tracking-normal text-white" />
+                    </label>
+                  ))}
+                </div>
+              </div>
+          )}
+          <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Zieh eine Quelle in der Vorschau oder nutze die X-/Y-/Breite-/Höhe-Felder. Speichere danach das Layout und kopiere die fertige URL für OBS.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS. Nach Änderungen die neue Adresse in OBS einsetzen.'}</p>
+        </div>
+
+      <div>
         <div className="space-y-5">
           {/* Stil, Layout & Spielmodus */}
           <div className="grid gap-3 sm:grid-cols-3">
@@ -693,23 +816,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 </label>
               </div>
 
-              <div className="rounded-lg border border-border bg-background/60 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold text-white">Ausgewählte Quelle: {selectedLabel}</h3>
-                    <p className="text-xs text-text-secondary">X/Y = Position · Breite/Höhe = Größe</p>
-                  </div>
-                  <button type="button" onClick={() => resetSource(selectedSource)} className="min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-text-secondary hover:border-primary hover:text-primary">Quelle zurücksetzen</button>
-                </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {(['x', 'y', 'width', 'height'] as const).map((field) => (
-                    <label key={field} className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                      {field === 'width' ? 'Breite' : field === 'height' ? 'Höhe' : field.toUpperCase()}
-                      <input type="number" min={0} step={1} value={selectedDraft[field]} onFocus={() => setEditingField({ key: selectedSource, field })} onChange={(event) => setSourceDrafts(current => ({ ...current, [selectedSource]: { ...current[selectedSource], [field]: event.target.value } }))} onBlur={() => commitSourceField(selectedSource, field)} className="mt-1 block w-full rounded-lg border border-border bg-background px-2 py-2 font-mono text-sm font-normal normal-case tracking-normal text-white" />
-                    </label>
-                  ))}
-                </div>
-              </div>
+
 
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -761,14 +868,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </div>
 
           {copyFailed && <p role="alert" className="text-sm text-warning">Die Adresse konnte nicht kopiert werden. Kopiere sie aus dem markierten Feld und übernimm sie in OBS.</p>}
-          {layout === 'canvas' && (
             <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2">
               <button type="button" onClick={saveLayout} className="min-h-11 rounded-lg border border-primary/50 bg-primary/15 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/25">
                 {saved ? 'Layout gespeichert' : 'Layout speichern'}
               </button>
               <span className="text-xs text-text-secondary">Dein Layout wird in diesem Browser gemerkt. Die fertige URL kannst du danach in OBS einfügen.</span>
             </div>
-          )}
           {saveFailed && <p role="alert" className="text-sm text-warning">Das Layout konnte in diesem Browser nicht gespeichert werden.</p>}
           {unsaved && <button type="button" onClick={() => setRetainedUrl(overlayUrl)} className="min-h-11 text-sm text-primary underline underline-offset-4">Adresse in OBS übernommen</button>}
 
@@ -779,7 +884,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               <li>Klick in OBS unten bei „Quellen" auf das Plus und wähle „Browser".</li>
               <li>Vergib einen Namen (z. B. „Deadlock-Stats") und bestätige mit OK.</li>
               <li>Füge die obige Overlay-URL in das Feld „URL" ein.</li>
-              <li>{layout === 'canvas' ? `Stell die Browser-Quelle auf ${canvasWidth} × ${canvasHeight}, passend zur Leinwand unten.` : 'Stell die Größe der Browser-Quelle passend zum Layout ein (siehe Empfehlung unten).'}</li>
+              <li>{layout === 'canvas' ? `Stell die Browser-Quelle auf ${canvasWidth} × ${canvasHeight}, passend zur Leinwand oben.` : 'Stell die Größe der Browser-Quelle passend zum Layout ein (siehe Empfehlung unten).'}</li>
               <li>Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.</li>
             </ol>
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2 text-sm">
@@ -789,53 +894,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </div>
         </div>
 
-        {/* Vorschau */}
-        <div ref={previewHostRef} className="space-y-3 xl:sticky xl:top-6 xl:self-start">
-          <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3><select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select></div>
-          <div
-            ref={editorRef}
-            className={`relative overflow-hidden rounded-xl border border-border bg-background/60 ${layout === 'canvas' ? '' : 'overflow-x-auto'}`}
-            style={{
-              ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }),
-              ...(layout === 'canvas' ? { width: `${canvasPreviewWidth}px`, height: `${canvasPreviewHeight}px`, marginInline: 'auto' } : {}),
-            }}
-          >
-            <iframe
-              src={debouncedUrl}
-              title="Overlay mit deinen Spielwerten"
-              style={layout === 'canvas' ? { height: '100%' } : { height: `${previewHeight}px` }}
-              className={layout === 'canvas' ? 'absolute inset-0 block h-full w-full min-w-0 border-0 bg-transparent' : 'block min-w-[440px] w-full border-0 bg-transparent'}
-            />
-            {layout === 'canvas' && (
-              <div className="absolute inset-0 z-10">
-                {MODULES.map(({ key, label }) => {
-                  if (!modules[key]) return null;
-                  const source = sources[key];
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      aria-label={`${label} verschieben und auswählen`}
-                      title={`${label}: ziehen zum Verschieben`}
-                      onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
-                      className={`absolute box-border cursor-move rounded-lg border-2 text-left transition-colors ${selectedSource === key ? 'border-primary bg-primary/10' : 'border-primary/30 bg-primary/5 hover:border-primary/70'}`}
-                      style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%` }}
-                    >
-                      <span className="pointer-events-none absolute left-1 top-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">{label}</span>
-                      <span
-                        aria-hidden="true"
-                        onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
-                        className="absolute bottom-0 right-0 h-4 w-4 cursor-se-resize rounded-tl border-l border-t border-primary bg-primary/80"
-                        title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
-                      />
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Zieh eine Quelle in der Vorschau oder nutze die X-/Y-/Breite-/Höhe-Felder. Speichere danach das Layout und kopiere die fertige URL für OBS.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS. Nach Änderungen die neue Adresse in OBS einsetzen.'}</p>
-        </div>
+
       </div>
     </motion.section>
   );
