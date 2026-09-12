@@ -563,10 +563,10 @@
       if (!Number.isInteger(badgeLevel)) return null;
       const tier = Math.floor(badgeLevel / 10);
       const sub = badgeLevel % 10;
-      if (tier < 1 || tier > 12) return null;
+      if (tier < 1 || tier > 11) return null;
 
       const base = `https://api.deadlock-api.com/v1/assets/ranks/${tier}`;
-      if (sub >= 0 && sub <= 6) return `${base}/${sub}/image`;
+      if (sub >= 1 && sub <= 6) return `${base}/${sub}/image`;
       return null;
     }
 
