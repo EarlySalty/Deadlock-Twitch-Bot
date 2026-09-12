@@ -10,8 +10,8 @@
 //! - Begrüßung: nur wenn die Nachricht praktisch *nur* ein Gruß ist, sonst
 //!   antwortet der Bot mitten in Gesprächen. Kanalweit, kein Deadlock-Gate.
 //! - Begrüßung ist pro Kanal abschaltbar (`streamer_plans.greeting_reply_enabled`,
-//!   Dashboard → Verwaltung). Default an; DB-Fehler lässt sie an, damit ein
-//!   Ausfall den Bot nicht stumm schaltet. Die Release-Antwort hängt nicht daran.
+//!   Dashboard → Verwaltung). Default aus; DB-Fehler lässt sie aus. Die
+//!   Release-Antwort hängt nicht daran.
 //! - Begrüßung höchstens einmal pro Chatter und Stream
 //!   (`twitch_greeted_chatters`): wer zweimal "hi" schreibt, bekommt keinen
 //!   zweiten Gruß. Der kanalweite Cooldown allein reichte dafür nicht.
@@ -139,10 +139,10 @@ impl StandardReplies {
     }
 
     /// Kanal-Schalter für den Rückgruß (Dashboard → Verwaltung). Fehlende Zeile
-    /// oder DB-Fehler heißt an — ein Ausfall darf den Bot nicht stumm schalten.
+    /// oder DB-Fehler heißt aus — der Gruß muss ausdrücklich aktiviert werden.
     async fn greeting_enabled(&self, event: &ChatMessageEvent, channel_login: &str) -> bool {
         sqlx::query_scalar(
-            "SELECT COALESCE(greeting_reply_enabled, 1)
+            "SELECT COALESCE(greeting_reply_enabled, 0)
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
                  OR twitch_user_id = $2
@@ -152,14 +152,14 @@ impl StandardReplies {
         .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await
-        .map(|value: Option<i32>| value.unwrap_or(1) != 0)
+        .map(|value: Option<i32>| value.unwrap_or(0) != 0)
         .unwrap_or_else(|error| {
             warn!(
                 channel = channel_login,
                 %error,
-                "Begrüßungs-Toggle konnte nicht gelesen werden — Gruß bleibt an"
+                "Begrüßungs-Toggle konnte nicht gelesen werden — Gruß bleibt aus"
             );
-            true
+            false
         })
     }
 
@@ -355,7 +355,7 @@ mod tests {
     use std::str::FromStr;
 
     /// Pool ohne erreichbare DB: die Toggle-Abfrage scheitert, der Gruß bleibt
-    /// an — genau der Fallback, den die Cooldown-Tests brauchen.
+    /// aus — genau der Fallback für den sicheren Standard.
     fn offline_pool() -> PgPool {
         PgPoolOptions::new()
             .max_connections(1)
@@ -393,7 +393,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
-             greeting_reply_enabled INTEGER DEFAULT 1 NOT NULL)",
+             greeting_reply_enabled INTEGER DEFAULT 0 NOT NULL)",
             "CREATE TABLE twitch_greeted_chatters (streamer_login TEXT NOT NULL, \
              chatter_login TEXT NOT NULL, chatter_id TEXT, \
              greeted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
@@ -507,22 +507,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gruss_wird_beantwortet_und_dann_vom_cooldown_gebremst() {
+    async fn gruss_bleibt_standardmaessig_aus() {
         let api = MockApi::new();
         let replies = StandardReplies::new(api.clone(), offline_pool());
 
-        assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
         assert!(!replies.maybe_respond(&event("moin"), "ch1", false).await);
 
         let messages = api.messages();
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].starts_with("@neuling"));
-        // Zurückgrüßen, nicht begrüßen: der Bot kennt den Neu-Status nicht.
-        assert!(
-            !messages[0].to_lowercase().contains("willkommen"),
-            "Rückgruß darf keine Willkommensformel sein: {}",
-            messages[0]
-        );
+        assert!(messages.is_empty());
     }
 
     #[tokio::test]
@@ -647,8 +640,8 @@ mod tests {
             replies.maybe_respond(&zweites, "ch1", false)
         );
 
-        assert!(a ^ b, "genau einer der beiden darf senden");
-        assert_eq!(api.sent.lock().unwrap().len(), 1);
+        assert!(!a && !b, "Begrüßung bleibt ohne ausdrückliche Aktivierung aus");
+        assert!(api.sent.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -754,15 +747,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ohne_plan_zeile_gruesst_der_bot_weiter() {
+    async fn ohne_plan_zeile_bleibt_die_begruessung_aus() {
         let Some(pool) = plans_pool("t_greeting_ohne_zeile").await else {
             panic!("TB_TEST_DATABASE_URL fehlt — Toggle-Test braucht die Test-DB");
         };
 
         let api = MockApi::new();
         let replies = StandardReplies::new(api.clone(), pool);
-        assert!(replies.maybe_respond(&event("hallo"), "ch1", false).await);
-        assert_eq!(api.messages().len(), 1);
+        assert!(!replies.maybe_respond(&event("hallo"), "ch1", false).await);
+        assert!(api.messages().is_empty());
     }
 
     /// Der Merker liegt in der DB, nicht im Prozess: eine zweite Instanz steht

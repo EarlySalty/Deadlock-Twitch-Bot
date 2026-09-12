@@ -1,7 +1,7 @@
 //! GET/POST `/twitch/api/v2/streamer/greeting-settings`.
 //!
 //! Streamer-Selbstbedienung fuer den automatischen Rueckgruss im Chat auf
-//! `streamer_plans.greeting_reply_enabled` (INTEGER, Default 1). Gelesen wird
+//! `streamer_plans.greeting_reply_enabled` (INTEGER, Default 0). Gelesen wird
 //! die Spalte im Bot von `tb_chat::StandardReplies`.
 
 use axum::{
@@ -29,7 +29,7 @@ pub struct GreetingUpdate {
     pub greeting_reply_enabled: bool,
 }
 
-const SELECT_SQL: &str = "SELECT COALESCE(greeting_reply_enabled, 1) AS enabled \
+const SELECT_SQL: &str = "SELECT COALESCE(greeting_reply_enabled, 0) AS enabled \
        FROM streamer_plans \
       WHERE ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1) \
          OR ($2 <> '' AND twitch_user_id = $2) \
@@ -52,10 +52,10 @@ pub async fn get_handler(
         .await
     {
         Ok(Some(row)) => {
-            let enabled: i32 = row.try_get("enabled").unwrap_or(1);
+            let enabled: i32 = row.try_get("enabled").unwrap_or(0);
             Json(json!({ "greeting_reply_enabled": enabled != 0 })).into_response()
         }
-        Ok(None) => Json(json!({ "greeting_reply_enabled": true })).into_response(),
+        Ok(None) => Json(json!({ "greeting_reply_enabled": false })).into_response(),
         Err(error) => {
             tracing::error!(%error, "greeting-settings GET DB-Fehler");
             (
@@ -167,7 +167,7 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
-             plan_name TEXT DEFAULT 'free' NOT NULL, greeting_reply_enabled INTEGER DEFAULT 1 NOT NULL)",
+             plan_name TEXT DEFAULT 'free' NOT NULL, greeting_reply_enabled INTEGER DEFAULT 0 NOT NULL)",
         )
         .execute(&pool)
         .await
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partner_toggle_roundtrip_default_an() {
+    async fn partner_toggle_roundtrip_default_aus() {
         let Some(pool) = make_pool("t_greeting_api_partner").await else {
             return;
         };
@@ -208,7 +208,7 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::OK);
-        assert_eq!(j["greeting_reply_enabled"], true);
+        assert_eq!(j["greeting_reply_enabled"], false);
 
         let (s, j) = body_of(
             post_handler(
