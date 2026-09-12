@@ -8,19 +8,19 @@ source: Uplink-Dashboard
 tip_eligible: false
 ---
 
-### Verbindung aus dem Dashboard übernehmen
+### Schritt 1: Verbindung aus dem Dashboard übernehmen
 
 Öffne in OBS Einstellungen → Stream und wähle Benutzerdefiniert. Kopiere die öffentliche RTMPS-Serveradresse aus dem Dashboard in Server. Deinen privaten Uplink-Schlüssel kopierst du getrennt in Streamschlüssel. Er gehört weder in die Serveradresse noch in den Stream.
 
-### Ausgabe einstellen
+### Schritt 2: Ausgabe einstellen
 
 Öffne Einstellungen → Ausgabe und wähle Erweitert. AV1 ist bevorzugt, H.264 wird ebenfalls unterstützt. Wähle einen Encoder, den deine OBS-Version für diesen RTMPS-Dienst anbietet. HEVC verwendest du nur mit einem dafür freigegebenen Eingangsprofil. Uplink prüft die tatsächlich empfangenen Eigenschaften.
 
-### Bitrate und Qualität
+### Schritt 3: Bitrate und Qualität
 
 Verwende CBR und plane Audio sowie Reserve innerhalb deines gemessenen Uploadbudgets ein. Die gewünschte Bitrate einer Plattform ist keine Vorgabe für deinen Upload. Auflösung, Bewegung und Encoder beeinflussen die Bildqualität; eine feste Einsparung ist nicht garantiert. Als Keyframe-Intervall wählst du 2 s.
 
-### Live- und VOD-Ton
+### Schritt 4: Live- und VOD-Ton
 
 Für Twitch verwendet Uplink immer zwei getrennte OBS-Mischungen: **OBS-Spur 1 ist der Livestream, OBS-Spur 2 ist das Twitch-VOD.** Dafür gibt es im Dashboard keine Audiowahl mehr. Uplink prüft beim Streamstart, ob beide Spuren wirklich ankommen. Fehlt Spur 2, wird nur der Twitch-Ausgang angehalten; der Live-Mix wird niemals still als VOD-Ersatz kopiert.
 
