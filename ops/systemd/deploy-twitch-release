@@ -34,6 +34,15 @@ if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 shift
 
+exec 9>/run/lock/deploy-twitch-release.lock
+if ! flock -n 9; then
+  echo "Deploy-Sperre belegt, warte bis zu 15 Minuten." >&2
+  if ! flock -w 900 9; then
+    echo "Ein anderer Deploy läuft seit über 15 Minuten, Abbruch." >&2
+    exit 75
+  fi
+fi
+
 src=""
 restart_explicit=0
 declare -a restart_targets=()
