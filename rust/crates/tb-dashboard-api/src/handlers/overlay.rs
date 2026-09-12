@@ -1810,7 +1810,7 @@ mod tests {
         // Freie OBS-Leinwand mit URL-gesteuerten Quellen
         assert!(html.contains("#overlay-card.layout-canvas"));
         assert!(html.contains("function canvasSource(key, label, content)"));
-        assert!(html.contains("canvasRect(key)"));
+        assert!(html.contains("canvasRect(source.dataset.module)"));
         // opacity wirkt auf Karten-Hintergrund via --bg-alpha
         assert!(html.contains("var(--bg-alpha)"));
         assert!(html.contains("--bg-alpha: 0.85"));
