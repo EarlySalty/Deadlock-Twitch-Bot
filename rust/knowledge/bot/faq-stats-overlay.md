@@ -45,9 +45,9 @@ Es gibt eine eigene Overlay-Seite mit Baukasten: Dort stellst du dir dein Overla
 
 1. Öffne die Overlay-Seite: `deutsche-deadlock-community.de/twitch/overlay`.
 2. Wähle einen Stil (Dunkel, Hell oder Akzent) und ein Layout (Box-Karte, schlanke Leiste oder „Freie OBS-Leinwand").
-3. Schalte ein, was angezeigt werden soll — Rang, Winrate, heutige Bilanz, Serie, K/D, letztes Match, meistgespielter Hero, Match-Verlauf, Live-Match — und wähle die Ecke im Bild.
+3. Schalte ein, was angezeigt werden soll — Rang, Winrate, heutige Bilanz, Serie, K/D, letztes Match, meistgespielter Hero, Match-Verlauf oder Live-Match. Bei Karte und Leiste wählst du zusätzlich die Ecke im Bild.
 4. Stell bei Bedarf die Hintergrund-Deckkraft und die Länge des Match-Verlaufs ein.
-5. Kopiere die angezeigte Overlay-URL, füge in OBS eine Browser-Quelle hinzu und trage sie ein (Box 360×200, Leiste 520×90).
+5. Kopiere die angezeigte Overlay-URL, füge in OBS eine Browser-Quelle hinzu und trage sie ein. Für Karte und Leiste gelten die empfohlenen Größen; bei der freien Leinwand nimmst du deine eingestellte Leinwandgröße.
 6. Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.
 
 Für eine frei anpassbare OBS-Leinwand wählst du „Freie OBS-Leinwand". Stell zuerst die Leinwandgröße ein. Danach kannst du die Quellen in der Vorschau per Drag-and-drop verschieben, am Eckgriff in der Größe ändern oder X, Y, Breite und Höhe exakt eintragen. Klicke anschließend auf „Layout speichern" und kopiere die fertige URL in OBS. In OBS verwendest du für die Browser-Quelle dieselbe Breite und Höhe wie für die Leinwand.

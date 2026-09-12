@@ -185,6 +185,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [editingField, setEditingField] = useState<{ key: ModuleKey; field: SourceField } | null>(null);
   const [editingCanvasDimension, setEditingCanvasDimension] = useState<'width' | 'height' | null>(null);
   const [selectedSource, setSelectedSource] = useState<ModuleKey>('rank');
+  const [previewHostWidth, setPreviewHostWidth] = useState(560);
   const [previewBackdrop, setPreviewBackdrop] = useState<'checker' | 'dark' | 'light'>('checker');
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -192,6 +193,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [retainedUrl, setRetainedUrl] = useState<string | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
+  const previewHostRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
 
   const storageKey = `ddc-overlay-layout-v1:${normalizedLogin}`;
@@ -305,6 +307,16 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   useEffect(() => {
     setCopied(false);
   }, [overlayUrl]);
+
+  useEffect(() => {
+    const host = previewHostRef.current;
+    if (!host) return;
+    const updateWidth = () => setPreviewHostWidth(Math.max(1, host.getBoundingClientRect().width));
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
 
   const toggleModule = (key: ModuleKey) => {
     setModules((current) => ({ ...current, [key]: !current[key] }));
@@ -437,7 +449,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
   };
 
-  const previewHeight = layout === 'bar' ? 300 : layout === 'canvas' ? Math.min(560, Math.max(180, Math.round(560 * canvasHeight / canvasWidth))) : 660;
+  const maxCanvasPreviewWidth = Math.max(1, Math.min(previewHostWidth, 560));
+  const canvasPreviewScale = Math.min(maxCanvasPreviewWidth / canvasWidth, 560 / canvasHeight);
+  const canvasPreviewWidth = Math.max(1, Math.round(canvasWidth * canvasPreviewScale));
+  const canvasPreviewHeight = Math.max(1, Math.round(canvasHeight * canvasPreviewScale));
+  const previewHeight = layout === 'bar' ? 300 : layout === 'canvas' ? canvasPreviewHeight : 660;
   const recommendedSize = layout === 'bar' ? '960 × 300' : layout === 'canvas' ? `${canvasWidth} × ${canvasHeight}` : '440 × 660';
   const selected = sources[selectedSource] || DEFAULT_CANVAS_SOURCES[selectedSource];
   const selectedDraft = sourceDrafts[selectedSource] || sourceDraft(selected);
@@ -774,14 +790,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         </div>
 
         {/* Vorschau */}
-        <div className="space-y-3 xl:sticky xl:top-6 xl:self-start">
+        <div ref={previewHostRef} className="space-y-3 xl:sticky xl:top-6 xl:self-start">
           <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3><select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select></div>
           <div
             ref={editorRef}
             className={`relative overflow-hidden rounded-xl border border-border bg-background/60 ${layout === 'canvas' ? '' : 'overflow-x-auto'}`}
             style={{
               ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }),
-              ...(layout === 'canvas' ? { aspectRatio: `${canvasWidth} / ${canvasHeight}`, height: `${previewHeight}px` } : {}),
+              ...(layout === 'canvas' ? { width: `${canvasPreviewWidth}px`, height: `${canvasPreviewHeight}px`, marginInline: 'auto' } : {}),
             }}
           >
             <iframe
