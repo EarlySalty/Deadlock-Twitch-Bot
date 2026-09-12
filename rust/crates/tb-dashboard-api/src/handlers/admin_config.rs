@@ -402,7 +402,13 @@ pub async fn config_promo_timers_handler(
     if let Some(err) = crate::auth::require_admin(&auth) {
         return Err(err);
     }
-    let settings: tb_analytics::promo_timers::PromoTimerSettings = serde_json::from_slice(&body)
+    let mut payload = parse_object_body(&body)?;
+    // postAdminJson sendet den bereits von der CSRF-Middleware geprüften Token
+    // zusätzlich im Body. Nur dieses Transportfeld gehört nicht zur Fachconfig.
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("csrf_token");
+    }
+    let settings: tb_analytics::promo_timers::PromoTimerSettings = serde_json::from_value(payload)
         .map_err(|_| ApiError::bad_request_with_body(json!({"error":"validation_failed","message":"Bitte alle Timerwerte als ganze Zahlen angeben."})))?;
     settings.validate().map_err(|message| {
         ApiError::bad_request_with_body(json!({"error":"validation_failed","message":message}))
@@ -417,6 +423,83 @@ pub async fn config_promo_timers_handler(
 mod promo_timer_tests {
     use super::*;
     use axum::{body::Bytes, http::StatusCode};
+
+    #[tokio::test]
+    async fn timer_clientbody_mit_csrf_speichert_in_postgres_und_bleibt_strikt() {
+        use tb_analytics::promo_timers::{load, PromoTimerSettings};
+
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260912090000_promo_timer_settings.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut settings = PromoTimerSettings::default();
+        settings.defaults.overall_cooldown_minutes = 80;
+        settings.community.timers.overall_cooldown_minutes = 15;
+        let mut clientbody = serde_json::to_value(&settings).unwrap();
+        // Exakter JSON-Vertrag des bestehenden postAdminJson-Clients.
+        clientbody["csrf_token"] = json!("synthetic-test-token");
+        let response = config_promo_timers_handler(
+            DashboardAuthLevel::admin(),
+            State(db.pool.clone()),
+            Bytes::from(serde_json::to_vec(&clientbody).unwrap()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["timerSettings"],
+            serde_json::to_value(&settings).unwrap()
+        );
+        assert_eq!(load(&db.pool).await.unwrap(), settings);
+
+        // Der echte Admin-Router bleibt ohne Admin-Session gesperrt, auch wenn
+        // ein Client das Transportfeld und den zugehörigen Header mitsendet.
+        use tower::ServiceExt;
+        let router = crate::build_admin_config_router(db.pool.clone(), String::new());
+        let response = router
+            .oneshot(axum::http::Request::builder()
+                .method("POST")
+                .uri("/twitch/api/admin/config/promo-timers")
+                .header("host", "dashboard.example.com")
+                .header("origin", "https://foreign.example.com")
+                .header("content-type", "application/json")
+                .header("x-csrf-token", "synthetic-test-token")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&clientbody).unwrap(),
+                ))
+                .unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(load(&db.pool).await.unwrap(), settings);
+
+        for group in [None, Some("defaults"), Some("community")] {
+            let mut invalid = clientbody.clone();
+            match group {
+                Some(group) => invalid[group]["unexpected"] = json!(1),
+                None => invalid["unexpected"] = json!(1),
+            }
+            let response = config_promo_timers_handler(
+                DashboardAuthLevel::admin(),
+                State(db.pool.clone()),
+                Bytes::from(serde_json::to_vec(&invalid).unwrap()),
+            )
+            .await;
+            assert_eq!(
+                response.err().unwrap().into_response().status(),
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(load(&db.pool).await.unwrap(), settings);
+        }
+    }
     #[tokio::test]
     async fn timer_writes_require_admin_and_validate_before_db() {
         let pool = sqlx::postgres::PgPoolOptions::new()
