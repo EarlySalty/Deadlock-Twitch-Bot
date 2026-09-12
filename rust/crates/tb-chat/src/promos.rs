@@ -1641,7 +1641,7 @@ impl PromoEngine {
                 .await;
 
             if overall_ready
-                && (state_snapshot.community_channel || activity_ready)
+                && activity_ready
                 && self.stream_start_delay_ok(login).await
             {
                 faellig.push((login.clone(), channel_id.clone()));
@@ -1664,17 +1664,12 @@ impl PromoEngine {
     }
 
     async fn process_due_channel(self: Arc<Self>, login: String, channel_id: String, now: Instant) {
-        let (_, community) = self.channel_timers(&login).await;
-        let sent = if community {
-            if !self.reserve_promo_attempt(&login, now).await {
-                return;
-            }
-            self.send_promo_message(&login, &channel_id, now, "community_timer")
-                .await
-        } else {
-            self.maybe_send_promo_with_stats(&login, &channel_id, now, false)
-                .await
-        };
+        // Community und alle anderen Kanäle laufen durch denselben Aktivitäts-Gate;
+        // nur die geladenen Timer-Werte unterscheiden sich. Keine Sonderlogik für
+        // den Community-Kanal (kein Senden bei ruhigem Chat trotz Overall-Timer).
+        let sent = self
+            .maybe_send_promo_with_stats(&login, &channel_id, now, false)
+            .await;
         if !sent {
             self.maybe_send_viewer_spike_promo(&login, &channel_id, now)
                 .await;
@@ -2001,6 +1996,12 @@ impl PromoEngine {
 
     /// Promo gesendet markieren (promos.py:879: `_mark_promo_sent`).
     async fn mark_promo_sent(&self, login: &str, now: Instant, reason: &str, wall_ts: f64) {
+        // Session-Viewer vor dem Lock holen (async DB-Abfrage) und mitmarkieren:
+        // get_new_chatters_in_window_inner zählt Aktivitäts-Bucket UNION
+        // Session-Viewer, also muss der Versand dieselbe Union als gesehen
+        // übernehmen. Sonst zählten API-only-Viewer bei jeder Folgewerbung erneut
+        // als neu und öffneten die new_chatters-Grenze dauerhaft.
+        let session_viewers = self.get_current_session_viewers(login).await;
         {
             let state_ref = self
                 .channel_states
@@ -2009,7 +2010,7 @@ impl PromoEngine {
             let mut state = state_ref.lock().await;
             state.last_promo_sent = Some(now);
             state.raw_msg_count_since_promo = 0;
-            self.update_seen_chatters_inner(&mut state, now);
+            self.update_seen_chatters_inner(&mut state, now, &session_viewers);
             if reason == "viewer_spike" {
                 state.last_promo_viewer_spike = Some(now);
             }
@@ -2022,14 +2023,23 @@ impl PromoEngine {
     }
 
     /// Gesehene Chatter aktualisieren (promos.py:879: `_update_seen_chatters`).
-    fn update_seen_chatters_inner(&self, state: &mut ChannelState, now: Instant) {
-        for (_, ts) in &state.activity {
-            // Chatter aus dem Aktivitäts-Bucket als gesehen markieren.
-            let _ = ts;
-        }
+    ///
+    /// Markiert dieselbe Menge, die `get_new_chatters_in_window_inner` als
+    /// potenziell "neu" zählt: Aktivitäts-Bucket UNION aktuelle Session-Viewer.
+    /// Die Session-Viewer kommen bereits normalisiert (lowercase) aus
+    /// `get_current_session_viewers`, passend zum dortigen Vergleich.
+    fn update_seen_chatters_inner(
+        &self,
+        state: &mut ChannelState,
+        now: Instant,
+        session_viewers: &HashSet<String>,
+    ) {
         let chatters: Vec<String> = state.activity.iter().map(|(_, c)| c.clone()).collect();
         for chatter in chatters {
             state.seen_chatters.insert(chatter, now);
+        }
+        for viewer in session_viewers {
+            state.seen_chatters.insert(viewer.clone(), now);
         }
     }
 
@@ -2122,8 +2132,10 @@ impl PromoEngine {
             }
         }
 
-        // 4. Neue Chatter ≥ 2 (wenn last_sent gesetzt).
-        if state.last_promo_sent.is_some() && state.timers.new_chatters > 0 {
+        // 4. Neue Chatter ≥ eingestellter Wert. Gilt auch für den ersten Versand:
+        //    ohne bisherige "gesehen"-Basis zählen alle aktiven Chatter als neu,
+        //    die eingestellte Schwelle bleibt so auch beim ersten Timer greifbar.
+        if state.timers.new_chatters > 0 {
             let new_chatters = self
                 .get_new_chatters_in_window_inner(login, state, now)
                 .await;
@@ -2202,29 +2214,35 @@ impl PromoEngine {
     /// Viewer-Spike-Promo (promos.py:1306: `_maybe_send_viewer_spike_promo`).
     async fn maybe_send_viewer_spike_promo(&self, login: &str, channel_id: &str, now: Instant) {
         // Guards (promos.py:1306).
-        let (overall_ready, has_new_raw, chat_silent, spike_cd_ok, attempt_ok) = {
+        let state_snapshot = {
             let state_ref = self
                 .channel_states
                 .entry(login.to_string())
                 .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
-
-            let overall = self.overall_promo_ready_inner(&state, now);
-            let has_raw = state.raw_msg_count_since_promo > 0;
-            // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
-            // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
-            let silent = state.last_raw_chat_message_ts.is_none_or(|t| {
-                now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
-            });
-            let spike_ok = state.last_promo_viewer_spike.is_none_or(|t| {
-                now.duration_since(t).as_secs() >= state.timers.viewer_spike_cooldown_minutes * 60
-            });
-            let attempt = self.promo_attempt_allowed_inner(&state, now);
-
-            (overall, has_raw, silent, spike_ok, attempt)
+            state.clone()
         };
 
-        if !overall_ready || !has_new_raw || !chat_silent || !spike_cd_ok || !attempt_ok {
+        let overall_ready = self.overall_promo_ready_inner(&state_snapshot, now);
+        // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
+        // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
+        let chat_silent = state_snapshot.last_raw_chat_message_ts.is_none_or(|t| {
+            now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
+        });
+        let spike_cd_ok = state_snapshot.last_promo_viewer_spike.is_none_or(|t| {
+            now.duration_since(t).as_secs()
+                >= state_snapshot.timers.viewer_spike_cooldown_minutes * 60
+        });
+        let attempt_ok = self.promo_attempt_allowed_inner(&state_snapshot, now);
+        // Auch der Viewer-Spike-Pfad respektiert die eingestellten Chat-Grenzen
+        // (min_messages, Aktivitätsfenster, neue Chatter). Keine alternative
+        // Werbeschleife darf diese Grenzen umgehen; die frühere Schwelle "eine
+        // Roh-Nachricht" ist damit abgelöst.
+        let activity_ready = self
+            .promo_activity_ready_inner(login, &state_snapshot, now)
+            .await;
+
+        if !overall_ready || !activity_ready || !chat_silent || !spike_cd_ok || !attempt_ok {
             return;
         }
 
@@ -4538,13 +4556,40 @@ mod db_tests {
                 .overall_cooldown_minutes,
             90
         );
-        // Ohne eine einzige Chatnachricht wird der eigene Timer ausgespielt.
+        // Ohne Chat-Aktivität bleibt der eigene Timer still: die eingestellten
+        // Chat-Schwellen gelten auch für den Community-Kanal.
+        let now = Instant::now();
         engine
             .clone()
             .process_due_channel(
                 "community-renamed".into(),
                 COMMUNITY_BROADCASTER_ID.into(),
-                Instant::now(),
+                now,
+            )
+            .await;
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "ruhiger Chat darf keinen Timer-Spam auslösen"
+        );
+        // Erst wenn min_messages und das Aktivitätsfenster erreicht sind, sendet der Timer.
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("community-renamed".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.raw_msg_count_since_promo = 8;
+            for idx in 0..8usize {
+                state.activity.push_back((now, format!("chatter{}", idx % 2)));
+            }
+        }
+        engine
+            .clone()
+            .process_due_channel(
+                "community-renamed".into(),
+                COMMUNITY_BROADCASTER_ID.into(),
+                now,
             )
             .await;
         assert_eq!(api.announcement_count().await, 1);
@@ -4693,6 +4738,93 @@ mod db_tests {
                 .0
                 .starts_with("Unser bestehender Hinweis"),
             "Andere Kanäle bleiben unverändert"
+        );
+    }
+
+    /// Regression zum Reset-Fehler: eine echte Folgewerbung ohne neuen
+    /// Teilnehmer bleibt gesperrt. Zuvor markierte der Versand nur den
+    /// Aktivitäts-Bucket als gesehen, `get_new_chatters_in_window_inner`
+    /// zählt aber Bucket UNION Session-Viewer. Dadurch zählten API-only-Viewer
+    /// bei jeder Folgewerbung erneut als neu und öffneten die new_chatters-Grenze.
+    #[tokio::test]
+    async fn folgewerbung_ohne_neuzugang_bleibt_gesperrt() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner_channel(&pool, "reg-id", "regkanal").await;
+        // Zwei API-only-Viewer an der aktiven Session: nie im Chat, nur getrackt.
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login)
+             SELECT active_session_id, 'regkanal', v
+               FROM twitch_live_state, unnest(ARRAY['viewer_b', 'viewer_c']) AS v
+              WHERE twitch_user_id = 'reg-id'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+
+        let now = Instant::now();
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("regkanal".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            // Kleine Aktivitäts-Cooldowns, damit der Folgeversuch nicht am
+            // Cooldown, sondern an der new_chatters-Grenze hängt (der Cooldown
+            // ist getrennt getestet). new_chatters bleibt bei 2.
+            state.timers.new_chatters = 2;
+            state.timers.min_messages = PROMO_ACTIVITY_MIN_MSGS;
+            state.timers.activity_cooldown_min_minutes = 1;
+            state.timers.activity_cooldown_max_minutes = 2;
+            state.raw_msg_count_since_promo = state.timers.min_messages;
+            for _ in 0..PROMO_ACTIVITY_MIN_MSGS {
+                state.activity.push_back((now, "chatter_a".into()));
+            }
+        }
+
+        // Erste Werbung: A (Chat) plus B/C (API-Viewer) sind neu → sendebereit.
+        let snap = {
+            let state_ref = engine.channel_states.entry("regkanal".into());
+            let state = state_ref.or_insert_with(|| Mutex::new(ChannelState::new()));
+            let guard = state.lock().await;
+            guard.clone()
+        };
+        assert!(
+            engine.promo_activity_ready_inner("regkanal", &snap, now).await,
+            "erste Werbung: A, B und C zählen als neu"
+        );
+        engine
+            .mark_promo_sent("regkanal", now, "chat_activity", 0.0)
+            .await;
+
+        // Etwas später chattet nur A erneut, kein neuer Teilnehmer kommt hinzu.
+        let later = now
+            .checked_add(Duration::from_secs(5 * 60))
+            .expect("Instant + 5 min");
+        {
+            let state_ref = engine.channel_states.entry("regkanal".into());
+            let state = state_ref.or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut guard = state.lock().await;
+            guard.raw_msg_count_since_promo = guard.timers.min_messages;
+            for _ in 0..PROMO_ACTIVITY_MIN_MSGS {
+                guard.activity.push_back((later, "chatter_a".into()));
+            }
+        }
+        let snap_later = {
+            let state_ref = engine.channel_states.entry("regkanal".into());
+            let state = state_ref.or_insert_with(|| Mutex::new(ChannelState::new()));
+            let guard = state.lock().await;
+            guard.clone()
+        };
+        assert!(
+            !engine
+                .promo_activity_ready_inner("regkanal", &snap_later, later)
+                .await,
+            "Folgewerbung ohne Neuzugang bleibt gesperrt: A, B und C sind bereits gesehen"
         );
     }
 
