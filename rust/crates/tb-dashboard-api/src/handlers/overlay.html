@@ -600,7 +600,8 @@
         if (icon) {
           const image = el('img', `ov-tile ${result}`);
           image.src = icon;
-          image.alt = '';
+          image.alt = (match.hero || 'Held') + ' – ' + (result === 'win' ? 'Sieg' : 'Niederlage');
+          image.title = image.alt;
           image.decoding = 'async';
           image.loading = 'lazy';
           image.onerror = () => image.replaceWith(fallbackTile(result));
