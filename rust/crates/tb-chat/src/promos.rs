@@ -3187,8 +3187,11 @@ impl PromoEngine {
     }
 
     async fn load_recent_channel_messages(&self, login: &str, n: i64) -> Vec<String> {
-        self.load_recent_channel_messages_before(login, n, None)
-            .await
+        let mut messages = self
+            .load_recent_channel_messages_before(login, n, None)
+            .await;
+        messages.reverse();
+        messages
     }
 
     async fn load_recent_channel_messages_before(
@@ -3219,6 +3222,7 @@ impl PromoEngine {
         .await
         .unwrap_or_default();
         rows.into_iter()
+            .rev()
             .filter_map(|row| {
                 match (
                     row.try_get::<Option<String>, _>("chatter_login")
@@ -4940,6 +4944,38 @@ mod db_tests {
         assert!(recent.iter().all(|m| !m.contains("nightbot")));
         assert!(recent.iter().all(|m| !m.contains("community freut")));
         assert!(recent.iter().all(|m| !m.contains("lurker")));
+    }
+
+    #[tokio::test]
+    async fn recent_messages_lfg_chronologisch_und_anlass_neueste_zuerst() {
+        let pool = pool_or_skip!("promo_recent_lfg_order");
+        let engine = make_engine(pool.clone());
+        for index in 1..=11 {
+            sqlx::query(
+                "INSERT INTO twitch_chat_messages
+                 (streamer_login, chatter_login, message_id, message_ts, is_command, content)
+                 VALUES ('nani', 'viewer', $1, NOW() - $2 * INTERVAL '1 minute', FALSE, $3)",
+            )
+            .bind(format!("msg-{index}"))
+            .bind(12 - index)
+            .bind(format!("Zeile {index}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(
+            engine
+                .load_recent_channel_messages_before("nani", 8, Some("msg-11"))
+                .await,
+            (3..=10)
+                .map(|index| format!("viewer: Zeile {index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            engine.load_recent_channel_messages("nani", 3).await,
+            vec!["viewer: Zeile 11", "viewer: Zeile 10", "viewer: Zeile 9"]
+        );
     }
 
     // -----------------------------------------------------------------------
