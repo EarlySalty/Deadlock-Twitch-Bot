@@ -117,6 +117,10 @@ try {
   assert.equal(await evaluate("document.body.innerText.includes('SRT')"), false);
   assert.equal(await evaluate(`document.querySelector('input[aria-label="Privater Streamschlüssel für OBS: verdeckt"]').type`), 'password');
   assert.equal(await evaluate("document.body.innerText.includes('Rechte ergänzen')"), true);
+  assert.equal(await evaluate("document.body.innerText.includes('Twitch-VOD-Spur freischalten')"), true);
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="OBS-Einstellung für benutzerdefinierte VOD-Spur: sichtbar"]').value`), 'EnableCustomServerVodTrack=true');
+  assert.equal(await evaluate("document.body.innerText.includes('Audiospur') && document.body.innerText.includes('Twitch-VOD-Spur')"), true);
+  assert.equal(await evaluate("document.body.innerText.includes('Fehlt Spur 2, bleibt nur der Twitch-Ausgang angehalten')"), true);
   assert.equal(await evaluate("document.documentElement.scrollWidth > innerWidth"), false);
   await screenshot('offline-desktop');
   await writeFile(new URL('dom-offline.json', artifacts), JSON.stringify(await evaluate("({buttons:[...document.querySelectorAll('button')].map(b=>({text:b.innerText,aria:b.getAttribute('aria-label'),disabled:b.disabled})),links:[...document.querySelectorAll('a')].map(a=>({text:a.innerText,href:a.getAttribute('href')}))})"), null, 2));

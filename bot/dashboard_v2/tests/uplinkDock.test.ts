@@ -198,7 +198,7 @@ test('trennen_bleibt_bei_entzogenem_secret', () => {
   assert.equal(abgelaufen.trennenMoeglich, true);
 });
 
-test('hilfe_und_wissensbasis_zeigen_auf_schritt_5', () => {
+test('hilfe_und_wissensbasis_zeigen_auf_schritt_6', () => {
   // Beide Fassungen schicken den Streamer an die Stelle, an der die Adressen
   // wirklich stehen. Zeigen sie auf eine Karte, die es nicht mehr gibt, sucht
   // er im Dashboard nach etwas, das dort nie auftaucht.
@@ -217,7 +217,7 @@ test('hilfe_und_wissensbasis_zeigen_auf_schritt_5', () => {
     ['public/uplink/obs.html', OBS_HILFE],
     ['rust/knowledge/bot/uplink-obs.md', OBS_WISSEN],
   ] as const) {
-    assert.ok(quelle.includes('Fenster einrichten'), `${name} nennt Schritt 5 nicht beim Namen`);
-    assert.ok(quelle.includes('Schritt 5'), `${name} nennt die Schrittnummer nicht`);
+    assert.ok(quelle.includes('Fenster einrichten'), `${name} nennt Schritt 6 nicht beim Namen`);
+    assert.ok(quelle.includes('Schritt 6'), `${name} nennt die Schrittnummer nicht`);
   }
 });

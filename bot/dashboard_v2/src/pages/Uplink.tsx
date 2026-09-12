@@ -42,7 +42,7 @@ import { obsZugang, zielBetrieb } from '@/uplinkBetrieb';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 
 /**
- * Inhalt von Schritt 5 der OBS-Anleitung, "Fenster einrichten".
+ * Inhalt von Schritt 6 der OBS-Anleitung, "Fenster einrichten".
  *
  * Vier Fenster, ein Zugang: Chat mit Antwortfeld, Aktivität, Stream-Infos und
  * Kanalpunkte, jeweils für alle verbundenen Plattformen zugleich. Die Adressen
@@ -255,7 +255,7 @@ function ObsSchritt({
             </span>
             <span>
               <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
-                Schritt {nummer} von 5
+                Schritt {nummer} von 6
               </span>
               <span className="block text-sm font-bold text-white">{titel}</span>
             </span>
@@ -305,9 +305,88 @@ function obsAusgabe() {
       warum: 'Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.' },
     { feld: 'Keyframe-Intervall', wert: '2 s',
       warum: 'Die endgültigen Anforderungen prüft Uplink je Plattform und Ausgabeprofil.' },
-    { feld: 'Audio', wert: 'Live-Mix und bei Bedarf eigener VOD-Mix',
-      warum: 'Beide Mischungen müssen als getrennte Spuren ankommen. Fehlenden VOD-Ton ersetzt Uplink nicht unbemerkt durch den Live-Mix.' },
+    { feld: 'Audio', wert: 'Live-Mix auf Spur 1, Twitch-VOD auf Spur 2',
+      warum: 'Die VOD-Spur wird im nächsten Schritt ausdrücklich freigeschaltet und getrennt zu Uplink gesendet.' },
   ];
+}
+
+/**
+ * Benutzerdefinierte RTMP-Dienste blenden OBS' vorhandene Twitch-VOD-Spur
+ * standardmäßig aus. Uplink kann die lokale OBS-Einstellung nicht aus der
+ * Ferne setzen. Deshalb steht der vollständige einmalige Handgriff direkt in
+ * der Einrichtung und nicht nur in einem Hilfelink.
+ */
+function ObsVodTrackEinrichtung() {
+  return (
+    <>
+      <div className="rounded-xl border border-primary/30 bg-primary/10 px-3 py-3 text-xs text-white">
+        <strong>Wenn „Twitch-VOD-Spur“ in OBS bereits sichtbar ist:</strong>{' '}
+        Überspringe die Dateiänderung und stelle unten direkt Live auf Spur 1 und VOD auf Spur 2.
+      </div>
+
+      <ol className="space-y-3 text-xs text-text-secondary">
+        <li className="space-y-1">
+          <strong className="block text-white">1. OBS vollständig beenden</strong>
+          <span>Auch das OBS-Symbol im Infobereich/Tray schließen. Sonst kann OBS die Datei beim Beenden wieder überschreiben.</span>
+        </li>
+        <li className="space-y-2">
+          <strong className="block text-white">2. Die Datei user.ini öffnen</strong>
+          <p>Unter Windows: <Feld>Win + R</Feld> drücken, <code className="font-mono text-white">%APPDATA%\obs-studio</code> eingeben und <code className="font-mono text-white">user.ini</code> mit einem Texteditor öffnen. Standardpfade:</p>
+          <dl className="grid gap-1 rounded-xl border border-border bg-background/65 px-3 py-2 font-mono text-[11px] text-white">
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">Windows</dt>
+              <dd className="break-all">%APPDATA%\obs-studio\user.ini</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">macOS</dt>
+              <dd className="break-all">~/Library/Application Support/obs-studio/user.ini</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">Linux</dt>
+              <dd className="break-all">~/.config/obs-studio/user.ini</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">Flatpak</dt>
+              <dd className="break-all">~/.var/app/com.obsproject.Studio/config/obs-studio/user.ini</dd>
+            </div>
+          </dl>
+          <p>Bei Portable-OBS liegt <code className="font-mono text-white">user.ini</code> im verwendeten lokalen OBS-Konfigurationsordner.</p>
+        </li>
+        <li className="space-y-2">
+          <strong className="block text-white">3. Unter dem vorhandenen Abschnitt [General] diese Zeile ergänzen</strong>
+          <CopyField
+            label="OBS-Einstellung für benutzerdefinierte VOD-Spur"
+            value="EnableCustomServerVodTrack=true"
+            privat={false}
+            darfAufdecken
+            grundVerdeckt=""
+          />
+          <p className="text-warning">
+            Keinen zweiten <code className="font-mono text-white">[General]</code>-Block anlegen. Die Zeile gehört in den bereits vorhandenen Abschnitt.
+          </p>
+        </li>
+        <li className="space-y-1">
+          <strong className="block text-white">4. OBS neu starten und die beiden Streaming-Spuren auswählen</strong>
+          <p>
+            <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg> <Weg>Stream</Weg>. Setze <Feld>Audiospur</Feld> auf <strong className="text-white">1</strong>{' '}
+            und <Feld>Twitch-VOD-Spur</Feld> auf <strong className="text-white">2</strong>.
+          </p>
+        </li>
+        <li className="space-y-1">
+          <strong className="block text-white">5. Audioquellen den beiden Mischungen zuordnen</strong>
+          <p>
+            In <Feld>Erweiterte Audioeigenschaften</Feld> ist Spur 1 der Livestream. Spur 2 ist das Twitch-VOD.
+            Quellen, die nicht im VOD landen sollen – zum Beispiel Musik – bekommen nur Spur 1.
+          </p>
+        </li>
+      </ol>
+
+      <div role="note" className="rounded-xl border border-success/30 bg-success/10 px-3 py-2.5 text-xs text-white">
+        <strong>Uplink prüft das beim nächsten Stream:</strong>{' '}
+        Es müssen zwei verschiedene AAC-Spuren ankommen. Fehlt Spur 2, bleibt nur der Twitch-Ausgang angehalten; der Live-Mix wird nicht als VOD-Ersatz verwendet.
+      </div>
+    </>
+  );
 }
 
 /**
@@ -944,11 +1023,11 @@ export function UplinkPage() {
                       </div>
                       <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
                       <p className="mt-1 text-sm text-text-secondary">
-                        Fünf kurze Schritte. Die Serveradresse ist direkt in Schritt 2.
+                        Sechs kurze Schritte. Die Twitch-VOD-Spur wird ausdrücklich mit eingerichtet.
                       </p>
                     </div>
                     <span className="rounded-full border border-border bg-background/60 px-3 py-1 text-xs font-semibold text-text-secondary">
-                      5 Schritte
+                      6 Schritte
                     </span>
                   </div>
 
@@ -1004,14 +1083,20 @@ export function UplinkPage() {
                           </div>
                         ))}
                       </dl>
-                      <p className="mt-3 text-xs text-warning">
-                        Fehlt bei „Benutzerdefiniert“ die VOD-Tonspur, benötigt OBS eine globale Einstellung.
-                        {' '}<a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">Einrichtung der zweiten Tonspur</a>.
-                        {' '}Ein Profilimport allein aktiviert sie nicht.
+                      <p className="mt-3 text-xs text-text-secondary">
+                        Die VOD-Spur richtest du direkt im nächsten Schritt ein. Bei „Benutzerdefiniert“ blendet OBS dieses Feld sonst oft aus.
                       </p>
                     </ObsSchritt>
 
-                    <ObsSchritt nummer={5} titel="Fenster einrichten">
+                    <ObsSchritt nummer={5} titel="Twitch-VOD-Spur freischalten" offenStart>
+                      <ObsVodTrackEinrichtung />
+                      <p className="text-xs text-text-secondary">
+                        Mehr Hintergrund findest du in der{' '}
+                        <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">OBS-Hilfe zur VOD-Spur</a>.
+                      </p>
+                    </ObsSchritt>
+
+                    <ObsSchritt nummer={6} titel="Fenster einrichten">
                       <DockSchrittInhalt me={data} />
                     </ObsSchritt>
                   </ol>
