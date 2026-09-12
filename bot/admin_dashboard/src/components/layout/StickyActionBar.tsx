@@ -6,6 +6,7 @@ interface StickyActionBarProps {
   onSave: () => void;
   onDiscard: () => void;
   saving?: boolean;
+  sticky?: boolean;
   children?: ReactNode;
 }
 
@@ -15,10 +16,11 @@ export function StickyActionBar({
   onSave,
   onDiscard,
   saving = false,
+  sticky = true,
   children,
 }: StickyActionBarProps) {
   return (
-    <div className="sticky bottom-0 z-20 pt-4">
+    <div className={sticky ? "sticky bottom-0 z-20 pt-4" : "pt-4"}>
       <div className="glass rounded-[1.6rem] border border-white/10 px-4 py-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="text-sm text-text-secondary">

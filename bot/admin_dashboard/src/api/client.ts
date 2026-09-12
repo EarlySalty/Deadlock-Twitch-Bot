@@ -16,6 +16,7 @@ import type {
   CreateChangelogEntryPayload,
   ConfigOverview,
   PromoTimerSettings,
+  CommunityAnnouncements,
   DatabaseStatsResponse,
   DisconnectBotResult,
   DisconnectBotUnmodOutcome,
@@ -815,6 +816,7 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
   const csrfToken = cacheCsrfToken(readString(payload, 'csrfToken', 'csrf_token')) || undefined;
   return {
     promo: coerceRecord(payload.promo),
+    communityAnnouncements: payload.communityAnnouncements as CommunityAnnouncements | undefined,
     timerSettings: payload.timerSettings as PromoTimerSettings | undefined,
     raids: parseRaidSnapshot(coerceRecord(payload.raids)),
     chat: parseChatSnapshot(coerceRecord(payload.chat)),
@@ -826,6 +828,10 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
 
 export function fetchGlobalBans(): Promise<GlobalBanAdminData> {
   return admin<GlobalBanAdminData>('/global-bans');
+}
+
+export function updateCommunityAnnouncements(body: CommunityAnnouncements): Promise<{ communityAnnouncements: CommunityAnnouncements }> {
+  return postAdminJson('/config/community-announcements', body);
 }
 
 export function updatePromoTimers(body: PromoTimerSettings): Promise<{ timerSettings: PromoTimerSettings }> {

@@ -109,6 +109,7 @@ pub async fn config_overview_handler(
 
     Ok(Json(json!({
         "promo": evaluation.to_json(),
+        "communityAnnouncements": tb_analytics::community_announcements::load(&pool).await.map_err(db_error)?,
         "timerSettings": tb_analytics::promo_timers::load(&pool).await.map_err(db_error)?,
         "raids": raids,
         "chat": snaps.chat_snapshot(),
@@ -285,6 +286,7 @@ mod tests {
         .unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('a', 'a', 'active')")
             .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../../../../migrations/20260912190000_community_announcements.sql")).execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_promo_timer_settings (singleton boolean PRIMARY KEY, settings jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -525,5 +527,127 @@ mod promo_timer_tests {
             invalid.err().unwrap().into_response().status(),
             StatusCode::BAD_REQUEST
         );
+    }
+}
+
+pub async fn config_community_announcements_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
+    }
+    let mut payload = parse_object_body(&body)?;
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("csrf_token");
+    }
+    let value: tb_analytics::community_announcements::CommunityAnnouncements =
+        serde_json::from_value(payload)
+            .map_err(|_| ApiError::bad_request("Ungültige Ankündigungen."))?;
+    value.validate().map_err(ApiError::bad_request)?;
+    let saved = tb_analytics::community_announcements::save(&pool, &value)
+        .await
+        .map_err(db_error)?;
+    match saved {
+        Some(saved) => Ok((
+            axum::http::StatusCode::OK,
+            Json(json!({"communityAnnouncements": saved})),
+        )),
+        None => Ok((
+            axum::http::StatusCode::CONFLICT,
+            Json(
+                json!({"error":"revision_conflict", "message":"Die Ankündigungen wurden inzwischen geändert. Bitte neu laden und die Änderungen erneut übernehmen."}),
+            ),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod community_announcement_tests {
+    use super::*;
+    use axum::{body::Bytes, http::StatusCode};
+    use tb_analytics::community_announcements::load;
+
+    #[tokio::test]
+    async fn community_announcements_write_reload_conflict_validation_and_admin() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260912190000_community_announcements.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let settings = load(&db.pool).await.unwrap();
+        assert_eq!(settings.entries.len(), 3);
+        assert!(settings.entries.iter().all(|entry| entry.enabled));
+        let mut body = serde_json::to_value(settings).unwrap();
+        body["csrf_token"] = json!("test-only");
+        body["entries"][0]["text"] = json!("Geänderter Testtext {invite}");
+        body["entries"][1]["enabled"] = json!(false);
+        let response = config_community_announcements_handler(
+            DashboardAuthLevel::admin(),
+            State(db.pool.clone()),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = load(&db.pool).await.unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.entries[0].text, "Geänderter Testtext {invite}");
+        assert!(!saved.entries[1].enabled);
+        let response = config_community_announcements_handler(
+            DashboardAuthLevel::admin(),
+            State(db.pool.clone()),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        body["revision"] = json!(1);
+        body["entries"][0]["text"] = json!("{unknown}");
+        let response = config_community_announcements_handler(
+            DashboardAuthLevel::admin(),
+            State(db.pool.clone()),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await
+        .err()
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let denied = config_community_announcements_handler(
+            DashboardAuthLevel::Partner {
+                twitch_login: "dach_lock".into(),
+                twitch_user_id: "1367527782".into(),
+                display_name: "dach_lock".into(),
+            },
+            State(db.pool.clone()),
+            Bytes::from("{}"),
+        )
+        .await
+        .err()
+        .unwrap()
+        .into_response();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        use tower::ServiceExt;
+        let router = crate::build_admin_config_router(db.pool.clone(), String::new());
+        let denied = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/twitch/api/admin/config/community-announcements")
+                    .header("host", "dashboard.example.com")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(load(&db.pool).await.unwrap().revision, 1);
     }
 }

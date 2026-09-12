@@ -23,7 +23,7 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   engagement: 'Engagement AI',
   chat: 'Chat Actions',
   content: 'Content & Comms',
-  announcements: 'Announcements',
+  announcements: 'Ankündigungen',
   roadmap: 'Roadmap',
   'caster-overlay': 'Caster-Overlay',
   changelog: 'Changelog',
@@ -139,9 +139,9 @@ export function TopBar({ auth }: TopBarProps) {
   }
 
   return (
-    <header className="glass sticky top-4 z-20 rounded-[1.8rem] px-5 py-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)_auto] lg:items-center">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+    <header className={`glass ${location.pathname.endsWith('/content/announcements') ? 'lg:sticky' : 'sticky'} top-4 z-20 rounded-[1.8rem] px-5 py-4`}>
+      <div className={`grid gap-4 lg:items-center ${location.pathname.endsWith('/content/announcements') ? 'lg:grid-cols-[minmax(0,1fr)_auto]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)_auto]'}`}>
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-secondary ${location.pathname.endsWith('/content/announcements') ? 'lg:col-span-2' : ''}`}>
           {breadcrumbs.map((crumb, index) => (
             <div key={crumb.to} className="flex items-center gap-2">
               {index > 0 ? <ChevronRight className="h-4 w-4" /> : null}

@@ -51,6 +51,7 @@ import {
   updateChatConfig,
   updatePromoConfig,
   updatePromoTimers,
+  updateCommunityAnnouncements,
   updateRaidConfig,
   verifyStreamer,
 } from '@/api/client';
@@ -531,6 +532,14 @@ export function useChatConfigMutation() {
       void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-streamer-detail'] });
     },
+  });
+}
+
+export function useCommunityAnnouncementsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateCommunityAnnouncements,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] }),
   });
 }
 
