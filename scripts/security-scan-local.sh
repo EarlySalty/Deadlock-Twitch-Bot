@@ -75,8 +75,11 @@ fi
 
 RUST_CHANGED=1
 CHANGED_FILES=""
+SCAN_REF="HEAD"
 if [ ! -t 0 ]; then
+  STDIN_DATA=$(cat)
   CHANGED_FILES=$(
+    printf '%s\n' "$STDIN_DATA" |
     while read -r _local_ref local_sha _remote_ref remote_sha; do
       [ -n "${local_sha:-}" ] || continue
       [ "$local_sha" != "0000000000000000000000000000000000000000" ] || continue
@@ -87,6 +90,18 @@ if [ ! -t 0 ]; then
       fi
     done
   )
+  _scan_ref=$(
+    printf '%s\n' "$STDIN_DATA" |
+    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+      [ -n "${local_sha:-}" ] || continue
+      [ "$local_sha" != "0000000000000000000000000000000000000000" ] || continue
+      printf '%s\n' "$local_sha"
+      break
+    done
+  )
+  if [ -n "$_scan_ref" ]; then
+    SCAN_REF="$_scan_ref"
+  fi
   if [ -n "$CHANGED_FILES" ]; then
     if ! printf '%s\n' "$CHANGED_FILES" | grep -qE '\.(rs)$|^Cargo\.(toml|lock)$|^rust/'; then
       RUST_CHANGED=0
@@ -105,6 +120,12 @@ forbidden=$(git ls-files | grep -E '(^|/)(\.env(\..*)?|id_rsa|id_dsa|machine_aut
 if [ -n "$forbidden" ]; then
   block "versionierte Secret-Dateien:"
   printf '%s\n' "$forbidden"
+fi
+
+SCAN_DIR=$(mktemp -d)
+trap 'rm -rf "$SCAN_DIR"' EXIT
+if ! git -C "$ROOT" archive "$SCAN_REF" | tar -x -C "$SCAN_DIR"; then
+  block "getrackten Stand ($SCAN_REF) nicht entpackt"
 fi
 
 if need gitleaks; then
@@ -127,7 +148,7 @@ paths = [
 ]
 targetRules = ["generic-api-key"]
 EOF
-  gitleaks_args=(detect --source "$ROOT" --no-git --no-banner --redact --exit-code 1 --config "$gitleaks_cfg")
+  gitleaks_args=(detect --source "$SCAN_DIR" --no-git --no-banner --redact --exit-code 1 --config "$gitleaks_cfg")
   if gitleaks "${gitleaks_args[@]}"; then
     pass "gitleaks"
   else
@@ -185,7 +206,7 @@ if need trivy; then
   else
     trivy_args+=(--exit-code 0)
   fi
-  if trivy "${trivy_args[@]}" "$ROOT"; then
+  if trivy "${trivy_args[@]}" "$SCAN_DIR"; then
     pass "trivy"
   else
     soft_fail "trivy"
