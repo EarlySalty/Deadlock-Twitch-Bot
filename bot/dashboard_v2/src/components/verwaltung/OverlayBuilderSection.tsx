@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { flushSync } from 'react-dom';
 import { motion } from 'framer-motion';
 import { Check, Copy, Maximize, Minimize, RectangleHorizontal, X } from 'lucide-react';
 import { OverlayCanvasGuides } from './OverlayCanvasGuides';
@@ -225,7 +226,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [marquee, setMarquee] = useState<OverlaySource | null>(null);
   const marqueeRef = useRef<MarqueeState | null>(null);
   const sceneRef = useRef({ sources, modules });
-  useEffect(() => { sceneRef.current = { sources, modules }; }, [sources, modules]);
+  useLayoutEffect(() => { sceneRef.current = { sources, modules }; }, [sources, modules]);
   const [activeSource, setActiveSource] = useState<ModuleKey | null>(null);
   const [touchSource, setTouchSource] = useState<ModuleKey | null>(null);
   const [previewHostWidth, setPreviewHostWidth] = useState(560);
@@ -251,9 +252,20 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const outputIframeRef = useRef<HTMLIFrameElement>(null);
   const expandedPreview = theaterMode || fullscreen;
 
+  const endGesture = useCallback(() => {
+    const active = dragRef.current || marqueeRef.current;
+    dragRef.current = null;
+    marqueeRef.current = null;
+    setMarquee(null);
+    setSnapHits([]);
+    setActiveSource(null);
+    if (active?.target.hasPointerCapture(active.pointerId)) active.target.releasePointerCapture(active.pointerId);
+  }, []);
+
   const toggleFullscreen = async () => {
     const panel = previewPanelRef.current;
     if (!panel || fullscreenPendingRef.current) return;
+    endGesture();
     fullscreenPendingRef.current = true;
     setFullscreenNotice('');
     try {
@@ -285,6 +297,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     if (!panel) return;
     let wasFullscreen = document.fullscreenElement === panel;
     const updateFullscreen = () => {
+      endGesture();
       const active = document.fullscreenElement === panel;
       setFullscreen(active);
       if (wasFullscreen && !active) {
@@ -295,7 +308,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     };
     document.addEventListener('fullscreenchange', updateFullscreen);
     return () => document.removeEventListener('fullscreenchange', updateFullscreen);
-  }, [normalizedLogin]);
+  }, [endGesture, normalizedLogin]);
 
   const syncPreview = () => {
     iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
@@ -408,13 +421,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     const handlePointerUp = (event: PointerEvent) => {
       const drag = dragRef.current || marqueeRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
-      dragRef.current = null;
       lastPointer = null;
-      marqueeRef.current = null;
-      setMarquee(null);
-      setSnapHits([]);
-      setActiveSource(null);
-      if (drag.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
+      endGesture();
     };
     const handleAlt = (event: KeyboardEvent) => {
       if (event.key === 'Alt' && lastPointer && dragRef.current?.mode === 'move') {
@@ -440,12 +448,9 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       window.removeEventListener('keydown', handleAlt);
       window.removeEventListener('keyup', handleAlt);
       window.removeEventListener('blur', handleBlur);
-      const drag = dragRef.current || marqueeRef.current;
-      dragRef.current = null;
-      marqueeRef.current = null;
-      if (drag?.target.hasPointerCapture(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
+      endGesture();
     };
-  }, [canvasHeight, canvasWidth]);
+  }, [canvasHeight, canvasWidth, endGesture]);
 
   const overlayUrl = useMemo(() => {
     const origin = typeof window === 'undefined' ? '' : window.location.origin;
@@ -556,8 +561,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     if (event.button !== 0 || dragRef.current || marqueeRef.current) return;
     event.preventDefault();
     event.stopPropagation();
-    previewPanelRef.current?.focus({ preventScroll: true });
-    const source = sources[key] || DEFAULT_CANVAS_SOURCES[key];
+    // Blur commits numeric drafts (including canvas dimensions). Finish that render
+    // before capturing geometry; otherwise the first pointermove restores stale values.
+    flushSync(() => previewPanelRef.current?.focus({ preventScroll: true }));
+    const currentSources = sceneRef.current.sources;
+    const source = currentSources[key] || DEFAULT_CANVAS_SOURCES[key];
     const bounds = editorRef.current?.getBoundingClientRect();
     if (!bounds) return;
     const additive = event.ctrlKey || event.metaKey || event.shiftKey;
@@ -578,8 +586,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       startX: event.clientX,
       startY: event.clientY,
       source,
-      members: keys.map(member => ({ key: member, source: sources[member] })),
-      targets: MODULES.filter(({ key: other }) => modules[other] && !keys.includes(other)).map(({ key: other }) => sources[other]),
+      members: keys.map(member => ({ key: member, source: currentSources[member] })),
+      targets: MODULES.filter(({ key: other }) => modules[other] && !keys.includes(other)).map(({ key: other }) => currentSources[other]),
     };
   };
 
@@ -735,6 +743,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         if (event.key === 'Escape' && !event.altKey && expandedPreview) {
           // Native Auswahlmenüs verarbeiten Escape zuerst; geschlossener Feldfokus sperrt den Ausstieg nicht.
           if (target instanceof HTMLSelectElement && CSS.supports('selector(select:open)') && target.matches(':open')) return;
+          endGesture();
           event.preventDefault();
           event.stopPropagation();
           if (fullscreen) void toggleFullscreen();
@@ -746,13 +755,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         }
         if (target.isContentEditable || target.closest('input, select, textarea, [role="textbox"]')) return;
         if (event.key === 'Escape' && !event.altKey) {
-          const active = dragRef.current || marqueeRef.current;
-          dragRef.current = null;
-          marqueeRef.current = null;
-          if (active?.target.hasPointerCapture(active.pointerId)) active.target.releasePointerCapture(active.pointerId);
-          setMarquee(null);
-          setSnapHits([]);
-          setActiveSource(null);
+          endGesture();
           setSelectedSources([]);
           setTouchSource(null);
           previewPanelRef.current?.focus({ preventScroll: true });
@@ -761,6 +764,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         if (event.key.toLowerCase() === 't' && event.altKey && !fullscreen) {
           event.preventDefault();
           event.stopPropagation();
+          endGesture();
           setFullscreenNotice('');
           setTheaterMode(current => !current);
           previewPanelRef.current?.focus({ preventScroll: true });
@@ -817,13 +821,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 <button type="button" aria-label="Magnet" aria-pressed={magnetEnabled} onClick={() => { magnetRef.current = !magnetEnabled; setMagnetEnabled(!magnetEnabled); setSnapHits([]); }} className="min-h-11 rounded-lg border border-border px-3 text-xs text-primary aria-pressed:border-primary aria-pressed:bg-primary/10">Magnet {magnetEnabled ? 'an' : 'aus'}</button>
               </>}
               <select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select>
-              <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
+              <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { endGesture(); setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
                 <RectangleHorizontal aria-hidden="true" className="h-5 w-5" />
               </button>
               <button type="button" title={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-label={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-keyshortcuts="f" aria-pressed={fullscreen} onClick={() => void toggleFullscreen()} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
                 {fullscreen ? <Minimize aria-hidden="true" className="h-5 w-5" /> : <Maximize aria-hidden="true" className="h-5 w-5" />}
               </button>
-              {expandedPreview && <button type="button" title={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} aria-label={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} onClick={() => { if (fullscreen) void toggleFullscreen(); else { setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
+              {expandedPreview && <button type="button" title={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} aria-label={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} onClick={() => { endGesture(); if (fullscreen) void toggleFullscreen(); else { setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
             </div>
           </div>
           {fullscreenNotice && <p role="status" className="shrink-0 text-xs text-text-secondary">{fullscreenNotice}</p>}
