@@ -286,7 +286,7 @@ mod tests {
         .unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('a', 'a', 'active')")
             .execute(&pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../../../../migrations/20260912190000_community_announcements.sql")).execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../../../../migrations/20260912204500_community_announcements.sql")).execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_promo_timer_settings (singleton boolean PRIMARY KEY, settings jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -573,7 +573,7 @@ mod community_announcement_tests {
     async fn community_announcements_write_reload_conflict_validation_and_admin() {
         let db = crate::test_postgres::TestPostgres::start().await;
         sqlx::raw_sql(include_str!(
-            "../../../../migrations/20260912190000_community_announcements.sql"
+            "../../../../migrations/20260912204500_community_announcements.sql"
         ))
         .execute(&db.pool)
         .await

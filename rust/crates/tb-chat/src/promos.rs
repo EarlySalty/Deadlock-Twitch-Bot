@@ -4505,7 +4505,7 @@ mod db_tests {
         .await
         .unwrap();
         sqlx::raw_sql(include_str!(
-            "../../../migrations/20260912190000_community_announcements.sql"
+            "../../../migrations/20260912204500_community_announcements.sql"
         ))
         .execute(&pool)
         .await
