@@ -543,7 +543,7 @@
     const foreground = hexColor('text');
     const background = hexColor('background');
     if (accent) { card.style.setProperty('--accent', accent); card.style.setProperty('--accent-line', accent); }
-    if (foreground) card.style.setProperty('--fg', foreground);
+    if (foreground) { card.style.setProperty('--fg', foreground); card.style.setProperty('--muted', foreground); }
     if (background) { const rgb = [1, 3, 5].map(i => parseInt(background.slice(i, i + 2), 16)); card.style.setProperty('--bg', 'rgba(' + rgb.join(',') + ',' + opacity / 100 + ')'); }
     card.style.setProperty('--radius', clampInt('radius', 0, 32, 18) + 'px');
     function fitViewport() {
@@ -806,6 +806,17 @@
         if (flags.live && data.live === true) seg.appendChild(el('span', 'ov-live-dot'));
         seg.appendChild(el('span', 'ov-seg-value', streamer));
         bar.appendChild(seg);
+      }
+
+      if (flags.live && data.live === true) {
+        const seg = el('div', 'ov-seg');
+        const live = el('div', 'ov-live');
+        if (!flags.header) live.appendChild(el('span', 'ov-live-dot'));
+        const details = [];
+        if (data.hero) details.push(data.hero);
+        if (isNumber(data.minutes)) details.push(data.minutes + '′');
+        live.appendChild(el('span', null, details.length ? 'LIVE · ' + details.join(' · ') : 'LIVE'));
+        seg.appendChild(live); bar.appendChild(seg);
       }
 
       for (const mod of activeModules(data)) {
