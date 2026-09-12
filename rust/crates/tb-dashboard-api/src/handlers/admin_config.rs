@@ -9,6 +9,7 @@
 //! über `DashboardAuthLevel`. updated_by = "admin" (Rust-Auth ohne
 //! Discord-User-ID, = Pythons Fallback).
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{
     extract::{Query, State},
     response::IntoResponse,
@@ -18,7 +19,6 @@ use chrono::SecondsFormat;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 use tb_analytics::admin_config::{
@@ -109,6 +109,7 @@ pub async fn config_overview_handler(
 
     Ok(Json(json!({
         "promo": evaluation.to_json(),
+        "timerSettings": tb_analytics::promo_timers::load(&pool).await.map_err(db_error)?,
         "raids": raids,
         "chat": snaps.chat_snapshot(),
         // announcements = Promo-Config-Sub-Objekt (Python promo.get("config", {})).
@@ -275,7 +276,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE twitch_global_promo_modes (\
                 config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
-                custom_message TEXT, starts_at TEXT, ends_at TEXT, \
+                custom_message TEXT, starts_at TEXT, ends_at TEXT, announcement_color TEXT NOT NULL DEFAULT 'purple', \
                 is_enabled INTEGER NOT NULL DEFAULT 0, \
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
         )
@@ -283,6 +284,8 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('a', 'a', 'active')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_promo_timer_settings (singleton boolean PRIMARY KEY, settings jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -296,14 +299,21 @@ mod tests {
 
     #[tokio::test]
     async fn raids_unauth_auth_required_401() {
-        let Some(pool) = make_pool("t_acfg_raids_unauth").await else { return };
-        let (s, _) = body_json(config_raids_handler(DashboardAuthLevel::None, State(pool), Bytes::from("{}")).await).await;
+        let Some(pool) = make_pool("t_acfg_raids_unauth").await else {
+            return;
+        };
+        let (s, _) = body_json(
+            config_raids_handler(DashboardAuthLevel::None, State(pool), Bytes::from("{}")).await,
+        )
+        .await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn raids_validation_und_scope() {
-        let Some(pool) = make_pool("t_acfg_raids_val").await else { return };
+        let Some(pool) = make_pool("t_acfg_raids_val").await else {
+            return;
+        };
         // fehlende bools → validation_failed.
         let (s, _) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(r#"{"scope":"active"}"#)).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -316,7 +326,9 @@ mod tests {
 
     #[tokio::test]
     async fn raids_happy_setzt_und_snapshot() {
-        let Some(pool) = make_pool("t_acfg_raids_ok").await else { return };
+        let Some(pool) = make_pool("t_acfg_raids_ok").await else {
+            return;
+        };
         let body = r#"{"raid_bot_enabled":true,"live_ping_enabled":false,"scope":"active"}"#;
         let (s, j) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(body)).await).await;
         assert_eq!(s, StatusCode::OK);
@@ -333,7 +345,9 @@ mod tests {
 
     #[tokio::test]
     async fn overview_aggregiert_promo_raids_chat() {
-        let Some(pool) = make_pool("t_acfg_overview").await else { return };
+        let Some(pool) = make_pool("t_acfg_overview").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_raid_history \
                 (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, reason, success) \
@@ -366,7 +380,9 @@ mod tests {
 
     #[tokio::test]
     async fn chat_happy_setzt_silent() {
-        let Some(pool) = make_pool("t_acfg_chat_ok").await else { return };
+        let Some(pool) = make_pool("t_acfg_chat_ok").await else {
+            return;
+        };
         let body = r#"{"silent_ban":true,"silent_raid":true,"scope":"active"}"#;
         let (s, j) = body_json(config_chat_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(body)).await).await;
         assert_eq!(s, StatusCode::OK);
@@ -375,5 +391,56 @@ mod tests {
         let v: i32 = sqlx::query_scalar("SELECT silent_ban FROM twitch_partners WHERE twitch_user_id='a'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(v, 1);
+    }
+}
+
+pub async fn config_promo_timers_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(err) = crate::auth::require_admin(&auth) {
+        return Err(err);
+    }
+    let settings: tb_analytics::promo_timers::PromoTimerSettings = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::bad_request_with_body(json!({"error":"validation_failed","message":"Bitte alle Timerwerte als ganze Zahlen angeben."})))?;
+    settings.validate().map_err(|message| {
+        ApiError::bad_request_with_body(json!({"error":"validation_failed","message":message}))
+    })?;
+    tb_analytics::promo_timers::save(&pool, &settings)
+        .await
+        .map_err(db_error)?;
+    Ok(Json(json!({"timerSettings": settings})))
+}
+
+#[cfg(test)]
+mod promo_timer_tests {
+    use super::*;
+    use axum::{body::Bytes, http::StatusCode};
+    #[tokio::test]
+    async fn timer_writes_require_admin_and_validate_before_db() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/unused_timer_test")
+            .unwrap();
+        let denied = config_promo_timers_handler(
+            DashboardAuthLevel::None,
+            State(pool.clone()),
+            Bytes::from("{}"),
+        )
+        .await;
+        assert_eq!(
+            denied.err().unwrap().into_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let invalid = config_promo_timers_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Bytes::from("{}"),
+        )
+        .await;
+        assert_eq!(
+            invalid.err().unwrap().into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 }

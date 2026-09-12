@@ -13,6 +13,7 @@ pub mod affiliate_commission;
 pub mod affiliate_gutschrift;
 pub mod affiliate_pii;
 pub mod admin_config;
+pub mod promo_timers;
 pub mod admin_streamers;
 pub mod ai_analysis;
 pub mod ai_history;
