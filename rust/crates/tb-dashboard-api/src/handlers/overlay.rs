@@ -145,11 +145,14 @@ struct SteamMatch {
     player_deaths: i64,
     #[serde(default)]
     player_assists: i64,
-    /// Deadlock-`ECitadelGameMode`-Diskriminator: 1 = Normal/Standard,
+    /// Deadlock-`ECitadelGameMode`-Diskriminator: 1 = Normal,
     /// 4 = StreetBrawl. Andere Werte (Test/Sandbox/NYC/Internal) bleiben dem
-    /// `all`-Modus vorbehalten. `match_mode` ist NICHT der Diskriminator.
+    /// `all`-Modus vorbehalten. Standard/Ranked trennt zusätzlich `match_mode`.
     #[serde(default)]
     game_mode: Option<i64>,
+    /// `ECitadelMatchMode`: 1 = Unranked, 4 = Ranked (Steam-GC/API).
+    #[serde(default)]
+    match_mode: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -614,11 +617,12 @@ fn rank_badge_url(badge: Option<i64>) -> Option<String> {
     ))
 }
 
-/// Normalisiert den Spielmodus-Param auf `all`, `standard` oder `brawl`.
+/// Normalisiert den Spielmodus-Param auf `all`, `standard`, `ranked` oder `brawl`.
 /// Unbekanntes/leeres → `all` (keine Filterung).
 fn normalize_mode(mode: Option<&str>) -> &'static str {
     match mode.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
         Some("standard") => "standard",
+        Some("ranked") => "ranked",
         Some("brawl") => "brawl",
         _ => "all",
     }
@@ -626,12 +630,17 @@ fn normalize_mode(mode: Option<&str>) -> &'static str {
 
 /// Reduziert die Match-Liste auf den gewählten Spielmodus, BEVOR Stats berechnet
 /// werden. `brawl` → nur Street Brawl (`game_mode == Some(4)`); `standard` →
-/// Normal (`game_mode == Some(1)`) und alte Matches ohne Modus;
-/// explizite Test-/Sandbox-Modi gehören nicht zu Standard. `all` → unverändert.
+/// Normal + Unranked; `ranked` → Normal + Ranked. Fehlende Kennungen und
+/// private Lobbys/Testmodi zählen nur unter `all` (unverändert).
+/// Kennungen: SteamDatabase/Protobufs, deadlock/citadel_gcmessages_common.proto,
+/// ECitadelGameMode und ECitadelMatchMode; öffentliche Match-History liefert Zahlen.
 /// Wirkt nur auf match-abgeleitete
 /// Stats, nicht auf rank/mmr-trend/live.
 fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
     const STREET_BRAWL: i64 = 4;
+    const NORMAL: i64 = 1;
+    const UNRANKED: i64 = 1;
+    const RANKED: i64 = 4;
     match mode {
         "brawl" => matches
             .iter()
@@ -640,7 +649,12 @@ fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
             .collect(),
         "standard" => matches
             .iter()
-            .filter(|entry| matches!(entry.game_mode, None | Some(1)))
+            .filter(|entry| entry.game_mode == Some(NORMAL) && entry.match_mode == Some(UNRANKED))
+            .cloned()
+            .collect(),
+        "ranked" => matches
+            .iter()
+            .filter(|entry| entry.game_mode == Some(NORMAL) && entry.match_mode == Some(RANKED))
             .cloned()
             .collect(),
         _ => matches.to_vec(),
@@ -812,7 +826,7 @@ fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
         .collect()
 }
 
-/// `GET /twitch/api/v2/public/overlay?streamer=<login>&mode=<all|standard|brawl>`
+/// `GET /twitch/api/v2/public/overlay?streamer=<login>&mode=<all|standard|ranked|brawl>`
 pub async fn overlay_api_handler(
     State(pool): State<PgPool>,
     Query(query): Query<OverlayQuery>,
@@ -911,14 +925,16 @@ mod tests {
             player_deaths: deaths,
             player_assists: assists,
             game_mode: None,
+            match_mode: None,
         }
     }
 
     /// Wie `sm`, aber mit explizitem `game_mode` (Deadlock-Diskriminator,
-    /// 1 = Standard, 4 = Street Brawl).
+    /// 1 = Normal, 4 = Street Brawl) in öffentlicher Unranked-Queue.
     fn sm_mode(result: Option<i64>, game_mode: Option<i64>, hero: &str) -> SteamMatch {
         SteamMatch {
             game_mode,
+            match_mode: Some(1),
             ..sm(result, false, 0, hero, 0, 0, 0)
         }
     }
@@ -1141,6 +1157,7 @@ mod tests {
         assert_eq!(normalize_mode(Some("standard")), "standard");
         assert_eq!(normalize_mode(Some("  BRAWL ")), "brawl");
         assert_eq!(normalize_mode(Some("Standard")), "standard");
+        assert_eq!(normalize_mode(Some(" Ranked ")), "ranked");
         assert_eq!(normalize_mode(Some("all")), "all");
         assert_eq!(normalize_mode(Some("unsinn")), "all");
         assert_eq!(normalize_mode(Some("")), "all");
@@ -1153,8 +1170,20 @@ mod tests {
             sm_mode(Some(1), Some(1), "Haze"),     // Standard
             sm_mode(Some(0), Some(4), "Abrams"),   // Brawl -> raus
             sm_mode(Some(1), Some(1), "Vindicta"), // Standard
-            sm_mode(Some(0), None, "Seven"),       // unbekannt -> zählt als Standard
+            sm_mode(Some(0), None, "Seven"),       // unbekannt -> raus
             sm_mode(Some(1), Some(2), "Sandbox"),  // expliziter anderer Modus -> raus
+            SteamMatch {
+                match_mode: Some(4),
+                ..sm_mode(Some(1), Some(1), "Ranked")
+            },
+            SteamMatch {
+                match_mode: Some(2),
+                ..sm_mode(Some(1), Some(1), "Privat")
+            },
+            SteamMatch {
+                match_mode: None,
+                ..sm_mode(Some(1), Some(1), "Unbekannt")
+            },
         ];
         let filtered = filter_by_mode(&matches, "standard");
         let heroes: Vec<_> = filtered
@@ -1162,14 +1191,33 @@ mod tests {
             .map(|m| m.hero_name.clone().unwrap())
             .collect();
         // Bekannte Nichtstandard-Modi zählen nicht als Standard.
-        assert_eq!(
-            heroes,
-            vec![
-                "Haze".to_string(),
-                "Vindicta".to_string(),
-                "Seven".to_string()
-            ]
-        );
+        assert_eq!(heroes, vec!["Haze".to_string(), "Vindicta".to_string()]);
+        let ranked = filter_by_mode(&matches, "ranked");
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].hero_name.as_deref(), Some("Ranked"));
+        // Auch die reale API-Drahtform muss beide unabhängigen Kennungen erhalten.
+        for (game_mode, match_mode, expected) in [
+            (Some(1), Some(1), "standard"),
+            (Some(1), Some(4), "ranked"),
+            (Some(4), Some(1), "brawl"),
+            (Some(1), None, "all"),
+            (None, Some(4), "all"),
+            (Some(1), Some(2), "all"),
+            (Some(1), Some(99), "all"),
+            (Some(3), Some(4), "all"),
+        ] {
+            let entry: SteamMatch = serde_json::from_value(json!({
+                "game_mode": game_mode, "match_mode": match_mode
+            }))
+            .unwrap();
+            for mode in ["standard", "ranked", "brawl"] {
+                assert_eq!(
+                    filter_by_mode(std::slice::from_ref(&entry), mode).len(),
+                    usize::from(mode == expected),
+                    "{game_mode:?}/{match_mode:?}: {mode}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1691,7 +1739,7 @@ mod tests {
         // Param-Parsing + Defaults
         assert!(html.contains("oneOf('theme', ['dark', 'light', 'accent'], 'dark')"));
         assert!(html.contains("oneOf('layout', ['box', 'bar', 'canvas'], 'box')"));
-        assert!(html.contains("oneOf('mode', ['all', 'standard', 'brawl'], 'all')"));
+        assert!(html.contains("oneOf('mode', ['all', 'standard', 'ranked', 'brawl'], 'all')"));
         assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl')"));
         assert!(html.contains("clampInt('opacity', 0, 100, 85)"));
         assert!(html.contains("clampInt('recent_n', 1, 15, 10)"));

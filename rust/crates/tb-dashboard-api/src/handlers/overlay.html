@@ -612,7 +612,7 @@
     const theme = oneOf('theme', ['dark', 'light', 'accent'], 'dark');
     const layout = oneOf('layout', ['box', 'bar', 'canvas'], 'box');
     const scalableCanvas = params.get('scene_v') === '2';
-    const mode = oneOf('mode', ['all', 'standard', 'brawl'], 'all');
+    const mode = oneOf('mode', ['all', 'standard', 'ranked', 'brawl'], 'all');
     const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl');
     const opacity = clampInt('opacity', 0, 100, 85);
     const recentN = clampInt('recent_n', 1, 15, 10);
