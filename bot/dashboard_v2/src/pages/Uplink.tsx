@@ -8,6 +8,8 @@ import {
   EyeOff,
   Loader2,
   Lock,
+  FileSearch,
+  CheckCircle2,
   UserMinus,
   UserPlus,
   Users,
@@ -40,6 +42,8 @@ import { PREVIEW_PRICING_ROUTE } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { obsZugang, zielBetrieb } from '@/uplinkBetrieb';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
+import { analysiereObsLog } from '@/uplinkEncoderAnalyse';
+import type { UplinkEncoderAnalyse } from '@/uplinkEncoderAnalyse';
 
 /**
  * Inhalt von Schritt 6 der OBS-Anleitung, "Fenster einrichten".
@@ -297,10 +301,10 @@ function HilfeKapitel({ datei, label, html }: { datei: string; label: string; ht
  */
 function obsAusgabe() {
   return [
-    { feld: 'Videoencoder', wert: 'AV1 bevorzugt, H.264 ebenfalls möglich',
-      warum: 'Wähle einen Encoder, den deine OBS-Version für den benutzerdefinierten RTMPS-Dienst anbietet. Uplink prüft das tatsächlich empfangene Profil.' },
-    { feld: 'Ratensteuerung', wert: 'CBR',
-      warum: 'Plane dein Uploadbudget einschließlich Audio und Reserve. Eine Plattform-Zielbitrate ist keine automatische Vorgabe für deinen Upload.' },
+    { feld: 'Videoencoder', wert: 'Hardwareencoder passend zu deinem System',
+      warum: 'Nutze die Analyse direkt darüber. Software-AV1 über AOM/SVT wird für den Live-Uplink nicht automatisch empfohlen.' },
+    { feld: 'Ratensteuerung', wert: 'Aus der Encoder-Analyse übernehmen',
+      warum: 'AMD und NVIDIA benennen und unterstützen unterschiedliche Verfahren. Uplink zeigt nur die zum erkannten Hardwareweg passende Empfehlung.' },
     { feld: 'Auflösung und Bildrate', wert: 'Dein gewünschtes Quellprofil',
       warum: 'Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.' },
     { feld: 'Keyframe-Intervall', wert: '2 s',
@@ -308,6 +312,118 @@ function obsAusgabe() {
     { feld: 'Audio', wert: 'Live-Mix auf Spur 1, Twitch-VOD auf Spur 2',
       warum: 'Die VOD-Spur wird im nächsten Schritt ausdrücklich freigeschaltet und getrennt zu Uplink gesendet.' },
   ];
+}
+
+function ObsEncoderAnalyse() {
+  const [analyse, setAnalyse] = useState<UplinkEncoderAnalyse | null>(null);
+  const [fehler, setFehler] = useState<string | null>(null);
+  const [laedt, setLaedt] = useState(false);
+
+  async function dateiAnalysieren(datei: File) {
+    setLaedt(true);
+    setFehler(null);
+    try {
+      const text = await datei.text();
+      const ergebnis = analysiereObsLog(text);
+      if (!ergebnis.gpu && !ergebnis.hardware.av1 && !ergebnis.hardware.hevc && !ergebnis.hardware.h264) {
+        setAnalyse(null);
+        setFehler('In dieser Datei wurden keine OBS-GPU-/Encoderangaben gefunden. Nimm eine aktuelle OBS-Logdatei nach einem normalen OBS-Start.');
+        return;
+      }
+      setAnalyse(ergebnis);
+    } catch {
+      setAnalyse(null);
+      setFehler('Die Logdatei konnte im Browser nicht gelesen werden.');
+    } finally {
+      setLaedt(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <FileSearch className="h-4 w-4 text-primary" />
+            Optimale Encoder-Einstellung analysieren
+          </div>
+          <p className="mt-1 text-xs text-text-secondary">
+            Das geht vor dem ersten Stream. OBS schreibt GPU und verfügbare Encoder bereits beim Start in die Logdatei.
+          </p>
+        </div>
+        <label className="inline-flex min-h-10 cursor-pointer items-center rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/15">
+          {laedt ? 'Analysiere…' : 'OBS-Log auswählen'}
+          <input
+            type="file"
+            accept=".txt,.log,text/plain"
+            className="sr-only"
+            disabled={laedt}
+            onChange={(ereignis) => {
+              const datei = ereignis.currentTarget.files?.[0];
+              if (datei) void dateiAnalysieren(datei);
+              ereignis.currentTarget.value = '';
+            }}
+          />
+        </label>
+      </div>
+
+      <p className="text-[11px] text-text-secondary">
+        In OBS: <Weg>Hilfe</Weg> <Weg>Logdateien</Weg> <Feld>Aktuelle Logdatei anzeigen</Feld>. Die ausgewählte Datei wird nur lokal in deinem Browser gelesen und nicht zu Uplink hochgeladen.
+      </p>
+
+      {fehler ? (
+        <div role="alert" className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          {fehler}
+        </div>
+      ) : null}
+
+      {analyse ? (
+        <div className="space-y-3 rounded-lg border border-success/35 bg-success/10 p-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            Empfehlung für dieses OBS-System
+          </div>
+          <dl className="grid gap-2 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-text-secondary">GPU</dt>
+              <dd className="font-semibold text-white">{analyse.gpu ?? 'Nicht erkannt'}</dd>
+            </div>
+            <div>
+              <dt className="text-text-secondary">Codec</dt>
+              <dd className="font-semibold text-white">{analyse.empfehlung.codec}</dd>
+            </div>
+            <div>
+              <dt className="text-text-secondary">Videoencoder</dt>
+              <dd className="font-semibold text-white">{analyse.empfehlung.encoder}</dd>
+            </div>
+            <div>
+              <dt className="text-text-secondary">Ratensteuerung</dt>
+              <dd className="font-semibold text-white">{analyse.empfehlung.ratensteuerung}</dd>
+            </div>
+          </dl>
+          <div className="flex flex-wrap gap-1.5 text-[11px]">
+            <span className={`rounded-full border px-2 py-1 ${analyse.hardware.av1 ? 'border-success/35 text-success' : 'border-border text-text-secondary'}`}>
+              Hardware AV1 {analyse.hardware.av1 ? '✓' : '–'}
+            </span>
+            <span className={`rounded-full border px-2 py-1 ${analyse.hardware.hevc ? 'border-success/35 text-success' : 'border-border text-text-secondary'}`}>
+              Hardware HEVC {analyse.hardware.hevc ? '✓' : '–'}
+            </span>
+            <span className={`rounded-full border px-2 py-1 ${analyse.hardware.h264 ? 'border-success/35 text-success' : 'border-border text-text-secondary'}`}>
+              Hardware H.264 {analyse.hardware.h264 ? '✓' : '–'}
+            </span>
+          </div>
+          <ul className="list-disc space-y-1 pl-4 text-xs text-text-secondary">
+            {analyse.empfehlung.hinweise.map((hinweis) => <li key={hinweis}>{hinweis}</li>)}
+          </ul>
+          {analyse.softwareAv1 && !analyse.hardware.av1 ? (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              Software-AV1 erkannt: AOM/SVT wird nicht als Live-Empfehlung verwendet, wenn die GPU AV1 nicht selbst encodieren kann.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -1070,6 +1186,7 @@ export function UplinkPage() {
                       <p className="text-xs text-text-secondary">
                         <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
                       </p>
+                      <ObsEncoderAnalyse />
                       <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
                         {obsAusgabe().map((zeile) => (
                           <div key={zeile.feld} className="grid gap-1 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
