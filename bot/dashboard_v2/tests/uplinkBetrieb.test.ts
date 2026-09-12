@@ -3,46 +3,9 @@ import test from 'node:test';
 import { eingangStatus, obsZugang, zielBetrieb } from '../src/uplinkBetrieb';
 const browserGlobal = globalThis as typeof globalThis & { window?: { __TWITCH_DASHBOARD_RUNTIME__?: Record<string, unknown> } };
 browserGlobal.window = { __TWITCH_DASHBOARD_RUNTIME__: {} };
-const { plattformVerbindungen, saveUplinkDestination, twitchAudioFormular } = await import('../src/api/uplink');
-import type { UplinkDestination } from '../src/api/uplink';
+const { plattformVerbindungen, saveUplinkDestination } = await import('../src/api/uplink');
 
-function twitchZiel(felder: Partial<UplinkDestination> = {}): UplinkDestination {
-  return { platform: 'twitch', rtmp_url: 'rtmps://example.test/app', enabled: true,
-    twitch_audio_mode: null, effective_audio_mode: 'separate_vod', active_audio_mode: null, ...felder };
-}
-
-test('Twitch-Altbestand bleibt ohne ausdrückliche Audiowahl unverändert', () => {
-  assert.deepEqual(twitchAudioFormular(twitchZiel(), null), {
-    auswahl: null, gespeichert: null, naechsterStream: 'separate_vod', aktiv: null, geaendert: false,
-  });
-  assert.deepEqual(twitchAudioFormular(undefined, null), {
-    auswahl: null, gespeichert: null, naechsterStream: null, aktiv: null, geaendert: false,
-  });
-});
-
-test('Audioentwurf übersteht einen Poll und eine verspätete Bestätigung des vorherigen Stands', () => {
-  const alterStand = twitchZiel({ twitch_audio_mode: 'live', effective_audio_mode: 'live',
-    active_audio_mode: 'live', output_state: 'sending' });
-  assert.deepEqual(twitchAudioFormular(alterStand, 'separate_vod'), {
-    auswahl: 'separate_vod', gespeichert: 'live', naechsterStream: 'live', aktiv: 'live', geaendert: true,
-  });
-  const neuerStand = { ...alterStand, twitch_audio_mode: 'separate_vod' as const,
-    effective_audio_mode: 'separate_vod' as const };
-  assert.deepEqual(twitchAudioFormular(neuerStand, 'separate_vod'), {
-    auswahl: 'separate_vod', gespeichert: 'separate_vod', naechsterStream: 'separate_vod', aktiv: 'live', geaendert: false,
-  });
-  assert.equal(twitchAudioFormular(neuerStand, null).auswahl, 'separate_vod', 'Neuladen zeigt die gespeicherte Wahl');
-});
-
-test('angehaltene oder unbekannte Twitch-Ausgabe zeigt keinen aktiven Ton', () => {
-  for (const output_state of ['finished', 'failed', 'starting', undefined]) {
-    assert.equal(twitchAudioFormular(twitchZiel({ output_state, active_audio_mode: 'live' }), null).aktiv, null);
-  }
-  assert.equal(twitchAudioFormular(twitchZiel({ output_state: 'sending', blocked: true, active_audio_mode: 'live' }), null).aktiv, null);
-  assert.equal(twitchAudioFormular({ ...twitchZiel(), platform: 'youtube' }, null).auswahl, null);
-});
-
-test('Profilspeichern lässt die Audiowahl aus; ausdrückliche Auswahl geht über denselben Proxy', async () => {
+test('Profilspeichern sendet keine Twitch-Audiowahl mehr', async () => {
   const vorher = globalThis.fetch;
   const bodies: unknown[] = [];
   globalThis.fetch = async (input, init) => {
@@ -54,10 +17,8 @@ test('Profilspeichern lässt die Audiowahl aus; ausdrückliche Auswahl geht übe
   };
   try {
     await saveUplinkDestination({ platform: 'twitch', profil: '1080p60' });
-    await saveUplinkDestination({ platform: 'twitch', twitch_audio_mode: 'live' });
-    await saveUplinkDestination({ platform: 'twitch', twitch_audio_mode: 'separate_vod' });
-    assert.deepEqual(bodies, [{ platform: 'twitch', profil: '1080p60' },
-      { platform: 'twitch', twitch_audio_mode: 'live' }, { platform: 'twitch', twitch_audio_mode: 'separate_vod' }]);
+    assert.deepEqual(bodies, [{ platform: 'twitch', profil: '1080p60' }]);
+    assert.equal(Object.hasOwn(bodies[0] as object, 'twitch_audio_mode'), false);
   } finally {
     globalThis.fetch = vorher;
   }

@@ -905,7 +905,8 @@ pub struct DestinationBody {
     pub manuell: Option<ManuellesProfil>,
     /// Ziel an- oder abschalten, ohne es zu loeschen.
     pub enabled: Option<bool>,
-    /// Nur Twitch, ausdrücklich gespeichert; ausgelassen bleibt unverändert.
+    /// Legacy-Feld für ältere Dashboard-Versionen. Uplink trennt Twitch-Live
+    /// und VOD automatisch; dieser Wert wird nur noch kompatibel angenommen.
     pub twitch_audio_mode: Option<String>,
     /// Nur Twitch; bei Teilupdates bleibt die gespeicherte Betriebsart erhalten.
     pub twitch_output_mode: Option<String>,
@@ -964,7 +965,9 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
                 "Twitch-Audiowahl ist ungültig.",
             ));
         }
-        felder.insert("twitch_audio_mode".into(), json!(mode));
+        // Alte Clients dürfen das Feld noch senden, aber es wird absichtlich
+        // nicht an Uplink weitergereicht. Die feste Zuordnung ist Spur 1 Live,
+        // Spur 2 VOD und kann nicht mehr über das Dashboard abgeschaltet werden.
     }
 
     if let Some(mode) = body.twitch_output_mode.as_deref() {
@@ -1755,12 +1758,16 @@ mod tests {
     }
 
     #[test]
-    fn twitch_audio_choice_is_forwarded_only_when_explicit() {
+    fn legacy_twitch_audio_choice_is_accepted_but_never_forwarded() {
         for mode in ["live", "separate_vod"] {
-            let request: DestinationBody =
-                serde_json::from_value(json!({"platform":"twitch","twitch_audio_mode":mode}))
-                    .unwrap();
-            assert_eq!(ziel_nutzlast(&request).unwrap()["twitch_audio_mode"], mode);
+            let request: DestinationBody = serde_json::from_value(
+                json!({"platform":"twitch","profil":"1080p60","twitch_audio_mode":mode}),
+            )
+            .unwrap();
+            assert!(ziel_nutzlast(&request)
+                .unwrap()
+                .get("twitch_audio_mode")
+                .is_none());
         }
         let mut unchanged = body("twitch");
         unchanged.enabled = Some(true);

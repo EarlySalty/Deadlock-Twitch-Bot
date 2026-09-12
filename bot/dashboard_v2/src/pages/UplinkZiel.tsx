@@ -12,8 +12,6 @@ import {
   holeUplinkStreamKey,
   saveUplinkDestination,
   fetchUplinkDestinations,
-  twitchAudioFormular,
-  TWITCH_AUDIO_LABEL,
   trenneUplinkPlattform,
   TRENNEN_HINWEIS,
   VERBINDEN_HINWEIS,
@@ -28,9 +26,9 @@ import type {
   UplinkPlattformVerbindung,
   UplinkProfilAnsicht,
   UplinkProfilName,
-  UplinkTwitchAudioMode,
 } from '@/api/uplink';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
+import { uplinkHelpUrl } from '@/uplinkHelp';
 import { profilText, zielBetrieb } from '@/uplinkBetrieb';
 import { bestaetigeUplinkSpeichern, twitchOutputFormular, twitchOutputPayload } from '../uplinkOutputMode';
 import type { UplinkTwitchOutputMode } from '../uplinkOutputMode';
@@ -323,9 +321,6 @@ export function ZielKarte({
 
   const [rtmpUrl, setRtmpUrl] = useState(ziel?.rtmp_url || rtmpVorgabe);
   const [streamKey, setStreamKey] = useState('');
-  // null ist keine neue Wahl. Ein unberührter Altbestand bleibt beim Speichern erhalten.
-  const [audioEntwurf, setAudioEntwurf] = useState<UplinkTwitchAudioMode | null>(null);
-  const audio = twitchAudioFormular(ziel, audioEntwurf);
   const [outputEntwurf, setOutputEntwurf] = useState<UplinkTwitchOutputMode | null>(null);
   const output = twitchOutputFormular(ziel, outputEntwurf);
   const enhancedGewaehlt = platform === 'twitch' && output.auswahl === 'enhanced';
@@ -483,9 +478,8 @@ export function ZielKarte({
         body.stream_key = key;
       }
       if (enabled !== undefined) body.enabled = enabled;
-      if (platform === 'twitch' && audioEntwurf !== null) {
-        body.twitch_audio_mode = audioEntwurf;
-      }
+      // Twitch-Audio wird serverseitig fest geroutet: OBS-Spur 1 ist Live,
+      // OBS-Spur 2 ist VOD. Das Dashboard sendet dafür keine Wahl mehr.
       // Enhanced verwendet die echte Quelle und Twitch-Freigabe. Gespeicherte
       // Einzelwerte bleiben unangetastet als Rückfallprofil erhalten.
       if (!enhancedGewaehlt) {
@@ -559,7 +553,7 @@ export function ZielKarte({
   const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
   const ungespeichert =
     (!enhancedGewaehlt && eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
-    || (platform === 'twitch' && (audio.geaendert || output.geaendert));
+    || (platform === 'twitch' && output.geaendert);
   const betrieb = zielBetrieb(ziel, chat?.status);
   const eingangsCodec = ziel?.input_codec === 'h264' ? 'H.264'
     : ziel?.input_codec === 'hevc' ? 'HEVC'
@@ -707,52 +701,50 @@ export function ZielKarte({
         )}
 
         {platform === 'twitch' ? (
-          <fieldset
-            aria-describedby={`${basisId}-audio-hinweis`}
+          <section
+            aria-labelledby={`${basisId}-audio-titel`}
             className="space-y-3 rounded-xl border border-border/60 bg-background/40 p-3"
           >
-            <legend className="px-1 text-xs font-semibold text-white">Twitch-Ton</legend>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 id={`${basisId}-audio-titel`} className="text-xs font-semibold text-white">Twitch-Ton automatisch getrennt</h3>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Keine Auswahl nötig. Uplink verwendet immer zwei verschiedene OBS-Mischungen.
+                </p>
+              </div>
+              <span className="rounded-full border border-primary/35 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary">
+                Automatisch
+              </span>
+            </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {(['live', 'separate_vod'] as const).map((wert) => (
-                <label key={wert} className={`flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border p-3 ${audio.auswahl === wert ? 'border-primary/60 bg-primary/10' : 'border-border bg-background/70'}`}>
-                  <input
-                    type="radio"
-                    name={`${basisId}-twitch-audio`}
-                    value={wert}
-                    checked={audio.auswahl === wert}
-                    onChange={() => {
-                      setAudioEntwurf(wert);
-                      angefasst();
-                    }}
-                    className="mt-0.5 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
-                  />
-                  <span className="space-y-1">
-                    <span className="block text-sm font-semibold text-white">{TWITCH_AUDIO_LABEL[wert]}</span>
-                    <span className="block text-xs text-text-secondary">
-                      {wert === 'live'
-                        ? 'Eine Audiomischung für den Livestream und das Twitch-VOD.'
-                        : 'Eigener Mix für das Twitch-VOD. Benötigt eine zweite Audiomischung aus OBS.'}
-                    </span>
-                  </span>
-                </label>
-              ))}
+              <div className="rounded-xl border border-border bg-background/70 p-3">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">OBS-Spur 1</span>
+                <span className="mt-1 block text-sm font-semibold text-white">Livestream</span>
+                <span className="mt-1 block text-xs text-text-secondary">Der Mix, den Zuschauer live hören.</span>
+              </div>
+              <div className="rounded-xl border border-border bg-background/70 p-3">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">OBS-Spur 2</span>
+                <span className="mt-1 block text-sm font-semibold text-white">Twitch-VOD</span>
+                <span className="mt-1 block text-xs text-text-secondary">Der getrennte Mix für die Aufzeichnung.</span>
+              </div>
             </div>
-            <p id={`${basisId}-audio-hinweis`} className="text-xs text-text-secondary">
-              Änderungen gelten ab dem nächsten Stream. Bei separatem VOD-Ton wird der Live-Mix niemals als Ersatz verwendet.
+            <p className="text-xs text-text-secondary">
+              Fehlt Spur 2, hält Uplink nur den Twitch-Ausgang an. Spur 1 wird nie als VOD-Ersatz kopiert.
             </p>
-            {(audio.auswahl ?? audio.naechsterStream) === 'separate_vod' ? (
-              <p className="text-xs text-text-secondary">
-                Kommt nur eine Audiomischung an, bleibt dieser Twitch-Ausgang angehalten. Wähle dann bewusst Live-Ton oder richte die zweite Mischung in OBS ein.
-              </p>
-            ) : null}
-            <div className="space-y-1 text-xs text-text-secondary" aria-live="polite">
-              <p>{audio.gespeichert ? `Gespeichert: ${TWITCH_AUDIO_LABEL[audio.gespeichert]}.`
-                : 'Noch keine eigene Audiowahl gespeichert. Die bisherige Einstellung bleibt erhalten.'}</p>
-              <p>Für den nächsten Stream: {audio.naechsterStream ? TWITCH_AUDIO_LABEL[audio.naechsterStream] : 'noch nicht bestätigt'}.</p>
-              <p>Laufender Twitch-Ton: {audio.aktiv ? TWITCH_AUDIO_LABEL[audio.aktiv] : 'noch nicht bestätigt'}.</p>
-              {audio.geaendert ? <p className="text-primary">Audiowahl noch nicht gespeichert.</p> : null}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs" aria-live="polite">
+              <span className={ziel?.active_audio_mode === 'separate_vod' && ziel?.output_state === 'sending'
+                ? 'font-semibold text-success' : 'text-text-secondary'}>
+                {ziel?.active_audio_mode === 'separate_vod' && ziel?.output_state === 'sending'
+                  ? 'Live und VOD laufen getrennt.'
+                  : ziel?.output_state === 'sending'
+                    ? 'Zweite Tonspur noch nicht als laufend bestätigt.'
+                    : 'Wird beim nächsten Stream geprüft.'}
+              </span>
+              <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="font-semibold text-primary underline underline-offset-2">
+                OBS-Tonspur einrichten
+              </a>
             </div>
-          </fieldset>
+          </section>
         ) : null}
 
         {platform === 'twitch' ? <UplinkOutputMode ziel={ziel} entwurf={outputEntwurf} disabled={speichern.isPending}

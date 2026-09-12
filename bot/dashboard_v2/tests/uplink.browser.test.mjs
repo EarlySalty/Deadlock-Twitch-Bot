@@ -47,11 +47,7 @@ const server = createServer(async (request, response) => {
       const destination = destinations.destinations.find(item => item.platform === saved.platform);
       if (saved.manuell) destination.requested = saved.manuell;
       if (saved.enabled !== undefined) destination.enabled = saved.enabled;
-      if (saved.twitch_audio_mode !== undefined) {
-        destination.twitch_audio_mode = saved.twitch_audio_mode;
-        destination.effective_audio_mode = saved.twitch_audio_mode;
-      }
-      return json({ ...destinations, live_quality: { status: 'next_stream', message: 'Gespeichert für den nächsten Stream.' } });
+      return json({ ok: true, connection_generations: { [saved.platform]: 1 }, live_quality: { status: 'next_stream', message: 'Gespeichert für den nächsten Stream.' } });
     }
     if (request.method !== 'GET') return json({ error: 'Für diesen lokalen Bediennachweis nicht freigegeben.' }, 409);
     if (url.pathname.endsWith('/uplink/me')) {
@@ -70,7 +66,7 @@ const server = createServer(async (request, response) => {
       if (live) data.destinations.find(target => target.platform === 'youtube').active_profile = {
         width: 256, height: 144, fps: 25, codec: 'h264', bitrate_kbps: 500, profile_origin: 'running_graph',
       };
-      if (live) Object.assign(data.destinations.find(target => target.platform === 'twitch'), {output_state:'sending',active_audio_mode:'live',reason:null,active_profile:{width:256,height:144,fps:25,codec:'h264',bitrate_kbps:500,profile_origin:'running_graph'}});
+      if (live) Object.assign(data.destinations.find(target => target.platform === 'twitch'), {output_state:'sending',active_audio_mode:'separate_vod',active_audio_routes:[{source_wire_track:0,destination_wire_track:0,role:'live'},{source_wire_track:1,destination_wire_track:1,role:'vod'}],reason:null,active_profile:{width:256,height:144,fps:25,codec:'h264',bitrate_kbps:500,profile_origin:'running_graph'}});
       if (ended) for (const target of data.destinations) { target.output_state = 'finished'; target.active_profile = null; target.active_audio_mode = null; }
       return json(data);
     }
@@ -182,37 +178,23 @@ try {
   await activate(`document.querySelector('details[data-platform="twitch"] > summary')`);
   await wait(`document.querySelector('details[data-platform="twitch"]').open`);
   const twitchForm = `document.querySelector('[aria-label="Twitch-Einstellungen"]')`;
-  assert.equal(await evaluate(`(${twitchForm}).querySelectorAll('input[type="radio"]:checked').length`),0);
+  assert.equal(await evaluate(`(${twitchForm}).querySelectorAll('input[type="radio"][value="live"], input[type="radio"][value="separate_vod"]').length`),0,'Twitch-Ton hat keine Nutzerwahl mehr');
+  assert.equal(await evaluate(`(${twitchForm}).innerText.includes('Twitch-Ton automatisch getrennt')`),true);
+  assert.equal(await evaluate(`(${twitchForm}).innerText.includes('OBS-SPUR 1') && (${twitchForm}).innerText.includes('OBS-SPUR 2')`),true);
   await activate('[...document.querySelectorAll("button")].find(button => button.innerText === "Twitch speichern")');
   await wait(`(${twitchForm}).innerText.includes('Gespeichert für den nächsten Stream.')`);
-  assert.equal(Object.hasOwn(requests.at(-1),'twitch_audio_mode'),false,'Altbestand nicht durch Profilspeichern ändern');
-  await activate(`(${twitchForm}).querySelector('input[type="radio"][value="live"]')`);
-  holdNextSave = true;
-  await activate('[...document.querySelectorAll("button")].find(button => button.innerText === "Twitch speichern")');
-  await wait('document.body.innerText.includes("Twitch wird gespeichert")');
-  await activate(`(${twitchForm}).querySelector('input[type="radio"][value="separate_vod"]')`);
-  const audioPolls = destinationPolls;
-  const audioDeadline = Date.now() + 8000;
-  while (destinationPolls === audioPolls && Date.now() < audioDeadline) await new Promise(resolve => setTimeout(resolve,100));
-  assert.ok(destinationPolls > audioPolls);
-  releaseSave(); releaseSave = undefined;
-  await wait('!document.body.innerText.includes("Twitch wird gespeichert")');
-  assert.equal(await evaluate(`(${twitchForm}).querySelector('input[type="radio"]:checked').value`),'separate_vod');
-  assert.equal(await evaluate(`(${twitchForm}).innerText.includes('Gespeichert für den nächsten Stream.')`),false);
+  assert.equal(Object.hasOwn(requests.at(-1),'twitch_audio_mode'),false,'Profilspeichern darf keine alte Audiowahl mitsenden');
   await cdp('Page.reload');
-  await wait(`document.body.innerText.includes('Gespeichert: Live-Ton.')`);
-  assert.equal(await evaluate(`(${twitchForm}).querySelector('input[type="radio"]:checked').value`),'live');
+  await wait(`document.body.innerText.includes('Twitch-Ton automatisch getrennt')`);
   live = true;
   await cdp('Page.reload'); await wait("document.body.innerText.includes('Medien werden gesendet')");
   assert.equal(await evaluate("document.body.innerText.includes('Stream wird empfangen')"), true);
   assert.equal(await evaluate("document.body.innerText.includes('H264 · 320×180 · 25 fps')"), true);
   assert.equal(await evaluate("document.body.innerText.includes('Laufendes Encoderprofil: 256×144 · 25 fps · H264 · 500 kbit/s Zielbitrate')"), true);
   assert.equal(await evaluate("document.body.innerText.includes('Plattform bestätigt live')"), false);
-  await activate(`(${twitchForm}).querySelector('input[type="radio"][value="separate_vod"]')`);
-  await activate('[...document.querySelectorAll("button")].find(button => button.innerText === "Twitch speichern")');
-  await wait(`(${twitchForm}).innerText.includes('Für den nächsten Stream: Separater Twitch-VOD-Ton.')`);
-  assert.equal(await evaluate(`(${twitchForm}).innerText.includes('Laufender Twitch-Ton: Live-Ton.')`),true);
-  await screenshot('audio-naechster-stream');
+  assert.equal(await evaluate(`(${twitchForm}).innerText.includes('Live und VOD laufen getrennt.')`),true);
+  assert.equal(await evaluate(`(${twitchForm}).querySelectorAll('input[type="radio"][value="live"], input[type="radio"][value="separate_vod"]').length`),0);
+  await screenshot('audio-automatisch-getrennt');
   assert.equal(await evaluate(`document.querySelector('input[aria-label="Privater Streamschlüssel für OBS: verdeckt"]').type`), 'password');
   await screenshot('sendend-desktop');
   assert.equal(await evaluate('[...document.querySelectorAll("button")].filter(button => button.innerText === "Zeigen").every(button => button.disabled)'), true, 'Laufender Uplink-Eingang hält private Felder auch bei Twitch offline verdeckt');
