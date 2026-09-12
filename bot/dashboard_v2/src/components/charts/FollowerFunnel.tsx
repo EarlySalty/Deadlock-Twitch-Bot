@@ -7,8 +7,8 @@ import type { FollowerFunnel as FollowerFunnelType } from '@/types/analytics';
 // Stufenfarben gehören nur zum Funnel; Bewertung und Trends bleiben semantisch.
 const FUNNEL_COLORS = {
   viewers: 'var(--color-primary)',
-  returning: '#DE8A6A',
-  followers: '#C47682',
+  returning: '#D9752E',
+  followers: '#C93F63',
 } as const;
 
 interface FollowerFunnelProps {

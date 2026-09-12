@@ -19,8 +19,8 @@ const APPS = [
 ];
 
 const ALLOWED_HEX = new Set([
-  // Lokale Funnel-Stufen: Kupfer und Rosenholz.
-  '#de8a6a', '#c47682',
+  // Lokale Funnel-Stufen: Kupfer und Rosenholz, gesaettigt fuer klare Stufentrennung.
+  '#d9752e', '#c93f63',
   // Warme Goldspitzen, etwas dunkler als die ursprünglichen Messing-Highlights.
   '#e6c78f', '#d6b676', '#e8cfa0',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
