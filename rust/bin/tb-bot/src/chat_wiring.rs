@@ -677,6 +677,12 @@ pub async fn build_runtime(
         tracked_api,
         PolicyContext::Standard(policy_roster),
     ));
+    let zuschauer_register = member_relay.map(|relay| {
+        Arc::new(tb_chat::zuschauer_register::ZuschauerRegister::new(
+            pool.clone(),
+            Arc::new(BrokerMemberSource { relay }),
+        ))
+    });
 
     // Lern-Muster einmalig laden (Python lädt sie beim Bot-Start).
     let learned = LearnedPatterns::load(&pool).await;
@@ -755,13 +761,8 @@ pub async fn build_runtime(
         if let Some(sink) = pitch_review_sink {
             engine = engine.set_pitch_review_sink(sink);
         }
-        if let Some(relay) = member_relay {
-            engine = engine.set_zuschauer_register(Arc::new(
-                tb_chat::zuschauer_register::ZuschauerRegister::new(
-                    pool.clone(),
-                    Arc::new(BrokerMemberSource { relay }),
-                ),
-            ));
+        if let Some(register) = zuschauer_register.clone() {
+            engine = engine.set_zuschauer_register(register);
         }
         engine
     });
@@ -778,8 +779,11 @@ pub async fn build_runtime(
         Arc::new(DbInvitePort { pool: pool.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
-    ).set_sub_reminder(Arc::new(tb_chat::sub_reminder::SubReminder::new(
-        pool.clone(), Arc::clone(&api), subscription_status,
+    )
+    .set_sub_reminder(Arc::new(tb_chat::sub_reminder::SubReminder::new(
+        pool.clone(),
+        Arc::clone(&api),
+        subscription_status,
     )));
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
@@ -847,27 +851,37 @@ pub async fn build_runtime(
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
-        standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api), pool.clone())),
+        standard_replies: Arc::new(tb_chat::StandardReplies::new(
+            Arc::clone(&api),
+            pool.clone(),
+        )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
             Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
-            Arc::new(LlmInviteQuestionJudge::new(
-                EngagementLlmClient::new(None, None, None, None),
-            )),
-            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
-            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
-        )),
-        lfg_pitch: Arc::new(LfgPitchResponder::new(
-            Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
-            Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
+            Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
             ))),
-            lfg_pitch_enabled_from_env(),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
         )),
+        lfg_pitch: Arc::new({
+            let responder = LfgPitchResponder::new(
+                Arc::clone(&api),
+                Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+                Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
+                    None, None, None, None,
+                ))),
+                lfg_pitch_enabled_from_env(),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+            );
+            match zuschauer_register.clone() {
+                Some(register) => responder.set_zuschauer_register(register),
+                None => responder,
+            }
+        }),
         promos: Arc::clone(&promos),
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
@@ -909,8 +923,7 @@ pub async fn build_runtime(
         // Zweiter, anonymer Mitleser für Kanäle ohne `channel:bot`-Grant. Der
         // EventSub-Pfad oben sieht nur Partner-Kanäle; genau die fremden Kanäle
         // fehlen dort, in denen gelernt werden soll.
-        let learn_reader =
-            LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
+        let learn_reader = LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
         supervisor.spawn("engagement_learn_irc_reader", async move {
             learn_reader.run().await;
             future::pending::<()>().await;
@@ -1306,19 +1319,32 @@ impl tb_chat::sub_reminder::SubscriptionStatus for HelixSubscriptionStatus {
     async fn active(&self, broadcaster_id: &str, viewer_id: &str) -> Option<bool> {
         let helix = self.helix.as_ref()?;
         let provider = self.token_provider.as_ref()?;
-        let token = provider.get_valid_token_unrestricted_with_scope(
-            broadcaster_id, chrono::Utc::now(), tb_chat::sub_reminder::SUB_SCOPE,
-        ).await.ok()??;
-        tokio::time::timeout(Duration::from_secs(8),
-            helix.broadcaster_subscription_active(broadcaster_id, viewer_id, &token))
-            .await.ok()?.ok()
+        let token = provider
+            .get_valid_token_unrestricted_with_scope(
+                broadcaster_id,
+                chrono::Utc::now(),
+                tb_chat::sub_reminder::SUB_SCOPE,
+            )
+            .await
+            .ok()??;
+        tokio::time::timeout(
+            Duration::from_secs(8),
+            helix.broadcaster_subscription_active(broadcaster_id, viewer_id, &token),
+        )
+        .await
+        .ok()?
+        .ok()
     }
 }
 
 pub fn build_subscription_status(
-    helix: Option<Arc<HelixClient>>, token_provider: Option<Arc<TokenProvider>>,
+    helix: Option<Arc<HelixClient>>,
+    token_provider: Option<Arc<TokenProvider>>,
 ) -> Arc<dyn tb_chat::sub_reminder::SubscriptionStatus> {
-    Arc::new(HelixSubscriptionStatus { helix, token_provider })
+    Arc::new(HelixSubscriptionStatus {
+        helix,
+        token_provider,
+    })
 }
 const LURKER_REWARD_CACHE_TTL: Duration = Duration::from_secs(60);
 
@@ -1370,7 +1396,10 @@ impl LurkerRewardChecker for HelixLurkerRewardChecker {
             }
         };
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(broadcaster_id.to_string(), (std::time::Instant::now(), exists));
+            cache.insert(
+                broadcaster_id.to_string(),
+                (std::time::Instant::now(), exists),
+            );
         }
         exists
     }
@@ -1381,7 +1410,10 @@ pub fn build_lurker_reward_checker(
     token_provider: Option<Arc<TokenProvider>>,
 ) -> Option<Arc<dyn LurkerRewardChecker>> {
     let (helix, token_provider) = (helix?, token_provider?);
-    Some(Arc::new(HelixLurkerRewardChecker::new(helix, token_provider)) as Arc<dyn LurkerRewardChecker>)
+    Some(
+        Arc::new(HelixLurkerRewardChecker::new(helix, token_provider))
+            as Arc<dyn LurkerRewardChecker>,
+    )
 }
 
 struct ChatHooks {
@@ -2097,7 +2129,11 @@ impl PitchReviewSink for DiscordPitchReviewSink {
             PitchCardKind::Partner => "Partner-Pitch",
         };
         let mut displays = vec![
-            format!("**{}** in `{}`", title, neutralize_pitch_codespan(channel_login)),
+            format!(
+                "**{}** in `{}`",
+                title,
+                neutralize_pitch_codespan(channel_login)
+            ),
             format!("An **{}**", neutralize_pitch_field(target_login)),
             format!("> {}", neutralize_pitch_field(trigger)),
             format!("Antwort: {}", neutralize_pitch_field(reply)),
@@ -2132,9 +2168,7 @@ struct BrokerMemberSource {
 
 #[async_trait::async_trait]
 impl tb_chat::zuschauer_register::MemberIndexSource for BrokerMemberSource {
-    async fn fetch_members(
-        &self,
-    ) -> Option<Vec<tb_chat::zuschauer_register::MemberLite>> {
+    async fn fetch_members(&self) -> Option<Vec<tb_chat::zuschauer_register::MemberLite>> {
         match self.relay.list_members().await {
             Ok(members) => Some(
                 members
@@ -3129,14 +3163,17 @@ mod chat_notification_tests {
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
-            standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            standard_replies: Arc::new(tb_chat::StandardReplies::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             invite_question: Arc::new(InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
                 Arc::new(PgInviteQuestionStore::new(pool.clone())),
-                Arc::new(LlmInviteQuestionJudge::new(
-                    EngagementLlmClient::new(None, None, None, None),
-                )),
+                Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
+                    None, None, None, None,
+                ))),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
@@ -3148,6 +3185,7 @@ mod chat_notification_tests {
                 ))),
                 false,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                None,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
             promos,
@@ -3588,8 +3626,9 @@ mod db_tests {
     use std::str::FromStr;
 
     async fn setup(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)

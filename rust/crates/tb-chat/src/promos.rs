@@ -39,12 +39,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use rand::seq::IndexedRandom;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
+use crate::lfg_pitch::RecentChatPort;
 use crate::promo_pitch::{
     pitch_filter_reject, pitch_injection_reject, ChannelPromoContext, PartnerPitchContext,
     PartnerPitchGen, PitchJudge, PitchJudgeInput, PitchTextGen,
@@ -1062,8 +1063,14 @@ impl PromoEngine {
             return;
         }
         if pitch_injection_reject(&reply, target_login) {
-            self.log_partner_reject(login, target_user_id, "injection", trigger, Some(reply.clone()))
-                .await;
+            self.log_partner_reject(
+                login,
+                target_user_id,
+                "injection",
+                trigger,
+                Some(reply.clone()),
+            )
+            .await;
             return;
         }
 
@@ -1640,10 +1647,7 @@ impl PromoEngine {
                 .promo_activity_ready_inner(login, &state_snapshot, now)
                 .await;
 
-            if overall_ready
-                && activity_ready
-                && self.stream_start_delay_ok(login).await
-            {
+            if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
                 faellig.push((login.clone(), channel_id.clone()));
             }
         }
@@ -2409,7 +2413,11 @@ impl PromoEngine {
                 }
             }
             None => {
-                if self.reward_gate_warned.insert(login.to_string(), ()).is_none() {
+                if self
+                    .reward_gate_warned
+                    .insert(login.to_string(), ())
+                    .is_none()
+                {
                     warn!(
                         login,
                         "Lurker-Tax: kein Reward-Checker verdrahtet, Erinnerung wird nicht gesendet"
@@ -3179,26 +3187,52 @@ impl PromoEngine {
     }
 
     async fn load_recent_channel_messages(&self, login: &str, n: i64) -> Vec<String> {
+        self.load_recent_channel_messages_before(login, n, None)
+            .await
+    }
+
+    async fn load_recent_channel_messages_before(
+        &self,
+        login: &str,
+        n: i64,
+        before_message_id: Option<&str>,
+    ) -> Vec<String> {
         let known_bots: Vec<&str> = tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS.to_vec();
-        let rows = sqlx::query_scalar!(
-            "SELECT content AS \"content?\" FROM twitch_chat_messages
+        let rows = sqlx::query(
+            "SELECT chatter_login, content FROM twitch_chat_messages
               WHERE LOWER(streamer_login) = LOWER($1)
                 AND message_ts >= NOW() - INTERVAL '30 minutes'
+                AND ($3::text IS NULL OR message_id IS DISTINCT FROM $3)
                 AND COALESCE(is_command, FALSE) = FALSE
                 AND COALESCE(content, '') NOT LIKE '!%'
-                AND LOWER(COALESCE(chatter_login, '')) <> ALL($3::text[])
-                AND LOWER(COALESCE(chatter_login, '')) !~ $4
+                AND LOWER(COALESCE(chatter_login, '')) <> ALL($4::text[])
+                AND LOWER(COALESCE(chatter_login, '')) !~ $5
               ORDER BY message_ts DESC
               LIMIT $2",
-            login,
-            n,
-            &known_bots as &[&str],
-            tb_analytics::bekannte_bots::ANONYM_LOGIN_REGEX_SQL,
         )
+        .bind(login)
+        .bind(n)
+        .bind(before_message_id)
+        .bind(&known_bots as &[&str])
+        .bind(tb_analytics::bekannte_bots::ANONYM_LOGIN_REGEX_SQL)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-        rows.into_iter().flatten().collect()
+        rows.into_iter()
+            .filter_map(|row| {
+                match (
+                    row.try_get::<Option<String>, _>("chatter_login")
+                        .ok()
+                        .flatten(),
+                    row.try_get::<Option<String>, _>("content").ok().flatten(),
+                ) {
+                    (Some(chatter_login), Some(content)) => {
+                        Some(format!("{chatter_login}: {content}"))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     /// Alte Cooldown-Einträge bereinigen (promos.py: `cleanup_stale_promo_cooldowns(24)`).
@@ -3251,6 +3285,14 @@ impl InviteReplyNotifier for PromoEngine {
 impl PromoBlockCheck for PromoEngine {
     async fn is_promo_blocked(&self, channel_login: &str) -> bool {
         self.promo_blocked_by_plan_or_flag(channel_login).await
+    }
+}
+
+#[async_trait]
+impl RecentChatPort for PromoEngine {
+    async fn recent_chat(&self, channel_login: &str, before_message_id: &str) -> Vec<String> {
+        self.load_recent_channel_messages_before(channel_login, 8, Some(before_message_id))
+            .await
     }
 }
 
@@ -3632,7 +3674,10 @@ mod tests {
         let text = engine.build_lurker_tax_text(&candidates);
         assert!(text.contains("@alice"), "Mention alice fehlt: {text}");
         assert!(text.contains("@bob"), "Mention bob fehlt: {text}");
-        assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+        assert!(
+            lurker_reminder_ok(&text),
+            "Erinnerung unvollständig: {text}"
+        );
     }
 
     #[tokio::test]
@@ -3651,7 +3696,10 @@ mod tests {
             let text = engine.build_lurker_tax_text(&["xy".to_string()]);
             assert!(text.contains("@xy"), "Erwähnung fehlt: {text}");
             assert!(text.contains("schön dass du"), "Anrede fehlt: {text}");
-            assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+            assert!(
+                lurker_reminder_ok(&text),
+                "Erinnerung unvollständig: {text}"
+            );
             gesehen.insert(text);
         }
         assert!(
@@ -3669,7 +3717,10 @@ mod tests {
             assert!(text.contains("@alice"), "erste Erwähnung fehlt: {text}");
             assert!(text.contains("@bob"), "zweite Erwähnung fehlt: {text}");
             assert!(text.contains("schön dass ihr"), "Anrede fehlt: {text}");
-            assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+            assert!(
+                lurker_reminder_ok(&text),
+                "Erinnerung unvollständig: {text}"
+            );
             gesehen.insert(text);
         }
         assert!(
@@ -4067,11 +4118,7 @@ mod db_tests {
 
     #[async_trait]
     impl PitchTextGen for FixedTextGen {
-        async fn channel_promo(
-            &self,
-            _ctx: &ChannelPromoContext,
-            invite: &str,
-        ) -> Option<String> {
+        async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             self.0.as_ref().map(|body| format!("{body} {invite}"))
         }
         async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
@@ -4085,11 +4132,7 @@ mod db_tests {
 
     #[async_trait]
     impl PitchTextGen for SlowTextGen {
-        async fn channel_promo(
-            &self,
-            _ctx: &ChannelPromoContext,
-            invite: &str,
-        ) -> Option<String> {
+        async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             tokio::time::sleep(self.delay).await;
             Some(format!("hallo {invite}"))
         }
@@ -4145,8 +4188,7 @@ mod db_tests {
             &self,
             _input: PitchJudgeInput,
         ) -> Option<crate::promo_pitch::PitchResponse> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.response.clone()
         }
     }
@@ -4168,15 +4210,25 @@ mod db_tests {
     #[async_trait]
     impl PartnerPitchGen for MockPartnerPitchGen {
         async fn partner_pitch(&self, _ctx: &PartnerPitchContext) -> Option<String> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.text.clone()
         }
     }
 
     #[derive(Default, Clone)]
     struct RecordingReviewSink {
-        cards: Arc<Mutex<Vec<(String, String, String, String, PitchCardKind, Option<String>)>>>,
+        cards: Arc<
+            Mutex<
+                Vec<(
+                    String,
+                    String,
+                    String,
+                    String,
+                    PitchCardKind,
+                    Option<String>,
+                )>,
+            >,
+        >,
     }
 
     #[async_trait]
@@ -4201,7 +4253,13 @@ mod db_tests {
         }
     }
 
-    fn pitch_event(channel_id: &str, channel_login: &str, chatter_id: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+    fn pitch_event(
+        channel_id: &str,
+        channel_login: &str,
+        chatter_id: &str,
+        chatter_login: &str,
+        text: &str,
+    ) -> ChatMessageEvent {
         ChatMessageEvent {
             broadcaster_user_id: channel_id.to_string(),
             broadcaster_user_login: channel_login.to_string(),
@@ -4251,12 +4309,14 @@ mod db_tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE twitch_live_state SET active_session_id = $1 WHERE twitch_user_id = $2")
-            .bind(session_id)
-            .bind(channel_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_live_state SET active_session_id = $1 WHERE twitch_user_id = $2",
+        )
+        .bind(session_id)
+        .bind(channel_id)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     fn pitch_response(
@@ -4581,7 +4641,9 @@ mod db_tests {
             let mut state = state_ref.lock().await;
             state.raw_msg_count_since_promo = 8;
             for idx in 0..8usize {
-                state.activity.push_back((now, format!("chatter{}", idx % 2)));
+                state
+                    .activity
+                    .push_back((now, format!("chatter{}", idx % 2)));
             }
         }
         engine
@@ -4794,7 +4856,9 @@ mod db_tests {
             guard.clone()
         };
         assert!(
-            engine.promo_activity_ready_inner("regkanal", &snap, now).await,
+            engine
+                .promo_activity_ready_inner("regkanal", &snap, now)
+                .await,
             "erste Werbung: A, B und C zählen als neu"
         );
         engine
@@ -4832,9 +4896,7 @@ mod db_tests {
 
     #[async_trait::async_trait]
     impl crate::zuschauer_register::MemberIndexSource for EmptyMembers {
-        async fn fetch_members(
-            &self,
-        ) -> Option<Vec<crate::zuschauer_register::MemberLite>> {
+        async fn fetch_members(&self) -> Option<Vec<crate::zuschauer_register::MemberLite>> {
             Some(Vec::new())
         }
     }
@@ -5379,8 +5441,10 @@ mod db_tests {
         let engine = Arc::new(make_engine(pool));
         let e1 = Arc::clone(&engine);
         let e2 = Arc::clone(&engine);
-        let t1 = tokio::spawn(async move { e1.pitch_judge_throttle_reserve("rkanal", "chatter-a") });
-        let t2 = tokio::spawn(async move { e2.pitch_judge_throttle_reserve("rkanal", "chatter-b") });
+        let t1 =
+            tokio::spawn(async move { e1.pitch_judge_throttle_reserve("rkanal", "chatter-a") });
+        let t2 =
+            tokio::spawn(async move { e2.pitch_judge_throttle_reserve("rkanal", "chatter-b") });
         let (r1, r2) = tokio::join!(t1, t2);
         assert!(r1.unwrap(), "erste Reservierung muss durchgehen");
         assert!(r2.unwrap(), "zweite Reservierung muss durchgehen");
@@ -5688,7 +5752,11 @@ mod db_tests {
         assert!(row.1.is_some(), "sent_at muss gesetzt sein");
         assert_eq!(row.2.as_deref(), Some("game_unpopular"));
 
-        assert_eq!(sink.cards.lock().await.len(), 1, "eine Review-Karte erwartet");
+        assert_eq!(
+            sink.cards.lock().await.len(),
+            1,
+            "eine Review-Karte erwartet"
+        );
     }
 
     async fn seed_deadlock_candidate(pool: &PgPool, own_login: &str, chatter_id: &str) {
@@ -5757,7 +5825,13 @@ mod db_tests {
             .set_partner_pitch_gen(gen.clone())
             .set_zuschauer_register(test_register(pool.clone()));
 
-        let event = pitch_event("c-pkz", "pkzkanal", "u-pkz", "Kurz", "yo deadlock laeuft gut");
+        let event = pitch_event(
+            "c-pkz",
+            "pkzkanal",
+            "u-pkz",
+            "Kurz",
+            "yo deadlock laeuft gut",
+        );
         engine.on_message_pitch(&event).await;
 
         assert_eq!(
@@ -5804,7 +5878,11 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        assert_eq!(api.message_count().await, 1, "genau ein Partner-Pitch erwartet");
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "genau ein Partner-Pitch erwartet"
+        );
 
         let ledger: (String, String, String, Option<String>) = sqlx::query_as(
             "SELECT trigger_type, judge_verdict, action, twitch_user_id FROM twitch_scout_pitch_ledger",
@@ -5819,7 +5897,11 @@ mod db_tests {
 
         let cards = sink.cards.lock().await;
         assert_eq!(cards.len(), 1, "eine Review-Karte erwartet");
-        assert_eq!(cards[0].4, PitchCardKind::Partner, "Karte muss als Partner markiert sein");
+        assert_eq!(
+            cards[0].4,
+            PitchCardKind::Partner,
+            "Karte muss als Partner markiert sein"
+        );
         let hint = cards[0].5.as_deref().unwrap_or("");
         assert!(
             hint.contains("ledgerlogin"),
@@ -5985,7 +6067,11 @@ mod db_tests {
             0,
             "das Tageslimit muss vor dem Generator-Aufruf greifen"
         );
-        assert_eq!(api.message_count().await, 0, "sechster Partner-Pitch am Tag blockiert");
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "sechster Partner-Pitch am Tag blockiert"
+        );
     }
 
     #[tokio::test]
@@ -6022,7 +6108,11 @@ mod db_tests {
             0,
             "Werbefrei muss den Partner-Pitch vor dem Generator abschalten"
         );
-        assert_eq!(api.message_count().await, 0, "Werbefrei: kein Partner-Pitch");
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "Werbefrei: kein Partner-Pitch"
+        );
         let count: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'partner'")
                 .fetch_one(&pool)
@@ -6062,7 +6152,11 @@ mod db_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0.as_deref(), Some("link"), "harter Filter muss den Grund protokollieren");
+        assert_eq!(
+            row.0.as_deref(),
+            Some("link"),
+            "harter Filter muss den Grund protokollieren"
+        );
         assert!(row.1.is_none());
     }
 
@@ -6166,7 +6260,10 @@ mod db_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(row.0.is_some(), "harter Filter muss den Grund protokollieren");
+        assert!(
+            row.0.is_some(),
+            "harter Filter muss den Grund protokollieren"
+        );
         assert!(row.1.is_none());
     }
 
@@ -6979,11 +7076,7 @@ mod db_tests {
         engine
             .thank_lurker_tax_redeemer("u-off", "offkanal", "xy")
             .await;
-        assert_eq!(
-            api.message_count().await,
-            0,
-            "Schalter aus: kein Dank"
-        );
+        assert_eq!(api.message_count().await, 0, "Schalter aus: kein Dank");
 
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
@@ -7019,11 +7112,7 @@ mod db_tests {
         engine
             .thank_lurker_tax_redeemer("u-dank", "dankkanal", "xy")
             .await;
-        assert_eq!(
-            api.message_count().await,
-            1,
-            "erster Dank geht raus"
-        );
+        assert_eq!(api.message_count().await, 1, "erster Dank geht raus");
 
         engine
             .thank_lurker_tax_redeemer("u-dank", "dankkanal", "xy")
@@ -7035,7 +7124,12 @@ mod db_tests {
         );
     }
 
-    fn followup_event(channel_id: &str, channel_login: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+    fn followup_event(
+        channel_id: &str,
+        channel_login: &str,
+        chatter_login: &str,
+        text: &str,
+    ) -> ChatMessageEvent {
         ChatMessageEvent {
             broadcaster_user_id: channel_id.to_string(),
             broadcaster_user_login: channel_login.to_string(),
