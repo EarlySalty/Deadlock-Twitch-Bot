@@ -1086,6 +1086,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(admin_config::config_raids_handler),
         )
         .route(
+            "/twitch/api/admin/config/community-announcements",
+            post(admin_config::config_community_announcements_handler),
+        )
+        .route(
             "/twitch/api/admin/config/promo-timers",
             post(admin_config::config_promo_timers_handler),
         )

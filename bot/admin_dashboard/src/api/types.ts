@@ -378,7 +378,21 @@ export interface PromoTimerSettings {
   community: PromoTimerProfile & { broadcasterId: string };
 }
 
+export interface CommunityAnnouncement {
+  text: string;
+  enabled: boolean;
+  color: 'purple' | 'blue' | 'green' | 'orange' | 'primary';
+}
+
+export interface CommunityAnnouncements {
+  revision: number;
+  enabled: boolean;
+  includeGlobalEvent: boolean;
+  entries: CommunityAnnouncement[];
+}
+
 export interface ConfigOverview {
+  communityAnnouncements?: CommunityAnnouncements;
   timerSettings?: PromoTimerSettings;
   promo?: Record<string, unknown>;
   raids?: RaidConfigSnapshot;

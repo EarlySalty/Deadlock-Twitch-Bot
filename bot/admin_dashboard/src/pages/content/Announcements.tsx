@@ -10,6 +10,7 @@ import { useConfigOverview, usePromoConfigMutation } from '@/hooks/useAdmin';
 import { berlinLocalInputToUtcIso, berlinNowLocalInput, utcIsoToBerlinLocalInput } from '@/utils/berlinTime';
 import { coerceRecord, formatDateTime } from '@/utils/formatters';
 import { PromoTimers } from './PromoTimers';
+import { CommunityAnnouncementsEditor } from './CommunityAnnouncements';
 
 type ToastState = {
   open: boolean;
@@ -152,24 +153,24 @@ export default function AnnouncementsPage() {
       setLastSavedAt(readNullableStr(response, 'updated_at', 'updatedAt'));
       setLastSavedBy(readNullableStr(response, 'updated_by', 'updatedBy') || null);
       setInitialized(true);
-      setToast({ open: true, tone: 'success', message: 'Announcement gespeichert.' });
+      setToast({ open: true, tone: 'success', message: 'Globale Ankündigung gespeichert.' });
     } catch (error) {
       setToast({
         open: true,
         tone: 'error',
-        message: error instanceof Error ? error.message : 'Announcement konnte nicht gespeichert werden.',
+        message: error instanceof Error ? error.message : 'Globale Ankündigung konnte nicht gespeichert werden.',
       });
     }
   }
 
   if (query.isLoading && !initialized) {
-    return <div className="panel-card rounded-[1.8rem] p-8 text-white">Announcements werden geladen …</div>;
+    return <div className="panel-card rounded-[1.8rem] p-8 text-white">Ankündigungen werden geladen …</div>;
   }
 
   if (query.isError && !initialized) {
     return (
       <div className="panel-card rounded-[1.8rem] p-8 text-white">
-        {query.error instanceof Error ? query.error.message : 'Announcements konnten nicht geladen werden.'}
+        {query.error instanceof Error ? query.error.message : 'Ankündigungen konnten nicht geladen werden.'}
       </div>
     );
   }
@@ -179,8 +180,8 @@ export default function AnnouncementsPage() {
   return (
     <section className="space-y-6">
       <PageHeader
-        title="Announcements"
-        description="Community-Werbung und Timer einstellen. Globale Announcements mit Text, Farbe und Zeitfenster verwalten."
+        title="Ankündigungen"
+        description="Community-Werbung und Timer einstellen. Globale Ankündigungen und eigene Texte für dach_lock verwalten."
         primaryAction={
           <button
             className="admin-button admin-button-secondary"
@@ -188,16 +189,16 @@ export default function AnnouncementsPage() {
             disabled={query.isFetching}
           >
             <RefreshCw className={`h-4 w-4 ${query.isFetching ? 'animate-spin' : ''}`} />
-            Refresh
+            Aktualisieren
           </button>
         }
       />
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <Section title="Editor" hint="Text, Aktivierung und Zeitfenster für den globalen Announcement-Modus.">
+        <Section title="Globale Event-Ankündigung" hint="Text, Aktivierung und Zeitfenster gelten für alle Kanäle. Eigene Texte für dach_lock verwaltest du darunter.">
           <fieldset disabled={promoMutation.isPending} className="min-w-0 space-y-4">
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
-              <span className="text-sm font-medium text-white">Announcement aktiv</span>
+              <span className="text-sm font-medium text-white">Globale Ankündigung aktiv</span>
               <input
                 type="checkbox"
                 checked={draft.enabled}
@@ -206,7 +207,7 @@ export default function AnnouncementsPage() {
             </label>
 
             <fieldset className="min-w-0">
-              <legend className="mb-2 text-sm font-medium text-white">Announcement-Farbe</legend>
+              <legend className="mb-2 text-sm font-medium text-white">Ankündigungsfarbe</legend>
               <div className="flex flex-wrap gap-2">
                 {announcementColors.map(color => (
                   <label key={color.value} className="relative cursor-pointer">
@@ -220,7 +221,7 @@ export default function AnnouncementsPage() {
                   </label>
                 ))}
               </div>
-              <p className="mt-2 text-xs leading-5 text-text-secondary">Kanalfarbe übernimmt die Akzentfarbe des jeweiligen Twitch-Kanals. Die Auswahl gilt für dieses globale Announcement.</p>
+              <p className="mt-2 text-xs leading-5 text-text-secondary">Kanalfarbe übernimmt die Akzentfarbe des jeweiligen Twitch-Kanals. Die Auswahl gilt für diese globale Ankündigung.</p>
             </fieldset>
 
             <label className="block space-y-2">
@@ -230,7 +231,7 @@ export default function AnnouncementsPage() {
                 value={draft.body}
                 onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))}
                 className="admin-input min-h-[22rem] resize-y font-mono text-sm leading-6"
-                placeholder="Event-Announcement eingeben"
+                placeholder="Event-Ankündigung eingeben"
               />
             </label>
 
@@ -259,8 +260,8 @@ export default function AnnouncementsPage() {
           <div className="space-y-4">
             <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/40 py-5 pl-6 pr-5">
               <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1.5" style={{ backgroundColor: announcementColors.find(color => color.value === draft.color)?.swatch }} />
-              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">Announcement · {announcementColors.find(color => color.value === draft.color)?.label}</p>
-              <TextPreview value={draft.body} emptyMessage="Noch kein Announcement-Text vorhanden." />
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">Ankündigung · {announcementColors.find(color => color.value === draft.color)?.label}</p>
+              <TextPreview value={draft.body} emptyMessage="Noch kein Ankündigungstext vorhanden." />
               {draft.color === 'primary' && <p className="mt-3 text-xs text-text-secondary">Die Kanalfarbe unterscheidet sich je Twitch-Kanal.</p>}
             </div>
             <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5 text-sm text-white">
@@ -277,6 +278,7 @@ export default function AnnouncementsPage() {
       </div>
 
       <StickyActionBar
+        sticky={false}
         lastSavedAt={lastSavedAt ? formatDateTime(lastSavedAt) : null}
         dirty={dirty}
         onSave={() => void handleSave()}
@@ -286,6 +288,7 @@ export default function AnnouncementsPage() {
         {lastSavedBy ? <span className="stat-pill">Zuletzt von {lastSavedBy}</span> : null}
       </StickyActionBar>
 
+      <CommunityAnnouncementsEditor />
       <PromoTimers />
 
       <Toast

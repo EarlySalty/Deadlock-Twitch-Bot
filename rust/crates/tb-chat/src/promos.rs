@@ -124,15 +124,6 @@ pub fn promo_invite_fallback(configured: Option<&str>) -> String {
         .to_string()
 }
 
-fn community_promo_text(sent_count: i64, invite: &str) -> String {
-    let text = match sent_count.rem_euclid(3) {
-        0 => "Bock auf Scrims? Meld dich bei Leo auf unserem Discord, wenn du mitspielen möchtest :)",
-        1 => "Zuschauen ist gut, selber mitmischen auch :) Alles rund um unsere Turniere findest du bei uns im Discord.",
-        _ => "Die Solo-Queue hat heute wieder Humor? Auf unserem Discord findest du Leute zum gemeinsamen Zocken :)",
-    };
-    format!("{text} {invite}")
-}
-
 fn render_promo_template(template: &str, invite: &str) -> Option<String> {
     let chars: Vec<char> = template.chars().collect();
     let mut out = String::new();
@@ -1886,23 +1877,42 @@ impl PromoEngine {
     async fn build_promo_text(&self, login: &str, invite: &str) -> Option<(String, String)> {
         let (_, community) = self.channel_timers(login).await;
         if community {
-            // Nur erfolgreiche Sends zählen: Rotation überlebt Neustarts,
-            // fehlgeschlagene Zustellungen verbrauchen kein Thema.
+            // Vor jedem Versand neu laden; deaktivierte Texte haben keinen Fallback.
+            let settings = match tb_analytics::community_announcements::load(&self.pool).await {
+                Ok(settings) => settings,
+                Err(error) => {
+                    warn!(%error, "Community-Ankündigungen konnten nicht geladen werden");
+                    return None;
+                }
+            };
+            if !settings.enabled {
+                return None;
+            }
+            let mut rotation = Vec::new();
+            if settings.include_global_event {
+                if let Some(event) = self.load_global_promo_message(invite).await {
+                    rotation.push(event);
+                }
+            }
+            for entry in settings.entries.iter().filter(|entry| entry.enabled) {
+                let text = entry.text.trim().replace("{invite}", invite);
+                if text.chars().count() > 500 {
+                    warn!("Community-Ankündigung überschreitet nach Einfügen des Einladungslinks 500 Zeichen");
+                    return None;
+                }
+                rotation.push((text, entry.color.clone()));
+            }
+            if rotation.is_empty() {
+                return None;
+            }
+            // Nur erfolgreiche Sends zählen; die Position überlebt Neustarts.
             let count = sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE channel_login = $1 AND pfad = 'periodic' AND sent_at IS NOT NULL")
                 .bind(login).fetch_one(&self.pool).await;
             return match count {
                 Ok(count) => {
-                    if let Some(event) = self.load_global_promo_message(invite).await {
-                        if count.rem_euclid(4) == 0 {
-                            Some(event)
-                        } else {
-                            Some((community_promo_text(count.rem_euclid(4) - 1, invite), "purple".into()))
-                        }
-                    } else {
-                        Some((community_promo_text(count, invite), "purple".into()))
-                    }
-                },
+                    Some(rotation.remove(count.rem_euclid(rotation.len() as i64) as usize))
+                }
                 Err(error) => {
                     warn!(%error, login, "Community-Themenrotation konnte nicht geladen werden");
                     None
@@ -3248,19 +3258,6 @@ mod tests {
     }
 
     #[test]
-    fn community_rotation_wechselnde_themen_mit_discord() {
-        let invite = "https://discord.gg/deadlock";
-        let texts: Vec<_> = (0..3).map(|i| community_promo_text(i, invite)).collect();
-        assert!(texts[0].contains("Scrims"));
-        assert!(texts[1].contains("Turniere"));
-        assert!(texts[2].contains("Zocken"));
-        assert!(texts
-            .iter()
-            .all(|text| text.ends_with(invite) && text.matches("https://").count() == 1));
-        assert_eq!(community_promo_text(3, invite), texts[0]);
-    }
-
-    #[test]
     fn periodischer_promo_text_traegt_invite_am_ende_ohne_strich() {
         let invite = "https://discord.gg/deadlock";
         let out = crate::promo_pitch::finalize_channel_promo(
@@ -4507,6 +4504,12 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260912190000_community_announcements.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         seed_partner_channel(&pool, COMMUNITY_BROADCASTER_ID, "community-renamed").await;
         seed_partner_channel(&pool, "other-id", "other").await;
         let api = Arc::new(super::tests::MockApi::default());
@@ -4603,14 +4606,94 @@ mod db_tests {
         assert_eq!(api.announcement_colors().await, vec!["purple", "green"]);
         sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,3)")
             .execute(&pool).await.unwrap();
-        let active_event = engine.build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE).await.unwrap();
+        let active_event = engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .unwrap();
         assert!(active_event.0.starts_with("Unser bestehender Hinweis"));
         assert_eq!(active_event.1, "green");
         sqlx::query("UPDATE twitch_global_promo_modes SET ends_at = '2000-01-01T00:00:00+00:00'")
-            .execute(&pool).await.unwrap();
-        let expired_event = engine.build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE).await.unwrap();
-        assert_eq!(expired_event.0, community_promo_text(4, DEFAULT_PROMO_DISCORD_INVITE));
+            .execute(&pool)
+            .await
+            .unwrap();
+        let expired_event = engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .unwrap();
+        assert_eq!(expired_event.0, format!("Zuschauen ist gut, selber mitmischen auch :) Alles rund um unsere Turniere findest du bei uns im Discord. {}", DEFAULT_PROMO_DISCORD_INVITE));
         assert_eq!(expired_event.1, "purple");
+        use tb_analytics::community_announcements::{load, save, Announcement};
+        let mut config = load(&pool).await.unwrap();
+        config.include_global_event = false;
+        for entry in &mut config.entries {
+            entry.enabled = false;
+        }
+        config = save(&pool, &config).await.unwrap().unwrap();
+        assert!(
+            engine
+                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+                .await
+                .is_none(),
+            "Keine versteckten Standardtexte bei deaktivierter Rotation"
+        );
+        config.entries.push(Announcement {
+            text: "Nur unser neuer Test {invite}".into(),
+            enabled: false,
+            color: "orange".into(),
+        });
+        config = save(&pool, &config).await.unwrap().unwrap();
+        assert!(engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .is_none());
+        config.entries.last_mut().unwrap().enabled = true;
+        config = save(&pool, &config).await.unwrap().unwrap();
+        let selected = engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .unwrap();
+        assert_eq!(
+            selected,
+            (
+                format!("Nur unser neuer Test {}", DEFAULT_PROMO_DISCORD_INVITE),
+                "orange".into()
+            )
+        );
+        // Tatsächlicher Sendepfad, bestehender Cooldown bleibt erhalten.
+        assert!(
+            engine
+                .send_promo_message(
+                    "community-renamed",
+                    COMMUNITY_BROADCASTER_ID,
+                    Instant::now() + Duration::from_secs(3600),
+                    "test"
+                )
+                .await
+        );
+        assert_eq!(api.announcement_colors().await.last().unwrap(), "orange");
+        config.enabled = false;
+        config.include_global_event = true;
+        save(&pool, &config).await.unwrap().unwrap();
+        sqlx::query("UPDATE twitch_global_promo_modes SET ends_at = NULL")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            engine
+                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+                .await
+                .is_none(),
+            "Kanalpause sperrt auch das globale Event"
+        );
+        assert!(
+            engine
+                .build_promo_text("other", DEFAULT_PROMO_DISCORD_INVITE)
+                .await
+                .unwrap()
+                .0
+                .starts_with("Unser bestehender Hinweis"),
+            "Andere Kanäle bleiben unverändert"
+        );
     }
 
     struct EmptyMembers;

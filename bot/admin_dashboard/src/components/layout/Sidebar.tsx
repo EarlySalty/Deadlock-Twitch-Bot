@@ -82,7 +82,7 @@ const navigationGroups: NavigationGroup[] = [
   {
     label: 'Content & Comms',
     items: [
-      { label: 'Announcements', to: '/content/announcements', icon: Megaphone },
+      { label: 'Ankündigungen', to: '/content/announcements', icon: Megaphone },
       { label: 'Caster-Overlay', to: '/content/caster-overlay', icon: Monitor },
       { label: 'Roadmap', to: '/content/roadmap', icon: Map },
       { label: 'Changelog', to: '/content/changelog', icon: ClipboardList },

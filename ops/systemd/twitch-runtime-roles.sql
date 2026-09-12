@@ -193,3 +193,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
     REVOKE ALL ON TABLES FROM twitchbot, twitchdash, twitchlegacy;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
     REVOKE ALL ON SEQUENCES FROM twitchbot, twitchdash, twitchlegacy;
+
+-- Kanalgebundene Ankündigungsverwaltung: Bot liest, Dashboard bearbeitet.
+DO $$ BEGIN
+    IF to_regclass('public.twitch_community_announcements') IS NOT NULL THEN
+        REVOKE ALL ON twitch_community_announcements FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT ON twitch_community_announcements TO twitchbot;
+        GRANT SELECT, UPDATE ON twitch_community_announcements TO twitchdash;
+    END IF;
+END $$;
