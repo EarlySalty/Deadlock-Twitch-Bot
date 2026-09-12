@@ -647,7 +647,7 @@ mod community_announcement_tests {
             )
             .await
             .unwrap();
-        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(load(&db.pool).await.unwrap().revision, 1);
     }
 }
