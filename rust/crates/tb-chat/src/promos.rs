@@ -1641,7 +1641,7 @@ impl PromoEngine {
                 .await;
 
             if overall_ready
-                && (state_snapshot.community_channel || activity_ready)
+                && activity_ready
                 && self.stream_start_delay_ok(login).await
             {
                 faellig.push((login.clone(), channel_id.clone()));
@@ -1664,17 +1664,12 @@ impl PromoEngine {
     }
 
     async fn process_due_channel(self: Arc<Self>, login: String, channel_id: String, now: Instant) {
-        let (_, community) = self.channel_timers(&login).await;
-        let sent = if community {
-            if !self.reserve_promo_attempt(&login, now).await {
-                return;
-            }
-            self.send_promo_message(&login, &channel_id, now, "community_timer")
-                .await
-        } else {
-            self.maybe_send_promo_with_stats(&login, &channel_id, now, false)
-                .await
-        };
+        // Community und alle anderen Kanäle laufen durch denselben Aktivitäts-Gate;
+        // nur die geladenen Timer-Werte unterscheiden sich. Keine Sonderlogik für
+        // den Community-Kanal (kein Senden bei ruhigem Chat trotz Overall-Timer).
+        let sent = self
+            .maybe_send_promo_with_stats(&login, &channel_id, now, false)
+            .await;
         if !sent {
             self.maybe_send_viewer_spike_promo(&login, &channel_id, now)
                 .await;
@@ -2122,8 +2117,10 @@ impl PromoEngine {
             }
         }
 
-        // 4. Neue Chatter ≥ 2 (wenn last_sent gesetzt).
-        if state.last_promo_sent.is_some() && state.timers.new_chatters > 0 {
+        // 4. Neue Chatter ≥ eingestellter Wert. Gilt auch für den ersten Versand:
+        //    ohne bisherige "gesehen"-Basis zählen alle aktiven Chatter als neu,
+        //    die eingestellte Schwelle bleibt so auch beim ersten Timer greifbar.
+        if state.timers.new_chatters > 0 {
             let new_chatters = self
                 .get_new_chatters_in_window_inner(login, state, now)
                 .await;
@@ -2202,29 +2199,35 @@ impl PromoEngine {
     /// Viewer-Spike-Promo (promos.py:1306: `_maybe_send_viewer_spike_promo`).
     async fn maybe_send_viewer_spike_promo(&self, login: &str, channel_id: &str, now: Instant) {
         // Guards (promos.py:1306).
-        let (overall_ready, has_new_raw, chat_silent, spike_cd_ok, attempt_ok) = {
+        let state_snapshot = {
             let state_ref = self
                 .channel_states
                 .entry(login.to_string())
                 .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
-
-            let overall = self.overall_promo_ready_inner(&state, now);
-            let has_raw = state.raw_msg_count_since_promo > 0;
-            // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
-            // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
-            let silent = state.last_raw_chat_message_ts.is_none_or(|t| {
-                now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
-            });
-            let spike_ok = state.last_promo_viewer_spike.is_none_or(|t| {
-                now.duration_since(t).as_secs() >= state.timers.viewer_spike_cooldown_minutes * 60
-            });
-            let attempt = self.promo_attempt_allowed_inner(&state, now);
-
-            (overall, has_raw, silent, spike_ok, attempt)
+            state.clone()
         };
 
-        if !overall_ready || !has_new_raw || !chat_silent || !spike_cd_ok || !attempt_ok {
+        let overall_ready = self.overall_promo_ready_inner(&state_snapshot, now);
+        // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
+        // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
+        let chat_silent = state_snapshot.last_raw_chat_message_ts.is_none_or(|t| {
+            now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
+        });
+        let spike_cd_ok = state_snapshot.last_promo_viewer_spike.is_none_or(|t| {
+            now.duration_since(t).as_secs()
+                >= state_snapshot.timers.viewer_spike_cooldown_minutes * 60
+        });
+        let attempt_ok = self.promo_attempt_allowed_inner(&state_snapshot, now);
+        // Auch der Viewer-Spike-Pfad respektiert die eingestellten Chat-Grenzen
+        // (min_messages, Aktivitätsfenster, neue Chatter). Keine alternative
+        // Werbeschleife darf diese Grenzen umgehen; die frühere Schwelle "eine
+        // Roh-Nachricht" ist damit abgelöst.
+        let activity_ready = self
+            .promo_activity_ready_inner(login, &state_snapshot, now)
+            .await;
+
+        if !overall_ready || !activity_ready || !chat_silent || !spike_cd_ok || !attempt_ok {
             return;
         }
 
@@ -4538,13 +4541,40 @@ mod db_tests {
                 .overall_cooldown_minutes,
             90
         );
-        // Ohne eine einzige Chatnachricht wird der eigene Timer ausgespielt.
+        // Ohne Chat-Aktivität bleibt der eigene Timer still: die eingestellten
+        // Chat-Schwellen gelten auch für den Community-Kanal.
+        let now = Instant::now();
         engine
             .clone()
             .process_due_channel(
                 "community-renamed".into(),
                 COMMUNITY_BROADCASTER_ID.into(),
-                Instant::now(),
+                now,
+            )
+            .await;
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "ruhiger Chat darf keinen Timer-Spam auslösen"
+        );
+        // Erst wenn min_messages und das Aktivitätsfenster erreicht sind, sendet der Timer.
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("community-renamed".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.raw_msg_count_since_promo = 8;
+            for idx in 0..8usize {
+                state.activity.push_back((now, format!("chatter{}", idx % 2)));
+            }
+        }
+        engine
+            .clone()
+            .process_due_channel(
+                "community-renamed".into(),
+                COMMUNITY_BROADCASTER_ID.into(),
+                now,
             )
             .await;
         assert_eq!(api.announcement_count().await, 1);

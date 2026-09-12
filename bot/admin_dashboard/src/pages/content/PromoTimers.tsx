@@ -51,7 +51,7 @@ export function PromoTimers() {
               <section key={group} aria-labelledby={`timer-${group}-title`} className="min-w-0 rounded-2xl border border-white/10 bg-black/25 p-4 sm:p-5">
                 <h3 id={`timer-${group}-title`} className="text-base font-semibold text-white">{group === 'community' ? 'Unser Kanal · dach_lock' : 'Alle anderen Streamer'}</h3>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">{group === 'community'
-                  ? 'Eigene Abstände für unseren Community-Kanal. Der Timer kann auch bei ruhigem Chat senden; die Chat-Schwellen gelten für Werbung aus dem Chat heraus.'
+                  ? 'Eigene Abstände für unseren Community-Kanal. Auch der Timer sendet erst, wenn die eingestellten Chat-Schwellen erreicht sind; bei ruhigem Chat bleibt es still.'
                   : 'Zentrale Standardwerte für alle übrigen Kanäle. Unser Community-Kanal behält seine eigenen Abstände.'}</p>
                 <div className="mt-5 grid gap-4 sm:grid-cols-2">
                   {fields.map(field => (
