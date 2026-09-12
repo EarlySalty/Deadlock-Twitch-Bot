@@ -361,7 +361,25 @@ export interface ChatConfigSnapshot {
   raw?: Record<string, unknown>;
 }
 
+export interface PromoTimerProfile {
+  overallCooldownMinutes: number;
+  activityCooldownMinMinutes: number;
+  activityCooldownMaxMinutes: number;
+  minMessages: number;
+  newChatters: number;
+  attemptCooldownMinutes: number;
+  viewerSpikeCooldownMinutes: number;
+  pitchCooldownMinutes: number;
+  pitchMaxPerStream: number;
+}
+
+export interface PromoTimerSettings {
+  defaults: PromoTimerProfile;
+  community: PromoTimerProfile & { broadcasterId: string };
+}
+
 export interface ConfigOverview {
+  timerSettings?: PromoTimerSettings;
   promo?: Record<string, unknown>;
   raids?: RaidConfigSnapshot;
   chat?: ChatConfigSnapshot;

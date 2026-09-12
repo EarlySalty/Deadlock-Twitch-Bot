@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { Toast } from '@/components/shared/Toast';
 import { useChatConfigMutation, useConfigOverview } from '@/hooks/useAdmin';
+import { PromoTimers } from './PromoTimers';
 
 function formatCount(value: number | undefined) {
   return typeof value === 'number' ? String(value) : '—';
@@ -42,9 +43,11 @@ export function ChatConfig() {
   return (
     <section className="space-y-5">
       <PageHeader
-        title="Chat Config"
-        description="Moderations-Flags gesammelt steuern. Der Scope `all` erweitert den Rollout bewusst auf den gesamten verwalteten Bestand."
+        title="Chat und Timer"
+        description="Werbung und Timer zentral einstellen und die Chat-Moderation verwalten."
       />
+
+      <PromoTimers />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard

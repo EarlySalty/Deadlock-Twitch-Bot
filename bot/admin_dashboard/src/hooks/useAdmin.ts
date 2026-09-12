@@ -50,6 +50,7 @@ import {
   updateStreamerDiscordProfile,
   updateChatConfig,
   updatePromoConfig,
+  updatePromoTimers,
   updateRaidConfig,
   verifyStreamer,
 } from '@/api/client';
@@ -530,6 +531,14 @@ export function useChatConfigMutation() {
       void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-streamer-detail'] });
     },
+  });
+}
+
+export function usePromoTimerMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updatePromoTimers,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] }),
   });
 }
 
