@@ -21,7 +21,21 @@ type PromoDraft = {
   body: string;
   startsAt: string;
   endsAt: string;
+  color: AnnouncementColor;
 };
+
+const announcementColors = [
+  { value: 'primary', label: 'Kanalfarbe', swatch: '#b8b8b8' },
+  { value: 'blue', label: 'Blau', swatch: '#47adff' },
+  { value: 'green', label: 'Grün', swatch: '#00d69b' },
+  { value: 'orange', label: 'Orange', swatch: '#ffb31a' },
+  { value: 'purple', label: 'Lila', swatch: '#c299ff' },
+] as const;
+type AnnouncementColor = typeof announcementColors[number]['value'];
+
+function readColor(record: Record<string, unknown>): AnnouncementColor {
+  return announcementColors.find(color => color.value === record.announcement_color)?.value ?? 'purple';
+}
 
 function readStr(record: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
@@ -71,6 +85,7 @@ function draftFromConfig(record: Record<string, unknown>): PromoDraft {
     body: readStr(record, 'custom_message', 'message', 'promo_message'),
     startsAt: utcIsoToBerlinLocalInput(readNullableStr(record, 'starts_at', 'startsAt')),
     endsAt: utcIsoToBerlinLocalInput(readNullableStr(record, 'ends_at', 'endsAt')),
+    color: readColor(record),
   };
 }
 
@@ -86,8 +101,8 @@ function computeStatus(draft: PromoDraft): string {
 export default function AnnouncementsPage() {
   const query = useConfigOverview();
   const promoMutation = usePromoConfigMutation();
-  const [draft, setDraft] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '' });
-  const [saved, setSaved] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '' });
+  const [draft, setDraft] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '', color: 'purple' });
+  const [saved, setSaved] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '', color: 'purple' });
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [lastSavedBy, setLastSavedBy] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
@@ -97,7 +112,8 @@ export default function AnnouncementsPage() {
     draft.enabled !== saved.enabled ||
     draft.body !== saved.body ||
     draft.startsAt !== saved.startsAt ||
-    draft.endsAt !== saved.endsAt;
+    draft.endsAt !== saved.endsAt ||
+    draft.color !== saved.color;
 
   useEffect(() => {
     if (!query.data) {
@@ -123,6 +139,7 @@ export default function AnnouncementsPage() {
         starts_at: draft.startsAt ? berlinLocalInputToUtcIso(draft.startsAt) : null,
         ends_at: draft.endsAt ? berlinLocalInputToUtcIso(draft.endsAt) : null,
         is_enabled: draft.enabled,
+        announcement_color: draft.color,
       };
       const response = coerceRecord(await promoMutation.mutateAsync(payload));
       const next = draftFromConfig(response);
@@ -174,7 +191,7 @@ export default function AnnouncementsPage() {
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <Section title="Editor" hint="Text, Aktivierung und Zeitfenster für den globalen Announcement-Modus.">
-          <div className="space-y-4">
+          <fieldset disabled={promoMutation.isPending} className="min-w-0 space-y-4">
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <span className="text-sm font-medium text-white">Announcement aktiv</span>
               <input
@@ -184,8 +201,23 @@ export default function AnnouncementsPage() {
               />
             </label>
 
+            <fieldset className="min-w-0">
+              <legend className="mb-2 text-sm font-medium text-white">Announcement-Farbe</legend>
+              <div className="flex flex-wrap gap-2">
+                {announcementColors.map(color => (
+                  <label key={color.value} className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm text-white ${draft.color === color.value ? 'border-white/70 bg-white/10' : 'border-white/15 bg-black/20'}`}>
+                    <input type="radio" name="announcement-color" value={color.value} checked={draft.color === color.value}
+                      onChange={() => setDraft(current => ({ ...current, color: color.value }))} />
+                    <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: color.swatch }} />
+                    {color.label}
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs leading-5 text-text-secondary">Kanalfarbe übernimmt die Akzentfarbe des jeweiligen Twitch-Kanals. Die Auswahl gilt für dieses globale Announcement.</p>
+            </fieldset>
+
             <label className="block space-y-2">
-              <span className="text-sm font-medium text-white">Body</span>
+              <span className="text-sm font-medium text-white">Text</span>
               <textarea
                 rows={18}
                 value={draft.body}
@@ -213,13 +245,15 @@ export default function AnnouncementsPage() {
                 <span className="text-xs text-text-secondary">{draft.endsAt ? '' : 'Leer = kein Ende'}</span>
               </label>
             </div>
-          </div>
+          </fieldset>
         </Section>
 
-        <Section title="Preview" hint="Sichere Text-Vorschau ohne HTML-Ausfuehrung.">
+        <Section title="Vorschau" hint="Die Vorschau zeigt die gewählte Farbe ungefähr; die Darstellung im Chat übernimmt Twitch.">
           <div className="space-y-4">
-            <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5">
+            <div className="rounded-[1.5rem] border border-white/10 border-l-4 bg-bg/35 p-5" style={{ borderLeftColor: announcementColors.find(color => color.value === draft.color)?.swatch }}>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">Announcement · {announcementColors.find(color => color.value === draft.color)?.label}</p>
               <TextPreview value={draft.body} emptyMessage="Noch kein Announcement-Text vorhanden." />
+              {draft.color === 'primary' && <p className="mt-3 text-xs text-text-secondary">Die Kanalfarbe unterscheidet sich je Twitch-Kanal.</p>}
             </div>
             <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5 text-sm text-white">
               <p>

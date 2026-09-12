@@ -114,7 +114,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE twitch_global_promo_modes (\
                 config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
-                custom_message TEXT, starts_at TEXT, ends_at TEXT, \
+                custom_message TEXT, announcement_color TEXT NOT NULL DEFAULT 'purple', starts_at TEXT, ends_at TEXT, \
                 is_enabled INTEGER NOT NULL DEFAULT 0, \
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
         )
