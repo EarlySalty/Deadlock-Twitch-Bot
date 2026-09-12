@@ -48,3 +48,13 @@ fn classify_lfg_bleibt_bei_anderen_nachrichten_still() {
         assert!(!classify_lfg(text), "{text:?}");
     }
 }
+
+#[test]
+fn classify_lfg_ignoriert_aufzaehlung_ohne_suchsignal() {
+    assert!(!classify_lfg("Drifter und noch wer"));
+}
+
+#[test]
+fn classify_lfg_erkennt_suche_mit_gegenstand_weiterhin() {
+    assert!(classify_lfg("noch wer bock auf ranked?"));
+}

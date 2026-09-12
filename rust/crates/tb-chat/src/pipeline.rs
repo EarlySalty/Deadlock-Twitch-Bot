@@ -2032,7 +2032,10 @@ mod tests {
 
         assert!(seen.mark("msg-1", now), "erste Kopie wird verarbeitet");
         assert!(!seen.mark("msg-1", now), "zweite Kopie wird verworfen");
-        assert!(seen.mark("msg-2", now), "andere Nachricht bleibt unberuehrt");
+        assert!(
+            seen.mark("msg-2", now),
+            "andere Nachricht bleibt unberuehrt"
+        );
     }
 
     #[test]
@@ -2512,6 +2515,7 @@ mod tests {
                 true,
                 None,
                 None,
+                None,
             )),
             promos: Arc::new(PromoEngine::new(
                 pool.clone(),
@@ -2785,14 +2789,18 @@ mod tests {
                 None,
                 None,
             )),
-            lfg_pitch: Arc::new(crate::lfg_pitch::LfgPitchResponder::new(
-                Arc::clone(&api_trait),
-                Arc::new(StaticInviteUrl),
-                Arc::new(AlwaysYesLfgJudge),
-                true,
-                None,
-                None,
-            )),
+            lfg_pitch: Arc::new(
+                crate::lfg_pitch::LfgPitchResponder::new(
+                    Arc::clone(&api_trait),
+                    Arc::new(StaticInviteUrl),
+                    Arc::new(AlwaysYesLfgJudge),
+                    true,
+                    None,
+                    None,
+                    None,
+                )
+                .set_test_register_pass(),
+            ),
             promos: Arc::new(PromoEngine::new(
                 pool.clone(),
                 Arc::clone(&api_trait),
@@ -3560,7 +3568,9 @@ mod tests {
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
-                Arc::new(crate::invite_question::PgInviteQuestionStore::new(pool.clone())),
+                Arc::new(crate::invite_question::PgInviteQuestionStore::new(
+                    pool.clone(),
+                )),
                 Arc::new(crate::invite_question::LlmInviteQuestionJudge::new(
                     EngagementLlmClient::new(None, None, None, None),
                 )),
@@ -3572,6 +3582,7 @@ mod tests {
                 Arc::new(NoopDiscordLink),
                 Arc::new(NoopLfgJudge),
                 true,
+                None,
                 None,
                 None,
             )),
