@@ -85,6 +85,7 @@ const CLIP_FAILED_REPLY: &str =
 
 const HELP_BASE_URL: &str = "https://deutsche-deadlock-community.de/streamer/help";
 const COMMANDS_URL: &str = "https://deutsche-deadlock-community.de/streamer/commands";
+const DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/twitch/dashboard";
 
 fn knowledge_dir() -> PathBuf {
     match std::env::var("KNOWLEDGE_DIR")
@@ -105,6 +106,10 @@ fn knowledge_base() -> &'static KnowledgeBase {
 /// unlesbare Textwand, die Website erklärt jeden Befehl richtig.
 fn commands_reply() -> String {
     format!("Alle Befehle mit Erklärung findest du hier: {COMMANDS_URL}")
+}
+
+fn dashboard_reply() -> String {
+    format!("Dein Dashboard findest du hier: {DASHBOARD_URL}")
 }
 
 fn watchtime_dauer(minuten: f64) -> String {
@@ -564,6 +569,10 @@ impl CommandEngine {
                 self.cmd_commands(event).await;
                 true
             }
+            "!dashboard" => {
+                self.cmd_dashboard(event).await;
+                true
+            }
             "!help" => {
                 self.cmd_help(event, args).await;
                 true
@@ -714,6 +723,10 @@ impl CommandEngine {
 
     async fn cmd_commands(&self, event: &ChatMessageEvent) {
         self.reply(event, &commands_reply()).await;
+    }
+
+    async fn cmd_dashboard(&self, event: &ChatMessageEvent) {
+        self.reply(event, &dashboard_reply()).await;
     }
 
     async fn cmd_watchtime(&self, event: &ChatMessageEvent) {

@@ -126,6 +126,12 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Verlinkt die Übersicht aller Befehle.",
         },
         CommandInfo {
+            name: "!dashboard",
+            aliases: &[],
+            group: Fun,
+            summary: "Verlinkt dein Twitch-Dashboard.",
+        },
+        CommandInfo {
             name: "!help",
             aliases: &[],
             group: Fun,
