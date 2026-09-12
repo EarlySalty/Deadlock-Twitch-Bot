@@ -492,13 +492,15 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     setCopied(false);
   }, [overlayUrl]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const host = previewHostRef.current;
     if (!host) return;
     const updateSize = () => {
       const bounds = host.getBoundingClientRect();
       setPreviewHostWidth(Math.max(1, bounds.width));
-      setPreviewHostHeight(expandedPreview ? Math.max(180, (previewPanelRef.current?.clientHeight ?? 670) - 150) : 520);
+      // Beide Flächen passen in den Viewport, auch bei hohen festen Karten.
+      setPreviewHostHeight(Math.max(1, Math.min(window.innerHeight - 150,
+        expandedPreview ? (previewPanelRef.current?.clientHeight ?? 670) - 150 : 520)));
       setOutputHostWidth(Math.max(1, outputHostRef.current?.getBoundingClientRect().width ?? bounds.width));
     };
     updateSize();
@@ -512,7 +514,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       window.removeEventListener('resize', updateSize);
       document.removeEventListener('fullscreenchange', updateSize);
     };
-  }, [expandedPreview, normalizedLogin]);
+  }, [expandedPreview, normalizedLogin, editorMode, layout]);
 
   const toggleModule = (key: ModuleKey) => {
     endGesture();
@@ -706,7 +708,10 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
   const renderWidth = layout === 'canvas' ? canvasWidth : layout === 'bar' ? 960 : 440;
   const renderHeight = layout === 'canvas' ? canvasHeight : layout === 'bar' ? 300 : 660;
-  const canvasPreviewScale = Math.min(Math.max(1, previewHostWidth) / renderWidth, previewHostHeight / renderHeight);
+  // Die unskalierten Hosts messen: eine skalierte Ausgabe darf ihre eigene
+  // Breite nicht als Eingabe zurückführen. Editor und Ausgabe teilen den Fit.
+  const availablePreviewWidth = editorMode === 'advanced' ? Math.min(previewHostWidth, outputHostWidth) : previewHostWidth;
+  const canvasPreviewScale = Math.min(Math.max(1, availablePreviewWidth) / renderWidth, previewHostHeight / renderHeight);
   const canvasPreviewWidth = renderWidth * canvasPreviewScale;
   const canvasPreviewHeight = renderHeight * canvasPreviewScale;
   const recommendedSize = layout === 'bar' ? '960 × 300' : layout === 'canvas' ? `${canvasWidth} × ${canvasHeight}` : '440 × 660';
@@ -926,10 +931,10 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </div>}
           <p hidden={editorMode === 'simple'} className="text-xs text-text-secondary">Strg/⌘/Shift + Klick: Auswahl ändern. Rahmen auf freier Fläche ziehen, mit Strg/⌘/Shift ergänzen. Alt: ohne Magnet. Größengriff: nur ein Modul. Freier Klick oder Escape: Auswahl aufheben.</p>
           </div>
-          <div hidden={editorMode === 'simple'} className="flex min-w-0 flex-col gap-2">
+          <div ref={outputHostRef} hidden={editorMode === 'simple'} className="flex min-w-0 flex-col gap-2">
             <h4 className="text-sm font-semibold text-white">Vorschau · So sieht es im Stream aus</h4>
-            <div ref={outputHostRef} data-testid="overlay-clean-output" className="relative min-w-0 shrink-0 overflow-hidden rounded-xl ring-1 ring-border" style={{ ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }), width: '100%', aspectRatio: layout === 'canvas' ? `${canvasWidth} / ${canvasHeight}` : layout === 'bar' ? '960 / 300' : '440 / 660' }}>
-              <iframe ref={outputIframeRef} data-testid="overlay-output-frame" onLoad={syncPreview} src={debouncedUrl} title="Overlay-Live-Ausgabe ohne Bearbeitungshilfen" className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent" style={{ width: renderWidth, height: renderHeight, transform: `scale(${outputHostWidth / renderWidth})`, transformOrigin: 'top left' }} />
+            <div data-testid="overlay-clean-output" className="relative min-w-0 shrink-0 overflow-hidden rounded-xl ring-1 ring-border" style={{ ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }), width: canvasPreviewWidth, height: canvasPreviewHeight, marginInline: 'auto' }}>
+              <iframe ref={outputIframeRef} data-testid="overlay-output-frame" onLoad={syncPreview} src={debouncedUrl} title="Overlay-Live-Ausgabe ohne Bearbeitungshilfen" className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent" style={{ width: renderWidth, height: renderHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' }} />
             </div>
             <p className="text-xs text-text-secondary">Echte Spielwerte, laufend aktualisiert. Ohne verknüpftes Steam-Konto bleiben die Werte leer.</p>
           </div>
