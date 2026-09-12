@@ -133,7 +133,10 @@ export default function AnnouncementsPage() {
 
   async function handleSave() {
     try {
-      const payload = {
+      const colorOnly = draft.color !== saved.color &&
+        draft.enabled === saved.enabled && draft.body === saved.body &&
+        draft.startsAt === saved.startsAt && draft.endsAt === saved.endsAt;
+      const payload = colorOnly ? { announcement_color: draft.color } : {
         mode: draft.enabled ? 'custom_event' : 'standard',
         custom_message: draft.body,
         starts_at: draft.startsAt ? berlinLocalInputToUtcIso(draft.startsAt) : null,

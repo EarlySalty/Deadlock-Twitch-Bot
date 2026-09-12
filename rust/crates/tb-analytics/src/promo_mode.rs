@@ -568,6 +568,20 @@ impl From<sqlx::Error> for SavePromoModeError {
 }
 
 /// Validiert + speichert die Config (Python `save_global_promo_mode`).
+fn is_color_only_update(raw: &Value) -> bool {
+    raw.get("announcement_color").is_some()
+        && [
+            "mode",
+            "custom_message",
+            "starts_at",
+            "ends_at",
+            "is_enabled",
+        ]
+        .iter()
+        .all(|key| raw.get(key).is_none())
+}
+
+/// Speichert Vollkonfiguration oder eine isolierte Farbanpassung.
 pub async fn save_global_promo_mode(
     pool: &PgPool,
     raw_config: &Value,
@@ -577,6 +591,25 @@ pub async fn save_global_promo_mode(
     let (normalized, issues) = validate_global_promo_mode_config(raw_config);
     if let Some(first) = issues.first() {
         return Err(SavePromoModeError::Validation(first.message.clone()));
+    }
+
+    // Eine reine Farbanpassung berührt weder Text, Modus noch das Zeitfenster.
+    // Das Teilupdate bewahrt auch parallele Änderungen anderer Admin-Sessions.
+    if is_color_only_update(raw_config) {
+        sqlx::query(
+            "INSERT INTO twitch_global_promo_modes \
+             (config_key, announcement_color, updated_at, updated_by) VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (config_key) DO UPDATE SET \
+             announcement_color = EXCLUDED.announcement_color, \
+             updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by",
+        )
+        .bind(PROMO_MODE_SINGLETON_KEY)
+        .bind(&normalized.announcement_color)
+        .bind(iso_seconds(&Utc::now()))
+        .bind(updated_by.trim())
+        .execute(pool)
+        .await?;
+        return Ok(load_global_promo_mode(pool).await?);
     }
 
     let updated_at = iso_seconds(&Utc::now());
@@ -636,6 +669,25 @@ pub async fn save_global_promo_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn farbteilupdate_erkennt_nur_farbe_auch_mit_csrf() {
+        assert!(is_color_only_update(
+            &json!({"announcement_color": "blue", "csrf_token": "test"})
+        ));
+        for key in [
+            "mode",
+            "custom_message",
+            "starts_at",
+            "ends_at",
+            "is_enabled",
+        ] {
+            let mut request = json!({"announcement_color": "blue"});
+            request[key] = Value::Null;
+            assert!(!is_color_only_update(&request), "{key}");
+        }
+        assert!(!is_color_only_update(&json!({})));
+    }
 
     #[test]
     fn announcement_farben_nur_twitch_werte() {
