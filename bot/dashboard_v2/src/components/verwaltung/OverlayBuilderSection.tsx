@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Copy, Maximize, Minimize, RectangleHorizontal, X } from 'lucide-react';
+import { OverlayCanvasGuides } from './OverlayCanvasGuides';
 
 type OverlayTheme = 'dark' | 'light' | 'accent';
 type OverlayLayout = 'box' | 'bar' | 'canvas';
@@ -198,14 +199,17 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [editingField, setEditingField] = useState<{ key: ModuleKey; field: SourceField } | null>(null);
   const [editingCanvasDimension, setEditingCanvasDimension] = useState<'width' | 'height' | null>(null);
   const [selectedSource, setSelectedSource] = useState<ModuleKey>('rank');
+  const [hasSelection, setHasSelection] = useState(true);
+  const selectSource = (key: ModuleKey) => { setSelectedSource(key); setHasSelection(true); };
   const [activeSource, setActiveSource] = useState<ModuleKey | null>(null);
   const [touchSource, setTouchSource] = useState<ModuleKey | null>(null);
   const [previewHostWidth, setPreviewHostWidth] = useState(560);
   const [previewHostHeight, setPreviewHostHeight] = useState(520);
+  const [outputHostWidth, setOutputHostWidth] = useState(560);
   const [theaterMode, setTheaterMode] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenNotice, setFullscreenNotice] = useState('');
-  const [previewBackdrop, setPreviewBackdrop] = useState<'checker' | 'dark' | 'light'>('checker');
+  const [previewBackdrop, setPreviewBackdrop] = useState<'checker' | 'dark' | 'light'>('dark');
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -213,11 +217,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const [copyFailed, setCopyFailed] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const previewHostRef = useRef<HTMLDivElement>(null);
+  const outputHostRef = useRef<HTMLDivElement>(null);
   const previewPanelRef = useRef<HTMLDivElement>(null);
   const fullscreenPendingRef = useRef(false);
   const fullscreenExitRef = useRef(0);
   const dragRef = useRef<DragState | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const outputIframeRef = useRef<HTMLIFrameElement>(null);
   const expandedPreview = theaterMode || fullscreen;
 
   const toggleFullscreen = async () => {
@@ -268,10 +274,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
   const syncPreview = () => {
     iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
+    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
   };
 
   useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
+    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
   }, [sources]);
 
   const storageKey = `ddc-overlay-layout-v1:${normalizedLogin}`;
@@ -408,11 +416,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     const updateSize = () => {
       const bounds = host.getBoundingClientRect();
       setPreviewHostWidth(Math.max(1, bounds.width));
-      setPreviewHostHeight(expandedPreview ? Math.max(1, bounds.height) : 520);
+      setPreviewHostHeight(expandedPreview ? Math.max(180, (previewPanelRef.current?.clientHeight ?? 670) - 150) : 520);
+      setOutputHostWidth(Math.max(1, outputHostRef.current?.getBoundingClientRect().width ?? bounds.width));
     };
     updateSize();
     const observer = new ResizeObserver(updateSize);
     observer.observe(host);
+    if (outputHostRef.current) observer.observe(outputHostRef.current);
     window.addEventListener('resize', updateSize);
     document.addEventListener('fullscreenchange', updateSize);
     return () => {
@@ -472,7 +482,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     const source = sources[key] || DEFAULT_CANVAS_SOURCES[key];
     const bounds = editorRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    setSelectedSource(key);
+    selectSource(key);
     setActiveSource(key);
     setTouchSource(event.pointerType === 'touch' ? key : null);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -516,6 +526,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     setCanvasHeight(DEFAULT_CANVAS_HEIGHT);
     setSources(DEFAULT_CANVAS_SOURCES);
     setSelectedSource('rank');
+    setHasSelection(true);
   };
 
   const saveLayout = () => {
@@ -561,11 +572,11 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     }
   };
 
-  const maxCanvasPreviewWidth = Math.max(1, previewHostWidth);
-  const canvasPreviewScale = Math.min(maxCanvasPreviewWidth / canvasWidth, previewHostHeight / canvasHeight);
-  const canvasPreviewWidth = canvasWidth * canvasPreviewScale;
-  const canvasPreviewHeight = canvasHeight * canvasPreviewScale;
-  const previewHeight = layout === 'bar' ? 300 : layout === 'canvas' ? canvasPreviewHeight : 660;
+  const renderWidth = layout === 'canvas' ? canvasWidth : layout === 'bar' ? 960 : 440;
+  const renderHeight = layout === 'canvas' ? canvasHeight : layout === 'bar' ? 300 : 660;
+  const canvasPreviewScale = Math.min(Math.max(1, previewHostWidth) / renderWidth, previewHostHeight / renderHeight);
+  const canvasPreviewWidth = renderWidth * canvasPreviewScale;
+  const canvasPreviewHeight = renderHeight * canvasPreviewScale;
   const recommendedSize = layout === 'bar' ? '960 × 300' : layout === 'canvas' ? `${canvasWidth} × ${canvasHeight}` : '440 × 660';
   const selected = sources[selectedSource] || DEFAULT_CANVAS_SOURCES[selectedSource];
   const selectedDraft = sourceDrafts[selectedSource] || sourceDraft(selected);
@@ -616,6 +627,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           return;
         }
         if (target.isContentEditable || target.closest('input, select, textarea, [role="textbox"]')) return;
+        if (event.key === 'Escape' && !event.altKey) {
+          setHasSelection(false);
+          setTouchSource(null);
+          previewPanelRef.current?.focus({ preventScroll: true });
+          return;
+        }
         if (event.key.toLowerCase() === 't' && event.altKey && !fullscreen) {
           event.preventDefault();
           event.stopPropagation();
@@ -653,23 +670,22 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
         </p>
       </div>
 
-      <div className={`grid items-start gap-5 ${expandedPreview ? 'grid-cols-1' : 'lg:grid-cols-[360px_minmax(0,1fr)]'}`}>
-        {/* Mobil steht die Vorschau vor den Einstellungen. */}
+      <div className="grid min-w-0 items-start gap-4">
         <div
           ref={previewPanelRef}
           tabIndex={0}
           role="region"
-          aria-label="Overlay-Vorschau"
+          aria-label="Overlay-Baukasten und Live-Ausgabe"
           onPointerDown={(event) => {
             if (event.target instanceof HTMLElement && !event.target.closest('button, input, select, textarea, [contenteditable]')) {
               event.currentTarget.focus({ preventScroll: true });
             }
           }}
-          className={`min-w-0 flex flex-col gap-3 rounded-xl focus-visible:outline-2 focus-visible:outline-primary ${expandedPreview ? '' : 'lg:sticky lg:top-6 lg:col-start-2 lg:row-start-1'}`}
+          className="min-w-0 flex flex-col gap-3 rounded-xl focus-visible:outline-2 focus-visible:outline-primary"
           style={fullscreen ? { width: '100%', height: '100dvh', padding: 16, background: '#090a0d', overflow: 'auto' } : theaterMode ? { height: 'max(240px, calc(100dvh - 12rem))' } : undefined}
         >
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-white">So sieht es im Stream aus</h3>
+            <h3 className="text-sm font-semibold text-white">Baukasten & Live-Ausgabe</h3>
             <div className="flex flex-wrap items-center gap-2">
               <select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select>
               <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
@@ -682,25 +698,29 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
             </div>
           </div>
           {fullscreenNotice && <p role="status" className="shrink-0 text-xs text-text-secondary">{fullscreenNotice}</p>}
-          <div ref={previewHostRef} className={expandedPreview ? 'flex min-h-0 flex-1 items-center justify-center overflow-hidden' : 'min-w-0'}>
+          <div className={`grid min-w-0 items-start content-start gap-4 lg:grid-cols-2 ${expandedPreview ? 'min-h-0 flex-1 overflow-auto' : ''}`}>
+          <div className="flex min-w-0 flex-col gap-2">
+          <h4 className="text-sm font-semibold text-primary">Baukasten · Editor</h4>
+          <div ref={previewHostRef} className="min-w-0 shrink-0">
           <div
             ref={editorRef}
-            className={`relative overflow-hidden rounded-xl ring-1 ring-border bg-background/60 ${layout === 'canvas' ? 'touch-none select-none' : 'overflow-x-auto'}`}
+            className={`relative overflow-hidden rounded-xl ring-1 ring-border bg-background/60 ${layout === 'canvas' ? 'touch-none select-none' : ''}`}
             style={{
-              ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }),
-              ...(layout === 'canvas' ? { width: `${canvasPreviewWidth}px`, height: `${canvasPreviewHeight}px`, marginInline: 'auto', flexShrink: 0 } : { width: '100%', maxHeight: expandedPreview ? '100%' : undefined, overflowY: 'auto' }),
+              ...CHECKER_STYLE,
+              width: canvasPreviewWidth, height: canvasPreviewHeight, marginInline: 'auto', flexShrink: 0,
             }}
           >
             <iframe
               ref={iframeRef}
+              data-testid="overlay-editor-frame"
               onLoad={syncPreview}
               src={debouncedUrl}
-              title="Overlay mit deinen Spielwerten"
-              style={layout === 'canvas' ? { width: canvasWidth, height: canvasHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' } : { height: `${previewHeight}px` }}
-              className={layout === 'canvas' ? 'pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent' : 'block min-w-[440px] w-full border-0 bg-transparent'}
+              title="Overlay-Editor mit echten Spielwerten"
+              style={{ width: renderWidth, height: renderHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' }}
+              className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent"
             />
             {layout === 'canvas' && (
-              <div className="absolute inset-0 z-10">
+              <div className="absolute inset-0 z-10" data-testid="overlay-editor-controls" onPointerDown={(event) => { if (event.target === event.currentTarget) { setHasSelection(false); setTouchSource(null); } }}>
                 {MODULES.map(({ key, label }) => {
                   if (!modules[key]) return null;
                   const source = sources[key];
@@ -708,14 +728,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                     <div
                       key={key}
                       className="group/source absolute"
-                      data-chrome={activeSource === key || touchSource === key ? 'visible' : undefined}
+                      data-chrome={(hasSelection && selectedSource === key) || activeSource === key || touchSource === key ? 'visible' : undefined}
                       style={{ left: `${source.x / canvasWidth * 100}%`, top: `${source.y / canvasHeight * 100}%`, width: `${source.width / canvasWidth * 100}%`, height: `${source.height / canvasHeight * 100}%`, zIndex: selectedSource === key ? 2 : 1 }}
                     >
                       <button
                         type="button"
                         aria-label={`${label} verschieben und auswählen`}
                         title={`${label}: ziehen zum Verschieben`}
-                        onClick={() => setSelectedSource(key)}
+                        onClick={() => selectSource(key)}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
                         className="absolute inset-0 touch-none cursor-move rounded border-2 border-transparent text-left group-hover/source:border-primary group-has-[:focus-visible]/source:border-primary group-data-[chrome=visible]/source:border-primary"
                       >
@@ -725,7 +745,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                         type="button"
                         aria-label={`${label}: Größe ändern`}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
-                        onClick={() => setSelectedSource(key)}
+                        onClick={() => selectSource(key)}
                         className="pointer-events-none absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black opacity-0 group-hover/source:pointer-events-auto group-hover/source:opacity-100 group-has-[:focus-visible]/source:pointer-events-auto group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:pointer-events-auto group-data-[chrome=visible]/source:opacity-100"
                         title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
                       ><span aria-hidden="true">↘</span></button>
@@ -734,16 +754,34 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 })}
               </div>
             )}
+            {layout === 'canvas' && hasSelection && modules[selectedSource] && <OverlayCanvasGuides source={selected} canvasWidth={canvasWidth} canvasHeight={canvasHeight} scale={canvasPreviewScale} />}
           </div>
           </div>
-          {!expandedPreview && <p className="text-xs leading-relaxed text-text-secondary">{layout === 'canvas' ? 'Rahmen und Griffe erscheinen beim Darüberfahren, per Tastatur oder Antippen nur im Editor.' : 'Keine Werte sichtbar? Verknüpfe dein Steam-Konto im Discord. Die Vorschau verwendet denselben Datenstand wie OBS.'}</p>}
+          {layout === 'canvas' && hasSelection && modules[selectedSource] && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <span>{selectedLabel} · {selected.width} × {selected.height} px</span>
+            <button type="button" onClick={() => updateSource(selectedSource, 'x', (canvasWidth - selected.width) / 2)} className="min-h-9 rounded border border-border px-2 text-primary">Horizontal zentrieren</button>
+            <button type="button" onClick={() => updateSource(selectedSource, 'y', (canvasHeight - selected.height) / 2)} className="min-h-9 rounded border border-border px-2 text-primary">Vertikal zentrieren</button>
+            <span data-testid="overlay-center-status">Horizontal {Math.abs(selected.x + selected.width / 2 - canvasWidth / 2) <= 0.5 ? 'mittig' : 'nicht mittig'} · Vertikal {Math.abs(selected.y + selected.height / 2 - canvasHeight / 2) <= 0.5 ? 'mittig' : 'nicht mittig'}</span>
+          </div>}
+          <p className="text-xs text-text-secondary">Modul anklicken und ziehen. Klick auf die freie Fläche oder Escape hebt die Auswahl auf.</p>
+          </div>
+          <div className="flex min-w-0 flex-col gap-2">
+            <h4 className="text-sm font-semibold text-white">Vorschau · So sieht es im Stream aus</h4>
+            <div ref={outputHostRef} data-testid="overlay-clean-output" className="relative min-w-0 shrink-0 overflow-hidden rounded-xl ring-1 ring-border" style={{ ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }), width: '100%', aspectRatio: layout === 'canvas' ? `${canvasWidth} / ${canvasHeight}` : layout === 'bar' ? '960 / 300' : '440 / 660' }}>
+              <iframe ref={outputIframeRef} data-testid="overlay-output-frame" onLoad={syncPreview} src={debouncedUrl} title="Overlay-Live-Ausgabe ohne Bearbeitungshilfen" className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent" style={{ width: renderWidth, height: renderHeight, transform: `scale(${outputHostWidth / renderWidth})`, transformOrigin: 'top left' }} />
+            </div>
+            <p className="text-xs text-text-secondary">Echte Spielwerte, laufend aktualisiert. Ohne verknüpftes Steam-Konto bleiben die Werte leer.</p>
+          </div>
+          </div>
         </div>
 
-        <div hidden={expandedPreview} className="min-w-0 space-y-5 lg:col-start-1 lg:row-start-1 lg:max-h-[max(360px,calc(100dvh-16rem))] lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
+        <details hidden={expandedPreview} className="min-w-0 rounded-xl border border-border p-3 lg:w-[calc(50%-0.5rem)]">
+        <summary className="cursor-pointer text-sm font-semibold text-primary">Optionen · Module, Farben und OBS-Adresse</summary>
+        <div className="mt-3 min-w-0 space-y-4">
           <button type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
             Module frei bearbeiten
           </button>
-          {layout === 'canvas' && (
+          {layout === 'canvas' && hasSelection && (
               <div className="rounded-lg border border-border bg-background/60 p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -958,9 +996,9 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                       <button
                         key={key}
                         type="button"
-                        aria-pressed={selectedSource === key}
-                        onClick={() => setSelectedSource(key)}
-                        className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors ${selectedSource === key ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
+                        aria-pressed={hasSelection && selectedSource === key}
+                        onClick={() => selectSource(key)}
+                        className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors ${hasSelection && selectedSource === key ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
                       >
                         <span className="min-w-0 truncate">{label}</span>
                         <span className="shrink-0 font-mono text-xs">{Math.round(source.width)} × {Math.round(source.height)}</span>
@@ -1021,8 +1059,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
             </div>
           </div>
         </div>
-
-
+        </details>
       </div>
     </motion.section>
   );
