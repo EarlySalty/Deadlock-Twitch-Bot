@@ -19,6 +19,10 @@
 //! deduplizieren jede Reaktion: Admin-Embed + User-DM genau **1×/Streamer**,
 //! Reminder + Rollen-Entzug genau **1×** je abgelaufener Grace-Period.
 
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
+
 use std::sync::Arc;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -922,7 +926,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 r#"
                 UPDATE twitch_partners
                    SET technical_pause_reason = NULL,
-                       raid_bot_enabled = 1
+                       raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END
                  WHERE LOWER(twitch_login) = LOWER($1)
                    AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = 'bot_banned'
                 "#,
@@ -1041,7 +1045,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                     // Gemeldet wird der Zustandswechsel, nicht der Zustand. Ohne
                     // das Gedaechtnis staende derselbe Kanal 24 Mal am Tag im
                     // Admin-Kanal, bis jemand ihn von Hand traegt.
-                    if self.ban_probe_zustand_ist_neu(&twitch_user_id, &twitch_login).await {
+                    if self
+                        .ban_probe_zustand_ist_neu(&twitch_user_id, &twitch_login)
+                        .await
+                    {
                         let (title, description) =
                             admin_bot_ban_verdacht_text(&twitch_login, &twitch_user_id);
                         self.notifier
@@ -1167,7 +1174,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 UPDATE twitch_partners p
                    SET technical_pause_reason = NULL,
                        manual_partner_opt_out = 0,
-                       raid_bot_enabled = 1
+                       raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END
                   FROM eligible e
                  WHERE p.twitch_user_id = e.twitch_user_id
                    AND LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) LIKE 'token_error%'
@@ -1210,11 +1217,12 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         match sqlx::query!(
             r#"
             UPDATE twitch_partners p
-               SET raid_bot_enabled = 1
+               SET raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END
               FROM twitch_raid_auth a
              WHERE a.twitch_user_id = p.twitch_user_id
                AND LOWER(TRIM(COALESCE(p.status, ''))) = 'active'
                AND COALESCE(p.raid_bot_enabled, 0) = 0
+               AND p.raid_admin_enabled
                AND COALESCE(p.manual_partner_opt_out, 0) = 0
                AND COALESCE(TRIM(p.technical_pause_reason), '') = ''
                AND a.raid_enabled IS TRUE
@@ -1659,7 +1667,7 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             UPDATE twitch_partners
                SET technical_pause_reason = NULL,
                    manual_partner_opt_out = CASE WHEN $1 THEN 0 ELSE manual_partner_opt_out END,
-                   raid_bot_enabled = CASE WHEN $2 THEN 1 ELSE raid_bot_enabled END
+                   raid_bot_enabled = CASE WHEN NOT raid_admin_enabled THEN 0 WHEN $2 THEN 1 ELSE raid_bot_enabled END
              WHERE (twitch_user_id = $3
                  OR ($4 <> '' AND LOWER(twitch_login) = $4))
                -- Nie eine getrennte oder archivierte Zeile mitschreiben. Im
@@ -1980,6 +1988,11 @@ mod tests {
             .await
             .expect("Schema-Pool");
 
+        create_test_tables(&pool).await;
+        pool
+    }
+
+    async fn create_test_tables(pool: &PgPool) {
         for ddl in [
             "CREATE TABLE twitch_token_blacklist (
                 twitch_user_id text PRIMARY KEY, twitch_login text NOT NULL,
@@ -1995,7 +2008,7 @@ mod tests {
                 id bigserial PRIMARY KEY, twitch_user_id text, twitch_login text,
                 status text DEFAULT 'active',
                 manual_partner_opt_out integer DEFAULT 0,
-                technical_pause_reason text, raid_bot_enabled integer DEFAULT 1,
+                technical_pause_reason text, raid_admin_enabled boolean NOT NULL DEFAULT true, raid_bot_enabled integer DEFAULT 1,
                 -- Prod-Typen: beide TEXT, nicht timestamptz
                 -- (rust/migrations/20260601000000_baseline_schema.sql).
                 departnered_at text, admin_archived_at text)",
@@ -2015,9 +2028,8 @@ mod tests {
                 letzte_probe timestamptz NOT NULL DEFAULT NOW(),
                 proben bigint NOT NULL DEFAULT 1)",
         ] {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            sqlx::query(ddl).execute(pool).await.unwrap();
         }
-        pool
     }
 
     async fn seed_blacklist(pool: &PgPool, uid: &str, login: &str, grace_iso: &str, count: i32) {
@@ -2864,6 +2876,36 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(removed, 2);
+    }
+
+    #[tokio::test]
+    async fn admin_raid_aus_ueberlebt_reconciliation_und_token_reparatur() {
+        let db = test_postgres::TestPostgres::start().await;
+        create_test_tables(&db.pool).await;
+        sqlx::query("INSERT INTO twitch_partners(twitch_user_id,twitch_login,raid_admin_enabled,raid_bot_enabled,technical_pause_reason) VALUES ('off','off',false,0,NULL),('heal','heal',true,0,NULL),('paused','paused',false,0,'token_error')")
+            .execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth(twitch_user_id,twitch_login,raid_enabled,needs_reauth,access_token_enc,token_expires_at) SELECT twitch_user_id,twitch_login,true,false,decode('01','hex'),now()+interval '1 hour' FROM twitch_partners")
+            .execute(&db.pool).await.unwrap();
+        let reactor =
+            TokenLifecycleReactor::new(db.pool.clone(), Arc::new(CountingNotifier::default()));
+        assert_eq!(reactor.reconcile_healthy_raid_toggles().await, 1);
+        assert_eq!(
+            reactor
+                .reactivate_token_error_partners_with_valid_auth()
+                .await,
+            1
+        );
+        let rows: Vec<(String,i32,Option<String>)> = sqlx::query_as("SELECT twitch_user_id,raid_bot_enabled,technical_pause_reason FROM twitch_partners ORDER BY twitch_user_id")
+            .fetch_all(&db.pool).await.unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("heal".into(), 1, None),
+                ("off".into(), 0, None),
+                ("paused".into(), 0, None)
+            ]
+        );
+        assert_eq!(reactor.reconcile_healthy_raid_toggles().await, 0);
     }
 
     #[tokio::test]

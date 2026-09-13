@@ -71,7 +71,7 @@ async fn apply_ddl(pool: &PgPool) {
             last_link_checked_at TEXT,
             next_link_check_at TEXT,
             manual_partner_opt_out INTEGER,
-            raid_bot_enabled INTEGER,
+            raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER,
             silent_ban INTEGER,
             silent_raid INTEGER,
             live_ping_role_id BIGINT,

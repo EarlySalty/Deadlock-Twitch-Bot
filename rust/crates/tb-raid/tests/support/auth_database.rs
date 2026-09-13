@@ -97,7 +97,7 @@ impl Database {
             access_token_enc BYTEA, refresh_token_enc BYTEA, enc_version INTEGER, enc_kid TEXT
         ); CREATE TABLE twitch_token_blacklist (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, error_message TEXT, error_count INTEGER DEFAULT 1, first_error_at TEXT, last_error_at TEXT, grace_expires_at TEXT, notified INTEGER DEFAULT 0); CREATE TABLE oauth_state_tokens (state_token TEXT PRIMARY KEY, platform TEXT, streamer_login TEXT, redirect_uri TEXT, pkce_verifier TEXT, expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE twitch_partners (twitch_user_id TEXT, technical_pause_reason TEXT,
-            manual_partner_opt_out INTEGER DEFAULT 0, raid_bot_enabled INTEGER DEFAULT 0);")
+            manual_partner_opt_out INTEGER DEFAULT 0, raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER DEFAULT 0);")
             .execute(&self.pool).await.unwrap();
         sqlx::raw_sql(include_str!(
             "../../../../migrations/20260908220000_uplink_target_generations.sql"

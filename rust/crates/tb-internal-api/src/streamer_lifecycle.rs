@@ -678,7 +678,7 @@ pub async fn reactivate_partner(
             admin_archived_at = NULL,
             technical_pause_reason = NULL,
             manual_partner_opt_out = 0,
-            raid_bot_enabled = 1,
+            raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END,
             partnered_at = $2
         WHERE id = $3
         "#,
@@ -1130,7 +1130,7 @@ mod tests {
                 require_discord_link INTEGER DEFAULT 0,
                 next_link_check_at TEXT,
                 manual_partner_opt_out INTEGER DEFAULT 0,
-                raid_bot_enabled INTEGER DEFAULT 0,
+                raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER DEFAULT 0,
                 silent_ban INTEGER DEFAULT 0,
                 silent_raid INTEGER DEFAULT 0,
                 live_ping_role_id BIGINT,

@@ -260,7 +260,7 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query(
             "CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, status TEXT, \
-             raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, \
+             raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, \
              silent_ban INTEGER DEFAULT 0, silent_raid INTEGER DEFAULT 0)",
         )
         .execute(&pool)

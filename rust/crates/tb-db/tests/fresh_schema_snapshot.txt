@@ -1212,6 +1212,7 @@ twitch_partners|live_ping_role_id|bigint|YES|
 twitch_partners|manual_partner_opt_out|integer|YES|0
 twitch_partners|next_link_check_at|text|YES|
 twitch_partners|partnered_at|text|YES|CURRENT_TIMESTAMP
+twitch_partners|raid_admin_enabled|boolean|NO|true
 twitch_partners|raid_bot_enabled|integer|YES|0
 twitch_partners|require_discord_link|integer|YES|0
 twitch_partners|silent_ban|integer|YES|0

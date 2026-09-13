@@ -810,7 +810,7 @@ pub async fn promote_streamer_to_partner(
                 last_link_checked_at = $6,
                 next_link_check_at = $7,
                 manual_partner_opt_out = $8,
-                raid_bot_enabled = $9,
+                raid_bot_enabled = CASE WHEN raid_admin_enabled THEN $9 ELSE 0 END,
                 silent_ban = $10,
                 silent_raid = $11,
                 live_ping_role_id = $12,
@@ -1294,7 +1294,7 @@ mod tests {
                 id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT,
                 require_discord_link INTEGER, last_description TEXT, last_link_ok INTEGER,
                 added_by TEXT, last_link_checked_at TEXT, next_link_check_at TEXT,
-                manual_partner_opt_out INTEGER, raid_bot_enabled INTEGER, silent_ban INTEGER,
+                manual_partner_opt_out INTEGER, raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER, silent_ban INTEGER,
                 silent_raid INTEGER, live_ping_role_id BIGINT, live_ping_enabled INTEGER,
                 partnered_at TEXT, departnered_at TEXT, status TEXT, admin_archived_at TEXT,
                 technical_pause_reason TEXT

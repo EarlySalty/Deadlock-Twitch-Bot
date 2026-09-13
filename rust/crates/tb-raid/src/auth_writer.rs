@@ -313,6 +313,7 @@ impl AuthWriter {
                         ELSE technical_pause_reason
                     END,
                     raid_bot_enabled = CASE
+                        WHEN NOT raid_admin_enabled THEN 0
                         WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN 1
                         WHEN $2
                              AND COALESCE(manual_partner_opt_out, 0) = 0
