@@ -52,6 +52,8 @@
 //!                                   und wie sichtbar, steht dagegen je
 //!                                   Streamer im Dashboard, nicht hier
 
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 mod ad_manager_wiring;
 mod auto_raid;
 mod chat_typen_wiring;
@@ -551,6 +553,9 @@ fn language_filters_from_env() -> Vec<String> {
 
 #[tokio::main]
 async fn main() {
+    if print_build_revision() {
+        return;
+    }
     tracing_subscriber::fmt::init();
     let supervisor = task_supervisor::TaskSupervisor::start();
 

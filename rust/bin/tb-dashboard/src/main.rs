@@ -5,6 +5,8 @@
 //!
 //! **Nicht automatisch starten** — Start ist user-gated (erfordert echtes DSN).
 
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::net::SocketAddr;
@@ -317,6 +319,9 @@ fn spawn_affiliate_gutschrift_loop(pool: sqlx::PgPool) {
 
 #[tokio::main]
 async fn main() {
+    if print_build_revision() {
+        return;
+    }
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if arguments
         .iter()

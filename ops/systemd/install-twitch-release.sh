@@ -104,6 +104,20 @@ for relative in "${generated[@]}"; do
   fi
 done
 
+# Herkunft direkt aus ELF-Daten lesen; niemals ein Build-Artefakt als root
+# ausführen. Ein neuer Checkout-Name macht eine kopierte alte Binary nicht neu.
+check_binary_revisions() {
+  local source_root="$1" binary embedded_revision
+  for binary in tb-bot tb-dashboard tb-stream-audit; do
+    embedded_revision="$(readelf --string-dump=.twitch_build "$source_root/rust/target/release/$binary" 2>/dev/null | awk '/\[/{print $NF}')" || embedded_revision=""
+    if [[ "$embedded_revision" != "$git_sha" ]]; then
+      echo "Build-Herkunft stimmt nicht: $binary muss aus dem sauberen Commit $git_sha neu gebaut werden." >&2
+      exit 1
+    fi
+  done
+}
+check_binary_revisions "$checkout"
+
 release_root=/opt/deadlock/twitch/releases
 install -d -o root -g root -m 0755 "$release_root"
 release="$release_root/$git_sha"
@@ -244,6 +258,7 @@ fi
   cd "$release"
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
+check_binary_revisions "$release"
 
 current_tmp=/opt/deadlock/twitch/.current-next
 if [[ -e "$current_tmp" || -L "$current_tmp" ]]; then

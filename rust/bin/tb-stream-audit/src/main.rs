@@ -23,6 +23,8 @@
 //! transkribierte Streams teilten sich dieselben Kerne wie das Modell. Aufnehmen
 //! kostet fast nichts, transkribieren viel - deshalb die Trennung.
 
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +51,9 @@ const SEGMENT_SEKUNDEN: f64 = 30.0;
 
 #[tokio::main]
 async fn main() {
+    if print_build_revision() {
+        return;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
