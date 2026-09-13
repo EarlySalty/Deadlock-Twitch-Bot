@@ -47,8 +47,9 @@ use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::lfg_pitch::RecentChatPort;
 use crate::promo_pitch::{
-    pitch_filter_reject, pitch_injection_reject, ChannelPromoContext, PartnerPitchContext,
-    PartnerPitchGen, PitchJudge, PitchJudgeInput, PitchTextGen,
+    community_value_filter_reject, pitch_filter_reject, pitch_injection_reject,
+    ChannelPromoContext, PartnerPitchContext, PartnerPitchGen, PitchJudge, PitchJudgeInput,
+    PitchTextGen, PITCH_MIN_CONFIDENCE,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
@@ -901,10 +902,16 @@ impl PromoEngine {
         }
 
         let (game, title) = self.load_live_context(&login).await;
+        if !game
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("Deadlock"))
+        {
+            tracing::debug!(channel = %login, game = ?game, "anlass-pitch: kein Deadlock-Stream");
+            return;
+        }
         let recent = self.load_recent_channel_messages(&login, 8).await;
 
-        let occasion = if text_len >= 25
-            && self.pitch_user_limit_ok(&target_user_id).await
+        let occasion = if self.pitch_user_limit_ok(&target_user_id).await
             && self.pitch_channel_limit_ok(&login).await
             && self.pitch_judge_throttle_reserve(&login, &target_user_id)
         {
@@ -915,10 +922,13 @@ impl PromoEngine {
                 recent_chat: recent.clone(),
                 target_login: target_login.clone(),
             };
-            self.pitch_judge
-                .decide(input)
-                .await
-                .and_then(|resp| resp.occasion.map(|occ| (occ, resp.reply)))
+            self.pitch_judge.decide(input).await.and_then(|resp| {
+                if resp.confidence < PITCH_MIN_CONFIDENCE {
+                    None
+                } else {
+                    resp.occasion.map(|occ| (occ, resp.reply))
+                }
+            })
         } else {
             None
         };
@@ -928,6 +938,18 @@ impl PromoEngine {
         let resp_reply = reply;
 
         if let Some(reason) = pitch_filter_reject(&resp_reply) {
+            self.log_anlass_reject(
+                &login,
+                &target_user_id,
+                reason.as_str(),
+                text,
+                Some(resp_reply.clone()),
+            )
+            .await;
+            return;
+        }
+
+        if let Some(reason) = community_value_filter_reject(&resp_reply) {
             self.log_anlass_reject(
                 &login,
                 &target_user_id,
@@ -4446,6 +4468,7 @@ mod db_tests {
                 last_started_at TEXT,
                 is_live INTEGER DEFAULT 0,
                 last_game TEXT,
+                last_title TEXT,
                 active_session_id BIGINT,
                 last_viewer_count INTEGER DEFAULT 0
             )"#,
@@ -5723,7 +5746,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt",
+            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
@@ -5752,7 +5775,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt, das game macht suchtig",
+            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
@@ -5793,6 +5816,154 @@ mod db_tests {
             1,
             "eine Review-Karte erwartet"
         );
+    }
+
+    #[tokio::test]
+    async fn neuer_deadlock_zuschauer_bekommt_pitch_auch_ohne_frust_anlass() {
+        let pool = pool_or_skip!("promo_neuer_zuschauer_interesse");
+        seed_partner_channel(&pool, "c-neu", "neukanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+            "haze sieht wirklich spannend aus. im discord findest du mitspieler für gemeinsame runden",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-neu",
+            "neukanal",
+            "u-neu",
+            "Neuling",
+            "haze sieht echt wild aus",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "eine kurze substanzielle Deadlock-Nachricht ab 15 Zeichen soll den Judge erreichen"
+        );
+        let msgs = api.messages_sent().await;
+        assert_eq!(
+            msgs.len(),
+            1,
+            "neuer interessierter Zuschauer soll einen Pitch bekommen"
+        );
+        assert!(msgs[0].1.contains("discord findest du mitspieler"));
+
+        let occasion: Option<String> = sqlx::query_scalar(
+            "SELECT occasion FROM twitch_promo_pitch_log WHERE target_user_id = 'u-neu' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(occasion.as_deref(), Some("newcomer_interest"));
+    }
+
+    #[tokio::test]
+    async fn persoenlicher_meta_pitch_wird_verworfen() {
+        let pool = pool_or_skip!("promo_personal_meta");
+        seed_partner_channel(&pool, "c-meta", "metakanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+            "wer bock auf deadlock hat, ist in der deutschen community gut aufgehoben",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge)
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-meta",
+            "metakanal",
+            "u-meta",
+            "Meta",
+            "deadlock sieht interessanter aus als ich dachte",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "Meta-Pitch darf nicht gesendet werden"
+        );
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT reject_reason FROM twitch_promo_pitch_log WHERE target_user_id = 'u-meta'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.as_deref(), Some("meta_pitch"));
+    }
+
+    #[tokio::test]
+    async fn niedrige_pitch_confidence_sendet_nichts() {
+        let pool = pool_or_skip!("promo_personal_confidence");
+        seed_partner_channel(&pool, "c-conf", "confkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(
+            crate::promo_pitch::PitchResponse {
+                occasion: Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+                reply: "im discord findest du mitspieler für gemeinsame runden".to_string(),
+                confidence: 0.45,
+            },
+        )));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge)
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-conf",
+            "confkanal",
+            "u-conf",
+            "Conf",
+            "deadlock sieht interessanter aus als ich dachte",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "unsicherer Pitch soll schweigen"
+        );
+    }
+
+    #[tokio::test]
+    async fn persoenlicher_pitch_laeuft_nur_bei_deadlock() {
+        let pool = pool_or_skip!("promo_personal_nur_deadlock");
+        seed_partner_channel(&pool, "c-game", "gamekanal").await;
+        sqlx::query(
+            "UPDATE twitch_live_state SET last_game = 'Minecraft' WHERE twitch_user_id = 'c-game'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+            "spannend. im discord findest du mitspieler für gemeinsame runden",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-game",
+            "gamekanal",
+            "u-game",
+            "Game",
+            "das sieht ja echt interessant aus heute",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "außerhalb von Deadlock darf der persönliche Community-Judge nicht laufen"
+        );
+        assert_eq!(api.message_count().await, 0);
     }
 
     async fn seed_deadlock_candidate(pool: &PgPool, own_login: &str, chatter_id: &str) {
@@ -5952,7 +6123,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt, das game macht suchtig",
+            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))

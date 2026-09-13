@@ -3,7 +3,7 @@ title: Chat-Werbung des Bots
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-09-06
+last_updated: 2026-09-13
 source: manual
 tip_eligible: false
 ---
@@ -11,7 +11,7 @@ Was der Bot in deinen Chat schickt, wann, und wie du das komplett abstellst.
 
 ### Welche Werbung schickt der Bot in meinen Chat?
 
-Drei Dinge, alle nur rund um den Community-Discord, keine externen Sponsoren, keine fremden Produkte, kein Spam. Erstens antwortet der Bot einem Zuschauer, der gerade eine passende Situation schreibt (keine Mitspieler, findet Deadlock zu unpopulär, alles zu tryhard, Solo-Queue-Frust, neu im Spiel, sucht Hilfe). Zweitens kann er einem echten Neuling ab der zweiten richtigen Chat-Nachricht einen kurzen, passenden Hinweis geben, wenn es keinen solchen Anlass gibt. Persönliche Antworten gehen zuerst auf das Gesagte ein und erwähnen danach höchstens in einem Satz die Community. Drittens gibt es die periodische Einladung mit dem Discord-Link.
+Zwei Formen, beide nur rund um den Community-Discord, keine externen Sponsoren und keine fremden Produkte. Erstens kann der Bot einem echten neuen Deadlock-Zuschauer auf eine inhaltliche Chat-Nachricht antworten. Das gilt sowohl bei einem klaren Anlass wie Solo-Queue-Frust, fehlenden Mitspielern oder Anfängerfragen als auch bei erkennbarem Interesse an Deadlock, einem Hero, Ranked oder kompetitivem Spiel. Die Antwort reagiert zuerst auf das Gesagte und nennt danach genau einen passenden, konkreten Discord-Nutzen: Mitspieler, Scrims, Turnierinfos/Teilnahme oder Hilfe und Tipps. Zweitens gibt es die periodische Einladung mit dem Discord-Link. Auch deren frei geschriebener Text muss einen solchen konkreten Nutzen nennen; allgemeine Sätze wie "gut aufgehoben" werden verworfen.
 
 - Persönliche Antworten sind frei geschrieben, keine fertigen Standard-Sprüche mehr.
 - In einer persönlichen Antwort steht nie ein Link und kein "komm auf Discord".
@@ -23,7 +23,7 @@ Drei Dinge, alle nur rund um den Community-Discord, keine externen Sponsoren, ke
 
 ### Wen spricht der Bot persönlich auf die Community an?
 
-Wenn der Bot direkt auf einen einzelnen Zuschauer eingeht, dann nur bei jemandem, der zum ersten Mal in einem der Partnerkanäle schreibt und nach allem, was der Bot über ihn weiß, noch nicht zur Community gehört. Das gilt für die Antwort auf einen passenden Anlass genauso wie für den gezielten Hinweis nach mehreren Nachrichten. Wer im Discord bekannt ist, in einem Partnerkanal schon einmal geschrieben hat oder bereits einen persönlichen Community-Hinweis bekommen hat, wird nicht noch einmal angesprochen. Die Kanalbetreiber selbst, Moderatoren, andere Bots, Streamer und Partner der Community bleiben außen vor.
+Wenn der Bot direkt auf einen einzelnen Zuschauer eingeht, dann nur bei jemandem, der nach dem Zuschauer-Register erstmals im getrackten Partnernetz auftaucht und nach allem, was der Bot weiß, noch nicht zur Community gehört. Zusätzlich muss der aktuelle Stream als Deadlock-Stream erkannt sein und die Nachricht genug Inhalt für einen natürlich passenden Nutzen liefern. Der Bot sagt dem Zuschauer nie, dass er als neu erkannt oder getrackt wurde. Wer im Discord bekannt ist, in einem Partnerkanal schon früher auftauchte oder bereits einen persönlichen Community-Hinweis bekommen hat, wird nicht noch einmal angesprochen. Die Kanalbetreiber selbst, Moderatoren, andere Bots, Streamer und Partner der Community bleiben außen vor.
 
 - Gilt für jede persönliche Community-Antwort an einen einzelnen Zuschauer.
 - Nur echte Neulinge, die frisch in einem Partnerkanal schreiben.
@@ -45,10 +45,11 @@ Wenn du selbst Deadlock streamst und noch nicht Partner der Deutschen Deadlock C
 
 ### Wann genau wird das gepostet?
 
-Alle drei Formen greifen nur, wenn dein Stream läuft. Bei einer passenden Situation kann die persönliche Antwort kurz nach der Nachricht kommen. Gibt es keinen solchen Anlass, kann ein gezielter Hinweis frühestens nach der zweiten richtigen Nachricht derselben Person folgen. Eine Person bekommt insgesamt höchstens einen persönlichen Community-Hinweis. Pro Kanal gehen höchstens zwei gezielte Hinweise je Stream und insgesamt höchstens fünfzehn am Tag raus. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Abstände, damit nichts spammt.
+Die persönliche Discord-Antwort greift nur, wenn der Partnerstream läuft, Deadlock als aktuelles Spiel erkannt ist, der Zuschauer das Neulings-Gate besteht und seine Nachricht mindestens 15 Zeichen hat. Der Sprachmodell-Judge muss außerdem mit mindestens 0,70 Sicherheit einen natürlich passenden konkreten Nutzen erkennen; bei Unsicherheit schweigt der Bot. Eine Person bekommt insgesamt höchstens einen persönlichen Community-Hinweis. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Abstände, damit nichts spammt.
 
-- Die Anlass-Antwort trifft nur echte Situationen; ohne passenden Anlass kann stattdessen ab der zweiten richtigen Nachricht ein gezielter Hinweis folgen.
-- Feste Grenzen verhindern, dass dieselben Zuschauer wiederholt angeschrieben werden.
+- Persönliche Pitches sind für echte neue Deadlock-Zuschauer gedacht, nicht für Stammgäste oder zufälligen Smalltalk.
+- Ein persönlicher Pitch muss nach dem Wort Discord einen konkreten Nutzen nennen; reine Community-Floskeln werden technisch verworfen.
+- Feste Grenzen und Drosseln verhindern wiederholte Ansprache.
 - Bei aktiven Sonder-Events kann der Bot in der periodischen Einladung stattdessen einen Aktions-Text einblenden.
 
 ### Wie schalte ich die Chat-Werbung komplett ab?
