@@ -45,6 +45,19 @@ third="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$third"
 git -C "$scratch" checkout -q "$second"
 build_and_check "$second"
+# Ein tatsächlich mitkompiliertes, unversioniertes Modul macht den Build dirty.
+printf '\nmod extra;\n' >> "$scratch/src/main.rs"
+git -C "$scratch" add src/main.rs
+git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm module
+module_revision="$(git -C "$scratch" rev-parse HEAD)"
+printf 'const _: () = ();\n' > "$scratch/src/extra.rs"
+build_and_check "$module_revision-dirty"
+git -C "$scratch" add src/extra.rs
+git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm track-module
+tracked_revision="$(git -C "$scratch" rev-parse HEAD)"
+build_and_check "$tracked_revision"
+git -C "$scratch" checkout -q "$second"
+build_and_check "$second"
 # Exakt die Installer-Prüfung testen, ohne root, Dienste oder Release-Verzeichnis.
 sed -n '/^check_binary_revisions() {$/,/^}$/p' "$repo/ops/systemd/install-twitch-release.sh" > "$scratch/check.sh"
 source "$scratch/check.sh"

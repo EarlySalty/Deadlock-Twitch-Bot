@@ -22,7 +22,9 @@ fn main() {
     println!("cargo:rerun-if-changed=.build-revision-always-check");
     let revision = git(&["rev-parse", "HEAD"]);
     assert!(revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()));
-    let dirty = !git(&["status", "--porcelain", "--untracked-files=no"]).is_empty();
+    // Auch unversionierte Quellen können per mod/include! in die Binary
+    // gelangen. Sie dürfen niemals die Herkunft eines sauberen Commits tragen.
+    let dirty = !git(&["status", "--porcelain", "--untracked-files=all"]).is_empty();
     let revision = format!("{revision}{}", if dirty { "-dirty" } else { "" });
     let source = format!(
         "#[used]\n#[unsafe(link_section = \".twitch_build\")]\n\
