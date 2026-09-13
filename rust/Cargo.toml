@@ -60,7 +60,7 @@ sqlx = { version = "=0.8.6", default-features = false, features = ["postgres", "
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.11"
 blake2 = "0.11"
-axum = "0.7"
+axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "cors", "compression-br", "compression-gzip", "set-header"] }
 async-trait = "0.1"
