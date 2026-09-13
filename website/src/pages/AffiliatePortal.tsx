@@ -200,6 +200,8 @@ function profileErrorText(code: string): string {
 
 function claimErrorText(code: string): string {
   switch (code) {
+    case "affiliate_inactive":
+      return "Dein Affiliate-Konto ist deaktiviert. Du kannst keine neuen Streamer zuordnen.";
     case "invalid_login":
       return "Bitte gib einen gültigen Twitch-Login ein.";
     case "already_claimed":

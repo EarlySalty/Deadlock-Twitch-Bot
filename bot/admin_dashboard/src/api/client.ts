@@ -1231,10 +1231,6 @@ export function sendPartnerChatAction(payload: PartnerChatActionPayload) {
   });
 }
 
-export function reloadBot() {
-  return submitLegacyAction('/twitch/reload', {});
-}
-
 const DISCONNECT_UNMOD_OUTCOMES: DisconnectBotUnmodOutcome[] = [
   'removed',
   'not_moderator',

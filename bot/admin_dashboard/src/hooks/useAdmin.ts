@@ -44,7 +44,6 @@ import {
   toggleEngagement,
   removeStreamer,
   removeGlobalBan,
-  reloadBot,
   toggleStreamerDiscordFlag,
   toggleAffiliateActive,
   updateStreamerDiscordProfile,
@@ -439,19 +438,6 @@ export function usePartnerChatAction() {
     mutationFn: sendPartnerChatAction,
     onSuccess: (_result, variables) => {
       invalidateStreamerQueries(queryClient, variables.login);
-    },
-  });
-}
-
-export function useReloadBot() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: reloadBot,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard-overview'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-system-health'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-eventsub-status'] });
     },
   });
 }

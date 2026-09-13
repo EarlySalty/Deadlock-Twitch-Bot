@@ -469,6 +469,9 @@ pub async fn claim_handler(
         Ok(ClaimStatus::Ok) => {
             Json(json!({ "ok": true, "claimed": streamer_login })).into_response()
         }
+        Ok(ClaimStatus::AffiliateInactive) => {
+            json_error(StatusCode::FORBIDDEN, "affiliate_inactive")
+        }
         Ok(ClaimStatus::StreamerAlreadyRegistered) => {
             json_error(StatusCode::CONFLICT, "streamer_already_registered")
         }
@@ -817,6 +820,7 @@ async fn migrate_legacy_plaintext_pii(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaimStatus {
     Ok,
+    AffiliateInactive,
     StreamerAlreadyRegistered,
     AlreadyClaimed,
 }
@@ -849,6 +853,20 @@ async fn claim_streamer_at(
     .bind(&streamer_login)
     .fetch_one(&mut *tx)
     .await?;
+
+    // Der Zeilen-Lock bleibt bis zum Claim-Commit bestehen. Ein paralleles
+    // Admin-UPDATE von is_active wartet darauf; ein bereits deaktiviertes
+    // Konto kann weder neue Claims anlegen noch alte Reservierungen ersetzen.
+    let active: Option<i32> = sqlx::query_scalar(
+        "SELECT is_active FROM affiliate_accounts WHERE twitch_login = $1 FOR SHARE",
+    )
+    .bind(&twitch_login)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if !active.is_some_and(|value| value != 0) {
+        tx.commit().await?;
+        return Ok(ClaimStatus::AffiliateInactive);
+    }
 
     let partner_state: Option<(i32, Option<String>)> = sqlx::query_as(
         r#"
@@ -2139,9 +2157,8 @@ mod tests {
 
     #[tokio::test]
     async fn claim_api_blockt_aktive_partner() {
-        let Some(pool) = pool("t_affiliate_claim_partner").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
         sqlx::query(
             r#"
@@ -2385,12 +2402,120 @@ mod tests {
         assert_eq!(value["error"], "invalid_ust_status");
     }
 
+    async fn create_claim_accounts(pool: &PgPool) {
+        sqlx::query(
+            "INSERT INTO affiliate_accounts \
+             (twitch_login, twitch_user_id, email, full_name, address_line1, address_city, \
+              address_zip, created_at, updated_at, is_active) \
+             SELECT login, login, '', '', '', '', '', '', '', 1 \
+             FROM unnest(ARRAY['aff_one', 'aff_new', 'aff_a', 'aff_b']) AS login",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn claim_inaktiv_oder_fehlend_veraendert_keine_reservierung() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
+        sqlx::query("UPDATE affiliate_accounts SET is_active = 0 WHERE twitch_login = 'aff_one'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let old_claimed_at = ts_offset(chrono::Duration::days(-5));
+        insert_claim(&pool, "aff_old", "stale_slot", &old_claimed_at).await;
+        for login in ["aff_one", "missing"] {
+            assert_eq!(
+                claim_streamer(&pool, login, "fresh_streamer").await.unwrap(),
+                ClaimStatus::AffiliateInactive
+            );
+            assert_eq!(
+                claim_streamer(&pool, login, "stale_slot").await.unwrap(),
+                ClaimStatus::AffiliateInactive
+            );
+        }
+        let claims: Vec<(String, String)> = sqlx::query_as(
+            "SELECT affiliate_twitch_login, claimed_streamer_login FROM affiliate_streamer_claims",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(claims, vec![("aff_old".into(), "stale_slot".into())]);
+    }
+
+    #[tokio::test]
+    async fn claim_api_blockt_inaktives_konto_mit_bestehender_session() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
+        let state = state(pool.clone());
+        let session = state
+            .create_affiliate_session("aff_one", "1001", "Affiliate", "")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE affiliate_accounts SET is_active = 0 WHERE twitch_login = 'aff_one'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                .parse()
+                .unwrap(),
+        );
+        let response = claim_handler(
+            Some(Extension(state)),
+            headers,
+            State(pool),
+            Bytes::from(r#"{"streamer_login":"fresh_streamer"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"], "affiliate_inactive");
+    }
+
+    #[tokio::test]
+    async fn claim_wartet_auf_laufende_deaktivierung() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
+        let mut deactivation = pool.begin().await.unwrap();
+        sqlx::query("UPDATE affiliate_accounts SET is_active = 0 WHERE twitch_login = 'aff_one'")
+            .execute(&mut *deactivation)
+            .await
+            .unwrap();
+        let other_pool = pool.clone();
+        let mut claim = tokio::spawn(async move {
+            claim_streamer(&other_pool, "aff_one", "fresh_streamer").await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut claim)
+                .await
+                .is_err()
+        );
+        deactivation.commit().await.unwrap();
+        assert_eq!(claim.await.unwrap().unwrap(), ClaimStatus::AffiliateInactive);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_streamer_claims")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
     #[tokio::test]
     async fn claim_nicht_partner_pre_claim_erfolgreich() {
-        let Some(pool) = pool("t_aff_claim_pre_claim").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
 
         let status = claim_streamer(&pool, "aff_one", "fresh_streamer")
             .await
@@ -2408,10 +2533,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_etablierter_aktiver_partner_wird_abgelehnt() {
-        let Some(pool) = pool("t_aff_claim_established_partner").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let partnered_at = ts_offset(chrono::Duration::hours(-25));
         insert_partner_state(&pool, "established", 1, Some(&partnered_at)).await;
 
@@ -2423,10 +2548,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_frischer_aktiver_partner_in_nachfrist_erfolgreich() {
-        let Some(pool) = pool("t_aff_claim_grace_partner").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let partnered_at = ts_offset(chrono::Duration::hours(-23));
         insert_partner_state(&pool, "new_partner", 1, Some(&partnered_at)).await;
 
@@ -2438,10 +2563,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_aktiver_partner_exakt_an_grace_grenze_erlaubt() {
-        let Some(pool) = pool("t_aff_claim_grace_exact").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let now = chrono::DateTime::parse_from_rfc3339("2026-07-03T12:00:00+00:00")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -2457,10 +2582,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_aktiver_partner_eine_sekunde_nach_grace_wird_abgelehnt() {
-        let Some(pool) = pool("t_aff_claim_grace_plus_one").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let now = chrono::DateTime::parse_from_rfc3339("2026-07-03T12:00:00+00:00")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -2476,10 +2601,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_aktiver_partner_malformed_partnered_at_wird_abgelehnt() {
-        let Some(pool) = pool("t_aff_claim_grace_malformed").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         insert_partner_state(&pool, "bad_partnered_at", 1, Some("not-a-timestamp")).await;
 
         let status = claim_streamer(&pool, "aff_one", "bad_partnered_at")
@@ -2490,10 +2615,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_bestehende_frische_reservierung_blockiert() {
-        let Some(pool) = pool("t_aff_claim_fresh_existing").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let claimed_at = ts_offset(chrono::Duration::days(-2));
         insert_claim(&pool, "aff_old", "reserved", &claimed_at).await;
 
@@ -2511,10 +2636,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_abgelaufene_reservierung_wird_ueberschrieben() {
-        let Some(pool) = pool("t_aff_claim_expired_reclaim").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let old_claimed_at = ts_offset(chrono::Duration::days(-5));
         insert_claim(&pool, "aff_old", "stale_slot", &old_claimed_at).await;
 
@@ -2535,10 +2660,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_konvertierter_claim_bleibt_blockiert() {
-        let Some(pool) = pool("t_aff_claim_converted_blocks").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
         let old_claimed_at = ts_offset(chrono::Duration::days(-10));
         let partnered_at = ts_offset(chrono::Duration::days(-2));
         insert_claim(&pool, "aff_old", "converted", &old_claimed_at).await;
@@ -2558,10 +2683,10 @@ mod tests {
 
     #[tokio::test]
     async fn claim_race_zwei_parallele_claims_einer_gewinnt() {
-        let Some(pool) = pool("t_aff_claim_race").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
+        create_claim_accounts(&pool).await;
 
         let first_pool = pool.clone();
         let first =
