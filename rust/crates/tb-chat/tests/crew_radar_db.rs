@@ -1,61 +1,23 @@
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-
 use async_trait::async_trait;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
-use tb_chat::crew_guard::{persist_radar_log, CrewJudge, CrewRadarLog, CrewVerdict};
+use std::sync::Arc;
+use tb_chat::crew_guard::{persist_radar_log, CrewRadarLog};
 use tb_chat::scam_pitch::AccountAgePort;
 use tb_chat::style_score::{build_centroid, score, StyleBreakdown};
-use tb_chat::types::{ChatBadge, ChatMessageBody};
+use tb_chat::types::ChatMessageBody;
+use tb_chat::zuschauer_register::{reserviere_radar_meldung, unauffaellig};
 use tb_chat::{ChatMessageEvent, CrewGuard, ModAlerter};
-use tokio::sync::Semaphore;
-use tokio::time::{sleep, timeout, Duration};
-use wiremock::matchers::{method, path};
+use tokio::time::{sleep, Duration};
+use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-macro_rules! pool_or_skip {
-    ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-            }
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        pool_in_schema(&dsn, $schema).await
-    }};
-}
-
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .expect("Test-DB-Verbindung");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .expect("altes Testschema löschen");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("Testschema anlegen");
-    admin.close().await;
-
-    let options = PgConnectOptions::from_str(dsn)
-        .expect("Test-DSN")
-        .options([("search_path", schema)]);
-    PgPoolOptions::new()
-        .max_connections(2)
-        .connect_with(options)
-        .await
-        .expect("Testschema verbinden")
-}
+#[path = "../../../test-support/postgres.rs"]
+mod postgres;
+use postgres::TestPostgres;
 
 #[tokio::test]
 async fn ledger_speichert_auch_clean_entscheidung_vollstaendig() {
-    let pool = pool_or_skip!("tb_crew_radar_ledger");
+    let database = TestPostgres::start().await;
+    let pool = database.pool.clone();
     sqlx::query(
         "CREATE TABLE twitch_crew_radar_log (\
          id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
@@ -191,7 +153,8 @@ async fn ledger_speichert_auch_clean_entscheidung_vollstaendig() {
 
 #[tokio::test]
 async fn centroid_wird_aus_chat_dokumenten_gebaut() {
-    let pool = pool_or_skip!("tb_crew_radar_centroid");
+    let database = TestPostgres::start().await;
+    let pool = database.pool.clone();
     sqlx::query(
         "CREATE TABLE twitch_chat_messages (\
          chatter_login TEXT, content TEXT, message_ts TIMESTAMPTZ NOT NULL DEFAULT now())",
@@ -226,446 +189,351 @@ async fn centroid_wird_aus_chat_dokumenten_gebaut() {
     assert!(result.breakdown.cosine > 0, "{result:?}");
 }
 
-struct StubJudge;
-
-#[async_trait]
-impl CrewJudge for StubJudge {
-    async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
-        CrewVerdict::unsure()
-    }
-}
-
-struct RecordingJudge {
-    contexts: Arc<Mutex<Vec<Vec<String>>>>,
-    called: Arc<Semaphore>,
-}
-
-#[async_trait]
-impl CrewJudge for RecordingJudge {
-    async fn judge(&self, _content: &str, recent_context: &[String]) -> CrewVerdict {
-        self.contexts
-            .lock()
-            .expect("Judge-Kontexte sperren")
-            .push(recent_context.to_vec());
-        self.called.add_permits(1);
-        CrewVerdict::unsure()
-    }
-}
-
 struct StubAccountAge;
-
 #[async_trait]
 impl AccountAgePort for StubAccountAge {
     async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
-        None
+        Some(42)
     }
 }
 
-async fn prepare_observe_schema(pool: &PgPool, first_time: bool) {
-    for statement in [
-        "CREATE TABLE twitch_stream_sessions (id BIGINT PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), ended_at TIMESTAMPTZ)",
-        "CREATE TABLE twitch_session_chatters (session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, is_first_time_streamer BOOLEAN)",
-        "CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL)",
-        "CREATE TABLE twitch_crew_radar_log (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), channel_login TEXT NOT NULL, chatter_login TEXT NOT NULL, chatter_id TEXT, account_age_days BIGINT, style_score SMALLINT NOT NULL, style_breakdown JSONB NOT NULL, time_window_match BOOLEAN NOT NULL, messages JSONB NOT NULL, llm_verdict TEXT NOT NULL, llm_confidence REAL, llm_reasoning TEXT, action_taken TEXT NOT NULL DEFAULT 'none', source TEXT NOT NULL DEFAULT 'network')",
-        "INSERT INTO twitch_stream_sessions (id) VALUES (1)",
-    ] {
-        sqlx::query(statement)
-            .execute(pool)
-            .await
-            .expect("Observe-Fixture anlegen");
-    }
-    sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, is_first_time_streamer) VALUES (1, 'kanal', 'viewer', $1), (1, 'kanal', 'helmbombenricky', $1)")
-        .bind(first_time)
-        .execute(pool)
-        .await
-        .expect("Erstschreiber-Fixture anlegen");
+async fn schema(pool: &PgPool) {
+    sqlx::raw_sql("CREATE TABLE twitch_partners (twitch_user_id TEXT); CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT, is_on_discord INT); CREATE TABLE twitch_session_chatters (chatter_id TEXT, session_id BIGINT, messages INT, first_message_at TIMESTAMPTZ);
+        CREATE TABLE twitch_spam_review_decisions (chatter_id TEXT, verdict TEXT);
+        CREATE TABLE twitch_scam_guard_verdicts (chatter_id TEXT, verdict TEXT, action_taken TEXT);
+        CREATE TABLE twitch_chatter_global_ban (chatter_id TEXT);
+        CREATE TABLE tb_chat_autoban_log (chatter_id TEXT, action TEXT, source_path TEXT);")
+        .execute(pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260906140000_twitch_zuschauer_register.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260714120000_twitch_crew_radar_log.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260913190000_passives_kontoregister.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
-async fn observe_guard(pool: PgPool, server: &MockServer, event: &ChatMessageEvent) {
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(server)
-        .await;
-    let guard = crew_guard(pool, server);
-    guard.observe(event);
+async fn history(pool: &PgPool, id: &str) {
+    sqlx::query("INSERT INTO twitch_session_chatters VALUES ($1, 1, 20, NOW() - INTERVAL '10 days'), ($1, 2, 10, NOW() - INTERVAL '5 days'), ($1, 3, 13, NOW())")
+        .bind(id).execute(pool).await.unwrap();
 }
 
-fn crew_guard(pool: PgPool, server: &MockServer) -> CrewGuard {
+fn guard(pool: PgPool, server: &MockServer) -> CrewGuard {
     CrewGuard::new(
         true,
-        Arc::new(StubJudge),
         Arc::new(ModAlerter::with_endpoint(
             reqwest::Client::new(),
-            format!("{}/changelog", server.uri()),
+            server.uri(),
         )),
         pool,
-        "bot-id".to_string(),
+        "bot".into(),
         Arc::new(StubAccountAge),
         Arc::new(Default::default()),
         false,
     )
 }
 
-fn event(login: &str, chatter_id: &str, content: &str, badge: Option<&str>) -> ChatMessageEvent {
+fn event(id: &str, channel: &str, content: &str) -> ChatMessageEvent {
     ChatMessageEvent {
-        broadcaster_user_id: "channel-id".to_string(),
-        broadcaster_user_login: "kanal".to_string(),
-        chatter_user_id: chatter_id.to_string(),
-        chatter_user_login: login.to_string(),
-        message_id: "message-id".to_string(),
+        chatter_user_id: id.into(),
+        chatter_user_login: "viewer".into(),
+        broadcaster_user_login: channel.into(),
         message: ChatMessageBody {
-            text: content.to_string(),
-            fragments: Vec::new(),
+            text: content.into(),
+            fragments: vec![],
         },
-        badges: badge
-            .map(|set_id| ChatBadge {
-                set_id: set_id.to_string(),
-                id: String::new(),
-                info: String::new(),
-            })
-            .into_iter()
-            .collect(),
         ..Default::default()
     }
 }
 
-async fn wait_for_ledger(pool: &PgPool, expected: i64) {
-    for _ in 0..50 {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_crew_radar_log")
+async fn wait_log(pool: &PgPool) {
+    for _ in 0..100 {
+        if sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM twitch_crew_radar_log")
             .fetch_one(pool)
             .await
-            .expect("Ledger zaehlen");
-        if count >= expected {
-            return;
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
-    panic!("Ledger erhielt nicht {expected} Zeilen");
-}
-
-async fn wait_for_alerts(server: &MockServer, expected: usize) {
-    for _ in 0..50 {
-        if server
-            .received_requests()
-            .await
-            .expect("Discord-Requests lesen")
-            .len()
-            >= expected
+            .unwrap()
+            > 0
         {
             return;
         }
         sleep(Duration::from_millis(20)).await;
     }
-    panic!("Discord erhielt nicht {expected} Meldungen");
-}
-
-async fn ledger_verdicts(pool: &PgPool) -> Vec<String> {
-    sqlx::query_scalar("SELECT llm_verdict FROM twitch_crew_radar_log ORDER BY id")
-        .fetch_all(pool)
-        .await
-        .expect("Ledger lesen")
-}
-
-async fn observation_counts(pool: &PgPool, server: &MockServer) -> (i64, usize) {
-    let ledger = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_crew_radar_log")
-        .fetch_one(pool)
-        .await
-        .expect("Ledger zaehlen");
-    let alerts = server
-        .received_requests()
-        .await
-        .expect("Discord-Requests lesen")
-        .len();
-    (ledger, alerts)
+    panic!("Musterprotokoll fehlt");
 }
 
 #[tokio::test]
-async fn observe_meldet_hard_id_auch_bei_etabliertem_chatter() {
-    let pool = pool_or_skip!("tb_crew_observe_hard_id_returning");
-    prepare_observe_schema(&pool, false).await;
-    let server = MockServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-    let guard = crew_guard(pool.clone(), &server);
-    for content in ["hallo", "noch da", "dritte nachricht"] {
-        guard.observe(&event("helmbombenricky", "147713656", content, None));
-    }
-
-    wait_for_ledger(&pool, 3).await;
-    wait_for_alerts(&server, 3).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"; 3]);
-}
-
-#[tokio::test]
-async fn observe_meldet_hard_id_auch_mit_subscriber_badge() {
-    let pool = pool_or_skip!("tb_crew_observe_hard_id_sub");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
-
-    observe_guard(
-        pool.clone(),
-        &server,
-        &event("helmbombenricky", "147713656", "hallo", Some("subscriber")),
+async fn historie_ueberlebt_neustart_und_namenswechsel_ohne_community_score_zu_veraendern() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, signals) VALUES ('42', 0.8, '{\"hard_match\":true}')").execute(&db.pool).await.unwrap();
+    assert!(unauffaellig(&db.pool, "42").await.unwrap());
+    sqlx::raw_sql("DELETE FROM twitch_session_chatters; UPDATE twitch_zuschauer_register SET twitch_login = 'neuername' WHERE twitch_user_id = '42'").execute(&db.pool).await.unwrap();
+    assert!(unauffaellig(&db.pool.clone(), "42").await.unwrap());
+    let p: f64 = sqlx::query_scalar(
+        "SELECT community_probability FROM twitch_zuschauer_register WHERE twitch_user_id = '42'",
     )
-    .await;
-
-    wait_for_ledger(&pool, 1).await;
-    wait_for_alerts(&server, 1).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"]);
-}
-
-#[tokio::test]
-async fn observe_meldet_hard_invite_auch_bei_etabliertem_chatter() {
-    let pool = pool_or_skip!("tb_crew_observe_hard_invite_returning");
-    prepare_observe_schema(&pool, false).await;
-    let server = MockServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-    let guard = crew_guard(pool.clone(), &server);
-    for _ in 0..2 {
-        guard.observe(&event(
-            "viewer",
-            "999999999",
-            "https://discord.gg/ZWSNyNfdG",
-            None,
-        ));
-    }
-
-    wait_for_ledger(&pool, 2).await;
-    wait_for_alerts(&server, 2).await;
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_invite"; 2]);
-}
-
-#[tokio::test]
-async fn observe_startet_keinen_stil_radar_fuer_etablierten_chatter() {
-    let pool = pool_or_skip!("tb_crew_observe_returning_clean");
-    prepare_observe_schema(&pool, false).await;
-    let server = MockServer::start().await;
-
-    observe_guard(
-        pool.clone(),
-        &server,
-        &event("viewer", "999999999", "harmloser etablierter chat", None),
-    )
-    .await;
-    sleep(Duration::from_millis(250)).await;
-
-    assert!(ledger_verdicts(&pool).await.is_empty());
-    assert!(server
-        .received_requests()
-        .await
-        .expect("Discord-Requests lesen")
-        .is_empty());
-}
-
-#[tokio::test]
-async fn observe_meldet_eine_harmlose_nachricht_noch_nicht() {
-    let pool = pool_or_skip!("tb_crew_observe_no_substance");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
-
-    observe_guard(
-        pool.clone(),
-        &server,
-        &event("viewer", "999999999", "harmloser erster chat", None),
-    )
-    .await;
-    sleep(Duration::from_millis(250)).await;
-
-    assert_eq!(observation_counts(&pool, &server).await, (0, 0));
-}
-
-#[tokio::test]
-async fn observe_meldet_nach_drei_harmlosen_nachrichten_genau_einmal() {
-    let pool = pool_or_skip!("tb_crew_observe_three_messages");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-    let guard = crew_guard(pool.clone(), &server);
-
-    for content in [
-        "wie geht es dir heute an diesem abend",
-        "welchen held spielst du gerade am liebsten",
-        "das war eben wirklich eine gute runde",
-    ] {
-        guard.observe(&event("viewer", "999999999", content, None));
-    }
-
-    wait_for_ledger(&pool, 1).await;
-    wait_for_alerts(&server, 1).await;
-    sleep(Duration::from_millis(100)).await;
-    assert_eq!(observation_counts(&pool, &server).await, (1, 1));
-    assert_eq!(ledger_verdicts(&pool).await, ["skipped"]);
-}
-
-#[tokio::test]
-async fn observe_drosselt_zehn_weitere_harmlose_nachrichten() {
-    let pool = pool_or_skip!("tb_crew_observe_once_per_chatter");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-    let guard = crew_guard(pool.clone(), &server);
-
-    for number in 1..=3 {
-        guard.observe(&event(
-            "viewer",
-            "999999999",
-            &format!("das ist harmlose nachricht nummer {number} heute"),
-            None,
-        ));
-    }
-
-    wait_for_ledger(&pool, 1).await;
-    wait_for_alerts(&server, 1).await;
-    for number in 4..=13 {
-        guard.observe(&event(
-            "viewer",
-            "999999999",
-            &format!("das ist harmlose nachricht nummer {number} heute"),
-            None,
-        ));
-    }
-    sleep(Duration::from_millis(250)).await;
-    assert_eq!(observation_counts(&pool, &server).await, (1, 1));
-    assert_eq!(ledger_verdicts(&pool).await, ["skipped"]);
-}
-
-#[tokio::test]
-async fn observe_drosselung_ueberlebt_neuen_guard() {
-    let pool = pool_or_skip!("tb_crew_observe_restart");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-
-    let guard = crew_guard(pool.clone(), &server);
-    for number in 1..=3 {
-        guard.observe(&event(
-            "viewer",
-            "999999999",
-            &format!("harmlose nachricht nummer {number} fuer den test"),
-            None,
-        ));
-    }
-    wait_for_ledger(&pool, 1).await;
-    wait_for_alerts(&server, 1).await;
-    drop(guard);
-
-    let restarted_guard = crew_guard(pool.clone(), &server);
-    for number in 1..=3 {
-        restarted_guard.observe(&event(
-            "viewer",
-            "999999999",
-            &format!("harmlose nachricht nummer {number} nach neustart"),
-            None,
-        ));
-    }
-    sleep(Duration::from_millis(250)).await;
-
-    assert_eq!(observation_counts(&pool, &server).await, (1, 1));
-}
-
-#[tokio::test]
-async fn observe_gibt_zweitem_aufruf_den_kontext_des_ersten_mit() {
-    let pool = pool_or_skip!("tb_crew_observe_context_order");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/changelog"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-
-    let contexts = Arc::new(Mutex::new(Vec::new()));
-    let judge_called = Arc::new(Semaphore::new(0));
-    let guard = CrewGuard::new(
-        true,
-        Arc::new(RecordingJudge {
-            contexts: Arc::clone(&contexts),
-            called: Arc::clone(&judge_called),
-        }),
-        Arc::new(ModAlerter::with_endpoint(
-            reqwest::Client::new(),
-            format!("{}/changelog", server.uri()),
-        )),
-        pool.clone(),
-        "bot-id".to_string(),
-        Arc::new(StubAccountAge),
-        Arc::new(Default::default()),
-        false,
-    );
-
-    let connection_one = pool.acquire().await.expect("erste DB-Verbindung halten");
-    let connection_two = pool.acquire().await.expect("zweite DB-Verbindung halten");
-    let first = "erste nachricht ohne signal";
-    let second =
-        "hast du den bot von nani drinne? du bannst unbewusst viele leute wegen der bannliste";
-
-    guard.observe(&event("viewer", "999999999", first, None));
-    guard.observe(&event("viewer", "999999999", second, None));
-
-    let _permit = timeout(Duration::from_secs(1), judge_called.acquire())
-        .await
-        .expect("zweiter Aufruf erreichte Judge nicht")
-        .expect("Judge-Semaphore geschlossen");
-    assert_eq!(
-        *contexts.lock().expect("Judge-Kontexte lesen"),
-        vec![vec![first.to_string()]]
-    );
-
-    drop((connection_one, connection_two));
-    wait_for_ledger(&pool, 1).await;
-    let messages: serde_json::Value = sqlx::query_scalar(
-        "SELECT messages FROM twitch_crew_radar_log WHERE llm_verdict = 'unsure'",
-    )
-    .fetch_one(&pool)
+    .fetch_one(&db.pool)
     .await
-    .expect("Kontext aus Radar-Ledger lesen");
-    assert_eq!(messages, serde_json::json!([first, second]));
+    .unwrap();
+    assert_eq!(p, 0.8);
 }
 
 #[tokio::test]
-async fn observe_sendet_pro_vorfall_genau_eine_discord_meldung() {
-    let pool = pool_or_skip!("tb_crew_observe_single_alert");
-    prepare_observe_schema(&pool, true).await;
-    let server = MockServer::start().await;
+async fn fluten_und_doppelte_session_reichen_nicht_fuer_vertrauen() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    sqlx::query("INSERT INTO twitch_session_chatters VALUES ('42', 1, 2000, NOW() - INTERVAL '10 days'), ('42', 1, 1000, NOW()), ('42', 1, 1000, NOW()), ('43', 1, 1000, NOW()), ('43', 2, 1000, NOW()), ('43', 3, 1000, NOW()), ('44', 1, 20, NOW() - INTERVAL '8 days'), ('44', 2, 20, NOW() - INTERVAL '8 days' + INTERVAL '1 minute'), ('44', 3, 20, NOW() - INTERVAL '8 days' + INTERVAL '2 minutes')").execute(&db.pool).await.unwrap();
+    assert!(!unauffaellig(&db.pool, "42").await.unwrap());
+    assert!(!unauffaellig(&db.pool, "43").await.unwrap());
+    assert!(!unauffaellig(&db.pool, "44").await.unwrap());
+    assert!(!unauffaellig(&db.pool, "").await.unwrap());
+}
 
-    observe_guard(
-        pool.clone(),
-        &server,
-        &event("helmbombenricky", "147713656", "hallo", None),
-    )
-    .await;
+#[tokio::test]
+async fn bestaetigter_spam_scam_globalban_und_regelaktion_widerrufen_vertrauen() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    for (id, statement) in [
+        (
+            "1",
+            "INSERT INTO twitch_spam_review_decisions VALUES ('1','spam')",
+        ),
+        (
+            "2",
+            "INSERT INTO twitch_scam_guard_verdicts VALUES ('2','scam','banned')",
+        ),
+        ("3", "INSERT INTO twitch_chatter_global_ban VALUES ('3')"),
+        (
+            "4",
+            "INSERT INTO tb_chat_autoban_log VALUES ('4','ban','spam')",
+        ),
+    ] {
+        history(&db.pool, id).await;
+        assert!(unauffaellig(&db.pool, id).await.unwrap());
+        sqlx::query(statement).execute(&db.pool).await.unwrap();
+        assert!(!unauffaellig(&db.pool, id).await.unwrap());
+        assert!(!unauffaellig(&db.pool.clone(), id).await.unwrap());
+    }
+    history(&db.pool, "5").await;
+    sqlx::query("INSERT INTO twitch_scam_guard_verdicts VALUES ('5','scam','overturned')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(unauffaellig(&db.pool, "5").await.unwrap());
+}
 
-    wait_for_alerts(&server, 1).await;
-    sleep(Duration::from_millis(100)).await;
+#[tokio::test]
+async fn radar_slot_ist_atomar_netzwerkweit_und_auf_zwei_pro_woche_begrenzt() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    let (a, b) = tokio::join!(
+        reserviere_radar_meldung(&db.pool, "42"),
+        reserviere_radar_meldung(&db.pool, "42")
+    );
     assert_eq!(
-        server
-            .received_requests()
-            .await
-            .expect("Discord-Requests lesen")
-            .len(),
+        usize::from(a.unwrap().is_some()) + usize::from(b.unwrap().is_some()),
         1
     );
-    assert_eq!(ledger_verdicts(&pool).await, ["hard_id"]);
+    sqlx::query("UPDATE twitch_zuschauer_register SET radar_meldung_am = NOW() - INTERVAL '2 days' WHERE twitch_user_id = '42'").execute(&db.pool).await.unwrap();
+    assert_eq!(
+        reserviere_radar_meldung(&db.pool, "42").await.unwrap(),
+        Some(1)
+    );
+    sqlx::query("UPDATE twitch_zuschauer_register SET radar_meldung_am = NOW() - INTERVAL '1 day' WHERE twitch_user_id = '42'").execute(&db.pool).await.unwrap();
+    assert_eq!(
+        reserviere_radar_meldung(&db.pool, "42").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn zwei_guards_und_kanaele_melden_selben_treffer_nur_einmal_passiv() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let a = guard(db.pool.clone(), &server);
+    let b = guard(db.pool.clone(), &server);
+    a.observe(&event("42", "eins", "was ist mit der bannliste"));
+    b.observe(&event("42", "zwei", "was ist mit der bannliste"));
+    wait_log(&db.pool).await;
+    sleep(Duration::from_millis(200)).await;
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(payload["crew_radar"]["notify_only"], true);
+    assert_eq!(payload["crew_radar"]["verdict"], "pattern");
+    let row: (Option<f32>, String) =
+        sqlx::query_as("SELECT llm_confidence, action_taken FROM twitch_crew_radar_log")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row, (None, "none".into()));
+}
+
+#[tokio::test]
+async fn normale_unterhaltung_und_unauffaellige_stammgaeste_bleiben_still() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    let server = MockServer::start().await;
+    let guard = guard(db.pool.clone(), &server);
+    for _ in 0..12 {
+        guard.observe(&event("42", "eins", "nani spielt heute wirklich gut"));
+        guard.observe(&event("43", "zwei", "das war ein gutes spiel"));
+    }
+    sleep(Duration::from_millis(400)).await;
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM twitch_crew_radar_log")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(unauffaellig(&db.pool, "42").await.unwrap());
+    assert!(!unauffaellig(&db.pool, "43").await.unwrap());
+}
+
+#[tokio::test]
+async fn harte_muster_bleiben_trotz_sauberer_historie_sichtbar() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let guard = guard(db.pool.clone(), &server);
+    guard.observe(&event("42", "eins", "https://discord.gg/ZWSNyNfdG"));
+    wait_log(&db.pool).await;
+    let verdict: String = sqlx::query_scalar("SELECT llm_verdict FROM twitch_crew_radar_log")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(verdict, "hard_invite");
+}
+
+#[tokio::test]
+async fn partner_und_harte_discord_verknuepfung_zaehlen_namensaehnlichkeit_nicht() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    sqlx::raw_sql("INSERT INTO twitch_partners VALUES ('1'); INSERT INTO twitch_streamer_identities VALUES ('2','discord-id',1); INSERT INTO twitch_zuschauer_register (twitch_user_id,community_probability,discord_user_id) VALUES ('3',0.99,'guessed-name');").execute(&db.pool).await.unwrap();
+    assert!(unauffaellig(&db.pool, "1").await.unwrap());
+    assert!(unauffaellig(&db.pool, "2").await.unwrap());
+    assert!(!unauffaellig(&db.pool, "3").await.unwrap());
+    sqlx::query("INSERT INTO twitch_chatter_global_ban VALUES ('1')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(!unauffaellig(&db.pool, "1").await.unwrap());
+}
+
+#[tokio::test]
+async fn spam_judge_ueberspringt_bekannte_id_auch_nach_neustart_ohne_ki_aufruf() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    let chatter = event("42", "eins", "need more viewers?");
+    let reviewer = tb_chat::scam_pitch::SpamAiReviewer::new(db.pool.clone());
+    assert!(matches!(
+        reviewer.review_for_verdict(&chatter).await,
+        tb_chat::scam_pitch::AiReviewOutcome::Skipped
+    ));
+    let reviewer = tb_chat::scam_pitch::SpamAiReviewer::new(db.pool.clone());
+    let mut renamed = chatter;
+    renamed.chatter_user_login = "renamed".into();
+    renamed.broadcaster_user_login = "zwei".into();
+    assert!(matches!(
+        reviewer.review_for_verdict(&renamed).await,
+        tb_chat::scam_pitch::AiReviewOutcome::Skipped
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM twitch_spam_review_decisions")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn kontoregister_migration_passt_zur_frischen_schema_kette() {
+    let db = TestPostgres::start_with_timescaledb().await;
+    sqlx::query("CREATE EXTENSION timescaledb")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::migrate!("../../migrations")
+        .run(&db.pool)
+        .await
+        .unwrap();
+    let actual = sqlx::query_as::<_,(String,String,String,String,String)>(
+        "SELECT table_name, column_name, data_type, is_nullable, COALESCE(column_default,'') \
+         FROM information_schema.columns WHERE table_schema='public' AND table_name = 'twitch_zuschauer_register' \
+         ORDER BY table_name, column_name")
+        .fetch_all(&db.pool).await.unwrap().into_iter()
+        .map(|(t,c,d,n,v)| format!("{t}|{c}|{d}|{n}|{v}"))
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = include_str!("../../tb-db/tests/fresh_schema_snapshot.txt")
+        .lines()
+        .filter(|line| line.starts_with("twitch_zuschauer_register|"))
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        actual.difference(&expected).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "Neue Schemaspalten"
+    );
+    assert_eq!(
+        expected.difference(&actual).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "Fehlende Schemaspalten"
+    );
+}
+
+#[tokio::test]
+async fn gleichzeitiger_widerruf_und_historienpruefung_lassen_kein_vertrauen_zurueck() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    let (qualified, revoked) = tokio::join!(
+        unauffaellig(&db.pool, "42"),
+        sqlx::query("INSERT INTO twitch_spam_review_decisions VALUES ('42', 'spam')")
+            .execute(&db.pool)
+    );
+    qualified.unwrap();
+    revoked.unwrap();
+    assert!(!unauffaellig(&db.pool, "42").await.unwrap());
+    assert!(sqlx::query_scalar::<_, bool>("SELECT unauffaellig_seit IS NULL AND vertrauen_widerrufen_am IS NOT NULL FROM twitch_zuschauer_register WHERE twitch_user_id = '42'").fetch_one(&db.pool).await.unwrap());
+}
+
+#[tokio::test]
+async fn explizite_safe_id_zaehlt_und_widerruf_gewinnt_auch_dort() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    let id = tb_chat::safe_list::SAFE_ACCOUNTS[0].twitch_user_id;
+    assert!(unauffaellig(&db.pool, id).await.unwrap());
+    sqlx::query("INSERT INTO twitch_chatter_global_ban VALUES ($1)")
+        .bind(id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(!unauffaellig(&db.pool, id).await.unwrap());
 }

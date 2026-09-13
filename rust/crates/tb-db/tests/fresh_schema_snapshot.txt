@@ -1761,9 +1761,15 @@ twitch_zuschauer_register|computed_at|timestamp with time zone|NO|now()
 twitch_zuschauer_register|discord_user_id|text|YES|
 twitch_zuschauer_register|first_partner_channel|text|YES|
 twitch_zuschauer_register|first_seen_at|timestamp with time zone|YES|
+twitch_zuschauer_register|historie_geprueft_am|timestamp with time zone|YES|
+twitch_zuschauer_register|radar_meldung_am|timestamp with time zone|YES|
+twitch_zuschauer_register|radar_vorherige_meldung_am|timestamp with time zone|YES|
+twitch_zuschauer_register|radar_wiederholungen|bigint|NO|0
 twitch_zuschauer_register|signals|jsonb|NO|'{}'::jsonb
 twitch_zuschauer_register|twitch_login|text|YES|
 twitch_zuschauer_register|twitch_user_id|text|NO|
+twitch_zuschauer_register|unauffaellig_seit|timestamp with time zone|YES|
+twitch_zuschauer_register|vertrauen_widerrufen_am|timestamp with time zone|YES|
 uplink_target_generations|disconnect_pending|boolean|NO|false
 uplink_target_generations|enabled|boolean|NO|
 uplink_target_generations|generation|bigint|NO|

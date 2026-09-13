@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
+use serde_json::Value;
 use uuid::Uuid;
 
-use crate::crew_review::FIREWORKS_DEFAULT_MODEL;
+use tb_llm::selection::FIREWORKS_DEFAULT_MODEL;
 
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HOOKS: usize = 5;
@@ -209,7 +209,10 @@ impl OutreachReviewClient {
         // Proxy- und Testpfade konfigurierbar.
         let endpoint = tb_llm::endpoint_for(USE_CASE);
         if endpoint.provider != "fireworks"
-            || endpoint.api_key.as_deref().is_none_or(|key| key.trim().is_empty())
+            || endpoint
+                .api_key
+                .as_deref()
+                .is_none_or(|key| key.trim().is_empty())
         {
             return Err(OutreachError::Unavailable);
         }

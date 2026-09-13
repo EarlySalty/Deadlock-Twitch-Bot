@@ -24,6 +24,15 @@ pub(crate) struct TestPostgres {
 
 impl TestPostgres {
     pub async fn start() -> Self {
+        Self::start_with_preload(false).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_with_timescaledb() -> Self {
+        Self::start_with_preload(true).await
+    }
+
+    async fn start_with_preload(timescaledb: bool) -> Self {
         let slot = SLOTS
             .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
             .clone()
@@ -60,6 +69,14 @@ impl TestPostgres {
                 .arg(&data)
                 .args(["-h", "", "-k"])
                 .arg(directory.path())
+                .args([
+                    "-c",
+                    if timescaledb {
+                        "shared_preload_libraries=timescaledb"
+                    } else {
+                        "shared_preload_libraries="
+                    },
+                ])
                 .args([
                     "-c",
                     "unix_socket_permissions=0700",

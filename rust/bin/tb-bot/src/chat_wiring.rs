@@ -46,10 +46,10 @@ use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
     lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
-    ChatPipelineParts, ChatterTracker, CrewGuard, CrewJudge, FunResponses, GlobalBanSweeper,
+    ChatPipelineParts, ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper,
     GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
-    LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, OpenAiCrewJudge,
-    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster,
+    PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -821,10 +821,8 @@ pub async fn build_runtime(
         api: Arc::clone(&api),
     });
     let alerter = Arc::new(ModAlerter::new(http.clone()));
-    let crew_judge: Arc<dyn CrewJudge> = Arc::new(OpenAiCrewJudge::from_env());
     let scout_crew_guard = Arc::new(CrewGuard::new(
-        tb_chat::crew_guard::crew_guard_enabled(),
-        Arc::clone(&crew_judge),
+        true,
         Arc::clone(&alerter),
         pool.clone(),
         bot_user_id.clone(),
@@ -888,9 +886,7 @@ pub async fn build_runtime(
         review_log: Arc::new(ReviewLog::new(review_log_dir)),
         alerter,
         account_age,
-        crew_judge,
         crew_centroid,
-        crew_review_trigger: None,
     }));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
@@ -3205,9 +3201,7 @@ mod chat_notification_tests {
                 "http://127.0.0.1:1/changelog",
             )),
             account_age: Arc::new(NoopAccountAge),
-            crew_judge: Arc::new(OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(Centroid::default()),
-            crew_review_trigger: None,
         })
     }
 

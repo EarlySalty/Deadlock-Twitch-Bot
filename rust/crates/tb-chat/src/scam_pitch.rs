@@ -825,6 +825,12 @@ impl ScamPitchDetector {
     ///
     /// Entspricht `_maybe_warn_service_pitch` (service_pitch_warning.py Z. 800–1029).
     pub async fn observe(&self, event: &ChatMessageEvent) -> PitchDecision {
+        if crate::zuschauer_register::unauffaellig(&self.pool, &event.chatter_user_id)
+            .await
+            .unwrap_or(false)
+        {
+            return PitchDecision::None;
+        }
         // Schritt 1–5: Vorbedingungen (Z. 801–811)
         let raw_content = normalize_text(event.text());
         if raw_content.is_empty() {
@@ -1590,6 +1596,12 @@ impl SpamAiReviewer {
     /// Das Score-Gate (`spam_score > 0`) liegt beim Aufrufer; hier nur noch
     /// Cooldown (spam_ai_review.py Z. 75–85), Provider-Kette und Lernen.
     pub async fn review_for_verdict(&self, event: &ChatMessageEvent) -> AiReviewOutcome {
+        if crate::zuschauer_register::unauffaellig(&self.pool, &event.chatter_user_id)
+            .await
+            .unwrap_or(false)
+        {
+            return AiReviewOutcome::Skipped;
+        }
         let content = event.text().to_string();
         let channel = event.broadcaster_user_login.to_lowercase();
         let chatter = event.chatter_user_login.to_lowercase();
@@ -1792,7 +1804,10 @@ pub(crate) const LEARN_MIN_CONFIDENCE: f32 = 0.9;
 
 /// Ergebnis eines Lernversuchs aus einem Judge-Urteil.
 pub(crate) enum LearnOutcome {
-    Saved { id: i64, pattern: String },
+    Saved {
+        id: i64,
+        pattern: String,
+    },
     /// Muster hat eine der Hürden gerissen: nicht in der Nachricht belegt oder
     /// zu generisch.
     Rejected,
@@ -1852,7 +1867,10 @@ fn beleg_form(text: &str) -> String {
     entschaerft.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(crate) async fn learn_pattern_from_judge(pool: &PgPool, req: JudgeLearning<'_>) -> LearnOutcome {
+pub(crate) async fn learn_pattern_from_judge(
+    pool: &PgPool,
+    req: JudgeLearning<'_>,
+) -> LearnOutcome {
     let JudgeLearning {
         pattern,
         pattern_type,
@@ -1942,17 +1960,15 @@ async fn call_judge(
     content: &str,
 ) -> Result<AiReview, JudgeFailure> {
     let truncated: String = content.chars().take(500).collect();
-    let mut request = tb_llm::Request::simple(
-        SPAM_REVIEW_SYSTEM_PROMPT,
-        format!("Nachricht: {truncated}"),
-    )
-    .max_tokens(i64::from(JUDGE_MAX_TOKENS))
-    .temperature(0.0)
-    .timeout(Duration::from_secs(20))
-    .denken_aus()
-    .strip_think()
-    .allow_reasoning_content()
-    .accept(|text| extract_verdict(text).is_some());
+    let mut request =
+        tb_llm::Request::simple(SPAM_REVIEW_SYSTEM_PROMPT, format!("Nachricht: {truncated}"))
+            .max_tokens(i64::from(JUDGE_MAX_TOKENS))
+            .temperature(0.0)
+            .timeout(Duration::from_secs(20))
+            .denken_aus()
+            .strip_think()
+            .allow_reasoning_content()
+            .accept(|text| extract_verdict(text).is_some());
     request = match endpoint {
         Some(endpoint) => request.endpoint(endpoint.clone()),
         None => request.failover(),
@@ -2141,7 +2157,10 @@ mod tests {
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].provider, "fireworks");
-        assert_eq!(providers[0].model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(
+            providers[0].model,
+            tb_llm::selection::FIREWORKS_DEFAULT_MODEL
+        );
         clear_provider_env();
     }
 
@@ -2771,8 +2790,9 @@ mod tests {
         assert_eq!(pattern, "stream_promotion_bot");
 
         // Und der Vorfilter erkennt dieselbe Nachricht danach ohne Judge.
-        let filter =
-            crate::spam_filter::SpamFilter::new(crate::spam_filter::LearnedPatterns::load(&pool).await);
+        let filter = crate::spam_filter::SpamFilter::new(
+            crate::spam_filter::LearnedPatterns::load(&pool).await,
+        );
         let verdict = filter.evaluate(nachricht, &crate::spam_filter::SpamContext::default());
         assert!(
             verdict.hard_signal,
@@ -2805,7 +2825,10 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(count, 0, "halluziniertes Muster darf nicht in der DB stehen");
+        assert_eq!(
+            count, 0,
+            "halluziniertes Muster darf nicht in der DB stehen"
+        );
     }
 
     /// Fehlt die Konfidenz, gilt dasselbe wie im Ahndungspfad: unbekannt ist
@@ -3187,7 +3210,10 @@ mod tests {
         let requests = server.received_requests().await.expect("Requests");
         assert_eq!(requests.len(), 1);
         let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
-        assert!(body.contains("\"reasoning_effort\":\"none\""), "Body: {body}");
+        assert!(
+            body.contains("\"reasoning_effort\":\"none\""),
+            "Body: {body}"
+        );
     }
 
     #[tokio::test]

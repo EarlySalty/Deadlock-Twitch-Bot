@@ -43,7 +43,6 @@ use std::sync::Arc;
 use chrono::Utc;
 use dashmap::DashMap;
 use sqlx::PgPool;
-use tb_engagement::CrewReviewTrigger;
 use tracing::{debug, info, warn};
 
 use crate::api::{BanOutcome, ChatApi};
@@ -51,7 +50,7 @@ use crate::channel_classifier::{ChannelClass, ChannelClassifier};
 use crate::chatter_tracking::ChatterTracker;
 use crate::commands::CommandEngine;
 use crate::conversation_scam::ConversationScamGuard;
-use crate::crew_guard::{crew_guard_enabled, CrewGuard, CrewJudge};
+use crate::crew_guard::CrewGuard;
 use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::invite_question::InviteQuestionResponder;
@@ -701,9 +700,7 @@ pub struct ChatPipelineParts {
     pub review_log: Arc<ReviewLog>,
     pub alerter: Arc<ModAlerter>,
     pub account_age: Arc<dyn AccountAgePort>,
-    pub crew_judge: Arc<dyn CrewJudge>,
     pub crew_centroid: Arc<crate::style_score::Centroid>,
-    pub crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
 }
 
 /// Kurzzeit-Gedaechtnis fuer schon verarbeitete Nachrichten-IDs.
@@ -747,8 +744,6 @@ impl SeenMessages {
 #[derive(Clone)]
 pub struct ChatPipeline {
     parts: ChatPipelineParts,
-    /// Crew-Guard (Shadow-Mode): aus der Umgebung gebaut, teilt sich den
-    /// Discord-Alert-Pfad des `alerter`. Default AUS (`CREW_GUARD_ENABLED`).
     crew_guard: Arc<CrewGuard>,
     spam_meta_cooldowns: Arc<DashMap<String, std::time::Instant>>,
     spam_meta_reply_index: Arc<std::sync::atomic::AtomicUsize>,
@@ -759,19 +754,15 @@ pub struct ChatPipeline {
 
 impl ChatPipeline {
     pub fn new(parts: ChatPipelineParts) -> Self {
-        let crew_guard = Arc::new(
-            CrewGuard::new(
-                crew_guard_enabled(),
-                Arc::clone(&parts.crew_judge),
-                Arc::clone(&parts.alerter),
-                parts.pool.clone(),
-                parts.bot_user_id.clone(),
-                Arc::clone(&parts.account_age),
-                Arc::clone(&parts.crew_centroid),
-                false,
-            )
-            .with_crew_review_trigger(parts.crew_review_trigger.clone()),
-        );
+        let crew_guard = Arc::new(CrewGuard::new(
+            true,
+            Arc::clone(&parts.alerter),
+            parts.pool.clone(),
+            parts.bot_user_id.clone(),
+            Arc::clone(&parts.account_age),
+            Arc::clone(&parts.crew_centroid),
+            false,
+        ));
         let moderation_settings = Arc::new(ModerationSettingsCache::new(parts.pool.clone()));
         Self {
             parts,
@@ -904,8 +895,6 @@ impl ChatPipeline {
         // Crew-Guard (Shadow-Mode): koordinierte Abwerbe-/Diffamierungs-Kampagne
         // erkennen und im Shadow NUR nach Discord melden — KEIN Ban, KEIN
         // Chat-Post, KEIN Whisper. Nur Partner-Kanäle (hier). Fire-and-forget
-        // hinter Feature-Flag CREW_GUARD_ENABLED (default AUS): bei Aus ein
-        // sofortiger No-op, sonst screenen + ggf. GPT-Prüfung im Hintergrund.
         let crew_guard_observe = || {
             self.crew_guard.observe(event);
         };
@@ -1303,6 +1292,12 @@ impl ChatPipeline {
     ) -> bool {
         let p = &self.parts;
         let text = event.message.text.as_str();
+        if crate::zuschauer_register::unauffaellig(&p.pool, &event.chatter_user_id)
+            .await
+            .unwrap_or(false)
+        {
+            return false;
+        }
 
         // Menschlicher Safe-Gegen-Override: vollständiger kanonisierter
         // Volltexttreffer beendet den Spam-Pfad vor Score, Aktion und LLM.
@@ -1586,6 +1581,12 @@ impl ChatPipeline {
         let p = &self.parts;
         let text = event.message.text.as_str();
 
+        if crate::zuschauer_register::unauffaellig(&p.pool, &event.chatter_user_id)
+            .await
+            .unwrap_or(false)
+        {
+            return;
+        }
         let outcome = p.ai_reviewer.review_for_verdict(event).await;
 
         // Jede Judge-Entscheidung sichtbar machen: Review-Log + Tracing.
@@ -2055,7 +2056,6 @@ mod tests {
     use crate::types::{ChatMessageBody, SendOutcome};
     use chrono::{DateTime, Utc};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use tb_engagement::crew_review::{RickyChatInput, RICKY_TWITCH_USER_ID};
     use tb_engagement::llm_chat::EngagementLlmClient;
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
@@ -2125,15 +2125,6 @@ mod tests {
     #[derive(Default)]
     struct RecordingChatApi {
         calls: Mutex<Vec<String>>,
-    }
-
-    #[derive(Default)]
-    struct RecordingCrewReviewTrigger(Mutex<Vec<RickyChatInput>>);
-
-    impl CrewReviewTrigger for RecordingCrewReviewTrigger {
-        fn observe(&self, input: RickyChatInput) {
-            self.0.lock().expect("Recording-Lock").push(input);
-        }
     }
 
     impl RecordingChatApi {
@@ -2436,7 +2427,7 @@ mod tests {
     }
 
     fn pipeline_for_non_partner(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
-        pipeline_with_crew_review_trigger(api, pool, None)
+        make_pipeline(api, pool)
     }
 
     fn pipeline_for_non_partner_with_patterns(
@@ -2444,26 +2435,16 @@ mod tests {
         pool: PgPool,
         learned: crate::spam_filter::LearnedPatterns,
     ) -> ChatPipeline {
-        pipeline_with_crew_review_trigger_and_patterns(api, pool, None, learned)
+        pipeline_with_patterns(api, pool, learned)
     }
 
-    fn pipeline_with_crew_review_trigger(
-        api: Arc<RecordingChatApi>,
-        pool: PgPool,
-        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
-    ) -> ChatPipeline {
-        pipeline_with_crew_review_trigger_and_patterns(
-            api,
-            pool,
-            crew_review_trigger,
-            Default::default(),
-        )
+    fn make_pipeline(api: Arc<RecordingChatApi>, pool: PgPool) -> ChatPipeline {
+        pipeline_with_patterns(api, pool, Default::default())
     }
 
-    fn pipeline_with_crew_review_trigger_and_patterns(
+    fn pipeline_with_patterns(
         api: Arc<RecordingChatApi>,
         pool: PgPool,
-        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
         learned: crate::spam_filter::LearnedPatterns,
     ) -> ChatPipeline {
         let api_trait: Arc<dyn ChatApi> = api;
@@ -2538,9 +2519,7 @@ mod tests {
                 "http://127.0.0.1:1/changelog",
             )),
             account_age: Arc::new(NoopAccountAge),
-            crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
-            crew_review_trigger,
         })
     }
 
@@ -2822,9 +2801,7 @@ mod tests {
                 "http://127.0.0.1:1/changelog",
             )),
             account_age: Arc::new(NoopAccountAge),
-            crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
-            crew_review_trigger: None,
         });
         (pipeline, invite_api)
     }
@@ -2937,35 +2914,14 @@ mod tests {
         assert!(!pipeline.handle(&strong_timeout_event()).await);
     }
 
-    #[tokio::test]
-    async fn shared_chat_whitespace_source_id_faellt_im_handle_auf_message_id_zurueck() {
-        let Some(pool) = moderation_test_pool("pipeline_shared_chat_ricky_fallback").await else {
-            return;
-        };
-        seed_active_pipeline_channel(&pool).await;
-        let trigger = Arc::new(RecordingCrewReviewTrigger::default());
-        let trigger_port: Arc<dyn CrewReviewTrigger> = trigger.clone();
-        let pipeline = pipeline_with_crew_review_trigger(
-            Arc::new(RecordingChatApi::default()),
-            pool,
-            Some(trigger_port),
-        );
+    #[test]
+    fn shared_chat_whitespace_source_id_verwendet_message_id() {
         let mut event = strong_timeout_event();
-        event.broadcaster_user_id = "host-id".to_string();
-        event.broadcaster_user_login = "host".to_string();
-        event.chatter_user_id = RICKY_TWITCH_USER_ID.to_string();
-        event.chatter_user_login = "helmbombenricky".to_string();
         event.message_id = "fallback-7".to_string();
         event.source_broadcaster_user_id = Some("broadcaster-id".to_string());
         event.source_broadcaster_user_login = Some("channel".to_string());
         event.source_message_id = Some("  ".to_string());
-
-        pipeline.handle(&event).await;
-
-        let inputs = trigger.0.lock().expect("Recording-Lock");
-        assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
-        assert_eq!(inputs[0].source_message_id.as_deref(), Some("fallback-7"));
+        assert_eq!(event.with_effective_channel().message_id, "fallback-7");
     }
 
     #[tokio::test]
@@ -3607,9 +3563,7 @@ mod tests {
                 "http://127.0.0.1:1/changelog",
             )),
             account_age: Arc::new(NoopAccountAge),
-            crew_judge: Arc::new(crate::crew_guard::OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(crate::style_score::Centroid::default()),
-            crew_review_trigger: None,
         })
     }
 

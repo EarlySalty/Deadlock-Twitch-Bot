@@ -28,7 +28,6 @@ pub mod channel_classifier;
 pub mod channel_policy;
 pub mod chatter_tracking;
 pub mod commands;
-pub mod sub_reminder;
 pub mod conversation_scam;
 pub mod crew_guard;
 pub mod fun_responses;
@@ -48,10 +47,11 @@ pub mod scam_pitch;
 pub mod secret_sink;
 pub mod spam_filter;
 pub mod standard_replies;
-pub mod stats;
 pub mod stat_commands;
+pub mod stats;
 pub mod steam_lookup;
 pub mod style_score;
+pub mod sub_reminder;
 pub mod suppression_guard;
 pub mod sus_invite;
 pub mod timeout_tracking;
@@ -70,12 +70,10 @@ pub use commands::{
     RaidStatusInfo, SuperModPort,
 };
 pub use conversation_scam::{
-    ConversationScamGuard, DialogState, GuardMode, GuardSettings, LlmScamJudge, ScamJudge,
-    Verdict, VerdictKind,
+    ConversationScamGuard, DialogState, GuardMode, GuardSettings, LlmScamJudge, ScamJudge, Verdict,
+    VerdictKind,
 };
-pub use crew_guard::{
-    screen as crew_screen, CrewGuard, CrewJudge, CrewSignal, CrewVerdict, OpenAiCrewJudge,
-};
+pub use crew_guard::{screen as crew_screen, CrewGuard, CrewSignal};
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
@@ -93,11 +91,11 @@ pub use lurker_policy::{
     PASSIVE_LURKER_STATE,
 };
 pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
-pub use moderation_settings::{ModerationSettings, ModerationSettingsCache};
 pub use moderation::{
     AutoBanRequest, ChannelGuardPort, HelixChatClient, ModerationEngine, OutboundSuppressionCheck,
     OutboundSuppressionStore, TimeoutGuard,
 };
+pub use moderation_settings::{ModerationSettings, ModerationSettingsCache};
 pub use pipeline::{
     ChatPipeline, ChatPipelineParts, CrewRadarAlert, ModAlerter, PgHelixMentionResolver, ReviewLog,
     SCAM_PITCH_TIMEOUT_REASON,

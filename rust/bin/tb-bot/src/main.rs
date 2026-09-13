@@ -75,7 +75,6 @@ mod raid_arrival_wiring;
 mod raid_greeting;
 mod raid_oauth_impl;
 mod reauth_reminder;
-mod ricky_review_wiring;
 mod scam_enforce_impl;
 mod scam_notify_impl;
 mod scam_revoke_impl;
@@ -368,7 +367,6 @@ impl tb_internal_api::handlers::reauth_all::BulkReauthPort for InternalBulkReaut
 struct SubscriptionPollHooks {
     manager: Arc<SubscriptionManager>,
     pool: sqlx::PgPool,
-    crew_review_store: tb_engagement::crew_review_store::CrewReviewStore,
     offline_raid: Option<Arc<OfflineRaidHandler>>,
     /// ChatApi für den Partner-Recruiting-Outreach; `None` ohne Bot-Token.
     chat_api: Option<Arc<dyn tb_chat::ChatApi>>,
@@ -434,15 +432,6 @@ impl PollHooks for SubscriptionPollHooks {
     }
 
     async fn on_stream_offline_raid(&self, twitch_user_id: &str, login: Option<&str>) {
-        if let Some(login) = login.map(str::trim).filter(|value| !value.is_empty()) {
-            if let Err(error) = self
-                .crew_review_store
-                .close_channel_session(login, "stream_offline", chrono::Utc::now())
-                .await
-            {
-                tracing::warn!(%error, login, "Ricky-Review: Poll-Offline-Close fehlgeschlagen");
-            }
-        }
         if let Some(handler) = &self.offline_raid {
             handler.handle_streamer_offline(twitch_user_id, login).await;
         }
@@ -583,13 +572,10 @@ async fn main() {
         tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
     }
 
-    let ricky_review = ricky_review_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let outreach_shadow =
         outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let smalltalk_loop = smalltalk_loop_wiring::start(&supervisor, pool.clone(), &settings.broker);
     chat_typen_wiring::spawn(&supervisor, pool.clone());
-    let crew_review_trigger = ricky_review.trigger();
-    let crew_review_store = ricky_review.store();
 
     let port: u16 = optional_env_u16("PORT", 8776);
 
@@ -1277,16 +1263,6 @@ async fn main() {
         }
         _ => Arc::new(NoopEventSubHooks),
     };
-    // Der Decorator wertet bereits zugestellte Chat-Events unabhängig von der
-    // nativen ChatRuntime aus. Er legt selbst keine Chat-Subscription an: deren
-    // Reconcile bleibt wegen der Bot-Token-Ownership korrekt an TB_CHAT_ENABLED
-    // gebunden. Bei deaktiviertem Rust-Chat ist der anonyme Scout-IRC-Pfad die
-    // tokenfreie Primärquelle für alle aktuell gefundenen Live-Kanäle.
-    let eventsub_hooks = ricky_review_wiring::wrap_eventsub_hooks(
-        eventsub_hooks,
-        crew_review_trigger.clone(),
-        crew_review_store.clone(),
-    );
     // Welle B Phase 2: Pipeline auf der gebooteten ChatApi aufbauen. Wrappt
     // die Hooks, damit channel.chat.message in die tb-chat-Pipeline läuft;
     // startet Token-Loop, Promo-Loop, Global-Ban-Sweeper und den
@@ -1700,11 +1676,8 @@ async fn main() {
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
                 vod_config.yt_dlp = yt_dlp_path();
-                let vod_archive = tb_vod_archive::VodArchiveWorker::new(
-                    pool.clone(),
-                    vod_config,
-                    vod_creds,
-                );
+                let vod_archive =
+                    tb_vod_archive::VodArchiveWorker::new(pool.clone(), vod_config, vod_creds);
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {
@@ -1785,7 +1758,6 @@ async fn main() {
                     Some(manager) => Arc::new(SubscriptionPollHooks {
                         manager: manager.clone(),
                         pool: pool.clone(),
-                        crew_review_store: crew_review_store.clone(),
                         offline_raid: poll_offline_raid_handler.clone(),
                         chat_api: recruit_chat_api.clone(),
                         recruit_last_check: std::sync::Mutex::new(None),
@@ -1849,20 +1821,9 @@ async fn main() {
             std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
         let scout_lang_filters: Vec<String> = language_filters_from_env();
         let scout_chat_adapter = scout_crew_guard.as_ref().map_or_else(
-            || {
-                scout_chat::ScoutChatAdapter::storage_only(
-                    pool.clone(),
-                    crew_review_trigger.clone(),
-                    &supervisor,
-                )
-            },
+            || scout_chat::ScoutChatAdapter::storage_only(pool.clone(), &supervisor),
             |crew_guard| {
-                scout_chat::ScoutChatAdapter::new(
-                    pool.clone(),
-                    Arc::clone(crew_guard),
-                    crew_review_trigger.clone(),
-                    &supervisor,
-                )
+                scout_chat::ScoutChatAdapter::new(pool.clone(), Arc::clone(crew_guard), &supervisor)
             },
         );
         let scout_task = tb_monitoring::build_scout_task(
@@ -2108,7 +2069,6 @@ async fn main() {
         });
 
     let shutdown_supervisor = supervisor.clone();
-    let shutdown_ricky = ricky_review.clone();
     let shutdown_outreach = outreach_shadow.clone();
     let shutdown_smalltalk = smalltalk_loop.clone();
     if let Err(error) = axum::serve(
@@ -2118,9 +2078,6 @@ async fn main() {
     .with_graceful_shutdown(async move {
         shutdown_signal().await;
         shutdown_supervisor.shutdown().await;
-        shutdown_ricky
-            .close_all_open_sessions("process_shutdown")
-            .await;
         shutdown_outreach
             .close_open_session("process_shutdown")
             .await;

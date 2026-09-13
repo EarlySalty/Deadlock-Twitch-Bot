@@ -338,8 +338,7 @@ impl ZuschauerRegister {
             twitch_login: row.twitch_login,
             discord_user_id: row.discord_user_id,
             p: row.community_probability,
-            signals: serde_json::from_str(&row.signals)
-                .unwrap_or_else(|_| serde_json::json!({})),
+            signals: serde_json::from_str(&row.signals).unwrap_or_else(|_| serde_json::json!({})),
             first_partner_channel: row.first_partner_channel,
             first_seen_at: row.first_seen_at,
             computed_at: row.computed_at,
@@ -457,7 +456,12 @@ impl ZuschauerRegister {
                 let hard = self.hard_discord_id(twitch_user_id).await;
                 let prior = self.prior_for_channel(channel_login);
                 let (p, discord_id, signals) = score(twitch_login, &index, prior, hard.as_deref());
-                (p, discord_id.or(entry.discord_user_id.clone()), signals, now)
+                (
+                    p,
+                    discord_id.or(entry.discord_user_id.clone()),
+                    signals,
+                    now,
+                )
             };
 
             let updated = RegisterEntry {
@@ -541,7 +545,11 @@ impl ZuschauerRegister {
 
         let channel_login = &event.broadcaster_user_login;
         let Some(entry) = self
-            .ensure_current(&event.chatter_user_id, &event.chatter_user_login, channel_login)
+            .ensure_current(
+                &event.chatter_user_id,
+                &event.chatter_user_login,
+                channel_login,
+            )
             .await
         else {
             return GateOutcome::Reject("register_fehlt");
@@ -653,13 +661,19 @@ mod tests {
         let ambig = MemberIndex::build(&[member("1", "dax"), member("2", "dax")]);
         let (p_ambig, d1, s1) = score("dax", &ambig, PRIOR_PARTNER, None);
         let erwartet_ambig = 1.0 - (1.0 - PRIOR_PARTNER) * (1.0 - NAMENS_SCORE_EXACT_AMBIG);
-        assert!((p_ambig - erwartet_ambig).abs() < 1e-9, "ambig p war {p_ambig}");
+        assert!(
+            (p_ambig - erwartet_ambig).abs() < 1e-9,
+            "ambig p war {p_ambig}"
+        );
         assert!(d1.is_none(), "mehrdeutig darf keine Discord-ID setzen");
         assert_eq!(s1["stufe"], serde_json::json!("exakt_mehrdeutig"));
 
         let unique = MemberIndex::build(&[member("1", "dax")]);
         let (p_unique, _d2, _s2) = score("dax", &unique, PRIOR_PARTNER, None);
-        assert!(p_ambig < p_unique, "ambig {p_ambig} sollte < unique {p_unique}");
+        assert!(
+            p_ambig < p_unique,
+            "ambig {p_ambig} sollte < unique {p_unique}"
+        );
     }
 
     #[test]
@@ -675,11 +689,20 @@ mod tests {
         members.push(member("999", "gzmeranxy"));
         let index = MemberIndex::build(&members);
         let (p, discord, signals) = score("gamername", &index, PRIOR_PARTNER, None);
-        assert!(discord.is_none(), "0,75-Treffer darf keine Discord-ID liefern");
+        assert!(
+            discord.is_none(),
+            "0,75-Treffer darf keine Discord-ID liefern"
+        );
         assert_eq!(signals["stufe"], serde_json::json!("kein_treffer"));
         assert_eq!(signals["namens_score"], serde_json::json!(0.0));
-        assert!((p - PRIOR_PARTNER).abs() < 1e-9, "kein Signal soll p=prior geben, war {p}");
-        assert!(p < GATE_MAX_P, "kein Signal soll das Gate passieren, war {p}");
+        assert!(
+            (p - PRIOR_PARTNER).abs() < 1e-9,
+            "kein Signal soll p=prior geben, war {p}"
+        );
+        assert!(
+            p < GATE_MAX_P,
+            "kein Signal soll das Gate passieren, war {p}"
+        );
     }
 
     #[test]
@@ -691,7 +714,10 @@ mod tests {
         assert_eq!(signals["namens_score"], serde_json::json!(NAMENS_SCORE_MID));
         let erwartet = 1.0 - (1.0 - PRIOR_PARTNER) * (1.0 - NAMENS_SCORE_MID);
         assert!((p - erwartet).abs() < 1e-9, "war {p}, erwartet {erwartet}");
-        assert!(p < GATE_MAX_P, "MID mit Partner-Prior soll das Gate passieren, war {p}");
+        assert!(
+            p < GATE_MAX_P,
+            "MID mit Partner-Prior soll das Gate passieren, war {p}"
+        );
     }
 
     #[test]
@@ -700,10 +726,123 @@ mod tests {
         let (p, discord, signals) = score("nanigamer", &index, PRIOR_PARTNER, None);
         assert_eq!(discord.as_deref(), Some("100"), "HIGH setzt die Discord-ID");
         assert_eq!(signals["stufe"], serde_json::json!("high"));
-        assert_eq!(signals["namens_score"], serde_json::json!(NAMENS_SCORE_HIGH));
+        assert_eq!(
+            signals["namens_score"],
+            serde_json::json!(NAMENS_SCORE_HIGH)
+        );
         let erwartet = 1.0 - (1.0 - PRIOR_PARTNER) * (1.0 - NAMENS_SCORE_HIGH);
         assert!((p - erwartet).abs() < 1e-9, "war {p}, erwartet {erwartet}");
-        assert!((p - 0.68).abs() < 1e-9, "HIGH mit Partner-Prior soll p=0,68 geben, war {p}");
+        assert!(
+            (p - 0.68).abs() < 1e-9,
+            "HIGH mit Partner-Prior soll p=0,68 geben, war {p}"
+        );
         assert!(p >= GATE_MAX_P, "HIGH soll das Gate ablehnen, war {p}");
     }
+}
+
+pub async fn unauffaellig(pool: &PgPool, id: &str) -> Result<bool, sqlx::Error> {
+    if id.trim().is_empty() {
+        return Ok(false);
+    }
+    let current = sqlx::query_as::<_, (bool, bool, bool)>(
+        "SELECT unauffaellig_seit IS NOT NULL, vertrauen_widerrufen_am IS NOT NULL, \
+         COALESCE(historie_geprueft_am > NOW() - INTERVAL '1 day', FALSE) \
+         FROM twitch_zuschauer_register WHERE twitch_user_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some((clean, revoked, fresh)) = current {
+        if revoked {
+            return Ok(false);
+        }
+        if clean || fresh {
+            return Ok(clean);
+        }
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
+        VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
+        .bind(id).execute(&mut *tx).await?;
+    let (clean, revoked, fresh) = sqlx::query_as::<_, (bool, bool, bool)>(
+        "SELECT unauffaellig_seit IS NOT NULL, vertrauen_widerrufen_am IS NOT NULL, \
+         COALESCE(historie_geprueft_am > NOW() - INTERVAL '1 day', FALSE) \
+         FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if revoked || clean || fresh {
+        tx.commit().await?;
+        return Ok(clean && !revoked);
+    }
+    let linked: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1) \
+         OR EXISTS (SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id = $1 \
+            AND NULLIF(discord_user_id, '') IS NOT NULL AND is_on_discord = 1)",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let qualified: bool = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT session_id) >= 3 AND COALESCE(SUM(messages), 0) >= 20 \
+         AND COUNT(DISTINCT (first_message_at::timestamptz AT TIME ZONE 'UTC')::date) >= 3 \
+         AND COALESCE(MAX(first_message_at::timestamptz) - MIN(first_message_at::timestamptz) >= INTERVAL '7 days', FALSE) \
+         FROM twitch_session_chatters WHERE chatter_id = $1 AND messages > 0",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE twitch_zuschauer_register SET historie_geprueft_am = NOW(), \
+        unauffaellig_seit = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE twitch_user_id = $1",
+    )
+    .bind(id)
+    .bind(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
+}
+
+pub async fn reserviere_radar_meldung(pool: &PgPool, id: &str) -> Result<Option<i64>, sqlx::Error> {
+    if id.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
+        VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
+        .bind(id).execute(&mut *tx).await?;
+    let (last, previous, repetitions) =
+        sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i64)>(
+            "SELECT radar_meldung_am, radar_vorherige_meldung_am, radar_wiederholungen \
+         FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let now = Utc::now();
+    if last.is_some_and(|at| now - at < chrono::Duration::days(1))
+        || previous.is_some_and(|at| now - at < chrono::Duration::days(7))
+    {
+        sqlx::query(
+            "UPDATE twitch_zuschauer_register SET radar_wiederholungen = \
+            LEAST(radar_wiederholungen, 9223372036854775806) + 1 WHERE twitch_user_id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(None);
+    }
+    sqlx::query(
+        "UPDATE twitch_zuschauer_register SET radar_vorherige_meldung_am = radar_meldung_am, \
+        radar_meldung_am = $2, radar_wiederholungen = 0 WHERE twitch_user_id = $1",
+    )
+    .bind(id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(repetitions))
 }

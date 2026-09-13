@@ -1,38 +1,15 @@
-//! Crew-Guard — Shadow-Mode.
-//!
-//! Erkennt eine EINE koordinierte Abwerbe-/Diffamierungs-Kampagne im
-//! Twitch-Chat und meldet sie im **Shadow-Mode ausschliesslich nach Discord**
-//! (an nani). Es gibt hier bewusst KEINE Aktion gegen den Chatter: kein Ban,
-//! kein oeffentlicher Chat-Post, kein Whisper — nur die Info, damit der Mensch
-//! neue Kampagnen-Versuche sieht und die Erkennung adaptieren kann.
-//!
-//! Zweistufig:
-//!   1. [`screen`] — reine, synchrone Vorfilterung. Liefert **nur** ein Signal,
-//!      NIE ein Urteil. Harte Signale (bekanntes Konto per Twitch-User-ID,
-//!      bekannter Rival-Invite-Code) sind deterministisch; die Trigger-Muster
-//!      sind bewusst MEHRDEUTIG und eskalieren lediglich zur GPT-Pruefung.
-//!   2. [`CrewJudge`] — konservativer LLM-Klassifikator, der nur dann `is_crew`
-//!      setzt, wenn das Kampagnen-Muster klar erkennbar ist. Fail-safe „unsure".
-
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
-
-use async_trait::async_trait;
-use chrono::{DateTime, Timelike, Utc};
-use chrono_tz::Europe::Berlin;
-use regex::Regex;
-use serde::Deserialize;
-use sqlx::PgPool;
-use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
-use tracing::{debug, error, warn};
-
-use crate::conversation_scam::{should_consider_event, DialogState, FirstTimeContext};
 use crate::pipeline::{CrewRadarAlert, ModAlerter};
 use crate::scam_pitch::AccountAgePort;
-use crate::style_score::{score as style_score, Centroid, StyleBreakdown, StyleScore};
+use crate::style_score::{score as style_score, Centroid, StyleBreakdown};
 use crate::types::ChatMessageEvent;
+use crate::zuschauer_register::{reserviere_radar_meldung, unauffaellig};
+use chrono::{Timelike, Utc};
+use chrono_tz::Europe::Berlin;
+use regex::Regex;
+use sqlx::PgPool;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use tracing::{error, warn};
 
 #[derive(Debug, Clone)]
 pub struct CrewRadarLog {
@@ -49,46 +26,6 @@ pub struct CrewRadarLog {
     pub llm_reasoning: Option<String>,
     pub action_taken: String,
     pub source: String,
-}
-
-#[derive(Debug)]
-struct RadarDecision {
-    log: CrewRadarLog,
-    message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RadarVerdict {
-    Campaign,
-    HardId,
-    HardInvite,
-    Error,
-    Timeout,
-    Unsure,
-    Clean,
-    Skipped,
-}
-
-impl RadarVerdict {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Campaign => "campaign",
-            Self::HardId => "hard_id",
-            Self::HardInvite => "hard_invite",
-            Self::Error => "error",
-            Self::Timeout => "timeout",
-            Self::Unsure => "unsure",
-            Self::Clean => "clean",
-            Self::Skipped => "skipped",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CrewJudgeFacts {
-    pub style_score: StyleScore,
-    pub account_age_days: Option<i64>,
-    pub time_window_match: bool,
 }
 
 pub async fn persist_radar_log(pool: &PgPool, record: &CrewRadarLog) -> Result<(), sqlx::Error> {
@@ -117,53 +54,12 @@ pub async fn persist_radar_log(pool: &PgPool, record: &CrewRadarLog) -> Result<(
     Ok(())
 }
 
-async fn radar_logged_recently(
-    pool: &PgPool,
-    channel_login: &str,
-    chatter_login: &str,
-) -> Result<bool, sqlx::Error> {
-    Ok(sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_crew_radar_log \
-         WHERE lower(chatter_login) = $1 AND channel_login = $2 \
-           AND created_at > now() - interval '24 hours' LIMIT 1",
-    )
-    .bind(chatter_login)
-    .bind(channel_login)
-    .fetch_optional(pool)
-    .await?
-    .is_some())
-}
-
-type RadarChecks = HashMap<(String, String), DateTime<Utc>>;
-
-fn claim_radar_slot(
-    checked: &mut RadarChecks,
-    key: &(String, String),
-    now: DateTime<Utc>,
-    ttl: chrono::Duration,
-) -> bool {
-    checked.retain(|_, checked_at| now.signed_duration_since(*checked_at) < ttl);
-    if checked.contains_key(key) {
-        return false;
-    }
-    checked.insert(key.clone(), now);
-    true
-}
-
-// ---------------------------------------------------------------------------
-// Crew-Registry (harte Fakten) — bekannte Konten + bekannte Rival-Invite-Codes
-// ---------------------------------------------------------------------------
-
-/// Ein bekanntes Kampagnen-Konto. `has_behavioral_evidence` markiert, ob wir
-/// zu diesem Konto bereits konkretes Kampagnen-Verhalten belegt haben.
 struct CrewAccount {
     twitch_user_id: &'static str,
     login: &'static str,
     has_behavioral_evidence: bool,
 }
 
-/// Bekannte Kampagnen-Konten (hart). Match erfolgt ausschliesslich ueber die
-/// Twitch-User-ID — ein umbenannter Account bleibt so erkannt.
 const CREW_REGISTRY: &[CrewAccount] = &[
     CrewAccount {
         twitch_user_id: "89018048",
@@ -190,17 +86,11 @@ const CREW_REGISTRY: &[CrewAccount] = &[
         login: "mr_horizont",
         has_behavioral_evidence: false,
     },
-    // Zweitkonto derselben Person wie mr_horizont (Ansage nani). Eigener
-    // Verhaltensbeleg: ismile_e, 2026-07-06 — trug die Kampagne weiter,
-    // nachdem helmbombenricky dort gebannt wurde.
     CrewAccount {
         twitch_user_id: "771345179",
         login: "wall_horizon",
         has_behavioral_evidence: true,
     },
-    // Kontoname imitiert unsere Community. Verhaltensbeleg: jackauftwitch,
-    // 2026-07-28 — Ricky-Stil 75 %, Konto 60 Tage alt, bewarb den eigenen
-    // "community dc" im fremden Chat (Ansage nani).
     CrewAccount {
         twitch_user_id: "1505528697",
         login: "deadlock_germany",
@@ -208,8 +98,6 @@ const CREW_REGISTRY: &[CrewAccount] = &[
     },
 ];
 
-/// Bekannte Rival-Invite-Codes (hart). Ein `discord.gg/<code>` mit einem dieser
-/// Codes ist ein deterministisches Kampagnen-Signal.
 const RIVAL_INVITE_CODES: &[&str] = &[
     "ZWSNyNfdG",
     "W7kCyBBcf",
@@ -218,32 +106,21 @@ const RIVAL_INVITE_CODES: &[&str] = &[
     "SBRrArXjHf",
 ];
 
-// ---------------------------------------------------------------------------
-// Signal aus der reinen Vorfilterung
-// ---------------------------------------------------------------------------
-
-/// Ergebnis von [`screen`]. Priorität: `HardId` > `HardInvite` > `Trigger` >
-/// `None`. **Kein Urteil** — `Trigger` heisst nur „bitte GPT pruefen".
 #[derive(Debug, Clone, PartialEq)]
 pub enum CrewSignal {
-    /// Bekanntes Konto per Twitch-User-ID getroffen.
     HardId {
         login: &'static str,
         has_evidence: bool,
     },
-    /// Bekannter Rival-Invite-Code im Text.
-    HardInvite { code: String },
-    /// Ein oder mehrere mehrdeutige Trigger-Muster (Labels) getroffen.
-    Trigger { hits: Vec<&'static str> },
-    /// Nichts Relevantes.
+    HardInvite {
+        code: String,
+    },
+    Trigger {
+        hits: Vec<&'static str>,
+    },
     None,
 }
 
-/// Kompiliert (lazy) die mehrdeutigen Trigger-Matcher: `(Label, Regex)`.
-///
-/// WICHTIG: Ein Trigger-Treffer allein bedeutet NICHTS. Die Woerter kommen auch
-/// in voellig harmlosem Chat vor. Ein Treffer eskaliert nur zur GPT-Pruefung;
-/// [`screen`] faellt niemals ein Ban-Urteil.
 fn trigger_matchers() -> &'static [(&'static str, Regex)] {
     static MATCHERS: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
     MATCHERS
@@ -272,8 +149,6 @@ fn trigger_matchers() -> &'static [(&'static str, Regex)] {
         .as_slice()
 }
 
-/// Lazy kompilierter Invite-Matcher: `discord.gg/<einer der bekannten Codes>`,
-/// case-insensitive. Capture-Gruppe 1 = der gefundene Code (Original-Casing).
 fn invite_matcher() -> Option<&'static Regex> {
     static MATCHER: OnceLock<Option<Regex>> = OnceLock::new();
     MATCHER
@@ -284,7 +159,6 @@ fn invite_matcher() -> Option<&'static Regex> {
         .as_ref()
 }
 
-/// Alle getroffenen Trigger-Labels (mehrdeutig — nur Auslöser, kein Urteil).
 fn trigger_hits(content: &str) -> Vec<&'static str> {
     trigger_matchers()
         .iter()
@@ -293,42 +167,7 @@ fn trigger_hits(content: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// Ab diesem Ricky-Stil-Score fragt der Radar den Judge auch dann, wenn kein
-/// einziges Trigger-Wort fiel. Das Muster steckt im Verhalten, nicht im Vokabular
-/// — deadlock_germany fuhr am 2026-07-28 mit 75 % Stil und ohne Trigger-Wort
-/// durch die Vorfilterung und wurde nie geprueft.
-const BEHAVIOR_STYLE_THRESHOLD: u8 = 40;
-/// Schwaecherer Stil genuegt, wenn zwei weitere harte Fakten dazukommen:
-/// junges Konto UND Rickys Zeitfenster.
-const BEHAVIOR_STYLE_WEAK_THRESHOLD: u8 = 25;
-/// Bis zu diesem Kontoalter (Tage) gilt ein Konto als frisch.
-const BEHAVIOR_MAX_ACCOUNT_AGE_DAYS: i64 = 90;
-
-/// Verhaltens-Gate: reicht das Stil-/Faktenbild, um den Judge ohne Trigger-Wort
-/// zu fragen? Liefert das Label des Grundes (fuers Log), `None` = nicht fragen.
-///
-/// **Kein Urteil** — wie ein Trigger-Treffer heisst das nur „bitte pruefen".
-/// Gemessen am Radar-Ledger (30 Tage, 638 Logs) kostet das Gate genau einen
-/// zusaetzlichen Judge-Call, faengt aber exakt den Fall, der durchfiel.
-fn behavioral_trigger(
-    style_total: u8,
-    account_age_days: Option<i64>,
-    time_window_match: bool,
-) -> Option<&'static str> {
-    if style_total >= BEHAVIOR_STYLE_THRESHOLD {
-        return Some("stil-hoch");
-    }
-    let fresh_account = account_age_days.is_some_and(|days| days <= BEHAVIOR_MAX_ACCOUNT_AGE_DAYS);
-    if style_total >= BEHAVIOR_STYLE_WEAK_THRESHOLD && fresh_account && time_window_match {
-        return Some("stil-jung-zeitfenster");
-    }
-    None
-}
-
-/// Reine Vorfilterung. Liefert das höchstpriorisierte Signal, ohne je ein
-/// Urteil zu faellen. `chatter_id` = Twitch-User-ID des Chatters (falls bekannt).
 pub fn screen(content: &str, chatter_id: Option<&str>) -> CrewSignal {
-    // Priorität 1: bekanntes Konto per Twitch-User-ID (deterministisch).
     if let Some(id) = chatter_id {
         let id = id.trim();
         if let Some(account) = CREW_REGISTRY.iter().find(|acc| acc.twitch_user_id == id) {
@@ -339,7 +178,6 @@ pub fn screen(content: &str, chatter_id: Option<&str>) -> CrewSignal {
         }
     }
 
-    // Priorität 2: bekannter Rival-Invite-Code.
     if let Some(re) = invite_matcher() {
         if let Some(code) = re.captures(content).and_then(|caps| caps.get(1)) {
             return CrewSignal::HardInvite {
@@ -348,7 +186,6 @@ pub fn screen(content: &str, chatter_id: Option<&str>) -> CrewSignal {
         }
     }
 
-    // Priorität 3: mehrdeutige Trigger — NUR Auslöser für die GPT-Pruefung.
     let hits = trigger_hits(content);
     if !hits.is_empty() {
         return CrewSignal::Trigger { hits };
@@ -356,511 +193,15 @@ pub fn screen(content: &str, chatter_id: Option<&str>) -> CrewSignal {
 
     CrewSignal::None
 }
-
-// ---------------------------------------------------------------------------
-// LLM-Judge (konservativer Klassifikator)
-// ---------------------------------------------------------------------------
-
-/// Urteil des LLM-Judge. `unsure` = fail-safe (kein Crew, Confidence 0).
-#[derive(Debug, Clone, PartialEq)]
-pub struct CrewVerdict {
-    pub is_crew: bool,
-    pub confidence: f32,
-    pub patterns: Vec<String>,
-    pub reasoning: String,
-    pub status: CrewVerdictStatus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrewVerdictStatus {
-    Campaign,
-    Clean,
-    Unsure,
-    Error,
-    Timeout,
-}
-
-impl CrewVerdict {
-    /// Fail-safe: nichts erkannt, keine Aktion.
-    pub fn unsure() -> Self {
-        Self {
-            is_crew: false,
-            confidence: 0.0,
-            patterns: Vec::new(),
-            reasoning: String::new(),
-            status: CrewVerdictStatus::Unsure,
-        }
-    }
-}
-
-#[async_trait]
-pub trait CrewJudge: Send + Sync {
-    async fn judge(&self, content: &str, recent_context: &[String]) -> CrewVerdict;
-
-    async fn judge_with_facts(
-        &self,
-        content: &str,
-        recent_context: &[String],
-        _facts: &CrewJudgeFacts,
-    ) -> CrewVerdict {
-        self.judge(content, recent_context).await
-    }
-}
-
-const JUDGE_FAILURE_WARNING_THRESHOLD: usize = 5;
-const JUDGE_FAILURE_WARNING_SENTINEL: &str = "__crew_guard_failure_warning__";
-
-#[derive(Default)]
-struct JudgeFailureTracker {
-    consecutive: AtomicUsize,
-}
-
-impl JudgeFailureTracker {
-    fn record_failure(&self) -> bool {
-        let previous = self
-            .consecutive
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                Some(count.saturating_add(1))
-            })
-            .unwrap_or_else(|count| count);
-        previous == JUDGE_FAILURE_WARNING_THRESHOLD - 1
-    }
-
-    fn record_success(&self) {
-        self.consecutive.store(0, Ordering::Relaxed);
-    }
-}
-
-/// Wörtlicher deutscher System-Prompt (konservativer Klassifikator).
-const CREW_JUDGE_SYSTEM_PROMPT: &str = r#"Du fuehrst eine regelbasierte JSON-Kodierung fuer EINE koordinierte Twitch-Chat-Kampagne aus. Bewerte den gesamten chronologischen Dialog gemeinsam, nicht nur die aktuelle Nachricht. is_crew ist KEIN freies Gesamturteil, sondern ein strikt aus patterns abgeleitetes Feld.
-
-Arbeite exakt in dieser Reihenfolge:
-1. Markiere die Muster unabhaengig voneinander, auch wenn der Dialog harmlos ist:
-- a: Der User fragt oder thematisiert den Bann einer anderen Person oder Gruppe, auch mit Pronomen wie 'er ist gebannt'.
-- b: Der User redet Moderation, Moderator oder Bot schlecht, z.B. 'bannt unbewusst viele', Bannliste, woke, Rassist oder Scheisse.
-- c: Der User laedt aktiv in einen Discord ein, wirbt dafuer, fragt/bietet einen Invite oder Link an oder postet ihn. Markiere c auch bei harmloser Discord-Werbung und bei Platzhaltern wie <LINK>. Die blosse Erwaehnung eines eigenen Discords als Banngrund ist kein c.
-Ein Muster darf in einer frueheren Nachricht stehen und bleibt dann fuer den Gesamtdialog erkannt: patterns ist die Vereinigungsmenge ueber alle Nachrichten. Gib alle und nur die erkannten Muster in der kanonischen Reihenfolge a,b,c aus.
-2. Berechne is_crew ausschliesslich aus patterns: is_crew = patterns enthaelt b UND (patterns enthaelt a ODER patterns enthaelt c). Verbindliche Beispiele:
-- patterns=["b"] => is_crew=false, confidence hoechstens 0.3
-- patterns=["c"] => is_crew=false, confidence hoechstens 0.3
-- patterns=["a","c"] => is_crew=false, confidence hoechstens 0.3
-- patterns=["a","b"] => is_crew=true, confidence mindestens 0.7
-- patterns=["b","c"] => is_crew=true, confidence mindestens 0.7
-- patterns=["a","b","c"] => is_crew=true, confidence mindestens 0.7
-3. Pruefe vor der Ausgabe Bool UND Confidence gegen diese Beispiele. Fehlt b oder fehlen sowohl a als auch c, MUSS is_crew=false und confidence hoechstens 0.3 sein, selbst wenn der Dialog allgemein verdaechtig wirkt. Erfinde keine Ausnahme.
-
-Die Woerter nani, Ricky, Freund gebannt und Bannliste sind mehrdeutig. Erfinde daraus kein Muster, wenn die jeweilige Bedeutung oben nicht im Dialog erkennbar ist. Im Zweifel is_crew=false. Antworte NUR als JSON und erzeuge die Felder exakt in dieser Reihenfolge, damit is_crew aus den bereits festgelegten patterns folgt: {"patterns":["a","b","c"],"is_crew":bool,"confidence":0..1,"reasoning":"kurz"}."#;
-
-/// Timeout des Judge-HTTP-Calls.
-const CREW_JUDGE_TIMEOUT_SECS: u64 = 12;
-/// Anwendungsfall des Crew-Judges (nur für Logs und Ledger-Zweck).
-const CREW_JUDGE_USE_CASE: &str = "crew_guard";
-
-/// Crew-Judge über den zentralen Fireworks-Connector. Der historische
-/// Typname bleibt vorerst API-kompatibel; produktiv löst er weder OpenAI-
-/// Schlüssel noch ein eigenes Modell auf.
-pub struct OpenAiCrewJudge {
-    endpoint: Option<tb_llm::LlmEndpoint>,
-    timeout: Duration,
-    failures: JudgeFailureTracker,
-    /// Drossel fuer die Warnung "nicht konfiguriert": Sekunden seit
-    /// `gestartet`, zu denen zuletzt gewarnt wurde (-1 = noch nie).
-    zuletzt_gewarnt_s: AtomicI64,
-    gestartet: Instant,
-    /// Welche Variablen beim Start fehlten (fuer die gedrosselte Warnung).
-    konfig_luecke: &'static str,
-}
-
-/// Hoechstens alle fuenf Minuten eine Warnung, dass der Judge ohne
-/// Konfiguration laeuft: laut genug, um aufzufallen, leise genug, um das Log
-/// bei jedem Chat-Event nicht zu fluten.
-const KONFIG_WARNUNG_ABSTAND: Duration = Duration::from_secs(300);
-
-impl OpenAiCrewJudge {
-    pub fn from_env() -> Self {
-        let endpoint = tb_llm::endpoint_for(CREW_JUDGE_USE_CASE);
-        let konfig_luecke = if endpoint.api_key.is_some() {
-            ""
-        } else {
-            "FIREWORK_API_KEY/FIREWORKS_API_KEY"
-        };
-        let endpoint = endpoint.api_key.is_some().then_some(endpoint);
-        Self {
-            endpoint,
-            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
-            failures: JudgeFailureTracker::default(),
-            zuletzt_gewarnt_s: AtomicI64::new(-1),
-            gestartet: Instant::now(),
-            konfig_luecke,
-        }
-    }
-
-    /// Warnt gedrosselt, dass Schluessel oder Modell fehlen.
-    fn warne_nicht_konfiguriert(&self) {
-        let jetzt = self.gestartet.elapsed().as_secs() as i64;
-        let abstand = KONFIG_WARNUNG_ABSTAND.as_secs() as i64;
-        let faellig = self
-            .zuletzt_gewarnt_s
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |zuletzt| {
-                (zuletzt < 0 || jetzt - zuletzt >= abstand).then_some(jetzt)
-            })
-            .is_ok();
-        if faellig {
-            warn!(
-                fehlt = self.konfig_luecke,
-                "crew_guard: Variable nicht gesetzt, Crew-Judge antwortet fail-safe unsure"
-            );
-        }
-    }
-
-    fn failure(
-        &self,
-        content: &str,
-        error_kind: &'static str,
-        detail: impl std::fmt::Display,
-        status: CrewVerdictStatus,
-    ) -> CrewVerdict {
-        let failure_warning = self.failures.record_failure();
-        let consecutive_failures = self.failures.consecutive.load(Ordering::Relaxed);
-        let input = truncate_content(content, CONTENT_PREVIEW_MAX);
-        error!(
-            error_kind,
-            consecutive_failures,
-            input = %input,
-            error = %detail,
-            "crew_guard: Judge-Ausfall"
-        );
-        let mut verdict = CrewVerdict::unsure();
-        verdict.status = status;
-        if failure_warning {
-            // ponytail: private sentinel keeps the public CrewJudge API unchanged.
-            verdict.reasoning = JUDGE_FAILURE_WARNING_SENTINEL.to_string();
-        }
-        verdict
-    }
-
-    async fn judge_impl(
-        &self,
-        content: &str,
-        recent_context: &[String],
-        facts: Option<&CrewJudgeFacts>,
-    ) -> CrewVerdict {
-        let Some(endpoint) = self.endpoint.as_ref() else {
-            self.warne_nicht_konfiguriert();
-            return CrewVerdict::unsure();
-        };
-
-        let response = tb_llm::complete(
-            CREW_JUDGE_USE_CASE,
-            tb_llm::Request::simple(
-                CREW_JUDGE_SYSTEM_PROMPT,
-                build_user_content(content, recent_context, facts),
-            )
-            .temperature(0.0)
-            .json_object()
-            .denken_aus()
-            .timeout(self.timeout)
-            .no_ledger()
-            .endpoint(endpoint.clone()),
-        )
-        .await;
-
-        let raw = match response {
-            Ok(response) => response.text,
-            Err(error) => {
-                // Den Anbieter-Body hat der Hub schon geloggt; hier nur
-                // Fehlerklasse und HTTP-Status, kein zweites Mal der Body.
-                let (status, detail) = match &error {
-                    tb_llm::LlmError::Timeout(_) => {
-                        (CrewVerdictStatus::Timeout, "timeout".to_string())
-                    }
-                    tb_llm::LlmError::Http { status, .. } => {
-                        (CrewVerdictStatus::Error, format!("HTTP {status}"))
-                    }
-                    other => (CrewVerdictStatus::Error, other.code().to_string()),
-                };
-                return self.failure(content, error.code(), detail, status);
-            }
-        };
-        let Some(verdict) = parse_crew_verdict(&raw) else {
-            return self.failure(
-                content,
-                "verdict_json",
-                "ungültiges Judge-Urteil",
-                CrewVerdictStatus::Error,
-            );
-        };
-        self.failures.record_success();
-        verdict
-    }
-}
-
-#[async_trait]
-impl CrewJudge for OpenAiCrewJudge {
-    async fn judge(&self, content: &str, recent_context: &[String]) -> CrewVerdict {
-        self.judge_impl(content, recent_context, None).await
-    }
-
-    async fn judge_with_facts(
-        &self,
-        content: &str,
-        recent_context: &[String],
-        facts: &CrewJudgeFacts,
-    ) -> CrewVerdict {
-        self.judge_impl(content, recent_context, Some(facts)).await
-    }
-}
-
-/// Baut den User-Prompt: der bisherige Chatverlauf DIESES Users (chronologisch,
-/// je Zeile als `> …` vorangestellt) plus die aktuelle Nachricht. Die Kampagne
-/// ist ein Mehr-Nachrichten-Bogen — einzelne Zeilen sind bewusst zu wenig, der
-/// Kontext ist deshalb ausschlaggebend für die Recall.
-fn build_user_content(
-    content: &str,
-    recent_context: &[String],
-    facts: Option<&CrewJudgeFacts>,
-) -> String {
-    let mut prompt = if recent_context.is_empty() {
-        format!("Zu pruefende (aktuelle) Nachricht dieses Users:\n{content}")
-    } else {
-        let history = recent_context
-            .iter()
-            .map(|line| format!("> {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            "Bisheriger Chatverlauf dieses Users (chronologisch):\n{history}\n\nZu pruefende (aktuelle) Nachricht dieses Users:\n{content}"
-        )
-    };
-    if let Some(facts) = facts {
-        let age = facts
-            .account_age_days
-            .map(|days| days.to_string())
-            .unwrap_or_else(|| "unbekannt".to_string());
-        let window = if facts.time_window_match {
-            "ja"
-        } else {
-            "nein"
-        };
-        prompt.push_str(&format!(
-            "\n\nZusätzliche Fakten:\nRicky-Stil-Score: {} ({})\nAccount-Alter: {age} Tage\nRickys Zeitfenster: {window}\nNutze diese Fakten als Indizien, urteile aber nicht allein aufgrund des Stil-Scores.",
-            facts.style_score.total,
-            format_breakdown(&facts.style_score.breakdown),
-        ));
-    }
-    prompt
-}
-
-/// Robustes Bergen des JSON-Urteils (Stil wie `conversation_scam::parse_verdict`).
-fn parse_crew_verdict(raw: &str) -> Option<CrewVerdict> {
-    let parsed = serde_json::from_str::<RawCrewVerdict>(raw.trim()).or_else(|_| {
-        extract_json_object(raw)
-            .ok_or_else(|| serde_json::Error::io(std::io::Error::other("kein JSON-Objekt")))
-            .and_then(serde_json::from_str::<RawCrewVerdict>)
-    });
-    let Ok(parsed) = parsed else { return None };
-    if !parsed.confidence.is_finite() {
-        return None;
-    }
-    Some(CrewVerdict {
-        is_crew: parsed.is_crew,
-        confidence: parsed.confidence.clamp(0.0, 1.0),
-        patterns: parsed.patterns,
-        reasoning: parsed.reasoning,
-        status: if parsed.is_crew {
-            CrewVerdictStatus::Campaign
-        } else {
-            CrewVerdictStatus::Clean
-        },
-    })
-}
-
-#[cfg(test)]
-fn has_failure_warning(verdict: &CrewVerdict) -> bool {
-    verdict.reasoning == JUDGE_FAILURE_WARNING_SENTINEL
-}
-
-/// Erstes balanciertes JSON-Objekt aus einem String bergen (String-aware).
-fn extract_json_object(raw: &str) -> Option<&str> {
-    let bytes = raw.as_bytes();
-    for start in raw.match_indices('{').map(|(index, _)| index) {
-        let mut depth = 0usize;
-        let mut in_string = false;
-        let mut escaped = false;
-        for (offset, byte) in bytes[start..].iter().enumerate() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if *byte == b'\\' {
-                    escaped = true;
-                } else if *byte == b'"' {
-                    in_string = false;
-                }
-                continue;
-            }
-            match *byte {
-                b'"' => in_string = true,
-                b'{' => depth += 1,
-                b'}' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return raw.get(start..=start + offset);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-#[derive(Debug, Deserialize)]
-struct RawCrewVerdict {
-    #[serde(default)]
-    is_crew: bool,
-    #[serde(default)]
-    confidence: f32,
-    #[serde(default)]
-    patterns: Vec<String>,
-    #[serde(default)]
-    reasoning: String,
-}
-
-#[cfg(test)]
-fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-// ---------------------------------------------------------------------------
-// Discord-Meldung (Shadow) — Wortlaut fest verdrahtet
-// ---------------------------------------------------------------------------
-
-/// Vorschau-Länge des Original-Nachrichtentexts in der Discord-Meldung.
-const CONTENT_PREVIEW_MAX: usize = 160;
-
-/// Kürzt `content` char-sicher auf `max` Zeichen.
-fn truncate_content(content: &str, max: usize) -> String {
-    content.chars().take(max).collect()
-}
-
-fn format_breakdown(breakdown: &StyleBreakdown) -> String {
-    [
-        ("Pitch", breakdown.pitch),
-        ("Kampagne", breakdown.campaign),
-        ("Typos", breakdown.typo),
-        ("Bro", breakdown.bro),
-        ("Stil", breakdown.lowercase),
-        ("Opener", breakdown.opener),
-        ("Cosine", breakdown.cosine),
-    ]
-    .into_iter()
-    .filter(|(_, points)| *points > 0)
-    .map(|(label, points)| format!("{label} {points}"))
-    .collect::<Vec<_>>()
-    .join(", ")
-}
-
-#[allow(clippy::too_many_arguments)]
-fn format_radar_message(
-    login: &str,
-    channel: &str,
-    style: &StyleScore,
-    account_age_days: Option<i64>,
-    time_window_match: bool,
-    verdict: RadarVerdict,
-    confidence: Option<f32>,
-    reasoning: Option<&str>,
-    messages: &[String],
-) -> String {
-    let verdict_text = verdict.as_str();
-    let heading = match verdict {
-        RadarVerdict::Campaign => {
-            format!("🆕 Neuer Account **{login}** in #{channel} zeigt das Kampagnen-Muster.")
-        }
-        RadarVerdict::HardId => {
-            format!("🚨 **{login}** in #{channel} ist ein bekanntes Konto der Ricky-Gruppe.")
-        }
-        RadarVerdict::HardInvite => {
-            format!("🚨 **{login}** in #{channel} hat einen bekannten Rival-Invite gepostet.")
-        }
-        RadarVerdict::Error | RadarVerdict::Timeout => {
-            format!(
-                "⚠️ Radar-Log: **{login}** in #{channel} konnte NICHT geprüft werden — der Judge ist ausgefallen ({verdict_text}). Das ist KEIN Freispruch, ich hab kein Urteil. Guck selbst drauf."
-            )
-        }
-        RadarVerdict::Unsure => {
-            format!(
-                "❓ Radar-Log: **{login}** in #{channel} — der Judge ist sich nicht sicher, kein klares Urteil."
-            )
-        }
-        RadarVerdict::Clean => {
-            format!("🔎 Radar-Log: **{login}** in #{channel} geprüft, kein Kampagnen-Muster.")
-        }
-        // `skipped` heisst: kein Trigger-Wort, kein Verhaltenssignal — der Judge
-        // lief nie. Das ist kein Freispruch, also darf hier auch keiner stehen.
-        RadarVerdict::Skipped => {
-            format!(
-                "🔎 Radar-Log: **{login}** in #{channel} gesichtet, aber nicht inhaltlich geprüft (kein Trigger, kein Verhaltenssignal). Kein Urteil, guck bei Bedarf selbst drauf."
-            )
-        }
-    };
-    let age = account_age_days
-        .map(|days| days.to_string())
-        .unwrap_or_else(|| "unbekannt".to_string());
-    let time_window = if time_window_match { "ja" } else { "nein" };
-    let confidence = confidence
-        .map(|value| format!("{value:.2}"))
-        .unwrap_or_else(|| "n/a".to_string());
-    let reasoning = reasoning.unwrap_or_default();
-    let messages = messages
-        .iter()
-        .rev()
-        .take(6)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .map(|message| format!("> {}", message.replace(['\r', '\n'], " ")))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let ending = match verdict {
-        RadarVerdict::Campaign | RadarVerdict::HardId | RadarVerdict::HardInvite => {
-            "\nIch hab nichts getan."
-        }
-        RadarVerdict::Error
-        | RadarVerdict::Timeout
-        | RadarVerdict::Unsure
-        | RadarVerdict::Clean
-        | RadarVerdict::Skipped => "",
-    };
-    format!(
-        "{heading}\n**Ricky-Stil:** {} % ({})\n**Account-Alter:** {age} Tage\n**Rickys Zeitfenster:** {time_window}\n**Judge:** {verdict_text} ({confidence})\n{reasoning}\n**Nachrichten:**\n{messages}{ending}",
-        style.total,
-        format_breakdown(&style.breakdown),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Kontextfenster je (channel, chatter) — In-Memory, speicherbegrenzt
-// ---------------------------------------------------------------------------
-
-/// Anzahl der letzten Nachrichten je User, die als Judge-Kontext dienen.
 const CONTEXT_WINDOW: usize = 6;
-/// Deckel gegen unbegrenztes Wachstum: max. so viele (channel, chatter)-Keys.
 const CONTEXT_MAX_KEYS: usize = 4096;
 
 #[derive(Default)]
 struct ContextStore {
-    /// (channel, chatter-identity) → letzte Nachrichten (chronologisch).
     windows: HashMap<(String, String), VecDeque<String>>,
-    /// Einfüge-Reihenfolge der Keys (vorne = ältester) für FIFO-Verdrängung.
     order: VecDeque<(String, String)>,
 }
 
-/// Speicherbegrenzter In-Memory-Puffer der letzten Nachrichten je User.
-/// Threadsicher via `Mutex`; der Lock wird nur kurz und **await-frei** gehalten.
 struct ChatterContextBuffer {
     inner: Mutex<ContextStore>,
 }
@@ -872,9 +213,6 @@ impl ChatterContextBuffer {
         }
     }
 
-    /// Liefert die BISHERIGEN Nachrichten dieses Users (ohne die aktuelle) und
-    /// schiebt die aktuelle Nachricht danach in den Puffer. Ein einzelner,
-    /// kurzer Lock ohne `await` — clippy-sauber und race-frei zur Reihenfolge.
     fn snapshot_then_push(&self, channel: &str, identity: &str, content: &str) -> Vec<String> {
         let key = (channel.to_string(), identity.to_string());
         let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -906,589 +244,151 @@ impl ChatterContextBuffer {
     }
 }
 
-/// Kontext-Key-Identität: bevorzugt die stabile Twitch-User-ID, sonst der Login.
-fn context_identity<'a>(chatter_id: &'a str, login: &'a str) -> &'a str {
-    if chatter_id.trim().is_empty() {
-        login
-    } else {
-        chatter_id
-    }
-}
-
-// ---------------------------------------------------------------------------
-// CrewGuard — Verdrahtung (Shadow-Mode, fire-and-forget)
-// ---------------------------------------------------------------------------
-
-/// Confidence-Schwelle, ab der ein Judge-Treffer im Trigger-Pfad gemeldet wird.
-const JUDGE_CONFIDENCE_THRESHOLD: f32 = 0.7;
-
-/// Feature-Flag `CREW_GUARD_ENABLED` (default AUS).
-pub fn crew_guard_enabled() -> bool {
-    std::env::var("CREW_GUARD_ENABLED")
-        .map(|value| {
-            matches!(
-                value.trim().to_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn is_ricky_hour(hour: u32) -> bool {
-    matches!(hour, 0..=5 | 13..=17 | 20..=22)
-}
-
 pub fn evidence_logins() -> Vec<&'static str> {
     CREW_REGISTRY
         .iter()
-        .filter(|account| account.has_behavioral_evidence)
-        .map(|account| account.login)
+        .filter(|a| a.has_behavioral_evidence)
+        .map(|a| a.login)
         .collect()
 }
 
-async fn first_time_context(
-    pool: &PgPool,
-    channel_login: &str,
-    chatter_login: &str,
-) -> Result<FirstTimeContext, sqlx::Error> {
-    let session_value = sqlx::query_scalar::<_, bool>(
-        "SELECT COALESCE(sc.is_first_time_streamer, FALSE) \
-         FROM twitch_session_chatters sc \
-         JOIN twitch_stream_sessions ss ON ss.id = sc.session_id \
-         WHERE LOWER(sc.streamer_login) = $1 AND LOWER(sc.chatter_login) = $2 \
-           AND ss.ended_at IS NULL \
-         ORDER BY ss.started_at DESC LIMIT 1",
-    )
-    .bind(channel_login)
-    .bind(chatter_login)
-    .fetch_optional(pool)
-    .await?;
-    let is_first_time_streamer = match session_value {
-        Some(value) => value,
-        None => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT NOT EXISTS (SELECT 1 FROM twitch_chatter_rollup \
-                 WHERE LOWER(streamer_login) = $1 AND LOWER(chatter_login) = $2)",
-            )
-            .bind(channel_login)
-            .bind(chatter_login)
-            .fetch_one(pool)
-            .await?
-        }
-    };
-    Ok(FirstTimeContext {
-        is_first_time_streamer,
-        is_first_global: false,
-    })
-}
-
-/// Shadow-Mode-Wächter: screent jede Partner-Nachricht und meldet Kampagnen-
-/// Verdacht NUR nach Discord (kein Ban, kein Chat-Post, kein Whisper).
 pub struct CrewGuard {
     enabled: bool,
-    threshold: f32,
-    judge: Arc<dyn CrewJudge>,
     alerter: Arc<ModAlerter>,
     pool: PgPool,
     bot_user_id: String,
     account_age: Arc<dyn AccountAgePort>,
     centroid: Arc<Centroid>,
-    notify_only: bool,
-    context: Arc<ChatterContextBuffer>,
-    radar_checked: Arc<Mutex<RadarChecks>>,
-    crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
+    context: ChatterContextBuffer,
 }
 
 impl CrewGuard {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         enabled: bool,
-        judge: Arc<dyn CrewJudge>,
         alerter: Arc<ModAlerter>,
         pool: PgPool,
         bot_user_id: String,
         account_age: Arc<dyn AccountAgePort>,
         centroid: Arc<Centroid>,
-        notify_only: bool,
+        _notify_only: bool,
     ) -> Self {
         Self {
             enabled,
-            threshold: JUDGE_CONFIDENCE_THRESHOLD,
-            judge,
             alerter,
             pool,
             bot_user_id,
             account_age,
             centroid,
-            notify_only,
-            context: Arc::new(ChatterContextBuffer::new()),
-            radar_checked: Arc::new(Mutex::new(HashMap::new())),
-            crew_review_trigger: None,
+            context: ChatterContextBuffer::new(),
         }
     }
 
-    pub fn with_crew_review_trigger(
-        mut self,
-        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
-    ) -> Self {
-        self.crew_review_trigger = crew_review_trigger;
-        self
-    }
-
-    /// Baut den Wächter aus der Umgebung: Feature-Flag + zentraler Fireworks-Judge.
-    pub fn from_env(
-        alerter: Arc<ModAlerter>,
-        pool: PgPool,
-        bot_user_id: String,
-        account_age: Arc<dyn AccountAgePort>,
-        centroid: Arc<Centroid>,
-    ) -> Self {
-        Self::new(
-            crew_guard_enabled(),
-            Arc::new(OpenAiCrewJudge::from_env()),
-            alerter,
-            pool,
-            bot_user_id,
-            account_age,
-            centroid,
-            false,
-        )
-    }
-
-    /// Fire-and-forget: blockiert die Chat-Pipeline nie. Der synchrone Review-
-    /// Trigger läuft unabhängig vom Feature-Flag; nur das Radar bleibt dann aus.
     pub fn observe(&self, event: &ChatMessageEvent) {
-        if event.chatter_user_id == RICKY_TWITCH_USER_ID {
-            if let Some(trigger) = &self.crew_review_trigger {
-                let source_message_id = event
-                    .source_message_id
-                    .as_deref()
-                    .filter(|id| !id.trim().is_empty())
-                    .or_else(|| {
-                        (!event.message_id.trim().is_empty()).then_some(event.message_id.as_str())
-                    })
-                    .map(|id| id.trim().to_string());
-                trigger.observe(RickyChatInput {
-                    channel_login: event.broadcaster_user_login.clone(),
-                    subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_string(),
-                    source_message_id,
-                    occurred_at: Utc::now(),
-                    content: event.text().to_string(),
-                });
-            }
-        }
-        if !self.enabled {
-            return;
-        }
-        let content = event.text().to_string();
-        if content.is_empty() {
+        if !self.enabled
+            || event.chatter_user_id.trim().is_empty()
+            || event.chatter_user_id == self.bot_user_id
+            || event.text().is_empty()
+        {
             return;
         }
         let channel = event.broadcaster_user_login.to_lowercase();
         let login = event.chatter_user_login.to_lowercase();
-        let chatter_id = event.chatter_user_id.clone();
-
-        // Kontextfenster: vorherige Nachrichten dieses Users holen (OHNE die
-        // aktuelle) und die aktuelle danach in den Puffer schieben. Kurzer,
-        // await-freier Lock — läuft synchron vor dem Spawn, damit die
-        // chronologische Reihenfolge bei Nachrichten-Bursts erhalten bleibt.
-        let identity = context_identity(&chatter_id, &login);
-        let recent_context = self
-            .context
-            .snapshot_then_push(&channel, identity, &content);
-
-        let event = event.clone();
-        let judge = Arc::clone(&self.judge);
-        let alerter = Arc::clone(&self.alerter);
+        let id = event.chatter_user_id.clone();
+        let content = event.text().to_string();
+        let mut messages = self.context.snapshot_then_push(&channel, &id, &content);
+        messages.push(content.clone());
+        if messages.len() > CONTEXT_WINDOW {
+            messages.remove(0);
+        }
+        let signal = screen(&content, Some(&id));
         let pool = self.pool.clone();
-        let bot_user_id = self.bot_user_id.clone();
-        let account_age = Arc::clone(&self.account_age);
-        let centroid = Arc::clone(&self.centroid);
-        let radar_checked = Arc::clone(&self.radar_checked);
-        let threshold = self.threshold;
-        let notify_only = self.notify_only;
-
+        let alerter = self.alerter.clone();
+        let age = self.account_age.clone();
+        let centroid = self.centroid.clone();
         tokio::spawn(async move {
-            if matches!(screen(&content, Some(&chatter_id)), CrewSignal::None) {
-                let mut dialog = DialogState::new(false);
-                for message in recent_context.iter().chain(std::iter::once(&content)) {
-                    dialog.push_user_message(message);
+            let clean = match unauffaellig(&pool, &id).await {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!(%error, "Crew-Guard: Kontoregister nicht lesbar");
+                    false
                 }
-                if !dialog.has_enough_substance() {
-                    return;
-                }
-                let first_time = match first_time_context(&pool, &channel, &login).await {
-                    Ok(context) => context,
-                    Err(error) => {
-                        debug!(%error, channel, chatter = login, "crew_guard: Erstschreiber-Check fehlgeschlagen");
-                        return;
-                    }
-                };
-                if !should_consider_event(&event, &bot_user_id, first_time) {
-                    return;
-                }
-                let key = (channel.clone(), login.clone());
-                if !claim_radar_slot(
-                    &mut radar_checked.lock().unwrap_or_else(PoisonError::into_inner),
-                    &key,
-                    Utc::now(),
-                    chrono::Duration::hours(24),
-                ) {
-                    return;
-                }
-                match radar_logged_recently(&pool, &channel, &login).await {
-                    Ok(false) => {}
-                    Ok(true) => return,
-                    Err(error) => {
-                        radar_checked
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .remove(&key);
-                        debug!(%error, channel, chatter = login, "crew_guard: Radar-Drossel-Check fehlgeschlagen");
-                        return;
-                    }
-                }
-            }
-            let account_age_days = if chatter_id.is_empty() {
-                None
-            } else {
-                account_age.user_created_at_days(&chatter_id, &login).await
             };
-            let time_window_match = is_ricky_hour(Utc::now().with_timezone(&Berlin).hour());
-            if let Some(decision) = decide(
-                &content,
-                &chatter_id,
-                &channel,
-                &login,
-                threshold,
-                judge.as_ref(),
-                &recent_context,
-                &centroid,
-                account_age_days,
-                time_window_match,
-            )
-            .await
+            if matches!(signal, CrewSignal::None)
+                || (clean && matches!(signal, CrewSignal::Trigger { .. }))
             {
-                if let Err(error) = persist_radar_log(&pool, &decision.log).await {
-                    error!(%error, channel, chatter = login, "crew_guard: Radar-Ledger konnte nicht geschrieben werden");
-                }
-                alerter.send_crew_campaign(CrewRadarAlert {
-                    message: decision.message,
-                    chatter_login: decision.log.chatter_login,
-                    chatter_id: decision.log.chatter_id.unwrap_or_default(),
-                    channel_login: decision.log.channel_login,
-                    style_score: decision.log.style_score,
-                    verdict: decision.log.llm_verdict,
-                    notify_only,
-                });
+                return;
             }
+            let repetitions = match reserviere_radar_meldung(&pool, &id).await {
+                Ok(Some(value)) => value,
+                Ok(None) => return,
+                Err(error) => {
+                    error!(%error, "Crew-Guard: Meldung konnte nicht reserviert werden");
+                    return;
+                }
+            };
+            let account_age_days = age.user_created_at_days(&id, &login).await;
+            let style = style_score(&messages, &centroid);
+            let (verdict, detail) = match signal {
+                CrewSignal::HardId { has_evidence, .. } => (
+                    "hard_id",
+                    if has_evidence {
+                        "Bekanntes Konto mit früherem Verhaltensbeleg.".to_string()
+                    } else {
+                        "Bekanntes Konto ohne eigenen Verhaltensbeleg.".to_string()
+                    },
+                ),
+                CrewSignal::HardInvite { code } => {
+                    ("hard_invite", format!("Bekannter Einladungslink: {code}"))
+                }
+                CrewSignal::Trigger { hits } => (
+                    "pattern",
+                    format!("Mehrdeutige Textmuster: {}", hits.join(", ")),
+                ),
+                CrewSignal::None => return,
+            };
+            let mut message = format!("🔎 **{login}** in #{channel}: Muster gesichtet.\n{detail}\nKein Urteil über das Konto. Es wurde nichts moderiert.\n**Stilähnlichkeit:** {} %\n**Nachrichten:**\n{}", style.total,
+                messages.iter().map(|m| format!("> {}", m.chars().take(300).collect::<String>())).collect::<Vec<_>>().join("\n"));
+            if repetitions > 0 {
+                message.push_str(&format!(
+                    "\nSeit der letzten Meldung {} weitere Treffer.",
+                    repetitions
+                ));
+            }
+            let log = CrewRadarLog {
+                channel_login: channel.clone(),
+                chatter_login: login.clone(),
+                chatter_id: Some(id.clone()),
+                account_age_days,
+                style_score: style.total,
+                style_breakdown: style.breakdown,
+                time_window_match: matches!(Utc::now().with_timezone(&Berlin).hour(), 0..=5 | 13..=17 | 20..=22),
+                messages,
+                llm_verdict: verdict.to_string(),
+                llm_confidence: None,
+                llm_reasoning: Some(detail),
+                action_taken: "none".into(),
+                source: "passive_patterns".into(),
+            };
+            if let Err(error) = persist_radar_log(&pool, &log).await {
+                error!(%error, "Crew-Guard: Muster konnte nicht gespeichert werden");
+                return;
+            }
+            alerter.send_crew_campaign(CrewRadarAlert {
+                message,
+                chatter_login: login,
+                chatter_id: id,
+                channel_login: channel,
+                style_score: style.total,
+                verdict: verdict.to_string(),
+                notify_only: true,
+            });
         });
     }
 }
 
-/// Fragt den Judge und uebersetzt sein Urteil in einen [`RadarVerdict`].
-/// Ausfall/Timeout bleiben eigene Verdicts — nie ein Freispruch.
-async fn ask_judge(
-    judge: &dyn CrewJudge,
-    content: &str,
-    recent_context: &[String],
-    facts: &CrewJudgeFacts,
-    threshold: f32,
-) -> (RadarVerdict, Option<f32>, Option<String>) {
-    let verdict = judge.judge_with_facts(content, recent_context, facts).await;
-    let key = match verdict.status {
-        CrewVerdictStatus::Campaign if verdict.confidence >= threshold => RadarVerdict::Campaign,
-        CrewVerdictStatus::Campaign | CrewVerdictStatus::Unsure => RadarVerdict::Unsure,
-        CrewVerdictStatus::Clean => RadarVerdict::Clean,
-        CrewVerdictStatus::Error => RadarVerdict::Error,
-        CrewVerdictStatus::Timeout => RadarVerdict::Timeout,
-    };
-    let reasoning = (!verdict.reasoning.is_empty()
-        && verdict.reasoning != JUDGE_FAILURE_WARNING_SENTINEL)
-        .then_some(verdict.reasoning);
-    (key, Some(verdict.confidence), reasoning)
-}
-
-/// Entscheidet OHNE Seiteneffekt, ob (und mit welchem Text) gemeldet würde.
-/// Trennt die Erkennung von der Discord-Zustellung, damit der Backtest die
-/// Detektion messen kann, ohne echte Alerts zu senden. `None` = keine Meldung.
-///
-/// Der `recent_context` (vorherige Nachrichten desselben Users) fliesst NUR in
-/// den Trigger→Judge-Pfad ein; `HardId`/`HardInvite` bleiben deterministisch.
-#[allow(clippy::too_many_arguments)]
-async fn decide(
-    content: &str,
-    chatter_id: &str,
-    channel: &str,
-    login: &str,
-    threshold: f32,
-    judge: &dyn CrewJudge,
-    recent_context: &[String],
-    centroid: &Centroid,
-    account_age_days: Option<i64>,
-    time_window_match: bool,
-) -> Option<RadarDecision> {
-    let mut messages = recent_context.to_vec();
-    messages.push(content.to_string());
-    if messages.len() > CONTEXT_WINDOW {
-        messages.drain(..messages.len() - CONTEXT_WINDOW);
-    }
-    let style = style_score(&messages, centroid);
-    let facts = CrewJudgeFacts {
-        style_score: style.clone(),
-        account_age_days,
-        time_window_match,
-    };
-    let signal = screen(content, Some(chatter_id));
-    let (verdict, llm_confidence, llm_reasoning) = match &signal {
-        CrewSignal::Trigger { .. } => {
-            ask_judge(judge, content, recent_context, &facts, threshold).await
-        }
-        CrewSignal::HardId { .. } => (RadarVerdict::HardId, Some(1.0), None),
-        CrewSignal::HardInvite { .. } => (RadarVerdict::HardInvite, Some(1.0), None),
-        // Kein Trigger-Wort: das Verhalten selbst darf den Judge rufen, sonst
-        // bleibt ein Kampagnen-Konto ohne Stichwort komplett ungeprueft.
-        CrewSignal::None => {
-            match behavioral_trigger(style.total, account_age_days, time_window_match) {
-                Some(reason) => {
-                    debug!(
-                        channel,
-                        chatter = login,
-                        reason,
-                        "crew_guard: Verhaltens-Gate ruft Judge"
-                    );
-                    ask_judge(judge, content, recent_context, &facts, threshold).await
-                }
-                None => (RadarVerdict::Skipped, None, None),
-            }
-        }
-    };
-    let message = format_radar_message(
-        login,
-        channel,
-        &style,
-        account_age_days,
-        time_window_match,
-        verdict,
-        llm_confidence,
-        llm_reasoning.as_deref(),
-        &messages,
-    );
-    Some(RadarDecision {
-        log: CrewRadarLog {
-            channel_login: channel.to_string(),
-            chatter_login: login.to_string(),
-            chatter_id: (!chatter_id.is_empty()).then(|| chatter_id.to_string()),
-            account_age_days,
-            style_score: style.total,
-            style_breakdown: style.breakdown,
-            time_window_match,
-            messages,
-            llm_verdict: verdict.as_str().to_string(),
-            llm_confidence,
-            llm_reasoning,
-            action_taken: "none".to_string(),
-            source: "network".to_string(),
-        },
-        message,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Backtest — Vertrauen vor Live (statische Fixtures, kein Netz/DB)
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style_score::{Centroid, StyleBreakdown, StyleScore};
-    use crate::types::ChatMessageBody;
-    use tb_engagement::crew_review::{
-        CrewReviewTrigger, RickyChatInput, CREW_OWN_CHANNELS, RICKY_TWITCH_USER_ID,
-    };
-    use wiremock::matchers::method;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    /// Die Review-Kanalsperre lebt in tb-engagement (dort kann sie nicht auf
-    /// CREW_REGISTRY zugreifen). Driften beide Listen auseinander, wird ein
-    /// neuer Crew-Kanal wieder reviewt — dieser Test verhindert genau das.
-    #[test]
-    fn crew_registry_und_review_kanalsperre_bleiben_synchron() {
-        let mut registry: Vec<&str> = CREW_REGISTRY.iter().map(|acc| acc.login).collect();
-        registry.sort_unstable();
-        let mut blocked: Vec<&str> = CREW_OWN_CHANNELS.to_vec();
-        blocked.sort_unstable();
-        assert_eq!(registry, blocked);
-    }
-
-    mod crew_review_trigger {
-        use super::*;
-
-        #[derive(Default)]
-        struct RecordingCrewReviewTrigger(Mutex<Vec<RickyChatInput>>);
-
-        impl CrewReviewTrigger for RecordingCrewReviewTrigger {
-            fn observe(&self, input: RickyChatInput) {
-                self.0.lock().expect("Recording-Lock").push(input);
-            }
-        }
-
-        struct NoopAccountAge;
-
-        #[async_trait]
-        impl AccountAgePort for NoopAccountAge {
-            async fn user_created_at_days(&self, _user_id: &str, _login: &str) -> Option<i64> {
-                None
-            }
-        }
-
-        fn event(chatter_user_id: &str, source_message_id: Option<&str>) -> ChatMessageEvent {
-            ChatMessageEvent {
-                broadcaster_user_login: "partner_one".to_string(),
-                chatter_user_id: chatter_user_id.to_string(),
-                chatter_user_login: "helmbombenricky".to_string(),
-                message_id: "eventsub-copy-17".to_string(),
-                message: ChatMessageBody {
-                    text: "hallo".to_string(),
-                    fragments: Vec::new(),
-                },
-                source_message_id: source_message_id.map(str::to_string),
-                ..Default::default()
-            }
-        }
-
-        fn guard(trigger: Arc<RecordingCrewReviewTrigger>) -> CrewGuard {
-            CrewGuard::new(
-                false,
-                Arc::new(judge_nein()),
-                Arc::new(ModAlerter::new(reqwest::Client::new())),
-                sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").expect("Lazy-Test-Pool"),
-                "bot-id".to_string(),
-                Arc::new(NoopAccountAge),
-                Arc::new(Centroid::default()),
-                false,
-            )
-            .with_crew_review_trigger(Some(trigger))
-        }
-
-        #[test]
-        fn exakte_ricky_id_triggert_auch_wenn_crew_guard_aus_ist() {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Test-Runtime");
-            let _runtime_guard = runtime.enter();
-            let trigger = Arc::new(RecordingCrewReviewTrigger::default());
-
-            guard(Arc::clone(&trigger)).observe(&event(RICKY_TWITCH_USER_ID, Some("origin-42")));
-
-            let inputs = trigger.0.lock().expect("Recording-Lock");
-            assert_eq!(inputs.len(), 1);
-            assert_eq!(inputs[0].channel_login, "partner_one");
-            assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
-            assert_eq!(inputs[0].source_message_id.as_deref(), Some("origin-42"));
-            assert_eq!(inputs[0].content, "hallo");
-        }
-
-        #[test]
-        fn gleicher_login_mit_anderer_id_triggert_nicht() {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Test-Runtime");
-            let _runtime_guard = runtime.enter();
-            let trigger = Arc::new(RecordingCrewReviewTrigger::default());
-
-            guard(Arc::clone(&trigger)).observe(&event("999999", Some("origin-42")));
-
-            assert!(trigger.0.lock().expect("Recording-Lock").is_empty());
-        }
-
-        #[test]
-        fn leere_source_id_faellt_auf_message_id_zurueck() {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Test-Runtime");
-            let _runtime_guard = runtime.enter();
-            let trigger = Arc::new(RecordingCrewReviewTrigger::default());
-            let mut event = event(RICKY_TWITCH_USER_ID, Some("  "));
-            event.message_id = "fallback-7".to_string();
-
-            guard(Arc::clone(&trigger)).observe(&event);
-
-            let inputs = trigger.0.lock().expect("Recording-Lock");
-            assert_eq!(inputs.len(), 1);
-            assert_eq!(inputs[0].source_message_id.as_deref(), Some("fallback-7"));
-        }
-    }
-
-    #[test]
-    fn radar_slot_claims_fresh_key() {
-        let mut checked = HashMap::new();
-        let key = ("channel".to_string(), "chatter".to_string());
-
-        assert!(claim_radar_slot(
-            &mut checked,
-            &key,
-            Utc::now(),
-            chrono::Duration::hours(24),
-        ));
-    }
-
-    #[test]
-    fn radar_slot_throttles_immediate_second_claim() {
-        let mut checked = HashMap::new();
-        let key = ("channel".to_string(), "chatter".to_string());
-        let now = Utc::now();
-
-        assert!(claim_radar_slot(
-            &mut checked,
-            &key,
-            now,
-            chrono::Duration::hours(24),
-        ));
-        assert!(!claim_radar_slot(
-            &mut checked,
-            &key,
-            now,
-            chrono::Duration::hours(24),
-        ));
-    }
-
-    #[test]
-    fn radar_slot_can_be_reclaimed_after_ttl() {
-        let mut checked = HashMap::new();
-        let key = ("channel".to_string(), "chatter".to_string());
-        let now = Utc::now();
-        let ttl = chrono::Duration::hours(24);
-
-        assert!(claim_radar_slot(&mut checked, &key, now, ttl));
-        assert!(claim_radar_slot(
-            &mut checked,
-            &key,
-            now + chrono::Duration::hours(25),
-            ttl,
-        ));
-    }
-
-    #[test]
-    fn radar_slot_removes_expired_foreign_entries() {
-        let now = Utc::now();
-        let expired_key = ("other-channel".to_string(), "other-chatter".to_string());
-        let key = ("channel".to_string(), "chatter".to_string());
-        let mut checked = HashMap::from([(expired_key.clone(), now - chrono::Duration::hours(25))]);
-
-        assert!(claim_radar_slot(
-            &mut checked,
-            &key,
-            now,
-            chrono::Duration::hours(24),
-        ));
-        assert!(!checked.contains_key(&expired_key));
-    }
-
-    // Nur Texte — KEINE echten Usernamen als Chatter-Identität.
     const POSITIVES: [&str; 5] = [
         "hey mal ne frage warum ist mein freund helmbombenricky gebannt bei dir ?",
         "hast du den bot von nani drinne? du bannst unbewusst viele leute wegen der bannliste",
@@ -1503,634 +403,6 @@ mod tests {
         "ricky komm ins game",
         "welcher discord invite war das nochmal fuers turnier",
     ];
-
-    /// Judge-Attrappe mit festem Urteil — kein Netz.
-    struct StubJudge(CrewVerdict);
-
-    #[async_trait]
-    impl CrewJudge for StubJudge {
-        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
-            self.0.clone()
-        }
-    }
-
-    struct WarningJudge;
-
-    #[async_trait]
-    impl CrewJudge for WarningJudge {
-        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
-            let mut verdict = CrewVerdict::unsure();
-            verdict.reasoning = JUDGE_FAILURE_WARNING_SENTINEL.to_string();
-            verdict.status = CrewVerdictStatus::Error;
-            verdict
-        }
-    }
-
-    fn judge_nein() -> StubJudge {
-        StubJudge(CrewVerdict::unsure())
-    }
-
-    fn judge_ja() -> StubJudge {
-        StubJudge(CrewVerdict {
-            is_crew: true,
-            confidence: 0.9,
-            patterns: vec!["b".into(), "c".into()],
-            reasoning: "klar".into(),
-            status: CrewVerdictStatus::Campaign,
-        })
-    }
-
-    fn judge_status(status: CrewVerdictStatus) -> StubJudge {
-        StubJudge(CrewVerdict {
-            is_crew: false,
-            confidence: 0.0,
-            patterns: Vec::new(),
-            reasoning: String::new(),
-            status,
-        })
-    }
-
-    fn radar_score() -> StyleScore {
-        StyleScore {
-            total: 85,
-            breakdown: StyleBreakdown {
-                pitch: 40,
-                campaign: 30,
-                typo: 0,
-                bro: 0,
-                lowercase: 8,
-                opener: 5,
-                cosine: 2,
-            },
-        }
-    }
-
-    #[test]
-    fn ricky_zeitfenster_nutzt_exakt_die_kalibrierten_stunden() {
-        for hour in [0, 1, 2, 3, 4, 5, 13, 14, 15, 16, 17, 20, 21, 22] {
-            assert!(is_ricky_hour(hour), "Stunde {hour} fehlt");
-        }
-        for hour in [6, 7, 8, 9, 10, 11, 12, 18, 19, 23] {
-            assert!(!is_ricky_hour(hour), "Stunde {hour} darf nicht matchen");
-        }
-    }
-
-    #[test]
-    fn judge_prompt_enthaelt_radar_fakten_ohne_alleinurteil() {
-        let facts = CrewJudgeFacts {
-            style_score: radar_score(),
-            account_age_days: Some(3),
-            time_window_match: true,
-        };
-        let prompt = build_user_content("aktuell", &["vorher".to_string()], Some(&facts));
-        assert!(prompt.contains("> vorher"), "{prompt}");
-        assert!(prompt.contains("Zu pruefende (aktuelle) Nachricht dieses Users:\naktuell"));
-        assert!(prompt.contains("Ricky-Stil-Score: 85"), "{prompt}");
-        assert!(prompt.contains("Account-Alter: 3 Tage"), "{prompt}");
-        assert!(prompt.contains("Rickys Zeitfenster: ja"), "{prompt}");
-        assert!(
-            prompt.contains("nicht allein aufgrund des Stil-Scores"),
-            "{prompt}"
-        );
-    }
-
-    #[test]
-    fn radar_meldungen_folgen_exakt_dem_finalen_vertrag() {
-        let messages = (1..=7).map(|n| format!("m{n}")).collect::<Vec<_>>();
-        let campaign = format_radar_message(
-            "viewer",
-            "kanal",
-            &radar_score(),
-            Some(3),
-            true,
-            RadarVerdict::Campaign,
-            Some(0.91),
-            Some("klar"),
-            &messages,
-        );
-        assert_eq!(
-            campaign,
-            "🆕 Neuer Account **viewer** in #kanal zeigt das Kampagnen-Muster.\n\
-**Ricky-Stil:** 85 % (Pitch 40, Kampagne 30, Stil 8, Opener 5, Cosine 2)\n\
-**Account-Alter:** 3 Tage\n\
-**Rickys Zeitfenster:** ja\n\
-**Judge:** campaign (0.91)\n\
-klar\n\
-**Nachrichten:**\n\
-> m2\n> m3\n> m4\n> m5\n> m6\n> m7\n\
-Ich hab nichts getan."
-        );
-
-        let skipped = format_radar_message(
-            "viewer",
-            "kanal",
-            &radar_score(),
-            None,
-            false,
-            RadarVerdict::Skipped,
-            None,
-            None,
-            &["harmlos".to_string()],
-        );
-        assert_eq!(
-            skipped,
-            "🔎 Radar-Log: **viewer** in #kanal gesichtet, aber nicht inhaltlich geprüft (kein Trigger, kein Verhaltenssignal). Kein Urteil, guck bei Bedarf selbst drauf.\n\
-**Ricky-Stil:** 85 % (Pitch 40, Kampagne 30, Stil 8, Opener 5, Cosine 2)\n\
-**Account-Alter:** unbekannt Tage\n\
-**Rickys Zeitfenster:** nein\n\
-**Judge:** skipped (n/a)\n\
-\n\
-**Nachrichten:**\n\
-> harmlos"
-        );
-
-        let clean = format_radar_message(
-            "viewer",
-            "kanal",
-            &radar_score(),
-            None,
-            false,
-            RadarVerdict::Clean,
-            Some(0.2),
-            Some("harmlos"),
-            &["harmlos".to_string()],
-        );
-        assert!(
-            clean.starts_with("🔎 Radar-Log: **viewer** in #kanal geprüft, kein Kampagnen-Muster.")
-        );
-        assert!(clean.contains("**Judge:** clean (0.20)"));
-    }
-
-    #[tokio::test]
-    async fn error_wird_nie_als_freispruch_gemeldet() {
-        let decision = decide(
-            "hast du den bot von nani drin?",
-            "555000111",
-            "kanal",
-            "viewer",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_status(CrewVerdictStatus::Error),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("Judge-Ausfall muss sichtbar bleiben");
-
-        assert!(decision.message.starts_with(
-            "⚠️ Radar-Log: **viewer** in #kanal konnte NICHT geprüft werden — der Judge ist ausgefallen (error). Das ist KEIN Freispruch, ich hab kein Urteil. Guck selbst drauf."
-        ));
-        assert!(decision.message.contains("NICHT geprüft"));
-        assert!(!decision.message.contains("kein Kampagnen-Muster"));
-    }
-
-    #[tokio::test]
-    async fn timeout_wird_nie_als_freispruch_gemeldet() {
-        let decision = decide(
-            "hast du den bot von nani drin?",
-            "555000111",
-            "kanal",
-            "viewer",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_status(CrewVerdictStatus::Timeout),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("Judge-Timeout muss sichtbar bleiben");
-
-        assert!(decision.message.starts_with(
-            "⚠️ Radar-Log: **viewer** in #kanal konnte NICHT geprüft werden — der Judge ist ausgefallen (timeout). Das ist KEIN Freispruch, ich hab kein Urteil. Guck selbst drauf."
-        ));
-        assert!(decision.message.contains("NICHT geprüft"));
-        assert!(!decision.message.contains("kein Kampagnen-Muster"));
-    }
-
-    #[tokio::test]
-    async fn unsure_bekommt_eine_eigene_unsichere_meldung() {
-        let decision = decide(
-            "hast du den bot von nani drin?",
-            "555000111",
-            "kanal",
-            "viewer",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_status(CrewVerdictStatus::Unsure),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("unsicheres Judge-Urteil muss sichtbar bleiben");
-
-        assert!(decision.message.starts_with(
-            "❓ Radar-Log: **viewer** in #kanal — der Judge ist sich nicht sicher, kein klares Urteil."
-        ));
-        assert!(!decision.message.contains("kein Kampagnen-Muster"));
-    }
-
-    #[tokio::test]
-    async fn kein_alter_trigger_liefert_skipped_statt_keiner_pruefung() {
-        let decision = decide(
-            "harmloser erster Satz",
-            "555000111",
-            "kanal",
-            "viewer",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_nein(),
-            &[],
-            &Centroid::default(),
-            Some(3),
-            false,
-        )
-        .await
-        .expect("unprivilegierte Erstschreiber-Prüfung muss sichtbar bleiben");
-        assert_eq!(decision.log.llm_verdict, "skipped");
-        assert!(decision.message.starts_with("🔎 Radar-Log:"));
-    }
-
-    /// Die sechs echten Nachrichten von deadlock_germany in #jackauftwitch
-    /// (Radar-Log 2026-07-28, Ricky-Stil 75 %). Kein einziges Trigger-Wort —
-    /// genau deshalb wurde der Judge damals übersprungen.
-    fn deadlock_germany_nachrichten() -> Vec<String> {
-        [
-            "wazzup",
-            "Na community",
-            "Haben nen community dc und sozials usw.",
-            "war tatsächlich auch mien erster momba",
-            "Mein*",
-            "Bro was schreibe ich",
-        ]
-        .iter()
-        .map(|message| (*message).to_string())
-        .collect()
-    }
-
-    #[test]
-    fn deadlock_germany_ist_ein_bekanntes_crew_konto() {
-        assert_eq!(
-            screen("völlig harmloser satz", Some("1505528697")),
-            CrewSignal::HardId {
-                login: "deadlock_germany",
-                has_evidence: true,
-            }
-        );
-    }
-
-    /// Der Vorfall vom 2026-07-28: hoher Ricky-Stil, junges Konto, Ricky-Zeitfenster
-    /// — aber kein Trigger-Wort. Vorher fragte der Radar den Judge NICHT und meldete
-    /// „kein Kampagnen-Muster". Das Verhaltenssignal muss den Judge rufen.
-    #[tokio::test]
-    async fn hoher_ricky_stil_ohne_triggerwort_ruft_den_judge() {
-        let messages = deadlock_germany_nachrichten();
-        let (context, content) = messages.split_at(messages.len() - 1);
-
-        let decision = decide(
-            &content[0],
-            "1499999999",
-            "jackauftwitch",
-            "irgendwer",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &StubJudge(CrewVerdict {
-                is_crew: true,
-                confidence: 0.9,
-                patterns: Vec::new(),
-                reasoning: "Abwerbung in eigenen Discord".to_string(),
-                status: CrewVerdictStatus::Campaign,
-            }),
-            context,
-            &Centroid::default(),
-            Some(60),
-            true,
-        )
-        .await
-        .expect("Verhaltenssignal muss eine Meldung erzeugen");
-
-        assert_eq!(decision.log.llm_verdict, "campaign");
-        assert_eq!(decision.log.llm_confidence, Some(0.9));
-        assert!(!decision.message.contains("kein Kampagnen-Muster"));
-    }
-
-    /// Schwacher Stil allein darf den Judge weiter nicht rufen — sonst prüfen wir
-    /// jeden harmlosen Erstschreiber und verbrennen Judge-Calls.
-    #[test]
-    fn schwacher_stil_ohne_jung_und_zeitfenster_bleibt_ungeprueft() {
-        assert_eq!(behavioral_trigger(30, Some(400), false), None);
-        assert_eq!(behavioral_trigger(10, Some(3), true), None);
-        assert_eq!(
-            behavioral_trigger(30, Some(60), true),
-            Some("stil-jung-zeitfenster")
-        );
-        assert_eq!(behavioral_trigger(50, None, false), Some("stil-hoch"));
-    }
-
-    /// `skipped` heisst „nie inhaltlich geprüft", nicht „unauffällig". Der alte
-    /// Wortlaut behauptete einen Freispruch, den niemand ausgesprochen hat.
-    #[test]
-    fn skipped_wird_nie_als_freispruch_gemeldet() {
-        let skipped = format_radar_message(
-            "viewer",
-            "kanal",
-            &radar_score(),
-            None,
-            false,
-            RadarVerdict::Skipped,
-            None,
-            None,
-            &["harmlos".to_string()],
-        );
-        assert!(!skipped.contains("kein Kampagnen-Muster"));
-        assert!(skipped.contains("nicht inhaltlich geprüft"));
-    }
-
-    #[tokio::test]
-    async fn hard_id_wird_als_harter_treffer_geloggt_und_gemeldet() {
-        let decision = decide(
-            "hallo zusammen, alles gut?",
-            "147713656",
-            "kanal",
-            "helmbombenricky",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_nein(),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("HardId muss gemeldet werden");
-
-        assert_eq!(decision.log.llm_verdict, "hard_id");
-        assert_eq!(decision.log.llm_confidence, Some(1.0));
-        assert_eq!(decision.log.llm_reasoning, None);
-        assert!(decision.message.starts_with(
-            "🚨 **helmbombenricky** in #kanal ist ein bekanntes Konto der Ricky-Gruppe."
-        ));
-        assert!(!decision.message.contains("kein Kampagnen-Muster"));
-    }
-
-    #[tokio::test]
-    async fn hard_invite_wird_als_harter_treffer_geloggt_und_gemeldet() {
-        let decision = decide(
-            "https://discord.gg/ZWSNyNfdG",
-            "999999999",
-            "kanal",
-            "viewer",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_nein(),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("HardInvite muss gemeldet werden");
-
-        assert_eq!(decision.log.llm_verdict, "hard_invite");
-        assert_eq!(decision.log.llm_confidence, Some(1.0));
-        assert_eq!(decision.log.llm_reasoning, None);
-        assert!(decision
-            .message
-            .starts_with("🚨 **viewer** in #kanal hat einen bekannten Rival-Invite gepostet."));
-        assert!(!decision.message.contains("kein Kampagnen-Muster"));
-    }
-
-    #[test]
-    fn hard_id_hat_genau_einen_discord_meldeweg() {
-        let source = include_str!("crew_guard.rs");
-        let send_call = ["alerter", ".send_crew_campaign("].concat();
-        assert_eq!(source.matches(&send_call).count(), 1);
-    }
-
-    #[test]
-    fn judge_ausfallserie_warnt_genau_einmal_und_reset() {
-        let failures = JudgeFailureTracker::default();
-
-        for _ in 0..4 {
-            assert!(!failures.record_failure());
-        }
-        assert!(failures.record_failure(), "fünfter Ausfall muss warnen");
-        for _ in 0..5 {
-            assert!(!failures.record_failure(), "nur eine Warnung je Serie");
-        }
-
-        failures.record_success();
-        for _ in 0..4 {
-            assert!(!failures.record_failure());
-        }
-        assert!(failures.record_failure(), "neue Serie muss erneut warnen");
-    }
-
-    #[tokio::test]
-    async fn judge_ausfallwarnung_nutzt_shadow_meldeweg() {
-        let message = decide(
-            "hast du den bot von nani drin?",
-            "555000111",
-            "ismile_e",
-            "neuer_account",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &WarningJudge,
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await;
-
-        assert_eq!(
-            message.map(|decision| decision.log.llm_verdict),
-            Some("error".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn judge_http_fehler_zaehlen_bis_zur_einmalwarnung() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(503))
-            .mount(&server)
-            .await;
-        let judge = OpenAiCrewJudge {
-            endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "fireworks",
-                base_url: server.uri(),
-                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
-                api_key: Some("test-key".to_string()),
-            }),
-            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
-            failures: JudgeFailureTracker::default(),
-            zuletzt_gewarnt_s: AtomicI64::new(-1),
-            gestartet: Instant::now(),
-            konfig_luecke: "",
-        };
-
-        for _ in 0..4 {
-            assert!(!has_failure_warning(
-                &judge.judge("nani bannliste", &[]).await
-            ));
-        }
-        assert!(has_failure_warning(
-            &judge.judge("nani bannliste", &[]).await
-        ));
-        assert!(!has_failure_warning(
-            &judge.judge("nani bannliste", &[]).await
-        ));
-    }
-
-    #[tokio::test]
-    async fn unlesbares_judge_urteil_zaehlt_als_ausfall() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "choices": [{"message": {"content": "kein json"}}]
-            })))
-            .mount(&server)
-            .await;
-        let judge = OpenAiCrewJudge {
-            endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "fireworks",
-                base_url: server.uri(),
-                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
-                api_key: Some("test-key".to_string()),
-            }),
-            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
-            failures: JudgeFailureTracker::default(),
-            zuletzt_gewarnt_s: AtomicI64::new(-1),
-            gestartet: Instant::now(),
-            konfig_luecke: "",
-        };
-
-        for _ in 0..4 {
-            assert!(!has_failure_warning(
-                &judge.judge("nani bannliste", &[]).await
-            ));
-        }
-        assert!(has_failure_warning(
-            &judge.judge("nani bannliste", &[]).await
-        ));
-    }
-
-    #[tokio::test]
-    async fn judge_fehler_und_timeout_bleiben_im_ledger_unterscheidbar() {
-        let error_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(503))
-            .mount(&error_server)
-            .await;
-        let error_judge = OpenAiCrewJudge {
-            endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "fireworks",
-                base_url: error_server.uri(),
-                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
-                api_key: Some("test-key".to_string()),
-            }),
-            timeout: Duration::from_secs(CREW_JUDGE_TIMEOUT_SECS),
-            failures: JudgeFailureTracker::default(),
-            zuletzt_gewarnt_s: AtomicI64::new(-1),
-            gestartet: Instant::now(),
-            konfig_luecke: "",
-        };
-        assert_eq!(
-            error_judge.judge("nani bannliste", &[]).await.status,
-            CrewVerdictStatus::Error
-        );
-
-        let timeout_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
-            .mount(&timeout_server)
-            .await;
-        let timeout_judge = OpenAiCrewJudge {
-            endpoint: Some(tb_llm::LlmEndpoint {
-                provider: "fireworks",
-                base_url: timeout_server.uri(),
-                model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
-                api_key: Some("test-key".to_string()),
-            }),
-            timeout: Duration::from_millis(10),
-            failures: JudgeFailureTracker::default(),
-            zuletzt_gewarnt_s: AtomicI64::new(-1),
-            gestartet: Instant::now(),
-            konfig_luecke: "",
-        };
-        assert_eq!(
-            timeout_judge.judge("nani bannliste", &[]).await.status,
-            CrewVerdictStatus::Timeout
-        );
-    }
-
-    /// Der Vorfall vom 2026-07-06: `wall_horizon` fuhr das Skript, der Judge
-    /// verneinte, es kam KEINE Meldung. Ab jetzt: Trigger meldet immer.
-    #[tokio::test]
-    async fn trigger_meldet_auch_wenn_judge_verneint() {
-        let msg = decide(
-            "helmbombenricky wollte nochmal nachdeinem dc fragen aber er ist gebant",
-            "771345179",
-            "ismile_e",
-            "wall_horizon",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_nein(),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("Trigger muss auch bei Judge-Nein gemeldet werden");
-
-        assert!(msg.message.contains("wall_horizon"), "Login fehlt");
-        assert!(msg.message.contains("ismile_e"), "Kanal fehlt");
-    }
-
-    #[tokio::test]
-    async fn trigger_mit_judge_ja_bleibt_neu_account_alarm() {
-        let msg = decide(
-            "hast du den bot von nani drin? der bannt unbewusst viele wegen der bannliste",
-            "555000111",
-            "ismile_e",
-            "neuer_account",
-            JUDGE_CONFIDENCE_THRESHOLD,
-            &judge_ja(),
-            &[],
-            &Centroid::default(),
-            None,
-            false,
-        )
-        .await
-        .expect("Judge-Ja muss melden");
-
-        assert!(
-            msg.message.contains("Neuer Account"),
-            "kein Neu-Alarm: {}",
-            msg.message
-        );
-    }
-
-    /// Safe-Konten bleiben handlungsfrei, Radar und Ledger bleiben sichtbar.
-    #[tokio::test]
-    async fn safe_konto_bleibt_bei_trigger_im_radar_sichtbar() {
-        for safe in crate::safe_list::SAFE_ACCOUNTS {
-            let msg = decide(
-                "jaja frag mal ricky, der is einfach ueberall gebannt",
-                safe.twitch_user_id,
-                "ismile_e",
-                safe.login,
-                JUDGE_CONFIDENCE_THRESHOLD,
-                &judge_ja(),
-                &[],
-                &Centroid::default(),
-                None,
-                false,
-            )
-            .await;
-            let decision = msg.expect("Safe-Konto-Prüfung muss geloggt werden");
-            assert_eq!(decision.log.llm_verdict, "campaign", "{}", safe.login);
-            assert_eq!(decision.log.action_taken, "none", "{}", safe.login);
-        }
-    }
 
     #[test]
     fn wall_horizon_ist_bekanntes_konto() {
@@ -2228,76 +500,6 @@ Ich hab nichts getan."
     }
 
     #[test]
-    fn nachricht_wird_auf_160_zeichen_gekuerzt() {
-        let long = "x".repeat(400);
-        let preview = truncate_content(&long, CONTENT_PREVIEW_MAX);
-        assert_eq!(preview, "x".repeat(CONTENT_PREVIEW_MAX));
-    }
-
-    #[test]
-    fn verdict_parsing_ist_robust() {
-        let raw = "hier kommt: {\"is_crew\":true,\"confidence\":0.9,\"patterns\":[\"b\",\"c\"],\"reasoning\":\"klar\"} ok";
-        let verdict = parse_crew_verdict(raw).expect("gültiges Urteil");
-        assert!(verdict.is_crew);
-        assert_eq!(verdict.confidence, 0.9);
-        assert_eq!(verdict.patterns, vec!["b".to_string(), "c".to_string()]);
-
-        // Müll → fail-safe unsure.
-        assert_eq!(parse_crew_verdict("kein json"), None);
-    }
-
-    #[tokio::test]
-    async fn judge_backtest_precision_recall_wenn_konfiguriert() {
-        if tb_llm::endpoint_for(CREW_JUDGE_USE_CASE).api_key.is_none() {
-            eprintln!(
-                "SKIP judge_backtest_precision_recall_wenn_konfiguriert: Fireworks-Schlüssel nicht gesetzt"
-            );
-            return;
-        }
-        let judge = OpenAiCrewJudge::from_env();
-
-        let mut true_pos = 0usize;
-        let mut false_neg = 0usize;
-        for text in POSITIVES {
-            if judge.judge(text, &[]).await.is_crew {
-                true_pos += 1;
-            } else {
-                false_neg += 1;
-            }
-        }
-        let mut false_pos = 0usize;
-        let mut true_neg = 0usize;
-        for text in NEGATIVES {
-            if judge.judge(text, &[]).await.is_crew {
-                false_pos += 1;
-            } else {
-                true_neg += 1;
-            }
-        }
-
-        let precision = if true_pos + false_pos == 0 {
-            0.0
-        } else {
-            true_pos as f32 / (true_pos + false_pos) as f32
-        };
-        let recall = if true_pos + false_neg == 0 {
-            0.0
-        } else {
-            true_pos as f32 / (true_pos + false_neg) as f32
-        };
-        eprintln!(
-            "crew_guard Judge-Backtest (5+5): TP={true_pos} FP={false_pos} FN={false_neg} TN={true_neg} | precision={precision:.2} recall={recall:.2}"
-        );
-    }
-
-    #[test]
-    fn context_identity_bevorzugt_id_sonst_login() {
-        assert_eq!(context_identity("12345", "loginx"), "12345");
-        assert_eq!(context_identity("", "loginx"), "loginx");
-        assert_eq!(context_identity("   ", "loginx"), "loginx");
-    }
-
-    #[test]
     fn kontextpuffer_liefert_vorherige_ohne_aktuelle_und_verdraengt() {
         let buf = ChatterContextBuffer::new();
         // Erste Nachricht: kein Vorlauf.
@@ -2320,214 +522,5 @@ Ich hab nichts getan."
         let prev = buf.snapshot_then_push("nani", "u3", "final");
         assert_eq!(prev.len(), CONTEXT_WINDOW);
         assert_eq!(prev.last().map(String::as_str), Some("n19"));
-    }
-
-    #[test]
-    fn user_prompt_bettet_kontext_als_zitatzeilen_ein() {
-        let ctx = vec!["erste zeile".to_string(), "zweite zeile".to_string()];
-        let prompt = build_user_content("aktuelle nachricht", &ctx, None);
-        assert!(prompt.contains("> erste zeile"), "war: {prompt}");
-        assert!(prompt.contains("> zweite zeile"), "war: {prompt}");
-        assert!(prompt.contains("aktuelle nachricht"));
-        // Ohne Kontext kein Verlaufsblock.
-        let bare = build_user_content("nur eine", &[], None);
-        assert!(!bare.contains('>'), "war: {bare}");
-        assert!(bare.contains("nur eine"));
-    }
-
-    fn precision_recall(true_pos: usize, false_pos: usize, false_neg: usize) -> (f32, f32) {
-        let precision = if true_pos + false_pos == 0 {
-            0.0
-        } else {
-            true_pos as f32 / (true_pos + false_pos) as f32
-        };
-        let recall = if true_pos + false_neg == 0 {
-            0.0
-        } else {
-            true_pos as f32 / (true_pos + false_neg) as f32
-        };
-        (precision, recall)
-    }
-
-    /// Echter DB-Backtest gegen `twitch_chat_messages` (NUR lesend, keine
-    /// Writes). Gated auf TB_TEST_DATABASE_URL + Fireworks-Schlüssel
-    /// und `#[ignore]` — läuft nur auf explizite Anforderung mit DSN+Key. Er
-    /// misst zwei Dinge: (A) das End-to-End-System (screen + Judge mit Kontext)
-    /// und (B) die EHRLICHE Judge-Recall auf realem Kampagnentext, indem der
-    /// deterministische HardId-Kurzschluss bewusst umgangen wird.
-    #[tokio::test]
-    #[ignore = "DB-Backtest: braucht TB_TEST_DATABASE_URL + Fireworks-Schlüssel; nur lesend"]
-    async fn crew_guard_db_backtest_realdaten() {
-        let Some(dsn) = non_empty_env("TB_TEST_DATABASE_URL") else {
-            eprintln!("SKIP crew_guard_db_backtest_realdaten: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        if tb_llm::endpoint_for(CREW_JUDGE_USE_CASE).api_key.is_none() {
-            eprintln!("SKIP crew_guard_db_backtest_realdaten: Fireworks-Schlüssel nicht gesetzt");
-            return;
-        }
-
-        let pool = match sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
-            .connect(&dsn)
-            .await
-        {
-            Ok(pool) => pool,
-            Err(err) => {
-                eprintln!(
-                    "SKIP crew_guard_db_backtest_realdaten: DB-Connect fehlgeschlagen: {err}"
-                );
-                return;
-            }
-        };
-
-        // Die 5 Crew-Logins (lowercase) als Bind-Parameter.
-        let crew_logins: Vec<String> = CREW_REGISTRY
-            .iter()
-            .map(|acc| acc.login.to_string())
-            .collect();
-
-        // Positiva: echte Nachrichten der Crew-Logins, je User chronologisch.
-        let positives = match sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT streamer_login, COALESCE(chatter_login, ''), COALESCE(chatter_id, ''), content \
-             FROM twitch_chat_messages \
-             WHERE lower(chatter_login) = ANY($1) \
-               AND content IS NOT NULL AND length(btrim(content)) > 0 \
-             ORDER BY chatter_login, message_ts",
-        )
-        .bind(crew_logins.clone())
-        .fetch_all(&pool)
-        .await
-        {
-            Ok(rows) => rows,
-            Err(err) => {
-                eprintln!("crew_guard_db_backtest_realdaten: Positiv-Query fehlgeschlagen: {err}");
-                return;
-            }
-        };
-
-        // Negativa: Zufallsstichprobe sonstiger Nachrichten (KEINE Crew), LIMIT 500.
-        let negatives = match sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT streamer_login, COALESCE(chatter_login, ''), COALESCE(chatter_id, ''), content \
-             FROM twitch_chat_messages \
-             WHERE (chatter_login IS NULL OR lower(chatter_login) <> ALL($1)) \
-               AND content IS NOT NULL AND length(btrim(content)) > 0 \
-             ORDER BY random() LIMIT 500",
-        )
-        .bind(crew_logins.clone())
-        .fetch_all(&pool)
-        .await
-        {
-            Ok(rows) => rows,
-            Err(err) => {
-                eprintln!("crew_guard_db_backtest_realdaten: Negativ-Query fehlgeschlagen: {err}");
-                return;
-            }
-        };
-
-        eprintln!(
-            "crew_guard_db_backtest_realdaten: {} Crew-Nachrichten, {} Negativ-Stichprobe",
-            positives.len(),
-            negatives.len()
-        );
-
-        let judge = OpenAiCrewJudge::from_env();
-        let threshold = JUDGE_CONFIDENCE_THRESHOLD;
-
-        // ---- Metrik A: End-to-End (screen() + Judge mit Kontext) ----
-        let ctx_pos = ChatterContextBuffer::new();
-        let mut a_tp = 0usize;
-        let mut a_false_neg = 0usize;
-        for (streamer, login, chatter_id, content) in &positives {
-            let channel = streamer.to_lowercase();
-            let identity = context_identity(chatter_id, login);
-            let prev = ctx_pos.snapshot_then_push(&channel, identity, content);
-            if decide(
-                content,
-                chatter_id,
-                &channel,
-                login,
-                threshold,
-                &judge,
-                &prev,
-                &Centroid::default(),
-                None,
-                false,
-            )
-            .await
-            .is_some()
-            {
-                a_tp += 1;
-            } else {
-                a_false_neg += 1;
-            }
-        }
-        let ctx_neg = ChatterContextBuffer::new();
-        let mut a_fp = 0usize;
-        let mut a_tn = 0usize;
-        for (streamer, login, chatter_id, content) in &negatives {
-            let channel = streamer.to_lowercase();
-            let identity = context_identity(chatter_id, login);
-            let prev = ctx_neg.snapshot_then_push(&channel, identity, content);
-            if decide(
-                content,
-                chatter_id,
-                &channel,
-                login,
-                threshold,
-                &judge,
-                &prev,
-                &Centroid::default(),
-                None,
-                false,
-            )
-            .await
-            .is_some()
-            {
-                a_fp += 1;
-            } else {
-                a_tn += 1;
-            }
-        }
-        let (a_precision, a_recall) = precision_recall(a_tp, a_fp, a_false_neg);
-        eprintln!(
-            "Metrik A (End-to-End screen+judge+Kontext): TP={a_tp} FP={a_fp} FN={a_false_neg} TN={a_tn} | precision={a_precision:.2} recall={a_recall:.2}"
-        );
-
-        // ---- Metrik B: ehrliche Judge-Recall auf realem Kampagnentext ----
-        // HardId-Kurzschluss bewusst umgangen: Judge DIREKT auf die Crew-Texte,
-        // mit den vorherigen Nachrichten desselben Users als Kontext.
-        let ctx_b_pos = ChatterContextBuffer::new();
-        let mut b_tp = 0usize;
-        let mut b_false_neg = 0usize;
-        for (streamer, login, chatter_id, content) in &positives {
-            let channel = streamer.to_lowercase();
-            let identity = context_identity(chatter_id, login);
-            let prev = ctx_b_pos.snapshot_then_push(&channel, identity, content);
-            if judge.judge(content, &prev).await.is_crew {
-                b_tp += 1;
-            } else {
-                b_false_neg += 1;
-            }
-        }
-        let ctx_b_neg = ChatterContextBuffer::new();
-        let mut b_fp = 0usize;
-        let mut b_tn = 0usize;
-        for (streamer, login, chatter_id, content) in &negatives {
-            let channel = streamer.to_lowercase();
-            let identity = context_identity(chatter_id, login);
-            let prev = ctx_b_neg.snapshot_then_push(&channel, identity, content);
-            if judge.judge(content, &prev).await.is_crew {
-                b_fp += 1;
-            } else {
-                b_tn += 1;
-            }
-        }
-        let (b_precision, b_recall) = precision_recall(b_tp, b_fp, b_false_neg);
-        eprintln!(
-            "Metrik B (Judge direkt, HardId umgangen): TP={b_tp} FP={b_fp} FN={b_false_neg} TN={b_tn} | precision={b_precision:.2} recall={b_recall:.2}"
-        );
-
-        pool.close().await;
     }
 }

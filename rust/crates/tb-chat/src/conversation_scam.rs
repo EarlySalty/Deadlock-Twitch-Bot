@@ -531,6 +531,9 @@ pub struct VerdictRecord {
 
 #[async_trait]
 pub trait ScamGuardStore: Send + Sync {
+    async fn known_account(&self, _id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
     /// `channel_user_id` ist die stabile Kanal-ID aus dem EventSub-Payload.
     /// Ohne sie fiele der Scam-Schutz aus, sobald ein Kanal umbenannt wird und
     /// seine Settings-Zeile noch den alten Namen trägt — und ein stummer
@@ -673,6 +676,11 @@ impl PgScamGuardStore {
 
 #[async_trait]
 impl ScamGuardStore for PgScamGuardStore {
+    async fn known_account(&self, id: &str) -> Result<bool, String> {
+        crate::zuschauer_register::unauffaellig(&self.pool, id)
+            .await
+            .map_err(|error| error.to_string())
+    }
     async fn load_settings(
         &self,
         channel_login: &str,
@@ -822,7 +830,7 @@ impl ScamGuardStore for PgScamGuardStore {
         reasoning: &str,
         confidence: f32,
     ) -> Result<Option<String>, String> {
-        use crate::scam_pitch::{JudgeLearning, LearnOutcome, learn_pattern_from_judge};
+        use crate::scam_pitch::{learn_pattern_from_judge, JudgeLearning, LearnOutcome};
         match learn_pattern_from_judge(
             &self.pool,
             JudgeLearning {
@@ -945,6 +953,12 @@ impl ConversationScamGuard {
         };
         if !settings.enabled {
             return;
+        }
+
+        match self.store.known_account(&event.chatter_user_id).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => tracing::warn!(%error, "Scam-Schutz: Kontoregister nicht lesbar"),
         }
 
         let context = match self
@@ -2369,9 +2383,9 @@ mod tests {
     #[ignore = "benötigt produktive Fireworks-Zugangsdaten"]
     async fn live_fireworks_erkennt_gemeldeten_befriending_pivot_als_sicheren_scam() {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-        let judge: Arc<dyn ScamJudge> = Arc::new(LlmScamJudge::new(
-            EngagementLlmClient::new(None, None, None, None),
-        ));
+        let judge: Arc<dyn ScamJudge> = Arc::new(LlmScamJudge::new(EngagementLlmClient::new(
+            None, None, None, None,
+        )));
         let settings = GuardSettings::default();
         let enforcement_threshold = effective_scam_enforcement_threshold(&settings, Some(0));
         let (guard, store, api, moderation) = build_guard_with_judge(settings, judge);
@@ -2399,6 +2413,7 @@ mod tests {
     }
 
     struct MockStore {
+        known: StdMutex<bool>,
         settings: StdMutex<GuardSettings>,
         context: StdMutex<Option<FirstTimeContext>>,
         cross_channel: StdMutex<Result<i64, String>>,
@@ -2410,6 +2425,9 @@ mod tests {
 
     #[async_trait]
     impl ScamGuardStore for MockStore {
+        async fn known_account(&self, _id: &str) -> Result<bool, String> {
+            Ok(*self.known.lock().unwrap())
+        }
         async fn load_settings(
             &self,
             _channel_login: &str,
@@ -2727,6 +2745,7 @@ mod tests {
         Arc<MockModeration>,
     ) {
         let store = Arc::new(MockStore {
+            known: StdMutex::new(false),
             settings: StdMutex::new(settings),
             context: StdMutex::new(Some(FirstTimeContext {
                 is_first_time_streamer: true,
@@ -2768,6 +2787,27 @@ mod tests {
         let judge_port: Arc<dyn ScamJudge> = judge.clone();
         let (guard, store, api, moderation) = build_guard_with_judge(settings, judge_port);
         (guard, store, judge, api, moderation)
+    }
+
+    #[tokio::test]
+    async fn bekanntes_konto_ueberspringt_ki_unbekanntes_bleibt_im_bestehenden_scam_pfad() {
+        let (guard, store, judge, _api, moderation) = build_guard(
+            GuardSettings::default(),
+            [scam_verdict_mit_muster(0.95, "clicknex.online")],
+        );
+        *store.known.lock().unwrap() = true;
+        feed(&guard, "known", &[REPORTED_BEFRIENDING_PIVOT]).await;
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
+        assert!(store.records.lock().unwrap().is_empty());
+        *store.known.lock().unwrap() = false;
+        feed(&guard, "unknown", &[REPORTED_BEFRIENDING_PIVOT]).await;
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(store.records.lock().unwrap()[0].verdict, VerdictKind::Scam);
+        assert_eq!(
+            moderation.timeout_reasons.lock().unwrap().len()
+                + moderation.reasons.lock().unwrap().len(),
+            1
+        );
     }
 
     async fn feed(guard: &ConversationScamGuard, login: &str, messages: &[&str]) {
@@ -2924,8 +2964,8 @@ mod tests {
             assert!(dialog.has_enough_substance(), "Judge würde nie gefragt");
 
             let verdict = judge.judge(&mut dialog).await;
-            let bans = verdict.verdict == VerdictKind::Scam
-                && verdict.confidence >= enforcement_threshold;
+            let bans =
+                verdict.verdict == VerdictKind::Scam && verdict.confidence >= enforcement_threshold;
             would_ban += usize::from(bans);
             eprintln!(
                 "LIVE_BASELINE other_channels={other_channels} verdict={} confidence={:.2} threshold={enforcement_threshold:.2} category={} ban={bans} reasoning={}",
