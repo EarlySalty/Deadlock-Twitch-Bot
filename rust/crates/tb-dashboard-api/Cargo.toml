@@ -14,7 +14,7 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 zeroize      = { workspace = true }
 filedescriptor = "0.8.3"
-nix = { version = "0.29", default-features = false, features = ["fs"] }
+nix = { version = "0.31", default-features = false, features = ["fs"] }
 sqlx         = { workspace = true }
 tracing      = { workspace = true }
 chrono       = { workspace = true }

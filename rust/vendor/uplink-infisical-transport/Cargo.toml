@@ -8,4 +8,4 @@ publish = false
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
-nix = { version = "0.29", default-features = false, features = ["user"] }
+nix = { version = "0.31", default-features = false, features = ["user"] }
