@@ -1974,9 +1974,8 @@ mod tests {
 
     #[tokio::test]
     async fn claim_api_legt_claim_an_und_liefert_claims() {
-        let Some(pool) = pool("t_affiliate_claim_ok").await else {
-            return;
-        };
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
         create_tables(&pool).await;
         sqlx::query(
             r#"
