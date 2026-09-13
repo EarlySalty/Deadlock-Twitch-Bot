@@ -898,11 +898,16 @@ async fn close_locked(
     .bind(session.id)
     .execute(&mut **tx)
     .await?;
+    // Nur die von dieser Sitzung gesetzten Testwerte gehören dem Testlauf.
+    // Ein Dashboard-Toggle setzt live/off und übernimmt damit die Settings.
+    // Das Prädikat wird unter dem UPDATE-Zeilenlock geprüft, sodass auch ein
+    // gleichzeitiger Admin-Write nach dem Sitzungsende erhalten bleibt.
     if session.settings_existed {
         sqlx::query(
             "UPDATE twitch_engagement_settings
              SET enabled = $1, irc_read = $2, output_mode = $3
-             WHERE LOWER(channel_login) = LOWER($4)",
+             WHERE LOWER(channel_login) = LOWER($4)
+               AND enabled = TRUE AND irc_read = TRUE AND output_mode = 'test'",
         )
         .bind(session.previous_enabled)
         .bind(session.previous_irc_read)
@@ -919,7 +924,8 @@ async fn close_locked(
     } else {
         sqlx::query(
             "DELETE FROM twitch_engagement_settings
-             WHERE LOWER(channel_login) = LOWER($1) AND output_mode = 'test'",
+             WHERE LOWER(channel_login) = LOWER($1)
+               AND enabled = TRUE AND irc_read = TRUE AND output_mode = 'test'",
         )
         .bind(&session.channel_login)
         .execute(&mut **tx)

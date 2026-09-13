@@ -3123,6 +3123,7 @@ dependencies = [
  "tb-analytics",
  "tb-crypto",
  "tb-llm",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

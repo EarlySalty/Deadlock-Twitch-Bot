@@ -12,6 +12,9 @@ use tb_engagement::llm_chat::TestModeRejectReason;
 use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
 use tb_engagement::stream_transcripts::StreamTranscriptSegment;
 
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
+
 const MIGRATION: &str =
     include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
 const TRANSCRIPT_MIGRATION: &str =
@@ -505,10 +508,9 @@ async fn seed_candidate(pool: &PgPool, login: &str, user_id: &str, cooldown: Opt
 }
 
 async fn test_pool(schema: &str) -> Option<PgPool> {
-    let Ok(url) =
-        std::env::var("TB_TEST_DATABASE_URL")
-            .or_else(|_| std::env::var("TEST_DATABASE_URL"))
-            .or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
+    let Ok(url) = std::env::var("TB_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("TEST_DATABASE_URL"))
+        .or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
     else {
         return None;
     };
@@ -533,6 +535,11 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
         .execute(format!("CREATE SCHEMA {schema}").as_str())
         .await
         .expect("Testschema anlegen");
+    create_test_tables(&pool).await;
+    Some(pool)
+}
+
+async fn create_test_tables(pool: &PgPool) {
     pool.execute(
         "CREATE TABLE twitch_partner_outreach (
             streamer_login TEXT PRIMARY KEY,
@@ -579,7 +586,66 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
     pool.execute(TRANSCRIPT_MIGRATION)
         .await
         .expect("Transkript-Migration ausführen");
-    Some(pool)
+}
+
+#[tokio::test]
+async fn adminwahl_bleibt_nach_smalltalk_testende_auch_bei_gleichzeitigem_schreiben() {
+    let db = test_postgres::TestPostgres::start().await;
+    create_test_tables(&db.pool).await;
+    // Sowohl vorher vorhandene Settings als auch vom Test erzeugte Zeilen:
+    // explizites An/Aus muss das Ende und die Start-Aufräumung überleben.
+    for existed in [false, true] {
+        for enabled in [false, true] {
+            for concurrent in [false, true] {
+                sqlx::raw_sql("TRUNCATE twitch_smalltalk_sessions, twitch_partner_outreach, twitch_live_state, twitch_engagement_settings CASCADE")
+                    .execute(&db.pool).await.unwrap();
+                seed_candidate(&db.pool, "eins", "1", None).await;
+                if existed {
+                    sqlx::query(
+                        "INSERT INTO twitch_engagement_settings (channel_login) VALUES ('eins')",
+                    )
+                    .execute(&db.pool)
+                    .await
+                    .unwrap();
+                }
+                let store = SmalltalkLoopStore::new(db.pool.clone());
+                let now = Utc::now();
+                store.start_next_session(now).await.unwrap().unwrap();
+                let admin_write = async {
+                    // Exakter Zustandswechsel des Dashboard-Toggles. UPSERT
+                    // bildet auch den Fall ab, dass das Testende zuerst die
+                    // provisorische Zeile entfernt hat.
+                    sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, irc_read, output_mode) VALUES ('eins', $1, $1, $2) ON CONFLICT (channel_login) DO UPDATE SET enabled=EXCLUDED.enabled, irc_read=EXCLUDED.irc_read, output_mode=EXCLUDED.output_mode")
+                        .bind(enabled).bind(if enabled { "live" } else { "off" })
+                        .execute(&db.pool).await.unwrap();
+                };
+                if concurrent {
+                    let (_, closed) = tokio::join!(
+                        admin_write,
+                        store.close_all_open_sessions("process_start", now + Duration::minutes(1))
+                    );
+                    closed.unwrap();
+                } else {
+                    admin_write.await;
+                    store
+                        .close_active_session("session_timeout", now + Duration::minutes(60))
+                        .await
+                        .unwrap();
+                }
+                let actual: (bool, bool, String) = sqlx::query_as("SELECT enabled, irc_read, output_mode FROM twitch_engagement_settings WHERE channel_login='eins'")
+                    .fetch_one(&db.pool).await.unwrap();
+                assert_eq!(
+                    actual,
+                    (
+                        enabled,
+                        enabled,
+                        if enabled { "live" } else { "off" }.into()
+                    ),
+                    "existed={existed}, concurrent={concurrent}"
+                );
+            }
+        }
+    }
 }
 
 fn parse_timestamp(raw: &str) -> chrono::DateTime<Utc> {

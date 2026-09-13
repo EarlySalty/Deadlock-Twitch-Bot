@@ -26,7 +26,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{postgres::PgRow, PgPool, Row};
 use tb_crypto::FieldCipher;
 use tb_engagement::sender_auth::{SenderAuthStore, SENDER_LOGIN};
 
@@ -393,19 +393,10 @@ pub async fn get_log_handler(
     }
 }
 
-/// `"" / nur-Whitespace → None`, sonst getrimmt (mirror Pythons
-/// `(x or "").strip() or None`).
-fn normalize_opt(s: String) -> Option<String> {
-    let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_string())
-    }
-}
-
-/// Kern von `_sync_update_settings`: neue Zeile → INSERT (Rohwerte), sonst
-/// dynamisches UPDATE (nur gesetzte Felder; steam/persona getrimmt→NULL).
+/// Dashboard-Wahl atomar speichern, auch wenn ein Smalltalk-Test seine
+/// provisorische Settings-Zeile gleichzeitig aufräumt. Nur ausdrücklich
+/// gesetzte Felder ändern sich; der An/Aus-Schalter steuert auch Lese- und
+/// Versandmodus. Reine Profiländerungen behalten den Laufzustand bei.
 async fn update_settings(
     pool: &PgPool,
     channel: &str,
@@ -415,60 +406,47 @@ async fn update_settings(
     tabu: Option<Vec<String>>,
     actor_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let exists = sqlx::query_scalar!(
-        "SELECT 1 AS \"one!\" FROM twitch_engagement_settings WHERE channel_login = $1",
-        channel
+    let mut tx = pool.begin().await?;
+    // Derselbe Lock wie Start/Ende der Smalltalk-Sitzung: Profiländerungen
+    // dürfen nicht zwischen deren Settings-Snapshot und Aufräumen verloren gehen.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('tb-engagement:smalltalk-loop-global', 0))",
     )
-    .fetch_optional(pool)
-    .await?
-    .is_some();
-
-    if !exists {
-        let en = enabled.unwrap_or(false);
-        let tabu_topics = tabu.unwrap_or_default();
-        sqlx::query!(
-            "INSERT INTO twitch_engagement_settings \
-                (channel_login, enabled, steam_id, persona_override, tabu_topics, \
-                 enabled_at, enabled_by, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN NOW() ELSE NULL END, $7, NOW())",
-            channel,
-            en,
-            steam_id,
-            persona,
-            &tabu_topics,
-            en,
-            actor_id
-        )
-        .execute(pool)
-        .await?;
-        return Ok(());
-    }
-
-    // Bestehende Zeile: nur explizit gesetzte Felder anfassen.
-    if enabled.is_none() && steam_id.is_none() && persona.is_none() && tabu.is_none() {
-        return Ok(());
-    }
-    let mut qb =
-        QueryBuilder::<Postgres>::new("UPDATE twitch_engagement_settings SET updated_at = NOW()");
-    if let Some(en) = enabled {
-        qb.push(", enabled = ").push_bind(en);
-        if en {
-            qb.push(", enabled_at = NOW(), enabled_by = COALESCE(")
-                .push_bind(actor_id.map(str::to_string))
-                .push(", enabled_by)");
-        }
-    }
-    if let Some(s) = steam_id {
-        qb.push(", steam_id = ").push_bind(normalize_opt(s));
-    }
-    if let Some(p) = persona {
-        qb.push(", persona_override = ").push_bind(normalize_opt(p));
-    }
-    if let Some(t) = tabu {
-        qb.push(", tabu_topics = ").push_bind(t);
-    }
-    qb.push(" WHERE channel_login = ").push_bind(channel);
-    qb.build().execute(pool).await?;
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO twitch_engagement_settings AS current
+            (channel_login, enabled, steam_id, persona_override, tabu_topics,
+             enabled_at, enabled_by, updated_at, irc_read, output_mode)
+         VALUES ($1, COALESCE($2, FALSE), NULLIF(BTRIM($3), ''), NULLIF(BTRIM($4), ''),
+                 COALESCE($5, ARRAY[]::text[]), CASE WHEN $2 THEN NOW() ELSE NULL END,
+                 $6, NOW(), COALESCE($2, FALSE), CASE WHEN $2 THEN 'live' ELSE 'off' END)
+         ON CONFLICT (channel_login) DO UPDATE SET
+             enabled = COALESCE($2, current.enabled),
+             irc_read = CASE WHEN $2 IS NULL THEN current.irc_read ELSE $2 END,
+             output_mode = CASE WHEN $2 IS NULL THEN current.output_mode
+                                WHEN $2 THEN 'live' ELSE 'off' END,
+             steam_id = CASE WHEN $3 IS NULL THEN current.steam_id ELSE EXCLUDED.steam_id END,
+             persona_override = CASE WHEN $4 IS NULL THEN current.persona_override ELSE EXCLUDED.persona_override END,
+             tabu_topics = CASE WHEN $5 IS NULL THEN current.tabu_topics ELSE EXCLUDED.tabu_topics END,
+             enabled_at = CASE WHEN $2 THEN NOW() ELSE current.enabled_at END,
+             enabled_by = CASE WHEN $2 THEN COALESCE($6, current.enabled_by) ELSE current.enabled_by END,
+             updated_at = NOW()",
+    )
+    .bind(channel)
+    .bind(enabled)
+    .bind(steam_id)
+    .bind(persona)
+    .bind(tabu)
+    .bind(actor_id)
+    .execute(&mut *tx)
+    .await?;
+    // Auch eine ursprünglich provisorische Zeile gehört nach explizitem
+    // Speichern dem Nutzer. Das Testende stellt nur die Laufwerte zurück,
+    // statt die gerade gespeicherten Profilfelder mit der Zeile zu löschen.
+    sqlx::query("UPDATE twitch_smalltalk_sessions SET settings_existed = TRUE WHERE channel_login = $1 AND ended_at IS NULL")
+        .bind(channel).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -605,6 +583,120 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
+    #[tokio::test]
+    async fn admin_toggle_schaltet_versand_und_lesepfad_atomar_profil_bleibt_erhalten() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_engagement_settings (
+            channel_login TEXT PRIMARY KEY, channel_user_id TEXT,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT,
+            tabu_topics TEXT[], enabled_at TIMESTAMPTZ, enabled_by TEXT,
+            irc_read BOOLEAN NOT NULL DEFAULT FALSE, output_mode TEXT NOT NULL DEFAULT 'off',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260727150000_twitch_smalltalk_loop.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql("CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, cooldown_until TEXT)")
+            .execute(&db.pool).await.unwrap();
+        for existed in [false, true] {
+            sqlx::query("DELETE FROM twitch_engagement_settings")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            if existed {
+                sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, irc_read, output_mode) VALUES ('nani', TRUE, TRUE, 'test')")
+                    .execute(&db.pool).await.unwrap();
+            }
+            for enabled in [true, false, true] {
+                let response = post_toggle_handler(
+                    DashboardAuthLevel::admin(),
+                    State(db.pool.clone()),
+                    Json(json!({"channelLogin":"nani", "enabled":enabled})),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let state: (bool, bool, String) = sqlx::query_as("SELECT enabled, irc_read, output_mode FROM twitch_engagement_settings WHERE channel_login='nani'")
+                    .fetch_one(&db.pool).await.unwrap();
+                assert_eq!(
+                    state,
+                    (
+                        enabled,
+                        enabled,
+                        if enabled { "live" } else { "off" }.into()
+                    )
+                );
+                let runtime = tb_engagement::gate::load_settings(&db.pool, "nani", None)
+                    .await
+                    .unwrap();
+                assert_eq!(runtime.enabled, enabled);
+                assert_eq!(
+                    runtime.output_mode,
+                    if enabled {
+                        tb_engagement::types::OutputMode::Live
+                    } else {
+                        tb_engagement::types::OutputMode::Off
+                    }
+                );
+            }
+            // Profiländerung und Toggle konkurrieren: beide müssen erhalten bleiben.
+            let (profile, toggle) = tokio::join!(
+                update_settings(
+                    &db.pool,
+                    "nani",
+                    None,
+                    Some(" 123 ".into()),
+                    Some("frech".into()),
+                    None,
+                    None
+                ),
+                update_settings(&db.pool, "nani", Some(false), None, None, None, None),
+            );
+            profile.unwrap();
+            toggle.unwrap();
+            let state: (bool, bool, String, String, String) = sqlx::query_as("SELECT enabled, irc_read, output_mode, steam_id, persona_override FROM twitch_engagement_settings WHERE channel_login='nani'")
+                .fetch_one(&db.pool).await.unwrap();
+            assert_eq!(
+                state,
+                (false, false, "off".into(), "123".into(), "frech".into())
+            );
+        }
+        // Ein Profilupdate während eines Tests behält den Testmodus bis zum
+        // Ende, muss danach aber in der ursprünglich provisorischen Zeile bleiben.
+        sqlx::query("UPDATE twitch_engagement_settings SET enabled=TRUE, irc_read=TRUE, output_mode='test' WHERE channel_login='nani'")
+            .execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_smalltalk_sessions (id,channel_login,streamer_user_id,started_at,settings_existed,previous_enabled,previous_irc_read,previous_output_mode) VALUES ('00000000-0000-0000-0000-000000000001','nani','42',NOW(),FALSE,FALSE,FALSE,'off')")
+            .execute(&db.pool).await.unwrap();
+        update_settings(
+            &db.pool,
+            "nani",
+            None,
+            None,
+            Some("gespeichertes Profil".into()),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let store = tb_engagement::smalltalk_loop_store::SmalltalkLoopStore::new(db.pool.clone());
+        store
+            .close_active_session("session_timeout", chrono::Utc::now())
+            .await
+            .unwrap();
+        let state: (bool, bool, String, String) = sqlx::query_as("SELECT enabled,irc_read,output_mode,persona_override FROM twitch_engagement_settings WHERE channel_login='nani'")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(
+            state,
+            (false, false, "off".into(), "gespeichertes Profil".into())
+        );
+    }
+
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new()
@@ -633,6 +725,7 @@ mod tests {
             "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, \
              enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, \
              tabu_topics TEXT[], enabled_at TIMESTAMPTZ, enabled_by TEXT, \
+             irc_read BOOLEAN NOT NULL DEFAULT FALSE, output_mode TEXT NOT NULL DEFAULT 'off', \
              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         )
         .execute(&pool)
@@ -642,6 +735,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("CREATE TABLE twitch_smalltalk_sessions (channel_login TEXT, ended_at TIMESTAMPTZ, settings_existed BOOLEAN)")
+            .execute(&pool).await.unwrap();
         Some(pool)
     }
 
