@@ -44,6 +44,10 @@ const DEFAULT_STEAM_BOT_LIVE_URL: &str = "http://127.0.0.1:8783/player-live";
 #[derive(Debug, Clone, Deserialize)]
 pub struct RankInfo {
     pub linked: bool,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub is_steam_friend: bool,
     pub rank_name: Option<String>,
     pub subrank: Option<i64>,
     pub badge_level: Option<i64>,
@@ -196,6 +200,9 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
 
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
     match info {
+        Some(info) if info.linked && (!info.verified || !info.is_steam_friend) => format!(
+            "{name} hat Steam verknüpft, aber die Steam-Bot-Freundschaft noch nicht bestätigt — bitte die Freundschaftsanfrage auf Steam annehmen."
+        ),
         Some(info) if info.linked => match &info.rank_name {
             Some(rank) => match info.subrank {
                 Some(subrank @ 1..=6) => format!("Rang von {name}: {rank} {subrank}"),
@@ -543,6 +550,8 @@ mod tests {
     fn rang_vorhanden() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: Some("Archon".into()),
             subrank: None,
             badge_level: Some(61),
@@ -557,6 +566,8 @@ mod tests {
     fn rang_mit_subrank() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: Some("Phantom".into()),
             subrank: Some(1),
             badge_level: Some(91),
@@ -571,6 +582,8 @@ mod tests {
     fn verknuepft_ohne_rang() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: None,
             subrank: None,
             badge_level: None,
@@ -582,9 +595,29 @@ mod tests {
     }
 
     #[test]
+    fn verknuepft_aber_freundschaft_noch_offen() {
+        let info = RankInfo {
+            linked: true,
+            verified: false,
+            is_steam_friend: false,
+            rank_name: None,
+            subrank: None,
+            badge_level: None,
+            wins: None,
+            losses: None,
+            matches: None,
+        };
+        let reply = rank_reply("nani", Some(&info));
+        assert!(reply.contains("Freundschaft"));
+        assert!(reply.contains("annehmen"));
+    }
+
+    #[test]
     fn nicht_verknuepft() {
         let info = RankInfo {
             linked: false,
+            verified: false,
+            is_steam_friend: false,
             rank_name: None,
             subrank: None,
             badge_level: None,
@@ -600,6 +633,8 @@ mod tests {
     fn wins_reply_mit_siegen() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: None,
             subrank: None,
             badge_level: None,
@@ -618,6 +653,8 @@ mod tests {
     fn wins_reply_verknuepft_ohne_stats() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: None,
             subrank: None,
             badge_level: None,
@@ -633,6 +670,8 @@ mod tests {
     fn wins_reply_nicht_verknuepft() {
         let info = RankInfo {
             linked: false,
+            verified: false,
+            is_steam_friend: false,
             rank_name: None,
             subrank: None,
             badge_level: None,
