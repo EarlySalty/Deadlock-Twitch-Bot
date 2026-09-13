@@ -21,7 +21,7 @@
     "framer-motion": "^13.2.0",
     "lucide-react": "^1.42.0",
     "react": "^19.2.8",
-    "react-dom": "19.2.8",
+    "react-dom": "19.3.0",
     "recharts": "^3.10.1",
     "tailwindcss": "^4.3.3"
   },
@@ -30,7 +30,7 @@
     "@tailwindcss/oxide-linux-x64-gnu": "^4.3.3",
     "@types/node": "^26.5.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^10.0.1",
     "eslint-plugin-react-hooks": "^7.1.1",
