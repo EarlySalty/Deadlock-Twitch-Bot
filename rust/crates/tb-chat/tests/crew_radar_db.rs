@@ -356,6 +356,91 @@ async fn radar_slot_ist_atomar_netzwerkweit_und_auf_zwei_pro_woche_begrenzt() {
     assert_eq!(persist_radar_alert(&db.pool, &record).await.unwrap(), None);
 }
 
+#[tokio::test]
+async fn korrigierter_oder_entfernter_letzter_beleg_erlaubt_normale_neupruefung() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    for (index, insert, undo) in [
+        (0, "INSERT INTO twitch_scam_guard_verdicts VALUES ($1,'scam','banned')", "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE chatter_id = $1"),
+        (1, "INSERT INTO twitch_spam_review_decisions VALUES ($1,'spam')", "UPDATE twitch_spam_review_decisions SET verdict = 'clean' WHERE chatter_id = $1"),
+        (2, "INSERT INTO twitch_chatter_global_ban VALUES ($1)", "DELETE FROM twitch_chatter_global_ban WHERE chatter_id = $1"),
+        (3, "INSERT INTO tb_chat_autoban_log VALUES ($1,'ban','spam')", "UPDATE tb_chat_autoban_log SET action = 'unban' WHERE chatter_id = $1"),
+        (4, "INSERT INTO twitch_scam_guard_verdicts VALUES ($1,'scam','banned')", "DELETE FROM twitch_scam_guard_verdicts WHERE chatter_id = $1"),
+        (5, "INSERT INTO twitch_spam_review_decisions VALUES ($1,'spam')", "DELETE FROM twitch_spam_review_decisions WHERE chatter_id = $1"),
+        (6, "INSERT INTO tb_chat_autoban_log VALUES ($1,'timeout','scam')", "DELETE FROM tb_chat_autoban_log WHERE chatter_id = $1"),
+    ] {
+        let id = format!("undo-{index}");
+        if index == 2 {
+            sqlx::query("INSERT INTO twitch_partners VALUES ($1)").bind(&id).execute(&db.pool).await.unwrap();
+        } else {
+            history(&db.pool, &id).await;
+        }
+        assert!(unauffaellig(&db.pool, &id).await.unwrap());
+        sqlx::query(insert).bind(&id).execute(&db.pool).await.unwrap();
+        assert!(!unauffaellig(&db.pool, &id).await.unwrap());
+        sqlx::query(undo).bind(&id).execute(&db.pool).await.unwrap();
+        let pending: bool = sqlx::query_scalar("SELECT unauffaellig_seit IS NULL AND vertrauen_widerrufen_am IS NULL AND historie_geprueft_am IS NULL FROM twitch_zuschauer_register WHERE twitch_user_id = $1")
+            .bind(&id).fetch_one(&db.pool).await.unwrap();
+        assert!(pending, "keine direkte Freigabe für {id}");
+        assert!(unauffaellig(&db.pool, &id).await.unwrap(), "normale Neuprüfung für {id}");
+    }
+}
+
+#[tokio::test]
+async fn undo_gibt_weder_anderweitig_belastete_noch_unbekannte_konten_frei() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    sqlx::raw_sql(
+        "INSERT INTO twitch_scam_guard_verdicts VALUES ('42','scam','banned');
+        INSERT INTO twitch_spam_review_decisions VALUES ('42','spam');
+        INSERT INTO twitch_chatter_global_ban VALUES ('42');
+        INSERT INTO tb_chat_autoban_log VALUES ('42','ban','spam');
+        UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE chatter_id = '42'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(!unauffaellig(&db.pool, "42").await.unwrap());
+    for statement in [
+        "UPDATE twitch_spam_review_decisions SET verdict = 'clean' WHERE chatter_id = '42'",
+        "DELETE FROM twitch_chatter_global_ban WHERE chatter_id = '42'",
+    ] {
+        sqlx::query(statement).execute(&db.pool).await.unwrap();
+        assert!(!unauffaellig(&db.pool, "42").await.unwrap());
+    }
+    sqlx::query("UPDATE tb_chat_autoban_log SET action = 'unban' WHERE chatter_id = '42'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(unauffaellig(&db.pool, "42").await.unwrap());
+    sqlx::raw_sql("INSERT INTO twitch_scam_guard_verdicts VALUES ('unknown','scam','banned');
+        UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE chatter_id = 'unknown'")
+        .execute(&db.pool).await.unwrap();
+    assert!(!unauffaellig(&db.pool, "unknown").await.unwrap());
+}
+
+#[tokio::test]
+async fn gleichzeitiges_undo_neuer_beleg_und_historie_lassen_widerruf_bestehen() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    sqlx::query("INSERT INTO twitch_scam_guard_verdicts VALUES ('42','scam','banned')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let (undo, adverse, history) = tokio::join!(
+        sqlx::query("UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE chatter_id = '42'").execute(&db.pool),
+        sqlx::query("INSERT INTO twitch_spam_review_decisions VALUES ('42','spam')").execute(&db.pool),
+        unauffaellig(&db.pool, "42"),
+    );
+    undo.unwrap();
+    adverse.unwrap();
+    history.unwrap();
+    assert!(!unauffaellig(&db.pool, "42").await.unwrap());
+    assert!(sqlx::query_scalar::<_, bool>("SELECT unauffaellig_seit IS NULL AND vertrauen_widerrufen_am IS NOT NULL FROM twitch_zuschauer_register WHERE twitch_user_id = '42'").fetch_one(&db.pool).await.unwrap());
+}
+
 fn radar_record(id: &str) -> CrewRadarLog {
     CrewRadarLog {
         channel_login: "kanal".into(),
