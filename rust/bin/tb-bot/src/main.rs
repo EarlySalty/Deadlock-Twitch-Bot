@@ -60,6 +60,7 @@ mod chat_typen_wiring;
 mod chat_wiring;
 mod chatters_wiring;
 mod confirm_resolver;
+mod crew_archive;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
 mod irc_lurker_wiring;
@@ -576,6 +577,7 @@ async fn main() {
         outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
     let smalltalk_loop = smalltalk_loop_wiring::start(&supervisor, pool.clone(), &settings.broker);
     chat_typen_wiring::spawn(&supervisor, pool.clone());
+    crew_archive::start(&supervisor, pool.clone(), &settings.broker);
 
     let port: u16 = optional_env_u16("PORT", 8776);
 

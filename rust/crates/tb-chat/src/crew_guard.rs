@@ -6,7 +6,7 @@ use crate::zuschauer_register::{reserviere_radar_meldung, unauffaellig};
 use chrono::{Timelike, Utc};
 use chrono_tz::Europe::Berlin;
 use regex::Regex;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tracing::{error, warn};
@@ -28,7 +28,10 @@ pub struct CrewRadarLog {
     pub source: String,
 }
 
-pub async fn persist_radar_log(pool: &PgPool, record: &CrewRadarLog) -> Result<(), sqlx::Error> {
+pub async fn persist_radar_log<'e>(
+    executor: impl Executor<'e, Database = Postgres>,
+    record: &CrewRadarLog,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO twitch_crew_radar_log \
          (channel_login, chatter_login, chatter_id, account_age_days, style_score, \
@@ -49,9 +52,29 @@ pub async fn persist_radar_log(pool: &PgPool, record: &CrewRadarLog) -> Result<(
     .bind(&record.llm_reasoning)
     .bind(&record.action_taken)
     .bind(&record.source)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
+}
+
+pub async fn persist_radar_alert(
+    pool: &PgPool,
+    record: &CrewRadarLog,
+) -> Result<Option<i64>, sqlx::Error> {
+    let Some(id) = record
+        .chatter_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let mut tx = pool.begin().await?;
+    let repetitions = reserviere_radar_meldung(&mut tx, id).await?;
+    if repetitions.is_some() {
+        persist_radar_log(&mut *tx, record).await?;
+    }
+    tx.commit().await?;
+    Ok(repetitions)
 }
 
 struct CrewAccount {
@@ -318,14 +341,6 @@ impl CrewGuard {
             {
                 return;
             }
-            let repetitions = match reserviere_radar_meldung(&pool, &id).await {
-                Ok(Some(value)) => value,
-                Ok(None) => return,
-                Err(error) => {
-                    error!(%error, "Crew-Guard: Meldung konnte nicht reserviert werden");
-                    return;
-                }
-            };
             let account_age_days = age.user_created_at_days(&id, &login).await;
             let style = style_score(&messages, &centroid);
             let (verdict, detail) = match signal {
@@ -348,12 +363,6 @@ impl CrewGuard {
             };
             let mut message = format!("🔎 **{login}** in #{channel}: Muster gesichtet.\n{detail}\nKein Urteil über das Konto. Es wurde nichts moderiert.\n**Stilähnlichkeit:** {} %\n**Nachrichten:**\n{}", style.total,
                 messages.iter().map(|m| format!("> {}", m.chars().take(300).collect::<String>())).collect::<Vec<_>>().join("\n"));
-            if repetitions > 0 {
-                message.push_str(&format!(
-                    "\nSeit der letzten Meldung {} weitere Treffer.",
-                    repetitions
-                ));
-            }
             let log = CrewRadarLog {
                 channel_login: channel.clone(),
                 chatter_login: login.clone(),
@@ -369,9 +378,19 @@ impl CrewGuard {
                 action_taken: "none".into(),
                 source: "passive_patterns".into(),
             };
-            if let Err(error) = persist_radar_log(&pool, &log).await {
-                error!(%error, "Crew-Guard: Muster konnte nicht gespeichert werden");
-                return;
+            let repetitions = match persist_radar_alert(&pool, &log).await {
+                Ok(Some(value)) => value,
+                Ok(None) => return,
+                Err(error) => {
+                    error!(%error, "Crew-Guard: Muster konnte nicht gespeichert werden");
+                    return;
+                }
+            };
+            if repetitions > 0 {
+                message.push_str(&format!(
+                    "\nSeit der letzten Meldung {} weitere Treffer.",
+                    repetitions
+                ));
             }
             alerter.send_crew_campaign(CrewRadarAlert {
                 message,

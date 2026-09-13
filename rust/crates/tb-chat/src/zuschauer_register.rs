@@ -805,21 +805,23 @@ pub async fn unauffaellig(pool: &PgPool, id: &str) -> Result<bool, sqlx::Error> 
     Ok(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
 }
 
-pub async fn reserviere_radar_meldung(pool: &PgPool, id: &str) -> Result<Option<i64>, sqlx::Error> {
+pub(crate) async fn reserviere_radar_meldung(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: &str,
+) -> Result<Option<i64>, sqlx::Error> {
     if id.trim().is_empty() {
         return Ok(None);
     }
-    let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
         VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
-        .bind(id).execute(&mut *tx).await?;
+        .bind(id).execute(&mut **tx).await?;
     let (last, previous, repetitions) =
         sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i64)>(
             "SELECT radar_meldung_am, radar_vorherige_meldung_am, radar_wiederholungen \
          FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
         )
         .bind(id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
     let now = Utc::now();
     if last.is_some_and(|at| now - at < chrono::Duration::days(1))
@@ -830,9 +832,8 @@ pub async fn reserviere_radar_meldung(pool: &PgPool, id: &str) -> Result<Option<
             LEAST(radar_wiederholungen, 9223372036854775806) + 1 WHERE twitch_user_id = $1",
         )
         .bind(id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-        tx.commit().await?;
         return Ok(None);
     }
     sqlx::query(
@@ -841,8 +842,7 @@ pub async fn reserviere_radar_meldung(pool: &PgPool, id: &str) -> Result<Option<
     )
     .bind(id)
     .bind(now)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(Some(repetitions))
 }

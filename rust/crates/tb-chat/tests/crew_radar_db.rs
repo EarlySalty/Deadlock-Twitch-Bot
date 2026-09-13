@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tb_chat::crew_guard::{persist_radar_log, CrewRadarLog};
+use tb_chat::crew_guard::{persist_radar_alert, persist_radar_log, CrewRadarLog};
 use tb_chat::scam_pitch::AccountAgePort;
 use tb_chat::style_score::{build_centroid, score, StyleBreakdown};
 use tb_chat::types::ChatMessageBody;
-use tb_chat::zuschauer_register::{reserviere_radar_meldung, unauffaellig};
+use tb_chat::zuschauer_register::unauffaellig;
 use tb_chat::{ChatMessageEvent, CrewGuard, ModAlerter};
 use tokio::time::{sleep, Duration};
 use wiremock::matchers::method;
@@ -338,9 +338,10 @@ async fn bestaetigter_spam_scam_globalban_und_regelaktion_widerrufen_vertrauen()
 async fn radar_slot_ist_atomar_netzwerkweit_und_auf_zwei_pro_woche_begrenzt() {
     let db = TestPostgres::start().await;
     schema(&db.pool).await;
+    let record = radar_record("42");
     let (a, b) = tokio::join!(
-        reserviere_radar_meldung(&db.pool, "42"),
-        reserviere_radar_meldung(&db.pool, "42")
+        persist_radar_alert(&db.pool, &record),
+        persist_radar_alert(&db.pool, &record)
     );
     assert_eq!(
         usize::from(a.unwrap().is_some()) + usize::from(b.unwrap().is_some()),
@@ -348,14 +349,66 @@ async fn radar_slot_ist_atomar_netzwerkweit_und_auf_zwei_pro_woche_begrenzt() {
     );
     sqlx::query("UPDATE twitch_zuschauer_register SET radar_meldung_am = NOW() - INTERVAL '2 days' WHERE twitch_user_id = '42'").execute(&db.pool).await.unwrap();
     assert_eq!(
-        reserviere_radar_meldung(&db.pool, "42").await.unwrap(),
+        persist_radar_alert(&db.pool, &record).await.unwrap(),
         Some(1)
     );
     sqlx::query("UPDATE twitch_zuschauer_register SET radar_meldung_am = NOW() - INTERVAL '1 day' WHERE twitch_user_id = '42'").execute(&db.pool).await.unwrap();
+    assert_eq!(persist_radar_alert(&db.pool, &record).await.unwrap(), None);
+}
+
+fn radar_record(id: &str) -> CrewRadarLog {
+    CrewRadarLog {
+        channel_login: "kanal".into(),
+        chatter_login: "viewer".into(),
+        chatter_id: Some(id.into()),
+        account_age_days: Some(42),
+        style_score: 0,
+        style_breakdown: StyleBreakdown {
+            pitch: 0,
+            campaign: 0,
+            typo: 0,
+            bro: 0,
+            lowercase: 0,
+            opener: 0,
+            cosine: 0,
+        },
+        time_window_match: false,
+        messages: vec!["Muster".into()],
+        llm_verdict: "pattern".into(),
+        llm_confidence: None,
+        llm_reasoning: None,
+        action_taken: "none".into(),
+        source: "passive_patterns".into(),
+    }
+}
+
+#[tokio::test]
+async fn fehlgeschlagenes_radar_protokoll_verbraucht_keine_meldungsquote() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at, radar_meldung_am, radar_wiederholungen) VALUES ('42', 0.2, NOW(), NOW() - INTERVAL '2 days', 7)")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("ALTER TABLE twitch_crew_radar_log ADD CONSTRAINT test_write_failure CHECK (source <> 'passive_patterns')")
+        .execute(&db.pool).await.unwrap();
+    let record = radar_record("42");
+    assert!(persist_radar_alert(&db.pool, &record).await.is_err());
+    let state: (bool, bool, i64) = sqlx::query_as("SELECT radar_meldung_am < NOW() - INTERVAL '1 day', radar_vorherige_meldung_am IS NULL, radar_wiederholungen FROM twitch_zuschauer_register WHERE twitch_user_id = '42'")
+        .fetch_one(&db.pool).await.unwrap();
+    assert_eq!(state, (true, true, 7));
+    sqlx::query("ALTER TABLE twitch_crew_radar_log DROP CONSTRAINT test_write_failure")
+        .execute(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(
-        reserviere_radar_meldung(&db.pool, "42").await.unwrap(),
-        None
+        persist_radar_alert(&db.pool, &record).await.unwrap(),
+        Some(7)
     );
+    assert_eq!(persist_radar_alert(&db.pool, &record).await.unwrap(), None);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_crew_radar_log")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]
