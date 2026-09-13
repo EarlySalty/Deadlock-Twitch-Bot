@@ -83,7 +83,7 @@ export function ChatConfig() {
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div>
                 <p className="text-white">Silent Ban setzen</p>
-                <p className="mt-1 text-xs text-text-secondary">Aktualisiert das Silent-Ban-Flag gesammelt im gewählten Scope.</p>
+                <p className="mt-1 text-xs text-text-secondary">Legt stille Bans für alle aktiven Partner fest.</p>
               </div>
               <input
                 type="checkbox"
@@ -98,7 +98,7 @@ export function ChatConfig() {
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div>
                 <p className="text-white">Silent Raid setzen</p>
-                <p className="mt-1 text-xs text-text-secondary">Aktualisiert das Silent-Raid-Flag gesammelt im gewählten Scope.</p>
+                <p className="mt-1 text-xs text-text-secondary">Legt stille Raids für alle aktiven Partner fest.</p>
               </div>
               <input
                 type="checkbox"

@@ -205,7 +205,7 @@ pub async fn load_streamer_config_snapshots(
     let sql = format!(
         "SELECT \
             COUNT(*) AS total, \
-            COUNT(*) FILTER (WHERE raid_bot_enabled = 1) AS raid_bot, \
+            COUNT(*) FILTER (WHERE raid_admin_enabled) AS raid_bot, \
             COUNT(*) FILTER (WHERE COALESCE(live_ping_enabled, 1) = 1) AS live_ping, \
             COUNT(*) FILTER (WHERE silent_ban = 1) AS silent_ban, \
             COUNT(*) FILTER (WHERE silent_raid = 1) AS silent_raid \
@@ -284,7 +284,7 @@ mod tests {
     }
 
     async fn seed(pool: &PgPool, uid: &str, status: &str) {
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ($1, $1, $2)")
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, raid_admin_enabled) VALUES ($1, $1, $2, FALSE)")
             .bind(uid)
             .bind(status)
             .execute(pool)
@@ -341,7 +341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_raid_wunsch_bleibt_bei_technischer_reparatur_erhalten() {
+    async fn admin_raid_wunsch_wird_gespeichert_und_unabhaengig_von_pause_gelesen() {
         let db = test_postgres::TestPostgres::start().await;
         sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, status TEXT, raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, silent_ban INTEGER DEFAULT 0, silent_raid INTEGER DEFAULT 0)")
             .execute(&db.pool).await.unwrap();
@@ -375,6 +375,19 @@ mod tests {
                     ("old".into(), true, 1)
                 ]
             );
+            // Ein technischer Ausfall darf beim Neuladen nicht als neue
+            // Admin-Wahl erscheinen.
+            sqlx::query(
+                "UPDATE twitch_partners SET raid_bot_enabled=0 WHERE twitch_user_id='active'",
+            )
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            let snapshot = load_streamer_config_snapshots(&db.pool, "active")
+                .await
+                .unwrap();
+            assert_eq!(snapshot.raid_bot_enabled_count, i64::from(enabled));
+            assert_eq!(snapshot.raid_snapshot()["allRaidBotEnabled"], enabled);
         }
     }
 
