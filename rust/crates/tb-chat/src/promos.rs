@@ -4747,7 +4747,7 @@ mod db_tests {
                 .await
         );
         assert_eq!(api.announcement_colors().await, vec!["purple", "green"]);
-        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,9)")
+        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,6)")
             .execute(&pool).await.unwrap();
         let active_event = engine
             .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
@@ -4763,7 +4763,7 @@ mod db_tests {
             .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
             .await
             .unwrap();
-        assert_eq!(expired_event.0, format!("Ranked ohne festen Stack? Im Discord finden sich Leute für Premades und gemeinsame Competitive-Runden. {}", DEFAULT_PROMO_DISCORD_INVITE));
+        assert_eq!(expired_event.0, format!("Scrim ohne Gegnerteam? Bei uns kannst du gezielt andere Teams suchen, statt einzelne Leute per DM abzuklappern. {}", DEFAULT_PROMO_DISCORD_INVITE));
         assert_eq!(expired_event.1, "purple");
         use tb_analytics::community_announcements::{load, save, Announcement};
         let mut config = load(&pool).await.unwrap();

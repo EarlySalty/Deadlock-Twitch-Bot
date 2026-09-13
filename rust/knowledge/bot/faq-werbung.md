@@ -11,7 +11,7 @@ Was der Bot in deinen Chat schickt, wann, und wie du das komplett abstellst.
 
 ### Welche Werbung schickt der Bot in meinen Chat?
 
-Zwei Formen, beide nur rund um den Community-Discord, keine externen Sponsoren und keine fremden Produkte. Erstens kann der Bot einem echten neuen Deadlock-Zuschauer auf eine inhaltliche Chat-Nachricht antworten. Das gilt sowohl bei einem klaren Anlass wie Solo-Queue-Frust oder Anfängerfragen als auch bei Themen wie Ranked/Competitive, Builds und Meta, Coaching, Patchnotes oder Scam-Schutz. Die Antwort reagiert zuerst auf das Gesagte und nennt danach genau einen passenden, konkreten Discord-Nutzen. Zweitens gibt es die periodische Einladung mit dem Discord-Link. Die Themenrotation umfasst Mitspieler/LFG, Ranked-Stacks, Scrims, Turniere, Builds/Items/Meta, Anfänger- und Hero-Hilfe, kostenloses Coaching, deutsch aufbereitete Patchnotes sowie Scam-/Fake-Server-Schutz für Partner-Chats. Allgemeine Sätze wie "gut aufgehoben" werden verworfen.
+Zwei Formen, beide nur rund um den Community-Discord, keine externen Sponsoren und keine fremden Produkte. Erstens kann der Bot einem echten neuen Deadlock-Zuschauer auf eine inhaltliche Chat-Nachricht antworten. Das gilt sowohl bei einem klaren Anlass wie Solo-Queue-Frust oder Anfängerfragen als auch bei Themen wie Ranked/Competitive, Builds und Meta, Coaching, Patchnotes oder Scam-Schutz. Die Antwort reagiert zuerst auf das Gesagte und nennt danach genau einen Vorteil, der zu diesem Moment passt. Zweitens gibt es die periodische Einladung mit dem Discord-Link. Dort werden vor allem unterscheidbare Leistungen beworben: aktive Voice-Lanes statt Solo Queue, Scrims, Deadlock-Turniere mit Anmeldung, komplett kostenloses Coaching mit Replay-Besprechung, Deadlock-Patchnotes auf Deutsch und Scam-/Fake-Server-Schutz in Partner-Chats. Builds, Meta oder Hero-Hilfe werden nur aufgegriffen, wenn der aktuelle Chat genau davon handelt. Allgemeine Sätze wie "gut aufgehoben" oder Verwaltungssprache wie "wird aufbereitet" werden verworfen.
 
 - Persönliche Antworten sind frei geschrieben, keine fertigen Standard-Sprüche mehr.
 - In einer persönlichen Antwort steht nie ein Link und kein "komm auf Discord".
@@ -39,14 +39,14 @@ Nein. Der Bot macht keinen kalten Partner-Pitch an andere Deadlock-Streamer, nur
 
 - Streaming-Status allein löst keinen Partner-Pitch aus.
 - Keine ungefragte Raid-Netzwerk-Werbung an andere Deadlock-Streamer.
-- Periodische Community-Hinweise dürfen stattdessen konkrete, allgemein belegte Leistungen nennen, etwa deutsch aufbereitete Patchnotes oder Scam-/Fake-Server-Schutz.
+- Periodische Community-Hinweise dürfen stattdessen konkrete, allgemein belegte Leistungen nennen, etwa Deadlock-Patchnotes auf Deutsch, kostenloses Coaching oder Scam-/Fake-Server-Schutz.
 
 ### Wann genau wird das gepostet?
 
 Die persönliche Discord-Antwort greift nur, wenn der Partnerstream läuft, Deadlock als aktuelles Spiel erkannt ist, der Zuschauer das Neulings-Gate besteht und seine Nachricht mindestens 15 Zeichen hat. Der Sprachmodell-Judge muss außerdem mit mindestens 0,70 Sicherheit einen natürlich passenden konkreten Nutzen erkennen; bei Unsicherheit schweigt der Bot. Eine Person bekommt insgesamt höchstens einen persönlichen Community-Hinweis. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Abstände, damit nichts spammt.
 
 - Persönliche Pitches sind für echte neue Deadlock-Zuschauer gedacht, nicht für Stammgäste oder zufälligen Smalltalk.
-- Ein persönlicher Pitch muss das Wort Discord und einen konkreten Nutzen enthalten; der Nutzen darf vor oder nach dem Wort Discord stehen. Reine Community-Floskeln werden technisch verworfen.
+- Ein persönlicher Pitch muss einen konkreten Vorteil enthalten, der auch ohne die Wörter Discord oder Community noch interessant bleibt. Reine Community-Floskeln und Broschürensprache werden technisch verworfen.
 - Feste Grenzen und Drosseln verhindern wiederholte Ansprache.
 - Bei aktiven Sonder-Events kann der Bot in der periodischen Einladung stattdessen einen Aktions-Text einblenden.
 

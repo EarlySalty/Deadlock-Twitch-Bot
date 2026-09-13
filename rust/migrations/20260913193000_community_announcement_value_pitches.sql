@@ -3,15 +3,12 @@ SET settings = jsonb_set(
         settings,
         '{entries}',
         '[
-          {"text":"Für gemeinsame Deadlock-Runden findest du im Discord deutschsprachige Mitspieler. {invite}","enabled":true,"color":"purple"},
-          {"text":"Ranked ohne festen Stack? Im Discord finden sich Leute für Premades und gemeinsame Competitive-Runden. {invite}","enabled":true,"color":"purple"},
-          {"text":"Für Scrims gibt es im Discord Mitspieler und Gegner zum Organisieren. {invite}","enabled":true,"color":"purple"},
-          {"text":"Turnierinfos und Anmeldung für unsere Deadlock-Turniere landen gesammelt im Discord. {invite}","enabled":true,"color":"purple"},
-          {"text":"Builds, Items und die aktuelle Meta werden im Discord gemeinsam besprochen. {invite}","enabled":true,"color":"purple"},
-          {"text":"Bei Hero- und Einsteigerfragen gibt es im Discord Hilfe und konkrete Tipps. {invite}","enabled":true,"color":"purple"},
-          {"text":"Kostenloses Coaching und Replay-Feedback kann im Discord angefragt werden. {invite}","enabled":true,"color":"purple"},
-          {"text":"Deadlock-Patchnotes und wichtige Änderungen werden im Discord auf Deutsch aufbereitet. {invite}","enabled":true,"color":"purple"},
-          {"text":"Scam-Pitches und Fake-Server sind leider real: Partner-Chats bekommen Scam-Schutz, der offizielle Anlaufpunkt bleibt unser Discord. {invite}","enabled":true,"color":"purple"}
+          {"text":"Solo Queue muss nicht Standard sein: bei uns laufen aktive Voice-Lanes für gemeinsame Deadlock-Runden. {invite}","enabled":true,"color":"purple"},
+          {"text":"Scrim ohne Gegnerteam? Bei uns kannst du gezielt andere Teams suchen, statt einzelne Leute per DM abzuklappern. {invite}","enabled":true,"color":"purple"},
+          {"text":"Ranked reicht nicht mehr? Für unsere Deadlock-Turniere kannst du dich direkt als Teilnehmer anmelden. {invite}","enabled":true,"color":"purple"},
+          {"text":"Festgefahren? Bei uns geht ein Deadlock-Coach kostenlos mit dir durchs Replay. {invite}","enabled":true,"color":"purple"},
+          {"text":"Keine Lust, Valve-Changelogs selbst zu übersetzen? Neue Deadlock-Patches gibt''s bei uns direkt auf Deutsch. {invite}","enabled":true,"color":"purple"},
+          {"text":"Fake-Server und dubiose Service-Pitches im Chat? Unser Bot warnt in Partner-Chats vor typischen Scam-Versuchen. {invite}","enabled":true,"color":"purple"}
         ]'::jsonb,
         true
     ),
