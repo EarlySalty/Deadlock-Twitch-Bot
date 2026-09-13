@@ -108,6 +108,7 @@ const PROMO_RUNTIME_PRUNE_INTERVAL_SEC: u64 = 60;
 const PITCH_JUDGE_CHATTER_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 const PITCH_JUDGE_CHANNEL_WINDOW: Duration = Duration::from_secs(60 * 60);
 const PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW: usize = 30;
+const PARTNER_STREAMER_PITCH_ENABLED: bool = false;
 const PITCH_MAX_CONCURRENT: usize = 8;
 const PROMO_MAX_CONCURRENT: usize = 16;
 const PROMO_DUE_CONCURRENCY: usize = 4;
@@ -873,7 +874,7 @@ impl PromoEngine {
         }
 
         if let Some(candidate) = self.partner_candidate(&target_user_id).await {
-            if text_len >= 25 {
+            if PARTNER_STREAMER_PITCH_ENABLED && text_len >= 25 {
                 self.run_partner_pitch(
                     &login,
                     &channel_id,
@@ -883,6 +884,8 @@ impl PromoEngine {
                     candidate,
                 )
                 .await;
+            } else {
+                tracing::debug!(channel = %login, chatter = %target_user_id, "partner-pitch: bewusst deaktiviert");
             }
             return;
         }
@@ -4615,6 +4618,12 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260913193000_community_announcement_value_pitches.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         seed_partner_channel(&pool, COMMUNITY_BROADCASTER_ID, "community-renamed").await;
         seed_partner_channel(&pool, "other-id", "other").await;
         let api = Arc::new(super::tests::MockApi::default());
@@ -4738,7 +4747,7 @@ mod db_tests {
                 .await
         );
         assert_eq!(api.announcement_colors().await, vec!["purple", "green"]);
-        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,3)")
+        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,9)")
             .execute(&pool).await.unwrap();
         let active_event = engine
             .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
@@ -4754,7 +4763,7 @@ mod db_tests {
             .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
             .await
             .unwrap();
-        assert_eq!(expired_event.0, format!("Zuschauen ist gut, selber mitmischen auch :) Alles rund um unsere Turniere findest du bei uns im Discord. {}", DEFAULT_PROMO_DISCORD_INVITE));
+        assert_eq!(expired_event.0, format!("Ranked ohne festen Stack? Im Discord finden sich Leute für Premades und gemeinsame Competitive-Runden. {}", DEFAULT_PROMO_DISCORD_INVITE));
         assert_eq!(expired_event.1, "purple");
         use tb_analytics::community_announcements::{load, save, Announcement};
         let mut config = load(&pool).await.unwrap();
@@ -5979,18 +5988,14 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn partner_kandidat_bekommt_partner_pitch() {
+    async fn deadlock_streamer_bekommt_keinen_kalten_partner_pitch() {
         let pool = pool_or_skip!("promo_partner_kandidat");
         seed_partner_channel(&pool, "c-pk", "pkkanal").await;
         seed_deadlock_candidate(&pool, "kandidatlogin", "u-pk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(None));
-        let gen = Arc::new(MockPartnerPitchGen::new(Some(
-            "stark gespielt gerade. wenn du öfter deadlock streamst, bei der deutschen deadlock community gibts ein partner netzwerk, das raidet dich wenn andere offline gehen und schützt deinen chat vor spam",
-        )));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
             .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
@@ -6002,22 +6007,19 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        let msgs = api.messages_sent().await;
-        assert_eq!(msgs.len(), 1, "genau ein Partner-Pitch erwartet");
-        assert!(
-            msgs[0].1.starts_with("@Kandidat "),
-            "Antwort muss die Person mit @login anreden: {}",
-            msgs[0].1
+        assert_eq!(
+            gen.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "andere Deadlock-Streamer dürfen keinen kalten Partner-Pitch bekommen"
         );
-
-        let row: (String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-            "SELECT pfad, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
+        assert_eq!(api.message_count().await, 0, "kein Partner-Pitch im Chat");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, "partner");
-        assert!(row.1.is_some(), "sent_at muss gesetzt sein");
+        assert_eq!(count, 0, "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log");
     }
 
     #[tokio::test]
@@ -6060,19 +6062,15 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn partner_pitch_schreibt_ledger_und_review_karte() {
+    async fn deaktivierter_partner_pitch_schreibt_weder_ledger_noch_review() {
         let pool = pool_or_skip!("promo_partner_ledger_karte");
         seed_partner_channel(&pool, "c-lk", "lkkanal").await;
         seed_deadlock_candidate(&pool, "ledgerlogin", "u-lk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(None));
-        let gen = Arc::new(MockPartnerPitchGen::new(Some(
-            "stark gespielt gerade, wenn du öfter deadlock streamst gibts bei der community ein partner netzwerk mit raids und chat schutz",
-        )));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
             .set_partner_pitch_gen(gen.clone())
             .set_pitch_review_sink(Arc::new(sink.clone()));
 
@@ -6085,35 +6083,14 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        assert_eq!(
-            api.message_count().await,
-            1,
-            "genau ein Partner-Pitch erwartet"
-        );
-
-        let ledger: (String, String, String, Option<String>) = sqlx::query_as(
-            "SELECT trigger_type, judge_verdict, action, twitch_user_id FROM twitch_scout_pitch_ledger",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(ledger.0, "chat_partner_pitch");
-        assert_eq!(ledger.1, "partner_pitch");
-        assert_eq!(ledger.2, "posted");
-        assert_eq!(ledger.3.as_deref(), Some("u-lk"));
-
-        let cards = sink.cards.lock().await;
-        assert_eq!(cards.len(), 1, "eine Review-Karte erwartet");
-        assert_eq!(
-            cards[0].4,
-            PitchCardKind::Partner,
-            "Karte muss als Partner markiert sein"
-        );
-        let hint = cards[0].5.as_deref().unwrap_or("");
-        assert!(
-            hint.contains("ledgerlogin"),
-            "Kandidaten-Hinweis muss den Login tragen: {hint}"
-        );
+        assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(api.message_count().await, 0);
+        let ledger_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(ledger_count, 0, "kein kalter Streamer-Outreach-Ledger-Eintrag");
+        assert!(sink.cards.lock().await.is_empty(), "keine Review-Karte");
     }
 
     #[tokio::test]
@@ -6329,18 +6306,16 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn partner_filter_verwirft_link() {
+    async fn deaktivierter_partner_pitch_ruft_auch_keinen_generator_mit_link_auf() {
         let pool = pool_or_skip!("promo_partner_filter_link");
         seed_partner_channel(&pool, "c-fl", "flkanal").await;
         seed_deadlock_candidate(&pool, "filterlogin", "u-fl").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some(
             "stark gespielt, schau mal auf https://discord.gg/abc vorbei",
         )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
             .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
@@ -6352,19 +6327,15 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        assert_eq!(api.message_count().await, 0, "Link-Antwort darf nicht raus");
-        let row: (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-            "SELECT reject_reason, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
+        assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(api.message_count().await, 0);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(
-            row.0.as_deref(),
-            Some("link"),
-            "harter Filter muss den Grund protokollieren"
-        );
-        assert!(row.1.is_none());
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
