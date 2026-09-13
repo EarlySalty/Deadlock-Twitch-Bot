@@ -367,7 +367,7 @@ async fn korrigierter_oder_entfernter_letzter_beleg_erlaubt_normale_neupruefung(
         (3, "INSERT INTO tb_chat_autoban_log VALUES ($1,'ban','spam')", "UPDATE tb_chat_autoban_log SET action = 'unban' WHERE chatter_id = $1"),
         (4, "INSERT INTO twitch_scam_guard_verdicts VALUES ($1,'scam','banned')", "DELETE FROM twitch_scam_guard_verdicts WHERE chatter_id = $1"),
         (5, "INSERT INTO twitch_spam_review_decisions VALUES ($1,'spam')", "DELETE FROM twitch_spam_review_decisions WHERE chatter_id = $1"),
-        (6, "INSERT INTO tb_chat_autoban_log VALUES ($1,'timeout','scam')", "DELETE FROM tb_chat_autoban_log WHERE chatter_id = $1"),
+        (6, "INSERT INTO tb_chat_autoban_log VALUES ($1,'timeout','spam')", "DELETE FROM tb_chat_autoban_log WHERE chatter_id = $1"),
     ] {
         let id = format!("undo-{index}");
         if index == 2 {
@@ -439,6 +439,36 @@ async fn gleichzeitiges_undo_neuer_beleg_und_historie_lassen_widerruf_bestehen()
     history.unwrap();
     assert!(!unauffaellig(&db.pool, "42").await.unwrap());
     assert!(sqlx::query_scalar::<_, bool>("SELECT unauffaellig_seit IS NULL AND vertrauen_widerrufen_am IS NOT NULL FROM twitch_zuschauer_register WHERE twitch_user_id = '42'").fetch_one(&db.pool).await.unwrap());
+}
+
+#[tokio::test]
+async fn scam_timeout_undo_erlaubt_neupruefung_trotz_erhaltenem_audit() {
+    let db = TestPostgres::start().await;
+    schema(&db.pool).await;
+    history(&db.pool, "42").await;
+    sqlx::raw_sql(
+        "INSERT INTO tb_chat_autoban_log VALUES ('42','timeout','scam');
+        INSERT INTO twitch_scam_guard_verdicts VALUES ('42','scam','timed_out')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(!unauffaellig(&db.pool, "42").await.unwrap());
+    sqlx::query(
+        "UPDATE twitch_scam_guard_verdicts SET action_taken = 'overturned' WHERE chatter_id = '42'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(unauffaellig(&db.pool, "42").await.unwrap());
+    let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tb_chat_autoban_log WHERE chatter_id = '42' AND action = 'timeout' AND source_path = 'scam'")
+        .fetch_one(&db.pool).await.unwrap();
+    assert_eq!(audit_count, 1);
+    sqlx::query("INSERT INTO twitch_scam_guard_verdicts VALUES ('42','scam','suggested')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(!unauffaellig(&db.pool, "42").await.unwrap());
 }
 
 fn radar_record(id: &str) -> CrewRadarLog {

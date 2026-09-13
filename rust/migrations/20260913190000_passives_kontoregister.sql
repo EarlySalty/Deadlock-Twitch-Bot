@@ -44,7 +44,7 @@ BEGIN
             SELECT 1 FROM twitch_chatter_global_ban WHERE chatter_id = subject_id
         ) OR EXISTS (
             SELECT 1 FROM tb_chat_autoban_log WHERE chatter_id = subject_id
-                AND action IN ('ban', 'timeout') AND source_path IN ('spam', 'scam', 'global_ban')
+                AND action IN ('ban', 'timeout') AND source_path IN ('spam', 'global_ban')
         ) INTO bad;
         IF bad THEN
             UPDATE twitch_zuschauer_register SET
@@ -79,7 +79,7 @@ SELECT DISTINCT chatter_id, 0.2, 'epoch'::timestamptz, NOW() FROM (
     SELECT chatter_id FROM twitch_spam_review_decisions WHERE verdict = 'spam'
     UNION SELECT chatter_id FROM twitch_scam_guard_verdicts WHERE verdict = 'scam' AND action_taken <> 'overturned'
     UNION SELECT chatter_id FROM twitch_chatter_global_ban
-    UNION SELECT chatter_id FROM tb_chat_autoban_log WHERE action IN ('ban', 'timeout') AND source_path IN ('spam', 'scam', 'global_ban')
+    UNION SELECT chatter_id FROM tb_chat_autoban_log WHERE action IN ('ban', 'timeout') AND source_path IN ('spam', 'global_ban')
 ) bad WHERE NULLIF(BTRIM(chatter_id), '') IS NOT NULL
 ON CONFLICT (twitch_user_id) DO UPDATE SET
     unauffaellig_seit = NULL, vertrauen_widerrufen_am = NOW();
