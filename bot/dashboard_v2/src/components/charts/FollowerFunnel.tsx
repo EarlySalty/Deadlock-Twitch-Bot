@@ -110,7 +110,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
       </div>
 
       {/* Conversion Rate Hero Section */}
-      <div className="bg-[#0d0806] rounded-xl p-5 mb-6 border border-primary/25">
+      <div className="bg-background rounded-xl p-5 mb-6 border border-primary/25">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="text-sm text-text-secondary">Conversion Rate</span>
@@ -208,10 +208,12 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
 
         {/* Benchmark Gauge */}
         <div className="mt-4">
-          <div
-            className="relative h-2 rounded-full overflow-hidden"
-            style={{ background: 'linear-gradient(90deg, #7e4c10 0%, #9a7c42 35%, #c5a059 65%, #f1d299 100%)' }}
-          />
+          <div className="relative h-2 rounded-full overflow-hidden flex">
+            <div className="flex-1 bg-danger/40" />
+            <div className="flex-1 bg-warning/40" />
+            <div className="flex-1 bg-success/40" />
+            <div className="flex-1 bg-success/40" />
+          </div>
           {rating.position > 0 && (
             <motion.div
               initial={{ left: '0%' }}
