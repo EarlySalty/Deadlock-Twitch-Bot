@@ -209,10 +209,10 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         {/* Benchmark Gauge */}
         <div className="mt-4">
           <div className="relative h-2 rounded-full overflow-hidden flex">
-            <div className="flex-1 bg-danger/40" />
-            <div className="flex-1 bg-warning/40" />
-            <div className="flex-1 bg-success/40" />
-            <div className="flex-1 bg-success/40" />
+            <div className="flex-1 bg-danger/70" />
+            <div className="flex-1 bg-warning/70" />
+            <div className="flex-1 bg-success/70" />
+            <div className="flex-1 bg-success/70" />
           </div>
           {rating.position > 0 && (
             <motion.div
