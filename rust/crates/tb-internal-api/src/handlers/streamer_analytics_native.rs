@@ -1171,7 +1171,7 @@ mod tests {
         let base = INTERNAL_API_BASE_PATH;
         Router::new()
             .route(
-                &format!("{base}/analytics/streamer/:login"),
+                &format!("{base}/analytics/streamer/{{login}}"),
                 get(streamer_analytics_native_handler),
             )
             .with_state(pool)

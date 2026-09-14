@@ -1858,30 +1858,30 @@ mod tests {
         Router::new()
             .route(&format!("{base}/streamers"), get(list_handler))
             .route(&format!("{base}/streamers"), post(add_handler))
-            .route(&format!("{base}/streamers/:login"), delete(remove_handler))
+            .route(&format!("{base}/streamers/{{login}}"), delete(remove_handler))
             .route(
-                &format!("{base}/streamers/:login/verify"),
+                &format!("{base}/streamers/{{login}}/verify"),
                 post(verify_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/archive"),
+                &format!("{base}/streamers/{{login}}/archive"),
                 post(archive_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/disconnect-bot"),
+                &format!("{base}/streamers/{{login}}/disconnect-bot"),
                 post(disconnect_bot_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/discord-flag"),
+                &format!("{base}/streamers/{{login}}/discord-flag"),
                 post(discord_flag_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/discord-profile"),
+                &format!("{base}/streamers/{{login}}/discord-profile"),
                 post(discord_profile_handler),
             )
             .route(&format!("{base}/stats"), get(stats_handler))
             .route(
-                &format!("{base}/analytics/streamer/:login"),
+                &format!("{base}/analytics/streamer/{{login}}"),
                 get(streamer_analytics_handler),
             )
             .route(
@@ -1889,7 +1889,7 @@ mod tests {
                 get(analytics_comparison_handler),
             )
             .route(
-                &format!("{base}/sessions/:session_id"),
+                &format!("{base}/sessions/{{session_id}}"),
                 get(session_detail_handler),
             )
             .with_state(pool)
