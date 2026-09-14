@@ -14,6 +14,11 @@ pub const BASE_SCOPE_PROFILE: &str = "base";
 pub const DASHBOARD_REAUTH_SCOPE_PROFILE: &str = "dashboard_reauth";
 /// Auto-Profil — wird zur Laufzeit über Streamer-Kontext aufgelöst.
 pub const AUTO_SCOPE_PROFILE: &str = "auto";
+/// Titel-Studio-Profil — bestehender Basis-Satz plus genau das zusätzliche
+/// Schreibrecht für Kanaltitel. Der gemeinsame Token-Store braucht ein Superset
+/// des Basis-Grants, damit ein Titel-Connect keinen bestehenden Raid-Grant
+/// durch einen inkompatiblen kleineren Token ersetzt.
+pub const TITLE_SCOPE_PROFILE: &str = "title";
 /// Uplink-Profil — voller Streamer-Satz plus Chat und Stream-Key für den
 /// Multi-Chat und das automatische Uplink-Ziel.
 ///
@@ -63,6 +68,19 @@ pub const FULL_STREAMER_SCOPES: &[&str] = &[
     "channel:manage:broadcast",
     "channel:manage:ads",
     "channel:edit:commercial",
+];
+
+/// Titel-Studio = Basis-Grant + Kanaltitel-Schreibrecht. Kein Abo-/Hype-/Ads-
+/// Upgrade und keine Uplink-Rechte.
+pub const TITLE_SCOPES: &[&str] = &[
+    "channel:manage:raids",
+    "channel:manage:moderators",
+    "channel:bot",
+    "clips:edit",
+    "channel:read:ads",
+    "bits:read",
+    "channel:read:redemptions",
+    "channel:manage:broadcast",
 ];
 
 /// Kritische Basis-Scopes, deren Fehlen den Bot-Betrieb verhindert
@@ -127,6 +145,7 @@ pub fn normalize_scope_profile(raw: &str) -> &'static str {
         BASE_SCOPE_PROFILE => BASE_SCOPE_PROFILE,
         DASHBOARD_REAUTH_SCOPE_PROFILE => DASHBOARD_REAUTH_SCOPE_PROFILE,
         AUTO_SCOPE_PROFILE => AUTO_SCOPE_PROFILE,
+        TITLE_SCOPE_PROFILE => TITLE_SCOPE_PROFILE,
         UPLINK_SCOPE_PROFILE => UPLINK_SCOPE_PROFILE,
         _ => BASE_SCOPE_PROFILE,
     }
@@ -143,6 +162,7 @@ pub fn normalize_scope_profile(raw: &str) -> &'static str {
 pub fn scopes_for_profile(scope_profile: &str) -> &'static [&'static str] {
     match normalize_scope_profile(scope_profile) {
         DASHBOARD_REAUTH_SCOPE_PROFILE => FULL_STREAMER_SCOPES,
+        TITLE_SCOPE_PROFILE => TITLE_SCOPES,
         UPLINK_SCOPE_PROFILE => UPLINK_SCOPES,
         _ => BASE_STREAMER_SCOPES,
     }
@@ -175,6 +195,7 @@ mod tests {
             "dashboard_reauth"
         );
         assert_eq!(normalize_scope_profile("auto"), "auto");
+        assert_eq!(normalize_scope_profile("title"), "title");
     }
 
     #[test]
@@ -185,6 +206,7 @@ mod tests {
             "dashboard_reauth"
         );
         assert_eq!(normalize_scope_profile("Auto"), "auto");
+        assert_eq!(normalize_scope_profile(" TITLE "), "title");
     }
 
     #[test]
@@ -250,6 +272,20 @@ mod tests {
             BASE_STREAMER_SCOPES.len() + DASHBOARD_UPGRADE_SCOPES.len()
         );
         assert!(FULL_STREAMER_SCOPES.contains(&"channel:manage:broadcast"));
+    }
+
+    #[test]
+    fn scopes_for_title_sind_basis_plus_broadcast_ohne_dashboard_extras() {
+        let scopes = scopes_for_profile("title");
+        for scope in BASE_STREAMER_SCOPES {
+            assert!(scopes.contains(scope), "title fehlt Basis-Scope: {scope}");
+        }
+        assert!(scopes.contains(&"channel:manage:broadcast"));
+        assert!(!scopes.contains(&"channel:read:subscriptions"));
+        assert!(!scopes.contains(&"channel:read:hype_train"));
+        assert!(!scopes.contains(&"channel:manage:ads"));
+        assert!(!scopes.contains(&"user:write:chat"));
+        assert_eq!(scopes.len(), BASE_STREAMER_SCOPES.len() + 1);
     }
 
     #[test]

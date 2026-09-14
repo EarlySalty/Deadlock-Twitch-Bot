@@ -351,7 +351,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             {setTitleStatus === 'scope_missing' && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-xs text-warning">
                 <AlertCircle className="h-3.5 w-3.5" /> Schreibrecht fehlt oder muss erneuert werden.
-                <a href={result.oauth_url || settings?.oauth_url || '/twitch/raid/auth?scope_profile=dashboard_reauth'} className="font-semibold underline">Twitch verbinden</a>
+                <a href={result.oauth_url || settings?.oauth_url || '/twitch/raid/auth?scope_profile=title'} className="font-semibold underline">Twitch verbinden</a>
               </div>
             )}
             {setTitleStatus === 'error' && <p className="text-xs text-error">Twitch hat das Setzen des Titels gerade nicht bestätigt.</p>}

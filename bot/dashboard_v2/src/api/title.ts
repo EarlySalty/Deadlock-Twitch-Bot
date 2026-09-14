@@ -62,7 +62,7 @@ function previewSettings(): TitleSettings {
     experimental_auto_set: false,
     style_summary: 'Ø ca. 72 Zeichen; Emojis sind untypisch; häufiger Trenner |; eher ruhige Satzzeichen.',
     oauth_connected: true,
-    oauth_url: '/twitch/raid/auth?scope_profile=dashboard_reauth&source=title_generator',
+    oauth_url: '/twitch/raid/auth?scope_profile=title&source=title_generator',
     model: 'glm-5.3-flash',
   };
 }

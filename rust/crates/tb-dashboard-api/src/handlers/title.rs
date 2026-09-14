@@ -69,8 +69,7 @@ pub struct TitleSettingsBody {
     pub experimental_auto_set: bool,
 }
 
-const TITLE_OAUTH_URL: &str =
-    "/twitch/raid/auth?scope_profile=dashboard_reauth&source=title_generator";
+const TITLE_OAUTH_URL: &str = "/twitch/raid/auth?scope_profile=title&source=title_generator";
 const TITLE_MANAGE_SCOPE: &str = "channel:manage:broadcast";
 
 fn requested_login(
