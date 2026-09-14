@@ -603,6 +603,9 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<C
         "user:read:chat",
         "user:write:chat",
         "user:manage:whispers",
+        "moderator:manage:banned_users",
+        "moderator:manage:shoutouts",
+        "moderator:read:followers",
     ] {
         if !scopes.iter().any(|s| s == required) {
             tracing::warn!("Bot-Token ohne Scope {required} — Chat-Funktionen eingeschränkt");
