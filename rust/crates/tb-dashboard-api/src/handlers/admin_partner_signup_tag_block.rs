@@ -137,8 +137,18 @@ async fn add_entry(
     let outcome = db::add(pool, &display_tag, &reason, public_message, actor)
         .await
         .map_err(db_error)?;
-    let backfilled = db::backfill(pool, &tag).await.map_err(db_error)?;
-    tracing::info!(%tag, backfilled, "Tag-Backfill nach Admin-Write");
+    match db::backfill(pool, &tag).await {
+        Ok(backfilled) => {
+            tracing::info!(%tag, backfilled, "Tag-Backfill nach Admin-Write");
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                %tag,
+                "Tag-Regel gespeichert, unmittelbarer Backfill fehlgeschlagen; Bot-Sweep versucht erneut"
+            );
+        }
+    }
 
     Ok(Json(AddResponse {
         ok: true,
@@ -448,6 +458,40 @@ mod tests {
         .unwrap();
         assert_eq!(reason, "tag_block:deutsch");
         assert_eq!(added_by, "tag_block");
+        drop_schema(pool, &dsn, schema).await;
+    }
+
+    #[tokio::test]
+    async fn add_entry_bleibt_erfolgreich_wenn_backfill_fehlschlaegt() {
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_tag_block_api_backfill_fail";
+        let pool = make_pool(&dsn, schema).await;
+        sqlx::query("DROP TABLE twitch_stream_sessions")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = add_entry(
+            &pool,
+            AddRequest {
+                tag: "Deutsch".into(),
+                reason: None,
+                public_message: None,
+            },
+            "discord:4711",
+        )
+        .await;
+        let (status, body) = body_json(response).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+
+        let stored: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM twitch_partner_signup_tag_blocks WHERE tag = 'deutsch')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(stored);
         drop_schema(pool, &dsn, schema).await;
     }
 
