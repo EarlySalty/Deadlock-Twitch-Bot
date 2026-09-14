@@ -2,9 +2,12 @@
 
 status: aktiv
 datum: 2026-09-10
-stand: 2026-09-11 — M1 bis M4 verifiziert grün, M5: frischer Review gelaufen (REVIEW-F8.md,
-Findings behoben), Merge auf akutem main vorbereitet (Cherry-Pick b2c1133d + Nacharbeit
-auf acc5028d); offen: Push/Merge, Deploy, Live-Prüfung
+stand: 2026-09-11 — M1 bis M5 abgeschlossen: frischer Review gelaufen (REVIEW-F8.md, keine
+BLOCKER/MAJOR, MINOR behoben), über PR #874 auf main gemergt (c6453dca), CI grün.
+Release-Build fertig und eingefroren unter
+`/opt/deadlock/twitch/builds/<vollständige SHA von c6453dca>` (Binaries als twitchbuild
+gebaut, Anker im Binary und Bundle nachgewiesen). Offen: Root-Installer,
+Service-Restart und Live-Prüfung (root-Schritte müssen vom Nutzer ausgeführt werden).
 
 Ziel steht im Contract (`.tasks/2026-09-10-admanager-steam-queue/CONTRACT.md`).
 
@@ -14,6 +17,11 @@ Ziel steht im Contract (`.tasks/2026-09-10-admanager-steam-queue/CONTRACT.md`).
 - tb-bot: 289 grün
 - tb-dashboard-api ad_manager: 7 grün
 - dashboard_v2: 181 Tests grün, tsc+vite-Build grün
+- Closeout 2026-09-11: Seit Merge `c6453dca` sind die AdManager-Zieldateien auf
+  `origin/main` unverändert; `tests/adManager.test.ts` 12/12 grün und `npm run build`
+  grün. Ein lokaler Rust-Nachlauf war im Repo-Werkzeug mit Cargo 1.75 wegen Lockfile
+  v4 nicht möglich; maßgeblich bleiben die dokumentierten Merge-/CI-Läufe mit Cargo
+  1.97.1.
 - Browser-Preview: Werbemanager-Karte Desktop+mobil, Steam-Feld mit Dirty-Tracking, Fehlerpfad ehrlich (HTTP 502 ohne Backend), keine Konsolenfehler
 - Baseline-Beweis: ad_manager_store queue_lease war vor der Änderung im isolierten DB-Lauf rot (git-stash-Lauf), Fix ist hermetischer Test-Aufbau
 
