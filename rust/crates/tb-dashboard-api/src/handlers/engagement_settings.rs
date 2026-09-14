@@ -28,7 +28,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Row};
 use tb_crypto::FieldCipher;
-use tb_engagement::sender_auth::{SenderAuthStore, SENDER_LOGIN};
+use tb_engagement::sender_auth::SenderAuthStore;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -482,13 +482,21 @@ pub async fn sender_auth_start_handler(
         );
     };
     match store.build_authorize_url().await {
-        Ok(url) => Json(json!({
-            "authorizeUrl": url,
-            "senderLogin": SENDER_LOGIN,
-            "hint": "In einem separaten Browser/Inkognito als der Sende-Account einloggen, \
-                     dann diesen Link öffnen und Authorize klicken.",
-        }))
-        .into_response(),
+        Ok(url) => {
+            let sender_login = match store.current_sender_login().await {
+                Ok(login) => login,
+                Err(error) => {
+                    tracing::warn!(%error, "engagement sender-auth: aktueller Sender-Login nicht lesbar");
+                    None
+                }
+            };
+            Json(json!({
+                "authorizeUrl": url,
+                "senderLogin": sender_login,
+                "hint": "In einem separaten Browser/Inkognito als der gewünschte Sende-Account einloggen, dann diesen Link öffnen und Authorize klicken.",
+            }))
+            .into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "engagement sender-auth: Link-Erzeugung fehlgeschlagen");
             err(

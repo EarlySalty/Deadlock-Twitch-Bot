@@ -18,11 +18,6 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
-/// Login des Engagement-Sende-Accounts (Smoke-Account; per Code, keine Env —
-/// mirror von `sender_auth.SENDER_LOGIN`). Der IRC-Reader nutzt ihn als
-/// Echo-Guard (eigene Nachrichten überspringen).
-pub const SENDER_LOGIN: &str = "iamspyingthroughtyourcam";
-
 /// Twitch-Token-Endpoint (Refresh- + Code-Grant). Per `with_token_url` injizierbar.
 const DEFAULT_TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 /// Helix-Users-Endpoint (Onboarding-User-Lookup). Per `with_users_url` injizierbar.
@@ -228,6 +223,15 @@ impl SenderAuthStore {
         }))
     }
 
+    /// Login des aktuell zuletzt autorisierten Engagement-Sende-Accounts.
+    /// Die Identität kommt ausschließlich aus der OAuth-Tabelle, nie aus Code/Env.
+    pub async fn current_sender_login(&self) -> Result<Option<String>, String> {
+        let row = self.load_row().await.map_err(|error| error.to_string())?;
+        Ok(row
+            .map(|row| row.login.trim().to_lowercase())
+            .filter(|login| !login.is_empty()))
+    }
+
     /// Verschlüsselt + persistiert das Token-Paar (Python `_store_tokens`).
     /// Schlägt das Verschlüsseln fehl, wird NICHTS geschrieben (Lockout-Schutz).
     async fn store_tokens(
@@ -370,7 +374,7 @@ impl SenderAuthStore {
              ON CONFLICT (state_token) DO UPDATE SET expires_at = EXCLUDED.expires_at",
             state_lookup_key,
             PLATFORM,
-            SENDER_LOGIN,
+            Option::<&str>::None,
             REDIRECT_URI,
             expires_at
         )
@@ -453,11 +457,10 @@ impl SenderAuthStore {
             tracing::error!(%error, "Engagement-Sender: Twitch-Benutzer konnte nicht gelesen werden");
             "Twitch-Benutzer konnte nicht gelesen werden".to_string()
         })?;
-        let login = if login.is_empty() {
-            SENDER_LOGIN.to_string()
-        } else {
-            login
-        };
+        if login.trim().is_empty() {
+            return Err("Twitch-Benutzer-Lookup lieferte keinen Login".to_string());
+        }
+        let login = login.trim().to_lowercase();
         let scopes = if token.scope.is_empty() {
             SCOPES.join(" ")
         } else {
@@ -767,8 +770,8 @@ mod tests {
         // Scope url-encoded (Leerzeichen → +/%20), beide Scopes enthalten.
         assert!(url.contains("user%3Awrite%3Achat"));
         // Genau ein State-Token persistiert, plattform-gated.
-        let (token, platform): (String, String) =
-            sqlx::query_as("SELECT state_token, platform FROM oauth_state_tokens LIMIT 1")
+        let (token, platform, streamer_login): (String, String, Option<String>) =
+            sqlx::query_as("SELECT state_token, platform, streamer_login FROM oauth_state_tokens LIMIT 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -780,6 +783,7 @@ mod tests {
         assert!(raw_state.starts_with("engsender-"));
         assert_eq!(token, tb_crypto::token_lookup_key(raw_state));
         assert_eq!(platform, "engagement_sender");
+        assert_eq!(streamer_login, None, "OAuth-State darf keinen Accountnamen hart verdrahten");
     }
 
     /// senderauth-03: `oauth_state_tokens.expires_at` wird durchgängig als
@@ -844,7 +848,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/helix/users"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "555", "login": "iamspyingthroughtyourcam"}]
+                "data": [{"id": "555", "login": "testsender"}]
             })))
             .mount(&server)
             .await;
@@ -864,7 +868,12 @@ mod tests {
 
         let result = s.handle_callback("the-code", "st1").await.unwrap();
         assert_eq!(result.user_id, "555");
-        assert_eq!(result.login, "iamspyingthroughtyourcam");
+        assert_eq!(result.login, "testsender");
+        assert_eq!(
+            s.current_sender_login().await.unwrap(),
+            Some("testsender".to_string()),
+            "Laufzeitidentität muss aus dem zuletzt autorisierten OAuth-Account kommen"
+        );
         // State verbraucht (gelöscht).
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_state_tokens")
             .fetch_one(&pool)

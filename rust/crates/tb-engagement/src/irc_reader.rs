@@ -30,7 +30,6 @@ use tokio::net::TcpStream;
 
 use crate::irc_message::{build_incoming, parse_privmsg};
 use crate::pipeline::EngagementPipeline;
-use crate::sender_auth::SENDER_LOGIN;
 
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
@@ -97,20 +96,28 @@ async fn load_irc_channels(pool: &PgPool) -> Result<HashSet<String>, sqlx::Error
     .collect())
 }
 
+/// Login des aktuell autorisierten Engagement-Senders. Die Identität kommt
+/// direkt aus der OAuth-Tabelle und kann dadurch ohne Codeänderung wechseln.
+async fn load_sender_login(pool: &PgPool) -> Result<String, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT twitch_login FROM twitch_engagement_sender_auth ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_default()
+    .trim()
+    .to_lowercase())
+}
+
 /// Anonymer IRC-Reader, der Chat in die Engagement-Pipeline speist.
 pub struct EngagementIrcReader {
     pool: PgPool,
     pipeline: Arc<EngagementPipeline>,
-    self_login: String,
 }
 
 impl EngagementIrcReader {
     pub fn new(pool: PgPool, pipeline: Arc<EngagementPipeline>) -> Self {
-        Self {
-            pool,
-            pipeline,
-            self_login: SENDER_LOGIN.to_lowercase(),
-        }
+        Self { pool, pipeline }
     }
 
     /// Startet den Reader. Sind noch keine `irc_read`-Kanäle konfiguriert,
@@ -126,6 +133,17 @@ impl EngagementIrcReader {
             );
             return;
         }
+        let mut self_login = match load_sender_login(&self.pool).await {
+            Ok(login) => login,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    event = "engagement_irc.sender_login_load_failed",
+                    "Engagement-IRC: Sender-Login nicht lesbar; Echo-Guard startet leer"
+                );
+                String::new()
+            }
+        };
         let pool = self.pool.clone();
         let mut channels = wait_for_channels(Duration::from_secs(CHANNEL_REFRESH_SECONDS), || {
             let pool = pool.clone();
@@ -135,7 +153,7 @@ impl EngagementIrcReader {
         tracing::info!(channels = ?sorted(&channels), "Engagement-IRC-Reader gestartet");
         loop {
             match self.connect().await {
-                Some((reader, writer)) => self.serve(reader, writer, &mut channels).await,
+                Some((reader, writer)) => self.serve(reader, writer, &mut channels, &mut self_login).await,
                 None => tokio::time::sleep(Duration::from_secs(CONNECT_BACKOFF_SECONDS)).await,
             }
         }
@@ -205,6 +223,7 @@ impl EngagementIrcReader {
         mut reader: BufReader<OwnedReadHalf>,
         mut writer: OwnedWriteHalf,
         channels: &mut HashSet<String>,
+        self_login: &mut String,
     ) {
         for ch in channels.iter() {
             join(&mut writer, ch).await;
@@ -223,7 +242,7 @@ impl EngagementIrcReader {
                             tracing::warn!(%error, "Engagement-IRC: Read fehlgeschlagen");
                             break;
                         }
-                        Ok(_) => self.handle_line(line.trim_end(), &mut writer).await,
+                        Ok(_) => self.handle_line(line.trim_end(), &mut writer, self_login).await,
                     }
                 }
                 _ = refresh.tick() => {
@@ -245,12 +264,20 @@ impl EngagementIrcReader {
                             );
                         }
                     }
+                    match load_sender_login(&self.pool).await {
+                        Ok(latest_login) => *self_login = latest_login,
+                        Err(error) => tracing::warn!(
+                            %error,
+                            event = "engagement_irc.sender_login_refresh_failed",
+                            "Engagement-IRC: Sender-Login nicht aktualisiert; letzter Wert bleibt aktiv"
+                        ),
+                    }
                 }
             }
         }
     }
 
-    async fn handle_line(&self, msg: &str, writer: &mut OwnedWriteHalf) {
+    async fn handle_line(&self, msg: &str, writer: &mut OwnedWriteHalf, self_login: &str) {
         if msg.is_empty() {
             return;
         }
@@ -261,7 +288,7 @@ impl EngagementIrcReader {
         let Some(parsed) = parse_privmsg(msg) else {
             return;
         };
-        let Some(incoming) = build_incoming(&parsed, &self.self_login) else {
+        let Some(incoming) = build_incoming(&parsed, self_login) else {
             return;
         };
         // Lurker bleibt Lurker: Der anonyme Reader kann die Pipeline speisen,
@@ -517,7 +544,7 @@ mod tests {
     fn incoming_aus_privmsg() {
         let line = "@room-id=99;user-id=42;id=m1 :viewer!v@v PRIVMSG #Nani :lohnt sich haze";
         let p = parse_privmsg(line).unwrap();
-        let im = build_incoming(&p, "iamspyingthroughtyourcam").unwrap();
+        let im = build_incoming(&p, "testsender").unwrap();
         assert_eq!(im.channel_login, "nani"); // kleingeschrieben
         assert_eq!(im.twitch_user_id, "42");
         assert_eq!(im.twitch_login, "viewer");
@@ -528,16 +555,16 @@ mod tests {
     #[test]
     fn skip_eigener_account() {
         let line =
-            "@room-id=9;user-id=1 :iamspyingthroughtyourcam!s@s PRIVMSG #nani :test nachricht";
+            "@room-id=9;user-id=1 :testsender!s@s PRIVMSG #nani :test nachricht";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
     }
 
     #[test]
     fn skip_bekannter_bot() {
         let line = "@room-id=9;user-id=1 :nightbot!n@n PRIVMSG #nani :!command output";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
     }
 
     #[test]
@@ -545,17 +572,17 @@ mod tests {
         // Fehlende room-id.
         let line = "@user-id=1 :viewer!v@v PRIVMSG #nani :hallo welt";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
         // Fehlende user-id.
         let line2 = "@room-id=9 :viewer!v@v PRIVMSG #nani :hallo welt";
         let p2 = parse_privmsg(line2).unwrap();
-        assert!(build_incoming(&p2, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p2, "testsender").is_none());
     }
 
     #[test]
     fn skip_leerer_text() {
         let line = "@room-id=9;user-id=1 :viewer!v@v PRIVMSG #nani :   ";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
     }
 }
