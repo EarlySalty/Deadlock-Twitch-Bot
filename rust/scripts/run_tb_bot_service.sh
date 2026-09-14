@@ -123,6 +123,13 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 # ops/stt-server (Default-Endpunkt 127.0.0.1:8791); es geht kein Stream-Audio
 # an einen Fremdanbieter. Sichtung: ops/learn-samples.sh
 export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
+# Kein permanenter Whisper-Leerlauf mehr: solange der Owner in keinem Kanal
+# aktiv ist, liefert der Lernmodus keinen Nutzen, wuerde mit dem alten Default
+# aber trotzdem den lebendigsten Partner-Stream durchgehend transkribieren.
+# Heisse Kanaele bleiben erlaubt; die Parallelitaet ist standardmaessig auf
+# einen Kanal begrenzt, damit STT Bot/DB/Medienarbeit nicht die CPU wegnimmt.
+export ENGAGEMENT_LEARN_IDLE_CHANNELS="${ENGAGEMENT_LEARN_IDLE_CHANNELS:-0}"
+export ENGAGEMENT_LEARN_MAX_CHANNELS="${ENGAGEMENT_LEARN_MAX_CHANNELS:-1}"
 # streamlink liegt im venv, nicht im System-PATH. Ohne diesen Pfad findet der
 # Capturer nichts und der Zeitstrahl bekommt nur Chat, keinen Stream-Ton.
 if [[ -x /usr/local/libexec/deadlock-streamlink ]]; then
