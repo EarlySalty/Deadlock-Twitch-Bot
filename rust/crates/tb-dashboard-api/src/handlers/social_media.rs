@@ -14,8 +14,9 @@
 //! [`resolve_streamer_scope`]-Helfer.
 
 use axum::{
+    body::Body,
     extract::{Multipart, Path, Query, State},
-    http::{StatusCode, Uri},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     Json,
 };
@@ -60,6 +61,7 @@ use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
 };
+use tb_social_media::preview::{get_preview, request_preview, PREVIEW_READY};
 use tb_social_media::posting_plan::{
     berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
     load_streamer_settings, save_category_setting, save_platform_schedule, save_streamer_settings,
@@ -3082,6 +3084,7 @@ async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
         "approval_mode": settings.approval_mode.as_str(),
         "approval_modes": APPROVAL_MODES,
         "timezone": settings.timezone,
+        "subtitles_enabled": settings.subtitles_enabled,
         "platforms": platforms,
         "categories": categories.iter().map(category_json).collect::<Vec<_>>(),
         "pool": pool_forecast_json(&forecast),
@@ -3154,9 +3157,14 @@ pub async fn posting_plan_put_handler(
         None => current.timezone,
     };
 
+    let subtitles_enabled = payload
+        .get("subtitles_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(current.subtitles_enabled);
     let settings = StreamerSettings {
         approval_mode,
         timezone,
+        subtitles_enabled,
     };
     let actor = editor_user_id(&auth);
     if save_streamer_settings(&pool, &slug, &settings, actor.as_deref())
@@ -3789,6 +3797,147 @@ pub async fn check_partner_access_guard(
     }
 }
 
+async fn preview_scope_and_child(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    raw: String,
+) -> Result<(i64, i64), Response> {
+    let scope = require_sm_access(auth, pool, None).await?;
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return Err(invalid_clip_db_id());
+    };
+    require_clip_in_scope(pool, clip_db_id, scope.as_deref()).await?;
+    if let Some(guard) = guard_partner_access_for_clip(pool, auth, clip_db_id).await {
+        return Err(guard);
+    }
+    let child = require_clip_child_id(pool, clip_db_id, "preview").await?;
+    Ok((clip_db_id, i64::from(child)))
+}
+
+/// `POST /social-media/api/admin/clips/:clip_db_id/preview` — stoesst den
+/// Hochformat-Vorschaurender als Hintergrundjob an.
+pub async fn preview_request_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+) -> Response {
+    let (clip_db_id, child) = match preview_scope_and_child(&auth, &pool, raw).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if request_preview(&pool, child).await.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response();
+    }
+    Json(json!({ "clip_db_id": clip_db_id, "status": "pending" })).into_response()
+}
+
+/// `GET /social-media/api/admin/clips/:clip_db_id/preview` — Status des
+/// Vorschaujobs.
+pub async fn preview_status_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+) -> Response {
+    let (clip_db_id, child) = match preview_scope_and_child(&auth, &pool, raw).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let status = get_preview(&pool, child).await;
+    let (state, error) = match status {
+        Some(s) => (s.status, s.error),
+        None => (None, None),
+    };
+    let ready = state.as_deref() == Some(PREVIEW_READY);
+    Json(json!({
+        "clip_db_id": clip_db_id,
+        "status": state,
+        "error": error,
+        "ready": ready,
+    }))
+    .into_response()
+}
+
+/// `GET /social-media/api/admin/clips/:clip_db_id/preview/file` — streamt das
+/// gerenderte Vorschau-mp4 (mit Range-Unterstuetzung fuer den Video-Player).
+pub async fn preview_file_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let (_clip_db_id, child) = match preview_scope_and_child(&auth, &pool, raw).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let status = get_preview(&pool, child).await;
+    let path = match status {
+        Some(s) if s.status.as_deref() == Some(PREVIEW_READY) => match s.path {
+            Some(p) => p,
+            None => return preview_not_ready(),
+        },
+        _ => return preview_not_ready(),
+    };
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(b) => b,
+        Err(_) => return preview_not_ready(),
+    };
+    serve_mp4_range(bytes, headers.get(header::RANGE).and_then(|v| v.to_str().ok()))
+}
+
+fn preview_not_ready() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "preview_not_ready" }))).into_response()
+}
+
+fn parse_range(range: &str, len: u64) -> Option<(u64, u64)> {
+    if len == 0 {
+        return None;
+    }
+    let spec = range.strip_prefix("bytes=")?;
+    let (start_s, end_s) = spec.split_once('-')?;
+    if start_s.is_empty() {
+        let suffix: u64 = end_s.trim().parse().ok()?;
+        if suffix == 0 || len == 0 {
+            return None;
+        }
+        let start = len.saturating_sub(suffix);
+        return Some((start, len - 1));
+    }
+    let start: u64 = start_s.trim().parse().ok()?;
+    let end = if end_s.trim().is_empty() {
+        len - 1
+    } else {
+        end_s.trim().parse::<u64>().ok()?.min(len - 1)
+    };
+    if start > end || start >= len {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn serve_mp4_range(bytes: Vec<u8>, range: Option<&str>) -> Response {
+    let len = bytes.len() as u64;
+    match range.and_then(|r| parse_range(r, len)) {
+        Some((start, end)) => {
+            let slice = bytes[start as usize..=end as usize].to_vec();
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_TYPE, "video/mp4")
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}"))
+                .header(header::CONTENT_LENGTH, (end - start + 1).to_string())
+                .body(Body::from(slice))
+                .unwrap()
+        }
+        None => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "video/mp4")
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_LENGTH, len.to_string())
+            .body(Body::from(bytes))
+            .unwrap(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4050,7 +4199,7 @@ mod tests {
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
-            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, platform))",
             "CREATE TABLE social_media_category_settings (streamer_login TEXT NOT NULL, category_key TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, category_key))",
             "CREATE TABLE social_media_vod_archive (streamer_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",

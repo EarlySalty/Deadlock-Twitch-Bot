@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT preview_status, preview_error, preview_path FROM twitch_clips_social_media WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "preview_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "preview_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "preview_path",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a619036c1dbf16d2e6027120d0b47a717e657a01d06dc3a0d04fec7127ef2747"
+}

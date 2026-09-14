@@ -15,9 +15,9 @@ Abgrenzung: Die *Erkennung* einzelner Highlight-Momente macht [highlight-clipper
 | Richtung | Beziehung |
 |----------|-----------|
 | **Wird genutzt von** | `TwitchStreamCog` (Worker-Start), Admin-Dashboard (Social-Media-Sektion). |
-| **Nutzt** | `api/` (Twitch-Clips), LLM (`llm/` → Claude-Haiku/MiniMax/Ollama), Whisper (Transkription), Plattform-APIs (TikTok/Instagram/YouTube), `ffmpeg` (Video-Processing), `storage/`. |
+| **Nutzt** | `api/` (Twitch-Clips), LLM über `tb-llm` (Fireworks, Deepseek V4 Flash), lokaler STT-Server (Transkription, `ops/stt-server`), Plattform-APIs (TikTok/Instagram/YouTube), `ffmpeg` (Video-Processing), `storage/`. |
 | **DB-Tabellen** | Social-Media-Plattform-Auth, Clip-/Upload-/Approval-/Analytics-Tabellen (`social_media_*`, siehe Migrations-Phasen). |
-| **Externe Dienste** | Twitch, TikTok-Content-Posting-API, Instagram-Graph-API, YouTube-Data-API, LLM-Provider, Whisper. |
+| **Externe Dienste** | Twitch, TikTok-Content-Posting-API, Instagram-Graph-API, YouTube-Data-API, Fireworks (über `tb-llm`). Die Transkription läuft lokal (`ops/stt-server`). |
 | **Secret-Namen** | Plattform-OAuth-Credentials (pro Plattform), LLM-Keys. |
 
 ## 3. Dateien im Überblick (nach Pipeline-Stufe)
@@ -25,8 +25,8 @@ Abgrenzung: Die *Erkennung* einzelner Highlight-Momente macht [highlight-clipper
 | Stufe | Dateien (Zeilen) | Rolle |
 |-------|------------------|-------|
 | **Orchestrierung** | `clip_manager.py` (1349), `clip_fetcher.py` (282) | Clips holen + Lebenszyklus steuern. |
-| **Transkription** | `transcription/whisper.py` (253), `vocab.py` (308), `seed_vocab.py` (277), `correction.py` (235) | Audio→Text + Deadlock-Vokabular-Korrektur. |
-| **Anreicherung** | `enrichment.py` (673), `enrichment_worker.py` (74), `llm/*` (dispatcher 157, claude_haiku 116, minimax 124, ollama 178, base 87, prompts 70, _parsing 173) | Titel/Hashtags/Beschreibung via LLM. |
+| **Transkription** | lokaler STT-Server (`ops/stt-server`), `vocab`, `seed_vocab`, `correction` | Audio→Text + Deadlock-Vokabular-Korrektur. |
+| **Anreicherung** | `enrichment`, `enrichment_worker`, `llm_dispatch` (über `tb-llm`, Fireworks/Deepseek V4 Flash) | Titel/Hashtags/Beschreibung via LLM. |
 | **Freigabe** | `approval/approval_service.py` (739), `approval_worker.py` (92) | Review-Workflow vor Upload. |
 | **Rendern** | `uploaders/video_processor.py` (447), `rendering.py` (44), `layout/*` (197+142) | Plattformgerechtes Video + Layout. |
 | **Upload** | `upload_worker.py` (406), `uploaders/base.py` (228), `tiktok.py` (339), `instagram.py` (311), `youtube.py` (274) | Hochladen je Plattform. |
@@ -37,8 +37,8 @@ Abgrenzung: Die *Erkennung* einzelner Highlight-Momente macht [highlight-clipper
 ## 4. Datenfluss / Lebenszyklus
 
 1. **Holen:** `clip_fetcher` zieht neue Twitch-Clips (oder übernimmt Clips aus dem Highlight-Clipper); `clip_manager` legt sie an und treibt den Zustandsautomaten.
-2. **Transkribieren:** `transcription/whisper` erzeugt Text; `vocab`/`seed_vocab` halten ein **Deadlock-Vokabular**, `correction` korrigiert Fehlhörungen (Heldennamen, Items) damit Untertitel/Beschreibungen stimmen.
-3. **Anreichern:** `enrichment` baut über den `llm/dispatcher` (wählt Claude-Haiku/MiniMax/Ollama) Titel, Hashtags und Beschreibung — gated über `external_llm_consent` (kein externer LLM-Versand ohne Zustimmung).
+2. **Transkribieren:** der lokale STT-Server (`ops/stt-server`) erzeugt Text mit Segment-Zeitstempeln; `vocab`/`seed_vocab` halten ein **Deadlock-Vokabular**, `correction` korrigiert Fehlhörungen (Heldennamen, Items) damit Untertitel/Beschreibungen stimmen.
+3. **Anreichern:** `enrichment` baut über `tb-llm` (Fireworks, Deepseek V4 Flash) Titel, Hashtags und Beschreibung. `external_llm_consent` gated den Versand an den externen Anbieter.
 4. **Freigabe:** `approval_service` legt den Clip zur Review vor; erst nach Freigabe geht es weiter (`approval_worker`).
 5. **Rendern:** `uploaders/video_processor` bringt das Video ins Plattformformat (Seitenverhältnis, Länge, ggf. Layout/Untertitel aus `layout/`).
 6. **Hochladen:** `upload_worker` ruft den passenden `PlatformUploader` (TikTok/Instagram/YouTube) — `authenticate` → `validate_video` → `upload_video` → `get_video_status`.
@@ -66,10 +66,10 @@ Auth läuft quer dazu: `oauth_manager` führt den Plattform-OAuth-Flow, `credent
 
 ### Anreicherung & LLM
 - `enrichment.py` / `enrichment_worker.py` — Titel/Hashtags/Beschreibung erzeugen.
-- `llm/dispatcher.py` — wählt den Provider; `generate_text(...)`. Provider: `claude_haiku.py`, `minimax.py`, `ollama.py` (lokal), Basis `base.py`, Prompts `prompts.py`, Antwort-Parsing `_parsing.py`. `external_llm_consent` gated den Versand an externe Anbieter.
+- `llm_dispatch` — ein Weg über `tb-llm` (Fireworks, Deepseek V4 Flash); Prompt-Bau und Antwort-Parsing in `llm`. `external_llm_consent` gated den Versand an den externen Anbieter.
 
 ### Transkription
-- `whisper.py` — Whisper-Transkription. `vocab.py`/`seed_vocab.py` — Deadlock-Vokabular (Helden/Items). `correction.py` — korrigiert Transkripte gegen das Vokabular.
+- lokaler STT-Server (`ops/stt-server`, loopback) liefert Text und Segment-Zeitstempel. `vocab`/`seed_vocab` — Deadlock-Vokabular (Helden/Items). `correction` — korrigiert Transkripte gegen das Vokabular. `subtitles` schneidet die Segmente in Cues und brennt sie als ASS (Gold auf dunklem Balken) ein.
 
 ### Freigabe
 - `approval/approval_service.py` — Review-Status/Workflow (vorlegen, freigeben, ablehnen). `approval_worker.py` — verarbeitet freigegebene Clips weiter.
@@ -83,13 +83,13 @@ Auth läuft quer dazu: `oauth_manager` führt den Plattform-OAuth-Flow, `credent
 ## 6. Datenbank & externe Schnittstellen
 
 - **DB:** `social_media_platform_auth` + die Pipeline-Tabellen aus den Migrations-Phasen (Layout/Uploads, Enrichment, Analytics, Approval).
-- **Extern:** Twitch (Clips), TikTok/Instagram/YouTube (Upload + Analytics), LLM-Provider, Whisper.
+- **Extern:** Twitch (Clips), TikTok/Instagram/YouTube (Upload + Analytics), Fireworks (über `tb-llm`). Transkription lokal (`ops/stt-server`).
 
 ## 7. Stolperfallen / Besonderheiten
 
 - **Worker-Pipeline, kein Request/Response:** Fast alles läuft in Hintergrund-Workern (`*_worker.py`) mit Zustandsautomat — ein „hängender“ Clip steckt meist in einer Stufe fest, nicht in einem fehlgeschlagenen Request.
-- **External-LLM-Consent:** Vor dem Versand an externe LLMs greift `external_llm_consent`; ohne Zustimmung bleibt nur der lokale Provider (Ollama). Beim Debuggen prüfen, welcher Provider der `dispatcher` wählt.
-- **Transkript-Korrektur ist domänenspezifisch:** Ohne `vocab`/`correction` verschreibt Whisper Deadlock-Begriffe — die Vokabular-Pflege ist Teil der Qualitätskette.
+- **External-LLM-Consent:** Vor dem Versand an Fireworks greift `external_llm_consent`; ohne Zustimmung endet die Anreicherung als `skipped_no_key`. Download und Transkription laufen trotzdem, damit der Clip im Dashboard sichtbar wird.
+- **Transkript-Korrektur ist domänenspezifisch:** Ohne `vocab`/`correction` verschreibt die Spracherkennung Deadlock-Begriffe. Die Vokabular-Pflege ist Teil der Qualitätskette.
 - **Token-Refresh ist eigener Worker:** Plattform-Tokens laufen ab; `token_refresh_worker` muss laufen, sonst scheitern Uploads mit Auth-Fehlern trotz „verbundenem“ Konto.
 - **Plattform-Limits im `video_processor`:** Jede Plattform hat eigene Format-/Längen-Regeln — `validate_video` lehnt ungeeignete Clips ab, bevor der Upload startet.
 - **Freigabe vor Upload:** Clips werden erst nach `approval_service`-Freigabe veröffentlicht — automatischer Upload ohne Review ist nicht der Default.

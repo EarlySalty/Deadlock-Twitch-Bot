@@ -19,6 +19,7 @@ use crate::clip_queue::{
     get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
+use crate::render::render_clip_vertical;
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
 use crate::uploaders::youtube::{YouTubeRefreshCreds, YouTubeUploader, GOOGLE_TOKEN_URL};
@@ -29,8 +30,6 @@ const STALE_AFTER_SECS: i64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 10;
 const DEFAULT_INTERVAL_SECS: u64 = 60;
 const DEFAULT_MAX_PARALLEL: usize = 2;
-const TARGET_WIDTH: i64 = 1080;
-const TARGET_HEIGHT: i64 = 1920;
 
 #[derive(Debug, thiserror::Error)]
 enum WorkerError {
@@ -303,7 +302,7 @@ impl UploadTask {
         }
 
         let converted_path = self
-            .convert_to_vertical(&local_path, &item.platform)
+            .convert_to_vertical(item.clip_db_id, &local_path, &item.platform)
             .await?;
         self.update_upload_status_logged(item, "processing", None, None, "processing_converted")
             .await;
@@ -562,6 +561,7 @@ impl UploadTask {
 
     async fn convert_to_vertical(
         &self,
+        clip_db_id: i64,
         input_path: &str,
         platform: &str,
     ) -> Result<String, WorkerError> {
@@ -569,15 +569,17 @@ impl UploadTask {
         if Path::new(&output_path).exists() {
             return Ok(output_path);
         }
-        self.video_processor
-            .convert_and_trim(
-                input_path,
-                &output_path,
-                max_duration_for(platform),
-                TARGET_WIDTH,
-                TARGET_HEIGHT,
-            )
-            .await?;
+        // Zentraler Render-Baustein: gespeichertes Layout (sonst Center-Crop) und
+        // eingebrannte Untertitel, falls der Streamer sie anhat.
+        render_clip_vertical(
+            &self.video_processor,
+            &self.pool,
+            clip_db_id,
+            input_path,
+            &output_path,
+            max_duration_for(platform),
+        )
+        .await?;
         Ok(output_path)
     }
 }

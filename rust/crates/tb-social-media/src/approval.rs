@@ -1157,6 +1157,7 @@ mod tests {
             "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, \
              approval_mode TEXT NOT NULL DEFAULT 'manual', \
              timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', \
+             subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, \
              updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, \
              platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, \

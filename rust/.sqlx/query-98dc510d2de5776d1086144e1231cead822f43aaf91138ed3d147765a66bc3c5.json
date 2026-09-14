@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_clips_social_media SET preview_status = 'error', preview_error = $1, preview_updated_at = $2::text::timestamptz WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "98dc510d2de5776d1086144e1231cead822f43aaf91138ed3d147765a66bc3c5"
+}

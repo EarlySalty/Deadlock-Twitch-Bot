@@ -5,7 +5,7 @@ export interface LayoutBox {
   h: number;
 }
 
-export type LayoutMode = 'pip' | 'stacked';
+export type LayoutMode = 'pip' | 'stacked' | 'blur_pad';
 
 /**
  * Effective layout payload as returned/accepted by the backend.
@@ -155,6 +155,7 @@ export interface PostingPlan {
   approval_mode: ApprovalMode;
   approval_modes: ApprovalMode[];
   timezone: string;
+  subtitles_enabled: boolean;
   platforms: PlatformScheduleEntry[];
   categories: PostingPlanCategory[];
   pool: ClipPoolForecast;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id AS \"id!\", clip_id, streamer_login, source_kind, upload_local_path, local_file_path, retention_until::text, discarded_at::text, status FROM twitch_clips_social_media WHERE retention_until IS NOT NULL AND retention_until <= $1::text::timestamptz ORDER BY retention_until ASC, id ASC",
+  "query": "SELECT id AS \"id!\", clip_id, streamer_login, source_kind, upload_local_path, local_file_path, preview_path, retention_until::text, discarded_at::text, status FROM twitch_clips_social_media WHERE retention_until IS NOT NULL AND retention_until <= $1::text::timestamptz ORDER BY retention_until ASC, id ASC",
   "describe": {
     "columns": [
       {
@@ -35,16 +35,21 @@
       },
       {
         "ordinal": 6,
-        "name": "retention_until",
+        "name": "preview_path",
         "type_info": "Text"
       },
       {
         "ordinal": 7,
-        "name": "discarded_at",
+        "name": "retention_until",
         "type_info": "Text"
       },
       {
         "ordinal": 8,
+        "name": "discarded_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
         "name": "status",
         "type_info": "Text"
       }
@@ -61,10 +66,11 @@
       false,
       true,
       true,
+      true,
       null,
       null,
       true
     ]
   },
-  "hash": "794efe870a9f5ec16cddd1a479c6d0f32530b3505efa41d039710fd171af2bf1"
+  "hash": "9e774a83d55f456cb58593c8318622f2ce2271129d7b6f038945bdbb32f222b5"
 }

@@ -55,6 +55,20 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     let top_height = p.h.clamp(2, TARGET_HEIGHT - 2);
     let game_height = TARGET_HEIGHT - top_height;
 
+    // Blur-Rand: das Game-Bild sitzt formatfuellend in der Breite mittig im
+    // Frame, oben und unten fuellt eine vergroesserte, verschwommene Kopie. Kein
+    // Cam-Compositing; cam_enabled ist hier wirkungslos.
+    if mode == "blur_pad" {
+        return format!(
+            "[0:v]crop={gw}:{gh}:{gx}:{gy},setsar=1,split=2[bg][fg];\
+             [bg]scale={tw}:{th}:force_original_aspect_ratio=increase,\
+             crop={tw}:{th},boxblur=20:1,setsar=1[bgb];\
+             [fg]scale={tw}:-2,setsar=1[fgs];\
+             [bgb][fgs]overlay=(W-w)/2:(H-h)/2[vout]",
+            gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, th = TARGET_HEIGHT
+        );
+    }
+
     let base_game = format!(
         "[0:v]crop={gw}:{gh}:{gx}:{gy},\
          scale={tw}:{th}:force_original_aspect_ratio=increase,\
@@ -129,6 +143,27 @@ pub fn build_crop_filter(
         };
     }
     format!("crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_width}:{target_height}")
+}
+
+/// Wie ein Clip ins Hochformat gebracht wird. `Compose` traegt das
+/// Streamer-Layout (Facecam-Compositing), `CenterCrop` ist der Fallback ohne
+/// gespeichertes Layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerticalRender {
+    Compose { filter: String, cam_enabled: bool },
+    CenterCrop,
+}
+
+/// Waehlt den Render-Pfad: liegt ein Layout vor, wird komponiert (Overlay/
+/// Stacked), sonst faellt der Render auf Center-Crop zurueck.
+pub fn plan_vertical_render(layout: Option<&StreamerLayout>) -> VerticalRender {
+    match layout {
+        Some(l) => VerticalRender::Compose {
+            filter: build_compose_filter(l, l.mode.trim().to_lowercase().as_str(), l.cam_enabled),
+            cam_enabled: l.cam_enabled,
+        },
+        None => VerticalRender::CenterCrop,
+    }
 }
 
 /// FFmpeg/ffprobe-Wrapper.
@@ -230,6 +265,49 @@ impl VideoProcessor {
         ensure_output(output_path)
     }
 
+    /// Brennt eine ASS-Untertiteldatei ins Video. Der `subtitles`-Filter ist bei
+    /// Pfaden mit Sonderzeichen (Doppelpunkt) fragil; deshalb laeuft ffmpeg im
+    /// Verzeichnis der ASS-Datei und bekommt nur den Dateinamen.
+    pub async fn burn_subtitles(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        ass_path: &str,
+    ) -> Result<(), VideoProcessorError> {
+        let ass = Path::new(ass_path);
+        let dir = ass.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = ass
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| VideoProcessorError::OutputMissing(ass_path.to_string()))?;
+        let input_abs = std::fs::canonicalize(input_path)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| input_path.to_string());
+        // Sowohl Eingang als auch Ausgang muessen absolut sein: ffmpeg laeuft im
+        // ASS-Ordner (gegen Pfad-Sonderzeichen im subtitles-Filter), ein relativer
+        // Ausgabepfad wuerde sonst gegen dieses Verzeichnis aufgeloest.
+        let output_abs = if Path::new(output_path).is_absolute() {
+            output_path.to_string()
+        } else {
+            std::env::current_dir()
+                .map(|c| c.join(output_path).to_string_lossy().into_owned())
+                .unwrap_or_else(|_| output_path.to_string())
+        };
+        let output = tokio::process::Command::new(&self.ffmpeg)
+            .current_dir(&dir)
+            .args([
+                "-i", &input_abs, "-vf", &format!("subtitles={name}"),
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:a", "copy", "-movflags", "+faststart", "-y", &output_abs,
+            ])
+            .output()
+            .await?;
+        if !output.status.success() {
+            return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+        }
+        ensure_output(&output_abs)
+    }
+
     /// Schneidet das Video auf `max_duration` Sekunden (oder kopiert es, wenn
     /// bereits kürzer).
     pub async fn trim_video(
@@ -270,6 +348,30 @@ impl VideoProcessor {
             self.trim_video(input_path, &temp_path, max_duration).await?;
         }
         self.convert_to_vertical(&temp_path, output_path, target_width, target_height, "center").await?;
+        if temp_path != input_path {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+        }
+        Ok(())
+    }
+
+    /// Wie [`Self::convert_and_trim`], aber layout-bewusst: erst auf
+    /// `max_duration` schneiden (falls nötig), dann per [`Self::compose_vertical`]
+    /// das Streamer-Layout (Game + optional Facecam) ins Hochformat rendern.
+    pub async fn compose_and_trim(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        max_duration: i64,
+        layout: &StreamerLayout,
+    ) -> Result<(), VideoProcessorError> {
+        let info = self.get_video_info(input_path).await?;
+        let mut temp_path = input_path.to_string();
+        if info.duration > max_duration as f64 {
+            temp_path = Path::new(output_path).with_extension("temp.mp4").to_string_lossy().into_owned();
+            self.trim_video(input_path, &temp_path, max_duration).await?;
+        }
+        self.compose_vertical(&temp_path, output_path, layout, &layout.mode, layout.cam_enabled)
+            .await?;
         if temp_path != input_path {
             let _ = tokio::fs::remove_file(&temp_path).await;
         }
@@ -366,6 +468,29 @@ mod tests {
         let f = build_compose_filter(&layout, "stacked", true);
         assert!(f.contains("scale=1080:540:"), "{f}");
         assert!(f.contains("scale=1080:1380:"), "{f}");
+    }
+
+    #[test]
+    fn compose_filter_blur_pad_hat_boxblur_und_zentriertes_overlay() {
+        // Blur-Rand: 16:9-Bild mittig, oben/unten eine verschwommene, vergroesserte
+        // Kopie. Kein separates Cam-Tile.
+        let f = build_compose_filter(&default_streamer_layout(), "blur_pad", true);
+        assert!(f.contains("boxblur"), "blur_pad braucht einen Blur-Hintergrund: {f}");
+        assert!(f.contains("split"), "Hintergrund und Vordergrund aus einer Quelle: {f}");
+        assert!(
+            f.contains("overlay=(W-w)/2:(H-h)/2"),
+            "16:9-Bild sitzt zentriert im Frame: {f}"
+        );
+        assert!(f.ends_with("[vout]"), "{f}");
+        assert!(
+            !f.contains("crop=380:380"),
+            "im Blur-Rand gibt es keine Cam-Kachel: {f}"
+        );
+        // cam_enabled darf am Ergebnis nichts aendern.
+        assert_eq!(
+            build_compose_filter(&default_streamer_layout(), "blur_pad", false),
+            f
+        );
     }
 
     #[test]

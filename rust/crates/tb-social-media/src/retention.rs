@@ -126,6 +126,7 @@ pub struct ExpiredClip {
     pub source_kind: Option<String>,
     pub upload_local_path: Option<String>,
     pub local_file_path: Option<String>,
+    pub preview_path: Option<String>,
     pub retention_until: Option<String>,
     pub discarded_at: Option<String>,
     pub status: Option<String>,
@@ -153,7 +154,7 @@ pub async fn mark_clip_discarded(pool: &PgPool, clip_db_id: impl Into<i64>) -> b
 pub async fn iter_expired_clips_for_retention(pool: &PgPool, now: &str) -> Vec<ExpiredClip> {
     let rows = sqlx::query!(
             "SELECT id AS \"id!\", clip_id, streamer_login, source_kind, upload_local_path, local_file_path, \
-                    retention_until::text, discarded_at::text, status \
+                    preview_path, retention_until::text, discarded_at::text, status \
                FROM twitch_clips_social_media \
               WHERE retention_until IS NOT NULL AND retention_until <= $1::text::timestamptz \
               ORDER BY retention_until ASC, id ASC",
@@ -170,6 +171,7 @@ pub async fn iter_expired_clips_for_retention(pool: &PgPool, now: &str) -> Vec<E
             source_kind: Some(row.source_kind),
             upload_local_path: row.upload_local_path,
             local_file_path: row.local_file_path,
+            preview_path: row.preview_path,
             retention_until: row.retention_until,
             discarded_at: row.discarded_at,
             status: row.status,
@@ -229,7 +231,7 @@ mod tests {
             .unwrap();
         sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)")
+        sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, preview_path TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
