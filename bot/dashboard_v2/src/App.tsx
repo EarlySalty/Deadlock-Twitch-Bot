@@ -10,6 +10,7 @@ import { Monetization } from '@/pages/Monetization';
 import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
 import { Planung } from '@/pages/Planung';
+import { TitleGenerator } from '@/pages/TitleGenerator';
 import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
@@ -37,6 +38,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_TITLE_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   isPreviewModeEnabled,
@@ -347,6 +349,16 @@ function AnalyticsDashboard() {
   );
 }
 
+function TitleGeneratorRoute() {
+  const { data: authStatus } = useAuthStatus();
+  const streamer = authStatus?.twitchLogin ?? authStatus?.adminDefaultStreamer ?? null;
+  return (
+    <DashboardShell activeRoute="title">
+      <TitleGenerator streamer={streamer} />
+    </DashboardShell>
+  );
+}
+
 function PricingRoute() {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const authenticated = !loadingAuth && authStatus?.authenticated === true;
@@ -364,6 +376,7 @@ export default function App() {
   const isFeedbackRoute = path === '/twitch/feedback';
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
+  const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
@@ -404,6 +417,8 @@ export default function App() {
             <DashboardShell activeRoute="overlay">
               <OverlayBuilderPage />
             </DashboardShell>
+          ) : isTitleRoute ? (
+            <TitleGeneratorRoute />
           ) : isPricingRoute ? (
             <PricingRoute />
           ) : isUplinkRoute ? (

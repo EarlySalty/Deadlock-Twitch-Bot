@@ -147,7 +147,7 @@ pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
     BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES, DASHBOARD_REAUTH_SCOPE_PROFILE,
-    DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES,
+    DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES, TITLE_SCOPE_PROFILE, TITLE_SCOPES,
 };
 pub use score_store::{PartnerRaidScoreRow, PartnerRaidScoreUpsert, ScoreStore};
 pub use score_tracking_store::{ScoreTrackingStore, TrackConfirmedInput};

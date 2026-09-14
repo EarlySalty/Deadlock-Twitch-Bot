@@ -1361,6 +1361,13 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             .await;
 
         // 9. Tokens verschlüsselt persistieren (Python `save_auth`).
+        let normalized_scope_profile =
+            tb_raid::scope_profiles::normalize_scope_profile(&state_info.scope_profile);
+        let title_only_flow =
+            normalized_scope_profile == tb_raid::scope_profiles::TITLE_SCOPE_PROFILE;
+        let uplink_flow =
+            normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
+        let activates_raid_features = !title_only_flow && !uplink_flow;
         let new_auth = tb_raid::auth_writer::NewAuth {
             twitch_user_id: twitch_user_id.clone(),
             twitch_login: twitch_login.clone(),
@@ -1369,7 +1376,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             expires_in: token_response.expires_in,
             granted_scopes: granted,
             resolved_scope_profile: state_info.scope_profile.clone(),
-            activate_raid_features: state_info.scope_profile != "uplink",
+            activate_raid_features: activates_raid_features,
             state_created_at,
         };
         if let Err(e) = self
@@ -1407,10 +1414,12 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         // (had_existing_auth == true) feuerte er nie, sodass das
         // channel.chat.message-Abo erst im naechsten 30-Min-Takt entstand und
         // der Kanal bis dahin auf keinen Chat-Command reagierte.
-        request_chat_subscription_reconcile(
-            &Ok::<(), ()>(()),
-            self.chat_subscription_reconcile.as_deref(),
-        );
+        if !title_only_flow {
+            request_chat_subscription_reconcile(
+                &Ok::<(), ()>(()),
+                self.chat_subscription_reconcile.as_deref(),
+            );
+        }
 
         // 10. Followups als Background-Tasks (Python `schedule_background`,
         // `oauth_callback.py:207-254`): Erst-Auth → complete_setup
@@ -1426,7 +1435,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         // immer dann, wenn der Partner inaktiv ist und reaktiviert werden darf —
         // sonst bliebe der Web-Weg über `/twitch/raid/auth` folgenlos.
         // Async, deshalb vor dem `match` (Match-Guards dürfen nicht awaiten).
-        let partner_setup = (state_info.scope_profile != "uplink")
+        let partner_setup = activates_raid_features
             .then_some(self.partner_setup.as_ref())
             .flatten();
         let sync_existing_auth = match (partner_setup, had_existing_auth) {
@@ -1481,7 +1490,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 });
             }
             (Some(_), true) => {}
-            (None, false) if state_info.scope_profile != "uplink" => {
+            (None, false) if activates_raid_features => {
                 tracing::warn!(
                     login = %twitch_login,
                     "oauth_callback: Erst-Auth gespeichert, aber kein PartnerSetupService \
@@ -1491,14 +1500,18 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             (None, _) => {}
         }
 
-        tracing::info!(login = %twitch_login, "Raid auth successful");
-        let uplink = tb_raid::scope_profiles::normalize_scope_profile(&state_info.scope_profile)
-            == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
-        let (title, body_html) = if uplink {
+        tracing::info!(login = %twitch_login, "Twitch auth successful");
+        let (title, body_html) = if uplink_flow {
             (
                 "Verbindung steht",
                 "<p>Twitch ist jetzt mit dem Uplink verbunden.</p>\
                  <p>Du kannst dieses Fenster jetzt schließen.</p>",
+            )
+        } else if title_only_flow {
+            (
+                "Titel-Studio verbunden",
+                "<p>Das Titel-Studio darf jetzt deinen Twitch-Titel aktualisieren.</p>\
+                 <p>Du wirst zurück zum Titel-Studio geleitet.</p>",
             )
         } else {
             (
@@ -1529,17 +1542,15 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
 /// Adresse, damit eine falsch gesetzte Umgebungsvariable keinen fremden Host
 /// in die Weiterleitung bringt.
 fn erfolgsziel(success_redirect_url: &str, scope_profile: &str) -> String {
-    if tb_raid::scope_profiles::normalize_scope_profile(scope_profile)
-        != tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE
-    {
-        return success_redirect_url.to_string();
-    }
+    let profile = tb_raid::scope_profiles::normalize_scope_profile(scope_profile);
+    let feature_path = match profile {
+        tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE => UPLINK_ERFOLGS_PFAD,
+        tb_raid::scope_profiles::TITLE_SCOPE_PROFILE => TITLE_ERFOLGS_PFAD,
+        _ => return success_redirect_url.to_string(),
+    };
     match url::Url::parse(success_redirect_url.trim()) {
         Ok(url) if url.host_str().is_some() => {
-            format!(
-                "{}{UPLINK_ERFOLGS_PFAD}",
-                url.origin().ascii_serialization()
-            )
+            format!("{}{feature_path}", url.origin().ascii_serialization())
         }
         // Ohne lesbaren Ursprung bleibt es beim eingestellten Ziel: eine
         // Weiterleitung auf einen relativen Pfad würde der Dashboard-Seite
@@ -1551,6 +1562,7 @@ fn erfolgsziel(success_redirect_url: &str, scope_profile: &str) -> String {
 /// Pfad der Uplink-Seite samt Rückkehr-Merker. Das Dashboard liest
 /// `verbunden=twitch` und holt danach den Stream-Key nach.
 const UPLINK_ERFOLGS_PFAD: &str = "/twitch/uplink?verbunden=twitch";
+const TITLE_ERFOLGS_PFAD: &str = "/twitch/titel?verbunden=twitch";
 
 /// Synthetischer Onboarding-Login (Python `PUBLIC_STREAMER_ONBOARDING_LOGIN`).
 const PUBLIC_ONBOARDING_LOGIN: &str = "public:website_onboarding";
@@ -1726,7 +1738,16 @@ mod tests {
     }
 
     #[test]
-    fn callback_ohne_uplink_profil_leitet_wie_bisher() {
+    fn callback_mit_title_profil_leitet_zurueck_ins_titel_studio() {
+        let eingestellt = "https://deutsche-deadlock-community.de/twitch/dashboard";
+        assert_eq!(
+            erfolgsziel(eingestellt, "title"),
+            "https://deutsche-deadlock-community.de/twitch/titel?verbunden=twitch"
+        );
+    }
+
+    #[test]
+    fn callback_ohne_feature_profil_leitet_wie_bisher() {
         let eingestellt = "https://deutsche-deadlock-community.de/twitch/dashboard";
         for profil in ["base", "dashboard_reauth", "auto", "", "unbekannt"] {
             assert_eq!(erfolgsziel(eingestellt, profil), eingestellt, "{profil}");

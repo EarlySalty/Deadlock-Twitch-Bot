@@ -619,6 +619,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(title::insights_handler),
         )
         .route(
+            "/twitch/api/v2/title/settings",
+            get(title::settings_handler).post(title::settings_update_handler),
+        )
+        .route(
+            "/twitch/api/v2/title/feedback",
+            post(title::feedback_handler),
+        )
+        .route(
             "/twitch/api/v2/channel/title",
             axum::routing::patch(title::update_channel_title_handler),
         )
