@@ -86,7 +86,7 @@ pub fn build_internal_router(
             post(raid::manual_raid_handler),
         )
         .route(
-            &format!("{base}/streamer/:login/discord-invite"),
+            &format!("{base}/streamer/{{login}}/discord-invite"),
             get(discord_invite::handler),
         )
         .route(
@@ -112,7 +112,7 @@ pub fn build_internal_router(
             get(global_ban::list_channels_handler),
         )
         .route(
-            &format!("{base}/globalban/channels/:login"),
+            &format!("{base}/globalban/channels/{{login}}"),
             post(global_ban::set_channel_handler),
         )
         // Read-only Auth/Scope-Diagnose zu einer Discord-User-ID (Self-Service-Support).
@@ -274,11 +274,11 @@ pub fn build_internal_router(
             get(stats_native::extended_stats_handler),
         )
         .route(
-            &format!("{base}/analytics/streamer/:login"),
+            &format!("{base}/analytics/streamer/{{login}}"),
             get(streamer_analytics_native::streamer_analytics_native_handler),
         )
         .route(
-            &format!("{base}/sessions/:session_id"),
+            &format!("{base}/sessions/{{session_id}}"),
             get(session_detail::session_detail_handler),
         )
         // Native Diagnose- und Recovery-Routen:
@@ -293,7 +293,7 @@ pub fn build_internal_router(
             get(python_stubs::observability_handler),
         )
         .route(
-            &format!("{base}/debug/chatters/:login"),
+            &format!("{base}/debug/chatters/{{login}}"),
             get(python_stubs::chatters_debug_handler),
         )
         .route(
@@ -305,7 +305,7 @@ pub fn build_internal_router(
             post(python_stubs::eventsub_requeue_handler),
         )
         .route(
-            &format!("{base}/streamers/:login/chat-action"),
+            &format!("{base}/streamers/{{login}}/chat-action"),
             post(python_stubs::chat_action_handler),
         )
         // Streamer-CRUD: vollständig nativ portiert inkl. Partner-Lifecycle
@@ -316,27 +316,27 @@ pub fn build_internal_router(
             get(streamers::list_handler).post(streamers::add_handler),
         )
         .route(
-            &format!("{base}/streamers/:login"),
+            &format!("{base}/streamers/{{login}}"),
             delete(streamers::remove_handler),
         )
         .route(
-            &format!("{base}/streamers/:login/verify"),
+            &format!("{base}/streamers/{{login}}/verify"),
             post(streamers::verify_handler),
         )
         .route(
-            &format!("{base}/streamers/:login/disconnect-bot"),
+            &format!("{base}/streamers/{{login}}/disconnect-bot"),
             post(streamers::disconnect_bot_handler),
         )
         .route(
-            &format!("{base}/streamers/:login/archive"),
+            &format!("{base}/streamers/{{login}}/archive"),
             post(streamers::archive_handler),
         )
         .route(
-            &format!("{base}/streamers/:login/discord-flag"),
+            &format!("{base}/streamers/{{login}}/discord-flag"),
             post(streamers::discord_flag_handler),
         )
         .route(
-            &format!("{base}/streamers/:login/discord-profile"),
+            &format!("{base}/streamers/{{login}}/discord-profile"),
             post(streamers::discord_profile_handler),
         )
         .fallback(handlers::legacy_proxy::legacy_fallback_handler)
