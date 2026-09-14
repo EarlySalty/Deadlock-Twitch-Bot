@@ -452,7 +452,7 @@ mod tests {
                 get(list_channels_handler),
             )
             .route(
-                &format!("{base}/globalban/channels/:login"),
+                &format!("{base}/globalban/channels/{{login}}"),
                 post(set_channel_handler),
             )
             .with_state(pool)

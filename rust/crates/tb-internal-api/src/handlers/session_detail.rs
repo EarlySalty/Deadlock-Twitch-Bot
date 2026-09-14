@@ -421,7 +421,7 @@ mod tests {
         let base = INTERNAL_API_BASE_PATH;
         Router::new()
             .route(
-                &format!("{base}/sessions/:session_id"),
+                &format!("{base}/sessions/{{session_id}}"),
                 get(session_detail_handler),
             )
             .with_state(pool)
