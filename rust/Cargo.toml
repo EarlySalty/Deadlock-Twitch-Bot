@@ -27,6 +27,7 @@ members = [
     "crates/tb-vod-archive",
     "crates/tb-stream-audit",
     "crates/tb-scout",
+    "crates/tb-load",
     "bin/tb-stream-audit",
     "bin/tb-dashboard",
     "bin/tb-bot",
@@ -99,6 +100,7 @@ tb-llm           = { path = "crates/tb-llm" }
 tb-vod-archive   = { path = "crates/tb-vod-archive" }
 tb-stream-audit  = { path = "crates/tb-stream-audit" }
 tb-scout         = { path = "crates/tb-scout" }
+tb-load          = { path = "crates/tb-load" }
 url = "2"
 regex = "1"
 unicode-normalization = "0.1"

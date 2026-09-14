@@ -53,3 +53,15 @@ fn faq_frage_findet_migrierte_faq() {
     );
     assert!(hits.iter().any(|d| d.slug == "faq-einstieg"));
 }
+
+#[test]
+fn stoerung_stream_info_felder_findet_uplink_stoerungen() {
+    let kb = KnowledgeBase::load_from_dir(&knowledge_root()).unwrap();
+    let hits = kb.select(
+        "Live-Benachrichtigung Zuschauer Wiederholen Stream-Infos OBS Fenster fehlt",
+        Namespace::Bot,
+        None,
+        5,
+    );
+    assert!(hits.iter().any(|d| d.slug == "uplink-stoerungen"));
+}

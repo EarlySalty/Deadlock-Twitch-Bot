@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use tb_engagement::smalltalk_loop_store::{
 };
 use tb_engagement::stream_transcripts::StreamTranscripts;
 use tb_engagement::transcribe::OpenAiTranscriber;
+use tb_load::{cpu_prozent, cpu_stand, ram_prozent, Lastwaechter};
 use tb_transport_discord::{
     BrokerRelay, DeleteMessage, DiscordBackend, DiscordError, SendRichMessage,
 };
@@ -21,6 +23,13 @@ use tb_transport_discord::{
 use crate::task_supervisor::TaskSupervisor;
 
 const LOOP_INTERVAL: Duration = Duration::from_secs(5);
+/// Takt des Last-Monitors: derselbe wie im Audit-Dienst, denn er ist zugleich
+/// das CPU-Messfenster (Differenz zweier `/proc/stat`-Messungen).
+const LAST_TAKT: Duration = Duration::from_secs(20);
+/// Endgrund, mit dem eine laufende Sitzung bei anhaltender Server-Ueberlast
+/// geschlossen wird. Produktionscode und Karten-Label teilen sich diese
+/// Konstante, damit der Test nicht am Wortlaut haengt.
+const SERVER_OVERLOADED_REASON: &str = "server_overloaded";
 /// Takt der Ton-Aufnahme. Ein Block dauert selbst schon
 /// `ENGAGEMENT_TRANSCRIPT_CAPTURE_SECONDS`, der Takt ist also nur die Pause
 /// zwischen zwei Bloecken und die Wartezeit, bis eine neue Sitzung aufgegriffen
@@ -71,6 +80,7 @@ const SMALLTALK_DISCORD_COPY_JSON: &str = r#"{
   "end_process_shutdown": "Prozess beendet",
   "end_kill_switch": "Smalltalk-Loop ausgeschaltet",
   "end_provider_error": "Provider-Fehler",
+  "end_server_overloaded": "Server überlastet",
   "generated": "Erzeugte Nachrichten",
   "would_send": "Würde senden",
   "rejected": "Verworfen",
@@ -147,6 +157,7 @@ struct DiscordCopy {
     end_process_shutdown: String,
     end_kill_switch: String,
     end_provider_error: String,
+    end_server_overloaded: String,
     generated: String,
     would_send: String,
     rejected: String,
@@ -189,6 +200,7 @@ impl DiscordCopy {
             &copy.end_process_shutdown,
             &copy.end_kill_switch,
             &copy.end_provider_error,
+            &copy.end_server_overloaded,
             &copy.generated,
             &copy.would_send,
             &copy.rejected,
@@ -245,6 +257,7 @@ impl DiscordCopy {
             "process_shutdown" => &self.end_process_shutdown,
             "kill_switch" => &self.end_kill_switch,
             "provider_error" => &self.end_provider_error,
+            SERVER_OVERLOADED_REASON => &self.end_server_overloaded,
             _ => reason,
         }
     }
@@ -309,7 +322,10 @@ pub fn start(
         return inactive_runtime(supervisor, store, "discord_unavailable");
     };
 
-    spawn_loop(supervisor, store.clone());
+    // Ein Gate, zwei Leser: der Monitor setzt es, der Loop respektiert es.
+    let last_gate = Arc::new(AtomicBool::new(false));
+    spawn_last_monitor(supervisor, store.clone(), Arc::clone(&last_gate));
+    spawn_loop(supervisor, store.clone(), last_gate);
     spawn_transcript_capture(supervisor, store.clone(), pool);
     tracing::info!(
         event = "smalltalk_loop.started",
@@ -336,7 +352,7 @@ fn inactive_runtime(
     SmalltalkLoopRuntime { store }
 }
 
-fn spawn_loop(supervisor: &TaskSupervisor, store: SmalltalkLoopStore) {
+fn spawn_loop(supervisor: &TaskSupervisor, store: SmalltalkLoopStore, gate: Arc<AtomicBool>) {
     supervisor.spawn("smalltalk_loop", async move {
         if let Err(error) = store
             .close_all_open_sessions("process_start", Utc::now())
@@ -348,11 +364,90 @@ fn spawn_loop(supervisor: &TaskSupervisor, store: SmalltalkLoopStore) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
-            if let Err(error) = process_once(&store, Utc::now()).await {
+            if let Err(error) = process_once(&store, Utc::now(), &gate).await {
                 tracing::warn!(event = "smalltalk_loop.process_failed", %error);
             }
         }
     });
+}
+
+/// Misst CPU und RAM im Takt, fuettert den geteilten [`Lastwaechter`] und setzt
+/// das Gate. Der Uebergang inaktiv -> aktiv beendet die laufende Sitzung mit
+/// `server_overloaded`; solange das Gate aktiv ist, startet der Loop keine
+/// neue. Ist die Auslastung nicht messbar, gilt fail-open: Gate frei, kein
+/// Kill. Grenzwerte kommen aus derselben `STREAM_AUDIT_LOAD_*`-Konvention wie
+/// beim Audit, es gibt genau diesen einen Waechter.
+fn spawn_last_monitor(
+    supervisor: &TaskSupervisor,
+    store: SmalltalkLoopStore,
+    gate: Arc<AtomicBool>,
+) {
+    supervisor.spawn("smalltalk_loop_last", async move {
+        let mut waechter = Lastwaechter::aus_umgebung();
+        let start = tokio::time::Instant::now();
+        let mut voriger = cpu_stand();
+        let mut tick = tokio::time::interval(LAST_TAKT);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let jetziger = cpu_stand();
+            let cpu = match (voriger, jetziger) {
+                (Some(a), Some(b)) => cpu_prozent(a, b),
+                _ => None,
+            };
+            voriger = jetziger;
+            let ram = ram_prozent();
+            // Die groessere von CPU und RAM entscheidet - wie im Audit.
+            let auslastung = match (cpu, ram) {
+                (Some(c), Some(r)) => c.max(r),
+                (Some(c), None) => c,
+                (None, Some(r)) => r,
+                // Kein Signal messbar (etwa /proc unlesbar): fail-open. Ohne
+                // Beleg fuer Ueberlast nicht killen, Gate freigeben und den
+                // Zwischenstand vergessen, sonst bliebe es haengen.
+                (None, None) => {
+                    let vorher = waechter.aktiv();
+                    waechter.zuruecksetzen();
+                    gate.store(false, Ordering::Relaxed);
+                    if vorher {
+                        tracing::warn!(
+                            event = "smalltalk_loop.last_gate_off",
+                            reason = "auslastung_nicht_messbar",
+                        );
+                    }
+                    continue;
+                }
+            };
+            let vorher = waechter.aktiv();
+            let aktiv = waechter.beobachten(auslastung, start.elapsed().as_secs());
+            gate.store(aktiv, Ordering::Relaxed);
+            if let Some(reason) = kill_grund_bei_uebergang(vorher, aktiv) {
+                tracing::warn!(
+                    event = "smalltalk_loop.last_gate_on",
+                    auslastung,
+                    "Server ueberlastet - laufende Smalltalk-Sitzung wird beendet"
+                );
+                if let Err(error) = store.close_active_session(reason, Utc::now()).await {
+                    tracing::warn!(event = "smalltalk_loop.overload_close_failed", %error);
+                }
+            } else if vorher && !aktiv {
+                tracing::info!(event = "smalltalk_loop.last_gate_off", auslastung);
+            }
+        }
+    });
+}
+
+/// Ob der Loop bei diesem Stand eine neue Sitzung aufmachen darf: nur wenn das
+/// Last-Gate offen ist und gerade keine Sitzung laeuft.
+fn soll_neue_sitzung_starten(gate_aktiv: bool, hat_aktive_sitzung: bool) -> bool {
+    !gate_aktiv && !hat_aktive_sitzung
+}
+
+/// Der Endgrund, mit dem beim Uebergang inaktiv -> aktiv die laufende Sitzung
+/// beendet wird, oder `None`, wenn kein Uebergang vorliegt. Nur die steigende
+/// Flanke killt: ein schon aktives Gate killt nicht erneut, ein fallendes nie.
+fn kill_grund_bei_uebergang(vorher_aktiv: bool, jetzt_aktiv: bool) -> Option<&'static str> {
+    (jetzt_aktiv && !vorher_aktiv).then_some(SERVER_OVERLOADED_REASON)
 }
 
 /// Nimmt den Stream der laufenden Sitzung in Bloecken auf und transkribiert ihn
@@ -438,9 +533,14 @@ fn spawn_transcript_capture(supervisor: &TaskSupervisor, store: SmalltalkLoopSto
 async fn process_once(
     store: &SmalltalkLoopStore,
     now: chrono::DateTime<Utc>,
+    gate: &AtomicBool,
 ) -> Result<(), StoreError> {
     store.close_ineligible_session(now).await?;
-    if store.active_session().await?.is_none() {
+    let hat_aktive = store.active_session().await?.is_some();
+    // Bei Server-Ueberlast wird die laufende Sitzung im Monitor beendet; hier
+    // wird nur dafuer gesorgt, dass keine neue nachrueckt, solange das Gate zu
+    // ist.
+    if soll_neue_sitzung_starten(gate.load(Ordering::Relaxed), hat_aktive) {
         store.start_next_session(now).await?;
     }
     Ok(())
@@ -1154,5 +1254,71 @@ mod tests {
 
         assert!(text.contains(&copy_text.transcripts));
         assert!(text.contains(&copy_text.transcripts_missing));
+    }
+
+    /// T1: Der Endgrund `server_overloaded` bildet auf das Karten-Label
+    /// "Server überlastet" ab und erscheint so in der Auswertung. Fehlte das
+    /// Label, faellt die Karte auf den rohen Grund zurueck - hier wird der
+    /// lesbare Text geprueft.
+    #[test]
+    fn discord_karte_zeigt_server_ueberlast_als_endgrund() {
+        let copy = DiscordCopy::test_copy();
+        assert_eq!(
+            copy.end_reason_label(SERVER_OVERLOADED_REASON),
+            "Server überlastet"
+        );
+
+        let now = Utc.with_ymd_and_hms(2026, 8, 27, 20, 0, 0).unwrap();
+        let report = SmalltalkReport {
+            session: ReportSession {
+                id: Uuid::nil(),
+                channel_login: "kandidat".to_string(),
+                started_at: now,
+                ended_at: now + ChronoDuration::minutes(12),
+                end_reason: SERVER_OVERLOADED_REASON.to_string(),
+                viewer_count: Some(7),
+                provider_error_count: 0,
+                last_provider_error: None,
+            },
+            messages: vec![],
+            transcripts: vec![],
+        };
+
+        let payload = build_discord_card(&report, 123, &copy).expect("Discord-Karte");
+        let text = payload.components.expect("Components")[0]["components"][0]["content"]
+            .as_str()
+            .expect("Kartentext")
+            .to_string();
+        assert!(
+            text.contains("Server überlastet"),
+            "die Karte muss den Endgrund lesbar ausweisen: {text}"
+        );
+    }
+
+    /// T2: Solange das Last-Gate aktiv ist, startet der Loop keine neue
+    /// Sitzung; faellt es und liegt keine Sitzung an, laeuft er normal weiter.
+    #[test]
+    fn gate_haelt_den_loop_an_und_gibt_ihn_wieder_frei() {
+        // Gate aktiv: kein Start, egal ob schon eine Sitzung laeuft.
+        assert!(!soll_neue_sitzung_starten(true, false));
+        assert!(!soll_neue_sitzung_starten(true, true));
+        // Gate offen, keine aktive Sitzung: der Loop startet die naechste.
+        assert!(soll_neue_sitzung_starten(false, false));
+        // Gate offen, aber es laeuft schon eine: kein zweiter Start.
+        assert!(!soll_neue_sitzung_starten(false, true));
+    }
+
+    /// T3: Erst der Uebergang inaktiv -> aktiv killt die laufende Sitzung mit
+    /// `server_overloaded`. Ein bereits aktives Gate killt nicht erneut, und
+    /// ein Fallen des Gates killt nie.
+    #[test]
+    fn nur_der_uebergang_zu_ueberlast_killt_mit_server_overloaded() {
+        assert_eq!(
+            kill_grund_bei_uebergang(false, true),
+            Some(SERVER_OVERLOADED_REASON)
+        );
+        assert_eq!(kill_grund_bei_uebergang(true, true), None);
+        assert_eq!(kill_grund_bei_uebergang(false, false), None);
+        assert_eq!(kill_grund_bei_uebergang(true, false), None);
     }
 }

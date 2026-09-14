@@ -43,6 +43,9 @@ tb-social-media          = { workspace = true }
 tb-analytics             = { workspace = true }
 tb-highlight             = { workspace = true }
 tb-engagement            = { workspace = true }
+# Geteiltes Last-Gate (Lastwaechter + /proc-Messung), damit der Smalltalk-Test
+# bei Server-Ueberlast pausiert, ohne die ganze Audit-Crate hereinzuziehen.
+tb-load                  = { workspace = true }
 # Nur fuer den Modell-Resolver: der Bot loest den Anbieter-Modellnamen beim
 # Start auf, statt ihn einkompiliert altern zu lassen.
 tb-llm                   = { workspace = true }
