@@ -24,6 +24,28 @@ pub struct TagRemoveOutcome {
     pub removed: bool,
 }
 
+const FALLBACK_KEY_PREFIX: &str = "partner_signup_tag_block:";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct FallbackRule {
+    display_tag: String,
+    reason: String,
+    #[serde(default)]
+    public_message: Option<String>,
+}
+
+fn tag_table_unavailable(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(database)
+            if matches!(database.code().as_deref(), Some("42P01" | "42501"))
+    )
+}
+
+fn fallback_key(tag: &str) -> String {
+    format!("{FALLBACK_KEY_PREFIX}{tag}")
+}
+
 pub fn normalize_tag(tag: &str) -> Option<String> {
     let tag = tag.trim().to_lowercase();
     (!tag.is_empty()).then_some(tag)
@@ -43,7 +65,7 @@ pub fn matching_tag(tags: &[String], blocked: &[TagBlockEntry]) -> Option<String
         .map(|entry| entry.tag.clone())
 }
 
-pub async fn list_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx::Error> {
+async fn list_primary_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx::Error> {
     sqlx::query_as::<_, TagBlockEntry>(
         r#"
         SELECT tag, display_tag, reason, public_message, added_by, added_at
@@ -53,6 +75,98 @@ pub async fn list_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx::Err
     )
     .fetch_all(pool)
     .await
+}
+
+async fn list_fallback_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx::Error> {
+    let pattern = format!("{FALLBACK_KEY_PREFIX}%");
+    let rows: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            r#"
+            SELECT setting_key, setting_value, updated_by, updated_at::timestamptz
+              FROM twitch_global_settings
+             WHERE setting_key LIKE $1
+            "#,
+        )
+        .bind(pattern)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(key, value, updated_by, added_at)| {
+            let tag = key.strip_prefix(FALLBACK_KEY_PREFIX)?.to_string();
+            let rule = serde_json::from_str::<FallbackRule>(&value).unwrap_or_else(|_| FallbackRule {
+                display_tag: tag.clone(),
+                reason: "tag_block".to_string(),
+                public_message: None,
+            });
+            Some(TagBlockEntry {
+                tag,
+                display_tag: rule.display_tag,
+                reason: rule.reason,
+                public_message: rule.public_message,
+                added_by: updated_by.unwrap_or_else(|| "tag_block".to_string()),
+                added_at,
+            })
+        })
+        .collect())
+}
+
+pub async fn list_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx::Error> {
+    let mut entries = match list_primary_entries(pool).await {
+        Ok(entries) => entries,
+        Err(error) if tag_table_unavailable(&error) => {
+            tracing::warn!(%error, "Tag-Regel-Tabelle nicht verfügbar; nutze Global-Settings-Fallback");
+            Vec::new()
+        }
+        Err(error) => return Err(error),
+    };
+
+    for fallback in list_fallback_entries(pool).await? {
+        if !entries.iter().any(|entry| entry.tag == fallback.tag) {
+            entries.push(fallback);
+        }
+    }
+    entries.sort_by(|left, right| {
+        right
+            .added_at
+            .cmp(&left.added_at)
+            .then_with(|| left.display_tag.cmp(&right.display_tag))
+    });
+    Ok(entries)
+}
+
+async fn add_fallback(
+    pool: &PgPool,
+    tag_key: &str,
+    display_tag: &str,
+    reason: &str,
+    public_message: Option<&str>,
+    added_by: &str,
+) -> Result<TagAddOutcome, sqlx::Error> {
+    let value = serde_json::json!({
+        "display_tag": display_tag,
+        "reason": reason,
+        "public_message": public_message,
+    })
+    .to_string();
+    let inserted: bool = sqlx::query_scalar(
+        r#"
+        INSERT INTO twitch_global_settings (setting_key, setting_value, updated_at, updated_by)
+        VALUES ($1, $2, CURRENT_TIMESTAMP::text, $3)
+        ON CONFLICT (setting_key) DO UPDATE SET
+            setting_value = EXCLUDED.setting_value,
+            updated_at = EXCLUDED.updated_at,
+            updated_by = EXCLUDED.updated_by
+        RETURNING (xmax = 0)
+        "#,
+    )
+    .bind(fallback_key(tag_key))
+    .bind(value)
+    .bind(added_by)
+    .fetch_one(pool)
+    .await?;
+    Ok(TagAddOutcome { inserted })
 }
 
 pub async fn add(
@@ -66,9 +180,10 @@ pub async fn add(
         tracing::warn!(%added_by, "Tag-Regel mit leerem Tag abgewiesen");
         return Ok(TagAddOutcome::default());
     };
+    let display_tag = tag.trim();
     let public_message = public_message.map(str::trim).filter(|s| !s.is_empty());
 
-    let inserted: bool = sqlx::query_scalar(
+    let primary = sqlx::query_scalar(
         r#"
         INSERT INTO twitch_partner_signup_tag_blocks
             (tag, display_tag, reason, public_message, added_by)
@@ -83,27 +198,56 @@ pub async fn add(
         "#,
     )
     .bind(&tag_key)
-    .bind(tag.trim())
+    .bind(display_tag)
     .bind(reason)
     .bind(public_message)
     .bind(added_by)
     .fetch_one(pool)
-    .await?;
+    .await;
 
-    tracing::info!(tag = %tag_key, %reason, %added_by, inserted, "Tag-Regel gespeichert");
-    Ok(TagAddOutcome { inserted })
+    let outcome = match primary {
+        Ok(inserted) => {
+            if let Err(error) = sqlx::query("DELETE FROM twitch_global_settings WHERE setting_key = $1")
+                .bind(fallback_key(&tag_key))
+                .execute(pool)
+                .await
+            {
+                tracing::warn!(%error, tag = %tag_key, "Fallback-Tag-Regel konnte nach Primär-Write nicht bereinigt werden");
+            }
+            TagAddOutcome { inserted }
+        }
+        Err(error) if tag_table_unavailable(&error) => {
+            tracing::warn!(%error, tag = %tag_key, "Tag-Regel-Tabelle nicht verfügbar; speichere im Global-Settings-Fallback");
+            add_fallback(pool, &tag_key, display_tag, reason, public_message, added_by).await?
+        }
+        Err(error) => return Err(error),
+    };
+
+    tracing::info!(tag = %tag_key, %reason, %added_by, inserted = outcome.inserted, "Tag-Regel gespeichert");
+    Ok(outcome)
 }
 
 pub async fn remove(pool: &PgPool, tag: &str) -> Result<TagRemoveOutcome, sqlx::Error> {
     let Some(tag) = normalize_tag(tag) else {
         return Ok(TagRemoveOutcome::default());
     };
-    let removed = sqlx::query("DELETE FROM twitch_partner_signup_tag_blocks WHERE tag = $1")
+
+    let primary_removed = match sqlx::query("DELETE FROM twitch_partner_signup_tag_blocks WHERE tag = $1")
         .bind(&tag)
+        .execute(pool)
+        .await
+    {
+        Ok(result) => result.rows_affected() > 0,
+        Err(error) if tag_table_unavailable(&error) => false,
+        Err(error) => return Err(error),
+    };
+    let fallback_removed = sqlx::query("DELETE FROM twitch_global_settings WHERE setting_key = $1")
+        .bind(fallback_key(&tag))
         .execute(pool)
         .await?
         .rows_affected()
         > 0;
+    let removed = primary_removed || fallback_removed;
     tracing::info!(%tag, removed, "Tag-Regel aufgehoben");
     Ok(TagRemoveOutcome { removed })
 }
@@ -383,6 +527,19 @@ mod tests {
         .unwrap();
         sqlx::query(
             r#"
+            CREATE TABLE twitch_global_settings (
+                setting_key   TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL,
+                updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_by    TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
             CREATE TABLE twitch_partner_signup_denylist (
                 twitch_user_id TEXT PRIMARY KEY,
                 twitch_login   TEXT NOT NULL,
@@ -532,6 +689,42 @@ mod tests {
             .await
             .unwrap();
         assert!(!outcome.inserted);
+        assert!(list_entries(&pool).await.unwrap().is_empty());
+        drop_schema(pool, &dsn, schema).await;
+    }
+
+    #[tokio::test]
+    async fn fehlende_tag_tabelle_nutzt_global_settings_fallback() {
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_tag_block_fallback";
+        let pool = make_pool(&dsn, schema).await;
+        sqlx::query("DROP TABLE twitch_partner_signup_tag_blocks")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let outcome = add(&pool, " FPS ", "tag_block", None, "discord:1")
+            .await
+            .unwrap();
+        assert!(outcome.inserted);
+
+        let entries = list_entries(&pool).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tag, "fps");
+        assert_eq!(entries[0].display_tag, "FPS");
+        assert_eq!(entries[0].public_message, None);
+
+        let enforced = enforce(&pool, "42", "beispiel", &["FPS".to_string()])
+            .await
+            .unwrap();
+        assert!(enforced.is_some());
+        let (reason, public_message, added_by) = denylist_row(&pool, "42").await;
+        assert_eq!(reason, "tag_block:fps");
+        assert_eq!(public_message, None);
+        assert_eq!(added_by, "tag_block");
+
+        let removed = remove(&pool, "fps").await.unwrap();
+        assert!(removed.removed);
         assert!(list_entries(&pool).await.unwrap().is_empty());
         drop_schema(pool, &dsn, schema).await;
     }

@@ -165,6 +165,12 @@ chmod -R go-w "$dest"
 
 /usr/local/sbin/install-twitch-release "$dest" "$sha"
 
+# Das Release ist jetzt unter /opt/deadlock/twitch/current aktiv. Schema zuerst
+# mit dem eng begrenzten postgres-One-shot auf den Release-Stand bringen; erst
+# danach dürfen Dashboard/Bot mit dem neuen Code starten. Ein Migrationsfehler
+# bricht den Deploy wegen `set -e` ab statt einen halbfertigen Release zu starten.
+systemctl start deadlock-twitch-migrate.service
+
 for target in "${restart_targets[@]}"; do
   case "$target" in
     twitch-dashboard)
