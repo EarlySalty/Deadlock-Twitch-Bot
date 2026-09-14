@@ -200,8 +200,11 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
 
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
     match info {
-        Some(info) if info.linked && (!info.verified || !info.is_steam_friend) => format!(
-            "{name} hat Steam verknüpft, aber die Steam-Bot-Freundschaft noch nicht bestätigt — bitte die Freundschaftsanfrage auf Steam annehmen."
+        Some(info) if info.linked && !info.is_steam_friend => format!(
+            "{name} hat Steam verknüpft, aber keiner unserer Steam-Bots ist dort als Freund verbunden — bitte die Steam-Verknüpfung im Discord erneut öffnen."
+        ),
+        Some(info) if info.linked && !info.verified => format!(
+            "{name} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt."
         ),
         Some(info) if info.linked => match &info.rank_name {
             Some(rank) => match info.subrank {
@@ -595,21 +598,22 @@ mod tests {
     }
 
     #[test]
-    fn verknuepft_aber_freundschaft_noch_offen() {
+    fn verknuepft_aber_kein_steam_bot_als_freund() {
         let info = RankInfo {
             linked: true,
             verified: false,
             is_steam_friend: false,
-            rank_name: None,
-            subrank: None,
-            badge_level: None,
+            rank_name: Some("Phantom".into()),
+            subrank: Some(5),
+            badge_level: Some(95),
             wins: None,
             losses: None,
             matches: None,
         };
-        let reply = rank_reply("nani", Some(&info));
-        assert!(reply.contains("Freundschaft"));
-        assert!(reply.contains("annehmen"));
+        let reply = rank_reply("denoshock", Some(&info));
+        assert!(reply.contains("Steam-Bots"));
+        assert!(reply.contains("erneut öffnen"));
+        assert!(!reply.contains("Phantom"));
     }
 
     #[test]
