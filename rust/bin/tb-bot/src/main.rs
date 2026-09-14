@@ -374,6 +374,8 @@ struct SubscriptionPollHooks {
     /// Letzter Recruiting-Durchlauf (interne 30-min-Drosselung, Python
     /// `_last_recruit_check`).
     recruit_last_check: std::sync::Mutex<Option<std::time::Instant>>,
+    /// Letzter Tag-Block-Sweep über twitch_stream_sessions (5-min-Drosselung).
+    sweep_last_check: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 async fn mark_partner_inactivity_flagged(
@@ -415,6 +417,21 @@ impl SubscriptionPollHooks {
         let mut guard = self.recruit_last_check.lock().unwrap();
         let due = match *guard {
             Some(last) => now.duration_since(last) >= std::time::Duration::from_secs(1800),
+            None => true,
+        };
+        if due {
+            *guard = Some(now);
+        }
+        due
+    }
+
+    /// `true` wenn der Tag-Block-Sweep fällig ist (≥ 5 min seit dem letzten)
+    /// und stempelt zugleich neu.
+    fn tag_sweep_due(&self) -> bool {
+        let now = std::time::Instant::now();
+        let mut guard = self.sweep_last_check.lock().unwrap();
+        let due = match *guard {
+            Some(last) => now.duration_since(last) >= std::time::Duration::from_secs(300),
             None => true,
         };
         if due {
@@ -479,6 +496,27 @@ impl PollHooks for SubscriptionPollHooks {
     /// dieses Ticks (Python `_run_partner_recruit`) + fällige Partner-Raid-Score-
     /// Refreshes aus Poll-Transitions (zusätzlich zum 300s-Voll-Reconcile).
     async fn after_tick(&self, report: tb_monitoring::TickReport) {
+        // Tag-Block-Sweep: Kanäle mit gesperrten Tags aus den gespeicherten
+        // Sessions nachtragen (gespawnt, der Tick blockiert nicht).
+        if self.tag_sweep_due() {
+            let pool = self.pool.clone();
+            let handle = tokio::spawn(async move {
+                match tb_analytics::partner_signup_tag_block::sweep(&pool).await {
+                    Ok(written) if written > 0 => {
+                        tracing::warn!(
+                            written,
+                            "Tag-Block-Sweep: Kanäle neu von der Partneraufnahme ausgeschlossen"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "Tag-Block-Sweep fehlgeschlagen");
+                    }
+                }
+            });
+            watch_one_shot_task("partner_signup_tag_sweep", handle);
+        }
+
         // Partner-Recruiting: intern auf 30 min gedrosselt; die schwere Arbeit
         // (Kandidaten-Query + Sends mit 60s-Throttle) läuft gespawnt, damit der
         // Tick nicht blockiert. Nur mit gebootetem Bot-Token (chat_api Some).
@@ -514,6 +552,31 @@ impl PollHooks for SubscriptionPollHooks {
         self.manager
             .record_capacity_snapshot_periodic("poll_tick")
             .await;
+    }
+
+    async fn on_live_snapshots(&self, snapshots: &[tb_monitoring::StreamSnapshot]) {
+        for snapshot in snapshots {
+            let twitch_user_id = snapshot.user_id.trim();
+            let login = snapshot.user_login.trim().to_lowercase();
+            if twitch_user_id.is_empty() || login.is_empty() {
+                continue;
+            }
+            if let Err(error) = tb_analytics::partner_signup_tag_block::enforce(
+                &self.pool,
+                twitch_user_id,
+                &login,
+                &snapshot.tags,
+            )
+            .await
+            {
+                tracing::warn!(
+                    %error,
+                    twitch_user_id,
+                    login = %login,
+                    "Tag-Block-Durchsetzung fehlgeschlagen"
+                );
+            }
+        }
     }
 }
 
@@ -1763,6 +1826,7 @@ async fn main() {
                         offline_raid: poll_offline_raid_handler.clone(),
                         chat_api: recruit_chat_api.clone(),
                         recruit_last_check: std::sync::Mutex::new(None),
+                        sweep_last_check: std::sync::Mutex::new(None),
                     }),
                     None => Arc::new(tb_monitoring::NoopPollHooks),
                 };

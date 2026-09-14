@@ -18,6 +18,7 @@ use sqlx::PgPool;
 use tb_internal_api::RoleRevokeOutcome;
 use tb_raid::partner_setup::{
     ChatGreeterPort, DiscordDirectoryPort, ModeratorInstallPort, PartnerSetupService,
+    SignupTagEnforcePort,
 };
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
@@ -422,6 +423,28 @@ impl ChatGreeterPort for LegacyChatGreeter {
 }
 
 // ---------------------------------------------------------------------------
+// Signup-Tag-Block via tb-analytics
+// ---------------------------------------------------------------------------
+
+struct AnalyticsSignupTagBlock {
+    pool: PgPool,
+}
+
+#[async_trait]
+impl SignupTagEnforcePort for AnalyticsSignupTagBlock {
+    async fn enforce_session_tags(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        tags: &[String],
+    ) -> Result<(), sqlx::Error> {
+        tb_analytics::partner_signup_tag_block::enforce(&self.pool, twitch_user_id, twitch_login, tags)
+            .await?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
@@ -457,13 +480,16 @@ pub fn build_partner_setup_service(
             "TWITCH_BOT_USER_ID nicht gesetzt — OAuth-Followups laufen ohne Moderator-Setup/Begrüßung"
         );
     }
-    Some(Arc::new(PartnerSetupService::new(
-        pool,
-        Arc::new(BrokerDiscordDirectory::from_env(relay)),
-        Arc::new(HelixModeratorInstaller::new(helix)),
-        greeter,
-        bot_user_id,
-    )))
+    Some(Arc::new(
+        PartnerSetupService::new(
+            pool.clone(),
+            Arc::new(BrokerDiscordDirectory::from_env(relay)),
+            Arc::new(HelixModeratorInstaller::new(helix)),
+            greeter,
+            bot_user_id,
+        )
+        .with_signup_tag_block(Arc::new(AnalyticsSignupTagBlock { pool })),
+    ))
 }
 
 #[cfg(test)]

@@ -29,6 +29,9 @@ import type {
   PartnerSignupBlockAddResult,
   PartnerSignupBlockList,
   PartnerSignupBlockRemoveResult,
+  PartnerSignupTagBlockAddResult,
+  PartnerSignupTagBlockList,
+  PartnerSignupTagBlockRemoveResult,
   InternalHomeOverview,
   LegalPageDocument,
   LegalPageSlug,
@@ -875,6 +878,26 @@ export function removePartnerSignupBlock(body: {
     login: body.login,
     twitch_user_id: body.twitchUserId,
   });
+}
+
+export function fetchPartnerSignupTagBlocks(): Promise<PartnerSignupTagBlockList> {
+  return admin<PartnerSignupTagBlockList>('/partner-signup-tag-blocks');
+}
+
+export function addPartnerSignupTagBlock(body: {
+  tag: string;
+  reason?: string;
+  publicMessage?: string;
+}): Promise<PartnerSignupTagBlockAddResult> {
+  return postAdminJson('/partner-signup-tag-blocks', {
+    tag: body.tag,
+    reason: body.reason,
+    public_message: body.publicMessage,
+  });
+}
+
+export function removePartnerSignupTagBlock(tag: string): Promise<PartnerSignupTagBlockRemoveResult> {
+  return postAdminJson('/partner-signup-tag-blocks/remove', { tag });
 }
 
 export function setGlobalBanChannelEnforcement(

@@ -27,6 +27,9 @@ import {
   fetchPartnerSignupBlocks,
   addPartnerSignupBlock,
   removePartnerSignupBlock,
+  fetchPartnerSignupTagBlocks,
+  addPartnerSignupTagBlock,
+  removePartnerSignupTagBlock,
   fetchLegalPage,
   fetchPartnerAccess,
   fetchRoadmap,
@@ -207,6 +210,36 @@ export function useRemovePartnerSignupBlock() {
   return useMutation({
     mutationFn: removePartnerSignupBlock,
     onSuccess: () => invalidatePartnerSignupBlocks(queryClient),
+  });
+}
+
+export function usePartnerSignupTagBlocks() {
+  return useQuery({
+    queryKey: ['admin-partner-signup-tag-blocks'],
+    queryFn: fetchPartnerSignupTagBlocks,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddPartnerSignupTagBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: addPartnerSignupTagBlock,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-partner-signup-tag-blocks'] });
+      // Der Backfill beim Anlegen schreibt sofort Kanal-Ausschlüsse; die
+      // Kanalliste und die Streamer-Ansichten ziehen deshalb mit.
+      invalidatePartnerSignupBlocks(queryClient);
+    },
+  });
+}
+
+export function useRemovePartnerSignupTagBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: removePartnerSignupTagBlock,
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['admin-partner-signup-tag-blocks'] }),
   });
 }
 

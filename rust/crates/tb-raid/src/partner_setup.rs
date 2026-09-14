@@ -632,6 +632,60 @@ pub async fn record_first_login(pool: &PgPool, twitch_user_id: &str, twitch_logi
 // promote_streamer_to_partner
 // ---------------------------------------------------------------------------
 
+/// Zusammengeführte Tags aller Sessions mit nicht-leeren Tags
+/// (`twitch_stream_sessions.tags`: JSON-Array oder Komma-Liste). `None` =
+/// keine Tags bekannt.
+async fn session_tags(
+    pool: &PgPool,
+    twitch_user_id: &str,
+) -> Result<Option<Vec<String>>, sqlx::Error> {
+    let user_id = twitch_user_id.trim();
+    if user_id.is_empty() {
+        return Ok(None);
+    }
+    let rows: Vec<(Option<String>,)> = sqlx::query_as(
+        r#"
+        SELECT tags FROM twitch_stream_sessions
+         WHERE twitch_user_id = $1
+           AND COALESCE(tags, '') <> ''
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    let mut tags: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(raw,)| raw)
+        .flat_map(|raw| parse_session_tags(&raw))
+        .collect();
+    if tags.is_empty() {
+        return Ok(None);
+    }
+    tags.sort();
+    tags.dedup();
+    Ok(Some(tags))
+}
+
+fn parse_session_tags(raw: &str) -> Vec<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    if raw.starts_with('[') {
+        if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(raw) {
+            return items
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect();
+        }
+    }
+    raw.split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Python `promote_streamer_to_partner` (`partner_registry.py:782`) für den
 /// OAuth-Followup-Parametersatz. Läuft vollständig in der übergebenen
 /// Transaktion (Promotion + Identity-Upsert + Normalisierung + Clear-Source).
@@ -953,6 +1007,19 @@ pub trait ChatGreeterPort: Send + Sync {
     ) -> Result<bool, String>;
 }
 
+/// Schreibt bei Tag-Treffer den Denylist-Eintrag für den Kanal. Der Port hält
+/// die Dependency-Richtung ein (tb-analytics hängt an tb-raid, nicht
+/// umgekehrt); die Verdrahtung passiert im Bot-Binary.
+#[async_trait]
+pub trait SignupTagEnforcePort: Send + Sync {
+    async fn enforce_session_tags(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        tags: &[String],
+    ) -> Result<(), sqlx::Error>;
+}
+
 // ---------------------------------------------------------------------------
 // PartnerSetupService
 // ---------------------------------------------------------------------------
@@ -975,6 +1042,7 @@ pub struct PartnerSetupService {
     discord: Arc<dyn DiscordDirectoryPort>,
     moderator: Arc<dyn ModeratorInstallPort>,
     greeter: Arc<dyn ChatGreeterPort>,
+    signup_tag_block: Option<Arc<dyn SignupTagEnforcePort>>,
     /// Python `self._bot_id() or TWITCH_BOT_USER_ID`; None → Moderator- und
     /// Chat-Schritt entfallen (früher Return wie Python).
     bot_user_id: Option<String>,
@@ -997,10 +1065,16 @@ impl PartnerSetupService {
             discord,
             moderator,
             greeter,
+            signup_tag_block: None,
             bot_user_id,
             greeting_initial_pause: Duration::from_secs(2),
             greeting_message_pause: Duration::from_secs(1),
         }
+    }
+
+    pub fn with_signup_tag_block(mut self, port: Arc<dyn SignupTagEnforcePort>) -> Self {
+        self.signup_tag_block = Some(port);
+        self
     }
 
     /// Test-Konstruktor ohne reale Wartezeiten.
@@ -1040,6 +1114,12 @@ impl PartnerSetupService {
 
         // Promotion in eigener Transaktion — isoliert von Backfill, damit ein
         // Backfill-Fehler die Partner-Zeile nicht zurückrollt.
+        if let Some(port) = self.signup_tag_block.as_ref() {
+            if let Some(tags) = session_tags(&self.pool, twitch_user_id).await? {
+                port.enforce_session_tags(twitch_user_id, twitch_login, &tags)
+                    .await?;
+            }
+        }
         let promoted = {
             let mut tx = self.pool.begin().await?;
             let promoted = promote_streamer_to_partner(

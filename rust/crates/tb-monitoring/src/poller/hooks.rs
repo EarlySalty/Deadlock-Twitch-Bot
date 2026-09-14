@@ -186,6 +186,10 @@ pub trait PollHooks: Send + Sync {
     /// bzw. im `SubscriptionManager`; der Engine ruft nur taktgebend auf. Default
     /// no-op (Setups ohne Subscription-Manager schreiben keine Zeitreihe).
     async fn on_capacity_tick(&self) {}
+
+    /// Einmal pro Poll-Tick: alle bekannten Live-Snapshots (getrackte Streams
+    /// plus Kategorie-Sample). Default no-op.
+    async fn on_live_snapshots(&self, _snapshots: &[StreamSnapshot]) {}
 }
 
 /// Hooks ohne Wirkung (bis 4d/4f verdrahten).
@@ -367,6 +371,10 @@ impl PollHooks for ReauthReminderPollHooks {
 
     async fn on_capacity_tick(&self) {
         self.inner.on_capacity_tick().await;
+    }
+
+    async fn on_live_snapshots(&self, snapshots: &[StreamSnapshot]) {
+        self.inner.on_live_snapshots(snapshots).await;
     }
 }
 

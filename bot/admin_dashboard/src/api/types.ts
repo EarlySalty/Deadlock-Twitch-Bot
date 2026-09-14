@@ -78,6 +78,32 @@ export interface PartnerSignupBlockRemoveResult {
   partner_pause_cleared: boolean;
 }
 
+export interface PartnerSignupTagBlockEntry {
+  tag: string;
+  display_tag: string;
+  reason: string;
+  public_message?: string | null;
+  added_by: string;
+  added_at: string;
+}
+
+export interface PartnerSignupTagBlockList {
+  items: PartnerSignupTagBlockEntry[];
+}
+
+export interface PartnerSignupTagBlockAddResult {
+  ok: boolean;
+  tag: string;
+  display_tag: string;
+  inserted: boolean;
+}
+
+export interface PartnerSignupTagBlockRemoveResult {
+  ok: boolean;
+  tag: string;
+  removed: boolean;
+}
+
 export interface StreamerRow {
   login: string;
   displayName?: string;

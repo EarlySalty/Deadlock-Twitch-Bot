@@ -466,6 +466,17 @@ impl PollEngine {
             );
         }
 
+        let mut live_snapshots: Vec<StreamSnapshot> = streams_by_login.values().cloned().collect();
+        for stream in &category_streams {
+            let login = stream.user_login.to_lowercase();
+            if !login.is_empty() && !streams_by_login.contains_key(&login) {
+                live_snapshots.push(stream.clone());
+            }
+        }
+        if !live_snapshots.is_empty() {
+            self.hooks.on_live_snapshots(&live_snapshots).await;
+        }
+
         self.hooks
             .after_tick(TickReport {
                 score_refreshes,

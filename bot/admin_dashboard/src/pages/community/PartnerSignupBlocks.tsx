@@ -1,7 +1,7 @@
 import { AlertTriangle, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
-import type { PartnerSignupBlockEntry } from '@/api/types';
+import type { PartnerSignupBlockEntry, PartnerSignupTagBlockEntry } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { ConfirmTypedDialog } from '@/components/shared/ConfirmTypedDialog';
@@ -9,8 +9,11 @@ import { DataTable, type TableColumn } from '@/components/shared/DataTable';
 import { Toast } from '@/components/shared/Toast';
 import {
   useAddPartnerSignupBlock,
+  useAddPartnerSignupTagBlock,
   usePartnerSignupBlocks,
+  usePartnerSignupTagBlocks,
   useRemovePartnerSignupBlock,
+  useRemovePartnerSignupTagBlock,
 } from '@/hooks/useAdmin';
 import { formatDateTime } from '@/utils/formatters';
 
@@ -27,6 +30,18 @@ const REMOVE_STEPS = [
   'Der Kanal kann wieder ins Partnerprogramm aufgenommen werden.',
   'Die Raid-Sperre aus diesem Ausschluss wird aufgehoben, andere Sperrgründe bleiben.',
   'Gelöschte Zugänge kommen nicht zurück, der Kanal muss neu autorisieren.',
+];
+
+const TAG_ADD_STEPS = [
+  'Der Kanal kommt auf die Sperrliste der Partneraufnahme.',
+  'Scout spricht ihn nicht mehr an.',
+  'Der Kanal wird als Raid-Ziel gesperrt.',
+  'Bestehende Partner sind davon nicht betroffen.',
+];
+
+const TAG_REMOVE_STEPS = [
+  'Neue Streams mit diesem Tag werden nicht mehr automatisch ausgeschlossen.',
+  'Bestehende Kanal-Ausschlüsse bleiben bestehen.',
 ];
 
 /**
@@ -56,11 +71,19 @@ export default function PartnerSignupBlocksPage() {
   const query = usePartnerSignupBlocks();
   const addMutation = useAddPartnerSignupBlock();
   const removeMutation = useRemovePartnerSignupBlock();
+  const tagQuery = usePartnerSignupTagBlocks();
+  const tagAddMutation = useAddPartnerSignupTagBlock();
+  const tagRemoveMutation = useRemovePartnerSignupTagBlock();
   const [login, setLogin] = useState('');
   const [reason, setReason] = useState('');
   const [publicMessage, setPublicMessage] = useState('');
+  const [tag, setTag] = useState('');
+  const [tagReason, setTagReason] = useState('');
+  const [tagPublicMessage, setTagPublicMessage] = useState('');
   const [pendingAdd, setPendingAdd] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<PartnerSignupBlockEntry | null>(null);
+  const [pendingTagAdd, setPendingTagAdd] = useState<string | null>(null);
+  const [pendingTagRemove, setPendingTagRemove] = useState<PartnerSignupTagBlockEntry | null>(null);
   const [toast, setToast] = useState<ToastState>({ open: false, tone: 'success', message: '' });
 
   function openAddConfirm() {
@@ -143,6 +166,72 @@ export default function PartnerSignupBlocksPage() {
     }
   }
 
+  function openTagAddConfirm() {
+    const candidate = tag.trim();
+    if (!candidate) {
+      setToast({ open: true, tone: 'error', message: 'Bitte einen Tag eingeben.' });
+      return;
+    }
+    setPendingTagAdd(candidate);
+  }
+
+  async function confirmTagAdd() {
+    if (!pendingTagAdd) {
+      return;
+    }
+    try {
+      const result = await tagAddMutation.mutateAsync({
+        tag: pendingTagAdd,
+        reason: tagReason.trim() || undefined,
+        publicMessage: tagPublicMessage.trim() || undefined,
+      });
+      setTag('');
+      setTagReason('');
+      setTagPublicMessage('');
+      setToast({
+        open: true,
+        tone: 'success',
+        message: `${result.display_tag} ist gesperrt. Kanäle mit diesem Tag sind von der Partneraufnahme ausgeschlossen.`,
+      });
+    } catch (error) {
+      setToast({
+        open: true,
+        tone: 'error',
+        message: fehlerText(error, 'Tag-Sperre'),
+      });
+    } finally {
+      setPendingTagAdd(null);
+    }
+  }
+
+  async function confirmTagRemove() {
+    if (!pendingTagRemove) {
+      return;
+    }
+    const entry = pendingTagRemove;
+    try {
+      const result = await tagRemoveMutation.mutateAsync(entry.tag);
+      setToast({
+        open: true,
+        tone: result.removed ? 'success' : 'error',
+        message: result.removed
+          ? `${entry.display_tag} wird nicht mehr automatisch ausgeschlossen. Bestehende Kanal-Ausschlüsse bleiben bestehen.`
+          : `Für ${entry.display_tag} gab es keine Sperre mehr.`,
+      });
+    } catch (error) {
+      setToast({
+        open: true,
+        tone: 'error',
+        message:
+          error instanceof ApiError && (error.status === 401 || error.status === 403)
+            ? 'Die Sitzung ist abgelaufen. Bitte neu anmelden und die Aufhebung erneut versuchen.'
+            : 'Tag-Sperre konnte nicht aufgehoben werden.',
+      });
+    } finally {
+      setPendingTagRemove(null);
+    }
+  }
+
   const columns: TableColumn<PartnerSignupBlockEntry>[] = [
     {
       key: 'login',
@@ -187,6 +276,59 @@ export default function PartnerSignupBlocksPage() {
           className="admin-button admin-button-secondary"
           disabled={removeMutation.isPending}
           onClick={() => setPendingRemove(entry)}
+          type="button"
+        >
+          <Trash2 className="h-4 w-4" />
+          Aufheben
+        </button>
+      ),
+    },
+  ];
+
+  const tagColumns: TableColumn<PartnerSignupTagBlockEntry>[] = [
+    {
+      key: 'tag',
+      title: 'Tag',
+      sortable: true,
+      sortValue: (entry) => entry.display_tag,
+      render: (entry) => (
+        <div>
+          <div className="font-semibold">{entry.display_tag}</div>
+          <div className="text-xs text-white/50">{entry.tag}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'reason',
+      title: 'Interner Grund',
+      render: (entry) => entry.reason || '—',
+    },
+    {
+      key: 'public_message',
+      title: 'Absagetext',
+      render: (entry) => entry.public_message || 'Standardtext',
+    },
+    {
+      key: 'added_by',
+      title: 'Eingetragen von',
+      render: (entry) => entry.added_by || '—',
+    },
+    {
+      key: 'added_at',
+      title: 'Eingetragen am',
+      sortable: true,
+      sortValue: (entry) => entry.added_at,
+      render: (entry) => (entry.added_at ? formatDateTime(entry.added_at) : '—'),
+    },
+    {
+      key: 'actions',
+      title: 'Aktionen',
+      render: (entry) => (
+        <button
+          aria-label="Tag-Sperre aufheben"
+          className="admin-button admin-button-secondary"
+          disabled={tagRemoveMutation.isPending}
+          onClick={() => setPendingTagRemove(entry)}
           type="button"
         >
           <Trash2 className="h-4 w-4" />
@@ -283,6 +425,76 @@ export default function PartnerSignupBlocksPage() {
       </Section>
 
       <Section
+        title="Tags automatisch ausschließen"
+        hint="Die grauen Tags am Twitch-Stream, zum Beispiel Deutsch oder English. Wer so einen Tag live oder in einer gespeicherten Session hat, wird automatisch von der Partneraufnahme ausgeschlossen. Bestehende Partner bleiben unangetastet."
+      >
+        <div className="grid gap-4 md:grid-cols-[0.9fr_1.2fr_1.4fr_auto] md:items-end">
+          <label className="space-y-2">
+            <span className="text-sm font-medium text-white">Tag</span>
+            <input
+              className="admin-input"
+              placeholder="z. B. Deutsch"
+              value={tag}
+              onChange={(event) => setTag(event.target.value)}
+            />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-medium text-white">Interner Grund</span>
+            <input
+              className="admin-input"
+              value={tagReason}
+              onChange={(event) => setTagReason(event.target.value)}
+            />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-medium text-white">Absagetext (optional)</span>
+            <input
+              className="admin-input"
+              value={tagPublicMessage}
+              onChange={(event) => setTagPublicMessage(event.target.value)}
+            />
+          </label>
+          <button
+            className="admin-button admin-button-primary"
+            disabled={tagAddMutation.isPending}
+            onClick={openTagAddConfirm}
+            type="button"
+          >
+            <Plus className="h-4 w-4" />
+            Tag sperren
+          </button>
+        </div>
+
+        <div className="mt-4 flex gap-3 rounded-2xl border border-primary/35 bg-primary/10 p-4 text-sm text-white/80">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <div>
+            <div className="font-medium text-white">Das passiert bei einem Treffer</div>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {TAG_ADD_STEPS.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Gesperrte Tags"
+        hint="Ein Treffer schließt den Kanal dauerhaft aus. Das Aufheben der Regel hebt bestehende Kanal-Ausschlüsse nicht auf."
+      >
+        {tagQuery.isError ? (
+          <div className="text-sm text-white/70">Gesperrte Tags konnten nicht geladen werden.</div>
+        ) : (
+          <DataTable
+            columns={tagColumns}
+            rows={tagQuery.data?.items ?? []}
+            rowKey={(entry) => entry.tag}
+            emptyLabel="Kein Tag ist gesperrt."
+          />
+        )}
+      </Section>
+
+      <Section
         title="Von Partneraufnahme ausgeschlossen"
         hint="Die stabile Twitch-ID hält den Ausschluss auch nach einer Umbenennung."
       >
@@ -316,6 +528,30 @@ export default function PartnerSignupBlocksPage() {
         busy={removeMutation.isPending}
         onConfirm={() => void confirmRemove()}
         onCancel={() => setPendingRemove(null)}
+      />
+
+      <ConfirmTypedDialog
+        open={Boolean(pendingTagAdd)}
+        title="Tag sperren"
+        description={`${pendingTagAdd ?? ''} sperrt Kanäle mit diesem Tag, auch rückwirkend über gespeicherte Sessions. Bestehende Partner bleiben unangetastet. Zum Bestätigen den Tag eintippen.`}
+        expected={pendingTagAdd ?? ''}
+        steps={TAG_ADD_STEPS}
+        confirmLabel="Tag sperren"
+        busy={tagAddMutation.isPending}
+        onConfirm={() => void confirmTagAdd()}
+        onCancel={() => setPendingTagAdd(null)}
+      />
+
+      <ConfirmTypedDialog
+        open={Boolean(pendingTagRemove)}
+        title="Tag-Sperre aufheben"
+        description={`${pendingTagRemove?.display_tag ?? ''} sperrt danach keine Kanäle mehr. Zum Bestätigen den Tag eintippen.`}
+        expected={pendingTagRemove?.display_tag ?? ''}
+        steps={TAG_REMOVE_STEPS}
+        confirmLabel="Aufheben"
+        busy={tagRemoveMutation.isPending}
+        onConfirm={() => void confirmTagRemove()}
+        onCancel={() => setPendingTagRemove(null)}
       />
 
       <Toast

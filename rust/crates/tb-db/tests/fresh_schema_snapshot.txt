@@ -576,6 +576,9 @@ twitch_bot_ban_klassifikation|twitch_user_id|text|NO|
 twitch_bot_capabilities|has_chatters_scope|boolean|NO|true
 twitch_bot_capabilities|id|smallint|NO|1
 twitch_bot_capabilities|updated_at|timestamp with time zone|NO|now()
+twitch_caster_overlay|id|boolean|NO|true
+twitch_caster_overlay|revision|bigint|NO|0
+twitch_caster_overlay|scene|jsonb|NO|'{"slots": [null, null], "roster": []}'::jsonb
 twitch_channel_match_state|channel_login|text|NO|
 twitch_channel_match_state|channel_user_id|text|YES|
 twitch_channel_match_state|hero_id|integer|YES|
@@ -720,6 +723,10 @@ twitch_clips_upload_queue|quota_deferrals|integer|NO|0
 twitch_clips_upload_queue|scheduled_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|status|text|YES|'pending'::text
 twitch_clips_upload_queue|title|text|YES|
+twitch_community_announcements|broadcaster_id|text|NO|
+twitch_community_announcements|revision|bigint|NO|0
+twitch_community_announcements|settings|jsonb|NO|
+twitch_community_announcements|updated_at|timestamp with time zone|NO|now()
 twitch_confirmed_external_recruitment_raids|confirmation_signal|text|YES|
 twitch_confirmed_external_recruitment_raids|confirmed_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_confirmed_external_recruitment_raids|from_broadcaster_id|text|YES|
@@ -954,6 +961,7 @@ twitch_global_ban_sweep_due|broadcaster_id|text|NO|
 twitch_global_ban_sweep_due|broadcaster_login|text|NO|
 twitch_global_ban_sweep_due|run_after|timestamp with time zone|NO|
 twitch_global_ban_sweep_due|scheduled_at|timestamp with time zone|NO|now()
+twitch_global_promo_modes|announcement_color|text|NO|'purple'::text
 twitch_global_promo_modes|config_key|text|NO|
 twitch_global_promo_modes|custom_message|text|YES|
 twitch_global_promo_modes|ends_at|text|YES|
@@ -1172,6 +1180,12 @@ twitch_partner_signup_denylist|public_message|text|YES|
 twitch_partner_signup_denylist|reason|text|NO|
 twitch_partner_signup_denylist|twitch_login|text|NO|
 twitch_partner_signup_denylist|twitch_user_id|text|NO|
+twitch_partner_signup_tag_blocks|added_at|timestamp with time zone|NO|now()
+twitch_partner_signup_tag_blocks|added_by|text|NO|
+twitch_partner_signup_tag_blocks|display_tag|text|NO|
+twitch_partner_signup_tag_blocks|public_message|text|YES|
+twitch_partner_signup_tag_blocks|reason|text|NO|
+twitch_partner_signup_tag_blocks|tag|text|NO|
 twitch_partners_all_state|archived_at|text|YES|
 twitch_partners_all_state|created_at|text|YES|
 twitch_partners_all_state|departnered_at|text|YES|
@@ -1237,6 +1251,9 @@ twitch_promo_pitch_log|reject_reason|text|YES|
 twitch_promo_pitch_log|sent_at|timestamp with time zone|YES|
 twitch_promo_pitch_log|target_user_id|text|YES|
 twitch_promo_pitch_log|trigger_text|text|YES|
+twitch_promo_timer_settings|settings|jsonb|NO|
+twitch_promo_timer_settings|singleton|boolean|NO|true
+twitch_promo_timer_settings|updated_at|timestamp with time zone|NO|now()
 twitch_raid_arrival_tracking|classification|text|NO|
 twitch_raid_arrival_tracking|confirmation_signals|text|NO|''::text
 twitch_raid_arrival_tracking|correlation_detail|text|YES|

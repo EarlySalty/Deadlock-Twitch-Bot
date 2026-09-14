@@ -983,7 +983,8 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     use handlers::{
         admin_affiliate, admin_announcements, admin_audit_log, admin_billing, admin_config,
-        admin_global_ban, admin_legal, admin_partner_signup_block, admin_promo_mode, admin_roadmap,
+        admin_global_ban, admin_legal, admin_partner_signup_block, admin_partner_signup_tag_block,
+        admin_promo_mode, admin_roadmap,
     };
 
     Router::new()
@@ -1064,6 +1065,15 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/partner-signup-blocks/remove",
             post(admin_partner_signup_block::remove_handler),
+        )
+        .route(
+            "/twitch/api/admin/partner-signup-tag-blocks",
+            get(admin_partner_signup_tag_block::list_handler)
+                .post(admin_partner_signup_tag_block::add_handler),
+        )
+        .route(
+            "/twitch/api/admin/partner-signup-tag-blocks/remove",
+            post(admin_partner_signup_tag_block::remove_handler),
         )
         .route(
             "/twitch/api/admin/caster-overlay",
