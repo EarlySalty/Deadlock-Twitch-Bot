@@ -121,6 +121,43 @@ pub async fn add(
     let public_message = public_message.map(str::trim).filter(|s| !s.is_empty());
     let mut tx = pool.begin().await?;
 
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('partner_signup'), hashtext($1::text))")
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    if added_by == "tag_block" {
+        let active_partner: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM twitch_partners
+                 WHERE (NULLIF(twitch_user_id, '') = $1 OR lower(twitch_login) = $2)
+                   AND COALESCE(status, '') = 'active'
+            )
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(login)
+        .fetch_one(&mut *tx)
+        .await?;
+        let already_blocked: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM twitch_partner_signup_denylist
+                 WHERE twitch_user_id = $1 OR lower(twitch_login) = $2
+            )
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(login)
+        .fetch_one(&mut *tx)
+        .await?;
+        if active_partner || already_blocked {
+            tx.commit().await?;
+            return Ok(AddOutcome::default());
+        }
+    }
+
     // 1. Der eigentliche Zustand. Ein bestehender Eintrag mit gleicher ID wird
     //    aktualisiert; ein Login-Konflikt mit ANDERER ID wird vorher entfernt,
     //    damit der eindeutige Login-Index nicht bricht (Streamer-Umbenennung).

@@ -638,19 +638,25 @@ pub async fn record_first_login(pool: &PgPool, twitch_user_id: &str, twitch_logi
 async fn session_tags(
     pool: &PgPool,
     twitch_user_id: &str,
+    twitch_login: &str,
 ) -> Result<Option<Vec<String>>, sqlx::Error> {
     let user_id = twitch_user_id.trim();
-    if user_id.is_empty() {
+    let login = twitch_login.trim().to_lowercase();
+    if user_id.is_empty() || login.is_empty() {
         return Ok(None);
     }
     let rows: Vec<(Option<String>,)> = sqlx::query_as(
         r#"
         SELECT tags FROM twitch_stream_sessions
-         WHERE twitch_user_id = $1
-           AND COALESCE(tags, '') <> ''
+         WHERE COALESCE(tags, '') <> ''
+           AND (
+                twitch_user_id = $1
+                OR (NULLIF(twitch_user_id, '') IS NULL AND lower(streamer_login) = $2)
+           )
         "#,
     )
     .bind(user_id)
+    .bind(&login)
     .fetch_all(pool)
     .await?;
     let mut tags: Vec<String> = rows
@@ -699,6 +705,11 @@ pub async fn promote_streamer_to_partner(
     if normalized_login.is_empty() || normalized_user_id.is_empty() {
         return Err(PartnerSetupError::InvalidIdentity);
     }
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('partner_signup'), hashtext($1::text))")
+        .bind(&normalized_user_id)
+        .execute(&mut **tx)
+        .await?;
 
     // Signup-Block-Guard: eigenständiger Zustand
     // (`twitch_partner_signup_denylist`), getrennt von Raid-Blacklist,
@@ -1115,7 +1126,7 @@ impl PartnerSetupService {
         // Promotion in eigener Transaktion — isoliert von Backfill, damit ein
         // Backfill-Fehler die Partner-Zeile nicht zurückrollt.
         if let Some(port) = self.signup_tag_block.as_ref() {
-            if let Some(tags) = session_tags(&self.pool, twitch_user_id).await? {
+            if let Some(tags) = session_tags(&self.pool, twitch_user_id, twitch_login).await? {
                 port.enforce_session_tags(twitch_user_id, twitch_login, &tags)
                     .await?;
             }
@@ -1404,6 +1415,10 @@ mod tests {
             r#"CREATE TABLE twitch_live_state (
                 twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL
             )"#,
+            r#"CREATE TABLE twitch_stream_sessions (
+                id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL,
+                twitch_user_id TEXT, tags TEXT
+            )"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1420,6 +1435,37 @@ mod tests {
             activate_partner_features: true,
             clear_source: true,
         }
+    }
+
+    #[tokio::test]
+    async fn session_tags_nimmt_id_und_login_fallback_ohne_fremde_id() {
+        let Some(pool) = testpool("ps_session_tags").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, tags) VALUES
+             ('beispiel', '42', 'English'),
+             ('Beispiel', NULL, 'Deutsch'),
+             ('beispiel', '', 'SoloQ'),
+             ('beispiel', '99', 'Fremd')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let tags = session_tags(&pool, "42", "BEISPIEL")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tags,
+            vec![
+                "Deutsch".to_string(),
+                "English".to_string(),
+                "SoloQ".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

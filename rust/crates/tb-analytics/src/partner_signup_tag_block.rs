@@ -162,6 +162,9 @@ pub async fn enforce(
         "tag_block",
     )
     .await?;
+    if outcome == partner_signup_block::AddOutcome::default() {
+        return Ok(None);
+    }
     Ok(Some(outcome))
 }
 
@@ -626,6 +629,80 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ohne_id, None);
+        drop_schema(pool, &dsn, schema).await;
+    }
+
+    #[tokio::test]
+    async fn tag_block_add_ueberschreibt_keinen_bestehenden_kanal_block() {
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_tag_block_atomic_existing";
+        let pool = make_pool(&dsn, schema).await;
+        partner_signup_block::add(
+            &pool,
+            "42",
+            "beispiel",
+            "owner_decision",
+            Some("Manueller Text"),
+            "admin",
+        )
+        .await
+        .unwrap();
+
+        let outcome = partner_signup_block::add(
+            &pool,
+            "42",
+            "beispiel",
+            "tag_block:deutsch",
+            Some("Tag Text"),
+            "tag_block",
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, partner_signup_block::AddOutcome::default());
+
+        let (reason, public_message, added_by) = denylist_row(&pool, "42").await;
+        assert_eq!(reason, "owner_decision");
+        assert_eq!(public_message.as_deref(), Some("Manueller Text"));
+        assert_eq!(added_by, "admin");
+        drop_schema(pool, &dsn, schema).await;
+    }
+
+    #[tokio::test]
+    async fn tag_block_add_schuetzt_aktive_partner_auch_im_schreibpfad() {
+        let dsn = db_dsn_or_skip!();
+        let schema = "t_tag_block_atomic_partner";
+        let pool = make_pool(&dsn, schema).await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, raid_bot_enabled)
+             VALUES ('99', 'aktiverpartner', 'active', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let outcome = partner_signup_block::add(
+            &pool,
+            "99",
+            "aktiverpartner",
+            "tag_block:deutsch",
+            None,
+            "tag_block",
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, partner_signup_block::AddOutcome::default());
+
+        let denylist: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_signup_denylist")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(denylist, 0);
+        let raid: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_blacklist")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(raid, 0);
         drop_schema(pool, &dsn, schema).await;
     }
 
