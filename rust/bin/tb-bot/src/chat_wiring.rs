@@ -735,6 +735,20 @@ pub async fn build_runtime(
         relay: invite_relay,
         invite_channel_id: invite_channel_id_from_env(),
     });
+    if let Some(relay) = review_relay.clone() {
+        let pool = pool.clone();
+        supervisor.spawn("pitch_bewertung_loop", async move {
+            let quelle = BrokerReaktionsQuelle {
+                relay,
+                channel_id: PITCH_REVIEW_CHANNEL_ID,
+            };
+            let mut tick = tokio::time::interval(PITCH_BEWERTUNG_INTERVAL);
+            loop {
+                tick.tick().await;
+                tb_chat::pitch_bewertung::bewerte_offene_karten(&pool, &quelle).await;
+            }
+        });
+    }
     let pitch_review_sink: Option<Arc<dyn PitchReviewSink>> = review_relay.map(|relay| {
         Arc::new(DiscordPitchReviewSink {
             discord: Arc::new(relay),
@@ -753,7 +767,8 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
+            .set_bot_user_id(bot_user_id.clone());
         if let Some(checker) = lurker_reward_checker {
             engine = engine.set_lurker_reward_checker(checker);
             tracing::info!("lurker-tax: Reward-Checker verdrahtet");
@@ -2044,9 +2059,47 @@ impl AccountAgePort for HelixAccountAge {
 
 const PITCH_REVIEW_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
 const PITCH_REVIEW_GOLD: i64 = 0x00C8_A86B;
+const PITCH_BEWERTUNG_INTERVAL: Duration = Duration::from_secs(600);
 
 struct DiscordPitchReviewSink {
     discord: Arc<dyn DiscordBackend>,
+}
+
+struct BrokerReaktionsQuelle {
+    relay: BrokerRelay,
+    channel_id: i64,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::pitch_bewertung::ReaktionsQuelle for BrokerReaktionsQuelle {
+    async fn reaktionen(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<Vec<tb_chat::pitch_bewertung::Reaktion>>, tb_chat::pitch_bewertung::ReaktionsFehler>
+    {
+        match self
+            .relay
+            .get_message_reactions(&self.channel_id.to_string(), message_id)
+            .await
+        {
+            Ok(antwort) => {
+                if !antwort.found {
+                    return Ok(None);
+                }
+                Ok(Some(
+                    antwort
+                        .reactions
+                        .into_iter()
+                        .map(|reaktion| tb_chat::pitch_bewertung::Reaktion {
+                            emoji: reaktion.emoji,
+                            count: reaktion.count as i64,
+                        })
+                        .collect(),
+                ))
+            }
+            Err(error) => Err(tb_chat::pitch_bewertung::ReaktionsFehler(error.to_string())),
+        }
+    }
 }
 
 fn neutralize_pitch_mentions(value: &str) -> String {
@@ -2119,7 +2172,7 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         reply: &str,
         kind: PitchCardKind,
         candidate_hint: Option<&str>,
-    ) {
+    ) -> Option<i64> {
         let title = match kind {
             PitchCardKind::Anlass => "Anlass-Pitch",
             PitchCardKind::Partner => "Partner-Pitch",
@@ -2137,6 +2190,9 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         if let Some(hint) = candidate_hint {
             displays.push(neutralize_pitch_field(hint));
         }
+        displays.push(
+            "Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string(),
+        );
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
             content: None,
@@ -2152,8 +2208,12 @@ impl PitchReviewSink for DiscordPitchReviewSink {
             allowed_role_ids: vec![],
             view_spec: None,
         };
-        if let Err(error) = self.discord.send_rich_message(payload).await {
-            tracing::warn!(%error, channel = channel_login, kind = title, "Pitch-Review-Karte fehlgeschlagen");
+        match self.discord.send_rich_message(payload).await {
+            Ok(result) => result.result.message_id.parse::<i64>().ok(),
+            Err(error) => {
+                tracing::warn!(%error, channel = channel_login, kind = title, "Pitch-Review-Karte fehlgeschlagen");
+                None
+            }
         }
     }
 }
@@ -3121,6 +3181,7 @@ mod chat_notification_tests {
             source_broadcaster_user_id: None,
             source_broadcaster_user_login: None,
             source_message_id: None,
+            reply: None,
         }
     }
 

@@ -1241,6 +1241,8 @@ twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|
 twitch_promo_cooldowns|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|wall_ts|double precision|NO|
+twitch_promo_pitch_log|bewertet_at|timestamp with time zone|YES|
+twitch_promo_pitch_log|bewertung|text|YES|
 twitch_promo_pitch_log|channel_login|text|NO|
 twitch_promo_pitch_log|created_at|timestamp with time zone|NO|now()
 twitch_promo_pitch_log|generated_text|text|YES|
@@ -1248,6 +1250,7 @@ twitch_promo_pitch_log|id|bigint|NO|nextval('twitch_promo_pitch_log_id_seq'::reg
 twitch_promo_pitch_log|occasion|text|YES|
 twitch_promo_pitch_log|pfad|text|NO|
 twitch_promo_pitch_log|reject_reason|text|YES|
+twitch_promo_pitch_log|review_message_id|bigint|YES|
 twitch_promo_pitch_log|sent_at|timestamp with time zone|YES|
 twitch_promo_pitch_log|target_user_id|text|YES|
 twitch_promo_pitch_log|trigger_text|text|YES|

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, review_message_id AS \"review_message_id!\"\n             FROM twitch_promo_pitch_log\n            WHERE review_message_id IS NOT NULL\n              AND bewertung IS NULL\n              AND bewertet_at IS NULL\n              AND sent_at > NOW() - ($1 || ' days')::interval",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "review_message_id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "42504ae3a93e87fbe050f8850469ab1e932da74ceb5022227b2e06bb279be20d"
+}

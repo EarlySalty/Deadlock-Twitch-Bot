@@ -40,6 +40,8 @@ pub mod mention_scoring;
 pub mod moderation;
 pub mod moderation_settings;
 pub mod pipeline;
+pub mod pitch_beispiele;
+pub mod pitch_bewertung;
 pub mod promo_pitch;
 pub mod promos;
 pub mod safe_list;
@@ -121,7 +123,7 @@ pub use suppression_guard::{
 pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
-pub use types::{ChatMessageEvent, SendOutcome};
+pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]

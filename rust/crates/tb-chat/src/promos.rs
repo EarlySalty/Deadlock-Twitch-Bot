@@ -55,6 +55,55 @@ use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
 use tb_analytics::promo_timers::{PromoTimerPolicy, PromoTimerSettings, COMMUNITY_BROADCASTER_ID};
 
+pub fn adressat_fremd(event: &ChatMessageEvent, bot_user_id: &str) -> bool {
+    if let Some(reply) = event.reply.as_ref() {
+        let parent = reply.parent_user_id.trim();
+        if !parent.is_empty() && parent != bot_user_id {
+            return true;
+        }
+    }
+    let chatter = event.chatter_user_id.trim();
+    for fragment in &event.message.fragments {
+        if let Some(mention) = fragment.mention.as_ref() {
+            let id = mention.user_id.trim();
+            if !id.is_empty() && id != chatter && id != bot_user_id {
+                return true;
+            }
+        }
+    }
+    let text = event.text().to_lowercase();
+    for name in [
+        event.broadcaster_user_login.as_str(),
+        event.broadcaster_user_name.as_str(),
+    ] {
+        let needle = name.trim().to_lowercase();
+        if needle.chars().count() >= 3 && text_enthaelt_wort(&text, &needle) {
+            return true;
+        }
+    }
+    false
+}
+
+fn text_enthaelt_wort(haystack_lower: &str, needle_lower: &str) -> bool {
+    let hay: Vec<char> = haystack_lower.chars().collect();
+    let pat: Vec<char> = needle_lower.chars().collect();
+    if pat.is_empty() || pat.len() > hay.len() {
+        return false;
+    }
+    for start in 0..=hay.len() - pat.len() {
+        if hay[start..start + pat.len()] != pat[..] {
+            continue;
+        }
+        let left_ok = start == 0 || !hay[start - 1].is_alphanumeric();
+        let end = start + pat.len();
+        let right_ok = end == hay.len() || !hay[end].is_alphanumeric();
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Konstanten — exakt aus bot/chat/constants.py und targeted_promo.py
 // ---------------------------------------------------------------------------
@@ -437,7 +486,7 @@ pub trait PitchReviewSink: Send + Sync {
         reply: &str,
         kind: PitchCardKind,
         candidate_hint: Option<&str>,
-    );
+    ) -> Option<i64>;
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +619,7 @@ pub struct PromoEngine {
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
     zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
+    bot_user_id: String,
 }
 
 /// Fallback-PartnerChannelCheck: immer true (für Tests).
@@ -618,6 +668,7 @@ impl PromoEngine {
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             zuschauer_register: None,
+            bot_user_id: String::new(),
         }
     }
 
@@ -655,6 +706,11 @@ impl PromoEngine {
             .or_insert_with(|| Mutex::new(ChannelState::new()));
         let state = state_ref.lock().await;
         (state.timers.clone(), state.community_channel)
+    }
+
+    pub fn set_bot_user_id(mut self, bot_user_id: impl Into<String>) -> Self {
+        self.bot_user_id = bot_user_id.into();
+        self
     }
 
     pub fn set_zuschauer_register(
@@ -873,6 +929,12 @@ impl PromoEngine {
             return;
         }
 
+        if adressat_fremd(event, &self.bot_user_id) {
+            self.log_zuschauer_reject(&login, &target_user_id, "adressat_fremd", text, "anlass")
+                .await;
+            return;
+        }
+
         if let Some(candidate) = self.partner_candidate(&target_user_id).await {
             if PARTNER_STREAMER_PITCH_ENABLED && text_len >= 25 {
                 self.run_partner_pitch(
@@ -918,18 +980,24 @@ impl PromoEngine {
             && self.pitch_channel_limit_ok(&login).await
             && self.pitch_judge_throttle_reserve(&login, &target_user_id)
         {
+            let beispiele = crate::pitch_beispiele::lade_block(
+                &self.pool,
+                crate::pitch_beispiele::PitchPfad::Anlass,
+            )
+            .await;
             let input = PitchJudgeInput {
                 trigger_text: text.to_string(),
                 game: game.clone(),
                 title: title.clone(),
                 recent_chat: recent.clone(),
                 target_login: target_login.clone(),
+                beispiele,
             };
             self.pitch_judge.decide(input).await.and_then(|resp| {
-                if resp.confidence < PITCH_MIN_CONFIDENCE {
-                    None
-                } else {
+                if resp.ernst_gemeint && resp.confidence >= PITCH_MIN_CONFIDENCE {
                     resp.occasion.map(|occ| (occ, resp.reply))
+                } else {
+                    None
                 }
             })
         } else {
@@ -1026,15 +1094,19 @@ impl PromoEngine {
         drop(_guard);
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
-            sink.send_card(
-                &login,
-                &target_login,
-                text,
-                &resp_reply,
-                PitchCardKind::Anlass,
-                None,
-            )
-            .await;
+            if let Some(message_id) = sink
+                .send_card(
+                    &login,
+                    &target_login,
+                    text,
+                    &resp_reply,
+                    PitchCardKind::Anlass,
+                    None,
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
         }
     }
 
@@ -1062,12 +1134,18 @@ impl PromoEngine {
 
         let (game, title) = self.load_live_context(login).await;
         let recent = self.load_recent_channel_messages(login, 8).await;
+        let beispiele = crate::pitch_beispiele::lade_block(
+            &self.pool,
+            crate::pitch_beispiele::PitchPfad::Partner,
+        )
+        .await;
         let ctx = PartnerPitchContext {
             target_login: target_login.to_string(),
             target_messages: vec![trigger.to_string()],
             game,
             title,
             recent_chat: recent,
+            beispiele,
         };
         let Some(reply) = self.partner_pitch_gen.partner_pitch(&ctx).await else {
             self.log_partner_reject(login, target_user_id, "no_text", trigger, None)
@@ -1167,15 +1245,19 @@ impl PromoEngine {
                 candidate.login,
                 candidate.last_session.format("%Y-%m-%d")
             );
-            sink.send_card(
-                login,
-                target_login,
-                trigger,
-                &reply,
-                PitchCardKind::Partner,
-                Some(&hint),
-            )
-            .await;
+            if let Some(message_id) = sink
+                .send_card(
+                    login,
+                    target_login,
+                    trigger,
+                    &reply,
+                    PitchCardKind::Partner,
+                    Some(&hint),
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
         }
     }
 
@@ -1952,10 +2034,16 @@ impl PromoEngine {
         }
 
         let (game, title) = self.load_live_context(login).await;
+        let beispiele = crate::pitch_beispiele::lade_block(
+            &self.pool,
+            crate::pitch_beispiele::PitchPfad::Periodic,
+        )
+        .await;
         let ctx = ChannelPromoContext {
             game,
             title,
             recent_chat: self.load_recent_channel_messages(login, 8).await,
+            beispiele,
         };
         self.pitch_text_gen
             .channel_promo(&ctx, invite)
@@ -3198,6 +3286,19 @@ impl PromoEngine {
         }
     }
 
+    async fn set_review_message_id(&self, id: i64, message_id: i64) {
+        if let Err(e) = sqlx::query!(
+            "UPDATE twitch_promo_pitch_log SET review_message_id = $2 WHERE id = $1",
+            id,
+            message_id,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            warn!(id, "set_review_message_id fehlgeschlagen: {e}");
+        }
+    }
+
     async fn mark_pitch_log_dropped(&self, id: i64, reason: &str) {
         if let Err(e) = sqlx::query!(
             "UPDATE twitch_promo_pitch_log SET reject_reason = $2 WHERE id = $1",
@@ -4130,7 +4231,6 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
-    use crate::promo_pitch::TargetedPitchContext;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
@@ -4150,9 +4250,6 @@ mod db_tests {
         async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             self.0.as_ref().map(|body| format!("{body} {invite}"))
         }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.0.clone()
-        }
     }
 
     struct SlowTextGen {
@@ -4164,10 +4261,6 @@ mod db_tests {
         async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             tokio::time::sleep(self.delay).await;
             Some(format!("hallo {invite}"))
-        }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            tokio::time::sleep(self.delay).await;
-            Some("hallo".to_string())
         }
     }
 
@@ -4190,10 +4283,6 @@ mod db_tests {
         async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Some(format!("{} {invite}", self.body))
-        }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Some(self.body.clone())
         }
     }
 
@@ -4270,7 +4359,7 @@ mod db_tests {
             reply: &str,
             kind: PitchCardKind,
             candidate_hint: Option<&str>,
-        ) {
+        ) -> Option<i64> {
             self.cards.lock().await.push((
                 channel_login.to_string(),
                 target_login.to_string(),
@@ -4279,6 +4368,7 @@ mod db_tests {
                 kind,
                 candidate_hint.map(|h| h.to_string()),
             ));
+            Some(4242)
         }
     }
 
@@ -4355,6 +4445,7 @@ mod db_tests {
         crate::promo_pitch::PitchResponse {
             occasion,
             reply: reply.to_string(),
+            ernst_gemeint: true,
             confidence: 0.9,
         }
     }
@@ -4575,6 +4666,9 @@ mod db_tests {
                 generated_text TEXT,
                 reject_reason TEXT,
                 sent_at TIMESTAMPTZ,
+                review_message_id BIGINT,
+                bewertung TEXT,
+                bewertet_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
             r#"CREATE TABLE twitch_chat_messages (
@@ -7499,5 +7593,72 @@ mod db_tests {
             new_count, 2,
             "API-getrackte Session-Viewer zählen als neue Chatter"
         );
+    }
+}
+
+#[cfg(test)]
+mod adressat_tests {
+    use super::adressat_fremd;
+    use crate::types::{ChatMessageBody, ChatMessageEvent, ChatReply, MentionRef, MessageFragment};
+
+    fn basis(text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "streamer_id".into(),
+            broadcaster_user_login: "marcymcwhy".into(),
+            broadcaster_user_name: "MarcyMcWhy".into(),
+            chatter_user_id: "viewer_id".into(),
+            chatter_user_login: "viewer".into(),
+            message: ChatMessageBody {
+                text: text.into(),
+                fragments: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn adressat_reply_an_fremden_ist_fremd() {
+        let mut event = basis("bin gerade in den ersten ranked games");
+        event.reply = Some(ChatReply {
+            parent_user_id: "streamer_id".into(),
+            parent_user_login: "marcymcwhy".into(),
+        });
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_reply_an_bot_ist_erlaubt() {
+        let mut event = basis("hey bot wie gehts dir eigentlich so");
+        event.reply = Some(ChatReply {
+            parent_user_id: "bot_id".into(),
+            parent_user_login: "ddc_bot".into(),
+        });
+        assert!(!adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_mention_auf_anderen_ist_fremd() {
+        let mut event = basis("schau mal was der gemacht hat");
+        event.message.fragments.push(MessageFragment {
+            fragment_type: "mention".into(),
+            text: "@jemand".into(),
+            mention: Some(MentionRef {
+                user_id: "anderer_id".into(),
+                user_login: "jemand".into(),
+            }),
+        });
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_broadcaster_anrede_ist_fremd() {
+        let event = basis("na marcymcwhy, schön eingeranked?");
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_normale_nachricht_ist_kein_fremd() {
+        let event = basis("solo queue ist echt die hölle heute");
+        assert!(!adressat_fremd(&event, "bot_id"));
     }
 }

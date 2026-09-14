@@ -7,6 +7,17 @@ pub const USE_CASE: &str = "promo_pitch";
 
 const PITCH_TIMEOUT: Duration = Duration::from_secs(20);
 const PITCH_MAX_CHARS: usize = 400;
+const JUDGE_MAX_TOKENS: i64 = 300;
+const TEXT_MAX_TOKENS: i64 = 220;
+
+macro_rules! stilvertrag {
+    () => {
+        "Stilvertrag. Du bist der Bot der Deutschen Deadlock Community, kein Mensch. Sag das offen, wenn dich jemand fragt oder wenn es den Witz trägt. Du spielst selbst nicht, hast keinen Rang, keine Matches, keine Builds, keine Meinung zu Items und warst nie irgendwo weg. Ich benutzt du nie für eigenes Zocken, eigene Ränge, eigene Erlebnisse, eigene Abwesenheit oder eigene Urteile über Builds.\n\nDu erfindest nichts. Du sagst nichts über Spielmechanik, Items, Builds, Ränge, Patches, Turniere, Scrims oder Community-Interna, das nicht wörtlich im Auslösetext oder im Chatverlauf steht. Im Zweifel bleibst du allgemein und redest über die Leute, nicht über das Spiel.\n\nSei frech und lustig, aber immer auf Kosten des Spiels, der Situation oder deiner selbst als Bot, nie auf Kosten der Person, die du ansprichst. Keine Beleidigungen, keine Fäkal- oder Sexualsprache, kein Auslachen, kein Anbiedern, kein Werbesprech.\n\nSo klingst du: deutsch, kurz, locker, Kleinschreibung ist normal. Selbstironie ja, Superlative nein. Emojis nutzt du nicht, höchstens :) . Keine Gedankenstriche, echte Umlaute, kein immer gleicher Schlusssatz."
+    };
+}
+
+pub const STILVERTRAG: &str = stilvertrag!();
+
 pub const PITCH_MIN_CONFIDENCE: f32 = 0.70;
 
 pub const PITCH_SYSTEM_PROMPT: &str = r#"Du bist im Twitch-Chat eines deutschen Deadlock-Streamers, der Partner der Deutschen Deadlock Community ist. Die Person vor dir wurde vom Bot bereits als neuer Zuschauer im getrackten Deadlock-Partnernetz geprüft. Nutze das nur als Auswahlkriterium. Sage niemals, dass die Person neu ist, zum ersten Mal gesehen wurde, beobachtet oder getrackt wurde.
@@ -133,6 +144,8 @@ pub struct PitchResponse {
     #[serde(default)]
     pub reply: String,
     #[serde(default)]
+    pub ernst_gemeint: bool,
+    #[serde(default)]
     pub confidence: f32,
 }
 
@@ -184,6 +197,8 @@ pub enum PitchRejectReason {
     MemberCount,
     Superlative,
     Dash,
+    IchForm,
+    Beleidigung,
     Emoji,
     TooLong,
     JoinPhrase,
@@ -198,6 +213,8 @@ impl PitchRejectReason {
             Self::MemberCount => "member_count",
             Self::Superlative => "superlative",
             Self::Dash => "dash",
+            Self::IchForm => "ich_form",
+            Self::Beleidigung => "beleidigung",
             Self::Emoji => "emoji",
             Self::TooLong => "too_long",
             Self::JoinPhrase => "join_phrase",
@@ -205,6 +222,161 @@ impl PitchRejectReason {
             Self::NoConcreteValue => "no_concrete_value",
         }
     }
+}
+
+const ICH_FORM_MARKER: &[&str] = &[
+    "ich spiele",
+    "ich zocke",
+    "ich zock ",
+    "ich hab bock",
+    "ich habe bock",
+    "ich hab gespielt",
+    "ich habe gespielt",
+    "gespielt hab",
+    "bin gerade",
+    "bin grad",
+    "bin wieder da",
+    "ich bin wieder da",
+    "sind wieder da",
+    "wir spielen",
+    "wir zocken",
+    "mein rank",
+    "mein build",
+    "mein main",
+    "mein hero",
+    "meine matches",
+    "meine games",
+];
+
+const ICH_WAR_ORT: &[&str] = &["urlaub", "weg", "krank", "offline"];
+
+const ICH_BIN_RANG: &[&str] = &[
+    "ich bin initiate",
+    "ich bin seeker",
+    "ich bin alchemist",
+    "ich bin arcanist",
+    "ich bin ritualist",
+    "ich bin emissary",
+    "ich bin archon",
+    "ich bin oracle",
+    "ich bin phantom",
+    "ich bin ascendant",
+    "ich bin eternus",
+    "ich bin diamond",
+];
+
+const ICH_STARTER: &[&str] = &["ich", "wir", "hab", "habe", "haben"];
+
+const ICH_VERB_NAH: &[&str] = &[
+    "gezockt",
+    "gespielt",
+    "verloren",
+    "gewonnen",
+    "gerankt",
+    "gegrindet",
+];
+
+const ABWESENHEIT_STARTER: &[&str] = &["war", "waren"];
+
+const ABWESENHEIT_ZIEL: &[&str] = &["weg"];
+
+const BELEIDIGUNG_MARKER: &[&str] = &[
+    "arschloch",
+    "hurensohn",
+    "hurensoehne",
+    "wichser",
+    "wichs",
+    "fotze",
+    "fick dich",
+    "fickdich",
+    "verpiss dich",
+    "missgeburt",
+    "spasti",
+    "spast",
+    "schlampe",
+    "nutte",
+    "hurentochter",
+    "mongo",
+    "kackbratze",
+    "idiot",
+    "idioten",
+    "scheiße",
+    "scheisse",
+    "scheißkerl",
+    "hurensöhne",
+    "arschlöcher",
+    "wixer",
+    "wixxer",
+    "ehrenlos",
+    "kek",
+];
+
+const ICH_SPIEL_VERB: &[&str] = &["gespielt", "gezockt"];
+
+fn phrase_nahe(lower: &str, starter: &[&str], ziele: &[&str]) -> bool {
+    let tokens: Vec<&str> = lower
+        .split_whitespace()
+        .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
+        .collect();
+    for (index, token) in tokens.iter().enumerate() {
+        if !starter.contains(token) {
+            continue;
+        }
+        let ende = (index + 4).min(tokens.len().saturating_sub(1));
+        for folge in &tokens[(index + 1).min(tokens.len())..=ende] {
+            if ziele.contains(folge) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn ich_form_reject(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    if ICH_FORM_MARKER.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    if (enthaelt_wort(&lower, "ich") || enthaelt_wort(&lower, "wir"))
+        && ICH_SPIEL_VERB.iter().any(|verb| lower.contains(verb))
+    {
+        return true;
+    }
+    if lower.contains("ich war") && ICH_WAR_ORT.iter().any(|ort| enthaelt_wort(&lower, ort)) {
+        return true;
+    }
+    if ICH_BIN_RANG.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    phrase_nahe(&lower, ICH_STARTER, ICH_VERB_NAH)
+        || phrase_nahe(&lower, ABWESENHEIT_STARTER, ABWESENHEIT_ZIEL)
+}
+
+pub fn beleidigung_reject(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    BELEIDIGUNG_MARKER
+        .iter()
+        .any(|needle| enthaelt_wort(&lower, needle))
+}
+
+fn enthaelt_wort(haystack_lower: &str, needle_lower: &str) -> bool {
+    let hay: Vec<char> = haystack_lower.chars().collect();
+    let pat: Vec<char> = needle_lower.chars().collect();
+    if pat.is_empty() || pat.len() > hay.len() {
+        return false;
+    }
+    for start in 0..=hay.len() - pat.len() {
+        if hay[start..start + pat.len()] != pat[..] {
+            continue;
+        }
+        let left_ok = start == 0 || !hay[start - 1].is_alphanumeric();
+        let end = start + pat.len();
+        let right_ok = end == hay.len() || !hay[end].is_alphanumeric();
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn pitch_filter_reject(text: &str) -> Option<PitchRejectReason> {
@@ -220,6 +392,12 @@ pub fn pitch_filter_reject(text: &str) -> Option<PitchRejectReason> {
     }
     if contains_hard_dash(text) {
         return Some(PitchRejectReason::Dash);
+    }
+    if ich_form_reject(text) {
+        return Some(PitchRejectReason::IchForm);
+    }
+    if beleidigung_reject(text) {
+        return Some(PitchRejectReason::Beleidigung);
     }
     if contains_forbidden_emoji(text) {
         return Some(PitchRejectReason::Emoji);
@@ -482,6 +660,7 @@ pub struct PitchJudgeInput {
     pub title: Option<String>,
     pub recent_chat: Vec<String>,
     pub target_login: String,
+    pub beispiele: String,
 }
 
 #[async_trait]
@@ -502,6 +681,7 @@ impl FireworksPitchJudge {
             .temperature(0.0)
             .json_object()
             .denken_aus()
+            .max_tokens(JUDGE_MAX_TOKENS)
             .timeout(PITCH_TIMEOUT);
         if let Some(endpoint) = endpoint {
             request = request.no_ledger().endpoint(endpoint);
@@ -525,19 +705,21 @@ pub struct ChannelPromoContext {
     pub game: Option<String>,
     pub title: Option<String>,
     pub recent_chat: Vec<String>,
+    pub beispiele: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct TargetedPitchContext {
+pub struct PartnerPitchContext {
     pub target_login: String,
     pub target_messages: Vec<String>,
     pub game: Option<String>,
     pub title: Option<String>,
     pub recent_chat: Vec<String>,
+    pub beispiele: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct PartnerPitchContext {
+pub struct TargetedPitchContext {
     pub target_login: String,
     pub target_messages: Vec<String>,
     pub game: Option<String>,
@@ -636,6 +818,8 @@ pub async fn build_channel_promo_text(ctx: &ChannelPromoContext, invite: &str) -
     if let Ok(user) = serde_json::to_string(ctx) {
         let request = tb_llm::Request::simple(CHANNEL_PROMO_SYSTEM_PROMPT, user)
             .temperature(0.35)
+            .denken_aus()
+            .max_tokens(TEXT_MAX_TOKENS)
             .timeout(PITCH_TIMEOUT);
         if let Ok(response) = tb_llm::complete(USE_CASE, request).await {
             if let Some(text) = finalize_channel_promo(&response.text, invite) {
@@ -645,6 +829,21 @@ pub async fn build_channel_promo_text(ctx: &ChannelPromoContext, invite: &str) -
     }
 
     finalize_channel_promo(fallback_channel_promo_body(ctx), invite)
+}
+
+pub async fn build_partner_pitch_text(ctx: &PartnerPitchContext) -> Option<String> {
+    let user = serde_json::to_string(ctx).ok()?;
+    let request = tb_llm::Request::simple(PARTNER_PITCH_SYSTEM_PROMPT, user)
+        .temperature(0.7)
+        .denken_aus()
+        .max_tokens(TEXT_MAX_TOKENS)
+        .timeout(PITCH_TIMEOUT);
+    let response = tb_llm::complete(USE_CASE, request).await.ok()?;
+    let body = clean_model_line(&response.text);
+    if body.is_empty() {
+        return None;
+    }
+    Some(body)
 }
 
 pub async fn build_targeted_pitch_text(ctx: &TargetedPitchContext) -> Option<String> {
@@ -661,23 +860,12 @@ pub async fn build_targeted_pitch_text(ctx: &TargetedPitchContext) -> Option<Str
     Some(text)
 }
 
-pub async fn build_partner_pitch_text(ctx: &PartnerPitchContext) -> Option<String> {
-    let user = serde_json::to_string(ctx).ok()?;
-    let request = tb_llm::Request::simple(PARTNER_PITCH_SYSTEM_PROMPT, user)
-        .temperature(0.7)
-        .timeout(PITCH_TIMEOUT);
-    let response = tb_llm::complete(USE_CASE, request).await.ok()?;
-    let body = clean_model_line(&response.text);
-    if body.is_empty() {
-        return None;
-    }
-    Some(body)
-}
-
 #[async_trait]
 pub trait PitchTextGen: Send + Sync {
     async fn channel_promo(&self, ctx: &ChannelPromoContext, invite: &str) -> Option<String>;
-    async fn targeted_pitch(&self, ctx: &TargetedPitchContext) -> Option<String>;
+    async fn targeted_pitch(&self, ctx: &TargetedPitchContext) -> Option<String> {
+        build_targeted_pitch_text(ctx).await
+    }
 }
 
 #[async_trait]
@@ -700,9 +888,6 @@ pub struct FireworksPitchTextGen;
 impl PitchTextGen for FireworksPitchTextGen {
     async fn channel_promo(&self, ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
         build_channel_promo_text(ctx, invite).await
-    }
-    async fn targeted_pitch(&self, ctx: &TargetedPitchContext) -> Option<String> {
-        build_targeted_pitch_text(ctx).await
     }
 }
 
@@ -752,6 +937,7 @@ mod tests {
             title: None,
             recent_chat: vec![],
             target_login: "t".to_string(),
+            beispiele: String::new(),
         };
         let _ = FireworksPitchJudge
             .decide_intern(input, Some(endpoint))
@@ -1125,5 +1311,137 @@ mod tests {
             "kenn ich, solo queue nervt manchmal wirklich",
             "viewer",
         ));
+    }
+
+    #[test]
+    fn ich_form_filter_faengt_selbstbehauptungen() {
+        for text in [
+            "ich spiele gerade eine runde",
+            "ich zocke heute noch",
+            "ich hab bock auf die picks",
+            "bin gerade in den ersten ranked games",
+            "wir spielen gerade die normale version",
+            "mein build ist eh besser",
+            "ich habe gestern noch eine runde gespielt",
+            "wir haben das gestern zusammen gezockt",
+            "ich zock heute noch ein bisschen",
+            "war gestern weg, jetzt wieder hier",
+            "hab gestern gezockt",
+            "ich war im urlaub",
+            "mein main ist haze",
+            "wir haben verloren",
+            "ich bin diamond",
+            "ich hab verloren",
+            "ich hab gewonnen",
+            "hab gerankt",
+            "ich bin archon",
+            "mein hero ist grey talon",
+            "bin wieder da",
+            "war ne woche weg",
+        ] {
+            assert_eq!(
+                pitch_filter_reject(text),
+                Some(PitchRejectReason::IchForm),
+                "{text} muss als Ich-Form verworfen werden"
+            );
+        }
+    }
+
+    #[test]
+    fn ich_form_laesst_zuschauerbezug_durch() {
+        for text in [
+            "hast du das schon mal gespielt",
+            "wie lange hast du gezockt heute",
+            "ich bin nur der bot hier",
+            "ich glaub die community mag das",
+            "schön, dass du wieder da bist",
+            "cool dass du wieder zockst",
+            "du warst lange weg",
+        ] {
+            assert_eq!(
+                pitch_filter_reject(text),
+                None,
+                "{text} redet ueber den Zuschauer oder den Bot, keine Ich-Form"
+            );
+        }
+    }
+
+    #[test]
+    fn beleidigung_filter_faengt_beschimpfungen() {
+        for text in [
+            "du hurensohn",
+            "so ein arschloch echt",
+            "verpiss dich",
+            "du idiot",
+            "das ist doch scheiße",
+            "ihr hurensöhne",
+            "ihr arschlöcher",
+            "du wixer",
+            "du wixxer",
+            "so ehrenlos ist das",
+            "kek",
+        ] {
+            assert_eq!(
+                pitch_filter_reject(text),
+                Some(PitchRejectReason::Beleidigung),
+                "{text} muss als Beleidigung verworfen werden"
+            );
+        }
+    }
+
+    #[test]
+    fn beleidigung_laesst_harmlose_woerter_durch() {
+        for text in ["ich mag kekse", "das ist ein keks"] {
+            assert_eq!(
+                pitch_filter_reject(text),
+                None,
+                "{text} enthaelt kek nur als Teilwort und darf nicht fallen"
+            );
+        }
+    }
+
+    #[test]
+    fn ernst_gemeint_default_false() {
+        let parsed =
+            parse_pitch_response(r#"{"occasion":"solo_queue","reply":"kenn ich"}"#).unwrap();
+        assert!(!parsed.ernst_gemeint);
+        let echt = parse_pitch_response(
+            r#"{"occasion":"solo_queue","reply":"kenn ich","ernst_gemeint":true}"#,
+        )
+        .unwrap();
+        assert!(echt.ernst_gemeint);
+    }
+
+    #[test]
+    fn fixture_log_verwirft_ich_form_laesst_rest_durch() {
+        let ich_form = [
+            "bin gerade in den ersten ranked games",
+            "ich hab bock auf die picks",
+            "war ein paar tage weg, aber jetzt bin ich wieder da",
+            "wir spielen gerade die normale version",
+        ];
+        for text in ich_form {
+            assert_eq!(
+                pitch_filter_reject(text),
+                Some(PitchRejectReason::IchForm),
+                "Ich-Form aus dem Log muss fallen: {text}"
+            );
+        }
+        let rest = [
+            "ohne green investment wird das gegen die tanky builds wackelig",
+            "die scrim teams werden gerade ordentlich durchgeschuettelt",
+            "der prime fuer affiliate direkt dazu",
+            "na du nippel, schoen eingeranked?",
+            "oh marcy, oh marcy",
+            "was geht alles fit",
+            "die community hier ist echt quicklebendig",
+        ];
+        for text in rest {
+            assert_eq!(
+                pitch_filter_reject(text),
+                None,
+                "saubere Log-Antwort darf nicht ueber die Filter fallen: {text}"
+            );
+        }
     }
 }
