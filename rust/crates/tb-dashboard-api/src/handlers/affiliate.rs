@@ -709,7 +709,7 @@ pub async fn api_gutschriften_handler(
     .into_response()
 }
 
-/// `GET /twitch/api/affiliate/gutschriften/:gutschrift_id/pdf`.
+/// `GET /twitch/api/affiliate/gutschriften/{gutschrift_id}/pdf`.
 pub async fn api_gutschrift_pdf_handler(
     state: Option<Extension<DashboardAuthState>>,
     headers: HeaderMap,

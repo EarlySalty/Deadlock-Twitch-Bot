@@ -14,13 +14,12 @@
 //! rate-limitiert und durch Grounding + gehärteten System-Prompt gegen
 //! Prompt-Injection abgesichert. Logging-Fehler brechen die Antwort nie ab.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use axum::extract::{ConnectInfo, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -30,6 +29,8 @@ use sqlx::PgPool;
 
 use tb_knowledge::{assemble_grounding, KnowledgeBase, Namespace};
 use tb_llm::{Message, Request};
+
+use crate::auth::security::OptionalConnectInfo;
 
 // ── Konstanten (1:1 self_explainer.py / routes_self_explainer.py) ──────────────
 
@@ -630,7 +631,7 @@ async fn post_discord_via_worker(question: String, result: SelfExplainerAnswer, 
 /// `POST /twitch/api/v2/self-explainer/ask` (öffentlich, rate-limitiert).
 pub async fn self_explainer_ask(
     State(pool): State<PgPool>,
-    connect: Option<ConnectInfo<SocketAddr>>,
+    OptionalConnectInfo(connect): OptionalConnectInfo,
     body: String,
 ) -> Response {
     let peer = connect

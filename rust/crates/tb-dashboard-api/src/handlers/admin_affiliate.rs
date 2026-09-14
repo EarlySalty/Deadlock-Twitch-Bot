@@ -327,7 +327,7 @@ pub async fn gutschriften_handler(
     }
 }
 
-/// `GET /twitch/api/admin/affiliates/gutschriften/:gutschrift_id/pdf` —
+/// `GET /twitch/api/admin/affiliates/gutschriften/{gutschrift_id}/pdf` —
 /// gespeichertes Gutschrift-PDF herunterladen (Admin). Streamt das `pdf_blob`-
 /// BYTEA als `application/pdf` (kein Generieren).
 pub async fn gutschrift_pdf_handler(
@@ -369,7 +369,7 @@ pub async fn gutschrift_pdf_handler(
     }
 }
 
-/// `GET /twitch/api/admin/affiliates/:login` — Affiliate-Detail (Admin).
+/// `GET /twitch/api/admin/affiliates/{login}` — Affiliate-Detail (Admin).
 /// Inkl. PII-Readiness (entschlüsselt verschlüsselte Stammdaten via Field-Cipher).
 pub async fn detail_handler(
     auth: DashboardAuthLevel,
@@ -405,7 +405,7 @@ pub async fn detail_handler(
     }
 }
 
-/// `GET /twitch/api/admin/affiliates/:login/gutschriften` — Gutschriften eines
+/// `GET /twitch/api/admin/affiliates/{login}/gutschriften` — Gutschriften eines
 /// Affiliates inkl. Konto + PII-Readiness + Summary (Admin).
 pub async fn gutschriften_for_login_handler(
     auth: DashboardAuthLevel,
@@ -441,7 +441,7 @@ pub async fn gutschriften_for_login_handler(
     }
 }
 
-/// `POST /twitch/api/admin/affiliates/:login/toggle` — is_active flippen (Admin).
+/// `POST /twitch/api/admin/affiliates/{login}/toggle` — is_active flippen (Admin).
 pub async fn toggle_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -465,7 +465,7 @@ pub async fn toggle_handler(
     }
 }
 
-/// `POST /twitch/api/admin/affiliates/:login/commission-rate` — Provisionssatz setzen.
+/// `POST /twitch/api/admin/affiliates/{login}/commission-rate` — Provisionssatz setzen.
 pub async fn set_commission_rate_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,

@@ -427,7 +427,7 @@ fn internal_error(error: sqlx::Error) -> Response {
         .into_response()
 }
 
-/// `GET /twitch/api/admin/research/:login?days=30`
+/// `GET /twitch/api/admin/research/{login}?days=30`
 pub async fn handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,

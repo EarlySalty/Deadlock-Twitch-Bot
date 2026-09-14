@@ -43,7 +43,7 @@ use tb_raid::{
 };
 use tb_transport_twitch::{user_token::UserTokenError, HelixClient, HelixConfig};
 
-use crate::auth::security::require_internal;
+use crate::auth::security::{require_internal, OptionalConnectInfo};
 
 /// Einzige Plattform mit fertigem Verbinden-Weg. Andere Namen kommen ueber
 /// dieselbe Route und werden sauber abgewiesen.
@@ -643,7 +643,7 @@ fn intern_erlaubt(
 /// `GET /twitch/api/v2/internal/platform-token?streamer=&platform=`.
 pub async fn internal_platform_token_handler(
     State(pool): State<PgPool>,
-    connect: Option<ConnectInfo<SocketAddr>>,
+    OptionalConnectInfo(connect): OptionalConnectInfo,
     expected: Option<Extension<ExpectedToken>>,
     config: Option<Extension<PlatformTokenConfig>>,
     headers: HeaderMap,
@@ -868,7 +868,10 @@ mod tests {
             headers.insert(INTERNAL_TOKEN_HEADER, "synthetisch".parse().unwrap());
             let response = internal_platform_token_handler(
                 State(pool.clone()),
-                Some(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000)))),
+                OptionalConnectInfo(Some(ConnectInfo(SocketAddr::from((
+                    [127, 0, 0, 1],
+                    40000,
+                ))))),
                 Some(Extension(ExpectedToken("synthetisch".into()))),
                 Some(Extension(config_mit(Arc::new(FakeTokenClient::neu())))),
                 headers,

@@ -448,7 +448,7 @@ CREATE TABLE twitch_roadmap_items (
         Router::new()
             .route("/twitch/api/v2/roadmap", post(create_handler))
             .route(
-                "/twitch/api/v2/roadmap/:id",
+                "/twitch/api/v2/roadmap/{id}",
                 patch(update_handler).delete(delete_handler),
             )
             .with_state(pool)

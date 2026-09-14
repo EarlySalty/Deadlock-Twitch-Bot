@@ -1720,7 +1720,7 @@ pub async fn vocab_upsert_handler(
     }
 }
 
-/// `DELETE /social-media/api/admin/vocab/:term` — Vokabel löschen (Admin).
+/// `DELETE /social-media/api/admin/vocab/{term}` — Vokabel löschen (Admin).
 pub async fn vocab_delete_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2276,7 +2276,7 @@ pub async fn admin_clips_handler(
         .into_response()
 }
 
-/// `GET /social-media/api/admin/clips/:clip_db_id` — Clip-Detail (Admin).
+/// `GET /social-media/api/admin/clips/{clip_db_id}` — Clip-Detail (Admin).
 pub async fn admin_clip_detail_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2299,7 +2299,7 @@ pub async fn admin_clip_detail_handler(
     }
 }
 
-/// `POST /social-media/api/admin/clips/:clip_db_id/discard` — Clip verwerfen (Admin).
+/// `POST /social-media/api/admin/clips/{clip_db_id}/discard` — Clip verwerfen (Admin).
 pub async fn admin_clip_discard_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2456,7 +2456,7 @@ fn parse_hashtag_field(payload: &Value, field: &str) -> Result<Option<Vec<String
     }
 }
 
-/// `PUT /social-media/api/admin/clips/:clip_db_id/enrichment` — Edits speichern (Admin).
+/// `PUT /social-media/api/admin/clips/{clip_db_id}/enrichment` — Edits speichern (Admin).
 pub async fn enrichment_put_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2542,7 +2542,7 @@ pub async fn enrichment_put_handler(
     }
 }
 
-/// `GET /social-media/api/admin/clips/:clip_db_id/enrichment` — Enrichment (Admin).
+/// `GET /social-media/api/admin/clips/{clip_db_id}/enrichment` — Enrichment (Admin).
 pub async fn enrichment_get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2566,7 +2566,7 @@ pub async fn enrichment_get_handler(
     Json(enrichment_record_json(&record)).into_response()
 }
 
-/// `POST /social-media/api/admin/clips/:clip_db_id/enrichment/run` — Enrichment
+/// `POST /social-media/api/admin/clips/{clip_db_id}/enrichment/run` — Enrichment
 /// manuell anstoßen (Admin). Optionaler Body `{ "force": true }` reichert auch
 /// bereits fertige Clips neu an. Baut den LLM-Dispatcher inline. Transkription
 /// ist per Grillme-Entscheidung (Block 15) deaktiviert — es wird KEIN Transcriber
@@ -2626,7 +2626,7 @@ pub async fn enrichment_run_handler(
     .into_response()
 }
 
-/// `GET /social-media/api/admin/analytics/clips/:clip_db_id` — Analytics (Admin).
+/// `GET /social-media/api/admin/analytics/clips/{clip_db_id}` — Analytics (Admin).
 pub async fn clip_analytics_get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2805,7 +2805,7 @@ fn normalize_platform_list(value: Option<&Value>) -> Result<Vec<String>, Respons
     }
 }
 
-/// `GET /social-media/api/admin/approval/:clip_db_id` — Approval-State (Admin).
+/// `GET /social-media/api/admin/approval/{clip_db_id}` — Approval-State (Admin).
 pub async fn approval_get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2828,7 +2828,7 @@ pub async fn approval_get_handler(
     Json(json!({ "clip_db_id": clip_db_id, "approval": approval })).into_response()
 }
 
-/// `POST /social-media/api/admin/approval/:clip_db_id/decision` — Entscheidung (Admin).
+/// `POST /social-media/api/admin/approval/{clip_db_id}/decision` — Entscheidung (Admin).
 pub async fn approval_decision_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -2921,7 +2921,7 @@ pub async fn approval_decision_handler(
     }
 }
 
-/// `POST /social-media/api/approval/:clip_db_id/cancel` — eingeplante Uploads
+/// `POST /social-media/api/approval/{clip_db_id}/cancel` — eingeplante Uploads
 /// eines Clips stoppen.
 ///
 /// Macht das Versprechen des Modus „Veto-Fenster" wahr: eingeplant heißt dort,
@@ -3200,7 +3200,7 @@ fn parse_post_times(value: &Value) -> Result<Vec<String>, &'static str> {
     Ok(out)
 }
 
-/// `PUT /social-media/api/admin/settings/posting-plan/platform/:platform` —
+/// `PUT /social-media/api/admin/settings/posting-plan/platform/{platform}` —
 /// Auto-Posting und Kadenz einer Plattform setzen.
 pub async fn posting_plan_platform_put_handler(
     auth: DashboardAuthLevel,
@@ -3314,7 +3314,7 @@ pub async fn posting_plan_platform_put_handler(
     Json(posting_plan_json(&pool, &slug).await).into_response()
 }
 
-/// `PUT /social-media/api/admin/settings/posting-plan/category/:category_key` —
+/// `PUT /social-media/api/admin/settings/posting-plan/category/{category_key}` —
 /// Auto-Posting einer Spielkategorie schalten.
 pub async fn posting_plan_category_put_handler(
     auth: DashboardAuthLevel,
@@ -3532,7 +3532,7 @@ fn is_supported_platform(p: &str) -> bool {
     matches!(p, "tiktok" | "youtube" | "instagram")
 }
 
-/// `GET /social-media/oauth/start/:platform` — OAuth-Flow starten (Redirect).
+/// `GET /social-media/oauth/start/{platform}` — OAuth-Flow starten (Redirect).
 ///
 /// Der `streamer`-Parameter bleibt hier optional (Verbinden ist nicht
 /// zerstörend), [`GLOBAL_SCOPE_MARKER`] zeigt aber wie beim Trennen auf die
@@ -3582,7 +3582,7 @@ pub struct OAuthCallbackQuery {
     pub error: Option<String>,
 }
 
-/// `GET /social-media/oauth/callback[/:platform]` — Provider-Callback (öffentlich,
+/// `GET /social-media/oauth/callback[/{platform}]` — Provider-Callback (öffentlich,
 /// Security über den State-Token).
 pub async fn oauth_callback_handler(
     State(pool): State<PgPool>,
@@ -3640,7 +3640,7 @@ pub async fn oauth_callback_handler(
     }
 }
 
-/// `POST /social-media/oauth/disconnect/:platform?streamer=<kanal>` — Plattform
+/// `POST /social-media/oauth/disconnect/{platform}?streamer=<kanal>` — Plattform
 /// trennen.
 ///
 /// Der Parameter ist Pflicht (Admin ohne `streamer` → 400). Vorher schickte das

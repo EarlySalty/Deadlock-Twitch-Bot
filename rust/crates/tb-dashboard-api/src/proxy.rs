@@ -42,6 +42,7 @@
 //! `TB_DASHBOARD_LEGACY_FALLBACK_URL` — wenn leer oder nicht gesetzt, antwortet
 //! der Fallback mit 404 (Proxy deaktiviert).
 
+#[cfg(test)]
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +54,8 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
+
+use crate::auth::security::OptionalConnectInfo;
 
 /// Analytics-Responses können groß sein (Viewer-Profiles, Chat-Graph etc.) —
 /// 16 MiB ist großzügig aber verhindert OOM bei normalen API-Antworten.
@@ -122,7 +125,7 @@ fn is_hop_header(name: &HeaderName) -> bool {
 /// ```
 pub async fn dashboard_fallback_handler(
     Extension(proxy): Extension<DashboardProxyExt>,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
+    OptionalConnectInfo(connect_info): OptionalConnectInfo,
     req: Request,
 ) -> Response {
     let Some(proxy) = proxy.0 else {
@@ -605,7 +608,7 @@ mod tests {
     async fn patch_und_delete_werden_weitergereicht() {
         let upstream = Router::new()
             .route(
-                "/twitch/api/v2/roadmap/:id",
+                "/twitch/api/v2/roadmap/{id}",
                 any(|req: axum::http::Request<Body>| async move {
                     let method = req.method().to_string();
                     axum::Json(serde_json::json!({ "method": method }))

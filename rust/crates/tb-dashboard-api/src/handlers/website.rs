@@ -41,7 +41,7 @@ pub async fn streamer_root_handler(uri: Uri) -> Response {
 /// Verzeichnis-Treffer → `index.html` (SPA-Fallback). Python:
 /// `_resolve_website_dist_asset_response`.
 pub async fn streamer_asset_handler(Path(raw_path): Path<String>) -> Response {
-    // axum 0.7 liefert bei `/*path` den Wert mit führendem `/`.
+    // axum 0.7 liefert bei `/{*path}` den Wert mit führendem `/`.
     serve_website_asset(website_dist_root(), raw_path.trim_start_matches('/')).await
 }
 

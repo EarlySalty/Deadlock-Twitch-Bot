@@ -995,7 +995,7 @@ mod tests {
 
     fn make_detail_router(pool: PgPool, token: &str) -> Router {
         Router::new()
-            .route("/twitch/api/admin/streamers/:login", get(detail_handler))
+            .route("/twitch/api/admin/streamers/{login}", get(detail_handler))
             .with_state(pool)
             .layer(Extension(ExpectedToken(token.to_string())))
     }

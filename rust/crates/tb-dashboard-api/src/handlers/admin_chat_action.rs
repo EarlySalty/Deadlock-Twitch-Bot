@@ -18,7 +18,7 @@
 //!
 //! **Prozessgrenze:** Der eigentliche Send läuft NICHT in tb-dashboard (eigener
 //! Prozess ohne Bot-Token/Chat). Er wird über die Bot-internal-API
-//! (`POST {base}/streamers/:login/chat-action`, `X-Internal-Token`) gebrückt —
+//! (`POST {base}/streamers/{login}/chat-action`, `X-Internal-Token`) gebrückt —
 //! exakt der native Send-Pfad (`chat_action_handler` → `ChatActionAdapter`).
 
 use std::time::Duration;

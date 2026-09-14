@@ -138,13 +138,16 @@ pub(crate) async fn bounded_body(
 
 async fn credential(fd: u32) -> Result<Zeroizing<String>, &'static str> {
     use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use std::os::fd::BorrowedFd;
     let raw = i32::try_from(fd)
         .ok()
         .filter(|fd| *fd >= 3)
         .ok_or("Infisical-FD ist ungültig.")?;
-    let flags = fcntl(raw, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
+    let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+    let flags = fcntl(&borrowed, FcntlArg::F_GETFD)
+        .map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
     fcntl(
-        raw,
+        &borrowed,
         FcntlArg::F_SETFD(FdFlag::from_bits_retain(flags) | FdFlag::FD_CLOEXEC),
     )
     .map_err(|_| "Infisical-FD konnte nicht geschützt werden.")?;
@@ -789,13 +792,13 @@ mod tests {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
         use std::os::fd::AsRawFd;
         let file = memory_credential(b"synthetic-bootstrap\n");
-        assert_eq!(fcntl(file.as_raw_fd(), FcntlArg::F_GETFD).unwrap(), 0);
+        assert_eq!(fcntl(&file, FcntlArg::F_GETFD).unwrap(), 0);
         assert_eq!(
             &*credential(file.as_raw_fd() as u32).await.unwrap(),
             "synthetic-bootstrap"
         );
         assert_ne!(
-            fcntl(file.as_raw_fd(), FcntlArg::F_GETFD).unwrap() & FdFlag::FD_CLOEXEC.bits(),
+            fcntl(&file, FcntlArg::F_GETFD).unwrap() & FdFlag::FD_CLOEXEC.bits(),
             0
         );
         for value in [

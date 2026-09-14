@@ -80,12 +80,13 @@
 //! Der Client darf ausschliesslich `{"typ":"ping"}` senden und bekommt darauf
 //! `{"typ":"pong"}`. Jeder andere Rahmen wird verworfen.
 
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{FromRequestParts, Query, State};
+use axum::http::{request::Parts, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use futures_util::{SinkExt, StreamExt};
@@ -141,6 +142,21 @@ const NACHLAUF_RUNDEN: u32 = 5;
 /// er nicht falsch wird, wenn jemand an einer davon dreht.
 const RUECKGRIFF_RUNDEN: u32 =
     ((NACHZUG_RUECKGRIFF + NACHLAUF_DECKEL - 1) / NACHLAUF_DECKEL) as u32;
+
+pub struct OptionalWebSocketUpgrade(Option<WebSocketUpgrade>);
+
+impl<S> FromRequestParts<S> for OptionalWebSocketUpgrade
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            WebSocketUpgrade::from_request_parts(parts, state).await.ok(),
+        ))
+    }
+}
 
 /// Query-Parameter von `GET /obs/ws`.
 ///
@@ -440,7 +456,7 @@ pub async fn obs_ws_handler(
     auth_state: Option<Extension<DashboardAuthState>>,
     headers: HeaderMap,
     Query(abfrage): Query<ObsWsAbfrage>,
-    upgrade: Option<WebSocketUpgrade>,
+    OptionalWebSocketUpgrade(upgrade): OptionalWebSocketUpgrade,
 ) -> Response {
     let login = match kanal_freigabe(&auth, abfrage.streamer.as_deref()) {
         Ok(login) => login,
@@ -457,7 +473,6 @@ pub async fn obs_ws_handler(
             "Dieser Endpunkt spricht nur WebSocket.",
         );
     };
-
     let waechter =
         SessionWaechter::bauen(&auth, auth_state.map(|Extension(state)| state), &headers);
     let seit = abfrage.seit();
@@ -613,7 +628,7 @@ async fn nachlauf_senden(
                 }
                 for (id, json) in zeilen {
                     if schreiber
-                        .send(Message::Text(drahtrahmen(id, &json)))
+                        .send(Message::Text(drahtrahmen(id, &json).into()))
                         .await
                         .is_err()
                     {
@@ -668,7 +683,7 @@ async fn nachlauf_senden(
                 continue;
             }
             if schreiber
-                .send(Message::Text(drahtrahmen(id, &json)))
+                .send(Message::Text(drahtrahmen(id, &json).into()))
                 .await
                 .is_err()
             {
@@ -709,7 +724,7 @@ async fn luecke_melden(
     bis: i64,
 ) -> bool {
     if schreiber
-        .send(Message::Text(luecken_rahmen(bis)))
+        .send(Message::Text(luecken_rahmen(bis).into()))
         .await
         .is_err()
     {
@@ -777,7 +792,7 @@ async fn socket_bedienen(
                 if letztes_lebenszeichen.elapsed() > LEERLAUF_DECKEL {
                     break Some(SchliessGrund::Leerlauf);
                 }
-                if schreiber.send(Message::Ping(Vec::new())).await.is_err() {
+                if schreiber.send(Message::Ping(Vec::new().into())).await.is_err() {
                     break None;
                 }
             }
@@ -796,7 +811,7 @@ async fn socket_bedienen(
                             break None;
                         }
                         if ist_ping(&nachricht)
-                            && schreiber.send(Message::Text(PONG.to_string())).await.is_err()
+                            && schreiber.send(Message::Text(PONG.to_string().into())).await.is_err()
                         {
                             break None;
                         }
@@ -824,7 +839,7 @@ async fn socket_bedienen(
                             if !buch.live(rahmen.id) {
                                 continue;
                             }
-                            if schreiber.send(Message::Text(drahtrahmen(rahmen.id, &json))).await.is_err() {
+                            if schreiber.send(Message::Text(drahtrahmen(rahmen.id, &json).into())).await.is_err() {
                                 break None;
                             }
                         }
@@ -1013,11 +1028,11 @@ mod tests {
 
     #[test]
     fn nur_der_ping_gilt_als_client_rahmen() {
-        assert!(ist_ping(&Message::Text(r#"{"typ":"ping"}"#.to_string())));
-        assert!(!ist_ping(&Message::Text(r#"{"typ":"chat"}"#.to_string())));
-        assert!(!ist_ping(&Message::Text("kein json".to_string())));
-        assert!(!ist_ping(&Message::Binary(vec![1, 2, 3])));
-        assert!(!ist_ping(&Message::Pong(Vec::new())));
+        assert!(ist_ping(&Message::Text(r#"{"typ":"ping"}"#.to_string().into())));
+        assert!(!ist_ping(&Message::Text(r#"{"typ":"chat"}"#.to_string().into())));
+        assert!(!ist_ping(&Message::Text("kein json".to_string().into())));
+        assert!(!ist_ping(&Message::Binary(vec![1, 2, 3].into())));
+        assert!(!ist_ping(&Message::Pong(Vec::new().into())));
     }
 
     #[test]

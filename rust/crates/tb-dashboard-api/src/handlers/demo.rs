@@ -1160,7 +1160,7 @@ pub fn build_demo_router() -> Router {
     Router::new()
         .route("/twitch/demo", get(demo_index_handler))
         .route("/twitch/demo/", get(demo_index_handler))
-        .route("/twitch/demo/dashboard-v2/*path", get(demo_assets_handler))
+        .route("/twitch/demo/dashboard-v2/{*path}", get(demo_assets_handler))
         .route("/twitch/demo/api/v2/auth-status", get(demo_auth_status))
         .route("/twitch/demo/api/v2/streamers", get(demo_streamers))
         .route("/twitch/demo/api/v2/overview", get(demo_overview))

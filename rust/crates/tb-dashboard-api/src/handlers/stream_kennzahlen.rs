@@ -27,7 +27,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use tb_http_core::{ExpectedToken, INTERNAL_TOKEN_HEADER};
 
-use crate::auth::security::require_internal;
+use crate::auth::security::{require_internal, OptionalConnectInfo};
 use crate::handlers::viewer_exclusion::viewer_exclusion_logins;
 
 #[derive(Deserialize)]
@@ -63,7 +63,7 @@ fn intern_erlaubt(
 /// 503 wenn die Auswertung gerade nicht antwortet.
 pub async fn internal_stream_kennzahlen_handler(
     State(pool): State<PgPool>,
-    connect: Option<ConnectInfo<SocketAddr>>,
+    OptionalConnectInfo(connect): OptionalConnectInfo,
     expected: Option<Extension<ExpectedToken>>,
     headers: HeaderMap,
     Query(query): Query<StreamKennzahlenQuery>,
@@ -362,7 +362,9 @@ mod tests {
         if let Some(t) = token {
             headers.insert(INTERNAL_TOKEN_HEADER, t.parse().unwrap());
         }
-        let connect = von.map(|ip| ConnectInfo(SocketAddr::from((ip, 40000))));
+        let connect = OptionalConnectInfo(
+            von.map(|ip| ConnectInfo(SocketAddr::from((ip, 40000)))),
+        );
         let antwort = internal_stream_kennzahlen_handler(
             State(pool.clone()),
             connect,

@@ -284,7 +284,7 @@ pub async fn analyse_assets_handler(
     if let Some(r) = check_spa_auth(&auth, &pool).await {
         return r;
     }
-    // axum 0.7 liefert bei `/*path` den Wert mit führendem `/`
+    // axum 0.7 liefert bei `/{*path}` den Wert mit führendem `/`
     serve_asset(asset_path.trim_start_matches('/')).await
 }
 

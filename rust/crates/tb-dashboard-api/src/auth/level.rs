@@ -15,8 +15,9 @@
 //!    oder mit Modus-Cookie bleibt sie Admin.
 //! 4. **None** — alles andere
 
+#[cfg(test)]
+use async_trait::async_trait;
 use axum::{
-    async_trait,
     body::Body,
     extract::FromRequestParts,
     http::{request::Parts, Extensions, HeaderMap, Request},
@@ -316,7 +317,6 @@ fn partner_or_admin(
 ///
 /// Benötigt `DashboardAuthState` als Extension im Router.
 /// Ohne Extension → immer `None` (fail-closed).
-#[async_trait]
 impl<S> FromRequestParts<S> for DashboardAuthLevel
 where
     S: Send + Sync,

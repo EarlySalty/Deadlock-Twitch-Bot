@@ -17,8 +17,13 @@
 //! CSRF-Erzeugung/-Validierung liegt session-nah in [`super::session`]
 //! (`create_*_session` setzt das Token, `validate_csrf` prüft es).
 
+use axum::{
+    extract::{ConnectInfo, FromRequestParts},
+    http::request::Parts,
+};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::{convert::Infallible, net::SocketAddr};
 
 /// Session-Typ der Rate-Limit-Hit-Rows (Python: state_store.py:20).
 const RATE_LIMIT_SESSION_TYPE: &str = "rate_limit:dashboard_auth";
@@ -217,6 +222,25 @@ fn unix_now_f64() -> f64 {
 // Loopback-/Peer-Guard
 // ───────────────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone)]
+pub struct OptionalConnectInfo(pub Option<ConnectInfo<SocketAddr>>);
+
+impl<S> FromRequestParts<S> for OptionalConnectInfo
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .cloned(),
+        ))
+    }
+}
+
 /// Prüft, ob ein interner Request zugelassen wird: Peer-IP ist Loopback UND der
 /// präsentierte Token stimmt konstant-zeitlich mit dem erwarteten überein.
 ///
@@ -257,7 +281,6 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use std::net::SocketAddr;
 
 /// Konfiguration eines Rate-Limit-Layers: logischer Bucket-Name + Limits.
 #[derive(Clone)]
