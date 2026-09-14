@@ -8,6 +8,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_TITLE_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
@@ -38,6 +39,7 @@ export type DashboardRoute =
   | 'uplink'
   | 'verwaltung'
   | 'overlay'
+  | 'title'
   | 'pricing'
   | 'hilfe'
   | 'feedback';
@@ -125,6 +127,12 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
       label: 'Stream-Overlay',
       icon: MonitorPlay,
       active: activeRoute === 'overlay',
+    },
+    {
+      href: PREVIEW_TITLE_ROUTE,
+      label: 'Titel-Studio',
+      icon: Sparkles,
+      active: activeRoute === 'title',
     },
     {
       href: PREVIEW_PRICING_ROUTE,

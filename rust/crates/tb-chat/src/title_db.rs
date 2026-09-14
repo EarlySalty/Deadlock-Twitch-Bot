@@ -28,6 +28,22 @@ pub struct KnowledgeTitle {
     pub quality_tier: Option<i32>,
 }
 
+/// Persistente Nutzerpraeferenzen des Dashboard-Titelgenerators.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TitlePreferences {
+    pub style_preference: String,
+    pub experimental_auto_set: bool,
+}
+
+/// Vom Streamer explizit bewertetes Beispiel fuer die Human-Feedback-Schleife.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleFeedbackItem {
+    pub primary_title: String,
+    pub feedback: String,
+    pub selected_title: Option<String>,
+    pub edited_title: Option<String>,
+}
+
 /// Löst den `twitch_login` zu einer `twitch_user_id` auf (Python
 /// `_resolve_streamer_login_for_user_id`): leerer/fehlender Treffer → `None`.
 async fn resolve_streamer_login(pool: &PgPool, streamer_id: &str) -> Option<String> {
@@ -141,6 +157,73 @@ pub async fn get_top_knowledge_titles(pool: &PgPool, limit: i64) -> Vec<Knowledg
             Vec::new()
         }
     }
+}
+
+pub async fn get_title_preferences(pool: &PgPool, streamer_id: &str) -> TitlePreferences {
+    let row = sqlx::query_as::<_, (String, bool)>(
+        "SELECT style_preference, experimental_auto_set \
+         FROM title_generator_preferences WHERE twitch_user_id = $1",
+    )
+    .bind(streamer_id)
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(Some((style_preference, experimental_auto_set))) => TitlePreferences { style_preference, experimental_auto_set },
+        Ok(None) => TitlePreferences::default(),
+        Err(error) => {
+            tracing::debug!(%error, streamer_id, "title preferences konnten nicht geladen werden");
+            TitlePreferences::default()
+        }
+    }
+}
+
+pub async fn save_title_preferences(pool: &PgPool, streamer_id: &str, style_preference: &str, experimental_auto_set: bool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO title_generator_preferences \
+         (twitch_user_id, style_preference, experimental_auto_set, updated_at) \
+         VALUES ($1, $2, $3, NOW()) \
+         ON CONFLICT (twitch_user_id) DO UPDATE SET \
+             style_preference = EXCLUDED.style_preference, \
+             experimental_auto_set = EXCLUDED.experimental_auto_set, updated_at = NOW()",
+    )
+    .bind(streamer_id).bind(style_preference).bind(experimental_auto_set)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn insert_title_generation(pool: &PgPool, generation_id: &str, streamer_id: &str, keywords: &str, primary_title: &str, alternatives: &[String]) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO title_generator_feedback \
+         (generation_id, twitch_user_id, keywords, primary_title, alternatives) \
+         VALUES ($1, $2, $3, $4, $5::jsonb)",
+    )
+    .bind(generation_id).bind(streamer_id).bind(keywords).bind(primary_title)
+    .bind(serde_json::to_string(alternatives).unwrap_or_else(|_| "[]".to_string()))
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn save_title_feedback(pool: &PgPool, streamer_id: &str, generation_id: &str, feedback: &str, selected_title: Option<&str>, edited_title: Option<&str>) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE title_generator_feedback SET \
+             feedback = $3, selected_title = $4, edited_title = $5, feedback_at = NOW() \
+         WHERE generation_id = $1 AND twitch_user_id = $2",
+    )
+    .bind(generation_id).bind(streamer_id).bind(feedback).bind(selected_title).bind(edited_title)
+    .execute(pool).await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn get_recent_title_feedback(pool: &PgPool, streamer_id: &str, limit: i64) -> Vec<TitleFeedbackItem> {
+    sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT primary_title, feedback, selected_title, edited_title \
+         FROM title_generator_feedback WHERE twitch_user_id = $1 AND feedback IS NOT NULL \
+         ORDER BY feedback_at DESC NULLS LAST, created_at DESC LIMIT $2",
+    )
+    .bind(streamer_id).bind(limit).fetch_all(pool).await.unwrap_or_default()
+    .into_iter().map(|(primary_title, feedback, selected_title, edited_title)| TitleFeedbackItem {
+        primary_title, feedback, selected_title, edited_title,
+    }).collect()
 }
 
 // ───────────────────────────────────────────────────────────────────────────

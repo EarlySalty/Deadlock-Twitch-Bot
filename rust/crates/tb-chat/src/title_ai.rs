@@ -339,6 +339,15 @@ pub struct PromptLiveState {
     pub party_hint: Option<String>,
 }
 
+/// Explizites Human-Feedback aus frueheren Generierungen.
+#[derive(Debug, Clone)]
+pub struct PromptFeedbackItem {
+    pub proposed_title: String,
+    pub feedback: String,
+    pub selected_title: Option<String>,
+    pub edited_title: Option<String>,
+}
+
 fn lines_or_default(lines: Vec<String>) -> String {
     if lines.is_empty() {
         "  (keine Daten)".to_string()
@@ -362,8 +371,72 @@ fn history_line(item: &PromptHistoryItem) -> String {
 /// Hinweis: Für `Hero`/`Party` greift bei `None` der Python-Default
 /// (`unbekannt`) — fehlender Kontext darf keine Gruppengröße erfinden.
 /// diesen Fall gedacht (Live-Feld vorhanden aber leer).
-pub fn build_title_prompt(
+pub fn derive_style_summary(title_history: &[PromptHistoryItem]) -> String {
+    if title_history.is_empty() {
+        return "Noch keine eigene Titel-Historie: Stil wird aus der gespeicherten Präferenz und hochwertigen Community-Mustern abgeleitet.".to_string();
+    }
+
+    let sample: Vec<&PromptHistoryItem> = title_history.iter().take(30).collect();
+    let avg_len = sample
+        .iter()
+        .map(|item| item.title.chars().count() as f64)
+        .sum::<f64>()
+        / sample.len() as f64;
+    let titles: Vec<&str> = sample.iter().map(|item| item.title.as_str()).collect();
+    let emoji = emoji_ratio(&titles);
+    let pipe = sample
+        .iter()
+        .filter(|item| item.title.contains('|'))
+        .count();
+    let colon = sample
+        .iter()
+        .filter(|item| item.title.contains(':'))
+        .count();
+    let dash = sample
+        .iter()
+        .filter(|item| item.title.contains(" - ") || item.title.contains(" – "))
+        .count();
+    let questions = sample
+        .iter()
+        .filter(|item| item.title.contains('?'))
+        .count();
+    let exclamations = sample
+        .iter()
+        .filter(|item| item.title.contains('!'))
+        .count();
+
+    let separator = [("|", pipe), (":", colon), ("–", dash)]
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| *count * 3 >= sample.len())
+        .map(|(separator, _)| format!("häufiger Trenner {separator}"))
+        .unwrap_or_else(|| "kein dominanter Trenner".to_string());
+    let emoji_text = if emoji >= 0.3 {
+        "Emojis gehören erkennbar zum Stil"
+    } else {
+        "Emojis sind untypisch"
+    };
+    let punctuation = if questions * 4 >= sample.len() {
+        "Fragen kommen öfter vor"
+    } else if exclamations * 4 >= sample.len() {
+        "Ausrufezeichen kommen öfter vor"
+    } else {
+        "eher ruhige Satzzeichen"
+    };
+
+    format!(
+        "Ø ca. {:.0} Zeichen; {}; {}; {}.",
+        avg_len, emoji_text, separator, punctuation
+    )
+}
+
+/// Personalisierter Prompt des Dashboard-Moduls. Die explizite Nutzerpräferenz
+/// steht über der automatisch erkannten Stil-DNA; Community-Titel dienen nur
+/// als Inspirationsquelle und dürfen nicht wörtlich kopiert werden.
+pub fn build_personalized_title_prompt_with_feedback(
     keywords: &str,
+    style_preference: &str,
+    feedback: &[PromptFeedbackItem],
     title_history: &[PromptHistoryItem],
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
@@ -371,9 +444,9 @@ pub fn build_title_prompt(
     live_state: Option<&PromptLiveState>,
 ) -> String {
     let emoji_rule = if emoji_ratio >= 0.3 {
-        "Verwende maximal einen Emoji und nur dann, wenn der Streamer bereits Emojis in seinen Titeln nutzt."
+        "Maximal einen Emoji verwenden – und nur wenn er natürlich zum erkannten Eigenstil passt."
     } else {
-        "Verwende KEINE Emojis im Titel."
+        "Keine Emojis verwenden, außer die gespeicherte Nutzerpräferenz verlangt sie ausdrücklich."
     };
 
     let mut sorted: Vec<&PromptHistoryItem> = title_history.iter().collect();
@@ -390,18 +463,42 @@ pub fn build_title_prompt(
     });
 
     let top_reference_lines =
-        lines_or_default(sorted.iter().take(8).map(|t| history_line(t)).collect());
-    let history_lines = lines_or_default(title_history.iter().take(20).map(history_line).collect());
+        lines_or_default(sorted.iter().take(10).map(|t| history_line(t)).collect());
+    let recent_history_lines =
+        lines_or_default(title_history.iter().take(18).map(history_line).collect());
     let benchmark_lines = lines_or_default(
         knowledge_titles
             .iter()
-            .take(20)
+            .take(18)
             .map(|t| {
                 format!(
-                    "  - \"{}\" (Score: {})",
+                    "  - \"{}\" (Qualitäts-Score: {})",
                     t.title,
                     format_metric(t.normalized_score, 2)
                 )
+            })
+            .collect(),
+    );
+    let feedback_lines = lines_or_default(
+        feedback
+            .iter()
+            .take(16)
+            .map(|item| match item.feedback.as_str() {
+                "edited" => format!(
+                    "  - SEHR STARKES SIGNAL: Vorschlag \"{}\" wurde zu \"{}\" umgeschrieben.",
+                    item.proposed_title,
+                    item.edited_title.as_deref().unwrap_or("")
+                ),
+                "selected" => format!(
+                    "  - POSITIV: Gewählt wurde \"{}\" statt \"{}\".",
+                    item.selected_title
+                        .as_deref()
+                        .unwrap_or(&item.proposed_title),
+                    item.proposed_title
+                ),
+                "liked" => format!("  - POSITIV: \"{}\"", item.proposed_title),
+                "disliked" => format!("  - NEGATIV / SO NICHT: \"{}\"", item.proposed_title),
+                _ => format!("  - {}: \"{}\"", item.feedback, item.proposed_title),
             })
             .collect(),
     );
@@ -419,54 +516,110 @@ pub fn build_title_prompt(
         })
         .unwrap_or_default();
     let canonical_ranks = CANONICAL_RANK_NAMES.join(", ");
+    let style_summary = derive_style_summary(title_history);
+    let style_preference = style_preference.trim();
+    let preference_line = if style_preference.is_empty() {
+        "(keine zusätzliche Präferenz gespeichert)"
+    } else {
+        style_preference
+    };
+    let keyword_line = if keywords.trim().is_empty() {
+        "AUTO-MODUS: Es wurden keine Keywords angegeben. Finde selbst einen konkreten, zeitlosen Deadlock-Hook, der zum Eigenstil passt. Nutze Rang/Hero/Party nur wenn diese Daten wirklich vorhanden sind. Der Titel muss auch ohne erfundenen Anlass funktionieren."
+    } else {
+        keywords.trim()
+    };
 
     format!(
-        r#"Du bist ein Twitch-Stream-Titel-Experte für das Spiel Deadlock.
+        r#"Du schreibst Twitch-Titel für einen Deadlock-Streamer. Dein Job ist nicht, nach KI zu klingen, sondern einen Titel zu liefern, den dieser konkrete Streamer selbst hätte schreiben können – nur besser.
 
-AUFGABE:
-1. Analysiere die letzten Stream-Titel des Streamers (mit Performance-Metriken).
-2. Generiere EINEN optimalen Stream-Titel basierend auf den angegebenen Keywords.
-3. Gib zusätzlich 2 Alternativen an.
-4. Bewerte kurz die 3 schlechtesten eigenen Titel (max. 1 Satz je Titel).
+HEUTIGER INPUT:
+{keyword_line}{rank_line}{live_line}
 
-KATEGORIE/SPIEL: Deadlock
-KEYWORDS (Intent des Streamers heute): {keywords}{rank_line}{live_line}
+GESPEICHERTE STANDARD-PRÄFERENZ DES STREAMERS (höchste Stil-Priorität):
+{preference_line}
 
-BESTE EIGENE REFERENZEN (priorisieren, zuerst daran orientieren):
+AUTOMATISCH ERKANNTE STIL-DNA:
+{style_summary}
+
+HUMAN-FEEDBACK AUS FRÜHEREN VORSCHLÄGEN (wichtiger als reine Performance-Daten):
+{feedback_lines}
+
+BESTE EIGENE REFERENZEN (Ton, Rhythmus und wiederkehrende Bausteine zuerst hier lernen):
 {top_reference_lines}
 
-EIGENE TITEL-HISTORY (relative_perf = avg_viewers / eigener_durchschnitt):
-{history_lines}
+LETZTE EIGENE TITEL (damit du Wiederholungen vermeidest):
+{recent_history_lines}
 
-COMMUNITY BENCHMARKS (beste Deadlock-Titel nach normalisiertem Score):
+COMMUNITY-INSPIRATION (starke Titel anderer Deadlock-Streamer; Hooks/Strukturen lernen, NICHT wörtlich kopieren):
 {benchmark_lines}
 
-REGELN:
-- Der Titel soll vollständig und einladend sein - kein reiner Keyword-Dump.
-- Nutze einen konkreten Hook aus Keywords, Rang, Hero oder Party-Kontext statt austauschbarer Gaming-Floskeln.
-- Schreibe 45 bis 100 Zeichen; die harte Twitch-Obergrenze sind 140 Zeichen.
-- Erzeuge keine generischen Titel wie "Ranked Grind", "Gaming heute" oder "Wir sind live" ohne konkreten Anlass.
-- Passe dich stilistisch zuerst den BESTEN EIGENEN REFERENZEN an, erst danach den Community-Benchmarks.
-- Erfinde möglichst wenig neu. Bevorzuge bekannte Formulierungsbausteine, Satzrhythmus und Tonalität aus den Referenzen.
-- Wenn Keywords ungewohnt sind, formuliere konservativ statt kreativ.
+QUALITÄTSREGELN:
+- Liefere 1 starken Haupttitel und 2 deutlich unterschiedliche Alternativen.
+- Der Haupttitel muss einen echten Hook haben. Kein Keyword-Dump, keine Meta-Sprache, kein Marketing-Sprech.
+- Verbotene Slop-Muster ohne konkreten Anlass: "Ranked Grind", "Road to ...", "Gaming heute", "Wir sind live", "Heute wird rasiert", "mal schauen was geht", "chilliger Stream", "let's go" und austauschbare Varianten davon.
+- Kreativ sein heißt: einen überraschenden, aber glaubwürdigen Blickwinkel oder Satzrhythmus finden – NICHT Fakten, Ziele, Win-Streaks, Ränge oder Events erfinden.
+- Eigene erfolgreiche Formulierungsbausteine dürfen bewusst wiederverwendet und neu kombiniert werden.
+- Community-Titel niemals 1:1 übernehmen; höchstens Idee, Hook-Typ oder Struktur adaptieren.
+- Wenn Keywords vorhanden sind, müssen ihre Kernaussagen erkennbar im Titel landen. 2–3 Stichwörter sind Kontext, keine Pflicht-Reihenfolge.
+- Wenn keine Keywords vorhanden sind, baue einen hochwertigen Evergreen-Titel, der für einen normalen Deadlock-Stream wahr bleibt.
+- Zielbereich 45–105 Zeichen; harte Twitch-Grenze 140 Zeichen.
 - {emoji_rule}
-- Halte den Titel unter 140 Zeichen.
-- Verwende Rangbegriffe nur, wenn sie explizit in den Keywords oder in "Streamer-Rang" stehen.
-- Erfinde niemals Ränge, Skill-Stufen oder Match-Kontext.
-- Deadlock-Ränge heißen nur: {canonical_ranks}.
-- Schreibe Keywords nicht in andere Begriffe um. Beispiel: "Asc 2" bleibt "Asc 2" und wird NICHT zu "Ascension Rank 2" oder ähnlichem erweitert.
-- Vermeide generische Füllphrasen wie "heute ist es soweit", "endlich soweit" oder ähnliche Trailer-Sätze.
-- Die Performance-Scores basieren auf Viewer-Zahlen als Proxy (keine echten CTR-Daten).
+- Verwende Rangbegriffe nur, wenn sie in HEUTIGER INPUT / Streamer-Rang stehen.
+- Erfinde niemals Rang, Hero, Party, Challenge, Streak, Turnier, Patch oder Mitspieler.
+- Gültige Deadlock-Ränge: {canonical_ranks}.
+- "Asc 2" bleibt exakt "Asc 2"; keine künstliche Expansion zu "Ascension Rank 2".
+- Keine generischen Trailer-Floskeln wie "heute ist es soweit" oder "endlich soweit".
+- Performance-Werte sind nur ein Viewer-Proxy, keine CTR. Nutze sie als Tendenz, nicht als absolute Wahrheit.
 
-ANTWORT-FORMAT (JSON, kein Markdown drumherum):
+ANTWORT NUR ALS JSON:
 {{
-  "primary_title": "<optimaler Titel>",
-  "alternatives": ["<Alternative 1>", "<Alternative 2>"],
-  "title_analysis": [
-    {{"title": "<schlechtester eigener Titel>", "score": <1-10>, "feedback": "<1 Satz>"}},
-    ...
-  ]
+  "primary_title": "<bester Titel>",
+  "alternatives": ["<klar anderer Ansatz 1>", "<klar anderer Ansatz 2>"],
+  "title_analysis": []
 }}"#
+    )
+}
+
+/// Personalisierter Prompt ohne explizite Feedback-Liste (Kompatibilität).
+pub fn build_personalized_title_prompt(
+    keywords: &str,
+    style_preference: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    emoji_ratio: f64,
+    live_state: Option<&PromptLiveState>,
+) -> String {
+    build_personalized_title_prompt_with_feedback(
+        keywords,
+        style_preference,
+        &[],
+        title_history,
+        knowledge_titles,
+        rank_display,
+        emoji_ratio,
+        live_state,
+    )
+}
+
+/// Rückwärtskompatibler Prompt ohne explizite Nutzerpräferenz – z. B. für den
+/// bestehenden !title-Chat-Command und dessen Tests.
+pub fn build_title_prompt(
+    keywords: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    emoji_ratio: f64,
+    live_state: Option<&PromptLiveState>,
+) -> String {
+    build_personalized_title_prompt(
+        keywords,
+        "",
+        title_history,
+        knowledge_titles,
+        rank_display,
+        emoji_ratio,
+        live_state,
     )
 }
 
@@ -487,6 +640,28 @@ pub enum GenerateTitleError {
 
 /// Anwendungsfall in der gemeinsamen Anbieterauswahl.
 const USE_CASE: &str = "title_ai";
+const ZAI_TITLE_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
+const ZAI_TITLE_MODEL: &str = "glm-5.3-flash";
+
+/// Der Titelgenerator darf GLM-5.3-Flash gezielt nutzen, ohne die zentrale
+/// Modellwahl der anderen Twitch-Bot-Anwendungsfaelle zu veraendern. Fehlt der
+/// Z.ai-Key, bleibt Fireworks der sichere Rueckfall.
+fn title_endpoint() -> tb_llm::LlmEndpoint {
+    if let Ok(key) = std::env::var("ZAI_API_KEY") {
+        if !key.trim().is_empty() {
+            return tb_llm::LlmEndpoint {
+                provider: "zai",
+                base_url: std::env::var("ZAI_BASE_URL")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| ZAI_TITLE_BASE_URL.to_string()),
+                model: ZAI_TITLE_MODEL.to_string(),
+                api_key: Some(key),
+            };
+        }
+    }
+    tb_llm::endpoint_for(USE_CASE)
+}
 
 /// Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`: Rate-Limits aus, wenn die Env-Var
 /// auf einen „wahren" Wert gesetzt ist.
@@ -520,6 +695,7 @@ async fn titel_completion(
             .temperature(temperature)
             .max_tokens(max_tokens)
             .denken_aus()
+            .strip_think()
             .retry_on_429(2)
             .ledger_purpose(purpose)
             .endpoint(endpoint.clone()),
@@ -542,14 +718,16 @@ fn endpunkt(base_url: &str, api_key: &str, _model: &str) -> tb_llm::LlmEndpoint 
     endpoint
 }
 
-/// Kern von `generate_title` mit injizierbarem Endpoint (für Tests).
-/// emoji_ratio → Prompt → OpenAI-kompatibler POST → parse → sanitize.
+/// Kern des personalisierten Dashboard-Generators mit injizierbarem Endpoint.
+/// Ein eigener Wrapper bleibt darunter fuer den bestehenden !title-Command.
 #[allow(clippy::too_many_arguments)]
-pub async fn generate_title_with(
+pub async fn generate_title_personalized_with(
     base_url: &str,
     api_key: &str,
     model: &str,
     keywords: &str,
+    style_preference: &str,
+    feedback: &[PromptFeedbackItem],
     title_history: &[PromptHistoryItem],
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
@@ -557,20 +735,24 @@ pub async fn generate_title_with(
 ) -> Result<TitleResult, GenerateTitleError> {
     let titles: Vec<&str> = title_history.iter().map(|h| h.title.as_str()).collect();
     let ratio = emoji_ratio(&titles);
-    let prompt = build_title_prompt(
+    let prompt = build_personalized_title_prompt_with_feedback(
         keywords,
+        style_preference,
+        feedback,
         title_history,
         knowledge_titles,
         rank_display,
         ratio,
         live_state,
     );
+    // Kreativer als der alte konservative Generator, aber mit wenig Output:
+    // Die Titel selbst sind kurz und eine Analyse pro Klick waere nur Tokenlast.
     let content = titel_completion(
         &endpunkt(base_url, api_key, model),
         "title",
         &prompt,
-        0.35,
-        2000,
+        0.68,
+        900,
     )
     .await
     .map_err(GenerateTitleError::Http)?;
@@ -583,13 +765,41 @@ pub async fn generate_title_with(
     Ok(result)
 }
 
-/// Generiert einen Stream-Titel via KI (Python `generate_title`).
-/// Reihenfolge wie Python: Rate-Limit zuerst, dann Key-Resolve, dann Call.
+/// Rueckwaertskompatibler Test-/Chat-Einstieg ohne explizite Stilpraeferenz.
 #[allow(clippy::too_many_arguments)]
-pub async fn generate_title(
+pub async fn generate_title_with(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    keywords: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    live_state: Option<&PromptLiveState>,
+) -> Result<TitleResult, GenerateTitleError> {
+    generate_title_personalized_with(
+        base_url,
+        api_key,
+        model,
+        keywords,
+        "",
+        &[],
+        title_history,
+        knowledge_titles,
+        rank_display,
+        live_state,
+    )
+    .await
+}
+
+/// Personalisierter Dashboard-Einstieg: Rate-Limit + zentraler LLM-Endpunkt.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_title_personalized(
     rate_limiter: &TitleRateLimiter,
     streamer_id: &str,
     keywords: &str,
+    style_preference: &str,
+    feedback: &[PromptFeedbackItem],
     title_history: &[PromptHistoryItem],
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
@@ -601,20 +811,49 @@ pub async fn generate_title(
             .check_and_record(streamer_id, source)
             .map_err(GenerateTitleError::RateLimit)?;
     }
-    let endpoint = tb_llm::endpoint_for(USE_CASE);
+    let endpoint = title_endpoint();
     let api_key = endpoint
         .api_key
         .as_deref()
         .ok_or(GenerateTitleError::NoApiKey)?;
-    generate_title_with(
+    generate_title_personalized_with(
         &endpoint.base_url,
         api_key,
         &endpoint.model,
         keywords,
+        style_preference,
+        feedback,
         title_history,
         knowledge_titles,
         rank_display,
         live_state,
+    )
+    .await
+}
+
+/// Bestehender !title-Command ohne gespeicherte Dashboard-Praeferenz.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_title(
+    rate_limiter: &TitleRateLimiter,
+    streamer_id: &str,
+    keywords: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    live_state: Option<&PromptLiveState>,
+    source: &str,
+) -> Result<TitleResult, GenerateTitleError> {
+    generate_title_personalized(
+        rate_limiter,
+        streamer_id,
+        keywords,
+        "",
+        &[],
+        title_history,
+        knowledge_titles,
+        rank_display,
+        live_state,
+        source,
     )
     .await
 }
@@ -782,6 +1021,8 @@ mod tests {
             "FIREWORKS_BASE_URL",
             "FIREWORK_MODEL",
             "FIREWORKS_MODEL",
+            "ZAI_API_KEY",
+            "ZAI_BASE_URL",
             "MINMAX",
         ] {
             std::env::remove_var(name);
@@ -973,13 +1214,13 @@ mod tests {
     #[test]
     fn prompt_emoji_regel_und_keine_daten_fallback() {
         let p = build_title_prompt("ranked grind", &[], &[], None, 0.0, None);
-        assert!(p.contains("Verwende KEINE Emojis im Titel."));
-        assert!(p.contains("KEYWORDS (Intent des Streamers heute): ranked grind\n"));
+        assert!(p.contains("Keine Emojis verwenden"));
+        assert!(p.contains("HEUTIGER INPUT:\nranked grind"));
         assert!(p.contains("  (keine Daten)"));
-        assert!(p.contains("Deadlock-Ränge heißen nur: Obscurus, Seeker"));
+        assert!(p.contains("Gültige Deadlock-Ränge: Obscurus, Seeker"));
 
         let p2 = build_title_prompt("x", &[], &[], None, 0.5, None);
-        assert!(p2.contains("Verwende maximal einen Emoji"));
+        assert!(p2.contains("Maximal einen Emoji"));
     }
 
     #[test]
@@ -1011,10 +1252,34 @@ mod tests {
     #[test]
     fn prompt_gibt_spiel_hook_und_praezises_format_vor() {
         let p = build_title_prompt("ranked solo", &[], &[], None, 0.0, None);
-        assert!(p.contains("KATEGORIE/SPIEL: Deadlock"));
-        assert!(p.contains("45 bis 100 Zeichen"));
-        assert!(p.contains("konkreten Hook"));
-        assert!(p.contains("keine generischen"));
+        assert!(p.contains("Deadlock-Streamer"));
+        assert!(p.contains("Zielbereich 45–105 Zeichen"));
+        assert!(p.contains("echten Hook"));
+        assert!(p.contains("Verbotene Slop-Muster"));
+    }
+
+    #[test]
+    fn prompt_priorisiert_human_feedback_und_edits() {
+        let feedback = vec![PromptFeedbackItem {
+            proposed_title: "Ranked Grind".into(),
+            feedback: "edited".into(),
+            selected_title: None,
+            edited_title: Some("Drei Lanes, zwei Pläne, eine sehr schlechte Idee".into()),
+        }];
+        let p = build_personalized_title_prompt_with_feedback(
+            "duo",
+            "trocken, keine Emojis",
+            &feedback,
+            &[],
+            &[],
+            None,
+            0.0,
+            None,
+        );
+        assert!(p.contains("HUMAN-FEEDBACK"));
+        assert!(p.contains("SEHR STARKES SIGNAL"));
+        assert!(p.contains("Drei Lanes, zwei Pläne"));
+        assert!(p.contains("trocken, keine Emojis"));
     }
 
     #[tokio::test]
@@ -1043,8 +1308,8 @@ mod tests {
             None,
             None,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(result.primary, "Ranked Grind");
         assert_eq!(result.alternatives, vec!["Alt Eins".to_string()]);
     }
@@ -1059,9 +1324,18 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
-        let err = generate_title_with(&server.uri(), "k", "deepseek-v4-flash", "x", &[], &[], None, None)
-            .await
-            .unwrap_err();
+        let err = generate_title_with(
+            &server.uri(),
+            "k",
+            "deepseek-v4-flash",
+            "x",
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
     }
 
@@ -1102,8 +1376,8 @@ mod tests {
             None,
             None,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(result.primary, "Ranked mit Plan");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -1132,8 +1406,8 @@ mod tests {
             None,
             None,
         )
-            .await
-            .unwrap_err();
+        .await
+        .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
     }
 
@@ -1165,8 +1439,8 @@ mod tests {
             &history,
             "01.06. – 28.06.2026",
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(r.strengths, "stark");
         assert_eq!(r.patterns, "muster");
         // 4 Recs → erste 3, je „• "-Prefix.
@@ -1194,14 +1468,23 @@ mod tests {
             relative_perf: 1.2,
             engagement_rate: 0.05,
         }];
-        generate_insight_with(&server.uri(), "k", "deepseek-v4-flash", &history, "Zeitraum")
-            .await
-            .expect("Insight");
+        generate_insight_with(
+            &server.uri(),
+            "k",
+            "deepseek-v4-flash",
+            &history,
+            "Zeitraum",
+        )
+        .await
+        .expect("Insight");
 
         let requests = server.received_requests().await.expect("Requests");
         assert_eq!(requests.len(), 1);
         let body = String::from_utf8(requests[0].body.clone()).expect("utf8");
-        assert!(body.contains("\"reasoning_effort\":\"none\""), "Body: {body}");
+        assert!(
+            body.contains("\"reasoning_effort\":\"none\""),
+            "Body: {body}"
+        );
     }
 
     #[tokio::test]

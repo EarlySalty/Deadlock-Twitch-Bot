@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use axum::{
     extract::{Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
@@ -13,8 +13,8 @@ use serde_json::json;
 use sqlx::PgPool;
 use tb_chat::steam_lookup;
 use tb_chat::title_ai::{
-    generate_title, GenerateTitleError, PromptHistoryItem, PromptKnowledgeItem, PromptLiveState,
-    TitleRateLimiter,
+    derive_style_summary, generate_title_personalized, GenerateTitleError, PromptFeedbackItem,
+    PromptHistoryItem, PromptKnowledgeItem, PromptLiveState, TitleRateLimiter,
 };
 use tb_chat::title_db;
 use tb_crypto::FieldCipher;
@@ -43,7 +43,35 @@ pub struct TitleQuery {
 #[derive(Deserialize)]
 pub struct UpdateTitleBody {
     pub title: String,
+    #[serde(default)]
+    pub generation_id: Option<String>,
 }
+
+#[derive(Deserialize)]
+pub struct TitleFeedbackBody {
+    #[serde(default)]
+    pub streamer: Option<String>,
+    pub generation_id: String,
+    pub feedback: String,
+    #[serde(default)]
+    pub selected_title: Option<String>,
+    #[serde(default)]
+    pub edited_title: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TitleSettingsBody {
+    #[serde(default)]
+    pub streamer: Option<String>,
+    #[serde(default)]
+    pub style_preference: String,
+    #[serde(default)]
+    pub experimental_auto_set: bool,
+}
+
+const TITLE_OAUTH_URL: &str =
+    "/twitch/raid/auth?scope_profile=dashboard_reauth&source=title_generator";
+const TITLE_MANAGE_SCOPE: &str = "channel:manage:broadcast";
 
 fn requested_login(
     auth: &DashboardAuthLevel,
@@ -95,6 +123,141 @@ async fn resolve_user_id(pool: &PgPool, login: &str) -> Result<Option<String>, s
     )
     .fetch_optional(pool)
     .await
+}
+
+async fn can_manage_title(pool: &PgPool, twitch_user_id: &str) -> bool {
+    let scopes = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT scopes FROM twitch_raid_auth \
+         WHERE twitch_user_id = $1 AND NOT COALESCE(needs_reauth, FALSE) LIMIT 1",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .unwrap_or_default();
+    scopes
+        .split_whitespace()
+        .any(|scope| scope.trim() == TITLE_MANAGE_SCOPE)
+}
+
+fn context_tokens(raw: &str) -> Vec<String> {
+    raw.split(|c: char| !c.is_alphanumeric())
+        .map(str::trim)
+        .filter(|part| part.chars().count() >= 3)
+        .map(str::to_lowercase)
+        .take(12)
+        .collect()
+}
+
+fn rank_knowledge_titles(
+    mut titles: Vec<title_db::KnowledgeTitle>,
+    keywords: &str,
+    limit: usize,
+) -> Vec<title_db::KnowledgeTitle> {
+    let wanted = context_tokens(keywords);
+    if wanted.is_empty() {
+        titles.truncate(limit);
+        return titles;
+    }
+    titles.sort_by(|a, b| {
+        let overlap = |item: &title_db::KnowledgeTitle| {
+            let title = item.title.to_lowercase();
+            wanted
+                .iter()
+                .filter(|word| {
+                    title.contains(word.as_str())
+                        || item
+                            .keywords
+                            .iter()
+                            .any(|candidate| candidate.eq_ignore_ascii_case(word))
+                })
+                .count()
+        };
+        overlap(b).cmp(&overlap(a)).then_with(|| {
+            b.normalized_score
+                .unwrap_or(0.0)
+                .partial_cmp(&a.normalized_score.unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+    titles.truncate(limit);
+    titles
+}
+
+fn auto_fallback_titles(context: &TitleContext) -> (String, Vec<String>) {
+    let prefix = context
+        .live_state
+        .as_ref()
+        .and_then(|state| state.hero.as_deref())
+        .filter(|hero| !hero.trim().is_empty())
+        .map(|hero| format!("{hero}-Runden"))
+        .or_else(|| {
+            context
+                .rank_display
+                .clone()
+                .map(|rank| format!("{rank} Deadlock"))
+        })
+        .unwrap_or_else(|| "Deadlock".to_string());
+    (
+        format!("{prefix} | Saubere Plays gesucht, unnötiges Chaos wahrscheinlich"),
+        vec![
+            format!("{prefix} | Jede Lobby schreibt ihre eigene kleine Katastrophe"),
+            format!("{prefix} | Gute Entscheidungen treffen, bevor die Lobby andere Pläne hat"),
+        ],
+    )
+}
+
+#[derive(Debug)]
+enum TitleSetError {
+    ScopeMissing,
+    ReauthRequired,
+    TokenStoreUnavailable,
+    ClientUnavailable,
+    TwitchRejected,
+    TwitchUnavailable,
+}
+
+async fn set_channel_title(pool: &PgPool, user_id: &str, title: &str) -> Result<(), TitleSetError> {
+    let Ok(cipher) = FieldCipher::from_env() else {
+        return Err(TitleSetError::TokenStoreUnavailable);
+    };
+    let store = RaidAuthStore::new(pool.clone(), Arc::new(cipher));
+    let scopes = store.get_scopes(user_id).await.unwrap_or_default();
+    if !scopes.iter().any(|scope| scope == TITLE_MANAGE_SCOPE) {
+        return Err(TitleSetError::ScopeMissing);
+    }
+    let token = match store.load_decrypted_unrestricted(user_id).await {
+        Ok(Some(tokens)) if !tokens.needs_reauth => tokens.access_token,
+        _ => return Err(TitleSetError::ReauthRequired),
+    };
+    let client_id = std::env::var("TWITCH_CLIENT_ID")
+        .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_ID"))
+        .unwrap_or_default();
+    if client_id.trim().is_empty() {
+        return Err(TitleSetError::ClientUnavailable);
+    }
+    let base = std::env::var("TWITCH_HELIX_BASE_URL")
+        .unwrap_or_else(|_| "https://api.twitch.tv/helix".to_string());
+    let response = reqwest::Client::new()
+        .patch(format!("{}/channels", base.trim_end_matches('/')))
+        .query(&[("broadcaster_id", user_id)])
+        .header("Client-Id", client_id)
+        .bearer_auth(token)
+        .json(&json!({"title": title}))
+        .send()
+        .await
+        .map_err(|_| TitleSetError::TwitchUnavailable)?;
+    if response.status().is_success() {
+        Ok(())
+    } else if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        Err(TitleSetError::ReauthRequired)
+    } else if response.status() == reqwest::StatusCode::FORBIDDEN {
+        Err(TitleSetError::ScopeMissing)
+    } else {
+        Err(TitleSetError::TwitchRejected)
+    }
 }
 
 /// Aufgelöster Deadlock-Kontext für den Titel-Prompt.
@@ -175,6 +338,72 @@ async fn resolve_title_context(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn finish_suggestion(
+    pool: &PgPool,
+    user_id: &str,
+    keywords: &str,
+    analysis: Vec<serde_json::Value>,
+    prompt_history: &[PromptHistoryItem],
+    preferences: &title_db::TitlePreferences,
+    context: &TitleContext,
+    primary: String,
+    alternatives: Vec<String>,
+    generated_by: &str,
+) -> Response {
+    let generation_id = tb_crypto::random_hex_token(16);
+    if let Err(error) = title_db::insert_title_generation(
+        pool,
+        &generation_id,
+        user_id,
+        keywords,
+        &primary,
+        &alternatives,
+    )
+    .await
+    {
+        tracing::warn!(%error, "title generation feedback row konnte nicht gespeichert werden");
+    }
+
+    let oauth_connected = can_manage_title(pool, user_id).await;
+    let auto_set_status = if preferences.experimental_auto_set {
+        match set_channel_title(pool, user_id, &primary).await {
+            Ok(()) => {
+                let _ = title_db::save_title_feedback(
+                    pool,
+                    user_id,
+                    &generation_id,
+                    "selected",
+                    Some(&primary),
+                    None,
+                )
+                .await;
+                "set"
+            }
+            Err(TitleSetError::ScopeMissing | TitleSetError::ReauthRequired) => "scope_missing",
+            Err(_) => "error",
+        }
+    } else {
+        "disabled"
+    };
+
+    Json(json!({
+        "primary": primary,
+        "alternatives": alternatives,
+        "title_analysis": analysis.into_iter().take(20).collect::<Vec<_>>(),
+        "live_context_used": context.live_context_used,
+        "auto_mode": keywords.trim().is_empty(),
+        "generation_id": generation_id,
+        "style_summary": derive_style_summary(prompt_history),
+        "oauth_connected": oauth_connected,
+        "oauth_url": TITLE_OAUTH_URL,
+        "experimental_auto_set": preferences.experimental_auto_set,
+        "auto_set_status": auto_set_status,
+        "generated_by": generated_by,
+    }))
+    .into_response()
+}
+
 pub async fn suggest_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -192,10 +421,10 @@ pub async fn suggest_handler(
         }
     };
     let keywords = body.keywords.as_deref().unwrap_or("").trim();
-    if keywords.is_empty() {
+    if keywords.chars().count() > 300 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error":"keywords required"})),
+            Json(json!({"error":"keywords too long"})),
         )
             .into_response();
     }
@@ -254,7 +483,11 @@ pub async fn suggest_handler(
             engagement_rate: item["engagement_rate"].as_f64(),
         })
         .collect();
-    let knowledge = title_db::get_top_knowledge_titles(&pool, 30).await;
+    let knowledge = rank_knowledge_titles(
+        title_db::get_top_knowledge_titles(&pool, 80).await,
+        keywords,
+        24,
+    );
     let prompt_knowledge: Vec<PromptKnowledgeItem> = knowledge
         .into_iter()
         .map(|item| PromptKnowledgeItem {
@@ -262,16 +495,29 @@ pub async fn suggest_handler(
             normalized_score: item.normalized_score,
         })
         .collect();
+    let preferences = title_db::get_title_preferences(&pool, &user_id).await;
+    let feedback = title_db::get_recent_title_feedback(&pool, &user_id, 20).await;
+    let prompt_feedback: Vec<PromptFeedbackItem> = feedback
+        .into_iter()
+        .map(|item| PromptFeedbackItem {
+            proposed_title: item.primary_title,
+            feedback: item.feedback,
+            selected_title: item.selected_title,
+            edited_title: item.edited_title,
+        })
+        .collect();
 
-    // P2.101/P2.102: Deadlock-Rang + (optional) Live-State auflösen und an den
-    // Generator durchreichen — wie der !title-Chat-Command.
-    let context = resolve_title_context(&pool, &user_id, body.include_live).await;
+    // Im Auto-Modus nutzen wir Live-Kontext automatisch, sofern vorhanden.
+    let context =
+        resolve_title_context(&pool, &user_id, body.include_live || keywords.is_empty()).await;
 
     let limiter = TITLE_RATE_LIMITER.get_or_init(TitleRateLimiter::default);
-    match generate_title(
+    match generate_title_personalized(
         limiter,
         &user_id,
         keywords,
+        &preferences.style_preference,
+        &prompt_feedback,
         &prompt_history,
         &prompt_knowledge,
         context.rank_display.as_deref(),
@@ -280,19 +526,44 @@ pub async fn suggest_handler(
     )
     .await
     {
-        Ok(result) => Json(json!({
-            "primary": result.primary,
-            "alternatives": result.alternatives,
-            "title_analysis": analysis.into_iter().take(20).collect::<Vec<_>>(),
-            // P2.102: nur true, wenn Live-Kontext tatsächlich angewandt wurde.
-            "live_context_used": context.live_context_used,
-        }))
-        .into_response(),
+        Ok(result) => {
+            finish_suggestion(
+                &pool,
+                &user_id,
+                keywords,
+                analysis,
+                &prompt_history,
+                &preferences,
+                &context,
+                result.primary,
+                result.alternatives,
+                "ai",
+            )
+            .await
+        }
         Err(GenerateTitleError::RateLimit(rate)) => (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"error":"rate_limit","retry_after":rate.retry_after})),
         )
             .into_response(),
+        Err(GenerateTitleError::NoApiKey | GenerateTitleError::Http(_)) if keywords.is_empty() => {
+            // Experimenteller Auto-Modus soll auch bei einem temporaeren KI-Ausfall
+            // niemals ganz ohne brauchbaren Titel dastehen.
+            let (primary, alternatives) = auto_fallback_titles(&context);
+            finish_suggestion(
+                &pool,
+                &user_id,
+                keywords,
+                analysis,
+                &prompt_history,
+                &preferences,
+                &context,
+                primary,
+                alternatives,
+                "fallback",
+            )
+            .await
+        }
         Err(GenerateTitleError::NoApiKey) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error":"title_ai_unavailable"})),
@@ -330,6 +601,170 @@ pub async fn insights_handler(
     }
 }
 
+pub async fn settings_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<TitleQuery>,
+) -> impl IntoResponse {
+    let login = match requested_login(&auth, query.streamer.as_deref()) {
+        Ok(login) => login,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"streamer not found"})),
+        )
+            .into_response();
+    };
+    let preferences = title_db::get_title_preferences(&pool, &user_id).await;
+    let history = title_db::get_streamer_title_history(&pool, &user_id, 30).await;
+    let own_avg = title_db::get_streamer_avg_viewers(&pool, &user_id).await;
+    let prompt_history: Vec<PromptHistoryItem> = history
+        .iter()
+        .map(|item| PromptHistoryItem {
+            title: item.title.clone(),
+            relative_perf: item
+                .avg_viewers
+                .map(|avg| if own_avg > 0.0 { avg / own_avg } else { 0.0 }),
+            engagement_rate: item
+                .avg_viewers
+                .map(|avg| avg / item.followers_start.unwrap_or(1).max(1) as f64),
+        })
+        .collect();
+    Json(json!({
+        "style_preference": preferences.style_preference,
+        "experimental_auto_set": preferences.experimental_auto_set,
+        "style_summary": derive_style_summary(&prompt_history),
+        "oauth_connected": can_manage_title(&pool, &user_id).await,
+        "oauth_url": TITLE_OAUTH_URL,
+        "model": if std::env::var("ZAI_API_KEY").ok().is_some_and(|v| !v.trim().is_empty()) {
+            "glm-5.3-flash"
+        } else {
+            "fallback-provider"
+        },
+    }))
+    .into_response()
+}
+
+pub async fn settings_update_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Json(body): Json<TitleSettingsBody>,
+) -> impl IntoResponse {
+    let login = match requested_login(&auth, body.streamer.as_deref()) {
+        Ok(login) => login,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"streamer not found"})),
+        )
+            .into_response();
+    };
+    let style = body.style_preference.trim();
+    if style.chars().count() > 1200 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"style_preference too long"})),
+        )
+            .into_response();
+    }
+    if body.experimental_auto_set && !can_manage_title(&pool, &user_id).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error":"scope_missing",
+                "required_scope":TITLE_MANAGE_SCOPE,
+                "oauth_url":TITLE_OAUTH_URL
+            })),
+        )
+            .into_response();
+    }
+    match title_db::save_title_preferences(&pool, &user_id, style, body.experimental_auto_set).await
+    {
+        Ok(()) => Json(json!({
+            "ok": true,
+            "style_preference": style,
+            "experimental_auto_set": body.experimental_auto_set,
+            "oauth_connected": can_manage_title(&pool, &user_id).await,
+            "oauth_url": TITLE_OAUTH_URL,
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "title preferences konnten nicht gespeichert werden");
+            crate::auth::analytics_request_failed_json().into_response()
+        }
+    }
+}
+
+pub async fn feedback_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Json(body): Json<TitleFeedbackBody>,
+) -> impl IntoResponse {
+    let login = match requested_login(&auth, body.streamer.as_deref()) {
+        Ok(login) => login,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"streamer not found"})),
+        )
+            .into_response();
+    };
+    let feedback = body.feedback.trim().to_lowercase();
+    if !matches!(
+        feedback.as_str(),
+        "liked" | "disliked" | "selected" | "edited"
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid feedback"})),
+        )
+            .into_response();
+    }
+    let clean = |value: Option<String>| {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let selected = clean(body.selected_title);
+    let edited = clean(body.edited_title);
+    if selected.as_ref().is_some_and(|v| v.chars().count() > 140)
+        || edited.as_ref().is_some_and(|v| v.chars().count() > 140)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"title too long"})),
+        )
+            .into_response();
+    }
+    match title_db::save_title_feedback(
+        &pool,
+        &user_id,
+        body.generation_id.trim(),
+        &feedback,
+        selected.as_deref(),
+        edited.as_deref(),
+    )
+    .await
+    {
+        Ok(true) => Json(json!({"ok":true})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"generation not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "title feedback konnte nicht gespeichert werden");
+            crate::auth::analytics_request_failed_json().into_response()
+        }
+    }
+}
+
 pub async fn update_channel_title_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -359,86 +794,50 @@ pub async fn update_channel_title_handler(
         }
     };
 
-    let Ok(cipher) = FieldCipher::from_env() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"token_store_unavailable"})),
-        )
-            .into_response();
-    };
-    let store = RaidAuthStore::new(pool.clone(), Arc::new(cipher));
-    let scopes = store.get_scopes(&user_id).await.unwrap_or_default();
-    if !scopes
-        .iter()
-        .any(|scope| scope == "channel:manage:broadcast")
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error":"scope_missing","required_scope":"channel:manage:broadcast"})),
-        )
-            .into_response();
-    }
-    let token = match store.load_decrypted_unrestricted(&user_id).await {
-        Ok(Some(tokens)) if !tokens.needs_reauth => tokens.access_token,
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error":"reauth_required"})),
-            )
-                .into_response()
-        }
-    };
-    let client_id = std::env::var("TWITCH_CLIENT_ID")
-        .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_ID"))
-        .unwrap_or_default();
-    if client_id.trim().is_empty() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"twitch_client_unavailable"})),
-        )
-            .into_response();
-    }
-    let base = std::env::var("TWITCH_HELIX_BASE_URL")
-        .unwrap_or_else(|_| "https://api.twitch.tv/helix".to_string());
-    let response = reqwest::Client::new()
-        .patch(format!("{}/channels", base.trim_end_matches('/')))
-        .query(&[("broadcaster_id", user_id.as_str())])
-        .header("Client-Id", client_id)
-        .bearer_auth(token)
-        .json(&json!({"title": title}))
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) if resp.status().is_success() => {
+    match set_channel_title(&pool, &user_id, title).await {
+        Ok(()) => {
+            if let Some(generation_id) = body
+                .generation_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            {
+                let _ = title_db::save_title_feedback(
+                    &pool,
+                    &user_id,
+                    generation_id,
+                    "selected",
+                    Some(title),
+                    None,
+                )
+                .await;
+            }
             Json(json!({"ok":true,"title":title})).into_response()
         }
-        Ok(resp) if resp.status() == reqwest::StatusCode::UNAUTHORIZED => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"reauth_required"})),
-        )
-            .into_response(),
-        Ok(resp) if resp.status() == reqwest::StatusCode::FORBIDDEN => (
+        Err(TitleSetError::ScopeMissing) => (
             StatusCode::FORBIDDEN,
-            Json(json!({"error":"scope_missing","required_scope":"channel:manage:broadcast"})),
+            Json(json!({
+                "error":"scope_missing",
+                "required_scope":TITLE_MANAGE_SCOPE,
+                "oauth_url":TITLE_OAUTH_URL
+            })),
         )
             .into_response(),
-        Ok(resp) => {
-            tracing::error!(status = %resp.status(), "Twitch-Titelupdate abgelehnt");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error":"twitch_update_failed"})),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Twitch-Titelupdate fehlgeschlagen: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error":"twitch_unavailable"})),
-            )
-                .into_response()
-        }
+        Err(TitleSetError::ReauthRequired) => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"reauth_required","oauth_url":TITLE_OAUTH_URL})),
+        )
+            .into_response(),
+        Err(TitleSetError::TokenStoreUnavailable | TitleSetError::ClientUnavailable) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"title_update_unavailable"})),
+        )
+            .into_response(),
+        Err(TitleSetError::TwitchRejected | TitleSetError::TwitchUnavailable) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error":"twitch_update_failed"})),
+        )
+            .into_response(),
     }
 }
 

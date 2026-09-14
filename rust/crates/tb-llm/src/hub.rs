@@ -310,20 +310,24 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
         }
     };
     if let Some(endpoint) = chain.iter().find(|endpoint| {
-        endpoint.provider != "fireworks"
-            || endpoint.model != crate::selection::FIREWORKS_DEFAULT_MODEL
-    })
-    {
+        let standard = endpoint.provider == "fireworks"
+            && endpoint.model == crate::selection::FIREWORKS_DEFAULT_MODEL;
+        let title_glm = use_case == "title_ai"
+            && endpoint.provider == "zai"
+            && endpoint.model == "glm-5.3-flash";
+        !standard && !title_glm
+    }) {
         tracing::warn!(
             use_case,
             provider = endpoint.provider,
+            model = %endpoint.model,
             "nicht freigegebener LLM-Anbieter abgewiesen"
         );
         return Err(LlmFailure {
             provider: endpoint.provider.to_string(),
             model: endpoint.model.clone(),
             error: LlmError::Unavailable(
-                "der Twitch-Bot darf ausschließlich das freigegebene Fireworks-Modell verwenden"
+                "LLM-Endpunkt ist fuer diesen Twitch-Bot-Anwendungsfall nicht freigegeben"
                     .to_string(),
             ),
         });
@@ -588,7 +592,14 @@ fn openai_compatible_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
     if request.reasoning_off {
-        body["reasoning_effort"] = serde_json::json!("none");
+        // GLM-5.3-Flash akzeptiert low/high/max statt "none". Fuer den kurzen
+        // Titel-Use-Case ist "low" der kostenguensige, latenzarme Modus.
+        body["reasoning_effort"] =
+            if endpoint.provider == "zai" && endpoint.model == "glm-5.3-flash" {
+                serde_json::json!("low")
+            } else {
+                serde_json::json!("none")
+            };
     }
     body
 }
@@ -846,7 +857,38 @@ mod tests {
         .expect_err("MiniMax muss bereits im zentralen Hub abgewiesen werden");
 
         assert!(matches!(error, LlmError::Unavailable(_)));
-        assert!(error.to_string().contains("freigegebene Fireworks-Modell"));
+        assert!(error.to_string().contains("nicht freigegeben"));
+    }
+
+    #[tokio::test]
+    async fn title_ai_darf_glm_5_3_flash_mit_low_reasoning_nutzen() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("\"model\":\"glm-5.3-flash\""))
+            .and(body_string_contains("\"reasoning_effort\":\"low\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "{\"primary_title\":\"X\"}"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let response = complete(
+            "title_ai",
+            Request::prompt("titel")
+                .denken_aus()
+                .no_ledger()
+                .endpoint(LlmEndpoint {
+                    provider: "zai",
+                    base_url: server.uri(),
+                    model: "glm-5.3-flash".to_string(),
+                    api_key: Some("k".to_string()),
+                }),
+        )
+        .await
+        .expect("GLM-5.3-Flash ist nur fuer title_ai freigegeben");
+        assert_eq!(response.provider, "zai");
+        assert_eq!(response.model, "glm-5.3-flash");
     }
 
     #[tokio::test]
@@ -864,7 +906,7 @@ mod tests {
         .expect_err("ein anderes Fireworks-Modell darf nicht aufgerufen werden");
 
         assert!(matches!(error, LlmError::Unavailable(_)));
-        assert!(error.to_string().contains("freigegebene Fireworks-Modell"));
+        assert!(error.to_string().contains("nicht freigegeben"));
     }
 
     #[tokio::test]
