@@ -3406,6 +3406,7 @@ dependencies = [
  "serde_json",
  "tb-engagement",
  "tb-llm",
+ "tb-load",
  "tb-stream-audit",
  "tb-transport-twitch",
  "tokio",

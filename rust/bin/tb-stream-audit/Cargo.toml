@@ -21,5 +21,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tb-engagement = { workspace = true }
 tb-llm = { workspace = true }
+tb-load = { workspace = true }
 tb-stream-audit = { workspace = true }
 tb-transport-twitch = { workspace = true }

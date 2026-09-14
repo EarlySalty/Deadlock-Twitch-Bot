@@ -61,7 +61,6 @@ use tb_raid::{
     auth_writer::AuthWriter,
     oauth_flow::{build_authorize_url, build_state_info, StreamerContextResolver},
     partner_setup::PartnerSetupService,
-    scope_profiles::scopes_for_profile,
     state_store::StateStore,
     token_refresher::TwitchTokenClient,
 };
@@ -1713,6 +1712,7 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tb_raid::scope_profiles::scopes_for_profile;
 
     // ── parse_allowlist ───────────────────────────────────────────────────────
 
