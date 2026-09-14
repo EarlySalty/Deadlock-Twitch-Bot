@@ -23,6 +23,10 @@ reqwest           = { workspace = true, features = ["multipart"] }
 regex             = { workspace = true }
 async-trait       = { workspace = true }
 
+[[bin]]
+name = "korpus_ernte"
+path = "src/bin/korpus_ernte.rs"
+
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
 wiremock = { workspace = true }

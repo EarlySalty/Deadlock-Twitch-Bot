@@ -109,8 +109,9 @@ impl ClipRepository {
             INSERT INTO twitch_clips_social_media
                 (clip_id, clip_url, clip_title, clip_thumbnail_url,
                  streamer_login, twitch_user_id, created_at, duration_seconds,
-                 view_count, game_name, game_id, category_key, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending')
+                 view_count, game_name, game_id, category_key, status,
+                 vod_id, vod_offset_s)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, $14)
             RETURNING id AS "id!"
             "#,
             &rec.clip_id,
@@ -124,7 +125,9 @@ impl ClipRepository {
             view_count,
             rec.game_name.as_deref(),
             rec.game_id.as_deref(),
-            category_key
+            category_key,
+            rec.vod_id.as_deref(),
+            rec.vod_offset_s
         )
         .fetch_one(&self.pool)
         .await?;
@@ -228,7 +231,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', status TEXT DEFAULT 'pending', kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TIMESTAMPTZ, duration_seconds DOUBLE PRECISION, view_count BIGINT DEFAULT 0, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', vod_id TEXT, vod_offset_s INTEGER, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB)",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100)",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
@@ -246,11 +249,14 @@ mod tests {
             thumbnail_url: None,
             streamer_login: login.to_string(),
             twitch_user_id: "999".to_string(),
+            broadcaster_name: None,
             created_at: "2026-06-15T00:00:00Z".to_string(),
             duration_seconds: 28.0,
             view_count: 5,
             game_name: Some("Deadlock".to_string()),
             game_id: Some("1422200164".to_string()),
+            vod_id: None,
+            vod_offset_s: None,
         }
     }
 
@@ -315,8 +321,6 @@ mod tests {
         assert_eq!(created_at.to_rfc3339(), "2026-06-15T00:00:00+00:00");
     }
 
-    // social_media-5: ensure_monitored_streamer backfillt twitch_user_id eines
-    // bereits bekannten Streamers NICHT (1:1 zu Python).
     #[tokio::test]
     async fn ensure_streamer_backfillt_user_id_nicht() {
         let Some(pool) = make_pool("t_sm_repo_streamer").await else {

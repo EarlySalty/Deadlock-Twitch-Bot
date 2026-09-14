@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO twitch_clips_social_media\n                (clip_id, clip_url, clip_title, clip_thumbnail_url,\n                 streamer_login, twitch_user_id, created_at, duration_seconds,\n                 view_count, game_name, game_id, category_key, status,\n                 vod_id, vod_offset_s)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, $14)\n            RETURNING id AS \"id!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Float8",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "86c96d5e32b69295dd7af13eb633748f8fc7f52f142dc4281dd1a1df92dfd9d0"
+}

@@ -1,0 +1,48 @@
+[allgemein]
+spieler_namen = ["earlysalty"]
+frame_breite = 1920
+frame_hoehe = 1080
+
+[ocr]
+fps = 2.0
+sprache = "deu+eng"
+
+[[region]]
+name = "killfeed"
+x0 = 0.02
+y0 = 0.173
+x1 = 0.27
+y1 = 0.213
+psm = 7
+whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+_-"
+invertieren = true
+skalierung = 4.0
+teilung = 0.47
+
+[[region]]
+name = "souls"
+x0 = 0.058
+y0 = 0.822
+x1 = 0.132
+y1 = 0.858
+psm = 7
+whitelist = "0123456789.,$"
+invertieren = true
+skalierung = 3.0
+
+[[region]]
+name = "banner"
+x0 = 0.30
+y0 = 0.19
+x1 = 0.70
+y1 = 0.44
+psm = 6
+whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789! "
+invertieren = true
+skalierung = 2.0
+
+[parser]
+multikill_woerter = ["double", "triple", "quadra", "penta", "rampage", "multikill", "killstreak", "doppelkill", "dreifachkill"]
+objective_woerter = ["guardian", "walker", "shrine", "patron", "weakened", "urn", "midboss", "rejuvenator", "wachter"]
+soul_sprung_min = 120
+name_aehnlichkeit = 0.65
