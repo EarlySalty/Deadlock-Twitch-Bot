@@ -1137,6 +1137,11 @@ async fn aufnahme_schleife(
             Err(fehler) => {
                 helix_fehler += 1;
                 tracing::warn!(?fehler, helix_fehler, "Live-Abfrage fehlgeschlagen");
+                // Twitch entzieht bei jedem client_credentials-Abruf die alten
+                // App-Tokens derselben Client-ID - etwa bei jedem Start des
+                // Bots. Gecachten Token verwerfen, damit der naechste Takt
+                // frisch anfragt, statt denselben 401 ewig zu wiederholen.
+                helix.invalidate_app_token().await;
                 // Ohne Live-Abfrage nimmt der Dienst nichts auf. Das sieht
                 // hinterher aus wie ein sauberer Tag, ist aber ein Ausfall.
                 if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
