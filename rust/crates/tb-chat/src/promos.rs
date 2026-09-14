@@ -6011,6 +6011,7 @@ mod db_tests {
                 occasion: Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
                 reply: "im discord findest du mitspieler für gemeinsame runden".to_string(),
                 confidence: 0.45,
+                ernst_gemeint: true,
             },
         )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))

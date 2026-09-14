@@ -1712,7 +1712,6 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use tb_raid::scope_profiles::scopes_for_profile;
 
     // ── parse_allowlist ───────────────────────────────────────────────────────
 
@@ -2799,6 +2798,7 @@ mod callback_tests {
     use std::time::Duration;
     use tb_crypto::{FieldCipher, KID};
     use tb_raid::partner_setup::{ChatGreeterPort, DiscordDirectoryPort, ModeratorInstallPort};
+    use tb_raid::scope_profiles::scopes_for_profile;
     use tb_raid::token_refresher::{RefreshError, TokenOwnerInfo, TokenResponse};
     use tb_raid::RaidOAuthState;
 

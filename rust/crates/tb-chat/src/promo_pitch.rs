@@ -1199,41 +1199,49 @@ mod tests {
                 game: Some("Deadlock".into()),
                 title: None,
                 recent_chat: vec![],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: Some("Scrims heute".into()),
                 recent_chat: vec![],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: Some("Ranked grind".into()),
                 recent_chat: vec![],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: None,
                 recent_chat: vec!["welcher hero ist gut für anfänger?".into()],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: Some("Patchday".into()),
                 recent_chat: vec!["was wurde generft?".into()],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: Some("Build testing".into()),
                 recent_chat: vec!["welches item ist gerade meta?".into()],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: Some("Replay Coaching".into()),
                 recent_chat: vec![],
+                beispiele: String::new(),
             },
             ChannelPromoContext {
                 game: Some("Deadlock".into()),
                 title: None,
                 recent_chat: vec!["schon wieder so ein fake server scam".into()],
+                beispiele: String::new(),
             },
         ] {
             let body = fallback_channel_promo_body(&ctx);
