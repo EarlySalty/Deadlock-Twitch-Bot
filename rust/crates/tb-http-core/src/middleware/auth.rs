@@ -79,7 +79,6 @@ impl AuthLevel {
 #[derive(Clone)]
 pub struct ExpectedToken(pub String);
 
-#[async_trait::async_trait]
 impl<S> axum::extract::FromRequestParts<S> for AuthLevel
 where
     S: Send + Sync,
