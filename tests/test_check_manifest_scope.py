@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -91,123 +93,128 @@ def build_repo(
     return tmp_path
 
 
-def test_deckungsgleiche_konfiguration_meldet_nichts(tmp_path: Path) -> None:
-    repo = build_repo(
-        tmp_path,
-        watched=["/website", "/bot/admin_dashboard"],
-        built=["website", "bot/admin_dashboard"],
-        projects=["website", "bot/admin_dashboard"],
-    )
+class ManifestScopeTests(unittest.TestCase):
+    def make_repo(
+        self,
+        *,
+        watched: list[str],
+        built: list[str],
+        projects: list[str],
+    ) -> Path:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        return build_repo(
+            Path(temp_dir.name), watched=watched, built=built, projects=projects
+        )
 
-    assert check_manifest_scope.check(repo) == []
+    def test_deckungsgleiche_konfiguration_meldet_nichts(self) -> None:
+        repo = self.make_repo(
+            watched=["/website", "/bot/admin_dashboard"],
+            built=["website", "bot/admin_dashboard"],
+            projects=["website", "bot/admin_dashboard"],
+        )
+
+        self.assertEqual(check_manifest_scope.check(repo), [])
+
+    def test_ueberwachtes_verzeichnis_ohne_projekt_wird_gemeldet(self) -> None:
+        """Der Fall .github/eslint-security: Config blieb, Ordner war weg."""
+        repo = self.make_repo(
+            watched=["/website", "/.github/eslint-security"],
+            built=["website"],
+            projects=["website"],
+        )
+
+        problems = check_manifest_scope.check(repo)
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("/.github/eslint-security", problems[0])
+        self.assertIn("keine package.json", problems[0])
+
+    def test_punktverzeichnis_mit_projekt_meldet_nichts(self) -> None:
+        """Zustand vor dem Aufraeumen: Ordner da, Config da, CI baut ihn.
+
+        Faengt die Pfad-Normalisierung ab: wer fuehrende Punkte abschneidet, macht
+        aus `.github/eslint-security` ein `github/eslint-security` und meldet zwei
+        Fehler, von denen einer luegt.
+        """
+        repo = self.make_repo(
+            watched=["/.github/eslint-security"],
+            built=[".github/eslint-security"],
+            projects=[".github/eslint-security"],
+        )
+
+        self.assertEqual(check_manifest_scope.check(repo), [])
+
+    def test_root_projekt_meldet_nichts(self) -> None:
+        """`directory: "/"` und ein Root-Manifest muessen zusammenpassen."""
+        repo = self.make_repo(watched=["/"], built=["."], projects=[""])
+
+        self.assertEqual(check_manifest_scope.check(repo), [])
+
+    def test_unbeaufsichtigtes_projekt_wird_zweifach_gemeldet(self) -> None:
+        repo = self.make_repo(
+            watched=["/website"],
+            built=["website"],
+            projects=["website", "tools/tote-app"],
+        )
+
+        problems = check_manifest_scope.check(repo)
+
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(
+            any("nicht eingetragen" in p and "tools/tote-app" in p for p in problems)
+        )
+        self.assertTrue(
+            any(
+                "keiner Frontend-CI-Matrix" in p and "tools/tote-app" in p
+                for p in problems
+            )
+        )
+
+    def test_ueberwachtes_projekt_ohne_ci_matrix_wird_gemeldet(self) -> None:
+        repo = self.make_repo(
+            watched=["/website", "/bot/dashboard_v2"],
+            built=["website"],
+            projects=["website", "bot/dashboard_v2"],
+        )
+
+        problems = check_manifest_scope.check(repo)
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("bot/dashboard_v2", problems[0])
+        self.assertIn("keiner Frontend-CI-Matrix", problems[0])
+
+    def test_build_ordner_zaehlen_nicht_als_projekt(self) -> None:
+        """node_modules und dist duerfen keine Befunde erzeugen."""
+        repo = self.make_repo(
+            watched=["/website"],
+            built=["website"],
+            projects=["website", "website/node_modules/react", "website/dist"],
+        )
+
+        self.assertEqual(check_manifest_scope.check(repo), [])
+
+    def test_cache_dependency_path_gilt_nicht_als_matrix_eintrag(self) -> None:
+        """`cache-dependency-path:` darf kein Projekt still als gebaut markieren."""
+        repo = self.make_repo(
+            watched=["/website"],
+            built=[],
+            projects=["website"],
+        )
+
+        built = check_manifest_scope.npm_dirs_in_frontend_ci(
+            repo / ".github" / "workflows" / "lint-and-typecheck.yml"
+        )
+
+        self.assertEqual(built, set())
+        problems = check_manifest_scope.check(repo)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("keiner Frontend-CI-Matrix", problems[0])
+
+    def test_echtes_repo_ist_deckungsgleich(self) -> None:
+        """Der Produktivpfad: die eingecheckte Konfiguration selbst."""
+        self.assertEqual(check_manifest_scope.check(REPO_ROOT), [])
 
 
-def test_ueberwachtes_verzeichnis_ohne_projekt_wird_gemeldet(tmp_path: Path) -> None:
-    """Der Fall .github/eslint-security: Config blieb, Ordner war weg."""
-    repo = build_repo(
-        tmp_path,
-        watched=["/website", "/.github/eslint-security"],
-        built=["website"],
-        projects=["website"],
-    )
-
-    problems = check_manifest_scope.check(repo)
-
-    assert len(problems) == 1
-    assert "/.github/eslint-security" in problems[0]
-    assert "keine package.json" in problems[0]
-
-
-def test_punktverzeichnis_mit_projekt_meldet_nichts(tmp_path: Path) -> None:
-    """Zustand vor dem Aufraeumen: Ordner da, Config da, CI baut ihn.
-
-    Faengt die Pfad-Normalisierung ab: wer fuehrende Punkte abschneidet, macht
-    aus `.github/eslint-security` ein `github/eslint-security` und meldet zwei
-    Fehler, von denen einer luegt.
-    """
-    repo = build_repo(
-        tmp_path,
-        watched=["/.github/eslint-security"],
-        built=[".github/eslint-security"],
-        projects=[".github/eslint-security"],
-    )
-
-    assert check_manifest_scope.check(repo) == []
-
-
-def test_root_projekt_meldet_nichts(tmp_path: Path) -> None:
-    """`directory: "/"` und ein Root-Manifest muessen zusammenpassen."""
-    repo = build_repo(
-        tmp_path,
-        watched=["/"],
-        built=["."],
-        projects=[""],
-    )
-
-    assert check_manifest_scope.check(repo) == []
-
-
-def test_unbeaufsichtigtes_projekt_wird_zweifach_gemeldet(tmp_path: Path) -> None:
-    repo = build_repo(
-        tmp_path,
-        watched=["/website"],
-        built=["website"],
-        projects=["website", "tools/tote-app"],
-    )
-
-    problems = check_manifest_scope.check(repo)
-
-    assert len(problems) == 2
-    assert any("nicht eingetragen" in p and "tools/tote-app" in p for p in problems)
-    assert any("keiner Frontend-CI-Matrix" in p and "tools/tote-app" in p for p in problems)
-
-
-def test_ueberwachtes_projekt_ohne_ci_matrix_wird_gemeldet(tmp_path: Path) -> None:
-    repo = build_repo(
-        tmp_path,
-        watched=["/website", "/bot/dashboard_v2"],
-        built=["website"],
-        projects=["website", "bot/dashboard_v2"],
-    )
-
-    problems = check_manifest_scope.check(repo)
-
-    assert len(problems) == 1
-    assert "bot/dashboard_v2" in problems[0]
-    assert "keiner Frontend-CI-Matrix" in problems[0]
-
-
-def test_build_ordner_zaehlen_nicht_als_projekt(tmp_path: Path) -> None:
-    """node_modules und dist duerfen keine Befunde erzeugen."""
-    repo = build_repo(
-        tmp_path,
-        watched=["/website"],
-        built=["website"],
-        projects=["website", "website/node_modules/react", "website/dist"],
-    )
-
-    assert check_manifest_scope.check(repo) == []
-
-
-def test_cache_dependency_path_gilt_nicht_als_matrix_eintrag(tmp_path: Path) -> None:
-    """`cache-dependency-path:` darf kein Projekt still als gebaut markieren."""
-    repo = build_repo(
-        tmp_path,
-        watched=["/website"],
-        built=[],
-        projects=["website"],
-    )
-
-    built = check_manifest_scope.npm_dirs_in_frontend_ci(
-        repo / ".github" / "workflows" / "lint-and-typecheck.yml"
-    )
-
-    assert built == set()
-    problems = check_manifest_scope.check(repo)
-    assert len(problems) == 1
-    assert "keiner Frontend-CI-Matrix" in problems[0]
-
-
-def test_echtes_repo_ist_deckungsgleich() -> None:
-    """Der Produktivpfad: die eingecheckte Konfiguration selbst."""
-    assert check_manifest_scope.check(REPO_ROOT) == []
+if __name__ == "__main__":
+    unittest.main()
