@@ -7,7 +7,6 @@ import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
-import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
 import { StatCommandSection } from '@/components/verwaltung/StatCommandSection';
 import { SubReminderSection } from '@/components/verwaltung/SubReminderSection';
@@ -391,7 +390,6 @@ export function VerwaltungPage() {
 
   const botTab = (
     <>
-      <AIEngagementSection />
       <ModerationSection />
       <ScamGuardSection />
       <SilentNotificationsSection />

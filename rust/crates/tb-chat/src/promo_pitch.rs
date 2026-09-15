@@ -33,7 +33,7 @@ new_player: die Person ist Anfänger in Deadlock, sammelt erste MOBA-Erfahrung o
 wants_help: die Person sucht Hilfe, Tipps oder Coaching.
 ranked_competitive: die Person spricht über Ranked, Competitive, Premades oder einen festen Stack.
 build_meta: die Person spricht über Builds, Items, Meta, Hero-Builds oder konkrete Spielentscheidungen.
-coaching: die Person möchte ihr Gameplay verbessern, ein Replay besprechen oder fragt nach Coaching bzw. Feedback.
+coaching: die Person möchte ihr Gameplay verbessern, ein Replay besprechen oder fragt nach Coaching bzw. Feedback. Das gilt ausdrücklich auch für Frust wie "ich spiele seit Wochen/Monaten, werde aber nicht besser", "ich hänge fest" oder sinngleiche Aussagen, auch wenn die Person nicht wörtlich nach Hilfe fragt.
 patchnotes_news: die Person spricht über einen Patch, Buffs, Nerfs, Änderungen, Changelog oder aktuelle Deadlock-News.
 scam_protection: die Person spricht über Scam, Fake-Server, dubiose Service-Pitches oder verdächtige Werbung.
 newcomer_interest: die Person zeigt inhaltliches Interesse an Deadlock, einem Hero oder dem Gameplay und ein konkreter Discord-Nutzen passt natürlich dazu, auch ohne Beschwerde.
@@ -43,6 +43,8 @@ Kein Anlass sind Begrüßungen, Emotes, allgemeiner Smalltalk oder eine Nachrich
 Passt ein Anlass, schreibst du genau zwei kurze Teile in dieser Reihenfolge:
 1. Reagiere echt auf das Gesagte. Kein Werbeton, keine Floskel.
 2. Nenne genau einen dazu passenden Grund, warum sich der Community-Discord für diese Person wirklich lohnt. Verkaufe nicht den Ort oder die Aktivität, sondern den ersparten Aufwand, den konkreten Zugang oder den Schutz. Gute Nutzen sind: statt Solo Queue aktive Voice-Lanes bzw. einen festen Ranked-Stack nutzen; für Scrims nicht erst Gegner über einzelne DMs zusammensuchen; an Deadlock-Turnieren mit Anmeldung teilnehmen; eine konkrete Build-/Item-Frage mit anderen Deadlock-Spielern klären; komplett kostenloses Coaching, bei dem ein Replay mit einem Coach durchgegangen werden kann; neue Deadlock-Patchnotes auf Deutsch bekommen, ohne das englische Changelog selbst übersetzen zu müssen; oder Scam-/Fake-Server-Pitches durch den Schutz in Partner-Chats erkennen lassen. Zähle nie mehrere Vorteile auf, wenn die Nachricht nur zu einem passt.
+
+Sonderfall coaching: Der zweite Teil soll nicht vage bleiben. Sag klar, dass das Coaching komplett kostenlos ist und wie man es bekommt: !discord nutzen, auf dem Server den Kanal #ich-brauch-einen-coach öffnen und dort Coaching beantragen. Nenne keinen direkten Invite-Link.
 
 Leere Meta-Sätze sind verboten, auch wenn sie nett klingen: "gut aufgehoben", "wer Bock auf Deadlock hat", "schau mal rein", "schau vorbei", "Austausch", "vernetzen", "Gleichgesinnte", "Community für Deadlock" oder sinngleiche Aussagen ohne konkretes Ergebnis. Ebenfalls verboten sind Verwaltungs- und Broschürenformulierungen wie "wird aufbereitet", "kann angefragt werden", "wird gemeinsam besprochen", "zum Organisieren", "findest du im Discord" oder "im Discord findest du". Wenn der Satz im Kern nur sagt, wo etwas passiert, statt warum es nützlich ist, setzt du occasion auf null. Der Zuschauer soll wegen eines echten Vorteils Interesse bekommen, nicht weil du ihm sagst, dass die Community existiert.
 
@@ -134,6 +136,38 @@ impl PitchOccasion {
             Self::ScamProtection => "scam_protection",
             Self::NewcomerInterest => "newcomer_interest",
         }
+    }
+}
+
+pub const COACHING_ACTION_CTA: &str = "coaching ist bei uns komplett kostenlos: !discord nutzen, auf dem server #ich-brauch-einen-coach öffnen und dort coaching beantragen.";
+
+pub fn finalize_occasion_reply(occasion: PitchOccasion, model_reply: &str) -> String {
+    if occasion != PitchOccasion::Coaching {
+        return model_reply.trim().to_string();
+    }
+
+    let body = model_reply.trim();
+    let lower = body.to_lowercase();
+    if lower.contains("!discord")
+        && lower.contains("#ich-brauch-einen-coach")
+        && lower.contains("kostenlos")
+        && lower.contains("beantrag")
+    {
+        return body.to_string();
+    }
+
+    let lead_end = body
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '.' | '?' | '!').then_some(index + ch.len_utf8()));
+    let lead = lead_end
+        .and_then(|end| body.get(..end))
+        .unwrap_or(body)
+        .trim();
+
+    if lead.is_empty() {
+        COACHING_ACTION_CTA.to_string()
+    } else {
+        format!("{lead} {COACHING_ACTION_CTA}")
     }
 }
 
@@ -987,6 +1021,39 @@ mod tests {
             let parsed = parse_pitch_response(&raw).unwrap();
             assert_eq!(parsed.occasion, Some(expected), "{occasion}");
         }
+    }
+
+    #[test]
+    fn coaching_reply_haengt_konkreten_antragsweg_an() {
+        let reply = finalize_occasion_reply(
+            PitchOccasion::Coaching,
+            "uff, nach ein paar monaten festzuhängen ist mies. da kann feedback echt helfen",
+        );
+        assert!(reply.starts_with("uff, nach ein paar monaten festzuhängen ist mies."));
+        assert!(reply.contains("komplett kostenlos"));
+        assert!(reply.contains("!discord"));
+        assert!(reply.contains("#ich-brauch-einen-coach"));
+        assert!(reply.contains("coaching beantragen"));
+        assert!(pitch_filter_reject(&reply).is_none());
+        assert!(community_value_filter_reject(&reply).is_none());
+    }
+
+    #[test]
+    fn coaching_reply_dupliziert_vollstaendigen_antragsweg_nicht() {
+        let model = "festhängen nervt. coaching ist bei uns komplett kostenlos: !discord nutzen, auf dem server #ich-brauch-einen-coach öffnen und dort coaching beantragen.";
+        assert_eq!(
+            finalize_occasion_reply(PitchOccasion::Coaching, model),
+            model
+        );
+    }
+
+    #[test]
+    fn andere_anlaesse_bleiben_unveraendert() {
+        let model = "solo queue kann echt nerven. ein fester stack spart den zufallsfaktor";
+        assert_eq!(
+            finalize_occasion_reply(PitchOccasion::SoloQueue, model),
+            model
+        );
     }
 
     #[test]
