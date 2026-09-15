@@ -16,6 +16,10 @@ pub struct Caster {
     pub id: String,
     pub name: String,
     pub handle: String,
+    #[serde(default, rename = "accountLogin", skip_serializing_if = "Option::is_none")]
+    pub account_login: Option<String>,
+    #[serde(default, rename = "cameraUrl")]
+    pub camera_url: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Scene {
@@ -31,7 +35,7 @@ pub struct SaveRequest {
 fn validate(scene: &mut Scene) -> Result<(), ApiError> {
     let invalid = || {
         ApiError::bad_request_with_body(
-            json!({"message":"Bitte höchstens 100 Personen mit eindeutiger ID, Name (1–60 Zeichen) und Handle (höchstens 60 Zeichen) verwenden."}),
+            json!({"message":"Bitte höchstens 100 Personen mit eindeutiger ID, Name (1–60 Zeichen), gültigem Twitch-Konto und einer HTTPS-Kameraquelle (höchstens 2048 Zeichen) verwenden."}),
         )
     };
     if scene.roster.len() > 100 {
@@ -41,6 +45,16 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
     for caster in &mut scene.roster {
         caster.name = caster.name.trim().to_owned();
         caster.handle = caster.handle.trim().trim_start_matches('@').to_owned();
+        caster.account_login = caster
+            .account_login
+            .take()
+            .map(|login| login.trim().trim_start_matches('@').to_ascii_lowercase())
+            .filter(|login| !login.is_empty());
+        caster.camera_url = caster.camera_url.trim().to_owned();
+        let valid_camera_url = caster.camera_url.is_empty()
+            || ((caster.camera_url.starts_with("https://")
+                || (caster.camera_url.starts_with('/') && !caster.camera_url.starts_with("//")))
+                && !caster.camera_url.chars().any(char::is_whitespace));
         if caster.id.is_empty()
             || caster.id.len() > 64
             || !caster
@@ -51,8 +65,15 @@ fn validate(scene: &mut Scene) -> Result<(), ApiError> {
             || caster.name.is_empty()
             || caster.name.chars().count() > 60
             || caster.handle.chars().count() > 60
+            || caster
+                .account_login
+                .as_ref()
+                .is_some_and(|login| login.len() > 60 || !login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+            || caster.camera_url.len() > 2048
+            || !valid_camera_url
             || caster.name.chars().any(char::is_control)
             || caster.handle.chars().any(char::is_control)
+            || caster.camera_url.chars().any(char::is_control)
         {
             return Err(invalid());
         }
@@ -119,7 +140,7 @@ pub async fn public_handler(State(pool): State<PgPool>) -> Result<impl IntoRespo
         .map(|id| {
             id.as_ref()
                 .and_then(|id| scene.roster.iter().find(|caster| &caster.id == id))
-                .map(|caster| json!({"name":caster.name,"handle":caster.handle}))
+                .map(|caster| json!({"name":caster.name,"handle":caster.handle,"cameraUrl":caster.camera_url}))
         })
         .collect();
     Ok((
@@ -128,7 +149,7 @@ pub async fn public_handler(State(pool): State<PgPool>) -> Result<impl IntoRespo
     ))
 }
 pub async fn html_handler() -> impl IntoResponse {
-    ([(header::CACHE_CONTROL, "no-cache"), (header::X_FRAME_OPTIONS, "SAMEORIGIN"), (header::CONTENT_SECURITY_POLICY, "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de")], Html(include_str!("caster_overlay.html")))
+    ([(header::CACHE_CONTROL, "no-cache"), (header::X_FRAME_OPTIONS, "SAMEORIGIN"), (header::CONTENT_SECURITY_POLICY, "default-src 'none'; img-src 'self'; frame-src 'self' https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de")], Html(include_str!("caster_overlay.html")))
 }
 pub async fn background_handler() -> impl IntoResponse {
     (
@@ -149,6 +170,8 @@ mod tests {
                 id: "caster-1".into(),
                 name: " ZeRo ".into(),
                 handle: "@zro_dl".into(),
+                account_login: Some("@ZRO_DL".into()),
+                camera_url: " https://vdo.ninja/?view=test ".into(),
             }],
             slots: [Some("caster-1".into()), None],
         }
@@ -159,6 +182,8 @@ mod tests {
         validate(&mut value).unwrap();
         assert_eq!(value.roster[0].name, "ZeRo");
         assert_eq!(value.roster[0].handle, "zro_dl");
+        assert_eq!(value.roster[0].account_login.as_deref(), Some("zro_dl"));
+        assert_eq!(value.roster[0].camera_url, "https://vdo.ninja/?view=test");
     }
     #[test]
     fn rejects_dangling_slots_and_duplicate_ids() {
@@ -176,5 +201,24 @@ mod tests {
         assert!(validate(&mut value).is_err());
         value.roster[0].name = "ü".repeat(61);
         assert!(validate(&mut value).is_err());
+    }
+    #[test]
+    fn rejects_unsafe_camera_urls() {
+        let mut value = scene();
+        value.roster[0].camera_url = "javascript:alert(1)".into();
+        assert!(validate(&mut value).is_err());
+        let mut value = scene();
+        value.roster[0].camera_url = "https://example.invalid/cam with-space".into();
+        assert!(validate(&mut value).is_err());
+    }
+    #[test]
+    fn alte_szenen_bekommen_leere_neue_felder() {
+        let value: Scene = serde_json::from_value(json!({
+            "roster": [{"id":"caster-1","name":"Alt","handle":"alt"}],
+            "slots": ["caster-1", null]
+        }))
+        .unwrap();
+        assert_eq!(value.roster[0].account_login, None);
+        assert_eq!(value.roster[0].camera_url, "");
     }
 }

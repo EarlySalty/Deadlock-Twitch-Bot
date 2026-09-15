@@ -1379,7 +1379,13 @@ export async function fetchAdminResearchSuggestions(days: number): Promise<Resea
   return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
 }
 
-export interface CasterPerson { id: string; name: string; handle: string }
+export interface CasterPerson {
+  id: string;
+  name: string;
+  handle: string;
+  accountLogin?: string | null;
+  cameraUrl?: string;
+}
 export interface CasterScene { roster: CasterPerson[]; slots: [string | null, string | null] }
 export interface CasterDocument { revision: number; scene: CasterScene }
 export const fetchCasterOverlay = () => admin<CasterDocument>('/caster-overlay');
