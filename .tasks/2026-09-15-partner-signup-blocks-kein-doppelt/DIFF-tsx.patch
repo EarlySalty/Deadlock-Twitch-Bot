@@ -1,0 +1,236 @@
+diff --git a/bot/admin_dashboard/src/pages/community/PartnerSignupBlocks.tsx b/bot/admin_dashboard/src/pages/community/PartnerSignupBlocks.tsx
+index 704515ed..735cd798 100644
+--- a/bot/admin_dashboard/src/pages/community/PartnerSignupBlocks.tsx
++++ b/bot/admin_dashboard/src/pages/community/PartnerSignupBlocks.tsx
+@@ -4,7 +4,6 @@ import { ApiError } from '@/api/client';
+ import type { PartnerSignupBlockEntry, PartnerSignupTagBlockEntry } from '@/api/types';
+ import { PageHeader } from '@/components/layout/PageHeader';
+ import { Section } from '@/components/layout/Section';
+-import { ConfirmTypedDialog } from '@/components/shared/ConfirmTypedDialog';
+ import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+ import { Toast } from '@/components/shared/Toast';
+ import {
+@@ -26,12 +25,6 @@ const ADD_STEPS = [
+   'Ein noch aktiver Partner wird stillgelegt.',
+ ];
+ 
+-const REMOVE_STEPS = [
+-  'Der Kanal kann wieder ins Partnerprogramm aufgenommen werden.',
+-  'Die Raid-Sperre aus diesem Ausschluss wird aufgehoben, andere Sperrgründe bleiben.',
+-  'Gelöschte Zugänge kommen nicht zurück, der Kanal muss neu autorisieren.',
+-];
+-
+ const TAG_ADD_STEPS = [
+   'Der Kanal kommt auf die Sperrliste der Partneraufnahme.',
+   'Scout spricht ihn nicht mehr an.',
+@@ -39,11 +32,6 @@ const TAG_ADD_STEPS = [
+   'Bestehende Partner sind davon nicht betroffen.',
+ ];
+ 
+-const TAG_REMOVE_STEPS = [
+-  'Neue Streams mit diesem Tag werden nicht mehr automatisch ausgeschlossen.',
+-  'Bestehende Kanal-Ausschlüsse bleiben bestehen.',
+-];
+-
+ /**
+  * Fehlertext für einen fehlgeschlagenen Schreibvorgang.
+  *
+@@ -80,13 +68,9 @@ export default function PartnerSignupBlocksPage() {
+   const [tag, setTag] = useState('');
+   const [tagReason, setTagReason] = useState('');
+   const [tagPublicMessage, setTagPublicMessage] = useState('');
+-  const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+-  const [pendingRemove, setPendingRemove] = useState<PartnerSignupBlockEntry | null>(null);
+-  const [pendingTagAdd, setPendingTagAdd] = useState<string | null>(null);
+-  const [pendingTagRemove, setPendingTagRemove] = useState<PartnerSignupTagBlockEntry | null>(null);
+   const [toast, setToast] = useState<ToastState>({ open: false, tone: 'success', message: '' });
+ 
+-  function openAddConfirm() {
++  async function submitAdd() {
+     const candidate = login.trim().toLowerCase();
+     if (!candidate) {
+       setToast({ open: true, tone: 'error', message: 'Bitte einen Login eingeben.' });
+@@ -96,16 +80,9 @@ export default function PartnerSignupBlocksPage() {
+       setToast({ open: true, tone: 'error', message: 'Bitte einen internen Grund angeben.' });
+       return;
+     }
+-    setPendingAdd(candidate);
+-  }
+-
+-  async function confirmAdd() {
+-    if (!pendingAdd) {
+-      return;
+-    }
+     try {
+       const result = await addMutation.mutateAsync({
+-        login: pendingAdd,
++        login: candidate,
+         reason: reason.trim(),
+         publicMessage: publicMessage.trim() || undefined,
+       });
+@@ -130,16 +107,10 @@ export default function PartnerSignupBlocksPage() {
+         tone: 'error',
+         message: fehlerText(error, 'Ausschluss'),
+       });
+-    } finally {
+-      setPendingAdd(null);
+     }
+   }
+ 
+-  async function confirmRemove() {
+-    if (!pendingRemove) {
+-      return;
+-    }
+-    const entry = pendingRemove;
++  async function submitRemove(entry: PartnerSignupBlockEntry) {
+     try {
+       const result = await removeMutation.mutateAsync({
+         login: entry.login,
+@@ -161,27 +132,18 @@ export default function PartnerSignupBlocksPage() {
+             ? 'Die Sitzung ist abgelaufen. Bitte neu anmelden und die Aufhebung erneut versuchen.'
+             : 'Ausschluss konnte nicht aufgehoben werden.',
+       });
+-    } finally {
+-      setPendingRemove(null);
+     }
+   }
+ 
+-  function openTagAddConfirm() {
++  async function submitTagAdd() {
+     const candidate = tag.trim();
+     if (!candidate) {
+       setToast({ open: true, tone: 'error', message: 'Bitte einen Tag eingeben.' });
+       return;
+     }
+-    setPendingTagAdd(candidate);
+-  }
+-
+-  async function confirmTagAdd() {
+-    if (!pendingTagAdd) {
+-      return;
+-    }
+     try {
+       const result = await tagAddMutation.mutateAsync({
+-        tag: pendingTagAdd,
++        tag: candidate,
+         reason: tagReason.trim() || undefined,
+         publicMessage: tagPublicMessage.trim() || undefined,
+       });
+@@ -199,16 +161,10 @@ export default function PartnerSignupBlocksPage() {
+         tone: 'error',
+         message: fehlerText(error, 'Tag-Sperre'),
+       });
+-    } finally {
+-      setPendingTagAdd(null);
+     }
+   }
+ 
+-  async function confirmTagRemove() {
+-    if (!pendingTagRemove) {
+-      return;
+-    }
+-    const entry = pendingTagRemove;
++  async function submitTagRemove(entry: PartnerSignupTagBlockEntry) {
+     try {
+       const result = await tagRemoveMutation.mutateAsync(entry.tag);
+       setToast({
+@@ -227,8 +183,6 @@ export default function PartnerSignupBlocksPage() {
+             ? 'Die Sitzung ist abgelaufen. Bitte neu anmelden und die Aufhebung erneut versuchen.'
+             : 'Tag-Sperre konnte nicht aufgehoben werden.',
+       });
+-    } finally {
+-      setPendingTagRemove(null);
+     }
+   }
+ 
+@@ -275,7 +229,7 @@ export default function PartnerSignupBlocksPage() {
+           aria-label="Ausschluss aufheben"
+           className="admin-button admin-button-secondary"
+           disabled={removeMutation.isPending}
+-          onClick={() => setPendingRemove(entry)}
++          onClick={() => void submitRemove(entry)}
+           type="button"
+         >
+           <Trash2 className="h-4 w-4" />
+@@ -328,7 +282,7 @@ export default function PartnerSignupBlocksPage() {
+           aria-label="Tag-Sperre aufheben"
+           className="admin-button admin-button-secondary"
+           disabled={tagRemoveMutation.isPending}
+-          onClick={() => setPendingTagRemove(entry)}
++          onClick={() => void submitTagRemove(entry)}
+           type="button"
+         >
+           <Trash2 className="h-4 w-4" />
+@@ -403,7 +357,7 @@ export default function PartnerSignupBlocksPage() {
+           <button
+             className="admin-button admin-button-primary"
+             disabled={addMutation.isPending}
+-            onClick={openAddConfirm}
++            onClick={() => void submitAdd()}
+             type="button"
+           >
+             <Plus className="h-4 w-4" />
+@@ -457,7 +411,7 @@ export default function PartnerSignupBlocksPage() {
+           <button
+             className="admin-button admin-button-primary"
+             disabled={tagAddMutation.isPending}
+-            onClick={openTagAddConfirm}
++            onClick={() => void submitTagAdd()}
+             type="button"
+           >
+             <Plus className="h-4 w-4" />
+@@ -506,54 +460,6 @@ export default function PartnerSignupBlocksPage() {
+         />
+       </Section>
+ 
+-      <ConfirmTypedDialog
+-        open={Boolean(pendingAdd)}
+-        title="Kanal von der Partneraufnahme ausschließen"
+-        description={`${pendingAdd ?? ''} wird ausgeschlossen. Zum Bestätigen den Login eintippen.`}
+-        expected={pendingAdd ?? ''}
+-        steps={ADD_STEPS}
+-        confirmLabel="Ausschließen"
+-        busy={addMutation.isPending}
+-        onConfirm={() => void confirmAdd()}
+-        onCancel={() => setPendingAdd(null)}
+-      />
+-
+-      <ConfirmTypedDialog
+-        open={Boolean(pendingRemove)}
+-        title="Ausschluss aufheben"
+-        description={`${pendingRemove?.login ?? ''} darf danach wieder aufgenommen werden. Zum Bestätigen den Login eintippen.`}
+-        expected={pendingRemove?.login ?? ''}
+-        steps={REMOVE_STEPS}
+-        confirmLabel="Aufheben"
+-        busy={removeMutation.isPending}
+-        onConfirm={() => void confirmRemove()}
+-        onCancel={() => setPendingRemove(null)}
+-      />
+-
+-      <ConfirmTypedDialog
+-        open={Boolean(pendingTagAdd)}
+-        title="Tag sperren"
+-        description={`${pendingTagAdd ?? ''} sperrt Kanäle mit diesem Tag, auch rückwirkend über gespeicherte Sessions. Bestehende Partner bleiben unangetastet. Zum Bestätigen den Tag eintippen.`}
+-        expected={pendingTagAdd ?? ''}
+-        steps={TAG_ADD_STEPS}
+-        confirmLabel="Tag sperren"
+-        busy={tagAddMutation.isPending}
+-        onConfirm={() => void confirmTagAdd()}
+-        onCancel={() => setPendingTagAdd(null)}
+-      />
+-
+-      <ConfirmTypedDialog
+-        open={Boolean(pendingTagRemove)}
+-        title="Tag-Sperre aufheben"
+-        description={`${pendingTagRemove?.display_tag ?? ''} sperrt danach keine Kanäle mehr. Zum Bestätigen den Tag eintippen.`}
+-        expected={pendingTagRemove?.display_tag ?? ''}
+-        steps={TAG_REMOVE_STEPS}
+-        confirmLabel="Aufheben"
+-        busy={tagRemoveMutation.isPending}
+-        onConfirm={() => void confirmTagRemove()}
+-        onCancel={() => setPendingTagRemove(null)}
+-      />
+-
+       <Toast
+         open={toast.open}
+         tone={toast.tone}
