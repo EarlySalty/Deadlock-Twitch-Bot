@@ -28,7 +28,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{block_padding::Pkcs7, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
@@ -93,7 +93,7 @@ pub fn encrypt(key_b64: &str, plaintext: &[u8]) -> Result<String, FernetError> {
     let mut buf = vec![0u8; padded_len];
     buf[..plaintext.len()].copy_from_slice(plaintext);
     let ct_len = Aes128CbcEnc::new(&key.encryption.into(), &iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+        .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
         .map_err(|_| FernetError::AesDecrypt)?
         .len();
     buf.truncate(ct_len);
@@ -172,7 +172,7 @@ pub fn decrypt(key_b64: &str, token: &str, ttl_secs: Option<u64>) -> Result<Vec<
     // 8. AES-128-CBC entschlüsseln
     let mut buf = ciphertext.to_vec();
     let plaintext_len = Aes128CbcDec::new(&encryption_key.into(), &iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .map_err(|_| FernetError::AesDecrypt)?
         .len();
     buf.truncate(plaintext_len);
