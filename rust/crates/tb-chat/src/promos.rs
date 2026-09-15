@@ -47,9 +47,9 @@ use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
 use crate::lfg_pitch::RecentChatPort;
 use crate::promo_pitch::{
-    community_value_filter_reject, pitch_filter_reject, pitch_injection_reject,
-    ChannelPromoContext, PartnerPitchContext, PartnerPitchGen, PitchJudge, PitchJudgeInput,
-    PitchTextGen, PITCH_MIN_CONFIDENCE,
+    community_value_filter_reject, finalize_occasion_reply, pitch_filter_reject,
+    pitch_injection_reject, ChannelPromoContext, PartnerPitchContext, PartnerPitchGen, PitchJudge,
+    PitchJudgeInput, PitchTextGen, PITCH_MIN_CONFIDENCE,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
@@ -1006,7 +1006,7 @@ impl PromoEngine {
         let Some((occasion, reply)) = occasion else {
             return;
         };
-        let resp_reply = reply;
+        let resp_reply = finalize_occasion_reply(occasion, &reply);
 
         if let Some(reason) = pitch_filter_reject(&resp_reply) {
             self.log_anlass_reject(
