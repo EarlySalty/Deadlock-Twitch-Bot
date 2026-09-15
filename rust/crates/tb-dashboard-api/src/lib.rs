@@ -565,6 +565,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/uplink/destinations",
             get(uplink::destinations_handler).put(uplink::put_destination_handler),
         )
+        .route(
+            "/twitch/api/v2/uplink/native-2k-hardware",
+            get(uplink::native_2k_hardware_handler)
+                .put(uplink::put_native_2k_hardware_handler)
+                .delete(uplink::delete_native_2k_hardware_handler),
+        )
         .route("/twitch/api/v2/uplink/caps", get(uplink::caps_handler))
         // Uplink Multi-Chat: Verbinden laeuft ueber den bestehenden
         // Streamer-OAuth (`/twitch/raid/auth?scope_profile=uplink`), es gibt

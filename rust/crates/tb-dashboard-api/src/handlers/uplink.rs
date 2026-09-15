@@ -717,6 +717,73 @@ pub async fn destinations_handler(
     Ok(Json(wert))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Native2kHardwareBody {
+    pub profile: Value,
+}
+
+pub async fn native_2k_hardware_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::GET,
+        &format!("/v1/me/twitch/native-2k-hardware?streamer_id={id}"),
+        None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+pub async fn put_native_2k_hardware_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<Native2kHardwareBody>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    if !body.profile.is_object() {
+        return Err(fehler(
+            StatusCode::BAD_REQUEST,
+            "2K-Hardwareprofil ist ungültig.",
+        ));
+    }
+    let bytes = serde_json::to_vec(&body.profile).map_err(|_| {
+        fehler(
+            StatusCode::BAD_REQUEST,
+            "2K-Hardwareprofil ist ungültig.",
+        )
+    })?;
+    if bytes.len() > 16 * 1024 {
+        return Err(fehler(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "2K-Hardwareprofil ist zu groß.",
+        ));
+    }
+    let wert = relay_json(
+        reqwest::Method::PUT,
+        "/v1/me/twitch/native-2k-hardware",
+        Some(json!({"streamer_id":id,"profile":body.profile})),
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+pub async fn delete_native_2k_hardware_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::DELETE,
+        &format!("/v1/me/twitch/native-2k-hardware?streamer_id={id}"),
+        None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
 /// Einstellung fuer die Wartezeit nach einem unerwarteten Ingest-Abriss.
 /// Ein normales OBS-Stoppen wird im Relay davon getrennt und sofort abgeraeumt.
 #[derive(Deserialize)]
@@ -971,7 +1038,7 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
     }
 
     if let Some(mode) = body.twitch_output_mode.as_deref() {
-        if body.platform.trim() != "twitch" || !matches!(mode, "single" | "enhanced") {
+        if body.platform.trim() != "twitch" || !matches!(mode, "single" | "enhanced" | "native_2k") {
             return Err(fehler(
                 StatusCode::BAD_REQUEST,
                 "Twitch-Betriebsart ist ungültig.",
@@ -1730,7 +1797,7 @@ mod tests {
 
     #[test]
     fn twitch_output_mode_is_explicit_and_does_not_replace_saved_profile() {
-        for mode in ["single", "enhanced"] {
+        for mode in ["single", "enhanced", "native_2k"] {
             let request: DestinationBody =
                 serde_json::from_value(json!({"platform":"twitch","twitch_output_mode":mode}))
                     .unwrap();

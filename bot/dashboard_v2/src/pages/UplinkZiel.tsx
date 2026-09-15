@@ -33,6 +33,7 @@ import { profilText, zielBetrieb } from '@/uplinkBetrieb';
 import { bestaetigeUplinkSpeichern, twitchOutputFormular, twitchOutputPayload } from '../uplinkOutputMode';
 import type { UplinkTwitchOutputMode } from '../uplinkOutputMode';
 import { UplinkOutputMode } from './UplinkOutputMode';
+import { UplinkNative2kHardware } from './UplinkNative2kHardware';
 
 type Modus = 'stufe' | 'manuell';
 
@@ -323,7 +324,9 @@ export function ZielKarte({
   const [streamKey, setStreamKey] = useState('');
   const [outputEntwurf, setOutputEntwurf] = useState<UplinkTwitchOutputMode | null>(null);
   const output = twitchOutputFormular(ziel, outputEntwurf);
-  const enhancedGewaehlt = platform === 'twitch' && output.auswahl === 'enhanced';
+  const native2kGewaehlt = platform === 'twitch' && output.auswahl === 'native_2k';
+  const mehrspurGewaehlt = platform === 'twitch'
+    && (output.auswahl === 'enhanced' || native2kGewaehlt);
   const [modus, setModus] = useState<Modus>('stufe');
   const [profil, setProfil] = useState<UplinkProfilName>('1080p60');
   const [manuell, setManuell] = useState({
@@ -482,7 +485,7 @@ export function ZielKarte({
       // OBS-Spur 2 ist VOD. Das Dashboard sendet dafür keine Wahl mehr.
       // Enhanced verwendet die echte Quelle und Twitch-Freigabe. Gespeicherte
       // Einzelwerte bleiben unangetastet als Rückfallprofil erhalten.
-      if (!enhancedGewaehlt) {
+      if (!mehrspurGewaehlt) {
         // Die Qualitaet geht im Einzelmodus auch beim Pausieren mit. Sonst verliert ein
         // Klick auf "Ziel pausieren" die Stufe, die daneben im Formular steht,
         // wortlos: die Auswahl bliebe stehen, gespeichert waere sie nicht.
@@ -552,7 +555,7 @@ export function ZielKarte({
   // gespeichert" ueber einem 1440p-Ziel waere schlicht falsch.
   const kopfWerte = vorbelegt ? eingetippt ?? bestellt : bestellt;
   const ungespeichert =
-    (!enhancedGewaehlt && eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
+    (!mehrspurGewaehlt && eingerichtet && vorbelegt && !gleicheWerte(eingetippt ?? undefined, bestellt))
     || (platform === 'twitch' && output.geaendert);
   const betrieb = zielBetrieb(ziel, chat?.status);
   const eingangsCodec = ziel?.input_codec === 'h264' ? 'H.264'
@@ -614,7 +617,9 @@ export function ZielKarte({
             </span>
             <span className="mt-0.5 block text-xs font-normal text-text-secondary">
               {eingerichtet && kopfWerte
-                ? enhancedGewaehlt ? 'Gewünscht: Enhanced Broadcasting' : `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
+                ? mehrspurGewaehlt
+                  ? native2kGewaehlt ? 'Gewünscht: Native 2K (HEVC)' : 'Gewünscht: Enhanced Broadcasting'
+                  : `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
             </span>
@@ -749,8 +754,9 @@ export function ZielKarte({
 
         {platform === 'twitch' ? <UplinkOutputMode ziel={ziel} entwurf={outputEntwurf} disabled={speichern.isPending}
           onChange={(mode) => { setOutputEntwurf(mode); angefasst(); }} /> : null}
+        {native2kGewaehlt ? <UplinkNative2kHardware disabled={speichern.isPending} /> : null}
 
-        {!enhancedGewaehlt ? <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
+        {!mehrspurGewaehlt ? <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
               Gewünschte Ausgabe für {label}
@@ -865,7 +871,9 @@ export function ZielKarte({
           )}
         </div>
 
-        : <p className="text-xs text-text-secondary">Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.</p>}
+        : <p className="text-xs text-text-secondary">{native2kGewaehlt
+          ? 'Native 2K verlangt 2560×1440@60 HEVC aus OBS und ein gültiges Quellrechner-Hardwareprofil. Die 2K-Spur wird nicht neu encodiert; fehlt eine Voraussetzung, blockiert Uplink diesen Modus sichtbar.'
+          : 'Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.'}</p>}
 
         {fehlertext && <p id={fehlerId} role="alert" className="text-xs text-warning">{fehlertext}</p>}
         {livetext && <p role="status" className="text-xs text-text-secondary">{livetext}</p>}
@@ -910,7 +918,7 @@ export function ZielKarte({
                 : 'Schlüssel liegt verschlüsselt bei uns.'}
               {bestellt ? (
                 <>
-                  {' '}{enhancedGewaehlt ? 'Gespeichertes Einzelprofil' : 'Gespeicherter Wunsch'}: {profilText(bestellt)}.
+                  {' '}{mehrspurGewaehlt ? 'Gespeichertes Einzelprofil' : 'Gespeicherter Wunsch'}: {profilText(bestellt)}.
                 </>
               ) : null}
               {ungespeichert ? (

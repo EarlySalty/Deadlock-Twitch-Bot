@@ -93,6 +93,7 @@ test('Teiländerungen ohne explizite Moduswahl setzen keinen Standard zurück', 
   assert.deepEqual(twitchOutputPayload('twitch', null), {});
   assert.deepEqual(twitchOutputPayload('youtube', 'enhanced'), {});
   assert.deepEqual(twitchOutputPayload('twitch', 'enhanced'), { twitch_output_mode: 'enhanced' });
+  assert.deepEqual(twitchOutputPayload('twitch', 'native_2k'), { twitch_output_mode: 'native_2k' });
   assert.deepEqual(twitchOutputPayload('twitch', 'single'), { twitch_output_mode: 'single' });
 });
 
@@ -136,7 +137,9 @@ test('Betriebsart besitzt native Radiogruppe, Beschriftungen und vorlesbaren Sta
   const html = renderToStaticMarkup(<UplinkOutputMode ziel={ziel} entwurf={'single'} disabled={true} onChange={() => {}} />);
   assert.match(html, /<fieldset disabled=""/);
   assert.match(html, /<legend[^>]*>Twitch-Betriebsart<\/legend>/);
-  assert.equal((html.match(/type="radio"/g) ?? []).length, 2);
+  assert.equal((html.match(/type="radio"/g) ?? []).length, 3);
+  assert.match(html, /Native 2K \(HEVC\)/);
+  assert.match(html, /2560×1440@60 HEVC/);
   assert.match(html, /checked="" value="single"/);
   assert.match(html, /role="status" aria-atomic="true"/);
   assert.match(html, /aria-describedby=/);

@@ -626,3 +626,63 @@ export function fetchUplinkDestinations(): Promise<{ destinations: UplinkDestina
     withCookieCredentials()
   );
 }
+
+export interface UplinkNative2kClientProfile {
+  capabilities: {
+    cpu: {
+      physical_cores: number;
+      logical_cores: number;
+      name: string | null;
+      speed: number | null;
+    };
+    memory: { total: number; free: number };
+    system: {
+      name: string;
+      version: string;
+      release: string;
+      revision: string;
+      bits: number;
+      arm: boolean;
+      build: number;
+      armEmulation: boolean;
+    };
+    gpu: Array<{
+      model: string;
+      vendor_id: number;
+      device_id: number;
+      dedicated_video_memory: number;
+      shared_system_memory: number;
+      driver_version: string;
+    }>;
+    gaming_features: null;
+  };
+  hevc_encoder: string;
+  h264_encoder: string;
+}
+
+export interface UplinkNative2kHardwareAntwort {
+  configured: boolean;
+  profile: UplinkNative2kClientProfile | null;
+}
+
+export function fetchUplinkNative2kHardware(): Promise<UplinkNative2kHardwareAntwort> {
+  return fetchJson<UplinkNative2kHardwareAntwort>(
+    '/twitch/api/v2/uplink/native-2k-hardware',
+    withCookieCredentials()
+  );
+}
+
+export function saveUplinkNative2kHardware(profile: UplinkNative2kClientProfile): Promise<{ configured: boolean; message?: string }> {
+  return fetchJson('/twitch/api/v2/uplink/native-2k-hardware', withCookieCredentials({
+    method: 'PUT',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile }),
+  }));
+}
+
+export function deleteUplinkNative2kHardware(): Promise<{ configured: boolean }> {
+  return fetchJson('/twitch/api/v2/uplink/native-2k-hardware', withCookieCredentials({
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  }));
+}
