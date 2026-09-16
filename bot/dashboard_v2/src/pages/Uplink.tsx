@@ -341,6 +341,9 @@ function ObsEncoderAnalyse() {
         return;
       }
       setAnalyse(ergebnis);
+      if (ergebnis.native2kProfile) {
+        await hardwareSpeichern.mutateAsync(ergebnis.native2kProfile);
+      }
     } catch {
       setAnalyse(null);
       setFehler('Die Logdatei konnte im Browser nicht gelesen werden.');
