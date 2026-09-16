@@ -126,7 +126,7 @@ export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
 # Kontrollierter Live-Smalltalk-Test mit dem separat per OAuth verbundenen
 # Engagement-Account. Das Wiring startet im Live-Modus genau EINE Session pro
 # Bot-Prozess; Kandidaten muessen live Deadlock spielen, Nicht-Partner sein und
-# einen bekannten Followerstand unter 50 haben. Kein Pitch/Link ist im Prompt
+# einen in den letzten 12h bekannten Followerstand unter 50 haben. Kein Pitch/Link ist im Prompt
 # und im Ausgabefilter erlaubt. Kill-Switch: beide Variablen auf 0 setzen.
 export SMALLTALK_LOOP_ENABLED="${SMALLTALK_LOOP_ENABLED:-1}"
 export SMALLTALK_LOOP_LIVE_SEND="${SMALLTALK_LOOP_LIVE_SEND:-1}"
