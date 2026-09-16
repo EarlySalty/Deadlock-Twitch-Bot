@@ -31,6 +31,7 @@ import {
   rejectUplinkAdminWaitlistEntry,
   rotateUplinkDockToken,
   saveUplinkReconnectWait,
+  saveUplinkNative2kHardware,
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
@@ -315,9 +316,18 @@ function obsAusgabe() {
 }
 
 function ObsEncoderAnalyse() {
+  const queryClient = useQueryClient();
   const [analyse, setAnalyse] = useState<UplinkEncoderAnalyse | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
   const [laedt, setLaedt] = useState(false);
+  const hardwareSpeichern = useMutation({
+    mutationFn: saveUplinkNative2kHardware,
+    onSuccess: async () => {
+      setFehler(null);
+      await queryClient.invalidateQueries({ queryKey: ['uplink-native-2k-hardware'] });
+    },
+    onError: (error) => setFehler(error instanceof Error ? error.message : '2K-Hardwaredaten konnten nicht gespeichert werden.'),
+  });
 
   async function dateiAnalysieren(datei: File) {
     setLaedt(true);
@@ -420,6 +430,22 @@ function ObsEncoderAnalyse() {
           <ul className="list-disc space-y-1 pl-4 text-xs text-text-secondary">
             {analyse.empfehlung.hinweise.map((hinweis) => <li key={hinweis}>{hinweis}</li>)}
           </ul>
+          {analyse.native2kProfile ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2">
+              <p className="text-xs text-text-secondary">
+                CPU, RAM, Windows, GPU, PCI-ID, VRAM, Treiber sowie HEVC/H.264-Encoder wurden vollständig erkannt. Für Twitch wird nur dieses normalisierte Hardwareprofil gespeichert, nicht deine Logdatei.
+              </p>
+              <button type="button" disabled={hardwareSpeichern.isPending}
+                onClick={() => hardwareSpeichern.mutate(analyse.native2kProfile!)}
+                className="min-h-10 shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:opacity-50">
+                {hardwareSpeichern.isPending ? 'Übernehme…' : hardwareSpeichern.isSuccess ? '2K-Hardware übernommen' : 'Für Native 2K übernehmen'}
+              </button>
+            </div>
+          ) : analyse.native2kFehlendeFelder.length ? (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              Für die automatische 2K-Hardwareweitergabe fehlen in dieser OBS-Logdatei: {analyse.native2kFehlendeFelder.join(', ')}. Eine neu gestartete aktuelle OBS-Logdatei enthält diese Angaben meist vollständig.
+            </div>
+          ) : null}
           {analyse.softwareAv1 && !analyse.hardware.av1 ? (
             <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
               Software-AV1 erkannt: AOM/SVT wird nicht als Live-Empfehlung verwendet, wenn die GPU AV1 nicht selbst encodieren kann.

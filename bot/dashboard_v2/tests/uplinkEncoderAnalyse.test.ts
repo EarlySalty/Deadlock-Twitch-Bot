@@ -146,3 +146,42 @@ test('Software-AV1 ohne Hardwareencoder wird nicht als Live-AV1 empfohlen', () =
   assert.equal(analyse.hardware.av1, false);
   assert.equal(analyse.empfehlung.codec, 'H.264');
 });
+
+test('vollständiges OBS-Hostlog wird als Native-2K-Hardwareprofil normalisiert', () => {
+  const analyse = analysiereObsLog(`
+00:00:00.000: CPU Name: AMD Ryzen 7 7800X3D 8-Core Processor
+00:00:00.000: CPU Speed: 4200MHz
+00:00:00.000: Physical Cores: 8, Logical Cores: 16
+00:00:00.000: Physical Memory: 32768MB Total, 16384MB Free
+00:00:00.000: Windows Version: 10.0 Build 26100 (release: 24H2; revision: 1742; 64-bit)
+00:00:00.000: Adapter 0: NVIDIA GeForce RTX 4070
+00:00:00.000:   Dedicated VRAM: 12282MB
+00:00:00.000:   Shared VRAM: 16384MB
+00:00:00.000:   PCI ID: 10de:2786
+00:00:00.000:   Driver Version: 32.0.15.6094
+00:00:00.000: Loading up D3D11 on adapter NVIDIA GeForce RTX 4070 (0)
+00:00:00.001: Available Encoders:
+00:00:00.001:   Video Encoders:
+00:00:00.001:     - obs_nvenc_av1_tex (NVIDIA NVENC AV1)
+00:00:00.001:     - obs_nvenc_hevc_tex (NVIDIA NVENC HEVC)
+00:00:00.001:     - obs_nvenc_h264_tex (NVIDIA NVENC H.264)
+00:00:00.001:   Audio Encoders:
+`);
+  assert.deepEqual(analyse.native2kFehlendeFelder, []);
+  assert.equal(analyse.native2kProfile?.capabilities.cpu.physical_cores, 8);
+  assert.equal(analyse.native2kProfile?.capabilities.memory.total, 32768 * 1024 * 1024);
+  assert.equal(analyse.native2kProfile?.capabilities.gpu[0]?.vendor_id, 0x10de);
+  assert.equal(analyse.native2kProfile?.capabilities.gpu[0]?.device_id, 0x2786);
+  assert.equal(analyse.native2kProfile?.hevc_encoder, 'obs_nvenc_hevc_tex');
+  assert.equal(analyse.native2kProfile?.h264_encoder, 'obs_nvenc_h264_tex');
+});
+
+test('unvollständiges OBS-Log wird nicht als Twitch-Hardwareprofil erfunden', () => {
+  const analyse = analysiereObsLog(log('NVIDIA GeForce RTX 4070', [
+    'obs_nvenc_hevc_tex (NVIDIA NVENC HEVC)',
+    'obs_nvenc_h264_tex (NVIDIA NVENC H.264)',
+  ]));
+  assert.equal(analyse.native2kProfile, null);
+  assert.ok(analyse.native2kFehlendeFelder.includes('GPU PCI-ID/VRAM/Treiber'));
+  assert.ok(analyse.native2kFehlendeFelder.includes('physische CPU-Kerne'));
+});

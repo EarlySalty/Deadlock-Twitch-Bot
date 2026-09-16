@@ -1038,7 +1038,7 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
     }
 
     if let Some(mode) = body.twitch_output_mode.as_deref() {
-        if body.platform.trim() != "twitch" || !matches!(mode, "single" | "enhanced" | "native_2k") {
+        if body.platform.trim() != "twitch" || !matches!(mode, "single" | "enhanced" | "native_2k" | "native_2k_av1") {
             return Err(fehler(
                 StatusCode::BAD_REQUEST,
                 "Twitch-Betriebsart ist ungültig.",
@@ -1797,7 +1797,7 @@ mod tests {
 
     #[test]
     fn twitch_output_mode_is_explicit_and_does_not_replace_saved_profile() {
-        for mode in ["single", "enhanced", "native_2k"] {
+        for mode in ["single", "enhanced", "native_2k", "native_2k_av1"] {
             let request: DestinationBody =
                 serde_json::from_value(json!({"platform":"twitch","twitch_output_mode":mode}))
                     .unwrap();

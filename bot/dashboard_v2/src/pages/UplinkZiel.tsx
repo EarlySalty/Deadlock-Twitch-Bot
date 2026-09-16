@@ -324,7 +324,9 @@ export function ZielKarte({
   const [streamKey, setStreamKey] = useState('');
   const [outputEntwurf, setOutputEntwurf] = useState<UplinkTwitchOutputMode | null>(null);
   const output = twitchOutputFormular(ziel, outputEntwurf);
-  const native2kGewaehlt = platform === 'twitch' && output.auswahl === 'native_2k';
+  const native2kHevcGewaehlt = platform === 'twitch' && output.auswahl === 'native_2k';
+  const native2kAv1Gewaehlt = platform === 'twitch' && output.auswahl === 'native_2k_av1';
+  const native2kGewaehlt = native2kHevcGewaehlt || native2kAv1Gewaehlt;
   const mehrspurGewaehlt = platform === 'twitch'
     && (output.auswahl === 'enhanced' || native2kGewaehlt);
   const [modus, setModus] = useState<Modus>('stufe');
@@ -618,7 +620,9 @@ export function ZielKarte({
             <span className="mt-0.5 block text-xs font-normal text-text-secondary">
               {eingerichtet && kopfWerte
                 ? mehrspurGewaehlt
-                  ? native2kGewaehlt ? 'Gewünscht: Native 2K (HEVC)' : 'Gewünscht: Enhanced Broadcasting'
+                  ? native2kHevcGewaehlt ? 'Gewünscht: Native 2K (HEVC)'
+                    : native2kAv1Gewaehlt ? 'Gewünscht: Native 2K (AV1 Test)'
+                      : 'Gewünscht: Enhanced Broadcasting'
                   : `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
                 : 'Server, Schlüssel und Qualität hinterlegen'}
               {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
@@ -871,9 +875,11 @@ export function ZielKarte({
           )}
         </div>
 
-        : <p className="text-xs text-text-secondary">{native2kGewaehlt
-          ? 'Native 2K verlangt 2560×1440@60 HEVC aus OBS und ein gültiges Quellrechner-Hardwareprofil. Die 2K-Spur wird nicht neu encodiert; fehlt eine Voraussetzung, blockiert Uplink diesen Modus sichtbar.'
-          : 'Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.'}</p>}
+        : <p className="text-xs text-text-secondary">{native2kHevcGewaehlt
+          ? 'Native 2K HEVC verlangt 2560×1440@60 HEVC aus OBS und ein gültiges Quellrechner-Hardwareprofil. Die 2K-Spur wird nicht neu encodiert.'
+          : native2kAv1Gewaehlt
+            ? 'Native 2K AV1 verlangt 2560×1440@60 AV1 aus OBS. Uplink erzeugt daraus die Twitch-HEVC-Topspur; der Modus bleibt auf Servern ohne bestandene Echtzeit-Lastmessung gesperrt.'
+            : 'Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.'}</p>}
 
         {fehlertext && <p id={fehlerId} role="alert" className="text-xs text-warning">{fehlertext}</p>}
         {livetext && <p role="status" className="text-xs text-text-secondary">{livetext}</p>}

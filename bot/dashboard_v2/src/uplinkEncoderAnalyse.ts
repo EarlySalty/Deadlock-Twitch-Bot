@@ -1,3 +1,5 @@
+import type { UplinkNative2kClientProfile } from './api/uplink';
+
 export type UplinkGpuHersteller = 'nvidia' | 'amd' | 'intel' | 'unbekannt';
 export type UplinkVideoCodec = 'AV1' | 'HEVC / H.265' | 'H.264';
 
@@ -22,6 +24,10 @@ export interface UplinkEncoderAnalyse {
   };
   softwareAv1: boolean;
   empfehlung: UplinkEncoderEmpfehlung;
+  /** Vollständige, aus dem OBS-Host gelesene GoLive-Hardwaredaten. */
+  native2kProfile: UplinkNative2kClientProfile | null;
+  /** Fehlende OBS-Logfelder, falls das Profil noch nicht sicher weitergegeben werden kann. */
+  native2kFehlendeFelder: string[];
 }
 
 export interface UplinkEncoderEmpfehlung {
@@ -135,6 +141,161 @@ function empfehlungFuerHardware(
   };
 }
 
+function encoderId(roh: string) {
+  return roh.split(/\s+\(/, 1)[0]?.trim() ?? '';
+}
+
+function speicherBytes(text: string): number | null {
+  const match = text.match(/([0-9][0-9.,]*)\s*(B|KB|KiB|MB|MiB|GB|GiB)?/i);
+  if (!match?.[1]) return null;
+  const zahl = Number(match[1].replace(/,/g, '.'));
+  if (!Number.isFinite(zahl) || zahl < 0) return null;
+  const einheit = (match[2] ?? 'B').toLowerCase();
+  const faktor = einheit === 'kb' || einheit === 'kib' ? 1024
+    : einheit === 'mb' || einheit === 'mib' ? 1024 ** 2
+      : einheit === 'gb' || einheit === 'gib' ? 1024 ** 3 : 1;
+  return Math.round(zahl * faktor);
+}
+
+interface ObsGpuProfil {
+  model: string;
+  vendor_id: number | null;
+  device_id: number | null;
+  dedicated_video_memory: number | null;
+  shared_system_memory: number | null;
+  driver_version: string | null;
+}
+
+function native2kProfilAusObsLog(
+  text: string,
+  aktiveGpu: string | null,
+  encoder: HardwareEncoder[],
+): { profile: UplinkNative2kClientProfile | null; fehlend: string[] } {
+  const fehlend: string[] = [];
+  const zeilen = text.split(/\r?\n/);
+  let cpuName: string | null = null;
+  let cpuSpeed: number | null = null;
+  let physicalCores: number | null = null;
+  let logicalCores: number | null = null;
+  let memoryTotal: number | null = null;
+  let memoryFree: number | null = null;
+  let systemName: string | null = null;
+  let systemVersion: string | null = null;
+  let systemRelease: string | null = null;
+  let systemRevision: string | null = null;
+  let systemBits: number | null = null;
+  let systemBuild: number | null = null;
+  let systemArm = false;
+  const gpuProfile: ObsGpuProfil[] = [];
+  let aktuelleGpu: ObsGpuProfil | null = null;
+
+  for (const zeile of zeilen) {
+    const cpu = zeile.match(/CPU Name:\s*(.+)$/i);
+    if (cpu?.[1]) cpuName = cpu[1].trim();
+    const speed = zeile.match(/CPU Speed:\s*([0-9]+)\s*MHz/i);
+    if (speed?.[1]) cpuSpeed = Number(speed[1]);
+    const cores = zeile.match(/Physical Cores:\s*([0-9]+)\s*,\s*Logical Cores:\s*([0-9]+)/i);
+    if (cores?.[1] && cores?.[2]) {
+      physicalCores = Number(cores[1]);
+      logicalCores = Number(cores[2]);
+    }
+    const memory = zeile.match(/Physical Memory:\s*([^,]+)\s+Total\s*,\s*([^,]+)\s+Free/i);
+    if (memory?.[1] && memory?.[2]) {
+      memoryTotal = speicherBytes(memory[1]);
+      memoryFree = speicherBytes(memory[2]);
+    }
+
+    const windows = zeile.match(/Windows Version:\s*([^\s]+)(?:\s+Build\s+([0-9]+))?(.*)$/i);
+    if (windows?.[1]) {
+      systemName = 'Windows';
+      systemVersion = windows[1].trim();
+      systemBuild = windows[2] ? Number(windows[2]) : 0;
+      const rest = windows[3] ?? '';
+      systemRelease = rest.match(/release:\s*([^;)]+)/i)?.[1]?.trim() ?? systemVersion;
+      systemRevision = rest.match(/revision:\s*([^;)]+)/i)?.[1]?.trim() ?? String(systemBuild ?? 0);
+      systemBits = /64-bit|x64|amd64/i.test(rest) ? 64 : /32-bit|x86/i.test(rest) ? 32 : 64;
+      systemArm = /arm64|aarch64/i.test(rest);
+    }
+
+    const adapter = zeile.match(/Adapter\s+\d+:\s*(.+)$/i);
+    if (adapter?.[1]) {
+      aktuelleGpu = {
+        model: adapter[1].trim(),
+        vendor_id: null,
+        device_id: null,
+        dedicated_video_memory: null,
+        shared_system_memory: null,
+        driver_version: null,
+      };
+      gpuProfile.push(aktuelleGpu);
+      continue;
+    }
+    if (!aktuelleGpu) continue;
+    const pci = zeile.match(/PCI ID:\s*([0-9a-f]{4}):([0-9a-f]{4})/i);
+    if (pci?.[1] && pci?.[2]) {
+      aktuelleGpu.vendor_id = Number.parseInt(pci[1], 16);
+      aktuelleGpu.device_id = Number.parseInt(pci[2], 16);
+    }
+    const dedicated = zeile.match(/Dedicated (?:Video Memory|VRAM):\s*(.+)$/i);
+    if (dedicated?.[1]) aktuelleGpu.dedicated_video_memory = speicherBytes(dedicated[1]);
+    const shared = zeile.match(/Shared (?:System Memory|VRAM):\s*(.+)$/i);
+    if (shared?.[1]) aktuelleGpu.shared_system_memory = speicherBytes(shared[1]);
+    const driver = zeile.match(/Driver Version:\s*(.+)$/i);
+    if (driver?.[1]) aktuelleGpu.driver_version = driver[1].trim();
+  }
+
+  const aktiverHersteller = herstellerFuer(aktiveGpu);
+  const hevc = waehleEncoder(encoder, 'hevc', aktiverHersteller);
+  const h264 = waehleEncoder(encoder, 'h264', aktiverHersteller);
+  if (!physicalCores) fehlend.push('physische CPU-Kerne');
+  if (!logicalCores) fehlend.push('logische CPU-Kerne');
+  if (!memoryTotal) fehlend.push('Gesamtspeicher');
+  if (memoryFree === null) fehlend.push('freier Speicher');
+  if (!systemName || !systemVersion || !systemRelease || !systemRevision || !systemBits) fehlend.push('Windows-/Systemversion');
+  if (!hevc) fehlend.push('Hardware-HEVC-Encoder');
+  if (!h264) fehlend.push('Hardware-H.264-Encoder');
+  const vollstaendigeGpus = gpuProfile.filter((gpu) => gpu.vendor_id && gpu.device_id
+    && gpu.dedicated_video_memory && gpu.shared_system_memory !== null && gpu.driver_version);
+  if (!vollstaendigeGpus.length) fehlend.push('GPU PCI-ID/VRAM/Treiber');
+  if (fehlend.length) return { profile: null, fehlend };
+
+  return {
+    profile: {
+      capabilities: {
+        cpu: {
+          physical_cores: physicalCores!,
+          logical_cores: logicalCores!,
+          name: cpuName,
+          speed: cpuSpeed,
+        },
+        memory: { total: memoryTotal!, free: memoryFree! },
+        system: {
+          name: systemName!,
+          version: systemVersion!,
+          release: systemRelease!,
+          revision: systemRevision!,
+          bits: systemBits!,
+          arm: systemArm,
+          build: systemBuild ?? 0,
+          armEmulation: false,
+        },
+        gpu: vollstaendigeGpus.map((gpu) => ({
+          model: gpu.model,
+          vendor_id: gpu.vendor_id!,
+          device_id: gpu.device_id!,
+          dedicated_video_memory: gpu.dedicated_video_memory!,
+          shared_system_memory: gpu.shared_system_memory!,
+          driver_version: gpu.driver_version!,
+        })),
+        gaming_features: null,
+      },
+      hevc_encoder: encoderId(hevc!.roh),
+      h264_encoder: encoderId(h264!.roh),
+    },
+    fehlend: [],
+  };
+}
+
 function empfehlung(
   aktiverHersteller: UplinkGpuHersteller,
   encoder: HardwareEncoder[],
@@ -207,6 +368,7 @@ export function analysiereObsLog(text: string): UplinkEncoderAnalyse {
     h264: hwEncoder.some((eintrag) => eintrag.codec === 'h264'),
   };
   const softwareAv1 = encoders.some((e) => /aom av1|svt-av1|ffmpeg_aom_av1|ffmpeg_svt_av1/i.test(e));
+  const native2k = native2kProfilAusObsLog(text, gpu, hwEncoder);
 
   return {
     gpu,
@@ -215,5 +377,7 @@ export function analysiereObsLog(text: string): UplinkEncoderAnalyse {
     hardware,
     softwareAv1,
     empfehlung: empfehlung(hersteller, hwEncoder, softwareAv1),
+    native2kProfile: native2k.profile,
+    native2kFehlendeFelder: native2k.fehlend,
   };
 }
