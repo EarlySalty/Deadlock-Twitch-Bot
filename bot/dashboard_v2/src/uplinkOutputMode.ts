@@ -6,8 +6,8 @@ export type UplinkTwitchOutputMode = 'single' | 'enhanced' | 'native_2k' | 'nati
 
 export const TWITCH_OUTPUT_LABEL: Record<UplinkTwitchOutputMode, string> = {
   single: 'Einzelstream',
-  enhanced: 'Enhanced Broadcasting',
-  native_2k: 'Native 2K (HEVC)',
+  enhanced: 'Uplink Enhanced (Upload sparen)',
+  native_2k: 'Native Twitch 2K (HEVC)',
   native_2k_av1: 'Native 2K (AV1 Test)',
 };
 

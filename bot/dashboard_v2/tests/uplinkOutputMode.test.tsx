@@ -74,7 +74,7 @@ test('gespeicherter Enhanced-Wunsch bleibt beim tatsächlichen Einzelstream samt
   assert.equal(state.stufen.length, 1);
   assert.equal(state.fallback, ziel.fallback_reason);
   const html = renderToStaticMarkup(<UplinkOutputMode ziel={ziel} entwurf={null} disabled={false} onChange={() => {}} />);
-  assert.match(html, /Gespeichert: Enhanced Broadcasting/);
+  assert.match(html, /Gespeichert: Uplink Enhanced \(Upload sparen\)/);
   assert.match(html, /Laufende Ausgabe: Einzelstream/);
   assert.match(html, /Twitch hat keine zusätzlichen Qualitätsstufen freigegeben/);
 });
@@ -129,7 +129,7 @@ test('echte Enhanced-Leiter wird angezeigt, einzelnes Profil bestätigt kein Enh
     entwurf={null} disabled={false} onChange={() => {}} />);
   assert.match(html([profil]), /Mehrere Qualitätsstufen noch nicht bestätigt/);
   const enhanced = html([profil, { ...profil, width: 1280, height: 720, bitrate_kbps: 3000 }]);
-  assert.match(enhanced, /Laufende Ausgabe: Enhanced Broadcasting/);
+  assert.match(enhanced, /Laufende Ausgabe: Uplink Enhanced \(Upload sparen\)/);
   assert.match(enhanced, /1920×1080/);
   assert.match(enhanced, /1280×720/);
 });
@@ -138,9 +138,9 @@ test('Betriebsart besitzt native Radiogruppe, Beschriftungen und vorlesbaren Sta
   const html = renderToStaticMarkup(<UplinkOutputMode ziel={ziel} entwurf={'single'} disabled={true} onChange={() => {}} />);
   assert.match(html, /<fieldset disabled=""/);
   assert.match(html, /<legend[^>]*>Twitch-Betriebsart<\/legend>/);
-  assert.equal((html.match(/type="radio"/g) ?? []).length, 4);
-  assert.match(html, /Native 2K \(AV1 Test\)/);
-  assert.match(html, /Native 2K \(HEVC\)/);
+  assert.equal((html.match(/type="radio"/g) ?? []).length, 3);
+  assert.doesNotMatch(html, /Native 2K \(AV1 Test\)/);
+  assert.match(html, /Native Twitch 2K \(HEVC\)/);
   assert.match(html, /2560×1440@60 HEVC/);
   assert.match(html, /checked="" value="single"/);
   assert.match(html, /role="status" aria-atomic="true"/);

@@ -116,6 +116,7 @@ function empfehlungFuerHardware(
 
   if (eintrag.codec === 'av1') {
     hinweise.push('Hardware-AV1 verwenden; AOM AV1 und SVT-AV1 sind für den Live-Uplink kein automatischer Ersatz.');
+    hinweise.push('Für den Uplink-Enhanced-Test: 1920×1080@60 mit 5 Mbit/s starten. Uplink erzeugt daraus die Twitch-H.264-Qualitätsstufen; natives Twitch-2K gehört nicht zu diesem Modus.');
   } else if (softwareAv1) {
     hinweise.push('AV1 ist nur als Softwareencoder sichtbar und wird deshalb nicht empfohlen.');
   }

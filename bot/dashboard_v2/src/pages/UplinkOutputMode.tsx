@@ -14,8 +14,8 @@ export function UplinkOutputMode({ ziel, entwurf, disabled, onChange }: {
   return (
     <fieldset disabled={disabled} aria-describedby={`${id}-hinweis`} className="min-w-0 space-y-3 rounded-xl border border-border/60 bg-background/40 p-3">
       <legend className="px-1 text-sm font-semibold text-white">Twitch-Betriebsart</legend>
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {(['single', 'enhanced', 'native_2k', 'native_2k_av1'] as const).map((mode) => (
+      <div className="grid gap-2 sm:grid-cols-3">
+        {(['single', 'enhanced', 'native_2k'] as const).map((mode) => (
           <label key={mode} className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/70 p-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary">
             <input type="radio" name={`${id}-modus`} value={mode} checked={modus.auswahl === mode}
               onChange={() => onChange(mode)} aria-describedby={`${id}-${mode}-beschreibung`}
@@ -27,9 +27,7 @@ export function UplinkOutputMode({ ziel, entwurf, disabled, onChange }: {
                   ? 'Eine H.264-Qualitätsstufe, weniger Rechenaufwand.'
                   : mode === 'native_2k'
                     ? '2560×1440@60 HEVC kommt aus OBS. Uplink reicht die 2K-Spur unverändert durch und berechnet nur nötige H.264-Unterstufen.'
-                    : mode === 'native_2k_av1'
-                      ? '2560×1440@60 AV1 kommt aus OBS. Uplink müsste daraus Twitch-HEVC erzeugen. Dieser Modus bleibt auf Hosts ohne bestandene Lastmessung blockiert.'
-                      : 'Mehrere Qualitätsstufen nach Twitch-Freigabe, mehr Rechenaufwand.'}
+                    : 'Ein 1080p60-Masterstream kommt zu Uplink – bevorzugt AV1 bei knapper Uploadleitung. Uplink erzeugt daraus die von Twitch freigegebene H.264-Enhanced-Leiter. Kein natives Twitch-2K.'}
               </span>
             </span>
           </label>
