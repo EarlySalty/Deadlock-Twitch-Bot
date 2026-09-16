@@ -19,6 +19,8 @@ const MIGRATION: &str =
     include_str!("../../../migrations/20260727150000_twitch_smalltalk_loop.sql");
 const TRANSCRIPT_MIGRATION: &str =
     include_str!("../../../migrations/20260813220000_twitch_smalltalk_transcripts.sql");
+const LIVE_MODE_MIGRATION: &str =
+    include_str!("../../../migrations/20260916013000_smalltalk_live_mode.sql");
 
 /// `twitch_engagement_settings` wird laut Vertrag kleingeschrieben befuellt
 /// und exakt gelesen (`auto_off.rs`, `gate::load_settings`). Eine abweichend
@@ -82,6 +84,38 @@ async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
         cooldown.is_some(),
         "der uebersprungene Kandidat bekommt Cooldown, sonst faellt er bei jedem Tick erneut an"
     );
+}
+
+#[tokio::test]
+async fn live_test_nimmt_nur_kandidaten_unter_50_und_setzt_eigenen_modus() {
+    let Some(pool) = test_pool("smalltalk_loop_live_followers").await else {
+        return;
+    };
+    seed_candidate(&pool, "zu_gross", "50", None).await;
+    seed_candidate(&pool, "klein", "49", None).await;
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions
+            (streamer_login, followers_start, followers_end, started_at)
+         VALUES ('zu_gross', 50, 50, NOW()), ('klein', 49, 49, NOW())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(true);
+    let session = store
+        .start_next_session(Utc::now())
+        .await
+        .unwrap()
+        .expect("49-Follower-Kandidat muss starten");
+    assert_eq!(session.channel_login, "klein");
+    let mode: String = sqlx::query_scalar(
+        "SELECT output_mode FROM twitch_engagement_settings WHERE channel_login = 'klein'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(mode, "smalltalk_live");
 }
 
 /// Ein Kanal, in dem der Bot gebannt ist, landet als `bot_banned` in
@@ -570,12 +604,18 @@ async fn create_test_tables(pool: &PgPool) {
             target_login TEXT PRIMARY KEY,
             reason TEXT
         );
+        CREATE TABLE twitch_stream_sessions (
+            streamer_login TEXT NOT NULL,
+            followers_start INTEGER,
+            followers_end INTEGER,
+            started_at TIMESTAMPTZ
+        );
         CREATE TABLE twitch_engagement_settings (
             channel_login TEXT PRIMARY KEY,
             enabled BOOLEAN NOT NULL DEFAULT FALSE,
             irc_read BOOLEAN NOT NULL DEFAULT FALSE,
             output_mode TEXT NOT NULL DEFAULT 'off'
-                CHECK (output_mode IN ('off', 'shadow', 'live', 'test'))
+                CHECK (output_mode IN ('off', 'shadow', 'live', 'test', 'smalltalk_live'))
         );",
     )
     .await
@@ -586,6 +626,9 @@ async fn create_test_tables(pool: &PgPool) {
     pool.execute(TRANSCRIPT_MIGRATION)
         .await
         .expect("Transkript-Migration ausführen");
+    pool.execute(LIVE_MODE_MIGRATION)
+        .await
+        .expect("Smalltalk-Live-Modus-Migration ausführen");
 }
 
 #[tokio::test]

@@ -54,7 +54,6 @@ impl StealthSender {
         channel_login: &str,
         text: &str,
     ) -> Option<bool> {
-        let broadcaster_id = broadcaster_id.trim();
         if !crate::gate::is_operational_partner(&self.pool, channel_login).await {
             tracing::warn!(
                 channel_login,
@@ -64,6 +63,78 @@ impl StealthSender {
             );
             return Some(false);
         }
+        self.send_after_gate(broadcaster_id, text).await
+    }
+
+    /// Eng begrenzter Nicht-Partner-Pfad fuer den Live-Smalltalk-Test.
+    ///
+    /// Er darf nur in den exakt offenen Smalltalk-Kanal schreiben. Die
+    /// Follower-Grenze wird hier unmittelbar vor dem HTTP-Call erneut aus den
+    /// Monitoring-Daten geprueft, damit ein Auswahlfehler nie zum Versand wird.
+    pub async fn send_smalltalk_live(
+        &self,
+        broadcaster_id: &str,
+        channel_login: &str,
+        text: &str,
+    ) -> Option<bool> {
+        let broadcaster_id = broadcaster_id.trim();
+        let channel_login = channel_login.trim().to_lowercase();
+        if broadcaster_id.is_empty() || channel_login.is_empty() {
+            return Some(false);
+        }
+        let allowed = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (\
+                SELECT 1\
+                FROM twitch_smalltalk_sessions s\
+                JOIN twitch_engagement_settings e\
+                  ON LOWER(e.channel_login) = LOWER(s.channel_login)\
+                WHERE s.ended_at IS NULL\
+                  AND s.streamer_user_id = $1\
+                  AND LOWER(s.channel_login) = LOWER($2)\
+                  AND e.enabled = TRUE\
+                  AND e.irc_read = TRUE\
+                  AND e.output_mode = 'smalltalk_live'\
+                  AND (\
+                    SELECT COALESCE(ss.followers_end, ss.followers_start)\
+                    FROM twitch_stream_sessions ss\
+                    WHERE LOWER(ss.streamer_login) = LOWER(s.channel_login)\
+                      AND COALESCE(ss.followers_end, ss.followers_start) IS NOT NULL\
+                      AND ss.started_at >= NOW() - INTERVAL '12 hours'\
+                    ORDER BY ss.started_at DESC NULLS LAST\
+                    LIMIT 1\
+                  ) BETWEEN 0 AND 49\
+            )",
+        )
+        .bind(broadcaster_id)
+        .bind(&channel_login)
+        .fetch_one(&self.pool)
+        .await;
+        match allowed {
+            Ok(true) => self.send_after_gate(broadcaster_id, text).await,
+            Ok(false) => {
+                tracing::warn!(
+                    channel = %channel_login,
+                    broadcaster_id,
+                    event = "smalltalk_loop.send_blocked",
+                    reason = "session_or_follower_gate",
+                );
+                Some(false)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    channel = %channel_login,
+                    broadcaster_id,
+                    event = "smalltalk_loop.send_blocked",
+                    reason = "database",
+                    %error,
+                );
+                Some(false)
+            }
+        }
+    }
+
+    async fn send_after_gate(&self, broadcaster_id: &str, text: &str) -> Option<bool> {
+        let broadcaster_id = broadcaster_id.trim();
         let Some(text) = sanitize_chat_text(text, 120) else {
             return Some(false);
         };
@@ -102,7 +173,6 @@ impl StealthSender {
         };
 
         let status = resp.status().as_u16();
-        // Alles außer 200/204 → Fehlschlag (Python `if r.status not in {200, 204}`).
         if status != 200 && status != 204 {
             let body = resp.text().await.unwrap_or_default();
             tracing::warn!(status, body = %truncate(&body, 200), "StealthSender: Helix-Fehler");
@@ -112,7 +182,6 @@ impl StealthSender {
             return Some(true);
         }
 
-        // HTTP 200 kann trotzdem einen serverseitigen Drop bedeuten.
         let payload: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
         let first = payload
             .get("data")
@@ -131,10 +200,10 @@ impl StealthSender {
                 tracing::warn!(drop = %drop, "StealthSender: Nachricht gedroppt");
                 Some(false)
             }
-            // Kein eindeutiges is_sent → optimistisch True (Helix-Erfolg).
             None => Some(true),
         }
     }
+
 }
 
 /// Kürzt einen String byte-sicher auf `max` Zeichen (für Log-Bodies).
@@ -181,7 +250,19 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)",
+            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER);
+             CREATE TABLE twitch_smalltalk_sessions (
+                 id UUID PRIMARY KEY, channel_login TEXT NOT NULL, streamer_user_id TEXT NOT NULL,
+                 ended_at TIMESTAMPTZ
+             );
+             CREATE TABLE twitch_engagement_settings (
+                 channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL, irc_read BOOLEAN NOT NULL,
+                 output_mode TEXT NOT NULL
+             );
+             CREATE TABLE twitch_stream_sessions (
+                 streamer_login TEXT NOT NULL, followers_start INTEGER, followers_end INTEGER,
+                 started_at TIMESTAMPTZ
+             )",
         )
         .execute(&pool)
         .await
@@ -222,6 +303,80 @@ mod tests {
         .await
         .unwrap();
         Arc::new(s)
+    }
+
+    async fn seed_smalltalk_live(pool: &PgPool, followers: i32) {
+        sqlx::query(
+            "INSERT INTO twitch_smalltalk_sessions (id, channel_login, streamer_user_id, ended_at)
+             VALUES ($1, 'tiny', '123', NULL)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled, irc_read, output_mode)
+             VALUES ('tiny', TRUE, TRUE, 'smalltalk_live')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions
+                (streamer_login, followers_start, followers_end, started_at)
+             VALUES ('tiny', $1, $1, NOW())",
+        )
+        .bind(followers)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn smalltalk_live_sendet_nur_unter_50_follower() {
+        let Some(pool) = make_pool("t_eng_stealth_smalltalk_49").await else {
+            return;
+        };
+        seed_smalltalk_live(&pool, 49).await;
+        let auth = auth_with_token(pool.clone(), cipher()).await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Client-ID", "cid"))
+            .and(body_json(serde_json::json!({
+                "broadcaster_id": "123",
+                "sender_id": "77",
+                "message": "hi"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let sender = StealthSender::new(auth, "cid".into(), pool)
+            .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
+        assert_eq!(
+            sender.send_smalltalk_live("123", "tiny", "hi").await,
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn smalltalk_live_blockiert_ab_50_follower_vor_http() {
+        let Some(pool) = make_pool("t_eng_stealth_smalltalk_50").await else {
+            return;
+        };
+        seed_smalltalk_live(&pool, 50).await;
+        let auth = auth_with_token(pool.clone(), cipher()).await;
+        let server = MockServer::start().await;
+        let sender = StealthSender::new(auth, "cid".into(), pool)
+            .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
+        assert_eq!(
+            sender.send_smalltalk_live("123", "tiny", "hi").await,
+            Some(false)
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 0);
     }
 
     #[tokio::test]

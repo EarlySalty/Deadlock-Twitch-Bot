@@ -107,39 +107,38 @@ const SMALLTALK_DISCORD_COPY_JSON: &str = r#"{
   "retention_delete_reason": "Aufbewahrungsfrist abgelaufen"
 }"#;
 
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SmalltalkDeliveryTarget {
-    Database,
-    Discord,
-}
-
-#[cfg(test)]
-impl SmalltalkDeliveryTarget {
-    const ALL: [Self; 2] = [Self::Database, Self::Discord];
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SmalltalkConfig {
     enabled: bool,
+    live_send: bool,
 }
 
 impl SmalltalkConfig {
     fn from_env() -> Self {
-        let raw = std::env::var("SMALLTALK_LOOP_ENABLED").ok();
-        Self::from_value(raw.as_deref())
-    }
-
-    fn from_value(value: Option<&str>) -> Self {
+        let enabled = std::env::var("SMALLTALK_LOOP_ENABLED").ok();
+        let live_send = std::env::var("SMALLTALK_LOOP_LIVE_SEND").ok();
         Self {
-            enabled: value.is_some_and(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            }),
+            enabled: flag(enabled.as_deref()),
+            live_send: flag(live_send.as_deref()),
         }
     }
+
+    #[cfg(test)]
+    fn from_value(value: Option<&str>) -> Self {
+        Self {
+            enabled: flag(value),
+            live_send: false,
+        }
+    }
+}
+
+fn flag(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -281,8 +280,8 @@ pub fn start(
     pool: PgPool,
     broker: &BrokerConfig,
 ) -> SmalltalkLoopRuntime {
-    let store = SmalltalkLoopStore::new(pool.clone());
     let config = SmalltalkConfig::from_env();
+    let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(config.live_send);
     let copy = DiscordCopy::configured();
     let discord: Option<Arc<dyn DiscordBackend>> = match BrokerRelay::new(broker) {
         Ok(relay) => Some(Arc::new(relay)),
@@ -325,12 +324,14 @@ pub fn start(
     // Ein Gate, zwei Leser: der Monitor setzt es, der Loop respektiert es.
     let last_gate = Arc::new(AtomicBool::new(false));
     spawn_last_monitor(supervisor, store.clone(), Arc::clone(&last_gate));
-    spawn_loop(supervisor, store.clone(), last_gate);
+    spawn_loop(supervisor, store.clone(), last_gate, config.live_send);
     spawn_transcript_capture(supervisor, store.clone(), pool);
     tracing::info!(
         event = "smalltalk_loop.started",
         guild_id = DEFAULT_REVIEW_GUILD_ID,
         channel_id = DEFAULT_REVIEW_CHANNEL_ID,
+        live_send = config.live_send,
+        one_shot = config.live_send,
     );
     SmalltalkLoopRuntime { store }
 }
@@ -352,7 +353,12 @@ fn inactive_runtime(
     SmalltalkLoopRuntime { store }
 }
 
-fn spawn_loop(supervisor: &TaskSupervisor, store: SmalltalkLoopStore, gate: Arc<AtomicBool>) {
+fn spawn_loop(
+    supervisor: &TaskSupervisor,
+    store: SmalltalkLoopStore,
+    gate: Arc<AtomicBool>,
+    one_shot: bool,
+) {
     supervisor.spawn("smalltalk_loop", async move {
         if let Err(error) = store
             .close_all_open_sessions("process_start", Utc::now())
@@ -362,10 +368,13 @@ fn spawn_loop(supervisor: &TaskSupervisor, store: SmalltalkLoopStore, gate: Arc<
         }
         let mut tick = tokio::time::interval(LOOP_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut session_started_once = false;
         loop {
             tick.tick().await;
-            if let Err(error) = process_once(&store, Utc::now(), &gate).await {
-                tracing::warn!(event = "smalltalk_loop.process_failed", %error);
+            let allow_start = !one_shot || !session_started_once;
+            match process_once(&store, Utc::now(), &gate, allow_start).await {
+                Ok(started) => session_started_once |= started,
+                Err(error) => tracing::warn!(event = "smalltalk_loop.process_failed", %error),
             }
         }
     });
@@ -534,16 +543,17 @@ async fn process_once(
     store: &SmalltalkLoopStore,
     now: chrono::DateTime<Utc>,
     gate: &AtomicBool,
-) -> Result<(), StoreError> {
+    allow_start: bool,
+) -> Result<bool, StoreError> {
     store.close_ineligible_session(now).await?;
     let hat_aktive = store.active_session().await?.is_some();
     // Bei Server-Ueberlast wird die laufende Sitzung im Monitor beendet; hier
     // wird nur dafuer gesorgt, dass keine neue nachrueckt, solange das Gate zu
     // ist.
-    if soll_neue_sitzung_starten(gate.load(Ordering::Relaxed), hat_aktive) {
-        store.start_next_session(now).await?;
+    if allow_start && soll_neue_sitzung_starten(gate.load(Ordering::Relaxed), hat_aktive) {
+        return Ok(store.start_next_session(now).await?.is_some());
     }
-    Ok(())
+    Ok(false)
 }
 
 fn spawn_discord_forwarder(
@@ -936,17 +946,6 @@ mod tests {
         assert!(!SmalltalkConfig::from_value(None).enabled);
         assert!(SmalltalkConfig::from_value(Some("on")).enabled);
         assert!(!SmalltalkConfig::from_value(Some("off")).enabled);
-    }
-
-    #[test]
-    fn testmodus_hat_keinen_twitch_send_port() {
-        assert_eq!(
-            SmalltalkDeliveryTarget::ALL,
-            [
-                SmalltalkDeliveryTarget::Database,
-                SmalltalkDeliveryTarget::Discord,
-            ]
-        );
     }
 
     /// Eine Stunde Testmodus kann mehr Nachrichten erzeugen, als in einen

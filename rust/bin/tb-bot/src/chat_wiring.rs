@@ -947,7 +947,11 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    let engagement_irc_reader = EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement));
+    let engagement_irc_reader = EngagementIrcReader::new(
+        pool.clone(),
+        Arc::clone(&engagement),
+        stealth.clone(),
+    );
     supervisor.spawn("engagement_irc_reader", async move {
         engagement_irc_reader.run().await;
         future::pending::<()>().await;

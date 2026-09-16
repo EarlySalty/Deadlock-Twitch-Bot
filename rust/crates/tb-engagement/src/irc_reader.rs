@@ -9,8 +9,9 @@
 //!
 //! Trennung der Transporte:
 //! - **Lesen**: anonymes IRC (`irc.chat.twitch.tv:6667`, CAP `tags`+`commands`).
-//! - **Schreiben**: absichtlich nicht möglich; der anonyme Reader besitzt
-//!   keinen Twitch-Schreib-Transport.
+//! - **Schreiben**: ausschließlich im `smalltalk_live`-Testmodus über den
+//!   separat autorisierten Engagement-Sender. Der Sender prüft die offene
+//!   Session und die <50-Follower-Grenze vor jedem HTTP-Call erneut.
 //!
 //! Kanalquelle: `twitch_engagement_settings` mit `enabled = TRUE AND irc_read =
 //! TRUE`. Die Kanal-Menge ist disjunkt zum EventSub-Pfad → kein Doppel-Processing.
@@ -30,11 +31,12 @@ use tokio::net::TcpStream;
 
 use crate::irc_message::{build_incoming, parse_privmsg};
 use crate::pipeline::EngagementPipeline;
+use crate::stealth_sender::StealthSender;
 
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
 const ANON_NICK: &str = "justinfan13371337";
-const CHANNEL_REFRESH_SECONDS: u64 = 300;
+const CHANNEL_REFRESH_SECONDS: u64 = 5;
 const CONNECT_BACKOFF_SECONDS: u64 = 30;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -113,11 +115,16 @@ async fn load_sender_login(pool: &PgPool) -> Result<String, sqlx::Error> {
 pub struct EngagementIrcReader {
     pool: PgPool,
     pipeline: Arc<EngagementPipeline>,
+    sender: Option<Arc<StealthSender>>,
 }
 
 impl EngagementIrcReader {
-    pub fn new(pool: PgPool, pipeline: Arc<EngagementPipeline>) -> Self {
-        Self { pool, pipeline }
+    pub fn new(
+        pool: PgPool,
+        pipeline: Arc<EngagementPipeline>,
+        sender: Option<Arc<StealthSender>>,
+    ) -> Self {
+        Self { pool, pipeline, sender }
     }
 
     /// Startet den Reader. Sind noch keine `irc_read`-Kanäle konfiguriert,
@@ -291,12 +298,45 @@ impl EngagementIrcReader {
         let Some(incoming) = build_incoming(&parsed, self_login) else {
             return;
         };
-        // Lurker bleibt Lurker: Der anonyme Reader kann die Pipeline speisen,
-        // besitzt aber absichtlich keinen Schreib-Transport.
         let pipeline = Arc::clone(&self.pipeline);
+        let sender = self.sender.clone();
         let channel = incoming.channel_login.clone();
+        let broadcaster_id = incoming.channel_user_id.clone();
         match tokio::spawn(async move { pipeline.handle(&incoming).await }).await {
-            Ok(_) => {}
+            Ok(result) => {
+                let Some(text) = result.response_text else {
+                    return;
+                };
+                let Some(sender) = sender else {
+                    tracing::warn!(
+                        event = "smalltalk_loop.send_skipped",
+                        channel = %channel,
+                        reason = "sender_unavailable",
+                    );
+                    return;
+                };
+                match sender
+                    .send_smalltalk_live(&broadcaster_id, &channel, &text)
+                    .await
+                {
+                    Some(true) => tracing::info!(
+                        event = "smalltalk_loop.message_sent",
+                        channel = %channel,
+                        broadcaster_id = %broadcaster_id,
+                        latency_ms = result.latency_ms,
+                    ),
+                    Some(false) => tracing::warn!(
+                        event = "smalltalk_loop.send_failed",
+                        channel = %channel,
+                        broadcaster_id = %broadcaster_id,
+                    ),
+                    None => tracing::warn!(
+                        event = "smalltalk_loop.send_skipped",
+                        channel = %channel,
+                        reason = "sender_not_onboarded",
+                    ),
+                }
+            }
             Err(error) => {
                 tracing::error!(channel = %channel, %error, "Engagement-IRC: Pipeline-Task fehlgeschlagen");
             }

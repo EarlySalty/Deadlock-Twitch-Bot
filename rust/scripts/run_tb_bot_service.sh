@@ -123,6 +123,13 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 # ops/stt-server (Default-Endpunkt 127.0.0.1:8791); es geht kein Stream-Audio
 # an einen Fremdanbieter. Sichtung: ops/learn-samples.sh
 export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
+# Kontrollierter Live-Smalltalk-Test mit dem separat per OAuth verbundenen
+# Engagement-Account. Das Wiring startet im Live-Modus genau EINE Session pro
+# Bot-Prozess; Kandidaten muessen live Deadlock spielen, Nicht-Partner sein und
+# einen bekannten Followerstand unter 50 haben. Kein Pitch/Link ist im Prompt
+# und im Ausgabefilter erlaubt. Kill-Switch: beide Variablen auf 0 setzen.
+export SMALLTALK_LOOP_ENABLED="${SMALLTALK_LOOP_ENABLED:-1}"
+export SMALLTALK_LOOP_LIVE_SEND="${SMALLTALK_LOOP_LIVE_SEND:-1}"
 # Kein permanenter Whisper-Leerlauf mehr: solange der Owner in keinem Kanal
 # aktiv ist, liefert der Lernmodus keinen Nutzen, wuerde mit dem alten Default
 # aber trotzdem den lebendigsten Partner-Stream durchgehend transkribieren.
