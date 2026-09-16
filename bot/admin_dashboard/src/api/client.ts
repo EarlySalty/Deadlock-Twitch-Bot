@@ -1379,14 +1379,80 @@ export async function fetchAdminResearchSuggestions(days: number): Promise<Resea
   return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
 }
 
+export type CasterLayout = 'solo' | 'duo' | 'trio';
 export interface CasterPerson {
   id: string;
   name: string;
   handle: string;
   accountLogin?: string | null;
   cameraUrl?: string;
+  cameraId?: string | null;
+  steamAccountId?: number | null;
+  teamId?: string | null;
 }
-export interface CasterScene { roster: CasterPerson[]; slots: [string | null, string | null] }
+export interface CasterScenePlayer {
+  displayName: string;
+  steamId64?: string | null;
+  accountId?: number | null;
+}
+export interface CasterSceneTeam {
+  id?: string | null;
+  name: string;
+  players: CasterScenePlayer[];
+}
+export interface CasterMatchContext {
+  teamA?: CasterSceneTeam | null;
+  teamB?: CasterSceneTeam | null;
+  observerAccountId?: number | null;
+}
+export interface CasterScene {
+  roster: CasterPerson[];
+  slots: Array<string | null>;
+  layout: CasterLayout;
+  matchContext: CasterMatchContext;
+}
 export interface CasterDocument { revision: number; scene: CasterScene }
+export interface CasterCamera {
+  cameraId: string;
+  ownerLogin: string;
+  label: string;
+  consentEnabled: boolean;
+  online: boolean;
+  createdAt?: string;
+  lastConnectedAt?: string | null;
+}
+export interface CreatedCasterCamera extends CasterCamera { inviteUrl: string }
+export interface CasterContextPlayer {
+  displayName: string;
+  discordId?: string | null;
+  steamId64?: string | null;
+  accountId?: number | null;
+  isBench?: boolean;
+}
+export interface CasterContextTeam {
+  id: string;
+  name: string;
+  players: CasterContextPlayer[];
+}
+export interface CasterOverlayContext {
+  available: boolean;
+  reason?: string;
+  source?: string;
+  teams: CasterContextTeam[];
+}
 export const fetchCasterOverlay = () => admin<CasterDocument>('/caster-overlay');
 export const saveCasterOverlay = (document: CasterDocument) => postAdminJson<CasterDocument, CasterDocument>('/caster-overlay', document);
+export const fetchCasterOverlayContext = () => admin<CasterOverlayContext>('/caster-overlay/context');
+export const fetchCasterCameras = async () => {
+  const result = await admin<{ items: CasterCamera[] }>('/caster-cameras');
+  return result.items ?? [];
+};
+export const createCasterCamera = (ownerLogin: string, label: string) =>
+  postAdminJson<CreatedCasterCamera, { ownerLogin: string; label: string }>('/caster-cameras', { ownerLogin, label });
+export async function revokeCasterCamera(cameraId: string): Promise<{ ok: boolean; cameraId: string }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ ok: boolean; cameraId: string }>(`/caster-cameras/${encodeURIComponent(cameraId)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}

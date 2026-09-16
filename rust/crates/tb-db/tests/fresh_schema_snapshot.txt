@@ -577,6 +577,14 @@ twitch_bot_ban_klassifikation|twitch_user_id|text|NO|
 twitch_bot_capabilities|has_chatters_scope|boolean|NO|true
 twitch_bot_capabilities|id|smallint|NO|1
 twitch_bot_capabilities|updated_at|timestamp with time zone|NO|now()
+twitch_caster_cameras|camera_id|text|NO|
+twitch_caster_cameras|consent_enabled|boolean|NO|false
+twitch_caster_cameras|created_at|timestamp with time zone|NO|now()
+twitch_caster_cameras|label|text|NO|
+twitch_caster_cameras|last_connected_at|timestamp with time zone|YES|
+twitch_caster_cameras|owner_login|text|NO|
+twitch_caster_cameras|publish_token_hash|text|NO|
+twitch_caster_cameras|revoked_at|timestamp with time zone|YES|
 twitch_caster_overlay|id|boolean|NO|true
 twitch_caster_overlay|revision|bigint|NO|0
 twitch_caster_overlay|scene|jsonb|NO|'{"slots": [null, null], "roster": []}'::jsonb

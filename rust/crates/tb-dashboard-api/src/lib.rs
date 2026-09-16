@@ -46,7 +46,7 @@ pub use handlers::pause_loop::build_pause_loop_router;
 
 use axum::{
     http::{header::HeaderName, HeaderValue},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Extension, Router,
 };
 use sqlx::PgPool;
@@ -148,6 +148,10 @@ pub fn build_public_router(pool: PgPool) -> Router {
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
         .route("/twitch/caster-overlay", get(crate::handlers::caster_overlay::html_handler))
         .route("/twitch/caster-overlay/background.png", get(crate::handlers::caster_overlay::background_handler))
+        .route("/twitch/caster-camera/{camera_id}", get(crate::handlers::caster_overlay::camera_page_handler))
+        .route("/twitch/caster-camera/ws", get(crate::handlers::caster_overlay::camera_ws_handler))
+        .route("/twitch/caster-camera/{camera_id}", get(crate::handlers::caster_overlay::camera_page_handler))
+        .route("/twitch/caster-camera/ws", get(crate::handlers::caster_overlay::camera_ws_handler))
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
@@ -1100,6 +1104,19 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/caster-overlay",
             get(crate::handlers::caster_overlay::get_handler).post(crate::handlers::caster_overlay::save_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/context",
+            get(crate::handlers::caster_overlay::context_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-cameras",
+            get(crate::handlers::caster_overlay::list_cameras_handler)
+                .post(crate::handlers::caster_overlay::create_camera_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-cameras/{camera_id}",
+            delete(crate::handlers::caster_overlay::revoke_camera_handler),
         )
         .route(
             "/twitch/api/admin/roadmap",
