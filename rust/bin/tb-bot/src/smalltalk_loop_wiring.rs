@@ -332,6 +332,7 @@ pub fn start(
         channel_id = DEFAULT_REVIEW_CHANNEL_ID,
         live_send = config.live_send,
         one_shot = config.live_send,
+        follower_limit = tb_engagement::smalltalk_loop_store::SMALLTALK_FOLLOWER_LIMIT,
     );
     SmalltalkLoopRuntime { store }
 }
