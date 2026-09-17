@@ -1,10 +1,10 @@
 # Stat-Befehle & Stream-Overlay (SP2)
 
-Streamer-Statistiken im Twitch-Chat + ein OBS-Overlay. **Alles GC-nativ über den eigenen Steam-Bot — kein `deadlock-api` als Datenquelle, kein API-Key.** Die `deadlock-api` wurde nur als Referenz evaluiert; ihre öffentliche match-history ist exakt der GC-Call `GetMatchHistory`, den unser steam-core selbst macht.
+Streamer-Statistiken im Twitch-Chat + ein OBS-Overlay. **Primär GC-nativ über den eigenen Steam-Bot.** Seit 2026-09-17 besitzt der Chat-Befehl `!rank` zusätzlich einen öffentlichen Deadlock-API-Fallback ohne API-Key. Die Overlay-Datenquelle bleibt unverändert.
 
 ## Chat-Befehle (`tb-chat`)
 
-In `tb-chat/src/{stats.rs, commands.rs, catalog.rs}`. Jeder Befehl löst die Broadcaster-`discord_id` auf (`resolve_discord_id`, `twitch_streamer_identities`) und ruft einen Steam-Bot-HTTP-Endpoint:
+In `tb-chat/src/{stats.rs, commands.rs, catalog.rs}`. Ohne Ziel löst jeder Spielstatistikbefehl die Broadcaster-`discord_id` auf (`resolve_discord_id`, `twitch_streamer_identities`) und ruft einen Steam-Bot-HTTP-Endpoint:
 
 | Befehl | Quelle (Steam-Bot) | Inhalt |
 |--------|--------------------|--------|
@@ -15,6 +15,18 @@ In `tb-chat/src/{stats.rs, commands.rs, catalog.rs}`. Jeder Befehl löst die Bro
 | `!live` | `/player-live` | im Match? (+ Hero, Minute) |
 
 Reply-Funktionen sind pur + verhaltens-getestet (exakte `assert_eq!`, inkl. `not_scored`-Ausschluss). Steam-Bot-Basis-URL via env `STEAM_BOT_RANK_URL` (Default `http://127.0.0.1:8783`), Pfade via `*_url_from_rank`-Helfer abgeleitet.
+
+## Optionale Benutzerziele und Rank-Fallback (2026-09-17)
+
+`command_target.rs` löst genau einen optionalen Twitch-Login (`@name` oder `name`) aus EventSub-Mentions, Absender/Kanal oder Helix auf. Alle acht Stat-Befehle und ihre Aliase verwenden dann die Twitch-ID des Ziels. Das Originalevent bleibt unverändert: Kanal-Einstellungen, Versandkanal und Berechtigungen bleiben am Aufrufkanal/Absender. `!watchtime` nutzt denselben Resolver, standardmäßig aber den Absender, und zählt ausschließlich im Aufrufkanal. Sein atomarer 10-Sekunden-Cooldown bleibt pro `(Kanal-ID, Absender-ID)`, nicht pro Ziel.
+
+`rank_lookup.rs` verwendet zuerst `/rank?discord_id=...`. Bei fehlendem Rang/Freundschaft oder GC-Ausfall wird die bestätigte bevorzugte Verknüpfung aus `core.steam_links` gelesen (Primary zuerst, deterministischer Fallback). Nur dieser Steam-Account wird öffentlich abgefragt; unbestätigte Links, DB-Fehler und geschützte Accounts lösen keine alternative Namenssuche aus.
+
+Nur bei explizitem Twitch-Ziel ohne bestehende Steam-Verknüpfung folgt `/v1/players/steam-search?search_query=...&min_matches_played_last_30d=0&matches_played_weight=0&limit=100`. Genau ein exakter Namensfund darf einen **als unbestätigt markierten** Rang anzeigen. Mehrdeutige, ähnliche oder abgeschnittene Suchergebnisse werden nicht automatisch zugeordnet. `!rank steam:<Account-ID/SteamID64>` ist eine rein lesende Auswahl; es gibt keine Link-Schreiboperation.
+
+Öffentlicher Rang: `/v1/players/{account_id}/rank`, Namen dynamisch aus `/v1/assets/ranks`. Kein MMR-Schätzwert, kein Match-Teamdurchschnitt. Die Antwort kennzeichnet das letzte erfasste Ranked-Match und dessen Datum, sofern geliefert. HTTP-Timeout 3 Sekunden pro öffentlichem Request; Single-flight und 120-Sekunden-Cache pro Ressource (Rangnamen 1 Stunde), Fehler 15 Sekunden, maximal 256 Cache-Einträge. Prozessweites Budget pro CommandEngine: 16 öffentliche Requests/Minute, zusätzlich `Retry-After` bei HTTP 429 (1–300 Sekunden). Kein API-Key erforderlich.
+
+Vertrag: https://api.deadlock-api.com/openapi.json (geprüft 2026-09-17). Tests liegen in `command_target_tests.rs` und `rank_lookup/tests.rs`; alle HTTP-Daten werden gemockt, Datenbanktests laufen auf privaten PostgreSQL-Prozessen ohne Produktionszugriff.
 
 ## Steam-Bot-Endpoints (GC-nativ)
 
@@ -43,3 +55,19 @@ Nur öffentliche Asset-URLs der Deadlock-CDN (kein fremder Code):
 
 - Steam-Link-Test-DB: `/home/naniadm/Documents/Deadlock-Bots/data/deadlock.sqlite3`, `steam_links.user_id` = Discord-ID (in bun:sqlite als TEXT lesen — Snowflake-Präzisionsverlust!), `account_id = steam_id64 − 76561197960265728`.
 - Live-Verify immer gegen einen echten verknüpften Account (der Leerfall `discord_id=1` kurzschließt und beweist nichts).
+
+## Direkte Zuschauerverknüpfung (2026-09-18)
+
+`!connect` verlinkt `/twitch/connect`, ohne benutzerspezifische Bearer-Tokens im öffentlichen Chat. Der vorhandene Twitch-OAuth-Callback akzeptiert für das exakte, gespeicherte Ziel `/twitch/connect` eine getrennte `twitch_player`-Session; die Partner-/Admin-Gates bleiben unverändert. Anschließend startet ein sessiongebundener CSRF-POST Steam OpenID 2.0. Pinning von Provider und return_to, vollständige signierte Identitätsfelder, serverseitige check_authentication-Verifikation, frische Nonces, globale Nonce-Replaysperre und atomare Linkrevision schützen den Abschluss.
+
+`twitch_player_steam_links` ist unabhängig von `core.steam_links`. Direkte Links gewinnen bei Rank vor Discord und Namenssuche; Discord-Daten anderer Konten dürfen nicht als Daten des direkt verbundenen Kontos erscheinen. `!unconnect` setzt einen selbstbezogenen Opt-out und löscht die direkte Steam-ID. Der Opt-out gilt für alle identitätsbasierten Chat-Stats, nicht für explizite öffentliche `!rank steam:<ID>`-Abfragen und nicht für Watchtime. Keine automatischen Discord-Link-Schreibzugriffe oder Bot-Freundschaftsanfragen.
+
+## Direkte Zuschauer-Verknüpfung (2026-09-18)
+
+- `!connect` postet ausschließlich die öffentliche URL `/twitch/connect`, keine personenbezogenen Einmaltokens im Chat.
+- Vorhandener Twitch-OAuth-Codeflow mit Browser-Kontext und dem registrierten Callback. `next=/twitch/connect` erstellt ausschließlich eine kurzlebige `twitch_player`-Session, keine Partner-/Admin-Session und keine Partnerschaft.
+- Steam OpenID 2.0: POST-Start mit sessiongebundenem CSRF, fester Provider und HTTPS-Callback aus Serverkonfiguration, signierte Identität/Nonce/Return-URL, serverseitiges `check_authentication`, Nonce-Replay-Sperre und einmaliger browsergebundener Flow.
+- `twitch_player_steam_links`: stabile Twitch-ID, optionale SteamID64, lookup_enabled, Revision und Zeitstempel. CAS verhindert Wiederbelebung nach `!unconnect` und konkurrierendes Überschreiben.
+- Rank liest direkte Links vor Discord-/Namensauflösung. Opt-out und Kontowechsel werden nach HTTP erneut geprüft, auch auf dem Legacy-Pfad. Weitere Stat-Commands bleiben auf denselben verknüpften Discord-/Steam-Account beschränkt; direkte Steam-ID allein entsperrt derzeit nur Rank. Watchtime bleibt unverändert unabhängig von Steam.
+- `!unconnect`/`!disconnect` mutiert nur die authentische Chatter-ID, keine Ziele oder Mod-Ausnahmen; löscht die gespeicherte Steam-ID und erhält nur den Twitch-bezogenen Opt-out. Separate Discord-Verknüpfungen bleiben erhalten.
+- Datenbankmigration `20260918100000_twitch_player_steam_links.sql` muss vor dem Dienstneustart über den vorhandenen Migrationsdienst laufen. Die Runtime darf weiterhin kein DDL.

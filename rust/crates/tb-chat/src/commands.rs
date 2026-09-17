@@ -340,6 +340,7 @@ pub struct CommandEngine {
     /// Nachricht über beide Kanal-Abos) und gegen Clip-Spam.
     clip_cooldowns: Mutex<HashMap<String, Instant>>,
     watchtime_cooldowns: Mutex<HashMap<(String, String), Instant>>,
+    rank_lookup: crate::rank_lookup::RankLookup,
 }
 
 impl CommandEngine {
@@ -368,6 +369,7 @@ impl CommandEngine {
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
             clip_cooldowns: Mutex::new(HashMap::new()),
             watchtime_cooldowns: Mutex::new(HashMap::new()),
+            rank_lookup: crate::rank_lookup::RankLookup::default(),
         }
     }
 
@@ -428,13 +430,13 @@ impl CommandEngine {
     ///
     /// `commands.py` — RaidCommandsMixin dispatch-Tabelle.
     pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
-        let text_lower = event.text().to_lowercase();
-
-        let (cmd, args) = if let Some(pos) = text_lower.find(' ') {
-            (&text_lower[..pos], event.text()[pos..].trim())
-        } else {
-            (text_lower.as_str(), "")
-        };
+        // Split the original text before normalizing the command: Unicode
+        // case conversion may change byte offsets. Tabs/newlines are separators too.
+        let (command, args) = event.text().split_once(char::is_whitespace)
+            .unwrap_or((event.text(), ""));
+        let command = command.to_ascii_lowercase();
+        let cmd = command.as_str();
+        let args = args.trim();
 
         if cmd != "!watchtime"
             && (event.broadcaster_user_id.trim().is_empty()
@@ -475,8 +477,24 @@ impl CommandEngine {
         }
 
         match cmd {
+            "!connect" => {
+                self.reply(event, &format!("Verbinde dein Twitch- und Steam-Konto hier: {} — danach !rank @deinname. Kein Discord nötig.", crate::player_links::CONNECT_URL)).await;
+                true
+            }
+            "!unconnect" | "!disconnect" => {
+                if !args.is_empty() {
+                    self.reply(event, "Verwendung: !unconnect — entfernt nur deine eigene Steam-Zuordnung, ohne @user.").await;
+                } else {
+                    let text = match crate::player_links::disconnect(&self.pool, &event.chatter_user_id).await {
+                        Ok(()) => "Deine direkte Steam-Zuordnung ist entfernt. Automatische Zuordnung bleibt aus. Mit !connect kannst du erneut verbinden.",
+                        Err(_) => "Die Verknüpfung konnte nicht entfernt werden. Bitte erneut versuchen.",
+                    };
+                    self.reply(event, text).await;
+                }
+                true
+            }
             "!watchtime" => {
-                self.cmd_watchtime(event).await;
+                self.cmd_watchtime(event, args).await;
                 true
             }
             "!sub" => {
@@ -729,7 +747,7 @@ impl CommandEngine {
         self.reply(event, &dashboard_reply()).await;
     }
 
-    async fn cmd_watchtime(&self, event: &ChatMessageEvent) {
+    async fn cmd_watchtime(&self, event: &ChatMessageEvent, args: &str) {
         if event.broadcaster_user_id.trim().is_empty() || event.chatter_user_id.trim().is_empty() {
             self.reply_plain(
                 event,
@@ -754,28 +772,34 @@ impl CommandEngine {
             }
             cooldowns.insert(key.clone(), reservation);
         }
-        let text = match tb_analytics::stream_kennzahlen::zuschauer_watchtime(
-            &self.pool, &key.0, &key.1,
-        )
-        .await
-        {
-            Ok(time) if time.gesamt_minuten == 0.0 => {
-                "Für dich ist hier noch keine Zuschauerzeit erfasst.".to_string()
-            }
-            Ok(time) => {
-                let total = watchtime_dauer(time.gesamt_minuten);
-                match time.laufend_minuten {
-                    Some(current) => format!(
-                        "Hier bisher erfasst: ca. {total}, davon {} in diesem Stream.",
-                        watchtime_dauer(current)
-                    ),
-                    None => format!("Hier bisher erfasst: ca. {total}."),
+        let target = crate::command_target::resolve(
+            self.api.as_ref(), event, args, crate::command_target::DefaultTarget::Chatter,
+        ).await;
+        let text = match target {
+            Err(error) => error.reply(),
+            Ok(target) => {
+                let other = target.user_id != event.chatter_user_id;
+                match tb_analytics::stream_kennzahlen::zuschauer_watchtime(
+                    &self.pool, &event.broadcaster_user_id, &target.user_id,
+                ).await {
+                    Ok(time) if time.gesamt_minuten == 0.0 => {
+                        if other { format!("Für @{} ist hier noch keine Zuschauerzeit erfasst.", target.login) }
+                        else { "Für dich ist hier noch keine Zuschauerzeit erfasst.".into() }
+                    }
+                    Ok(time) => {
+                        let total = watchtime_dauer(time.gesamt_minuten);
+                        let prefix = if other { format!("Zuschauerzeit von @{}: ", target.login) } else { String::new() };
+                        match time.laufend_minuten {
+                            Some(current) => format!("{prefix}Hier bisher erfasst: ca. {total}, davon {} in diesem Stream.", watchtime_dauer(current)),
+                            None => format!("{prefix}Hier bisher erfasst: ca. {total}."),
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, broadcaster_id = %key.0, "!watchtime Abruf fehlgeschlagen");
+                        if other { format!("Die Zuschauerzeit von @{} kann ich gerade nicht abrufen. Versuch es gleich nochmal.", target.login) }
+                        else { "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal.".into() }
+                    }
                 }
-            }
-            Err(error) => {
-                tracing::warn!(%error, broadcaster_id = %key.0, "!watchtime Abruf fehlgeschlagen");
-                "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal."
-                    .to_string()
             }
         };
         if !self
@@ -793,29 +817,60 @@ impl CommandEngine {
         self.reply(event, &help_reply(knowledge_base(), args)).await;
     }
 
-    async fn cmd_rank(&self, event: &ChatMessageEvent, _args: &str) {
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, false)
-                    .await
-                    .map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
-        self.reply(
-            event,
-            &crate::stats::command_reply(
-                &event.broadcaster_user_name,
-                info,
-                crate::stats::rank_reply,
-            ),
-        )
-        .await;
+    async fn stat_target(&self, event: &ChatMessageEvent, args: &str) -> Option<crate::command_target::CommandTarget> {
+        match crate::command_target::resolve(
+            self.api.as_ref(), event, args, crate::command_target::DefaultTarget::Broadcaster,
+        ).await {
+            Ok(target) => {
+                match crate::player_links::load(&self.pool, &target.user_id).await {
+                    Ok(Some(link)) if !link.lookup_enabled => {
+                        self.reply(event, crate::player_links::DISCONNECTED_REPLY).await;
+                        return None;
+                    }
+                    Ok(Some(link)) if link.steam_id64.is_some()
+                        && !event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank") => {
+                        // Never show another Discord-linked Steam account after a direct account switch.
+                        let same_legacy = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+                            Ok(Some(discord_id)) => matches!(crate::rank_lookup::linked_account(&self.pool, &discord_id).await,
+                                Ok(Some((id, true))) if Some(id) == link.account_id()),
+                            _ => false,
+                        };
+                        if !same_legacy {
+                            self.reply(event, &format!("{} hat Steam direkt verbunden. Über diese Verbindung ist !rank verfügbar; dieser Statistikbefehl benötigt noch die zusätzliche Discord-/Steam-Verknüpfung.", target.name)).await;
+                            return None;
+                        }
+                    }
+                    Ok(_) => {},
+                    Err(_) => {
+                        self.reply(event, "Die Kontozuordnung kann ich gerade nicht abrufen. Bitte erneut versuchen.").await;
+                        return None;
+                    }
+                }
+                Some(target)
+            },
+            Err(error) => { self.reply(event, &error.reply()).await; None }
+        }
     }
 
-    async fn cmd_wins(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_rank(&self, event: &ChatMessageEvent, args: &str) {
+        match crate::rank_lookup::parse_steam_id(args) {
+            Ok(Some(account_id)) => {
+                let text = self.rank_lookup.account_reply(account_id, &format!("Steam-Account {account_id}"), false).await;
+                self.reply(event, &text).await;
+            }
+            Err(()) => self.reply(event, "Verwendung: !rank @username oder !rank steam:<Account-ID/SteamID64>.").await,
+            Ok(None) => {
+                let Some(target) = self.stat_target(event, args).await else { return; };
+                let text = self.rank_lookup.twitch_reply(&self.pool, &target, !args.is_empty()).await;
+                self.reply(event, &text).await;
+            }
+        }
+    }
+
+    async fn cmd_wins(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, true)
                     .await
                     .map(Some),
@@ -825,7 +880,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::wins_reply,
             ),
@@ -833,9 +888,10 @@ impl CommandEngine {
         .await;
     }
 
-    async fn cmd_winrate(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_winrate(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
                 Ok(None) => Ok(None),
                 Err(error) => Err(error),
@@ -843,7 +899,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::winrate_reply,
             ),
@@ -851,9 +907,10 @@ impl CommandEngine {
         .await;
     }
 
-    async fn cmd_mmr(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_mmr(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_mmr_trend(&discord_id).await.map(Some),
                 Ok(None) => Ok(None),
                 Err(error) => Err(error),
@@ -861,7 +918,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::mmr_reply,
             ),
@@ -869,9 +926,10 @@ impl CommandEngine {
         .await;
     }
 
-    async fn cmd_live(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_live(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_live(&discord_id).await.map(Some),
                 Ok(None) => Ok(None),
                 Err(error) => Err(error),
@@ -879,7 +937,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::live_reply,
             ),
@@ -887,9 +945,10 @@ impl CommandEngine {
         .await;
     }
 
-    async fn cmd_lastmatch(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_lastmatch(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
                 Ok(None) => Ok(None),
                 Err(error) => Err(error),
@@ -897,7 +956,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::lastmatch_reply,
             ),
@@ -905,9 +964,10 @@ impl CommandEngine {
         .await;
     }
 
-    async fn cmd_streak(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_streak(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
                 Ok(None) => Ok(None),
                 Err(error) => Err(error),
@@ -915,7 +975,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::streak_reply,
             ),
@@ -923,9 +983,10 @@ impl CommandEngine {
         .await;
     }
 
-    async fn cmd_mostplayed(&self, event: &ChatMessageEvent, _args: &str) {
+    async fn cmd_mostplayed(&self, event: &ChatMessageEvent, args: &str) {
+        let Some(target) = self.stat_target(event, args).await else { return; };
         let info =
-            match crate::stats::resolve_discord_id(&self.pool, &event.broadcaster_user_id).await {
+            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
                 Ok(None) => Ok(None),
                 Err(error) => Err(error),
@@ -933,7 +994,7 @@ impl CommandEngine {
         self.reply(
             event,
             &crate::stats::command_reply(
-                &event.broadcaster_user_name,
+                &target.name,
                 info,
                 crate::stats::mostplayed_reply,
             ),
@@ -2208,6 +2269,8 @@ impl CommandEngine {
 mod tests {
     include!("sub_reminder_tests.rs");
     include!("watchtime_tests.rs");
+    include!("command_target_tests.rs");
+    include!("player_link_command_tests.rs");
     include!("command_regression_tests.rs");
     use super::*;
     use crate::api::BanOutcome;
@@ -2224,6 +2287,8 @@ mod tests {
         sent: Mutex<Vec<(String, String)>>,
         fail_next_sends: Mutex<usize>,
         outcomes: Mutex<Vec<SendOutcome>>,
+        user_lookups: Mutex<HashMap<String, Result<Option<String>, String>>>,
+        lookup_calls: Mutex<Vec<String>>,
     }
 
     impl MockApi {
@@ -2232,6 +2297,8 @@ mod tests {
                 sent: Mutex::new(vec![]),
                 fail_next_sends: Mutex::new(0),
                 outcomes: Mutex::new(Vec::new()),
+                user_lookups: Mutex::new(HashMap::new()),
+                lookup_calls: Mutex::new(Vec::new()),
             })
         }
 
@@ -2294,8 +2361,9 @@ mod tests {
         async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
             Ok(None)
         }
-        async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
-            Ok(None)
+        async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String> {
+            self.lookup_calls.lock().await.push(login.into());
+            self.user_lookups.lock().await.get(login).cloned().unwrap_or(Ok(None))
         }
         async fn bot_user_id(&self) -> String {
             "botid".to_string()
@@ -2654,6 +2722,7 @@ mod tests {
     }
 
     async fn apply_ddl(pool: &PgPool) {
+    sqlx::raw_sql(include_str!("../../../migrations/20260918100000_twitch_player_steam_links.sql")).execute(pool).await.unwrap();
         for ddl in [
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, is_live INTEGER, last_game TEXT)",
             // twitch_streamers_partner_state — prod-treu: is_partner_active INTEGER

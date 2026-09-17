@@ -202,3 +202,23 @@ DO $$ BEGIN
         GRANT SELECT, UPDATE ON twitch_community_announcements TO twitchdash;
     END IF;
 END $$;
+
+-- Voluntary player links: only the authenticated web flow may assign Steam IDs.
+DO $$
+BEGIN
+    IF to_regclass('public.twitch_player_steam_links') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_player_steam_links FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT ON public.twitch_player_steam_links TO twitchbot;
+        GRANT INSERT (twitch_user_id, lookup_enabled, revision)
+            ON public.twitch_player_steam_links TO twitchbot;
+        GRANT UPDATE (lookup_enabled, revision, updated_at)
+            ON public.twitch_player_steam_links TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE ON public.twitch_player_steam_links TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_steam_openid_nonces') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_steam_openid_nonces FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, DELETE ON public.twitch_steam_openid_nonces TO twitchdash;
+    END IF;
+END;
+$$;
+

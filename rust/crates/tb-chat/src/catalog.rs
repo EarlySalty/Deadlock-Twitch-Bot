@@ -40,11 +40,13 @@ pub struct CommandInfo {
 pub fn catalog() -> &'static [CommandInfo] {
     use CommandGroup::*;
     &[
+        CommandInfo { name: "!connect", aliases: &[], group: Stats, summary: "Verbindet dein eigenes Twitch- und Steam-Konto über unsere Website, ohne Discord." },
+        CommandInfo { name: "!unconnect", aliases: &["!disconnect"], group: Stats, summary: "Entfernt deine eigene direkte Steam-Zuordnung und deaktiviert automatische Zuordnung." },
         CommandInfo {
             name: "!watchtime",
             aliases: &[],
             group: Fun,
-            summary: "Zeigt deine hier erfasste Zuschauerzeit insgesamt und im laufenden Stream.",
+            summary: "Erfasste Zuschauerzeit hier im Kanal. Mit !watchtime @user für eine andere Person.",
         },
         CommandInfo {
             name: "!sub",
@@ -57,49 +59,49 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!rank",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt den aktuellen Deadlock-Rang des Streamers.",
+            summary: "Deadlock-Rang des Streamers oder !rank @user; alternativ !rank steam:<ID>.",
         },
         CommandInfo {
             name: "!wins",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt die Deadlock-Karriere-Siege des Streamers.",
+            summary: "Deadlock-Karriere-Siege des Streamers oder mit !wins @user einer anderen Person.",
         },
         CommandInfo {
             name: "!winrate",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt die Deadlock-Winrate des Streamers in den letzten Spielen.",
+            summary: "Deadlock-Winrate der letzten Spiele. Optional: !winrate @user.",
         },
         CommandInfo {
             name: "!mmr",
             aliases: &["!climb"],
             group: Stats,
-            summary: "Zeigt Rang und Trend des Streamers in den letzten Tagen.",
+            summary: "Rang und Trend der letzten Tage. Optional: !mmr @user.",
         },
         CommandInfo {
             name: "!live",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt, ob der Streamer gerade in einem Deadlock-Match ist.",
+            summary: "Laufendes Deadlock-Match des Streamers oder mit !live @user einer anderen Person.",
         },
         CommandInfo {
             name: "!lastmatch",
             aliases: &["!last"],
             group: Stats,
-            summary: "Zeigt das letzte Deadlock-Spiel des Streamers (Ergebnis, Hero, KDA).",
+            summary: "Letztes Deadlock-Spiel mit Ergebnis, Hero und KDA. Optional: !lastmatch @user.",
         },
         CommandInfo {
             name: "!streak",
             aliases: &[],
             group: Stats,
-            summary: "Zeigt die aktuelle Sieges- oder Pechsträhne des Streamers.",
+            summary: "Aktuelle Sieges- oder Pechsträhne. Optional: !streak @user.",
         },
         CommandInfo {
             name: "!mostplayed",
             aliases: &["!main"],
             group: Stats,
-            summary: "Zeigt den meistgespielten Hero des Streamers in den letzten Spielen.",
+            summary: "Meistgespielter Hero der letzten Spiele. Optional: !mostplayed @user.",
         },
         CommandInfo {
             name: "!clip",

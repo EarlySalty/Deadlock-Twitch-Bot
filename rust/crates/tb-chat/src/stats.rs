@@ -216,7 +216,7 @@ pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
             }
         },
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -231,7 +231,7 @@ pub fn wins_reply(name: &str, info: Option<&RankInfo>) -> String {
             None => format!("{name}: Für deinen Account liegen noch keine Sieg-Daten vor."),
         },
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -252,7 +252,7 @@ pub fn winrate_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             )
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -278,7 +278,7 @@ pub fn mmr_reply(name: &str, t: Option<&MmrTrend>) -> String {
             ),
         },
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -303,7 +303,7 @@ pub fn live_reply(name: &str, s: Option<&LiveStatus>) -> String {
             }
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -326,7 +326,7 @@ pub fn lastmatch_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             format!("{name}: Letztes Spiel — {outcome} als {hero} ({k}/{d}/{a}).")
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -349,7 +349,7 @@ pub fn streak_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             }
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -383,12 +383,12 @@ pub fn mostplayed_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             format!("{name}: Meistgespielt zuletzt — {hero} ({top_count} von {total} Spielen).")
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
 
-fn steam_bot_rank_url() -> String {
+pub(crate) fn steam_bot_rank_url() -> String {
     std::env::var("STEAM_BOT_RANK_URL")
         .ok()
         .and_then(|value| {
@@ -827,11 +827,11 @@ mod tests {
 
         assert_eq!(
             mmr_reply("nani", Some(&info)),
-            "nani hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "nani hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
         assert_eq!(
             mmr_reply("nani", None),
-            "nani hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "nani hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
     }
 
@@ -888,11 +888,11 @@ mod tests {
 
         assert_eq!(
             live_reply("X", Some(&info)),
-            "X hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "X hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
         assert_eq!(
             live_reply("X", None),
-            "X hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "X hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
     }
 

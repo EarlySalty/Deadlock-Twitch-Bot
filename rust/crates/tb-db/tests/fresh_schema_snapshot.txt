@@ -403,6 +403,16 @@ tb_schema_ownership|details_json|jsonb|NO|'{}'::jsonb
 tb_schema_ownership|marker_version|integer|NO|
 tb_schema_ownership|schema_owner|text|NO|
 tb_schema_ownership|updated_at|timestamp with time zone|NO|now()
+title_generator_feedback|alternatives|jsonb|NO|'[]'::jsonb
+title_generator_feedback|created_at|timestamp with time zone|NO|now()
+title_generator_feedback|edited_title|text|YES|
+title_generator_feedback|feedback_at|timestamp with time zone|YES|
+title_generator_feedback|feedback|text|YES|
+title_generator_feedback|generation_id|text|NO|
+title_generator_feedback|keywords|text|NO|''::text
+title_generator_feedback|primary_title|text|NO|
+title_generator_feedback|selected_title|text|YES|
+title_generator_feedback|twitch_user_id|text|NO|
 title_generator_insights|generated_at|timestamp with time zone|NO|now()
 title_generator_insights|id|integer|NO|nextval('title_generator_insights_id_seq'::regclass)
 title_generator_insights|patterns|text|YES|
@@ -425,6 +435,10 @@ title_generator_knowledge|relative_perf|double precision|NO|
 title_generator_knowledge|source_streamer|text|YES|
 title_generator_knowledge|streamer_size|text|YES|
 title_generator_knowledge|title|text|NO|
+title_generator_preferences|experimental_auto_set|boolean|NO|false
+title_generator_preferences|style_preference|text|NO|''::text
+title_generator_preferences|twitch_user_id|text|NO|
+title_generator_preferences|updated_at|timestamp with time zone|NO|now()
 twitch_ad_break_events|duration_seconds|integer|YES|
 twitch_ad_break_events|id|bigint|NO|nextval('twitch_ad_break_events_id_seq'::regclass)
 twitch_ad_break_events|is_automatic|boolean|YES|false
@@ -1262,6 +1276,11 @@ twitch_partners|technical_pause_reason|text|YES|
 twitch_partners|twitch_login|text|NO|
 twitch_partners|twitch_user_id|text|NO|
 twitch_partners|verified|boolean|NO|false
+twitch_player_steam_links|lookup_enabled|boolean|NO|true
+twitch_player_steam_links|revision|bigint|NO|0
+twitch_player_steam_links|steam_id64|bigint|YES|
+twitch_player_steam_links|twitch_user_id|text|NO|
+twitch_player_steam_links|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|cooldown_type|text|NO|
 twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|
@@ -1582,6 +1601,8 @@ twitch_stats_tracked|tags|text|YES|
 twitch_stats_tracked|ts_utc|timestamp with time zone|NO|
 twitch_stats_tracked|twitch_user_id|text|YES|
 twitch_stats_tracked|viewer_count|integer|YES|
+twitch_steam_openid_nonces|expires_at|timestamp with time zone|NO|
+twitch_steam_openid_nonces|nonce_hash|text|NO|
 twitch_stream_ai_reports|error|text|YES|
 twitch_stream_ai_reports|finished_at|timestamp with time zone|YES|
 twitch_stream_ai_reports|generated_at|timestamp with time zone|YES|now()

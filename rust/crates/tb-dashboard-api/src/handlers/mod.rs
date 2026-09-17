@@ -30,6 +30,7 @@ pub mod ai_history;
 pub mod audience;
 pub mod audience_demographics;
 pub mod auth_login;
+pub mod player_connect;
 pub mod auth_status;
 pub mod bans;
 pub mod billing;
