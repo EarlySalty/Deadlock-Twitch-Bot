@@ -59,6 +59,15 @@ with tempfile.TemporaryDirectory(prefix='player-connect-private-pg-') as directo
             assert result.returncode == 0, result.stderr
             assert result.stdout.splitlines().count('t') == 2, result.stdout
             print('ROLE_ASSERTIONS: PASS (web assigns, bot clears, bot cannot assign, nonce store private)')
+            with open(root / '.tasks/player-connect-auth-regression.log', 'w') as log:
+                result = subprocess.run(['cargo', 'test', '-p', 'tb-dashboard-api', '--lib', '-j', '2', '--',
+                                         'handlers::auth_login::tests', 'auth::oauth_login::tests', 'auth::session::',
+                                         'player_connect', 'steam_openid', '--test-threads=2'],
+                                        cwd=root / 'rust', env=env, stdout=log, stderr=subprocess.STDOUT, timeout=180)
+            print('AUTH_DB_TEST_EXIT', result.returncode)
+            print((root / '.tasks/player-connect-auth-regression.log').read_text()[-5000:])
+            if result.returncode:
+                raise SystemExit(result.returncode)
         finally:
             process.terminate()
             try:
