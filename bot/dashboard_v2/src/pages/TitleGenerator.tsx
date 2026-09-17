@@ -70,7 +70,7 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
       onClick={() => onChange(!checked)}
       className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${checked ? 'bg-primary' : 'bg-border'}`}
     >
-      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+      <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
     </button>
   );
 }
@@ -210,11 +210,6 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             Eigene Historie, Human-Feedback und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.
           </p>
         </div>
-        {settings?.model && (
-          <span className="w-fit rounded-full border border-border bg-background/70 px-2.5 py-1 text-[11px] font-mono text-text-secondary">
-            {settings.model}
-          </span>
-        )}
       </div>
 
       <div className="panel-card rounded-2xl p-5 space-y-4">
@@ -298,7 +293,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary">
           <Toggle checked={includeLive} onChange={setIncludeLive} />
-          Rang / Live-Hero / Party-Kontext nutzen, wenn vorhanden
+          <span>Rang / Live-Hero / Party-Kontext nutzen, wenn vorhanden</span>
         </label>
         <AnimatePresence>
           {error && (
