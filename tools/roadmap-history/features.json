@@ -1,0 +1,34 @@
+{
+  "groups": [
+    {"id":"streaming","title":"Streaming & Produktion","description":"Vom Upload bis zur Sendung","color":"#79c9bc"},
+    {"id":"community","title":"Community & Chat","description":"Interaktion, Raids und Partner","color":"#e8c687"},
+    {"id":"insights","title":"Analyse & Content","description":"Aus Streams Erkenntnisse und Inhalte machen","color":"#bba9ed"},
+    {"id":"platform","title":"Plattform & Sicherheit","description":"Zugang, Verwaltung und verlässlicher Betrieb","color":"#93bde8"}
+  ],
+  "features": [
+    {"id":"uplink","group":"streaming","title":"Uplink & Encoding","description":"Upload, AV1, Transcoding, Enhanced Broadcasting und 2K.","subject":"uplink|\\bav1\\b|\\b2k\\b|enhanced.broadcast|transcod|host.hardware","paths":"uplink|encoder_preflight"},
+    {"id":"caster","group":"streaming","title":"Caster-Studio & Kameras","description":"Caster-Overlay, Kamera-Portal, Namen und Produktionslayouts.","subject":"caster|camera.portal|caster.cam|kamera","paths":"caster[_-]|Caster"},
+    {"id":"pause","group":"streaming","title":"Pausenbild & OBS-Overlay","description":"Pausenschleifen und die Einbindung im Stream.","subject":"pause.loop|pausen|obs.overlay|overlay.player","paths":"pause_loop|PauseLoop|handlers/overlay\\.|src/obs/"},
+    {"id":"announcements","group":"streaming","title":"Live-Ankündigungen","description":"Live-Meldungen, Vorschauen und Benachrichtigungen.","subject":"announc|live.announce|live.meldung","paths":"announc|Announc"},
+    {"id":"raids","group":"community","title":"Raid-Netzwerk","description":"Raid-Auswahl, Scoring, Ausführung und Erinnerungen.","subject":"\\braid|auto.raid|raidnetz","paths":"tb-raid/|/raid/|raid_|Raid"},
+    {"id":"engagement","group":"community","title":"Smalltalk & Engagement","description":"Chat-Interaktionen, Outreach und kontrollierte Experimente.","subject":"smalltalk|engagement|outreach|greeting|begrüß|begruess","paths":"tb-engagement/|engagement|Engagement|greeting"},
+    {"id":"promos","group":"community","title":"Community-Promos","description":"Discord-Einladungen, passende Hinweise und Pitch-Regeln.","subject":"promo|\\bpitch|coaching.*chat|chat.*coaching","paths":"promo|standard_replies|crew_guard"},
+    {"id":"partners","group":"community","title":"Partner & Onboarding","description":"Partneraufnahme, Sperrregeln und Onboarding.","subject":"partner|onboarding|tag.block|tag.sperr|signup","paths":"partner|Partner|onboarding|Onboarding"},
+    {"id":"rank","group":"community","title":"Rang & Steam-Verknüpfung","description":"Rangabfragen, Steam-Freundschaft und Verifizierung.","subject":"\\brank\\b|rangabfrag|steam.*friend|steam.*verif|steam.*freund","paths":"rank_command|rankings|steam_link|SteamLink"},
+    {"id":"chat","group":"community","title":"Chat-Befehle & Bot","description":"Befehle, Chat-Antworten und IRC-Anbindung.","subject":"\\bchat\\b|\\birc\\b|chat.command|chatters|lurk.command","paths":"tb-chat/|chat_wiring|irc_|command_settings"},
+    {"id":"title","group":"insights","title":"Twitch Titel-Studio","description":"Titel entwerfen, lernen und mit passender Freigabe setzen.","subject":"titel|title.studio|title.command|title.performance","paths":"/title\\.|title_|TitleStudio|TitelStudio"},
+    {"id":"social","group":"insights","title":"Clips & Social Media","description":"VOD-Schnitt, Clips, Untertitel und Veröffentlichung.","subject":"social|\\bclip|\\bvod|tiktok|youtube|instagram|highlight|untertitel|schnitt","paths":"social|Social|clip|Clip|highlight|Highlight"},
+    {"id":"coaching","group":"insights","title":"Stream-Coaching","description":"Stream-Auswertung, Coaching-Berichte und Unterstützung.","subject":"coaching|stream.audit|stream.report|stream.bewert","paths":"coaching|Coaching|stream_audit|stream_report"},
+    {"id":"analytics","group":"insights","title":"Analytics & Zuschauer","description":"Retention, Reichweite, Zuschauerverläufe und Vergleiche.","subject":"analytics|retention|audience|viewer|zuschauer|watch.time|loyalty|demograph|follower.funnel","paths":"tb-analytics/|/analytics/|viewer_|audience|retention|loyalty|watch_time|Comparison"},
+    {"id":"brain","group":"insights","title":"Deadlock-Wissen & Builds","description":"Anbindung von Deadlock-Wissen und Build-Werkzeugen im Twitch-Projekt.","subject":"deadlock.brain|build.reasoner|build.lab|brain.build|deadlock.wissen","paths":"brain_|build_lab|BuildLab|deadlock_knowledge"},
+    {"id":"ads","group":"insights","title":"Werbung & Monetarisierung","description":"Ad-Manager, Zeitpläne und Monetarisierungsansichten.","subject":"ad.manager|admanager|ads.schedule|werbepause|monetiz","paths":"ad_manager|AdManager|ads_schedule|monetization"},
+    {"id":"auth","group":"platform","title":"Login & Berechtigungen","description":"OAuth, Sessions, Token-Lebenszyklus und Zugriffsrechte.","subject":"oauth|\\bauth\\b|fernet|token|csrf|session.cookie|login|permission|scope.warning","paths":"/auth/|oauth|token_lifecycle|token_store|Login"},
+    {"id":"moderation","group":"platform","title":"Moderation & Schutz","description":"Scam-Guard, globale Sperren und Moderationsregeln.","subject":"scam|moderation|global.ban|blacklist|sicher|security|abuse","paths":"scam|moderation|global_ban|tb-moderation/"},
+    {"id":"billing","group":"platform","title":"Abrechnung & Affiliates","description":"Tarife, Zahlungen, Rechnungen und Affiliate-Portal.","subject":"billing|stripe|invoice|rechnung|affiliate|tarif|pricing","paths":"billing|Billing|affiliate|Affiliate|stripe"},
+    {"id":"roadmap","group":"platform","title":"Roadmap & Feature-Historie","description":"Nachvollziehbare Entwicklungslinien, Änderungen und Meilensteine.","subject":"roadmap|feature.history|feature.historie|stammbaum","paths":"roadmap|Roadmap|generate_roadmap"},
+    {"id":"dashboard","group":"platform","title":"Dashboard & Website","description":"Navigation, Verwaltungsoberflächen und öffentliche Seiten.","subject":"dashboard|website|frontend|navigation|landing|streamer.v2","paths":"bot/admin_dashboard/|bot/dashboard_v2/|website/|tb-dashboard-api/"},
+    {"id":"runtime","group":"platform","title":"Betrieb & Infrastruktur","description":"Rust-Laufzeit, Datenbank, Deployment und Hintergrunddienste.","subject":"runtime|database|migration|sqlx|postgres|timescale|deploy|release|axum|rust|build|ci\\b","paths":"ops/|scripts/|rust/bin/|tb-db/|migrations/|tb-config/|tb-http-core/|\\.github/"},
+    {"id":"other","group":"platform","title":"Noch nicht zugeordnet","description":"Änderungen ohne ausreichend eindeutigen Feature-Nachweis.","subject":"(?!)","paths":"(?!)"}
+  ],
+  "overrides": {}
+}

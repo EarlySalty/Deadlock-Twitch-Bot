@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Feature-Roadmap · DDC Twitch</title>
+<!-- ROADMAP_STYLE -->
+</head>
+<body>
+<a class="skip" href="#workspace">Zur Entwicklungsgeschichte</a>
+<header class="topbar"><a href="/twitch/admin" class="brand"><span class="brand-mark" aria-hidden="true">D</span> DDC <span class="brand-sub">/ TWITCH</span></a><a href="/twitch/admin" class="back">Zurück zum Dashboard ↗</a></header>
+<main>
+<header class="hero"><div><p class="eyebrow">PRODUKTENTWICKLUNG · GIT-HISTORIE</p><h1>Aus Ideen werden <em>Features.</em></h1><p class="intro">Was wurde wann gebaut – und wie hat es sich weiterentwickelt?<br>Entdecke die Geschichte hinter jedem Feature.</p></div><div class="snapshot"><span class="live-dot" aria-hidden="true"></span><strong>Stand der Historie</strong><span id="snapshot-date">Wird geladen …</span><small id="snapshot-ref"></small></div></header>
+<div id="notices" role="status"></div>
+<section class="stats" id="stats" aria-label="Übersicht der Historie"></section>
+<section class="workspace" id="workspace" aria-labelledby="workspace-title">
+<div class="workspace-head"><div><p class="eyebrow">VOM ÜBERBLICK INS DETAIL</p><h2 id="workspace-title">Die Entwicklungslinien</h2></div><div class="views" role="group" aria-label="Darstellung"><button type="button" data-view="roadmap" aria-pressed="true">Roadmap</button><button type="button" data-view="tree" aria-pressed="false">Feature-Stammbaum</button><button type="button" data-view="list" aria-pressed="false">Änderungsliste</button></div></div>
+<form class="toolbar" id="filters" role="search"><label class="search"><span>Suche</span><input type="search" id="search" placeholder="Feature, Änderung oder Commit suchen …" autocomplete="off"></label><label><span>Bereich</span><select id="group"><option value="all">Alle Bereiche</option></select></label><label><span>Zeitraum</span><select id="period"><option value="90">Letzte 90 Tage</option><option value="30">Letzte 30 Tage</option><option value="all">Gesamte Historie</option><option value="custom">Eigener Zeitraum</option></select></label><label><span>Änderungsart</span><select id="kind"><option value="all">Alle Änderungen</option><option value="feat">Erweiterungen</option><option value="fix">Fehlerbehebungen</option><option value="security">Sicherheit</option><option value="change">Überarbeitungen</option><option value="maintenance">Technik & Pflege</option></select></label><button class="reset" type="button" id="reset-filters">Zurücksetzen</button><div class="custom-dates" id="custom-dates" hidden><label><span>Von</span><input type="date" id="from"></label><label><span>Bis</span><input type="date" id="to"></label></div><label class="check"><input type="checkbox" id="maintenance"> Auch Doku, Tests, Abhängigkeiten & Pflege</label></form>
+<div class="result-line"><p id="result-count" role="status" aria-live="polite"></p><div class="legend" aria-label="Legende"><span><i class="dot feat"></i>Erweiterung</span><span><i class="dot fix"></i>Fix</span><span><i class="dot change"></i>Überarbeitung</span><span><i class="dot security"></i>Sicherheit</span></div></div>
+<p class="view-hint" id="view-hint"></p>
+<div id="content" aria-label="Feature-Historie"></div>
+</section>
+<details class="method"><summary>Woher kommen die Daten und Verbindungen?</summary><div><p>Diese Ansicht zeigt die Entwicklung im Repository <strong>EarlySalty/Deadlock-Twitch-Bot</strong>. Ein Commit auf main belegt eine Codeänderung, aber nicht automatisch ein Deployment oder einen abgeschlossenen Produktstatus. Andere Projekte sind hier nicht enthalten.</p><p>Bereiche und Feature-Namen sind redaktionell definiert. Die Zuordnung einzelner Änderungen erfolgt anhand des Commit-Titels oder geänderter Dateipfade. Automatische Zuordnungen können ungenau sein und sind im Detail gekennzeichnet. Der Stammbaum zeigt diese fachliche Gruppierung und die zeitliche Entwicklung – keine behauptete technische Abhängigkeit oder Git-Abstammung.</p><p>„Erster Nachweis“ bezeichnet den frühesten zugeordneten Commit, nicht zwingend die Einführung des Features. „Erweiterung“ wird aus dem Commit-Typ feat abgeleitet. Merge-Commits werden nicht erneut gezählt. Ein Commit kann mehrere Features berühren; die Gesamtzahlen zählen ihn nur einmal. Datumsangaben verwenden Europe/Berlin.</p><p>Zeiträume beziehen sich auf den angegebenen Datenstand. Doku, Tests, Abhängigkeiten und Pflege sind standardmäßig ausgeblendet, bleiben aber über den Filter zugänglich. Die ursprüngliche Punktewolke wird durch diese beschriftete Historie ersetzt.</p></div></details>
+<footer><span>DDC / TWITCH · FEATURE-HISTORIE</span><span id="generated-at"></span></footer>
+</main>
+<dialog id="detail" aria-labelledby="detail-title"><div class="drawer-header"><div><p class="eyebrow" id="detail-group"></p><h2 id="detail-title"></h2></div><button type="button" id="close-detail" class="close" aria-label="Details schließen">×</button></div><div id="detail-body"></div></dialog>
+<noscript><p class="empty">Bitte JavaScript aktivieren, um die interaktive Historie zu öffnen. Die Admin-Anmeldung bleibt unverändert erforderlich.</p></noscript>
+<!-- ROADMAP_DATA -->
+<!-- ROADMAP_SCRIPT -->
+</body>
+</html>
