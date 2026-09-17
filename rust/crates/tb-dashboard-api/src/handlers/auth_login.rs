@@ -341,6 +341,11 @@ async fn callback_handler_inner(
         }
     };
 
+    if login_state.next_path == tb_chat::player_links::CONNECT_PATH {
+        return no_store(clear_context_and_respond(config.cookie_secure,
+            super::player_connect::complete_twitch_login(&state, &config, identity).await));
+    }
+
     // Partner-Gate (Python _is_partner_allowed). Kein Partner → 403, KEINE Session.
     let partner = match state
         .find_partner_for_login(&identity.twitch_login, &identity.twitch_user_id)

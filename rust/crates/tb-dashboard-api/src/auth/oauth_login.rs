@@ -30,6 +30,7 @@ pub const DEFAULT_POST_LOGIN_PATH: &str = "/twitch/dashboard";
 /// `next`-Wert, der nicht mit einem dieser internen Präfixe beginnt, fällt auf
 /// [`DEFAULT_POST_LOGIN_PATH`] zurück.
 const ALLOWED_NEXT_PREFIXES: &[&str] = &[
+    "/twitch/connect",
     "/twitch/dashboard",
     "/twitch/abbo",
     "/twitch/abo",

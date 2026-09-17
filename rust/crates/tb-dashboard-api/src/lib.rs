@@ -1178,9 +1178,12 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
         RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_login", 10, 60);
     let discord_callback_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_callback", 20, 60);
+    let player_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "player_connect", 30, 60);
+    let player_router = handlers::player_connect::router().layer(axum::middleware::from_fn_with_state(player_rl, rate_limit_middleware));
     let demo_login_rl = RateLimitLayerConfig::new(rate_limiter, "demo_login", 10, 60);
 
     Router::new()
+        .merge(player_router)
         .route(
             "/twitch/auth/login",
             get(auth_login::login_handler).layer(axum::middleware::from_fn_with_state(
