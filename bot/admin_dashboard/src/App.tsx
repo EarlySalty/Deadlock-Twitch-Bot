@@ -23,6 +23,7 @@ import ChangelogPage from '@/pages/content/Changelog';
 import LegalPage from '@/pages/content/Legal';
 import CasterOverlayPage from '@/pages/content/CasterOverlay';
 import RoadmapPage from '@/pages/content/Roadmap';
+import BrainBuildLab from '@/pages/content/BrainBuildLab';
 import BotControlPage from '@/pages/operations/BotControl';
 import ScopesPage from '@/pages/operations/Scopes';
 import AuditLogPage from '@/pages/money/AuditLog';
@@ -74,6 +75,7 @@ const router = createBrowserRouter(
         { path: 'content', element: <Navigate to="/content/announcements" replace /> },
         { path: 'content/announcements', element: <AnnouncementsPage /> },
         { path: 'content/caster-overlay', element: <CasterOverlayPage /> },
+        { path: 'content/build-lab', element: <BrainBuildLab /> },
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },
         { path: 'content/legal', element: <LegalPage /> },

@@ -1,3 +1,4 @@
+import type { BrainCatalog, BrainReport, BrainRequest } from '@/api/brainLab';
 import type {
   AddStreamerPayload,
   AdminActionResult,
@@ -1454,5 +1455,21 @@ export async function revokeCasterCamera(cameraId: string): Promise<{ ok: boolea
   return admin<{ ok: boolean; cameraId: string }>(`/caster-cameras/${encodeURIComponent(cameraId)}`, {
     method: 'DELETE',
     headers: { 'X-CSRF-Token': csrfToken },
+  });
+}
+
+
+export function fetchBrainCatalog(): Promise<BrainCatalog> {
+  return admin<BrainCatalog>('/brain/catalog', { cache: 'no-store' });
+}
+
+export async function buildBrainPlan(body: BrainRequest): Promise<BrainReport> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  // The strict Rust request accepts only scenario fields, not transport tokens.
+  return admin<BrainReport>('/brain/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    cache: 'no-store',
+    body: JSON.stringify(body),
   });
 }
