@@ -935,6 +935,8 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
     use handlers::{admin_research, admin_scout, admin_streamers, social_media};
 
     Router::new()
+        .route("/twitch/api/admin/brain/catalog", get(crate::handlers::brain_lab::catalog_handler))
+        .route("/twitch/api/admin/brain/build", post(crate::handlers::brain_lab::build_handler))
         .route(
             "/twitch/api/admin/research/suggestions",
             get(admin_research::suggestions_handler),

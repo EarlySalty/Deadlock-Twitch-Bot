@@ -1,5 +1,6 @@
 import { Monitor,
   Activity,
+  Brain,
   AlertTriangle,
   ChevronDown,
   ChevronLeft,
@@ -84,6 +85,7 @@ const navigationGroups: NavigationGroup[] = [
     items: [
       { label: 'Ankündigungen', to: '/content/announcements', icon: Megaphone },
       { label: 'Caster-Overlay', to: '/content/caster-overlay', icon: Monitor },
+      { label: 'Build-Labor', to: '/content/build-lab', icon: Brain },
       { label: 'Roadmap', to: '/content/roadmap', icon: Map },
       { label: 'Changelog', to: '/content/changelog', icon: ClipboardList },
       { label: 'Legal Pages', to: '/content/legal', icon: ScrollText },
