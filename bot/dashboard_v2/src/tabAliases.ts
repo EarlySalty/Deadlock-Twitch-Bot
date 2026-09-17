@@ -17,7 +17,6 @@ const TAB_ALIASES: Record<string, ResolvedTab> = {
   category: { tab: 'growth', sub: 'markt' },
   experimental: { tab: 'growth', sub: 'experimentell' },
   schedule: { tab: 'planning', sub: 'zeitplan' },
-  title: { tab: 'planning', sub: 'titel' },
   planning: { tab: 'planning' },
   coaching: { tab: 'coaching', mode: 'empfehlungen' },
   ai: { tab: 'coaching', mode: 'ki' },

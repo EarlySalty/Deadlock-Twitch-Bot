@@ -1708,6 +1708,10 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
             "/twitch/uplink",
             get(spa::main_domain_spa_shell_gated_handler),
         )
+        .route(
+            "/twitch/titel",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
             "/twitch/analyse",
@@ -2199,6 +2203,10 @@ mod router_wiring_tests {
             (
                 "/twitch/uplink",
                 "/twitch/auth/login?next=%2Ftwitch%2Fuplink",
+            ),
+            (
+                "/twitch/titel",
+                "/twitch/auth/login?next=%2Ftwitch%2Ftitel",
             ),
         ];
         for (pfad, ziel) in gegated {
