@@ -1,0 +1,28 @@
+[Unit]
+Description=Refresh the private Twitch feature history from origin/main
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=nathanael
+Group=nathanael
+WorkingDirectory=/home/nathanael/repos/Deadlock-Twitch-Bot
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=GIT_TERMINAL_PROMPT=0
+Environment="GIT_SSH_COMMAND=ssh -o BatchMode=yes"
+ExecStartPre=/usr/bin/git -C /home/nathanael/repos/Deadlock-Twitch-Bot fetch --quiet origin main
+ExecStart=/usr/bin/python3 /opt/deadlock-roadmap/tools/generate_roadmap.py --repo /home/nathanael/repos/Deadlock-Twitch-Bot --ref origin/main --output /srv/deadlock-roadmap/index.html
+TimeoutStartSec=180
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/deadlock-roadmap /home/nathanael/repos/Deadlock-Twitch-Bot/.git
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
