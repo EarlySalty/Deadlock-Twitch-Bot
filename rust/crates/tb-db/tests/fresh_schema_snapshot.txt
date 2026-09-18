@@ -581,13 +581,6 @@ twitch_ad_manager_state|avg_match_seconds|integer|YES|
 twitch_ad_manager_state|avg_queue_seconds|integer|YES|
 twitch_ad_manager_state|budget_used_seconds|integer|YES|
 twitch_ad_manager_state|duration_seconds|integer|YES|
-twitch_ad_manager_state|match_active|boolean|NO|false
-twitch_ad_manager_state|match_ended_at|timestamp with time zone|YES|
-twitch_ad_manager_state|match_started_at|timestamp with time zone|YES|
-twitch_ad_manager_state|plan_block_seconds|integer|YES|
-twitch_ad_manager_state|plan_blocks_per_hour|integer|YES|
-twitch_ad_manager_state|plan_fit|text|YES|
-twitch_ad_manager_state|plan_next_block_at|timestamp with time zone|YES|
 twitch_ad_manager_state|is_live|boolean|NO|false
 twitch_ad_manager_state|last_action_at|timestamp with time zone|YES|
 twitch_ad_manager_state|last_action_detail|text|YES|
@@ -596,12 +589,19 @@ twitch_ad_manager_state|last_action_outcome|text|YES|
 twitch_ad_manager_state|last_ad_at|timestamp with time zone|YES|
 twitch_ad_manager_state|last_decision_reason|text|YES|
 twitch_ad_manager_state|last_decision|text|YES|
-twitch_ad_manager_state|last_history_at|timestamp with time zone|YES|
 twitch_ad_manager_state|last_hint_at|timestamp with time zone|YES|
 twitch_ad_manager_state|last_hint_key|text|YES|
 twitch_ad_manager_state|last_hint_variant|smallint|YES|
+twitch_ad_manager_state|last_history_at|timestamp with time zone|YES|
+twitch_ad_manager_state|match_active|boolean|NO|false
+twitch_ad_manager_state|match_ended_at|timestamp with time zone|YES|
+twitch_ad_manager_state|match_started_at|timestamp with time zone|YES|
 twitch_ad_manager_state|next_ad_at|timestamp with time zone|YES|
 twitch_ad_manager_state|observed_at|timestamp with time zone|YES|
+twitch_ad_manager_state|plan_block_seconds|integer|YES|
+twitch_ad_manager_state|plan_blocks_per_hour|integer|YES|
+twitch_ad_manager_state|plan_fit|text|YES|
+twitch_ad_manager_state|plan_next_block_at|timestamp with time zone|YES|
 twitch_ad_manager_state|preroll_free_seconds|integer|YES|
 twitch_ad_manager_state|snooze_count|integer|YES|
 twitch_ad_manager_state|snooze_refresh_at|timestamp with time zone|YES|
