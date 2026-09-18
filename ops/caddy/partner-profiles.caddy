@@ -1,18 +1,12 @@
-# Import inside the deutsche-deadlock-community.de site block, alongside
-# (not inside) the existing `handle /streamer*` landing handler.
-# Specific path wins over /streamer*. Preserve upstream status, CSP and no-store.
-handle /streamer/@* {
+# Import INSIDE the existing handle /streamer* block, before its fallback.
+# Reserved pages and file assets keep their existing handlers.
+@partner_profile {
+    path_regexp partner_profile ^/streamer/@?[A-Za-z0-9_]{1,25}/?$
+    not path /streamer/commands /streamer/commands/ /streamer/help /streamer/help/ /streamer/faq /streamer/faq/ /streamer/vergleich /streamer/vergleich/ /streamer/v1 /streamer/v1/ /streamer/v2 /streamer/v2/ /streamer/v3 /streamer/v3/ /streamer/onboarding /streamer/onboarding/ /streamer/vertriebler /streamer/vertriebler/ /streamer/assets /streamer/assets/ /streamer/fonts /streamer/fonts/ /streamer/brand /streamer/brand/
+}
+handle @partner_profile {
     reverse_proxy 127.0.0.1:8769 {
         header_up X-Forwarded-For {remote_host}
         header_up X-Forwarded-Proto https
     }
 }
-# The existing public Twitch matcher enumerates paths; it is NOT /twitch/*.
-# The stylesheet therefore needs an explicit public route as well.
-handle /twitch/profile-assets/* {
-    reverse_proxy 127.0.0.1:8769 {
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto https
-    }
-}
-# /twitch/api/v2/* already uses the dashboard proxy, including the new directory.

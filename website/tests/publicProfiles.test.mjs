@@ -28,5 +28,5 @@ test('directory fails closed and refreshes without cached credentials', () => {
   assert.match(source, /setProfiles\(\[\]\)/);
   assert.match(source, /visibilitychange/);
   assert.match(source, /current === generation/);
-  assert.match(source, /\/streamer\/@\$\{profile.login\}/);
+  assert.match(source, /\/streamer\/\$\{profile.login\}/);
 });

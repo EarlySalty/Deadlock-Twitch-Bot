@@ -125,7 +125,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
     let db = database().await;
     let response = page_handler(
         State(db.pool.clone()),
-        Path("@alice".into()),
+        Path("alice".into()),
         Query(PageParams::default()),
     )
     .await;
@@ -141,6 +141,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
     )
     .await;
     let value: serde_json::Value = serde_json::from_str(&body(get).await).unwrap();
+    assert_eq!(value["public_path"], "/streamer/alice");
     assert_eq!(value["revision"], 0);
     assert_eq!(value["published"], false);
     let mut first = update(0, true);
@@ -165,7 +166,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
     assert_eq!(stale.status(), StatusCode::CONFLICT);
     let response = page_handler(
         State(db.pool.clone()),
-        Path("@alice".into()),
+        Path("alice".into()),
         Query(PageParams::default()),
     )
     .await;
@@ -178,7 +179,9 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
     assert!(html.contains("&lt;script&gt;"));
     assert!(html.contains("Grüße &amp; Spaß"));
     assert!(html.contains("1 erfasste Streams"));
-    assert!(!html.contains("/streamer/@bob"));
+    assert!(html.contains("https://deutsche-deadlock-community.de/streamer/alice"));
+    assert!(!html.contains("/streamer/@"));
+    assert!(!html.contains("/streamer/bob"));
     assert!(!html.contains("twitch_user_id"));
     assert!(!html.contains("avg_viewers"));
     let (a, b) = tokio::join!(
@@ -201,7 +204,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
     assert_eq!(
         page_handler(
             State(db.pool.clone()),
-            Path("@alice".into()),
+            Path("alice".into()),
             Query(PageParams::default())
         )
         .await
@@ -241,7 +244,7 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
         .unwrap();
         let response = page_handler(
             State(db.pool.clone()),
-            Path("@alice".into()),
+            Path("alice".into()),
             Query(PageParams::default()),
         )
         .await;
@@ -277,7 +280,7 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
     assert_eq!(
         page_handler(
             State(db.pool.clone()),
-            Path("@alice".into()),
+            Path("alice".into()),
             Query(PageParams::default())
         )
         .await
@@ -286,7 +289,7 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
     );
     let renamed = page_handler(
         State(db.pool.clone()),
-        Path("@alice_new".into()),
+        Path("alice_new".into()),
         Query(PageParams::default()),
     )
     .await;
@@ -299,17 +302,60 @@ async fn mounted_routes_and_csrf_are_enforced() {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
     let db = database().await;
-    let router = crate::build_public_router(db.pool.clone());
+    // Compose both router trees exactly like production: profile routes must
+    // coexist with the existing website wildcard without startup conflicts.
+    let router = crate::build_public_router(db.pool.clone()).merge(crate::build_website_router());
     let response = router
+        .clone()
         .oneshot(
             Request::builder()
-                .uri("/streamer/@alice")
+                .uri("/streamer/alice")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let saved = put_handler(
+        partner(),
+        State(db.pool.clone()),
+        Query(OwnerParams::default()),
+        Json(update(0, true)),
+    )
+    .await;
+    assert_eq!(saved.status(), StatusCode::OK);
+    for path in [
+        "/streamer/alice",
+        "/streamer/alice/",
+        "/streamer/Alice?month=2025-01",
+        "/streamer/alice/?month=2026-10",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+        let html = body(response).await;
+        assert!(html.contains("https://deutsche-deadlock-community.de/streamer/alice"));
+        assert!(!html.contains("/streamer/@"));
+    }
+    for path in ["/streamer/@alice", "/streamer/@alice/", "/streamer/nobody"] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    for login in RESERVED_PROFILE_LOGINS {
+        assert!(profile_login(login).is_none());
+        assert!(profile_login(&login.to_ascii_uppercase()).is_none());
+    }
     let router = crate::build_authed_router(
         db.pool.clone(),
         "test-only".into(),

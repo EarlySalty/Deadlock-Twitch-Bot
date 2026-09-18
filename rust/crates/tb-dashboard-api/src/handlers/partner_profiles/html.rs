@@ -275,7 +275,7 @@ pub(super) fn page(
     if !featured.is_empty() {
         body.push_str("<section class=\"panel\"><p class=\"eyebrow\">Aus meinem Umfeld</p><h2>Schau auch hier vorbei</h2><div class=\"partner-grid\">");
         for entry in featured {
-            let _=write!(body,"<a class=\"partner-card\" href=\"/streamer/@{}\"><strong>@{} ↗</strong><span>{}</span></a>",escape(&entry.login),escape(&entry.login),escape(&entry.headline));
+            let _=write!(body,"<a class=\"partner-card\" href=\"/streamer/{}\"><strong>@{} ↗</strong><span>{}</span></a>",escape(&entry.login),escape(&entry.login),escape(&entry.headline));
         }
         body.push_str("</div></section>");
     }
@@ -286,7 +286,7 @@ pub(super) fn page(
             &format!("@{} · DDC-Partner", record.login),
             headline,
             Some(&format!(
-                "https://deutsche-deadlock-community.de/streamer/@{}",
+                "https://deutsche-deadlock-community.de/streamer/{}",
                 record.login
             )),
             &body,

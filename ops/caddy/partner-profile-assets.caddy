@@ -1,0 +1,7 @@
+# Import in the public site block, alongside handle /streamer*.
+handle /twitch/profile-assets/* {
+    reverse_proxy 127.0.0.1:8769 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}

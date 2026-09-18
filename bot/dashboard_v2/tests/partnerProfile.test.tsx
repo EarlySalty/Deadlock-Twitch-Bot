@@ -14,7 +14,7 @@ import type { PartnerProfileData } from '../src/api/partnerProfile';
 Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: new URL('https://example.test/twitch/verwaltung#profil'), __TWITCH_DASHBOARD_RUNTIME__: {} } });
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 const { ProfileEditor, PartnerProfile } = await import('../src/pages/PartnerProfile');
-const initial: PartnerProfileData = { login: 'alice', public_path: '/streamer/@alice', active: true, published: false, revision: 0,
+const initial: PartnerProfileData = { login: 'alice', public_path: '/streamer/alice', active: true, published: false, revision: 0,
   profile: { headline: '<script>bad()</script>', about: 'Grüße & Spaß', avatar_url: '', accent: 'gold', socials: [], featured: [], show_history: true, events: [] } };
 
 test('profile is reachable in free partner management and analytics', () => {
@@ -47,7 +47,7 @@ test('month grid starts Monday and preserves leap days', () => {
 test('empty draft is private, escaped, and has an actionable calendar', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={initial} onReload={() => {}} />);
   assert.match(html, /Noch nicht veröffentlicht/);
-  assert.doesNotMatch(html, /href="\/streamer\/@alice"/);
+  assert.doesNotMatch(html, /href="\/streamer\/alice"/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /Grüße &amp; Spaß/);
@@ -57,12 +57,12 @@ test('empty draft is private, escaped, and has an actionable calendar', () => {
 test('paused profiles have disabled edits and no public opening link', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={{ ...initial, published: true, active: false }} onReload={() => {}} />);
   assert.match(html, /fieldset disabled=""/);
-  assert.doesNotMatch(html, /href="\/streamer\/@alice"/);
+  assert.doesNotMatch(html, /href="\/streamer\/alice"/);
   assert.match(html, /Bot-Verwaltung öffnen/);
 });
 test('published profile links to its own public page', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={{ ...initial, published: true }} onReload={() => {}} />);
-  assert.match(html, /href="\/streamer\/@alice"/);
+  assert.match(html, /href="\/streamer\/alice"/);
 });
 test('demo profile editor never starts a live request', () => {
   const client = new QueryClient();

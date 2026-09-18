@@ -16,7 +16,7 @@ von der Gerätezeitzone. Nicht existierende oder mehrdeutige Ortszeiten bei der
 Zeitumstellung werden nicht stillschweigend verschoben.
 
 Neue Profile sind private Entwürfe. **Profil veröffentlichen** aktivieren und
-speichern, um `/streamer/@<twitch_login>` freizugeben. Ausschalten und Speichern
+speichern, um `/streamer/<twitch_login>` freizugeben. Ausschalten und Speichern
 nimmt die Seite wieder offline. Andere aktive und veröffentlichte Profile
 erscheinen in der Partnerübersicht der Website; bis zu sechs können im eigenen
 Profil unter „Aus meinem Umfeld“ empfohlen werden.
@@ -77,7 +77,7 @@ angepasst. Die bestehenden Sammler werden nicht verändert.
 
 | Pfad | Zugriff | Zweck |
 | --- | --- | --- |
-| `GET /streamer/@<login>?month=YYYY-MM` | Öffentlich, aktive veröffentlichte Partner | HTML-Profil und Kalender |
+| `GET /streamer/<login>?month=YYYY-MM` | Öffentlich, aktive veröffentlichte Partner | HTML-Profil und Kalender |
 | `GET /twitch/profile-assets/profile.css` | Öffentlich | Profil-Stylesheet |
 | `GET /twitch/api/v2/public/partner-profiles` | Öffentlich | Nur Login und Überschrift sichtbarer Profile |
 | `GET /twitch/api/v2/streamer/profile` | Angemeldeter Partner / Admin-Scope | Eigener gespeicherter Stand |
@@ -89,23 +89,25 @@ bestehenden Admin-Scope frei wählbar. Maximale Requestgröße: 512 KiB.
 
 ## Deployment
 
-**Implementiert und lokal getestet, noch nicht auf Produktion umgeschaltet.**
+Der aktuelle Release- und Live-Prüfstand steht in der Task-Akte
+`.tasks/2026-09-18-partner-profile-calendar/STATUS.md`.
 
 1. Feature-Branch über den normalen Releaseprozess integrieren. Die neue
    Migration mit dem bestehenden Migrationsprozess anwenden, bevor die neuen
    Endpunkte genutzt werden; anschließend die Runtime-Rechte aktualisieren.
 2. `tb-dashboard` sowie `bot/dashboard_v2` und `website` aus demselben
    Release-Stand bauen und mit dem vorhandenen Release-/Rollbackverfahren
-   ausliefern. In diesem Arbeitsstand wurden keine Produktionsdienste neu
-   gestartet und keine Produktionsdaten geändert.
-3. `ops/caddy/partner-profiles.caddy` im Site-Block von
-   `deutsche-deadlock-community.de` importieren, **auf derselben Ebene wie** der
-   bestehende `handle /streamer*`-Block. Die spezifischeren Profilpfade müssen
-   vor dessen SPA-Fallback greifen. Auch `/twitch/profile-assets/*` braucht die
-   enthaltene eigene Weiterleitung, da der vorhandene Twitch-Matcher Pfade
-   aufzählt und kein allgemeines `/twitch/*` ist. Konfiguration vor dem Reload
-   mit `caddy validate` prüfen. Upstream-Status, CSP und `no-store` nicht
-   überschreiben; eventuelle CDN-Regeln dürfen diese Pfade nicht cachen.
+   ausliefern. Der Deploy veröffentlicht keine privaten Profilentwürfe.
+3. `ops/caddy/partner-profiles.caddy` **innerhalb** des bestehenden
+   `handle /streamer*`-Blocks vor dessen Fallback importieren. Zusätzlich
+   `ops/caddy/partner-profile-assets.caddy` auf Site-Ebene importieren.
+   Die reservierten Website-Seiten (`commands`, `help`, `faq`, `vergleich`,
+   Versionsseiten und Asset-Verzeichnisse) behalten ihre bisherigen Handler.
+   Der gemeinsame Axum-Wildcard-Handler verteilt auf Profil und Website-Dateien;
+   keine kollidierende zweite Parameterroute registrieren. Profile verwenden
+   `/streamer/login`, auch mit abschließendem Slash. Alte `@`-Pfade liefern 404.
+   Konfiguration vor dem Reload mit `caddy validate` prüfen. Upstream-Status,
+   CSP und `no-store` nicht überschreiben; CDN-Regeln dürfen Profile nicht cachen.
 4. Mit einem Testpartner Entwurf speichern, veröffentlichten Stand im privaten
    Browserfenster prüfen und einen Termin anlegen/ändern/entfernen. Zweiter
    Partner darf das Profil nicht bearbeiten. Bot-Deaktivierung muss beim
@@ -130,8 +132,9 @@ gezielte Abschaltung vor einem Rollback kann der Betreiber die spezifischen
   TypeScript- und Produktionsbuild erfolgreich.
 - Website: vollständige Suite mit 48 Tests und Produktionsbuild erfolgreich.
 - Caddy: `node --test ops/tests/partner_profiles_caddy.test.mjs` erfolgreich;
-  prüft tatsächliche Adapter-Reihenfolge für Profilpfad und Stylesheet ohne
-  Listener, Zertifikatsanforderung oder Produktionsänderung.
+  prüft echte HTTP-Aufrufe über isolierte Loopback-Listener für Profile,
+  Monatsparameter, Stylesheet, 404 und bestehende Website-Pfade. Kein
+  Produktions-Admin-Port, keine Zertifikatsanforderungen.
 - Vollständige Dashboard-Suite: 367 von 374 Tests erfolgreich. Sieben Fehler
   betreffen unveränderte Bereiche: drei Farb-/Kontrastprüfungen, drei
   Social-Media-Vertragsprüfungen und eine OBS-Hilfe-Prüfung. Keine dieser sieben
@@ -141,5 +144,4 @@ gezielte Abschaltung vor einem Rollback kann der Betreiber die spezifischen
 Gezielter roter Gegenbeweis für den Verwaltungszugang: der neue Test erwartete
 `#profil`, bekam vor der Verdrahtung `konto` und schlug fehl. Nach Einbau des
 freien Verwaltungstabs und Anpassung der Tab-Vertragsprüfung ist er grün.
-Eine visuelle Browser-Abnahme der öffentlichen Profilseite und der echte
-Produktions-Smoke-Test sind noch nicht erfolgt.
+Live-Prüfergebnisse werden separat in der Task-Akte dokumentiert.

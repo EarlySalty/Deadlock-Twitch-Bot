@@ -34,7 +34,7 @@ export function PublicProfiles() {
     <p className="text-xs font-semibold uppercase tracking-widest text-primary">Lern uns kennen</p>
     <h3 id="public-profiles-heading" className="mt-2 text-2xl font-semibold text-text-primary">Die Menschen hinter den Streams</h3>
     <p className="mt-2 text-sm text-text-secondary">Eigene Profile, Socials und Streamkalender. Entdecke deinen nächsten Lieblingsstream.</p>
-    <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{(expanded ? profiles : profiles.slice(0, 6)).map(profile => <a key={profile.login} href={`/streamer/@${profile.login}`} className="rounded-xl border border-border p-4 transition-colors hover:border-primary/40 focus-visible:outline-primary">
+    <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{(expanded ? profiles : profiles.slice(0, 6)).map(profile => <a key={profile.login} href={`/streamer/${profile.login}`} className="rounded-xl border border-border p-4 transition-colors hover:border-primary/40 focus-visible:outline-primary">
       <span className="font-semibold text-primary">@{profile.login} ↗</span>
       <p className="mt-2 break-words text-sm text-text-secondary">{profile.headline || "Profil und Streamkalender entdecken"}</p>
     </a>)}</div>

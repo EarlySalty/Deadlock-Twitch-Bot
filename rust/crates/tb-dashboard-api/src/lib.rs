@@ -146,7 +146,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
     // aber keine browserübergreifende API. Wildcard-CORS auf diesen Antworten
     // vergrößert nur die Angriffsfläche und löste den ZAP-CORS-Fund aus.
     let public_pages = Router::new()
-        .route("/streamer/{handle}", get(handlers::partner_profiles::page_handler))
+        .route("/streamer/{*path}", get(handlers::partner_profiles::streamer_handler))
         .route("/twitch/profile-assets/profile.css", get(handlers::partner_profiles::css_handler))
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
         .route("/twitch/caster-overlay", get(crate::handlers::caster_overlay::html_handler))
@@ -1855,7 +1855,7 @@ pub fn build_website_router() -> Router {
             get(handlers::help_page::commands_page),
         )
         .route("/streamer/faq", get(handlers::help_page::faq_redirect))
-        .route("/streamer/{*path}", get(website::streamer_asset_handler))
+        // The public router dispatches /streamer/{*path} to profiles or website assets.
         .route("/website", get(website::website_root_redirect_handler))
         .route(
             "/website/{*path}",

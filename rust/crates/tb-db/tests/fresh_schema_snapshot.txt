@@ -1270,6 +1270,11 @@ twitch_partner_outreach|status|text|YES|'pending'::text
 twitch_partner_outreach|streamer_login|text|NO|
 twitch_partner_outreach|streamer_user_id|text|YES|
 twitch_partner_outreach|twitch_user_id|text|YES|
+twitch_partner_profiles|content|jsonb|NO|'{}'::jsonb
+twitch_partner_profiles|published|boolean|NO|false
+twitch_partner_profiles|revision|bigint|NO|1
+twitch_partner_profiles|twitch_user_id|text|NO|
+twitch_partner_profiles|updated_at|timestamp with time zone|NO|now()
 twitch_partner_raid_score_tracking|base_score|double precision|YES|
 twitch_partner_raid_score_tracking|confirmed_at|text|NO|CURRENT_TIMESTAMP
 twitch_partner_raid_score_tracking|deadlock_continued_sec|integer|YES|

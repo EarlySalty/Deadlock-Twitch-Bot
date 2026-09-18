@@ -7,7 +7,7 @@ mod tests;
 use super::community::matching::{schedule, Session};
 use crate::auth::{level::DashboardAuthLevel, streamer_scope::resolve_settings_target};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{OriginalUri, Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -133,6 +133,24 @@ fn valid_login(raw: &str) -> Option<String> {
             .all(|c| c.is_ascii_alphanumeric() || c == b'_'))
     .then_some(login)
 }
+// Existing website pages own these single-segment paths.
+const RESERVED_PROFILE_LOGINS: &[&str] = &[
+    "commands",
+    "help",
+    "faq",
+    "vergleich",
+    "v1",
+    "v2",
+    "v3",
+    "onboarding",
+    "vertriebler",
+    "assets",
+    "fonts",
+    "brand",
+];
+fn profile_login(raw: &str) -> Option<String> {
+    valid_login(raw).filter(|login| !RESERVED_PROFILE_LOGINS.contains(&login.as_str()))
+}
 fn safe_url(raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
@@ -255,7 +273,7 @@ fn owner(auth: &DashboardAuthLevel, params: &OwnerParams) -> Result<(String, Str
     Ok((login, id))
 }
 fn owner_response(record: Record) -> Response {
-    no_store(Json(json!({"login": record.login, "public_path": format!("/streamer/@{}", record.login), "active": record.active, "published": record.published, "revision": record.revision, "profile": record.content.0})).into_response())
+    no_store(Json(json!({"login": record.login, "public_path": format!("/streamer/{}", record.login), "active": record.active, "published": record.published, "revision": record.revision, "profile": record.content.0})).into_response())
 }
 pub async fn get_handler(
     auth: DashboardAuthLevel,
@@ -285,6 +303,12 @@ pub async fn put_handler(
         Ok(v) => v,
         Err(r) => return no_store(r),
     };
+    if update.published && profile_login(&login).is_none() {
+        return error(
+            StatusCode::CONFLICT,
+            "Diese Profiladresse ist bereits für eine Website-Seite reserviert.",
+        );
+    }
     if let Err(message) = validate(&mut update) {
         return error(StatusCode::BAD_REQUEST, message);
     }
@@ -339,8 +363,8 @@ pub async fn put_handler(
     }
 }
 async fn directory(pool: &PgPool) -> Result<Vec<DirectoryEntry>, sqlx::Error> {
-    sqlx::query_as::<_, DirectoryEntry>(&format!("SELECT lower(p.twitch_login) AS login, COALESCE(d.content->>'headline','') AS headline FROM twitch_partners p JOIN twitch_partner_profiles d USING(twitch_user_id) WHERE {ACTIVE} AND d.published ORDER BY lower(p.twitch_login) LIMIT 500"))
-        .fetch_all(pool).await
+    sqlx::query_as::<_, DirectoryEntry>(&format!("SELECT lower(p.twitch_login) AS login, COALESCE(d.content->>'headline','') AS headline FROM twitch_partners p JOIN twitch_partner_profiles d USING(twitch_user_id) WHERE {ACTIVE} AND d.published AND NOT(lower(p.twitch_login)=ANY($1)) ORDER BY lower(p.twitch_login) LIMIT 500"))
+        .bind(RESERVED_PROFILE_LOGINS).fetch_all(pool).await
 }
 pub async fn directory_handler(State(pool): State<PgPool>) -> Response {
     match directory(&pool).await {
@@ -400,12 +424,30 @@ fn is_live(record: &Record, now: DateTime<Utc>) -> bool {
                 seen >= now - Duration::minutes(5) && seen <= now + Duration::seconds(5)
             })
 }
+/// One wildcard route owns both public profiles and existing website assets.
+/// Axum cannot merge a catch-all with a sibling parameter route at this path.
+pub async fn streamer_handler(
+    State(pool): State<PgPool>,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let handle = path.strip_suffix('/').unwrap_or(&path);
+    if profile_login(handle).is_some() || handle.starts_with('@') {
+        let params = match Query::<PageParams>::try_from_uri(&uri) {
+            Ok(Query(params)) => params,
+            Err(err) => return no_store(err.into_response()),
+        };
+        return page_handler(State(pool), Path(handle.to_string()), Query(params)).await;
+    }
+    // Existing pages/assets keep their original query handling and traversal guard.
+    super::website::streamer_asset_handler(Path(path)).await
+}
 pub async fn page_handler(
     State(pool): State<PgPool>,
     Path(handle): Path<String>,
     Query(params): Query<PageParams>,
 ) -> Response {
-    let Some(login) = handle.strip_prefix('@').and_then(valid_login) else {
+    let Some(login) = profile_login(&handle) else {
         return html::missing(StatusCode::NOT_FOUND);
     };
     let record = match load(&pool, &login).await {

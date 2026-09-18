@@ -1,25 +1,33 @@
 # Partnerprofile mit Streamkalender
 
-Auftrag: aktive Streamer-Partner erhalten ein eigenes öffentliches Profil unter
-`/streamer/@user`, mit Infos, Socials, selbst gepflegtem Kalender und historischer
+Auftrag: aktive Streamer-Partner erhalten ein öffentliches Profil unter
+`/streamer/user`, mit Infos, Socials, eigenem Kalender und historischer
 Live-Übersicht. Bearbeitung im Twitch-Dashboard; bei Bot-Deaktivierung oder
-Austritt offline.
+Austritt offline. Das zuvor verwendete @ war nur ein Platzhalter im Auftrag
+und gehört ausdrücklich nicht in die Adresse.
 
 Branch: `feat/partner-profile-calendar`.
 Worktree: `/home/nathanael/.worktrees/partner-profile-calendar`.
-Basis: `679169ca`.
+Aktueller Produktionsstand `5bc791c1` ist in den Feature-Branch integriert.
 
-Implementierung und lokale Prüfungen abgeschlossen. Kein Merge in `main`, keine
-Produktionsmigration, kein Dienstneustart, kein Live-Caddy-Reload.
+## Abnahme der Pfadkorrektur
 
-Bedienung, API, Lebenszyklus, Grenzen, genaue Testergebnisse und Deployment:
-[`docs/PARTNER_PROFILES.md`](../../docs/PARTNER_PROFILES.md).
+- Backend-Gegenprobe: 4/6 erfolgreich, zwei Fehler wegen alter @-Pfade.
+- Vollständige Router-Komposition deckte eine zusätzliche Axum-Kollision auf.
+  Behebung: ein gemeinsamer Wildcard-Dispatcher für Profile und Website-Dateien.
+- Backend danach: 6/6 erfolgreich. Echte isolierte PostgreSQL-Instanzen, keine
+  Produktionsprofile angelegt oder verändert.
+- Dashboard: 28/28 gezielte Profil-/Verwaltungs-/Community-Tests erfolgreich.
+- Caddy: echter isolierter Loopback-Test ohne Admin-Port, Profile und Monate mit
+  und ohne abschließenden Slash; reservierte Website-Seiten/Assets unverändert.
+  Alte @-Adressen und deaktivierte Profile liefern 404 ohne Cache.
+- Profiltabellen-Snapshot aus einer isolierten PostgreSQL-Instanz erzeugt.
 
-Die öffentliche Aktivierung benötigt neben Backend und beiden Frontend-Builds
-auch den mitgelieferten Caddy-Import. Ohne diesen würde der bisherige
-Landing-Fallback für `/streamer/@...` weiter HTTP 200 mit der Landingpage liefern.
-Stylesheet-Weiterleitung ist im Import ebenfalls enthalten und getestet.
+Deployment-Auftrag: nach Review nach main integrieren, pushen, das komplette
+Release bauen, Migration ausführen, beide Caddy-Imports setzen sowie Dashboard
+und Twitch-Bot neu starten. Live-Nachweis wird nach der Ausführung ergänzt.
 
-Bekannte Restabnahme: visuelle Browserprüfung und Produktions-Smoke-Test.
-Die vollständige Dashboard-Suite enthält sieben Fehler in unveränderten
-Farb-/Social-Media-/OBS-Bereichen; Details stehen in der Dokumentation.
+Bedienung und HTTP-Vertrag: `docs/PARTNER_PROFILES.md`.
+Die vollständige Dashboard-Suite hatte vor diesem Folgeauftrag sieben Fehler
+in unveränderten Farb-/Social-Media-/OBS-Bereichen. Keine pauschale Behauptung,
+dass die gesamte Suite fehlerfrei sei.
