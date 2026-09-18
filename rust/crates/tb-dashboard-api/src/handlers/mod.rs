@@ -42,6 +42,7 @@ pub mod category_activity;
 pub mod category_comparison;
 pub mod category_leaderboard;
 pub mod category_timings;
+pub mod category_collector;
 pub mod chat_analytics;
 pub mod chatter_verlauf;
 pub mod chat_content_analysis;

@@ -100,3 +100,5 @@ pub use subscriptions::{
     SubscriptionManager, SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
+
+pub mod anonymous_chat;

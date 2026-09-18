@@ -231,3 +231,6 @@ BEGIN
 END;
 $$;
 
+-- Global category permissions are narrowed after the broad legacy grants.
+\ir category-runtime-roles.sql
+

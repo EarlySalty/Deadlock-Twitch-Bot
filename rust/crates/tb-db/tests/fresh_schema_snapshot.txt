@@ -79,6 +79,80 @@ ai_analyses|model|text|NO|
 ai_analyses|points|jsonb|NO|
 ai_analyses|streamer|text|NO|
 ai_analyses|twitch_user_id|text|YES|
+category_channels|broadcaster_language|text|NO|'und'::text
+category_channels|broadcaster_type|text|NO|''::text
+category_channels|created_at|timestamp with time zone|YES|
+category_channels|description|text|NO|''::text
+category_channels|display_name|text|NO|''::text
+category_channels|first_seen|timestamp with time zone|NO|now()
+category_channels|followers_checked_at|timestamp with time zone|YES|
+category_channels|followers_http_status|integer|YES|
+category_channels|followers_total|bigint|YES|
+category_channels|last_seen|timestamp with time zone|NO|now()
+category_channels|login|text|NO|
+category_channels|profile_checked_at|timestamp with time zone|YES|
+category_channels|profile_image_url|text|NO|''::text
+category_channels|user_id|text|NO|
+category_chat_dirty|hour_at|timestamp with time zone|NO|
+category_chat_dirty|language|text|NO|
+category_chat_dirty|room_user_id|text|NO|
+category_chat_messages|chatter_login|text|NO|
+category_chat_messages|chatter_user_id|text|NO|
+category_chat_messages|detected_lang|text|NO|
+category_chat_messages|emote_count|integer|NO|0
+category_chat_messages|language_confidence|double precision|NO|
+category_chat_messages|message_id|text|NO|
+category_chat_messages|message_len|integer|NO|
+category_chat_messages|message_text|text|NO|
+category_chat_messages|received_at|timestamp with time zone|NO|
+category_chat_messages|room_user_id|text|NO|
+category_chat_messages|sent_at|timestamp with time zone|NO|
+category_chat_messages|shared_chat_copy|boolean|NO|false
+category_chat_messages|stream_language|text|NO|
+category_chat_messages|tags|jsonb|NO|'{}'::jsonb
+category_chat_rollup|avg_len|double precision|NO|
+category_chat_rollup|distinct_chatter|bigint|NO|
+category_chat_rollup|hour_at|timestamp with time zone|NO|
+category_chat_rollup|language|text|NO|
+category_chat_rollup|messages|bigint|NO|
+category_chat_rollup|room_user_id|text|NO|
+category_chat_rollup|total_chars|bigint|NO|
+category_chat_rollup|updated_at|timestamp with time zone|NO|now()
+category_collection_runs|completed_at|timestamp with time zone|NO|
+category_collection_runs|poll_seconds|integer|NO|
+category_collection_runs|snapshot_at|timestamp with time zone|NO|
+category_collection_runs|streams|integer|NO|
+category_collection_runs|viewers|bigint|NO|
+category_collector_status|details|jsonb|NO|'{}'::jsonb
+category_collector_status|heartbeat_at|timestamp with time zone|NO|now()
+category_collector_status|singleton|boolean|NO|true
+category_media_jobs|cursor|text|YES|
+category_media_jobs|kind|text|NO|
+category_media_jobs|last_error|text|YES|
+category_media_jobs|next_at|timestamp with time zone|NO|now()
+category_media_jobs|pages|integer|NO|0
+category_media_jobs|user_id|text|NO|
+category_media_jobs|window_end|timestamp with time zone|NO|now()
+category_media_jobs|window_start|timestamp with time zone|NO|(now() - '7 days'::interval)
+category_media|category_verified|boolean|NO|false
+category_media|first_seen|timestamp with time zone|NO|now()
+category_media|kind|text|NO|
+category_media|last_seen|timestamp with time zone|NO|now()
+category_media|media_id|text|NO|
+category_media|metadata|jsonb|NO|
+category_media|user_id|text|NO|
+category_stream_snapshots|is_mature|boolean|NO|
+category_stream_snapshots|language|text|NO|
+category_stream_snapshots|sample_seconds|double precision|NO|
+category_stream_snapshots|snapshot_at|timestamp with time zone|NO|
+category_stream_snapshots|started_at|timestamp with time zone|NO|
+category_stream_snapshots|stream_id|text|NO|
+category_stream_snapshots|tags|ARRAY|NO|'{}'::text[]
+category_stream_snapshots|thumbnail_url|text|NO|''::text
+category_stream_snapshots|title|text|NO|
+category_stream_snapshots|user_id|text|NO|
+category_stream_snapshots|user_login|text|NO|
+category_stream_snapshots|viewer_count|bigint|NO|
 clip_fetch_history|clips_found|integer|YES|0
 clip_fetch_history|clips_new|integer|YES|0
 clip_fetch_history|error|text|YES|

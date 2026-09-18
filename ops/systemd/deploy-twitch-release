@@ -17,6 +17,7 @@ Erlaubte Restart-Ziele:
   twitch-bot
   twitch-audit
   coaching-watch
+  category-collector
   all
 EOF
 }
@@ -61,10 +62,14 @@ add_restart_target() {
     twitch-audit|coaching-watch|twitch-coaching-watch|deadlock-twitch-stream-coaching-watch|deadlock-twitch-stream-coaching-watch.service)
       canonical="coaching-watch"
       ;;
+    category-collector|tb-category-collector|tb-category-collector.service)
+      canonical="category-collector"
+      ;;
     all)
       add_restart_target twitch-dashboard
       add_restart_target twitch-bot
       add_restart_target coaching-watch
+      if [[ -f /etc/systemd/system/tb-category-collector.service ]]; then add_restart_target category-collector; fi
       return
       ;;
     *)
@@ -181,6 +186,9 @@ for target in "${restart_targets[@]}"; do
       ;;
     coaching-watch)
       systemctl restart deadlock-twitch-stream-coaching-watch.service
+      ;;
+    category-collector)
+      systemctl restart tb-category-collector.service
       ;;
   esac
 done

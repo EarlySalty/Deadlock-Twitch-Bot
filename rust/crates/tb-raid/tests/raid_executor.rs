@@ -10,8 +10,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
-    RaidApi, RaidAuthStore, RaidExecutor, RaidHistoryStore, RaidOutcome, RaidRequest,
-    RaidTokenRefresher, RaidBlacklistStore, RefreshError, TokenBlacklistStore, TokenOwnerInfo,
+    RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidOutcome,
+    RaidRequest, RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo,
     TokenProvider, TokenResponse, TwitchTokenClient,
 };
 
@@ -189,7 +189,12 @@ async fn gueltiger_token_startet_raid_und_schreibt_erfolg() {
     );
 
     let outcome = exec.execute(&request(), Utc::now()).await.unwrap();
-    assert_eq!(outcome, RaidOutcome::Started);
+    assert!(matches!(
+        outcome,
+        RaidOutcome::Started {
+            raid_history_id: Some(_)
+        }
+    ));
     // RaidApi mit entschlüsseltem User-Token aufgerufen.
     assert_eq!(
         api.called_with.lock().unwrap().clone(),

@@ -56,3 +56,14 @@ CREATE INDEX IF NOT EXISTS twitch_ad_manager_decisions_session
 
 CREATE INDEX IF NOT EXISTS twitch_ad_manager_decisions_retention
     ON twitch_ad_manager_decisions (decided_at);
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+        GRANT SELECT, INSERT, DELETE ON public.twitch_ad_manager_decisions TO twitchbot;
+        GRANT USAGE, SELECT ON SEQUENCE public.twitch_ad_manager_decisions_id_seq TO twitchbot;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchdash') THEN
+        GRANT SELECT ON public.twitch_ad_manager_decisions TO twitchdash;
+    END IF;
+END $$;

@@ -70,3 +70,5 @@ pub mod system_health;
 pub mod system_oauth_scopes;
 pub mod telemetry_routes;
 pub mod trial;
+
+pub mod category;

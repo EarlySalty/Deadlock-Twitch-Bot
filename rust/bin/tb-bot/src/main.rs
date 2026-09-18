@@ -58,6 +58,7 @@ mod ad_manager_wiring;
 mod auto_raid;
 mod chat_typen_wiring;
 mod chat_wiring;
+mod category_followers;
 mod chatters_wiring;
 mod confirm_resolver;
 mod crew_archive;
@@ -881,6 +882,9 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
+    if let (Some(client), Some(manager)) = (helix.as_ref().clone(), chatters_bot_token_manager.clone()) {
+        supervisor.spawn("category_public_followers", crate::category_followers::run(pool.clone(), client, manager));
+    }
     let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone());
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
         chat_api_handle.as_ref().map(|h| {
@@ -905,7 +909,7 @@ async fn main() {
                 ));
             Arc::new(
                 raid_greeting::RaidGreetingMonitor::new(
-                    h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
+                    h.raid_api(),
                     probe,
                 )
                 .with_live_probe(live_probe)
