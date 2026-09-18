@@ -89,25 +89,29 @@ fn budgetgrenzen_werden_geprueft() {
 
 #[test]
 fn planer_verteilt_budget_und_waehlt_blocklaenge() {
-    let three = plan_next_block(now(), Some(now() - Duration::hours(1)), 3, 0, None, 480, 8);
+    let start = now() - Duration::hours(1);
+    let three = plan_next_block(now(), Some(start), 3, 0, None, 480);
     assert_eq!(three.block_seconds, 30);
     assert_eq!(three.blocks_per_hour, 6);
 
-    // Dichtes Budget passt nicht in 30-Sekunden-Blöcke mit der Sperrzeit.
-    let eight = plan_next_block(now(), Some(now() - Duration::hours(1)), 8, 0, None, 480, 8);
-    assert_eq!(eight.block_seconds, 60);
-    assert_eq!(eight.blocks_per_hour, 8);
-
-    // Budget ausgeschöpft: kein weiterer Block in dieser Stunde.
-    let spent = plan_next_block(
-        now(),
-        Some(now() - Duration::hours(1)),
-        3,
-        180,
-        None,
-        480,
-        8,
+    let last = now() - Duration::minutes(10);
+    let three_next = plan_next_block(now(), Some(start), 3, 0, Some(last), 480);
+    assert_eq!(
+        three_next.next_block_at,
+        Some(last + Duration::seconds(600))
     );
+
+    let eight = plan_next_block(now(), Some(start), 8, 0, None, 480);
+    assert_eq!(eight.block_seconds, 60);
+    assert_eq!(eight.blocks_per_hour, 7);
+
+    let eight_next = plan_next_block(now(), Some(start), 8, 0, Some(last), 480);
+    assert_eq!(
+        eight_next.next_block_at,
+        Some(last + Duration::seconds(480))
+    );
+
+    let spent = plan_next_block(now(), Some(start), 3, 180, None, 480);
     assert!(spent.next_block_at.is_none());
 }
 

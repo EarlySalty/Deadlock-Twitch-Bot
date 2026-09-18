@@ -406,21 +406,16 @@ pub fn plan_next_block(
     budget_used_seconds_this_hour: i32,
     last_block_at: Option<DateTime<Utc>>,
     retry_after_seconds: i32,
-    min_interval_minutes: i32,
 ) -> AdPlan {
     let budget_seconds = budget_minutes_per_hour.clamp(1, 8) * 60;
-    let floor = retry_after_seconds
-        .max(1)
-        .max(min_interval_minutes.max(0) * 60);
+    let retry = retry_after_seconds.max(1);
 
     let count_30 = (budget_seconds / 30).max(1);
     let period_30 = 3600 / count_30;
-    let (block_seconds, blocks_per_hour) = if period_30 >= floor {
-        (30, count_30)
-    } else {
-        (60, (budget_seconds / 60).max(1))
-    };
-    let period = (3600 / blocks_per_hour).max(floor);
+    let block_seconds = if period_30 >= retry { 30 } else { 60 };
+    let desired_blocks = (budget_seconds / block_seconds).max(1);
+    let period = (3600 / desired_blocks).max(retry);
+    let blocks_per_hour = (3600 / period).max(1);
 
     let next_block_at = if budget_used_seconds_this_hour >= budget_seconds {
         None

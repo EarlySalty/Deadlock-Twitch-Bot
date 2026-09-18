@@ -294,7 +294,6 @@ async fn process_channel(
                 budget_used,
                 last_block_at,
                 retry_after_seconds,
-                channel.settings.min_interval_minutes,
             );
             plan_for_status = Some(plan);
             let (last_raid_at, last_raider) =
