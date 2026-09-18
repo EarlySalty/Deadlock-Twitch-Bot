@@ -466,6 +466,7 @@ const AD_MANAGER_FIXTURE: AdManagerResponse = {
     startupDelayMinutes: 20,
     quietWindowMinutes: 5,
     actionLeadSeconds: 60,
+    chatNoticeBeforeAd: true,
     updatedAt: '2026-04-22T09:24:00Z',
   },
   status: {
