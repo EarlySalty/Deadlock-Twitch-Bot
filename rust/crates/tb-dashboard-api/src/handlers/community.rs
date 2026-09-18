@@ -131,7 +131,7 @@ async fn enrich(members: &[Member]) -> HashMap<String,PlayerProfile> {
 
 pub async fn get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(params): Query<Params>) -> Response {
     let login=match subject(&auth,params.streamer.as_deref()) { Ok(login)=>login,Err(resp)=>return resp };
-    let days=match parse_bounded_query_int(params.days.as_deref(),"days",56,7,90) { Ok(days)=>days,Err(resp)=>return resp.into_response() };
+    let days=match parse_bounded_query_int(params.days.as_deref(),"days",56,7,crate::query_int::MAX_ANALYTICS_DAYS) { Ok(days)=>days,Err(resp)=>return resp.into_response() };
     let now=Utc::now(); let since=now-Duration::days(days);
     let loaded=tokio::time::timeout(std::time::Duration::from_secs(5),async {
         let members=load_members(&pool).await?;

@@ -2,7 +2,7 @@
 //!
 //! Port von `bot/analytics/api_insights.py:_api_v2_coaching`.
 //! Auth + Extended-Plan-Gate, `streamer` (Pflicht, Original-Case wird echot),
-//! `days` (7..365, Default 30). Lädt die volle regelbasierte Coaching-Engine
+//! `days` (7..3650, Default 30). Lädt die volle regelbasierte Coaching-Engine
 //! ([`tb_analytics::coaching::get_coaching_data`]).
 
 use axum::{
@@ -40,7 +40,7 @@ pub async fn coaching_handler(
     }
     // days VOR der streamer-Pflichtprüfung (Python-Reihenfolge in _api_v2_coaching:
     // erst _parse_bounded_query_int → 400, dann streamer-Check).
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

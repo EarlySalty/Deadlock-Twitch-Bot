@@ -619,7 +619,7 @@ pub async fn get_handler(
     Query(query): Query<InternalHomeQuery>,
     avatar_cache: Option<Extension<AvatarCache>>,
 ) -> Response {
-    // days parsen + clamp 1..=365 (api_v2.py:2015-2020)
+    // days parsen + clamp 1..=3650
     let days = query
         .days
         .as_deref()
@@ -627,7 +627,7 @@ pub async fn get_handler(
         .filter(|s| !s.is_empty())
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(DEFAULT_DAYS)
-        .clamp(1, 365);
+        .clamp(1, 3650);
 
     let identity = match resolve_identity(&auth, &query.streamer) {
         Ok(id) => id,

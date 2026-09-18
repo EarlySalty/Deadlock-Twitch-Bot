@@ -11,6 +11,7 @@ import { RaidRetention } from '@/components/charts/RaidRetention';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import { formatNumber, formatPercent, formatDate } from '@/utils/formatters';
+import { analyticsMonthsForDays } from '@/utils/zeitraum';
 import type { MonthlyStats, TimeRange, IncomingRaid } from '@/types/analytics';
 
 interface GrowthProps {
@@ -19,9 +20,10 @@ interface GrowthProps {
 }
 
 export function Growth({ streamer, days }: GrowthProps) {
+  const months = analyticsMonthsForDays(days);
   const { data: monthlyData, isLoading: loadingMonthly } = useQuery<MonthlyStats[]>({
-    queryKey: ['monthlyStats', streamer, 12],
-    queryFn: () => fetchMonthlyStats(streamer, 12),
+    queryKey: ['monthlyStats', streamer, months],
+    queryFn: () => fetchMonthlyStats(streamer, months),
     enabled: true,
   });
 
@@ -112,7 +114,7 @@ export function Growth({ streamer, days }: GrowthProps) {
       >
         <div className="flex items-center gap-3 mb-6">
           <TrendingUp className="w-6 h-6 text-primary" />
-          <h2 className="text-xl font-bold text-white">Wachstumstrend (12 Monate)</h2>
+          <h2 className="text-xl font-bold text-white">Wachstumstrend ({months} Monate)</h2>
         </div>
 
         <div className="h-[300px]">

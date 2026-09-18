@@ -64,6 +64,7 @@ mod confirm_resolver;
 mod crew_archive;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
+mod flip_unraid;
 mod irc_lurker_wiring;
 mod mcp;
 mod oauth_followups;
@@ -877,6 +878,8 @@ async fn main() {
         chat_api_handle.as_ref().map(|h| h.api());
     let scam_enforce_api: Option<Arc<dyn tb_chat::ChatApi>> =
         chat_api_handle.as_ref().map(|h| h.api());
+    let ad_manager_chat_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api());
     // BotTokenManager-Clone für den Chatters-Poller (#11): bot_token/-user_id/
     // -login + Scope-Check für den Helix-`GET /chat/chatters`-Call. Früh gezogen,
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
@@ -1276,6 +1279,15 @@ async fn main() {
                 });
             }
 
+            let flip_unraid = Arc::new(flip_unraid::FlipUnraidHandler::new(
+                pending.clone(),
+                suppression.clone(),
+                Arc::new(flip_unraid::HelixSourceRaidCanceller::new(
+                    token_provider.clone(),
+                    helix_client.clone(),
+                )),
+                chat_api_handle.as_ref().map(|h| h.api()),
+            ));
             let arrival = RaidArrivalCoordinator::new(
                 pool.clone(),
                 pending,
@@ -1312,6 +1324,7 @@ async fn main() {
                 side_effects: OfflineSideEffects::new(pool.clone()),
                 arrival,
                 guard: blacklist_guard,
+                flip_unraid,
                 outgoing_raid: OutgoingRaidObserver::new(
                     suppression.clone(),
                     raid_greeting_monitor.as_ref().map(|monitor| {
@@ -1617,6 +1630,7 @@ async fn main() {
                 helix_client,
                 token_provider,
                 raid_auth,
+                ad_manager_chat_api.clone(),
             ),
             None => tracing::error!(
                 "Werbemanager wurde nicht gestartet: Broadcaster-Tokenzugriff fehlt"

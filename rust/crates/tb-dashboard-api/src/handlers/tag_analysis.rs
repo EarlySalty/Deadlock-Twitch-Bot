@@ -2,7 +2,7 @@
 //!
 //! Port von `bot/analytics/api_performance.py:_api_v2_tag_analysis_extended`.
 //! Auth + Extended-Plan-Gate, `streamer` (optional → ohne Filter über alle),
-//! `days` (7..365, Default 30), `limit` (5..50, Default 20).
+//! `days` (7..3650, Default 30), `limit` (5..50, Default 20).
 
 use axum::{
     extract::{Query, State},
@@ -49,7 +49,7 @@ pub async fn tag_analysis_extended_handler(
             Err(resp) => return resp,
         };
     let streamer = owned_streamer.as_deref();
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

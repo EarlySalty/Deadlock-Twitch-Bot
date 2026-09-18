@@ -40,6 +40,7 @@ pub mod courtesy_store;
 pub mod deadlock_pause;
 pub mod eligibility;
 pub mod external_recruitment_store;
+pub mod flip_unraid;
 pub mod manual_suppression;
 pub mod oauth_flow;
 pub mod offline_eligibility;
@@ -109,6 +110,10 @@ pub use external_recruitment_store::{
     decide_blacklist_action, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
     DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,
     EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
+};
+pub use flip_unraid::{
+    pending_within_flip_window, FlipOutcome, FlipRepeatTracker, FLIP_PAUSE_DEFAULT_SECS,
+    FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS,
 };
 pub use manual_suppression::ManualRaidSuppression;
 pub use oauth_flow::{

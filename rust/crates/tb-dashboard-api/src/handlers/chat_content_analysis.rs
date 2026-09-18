@@ -1,7 +1,7 @@
 //! Handler für `/twitch/api/v2/chat-content-analysis`.
 //!
 //! Port von `bot/analytics/api_chat_deep.py:_api_v2_chat_content_analysis`.
-//! Auth + Extended-Plan-Gate, `streamer` (Pflicht), `days` (1..365, Default 30).
+//! Auth + Extended-Plan-Gate, `streamer` (Pflicht), `days` (1..3650, Default 30).
 
 use axum::{
     extract::{Query, State},
@@ -46,7 +46,7 @@ pub async fn chat_content_analysis_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(1, 3650) as i64;
 
     match tb_analytics::chat_content_analysis::load_chat_content_analysis_payload(
         &pool, &streamer, days,

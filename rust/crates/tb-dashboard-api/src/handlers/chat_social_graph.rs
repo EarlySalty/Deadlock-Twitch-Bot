@@ -1,7 +1,7 @@
 //! Handler für `/twitch/api/v2/chat-social-graph`.
 //!
 //! Port von `bot/analytics/api_chat_deep.py:_api_v2_chat_social_graph`.
-//! Auth + Extended-Plan-Gate, `streamer` (Pflicht), `days` (1..365, Default 30).
+//! Auth + Extended-Plan-Gate, `streamer` (Pflicht), `days` (1..3650, Default 30).
 
 use axum::{
     extract::{Query, State},
@@ -47,7 +47,7 @@ pub async fn chat_social_graph_handler(
             Err(resp) => return resp,
         };
     // Python: int(days, default 30) → min(365, max(1, days)).
-    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(1, 3650) as i64;
 
     match tb_analytics::chat_social_graph::load_chat_social_graph_payload(&pool, &streamer, days)
         .await

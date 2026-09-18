@@ -62,7 +62,7 @@ pub async fn title_performance_handler(
     }
 
     // days/limit VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_title_performance).
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

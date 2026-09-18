@@ -235,7 +235,7 @@ pub async fn raid_retention_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(90).clamp(7, 365);
+    let days = params.days.unwrap_or(90).clamp(7, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
     let base_rows = sqlx::query!(
@@ -440,7 +440,7 @@ pub async fn raid_analytics_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(7, 365);
+    let days = params.days.unwrap_or(30).clamp(7, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
