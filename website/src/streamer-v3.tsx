@@ -23,12 +23,3 @@ if (typeof window !== 'undefined') {
     )
   }
 }
-
-export async function prerender() {
-  const { renderToString } = await import('react-dom/server')
-  return renderToString(
-    <StrictMode>
-      <StreamerNetworkV3Page />
-    </StrictMode>,
-  )
-}
