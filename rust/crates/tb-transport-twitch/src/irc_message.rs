@@ -39,14 +39,22 @@ pub fn parse_privmsg(line: &str) -> Option<ParsedPrivmsg> {
     })
 }
 
-
 fn unescape_tag(value: &str) -> String {
     let mut result = String::with_capacity(value.len());
     let mut chars = value.chars();
     while let Some(ch) = chars.next() {
-        if ch != '\\' { result.push(ch); continue; }
+        if ch != '\\' {
+            result.push(ch);
+            continue;
+        }
         if let Some(escaped) = chars.next() {
-            result.push(match escaped { ':' => ';', 's' => ' ', 'r' => '\r', 'n' => '\n', other => other });
+            result.push(match escaped {
+                ':' => ';',
+                's' => ' ',
+                'r' => '\r',
+                'n' => '\n',
+                other => other,
+            });
         }
     }
     result
@@ -56,7 +64,9 @@ mod tests {
     use super::*;
     #[test]
     fn tags_are_unescaped_without_changing_message_content() {
-        let msg = parse_privmsg(r"@display-name=A\sB;badges=mod/1 :x!x@x PRIVMSG #room :hello \s world").unwrap();
+        let msg =
+            parse_privmsg(r"@display-name=A\sB;badges=mod/1 :x!x@x PRIVMSG #room :hello \s world")
+                .unwrap();
         assert_eq!(msg.tags["display-name"], "A B");
         assert_eq!(msg.text, r"hello \s world");
     }

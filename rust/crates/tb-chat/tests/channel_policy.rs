@@ -290,13 +290,29 @@ async fn partner_writes_and_reads_are_forwarded() {
 #[tokio::test]
 async fn raid_context_requires_authorized_partner_for_every_write() {
     let inner = Arc::new(RecordingApi::default());
-    let api = ChannelPolicyChatApi::new(inner.clone(), PolicyContext::Raid(Arc::new(StaticRoster { partner: false })));
+    let api = ChannelPolicyChatApi::new(
+        inner.clone(),
+        PolicyContext::Raid(Arc::new(StaticRoster { partner: false })),
+    );
     assert_denied(api.send_message("outsider", "hello").await, &inner);
     assert_denied(api.send_whisper("outsider", "hello").await, &inner);
     assert_denied(api.ban_user("outsider", "target", "reason").await, &inner);
-    let allowed = ChannelPolicyChatApi::new(inner.clone(), PolicyContext::Raid(Arc::new(StaticRoster { partner: true })));
-    assert_eq!(allowed.send_message("partner", "hello").await, Ok(SendOutcome::Sent));
+    let allowed = ChannelPolicyChatApi::new(
+        inner.clone(),
+        PolicyContext::Raid(Arc::new(StaticRoster { partner: true })),
+    );
+    assert_eq!(
+        allowed.send_message("partner", "hello").await,
+        Ok(SendOutcome::Sent)
+    );
     assert_eq!(allowed.send_whisper("partner", "hello").await, Ok(true));
-    assert_eq!(allowed.ban_user("partner", "target", "reason").await.err().as_deref(), Some("channel_policy_denied"));
+    assert_eq!(
+        allowed
+            .ban_user("partner", "target", "reason")
+            .await
+            .err()
+            .as_deref(),
+        Some("channel_policy_denied")
+    );
     assert_eq!(inner.calls(), vec!["send_message", "send_whisper"]);
 }

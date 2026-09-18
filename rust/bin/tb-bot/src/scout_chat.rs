@@ -1,13 +1,15 @@
 //! Scout adapter for the shared, anonymous read-only IRC transport.
-use std::sync::Arc;
+use crate::task_supervisor::TaskSupervisor;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tb_chat::types::ChatMessageBody;
 use tb_chat::{ChatMessageEvent, ChatterTracker, CrewGuard};
 use tb_engagement::irc_message::parse_privmsg;
-use tb_monitoring::{scout::ScoutChatSink, anonymous_chat::AnonymousChat};
-use crate::task_supervisor::TaskSupervisor;
+use tb_monitoring::{anonymous_chat::AnonymousChat, scout::ScoutChatSink};
 
-pub struct ScoutChatAdapter { membership: AnonymousChat }
+pub struct ScoutChatAdapter {
+    membership: AnonymousChat,
+}
 impl ScoutChatAdapter {
     pub fn new(pool: PgPool, crew_guard: Arc<CrewGuard>, supervisor: &TaskSupervisor) -> Self {
         Self::start(pool, Some(crew_guard), supervisor)
@@ -28,11 +30,21 @@ impl ScoutChatAdapter {
 }
 #[async_trait::async_trait]
 impl ScoutChatSink for ScoutChatAdapter {
-    async fn set_monitored_channels(&self, logins: &[String]) { self.membership.set_channels(logins); }
-    async fn join_channels(&self, logins: &[String]) { self.membership.join_channels(logins); }
-    async fn part_channels(&self, logins: &[String]) { self.membership.part_channels(logins); }
-    fn is_monitored_only(&self, _login: &str) -> bool { true }
-    fn is_subscription_ready(&self, _login: &str) -> bool { true }
+    async fn set_monitored_channels(&self, logins: &[String]) {
+        self.membership.set_channels(logins);
+    }
+    async fn join_channels(&self, logins: &[String]) {
+        self.membership.join_channels(logins);
+    }
+    async fn part_channels(&self, logins: &[String]) {
+        self.membership.part_channels(logins);
+    }
+    fn is_monitored_only(&self, _login: &str) -> bool {
+        true
+    }
+    fn is_subscription_ready(&self, _login: &str) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -194,7 +206,10 @@ mod tests {
 
     #[test]
     fn shared_transport_rejects_command_injection() {
-        assert!(tb_monitoring::anonymous_chat::normalize_channels(&["x\r\nPRIVMSG #y :z".into()]).is_empty());
+        assert!(
+            tb_monitoring::anonymous_chat::normalize_channels(&["x\r\nPRIVMSG #y :z".into()])
+                .is_empty()
+        );
     }
 
     #[tokio::test]

@@ -35,7 +35,19 @@ export function CategoryCollector() {
   });
   const data = query.data;
   const totals = useMemo(() => data?.languages.reduce((sum, row) => ({ hours: sum.hours + (row.airtime_hours ?? 0), messages: sum.messages + row.messages, viewerHours: sum.viewerHours + (row.viewer_hours ?? 0) }), { hours: 0, messages: 0, viewerHours: 0 }), [data]);
-  const chart = useMemo(() => data?.trend.map(row => ({ ...row, label: new Date(row.at).toLocaleString('de-DE', { timeZone: 'UTC', month: '2-digit', day: '2-digit', hour: '2-digit' }) })) ?? [], [data]);
+  const chart = useMemo(() => {
+    const rows: Array<{ at: string; streams: number | null; viewers: number | null; label: string }> = [];
+    let previous: number | null = null;
+    for (const row of data?.trend ?? []) {
+      const timestamp = new Date(row.at).getTime();
+      if (previous !== null && timestamp - previous > 3_600_000) {
+        rows.push({ at: new Date(previous + 3_600_000).toISOString(), streams: null, viewers: null, label: 'Messlücke' });
+      }
+      rows.push({ ...row, label: new Date(row.at).toLocaleString('de-DE', { timeZone: 'UTC', month: '2-digit', day: '2-digit', hour: '2-digit' }) });
+      previous = timestamp;
+    }
+    return rows;
+  }, [data]);
   const hourly = useMemo(() => Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, messages: data?.hourly.filter(row => row.hour === hour && (language === 'all' || row.language === language)).reduce((sum, row) => sum + row.messages, 0) ?? 0 })), [data, language]);
   const stale = !data?.heartbeat_at || Date.now() - new Date(data.heartbeat_at).getTime() > 120_000;
   const status = data?.status;

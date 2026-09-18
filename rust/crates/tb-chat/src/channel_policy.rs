@@ -34,7 +34,9 @@ impl ChannelPolicyChatApi {
     ) -> Result<(), String> {
         let allowed = match &self.context {
             PolicyContext::Standard(roster) => roster.is_operational_partner_channel(channel).await,
-            PolicyContext::Raid(roster) => action.allowed_for_raid() && roster.is_operational_partner_channel(channel).await,
+            PolicyContext::Raid(roster) => {
+                action.allowed_for_raid() && roster.is_operational_partner_channel(channel).await
+            }
         };
         if allowed {
             return Ok(());

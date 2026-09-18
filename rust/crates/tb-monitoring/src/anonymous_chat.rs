@@ -2,9 +2,25 @@
 //! No token, ChatApi, arbitrary write method, or moderation hook is accepted.
 //! Membership is incremental; existing channels retain their shard assignment.
 
-use std::{collections::BTreeSet, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
 use chrono::{DateTime, Utc};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}}, sync::{mpsc, watch, Mutex}, task::JoinSet, time::Instant};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
+    },
+    sync::{mpsc, watch, Mutex},
+    task::JoinSet,
+    time::Instant,
+};
 
 const JOIN_SPACING: Duration = Duration::from_millis(600);
 const BACKOFF: Duration = Duration::from_secs(30);
@@ -54,18 +70,25 @@ impl AnonymousChat {
 
     pub fn part_channels(&self, channels: &[String]) {
         let removed = normalize_channels(channels);
-        self.roster.send_modify(|roster| roster.retain(|c| !removed.contains(c)));
+        self.roster
+            .send_modify(|roster| roster.retain(|c| !removed.contains(c)));
     }
 }
 
 pub fn valid_channel(channel: &str) -> bool {
-    !channel.is_empty() && channel.len() <= 25
-        && channel.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    !channel.is_empty()
+        && channel.len() <= 25
+        && channel
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
 pub fn normalize_channels(channels: &[String]) -> Vec<String> {
-    let mut result: Vec<_> = channels.iter().map(|c| c.trim().trim_start_matches('#').to_ascii_lowercase())
-        .filter(|c| valid_channel(c)).collect();
+    let mut result: Vec<_> = channels
+        .iter()
+        .map(|c| c.trim().trim_start_matches('#').to_ascii_lowercase())
+        .filter(|c| valid_channel(c))
+        .collect();
     result.sort_unstable();
     result.dedup();
     result
@@ -75,8 +98,16 @@ pub fn normalize_channels(channels: &[String]) -> Vec<String> {
 /// not PART/JOIN the rest of the category.
 pub fn stable_shards(previous: &[Vec<String>], wanted: &[String]) -> Vec<Vec<String>> {
     let mut remaining: BTreeSet<_> = normalize_channels(wanted).into_iter().collect();
-    let mut shards: Vec<Vec<String>> = previous.iter().map(|shard| shard.iter()
-        .filter(|c| remaining.remove(*c)).cloned().collect()).collect();
+    let mut shards: Vec<Vec<String>> = previous
+        .iter()
+        .map(|shard| {
+            shard
+                .iter()
+                .filter(|c| remaining.remove(*c))
+                .cloned()
+                .collect()
+        })
+        .collect();
     for channel in remaining {
         if let Some(shard) = shards.iter_mut().find(|s| s.len() < MAX_CHANNELS_PER_SHARD) {
             shard.push(channel);
@@ -85,7 +116,9 @@ pub fn stable_shards(previous: &[Vec<String>], wanted: &[String]) -> Vec<Vec<Str
         }
     }
     // Keep internal empty shards to retain indices; trailing empty connections close.
-    while shards.last().is_some_and(Vec::is_empty) { shards.pop(); }
+    while shards.last().is_some_and(Vec::is_empty) {
+        shards.pop();
+    }
     shards
 }
 
@@ -94,7 +127,11 @@ pub fn anonymous_nick(shard: usize) -> String {
     format!("justinfan{}{:04}", std::process::id(), shard)
 }
 
-async fn coordinate(mut roster: watch::Receiver<Vec<String>>, events: mpsc::Sender<ReadEvent>, stats: Arc<ReadStats>) {
+async fn coordinate(
+    mut roster: watch::Receiver<Vec<String>>,
+    events: mpsc::Sender<ReadEvent>,
+    stats: Arc<ReadStats>,
+) {
     let limiter = Arc::new(Mutex::new(Instant::now()));
     let mut tasks = JoinSet::new();
     let mut assignments = Vec::new();
@@ -126,13 +163,23 @@ async fn coordinate(mut roster: watch::Receiver<Vec<String>>, events: mpsc::Send
     tasks.abort_all();
 }
 
-async fn run_shard(index: usize, mut roster: watch::Receiver<Vec<String>>, events: mpsc::Sender<ReadEvent>, stats: Arc<ReadStats>, limiter: Arc<Mutex<Instant>>) {
+async fn run_shard(
+    index: usize,
+    mut roster: watch::Receiver<Vec<String>>,
+    events: mpsc::Sender<ReadEvent>,
+    stats: Arc<ReadStats>,
+    limiter: Arc<Mutex<Instant>>,
+) {
     let mut attempted = false;
     loop {
         while roster.borrow().is_empty() {
-            if roster.changed().await.is_err() { return; }
+            if roster.changed().await.is_err() {
+                return;
+            }
         }
-        if attempted { stats.reconnects.fetch_add(1, Ordering::Relaxed); }
+        if attempted {
+            stats.reconnects.fetch_add(1, Ordering::Relaxed);
+        }
         attempted = true;
         if let Some((reader, writer)) = connect(&anonymous_nick(index)).await {
             serve(reader, writer, &mut roster, &events, &stats, &limiter).await;
@@ -151,32 +198,63 @@ async fn run_shard(index: usize, mut roster: watch::Receiver<Vec<String>>, event
 }
 
 fn handshake(nick: &str) -> Option<[String; 2]> {
-    if !nick.starts_with("justinfan") || !nick[9..].bytes().all(|b| b.is_ascii_digit()) || nick.len() <= 9 { return None; }
-    Some([format!("NICK {nick}\r\n"), "CAP REQ :twitch.tv/tags twitch.tv/commands\r\n".into()])
+    if !nick.starts_with("justinfan")
+        || !nick[9..].bytes().all(|b| b.is_ascii_digit())
+        || nick.len() <= 9
+    {
+        return None;
+    }
+    Some([
+        format!("NICK {nick}\r\n"),
+        "CAP REQ :twitch.tv/tags twitch.tv/commands\r\n".into(),
+    ])
 }
 
 async fn connect(nick: &str) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
-    let stream = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(("irc.chat.twitch.tv", 6667))).await.ok()?.ok()?;
+    let stream = tokio::time::timeout(
+        Duration::from_secs(10),
+        TcpStream::connect(("irc.chat.twitch.tv", 6667)),
+    )
+    .await
+    .ok()?
+    .ok()?;
     let (read, mut write) = stream.into_split();
     for command in handshake(nick)? {
-        tokio::time::timeout(Duration::from_secs(5), write.write_all(command.as_bytes())).await.ok()?.ok()?;
+        tokio::time::timeout(Duration::from_secs(5), write.write_all(command.as_bytes()))
+            .await
+            .ok()?
+            .ok()?;
     }
     let mut reader = BufReader::new(read);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let mut line = String::new();
-        let n = tokio::time::timeout_at(deadline, reader.read_line(&mut line)).await.ok()?.ok()?;
-        if n == 0 || line.len() > 16_384 { return None; }
-        if line.starts_with(":tmi.twitch.tv 001") { return Some((reader, write)); }
-        if line.starts_with("PING ") && !pong(&mut write, line.trim_end()).await { return None; }
+        let n = tokio::time::timeout_at(deadline, reader.read_line(&mut line))
+            .await
+            .ok()?
+            .ok()?;
+        if n == 0 || line.len() > 16_384 {
+            return None;
+        }
+        if line.starts_with(":tmi.twitch.tv 001") {
+            return Some((reader, write));
+        }
+        if line.starts_with("PING ") && !pong(&mut write, line.trim_end()).await {
+            return None;
+        }
     }
 }
 
-struct ConnectedGauge<'a> { stats: &'a ReadStats, confirmed: BTreeSet<String> }
+struct ConnectedGauge<'a> {
+    stats: &'a ReadStats,
+    confirmed: BTreeSet<String>,
+}
 impl Drop for ConnectedGauge<'_> {
     fn drop(&mut self) {
         self.stats.connected_shards.fetch_sub(1, Ordering::Relaxed);
-        self.stats.confirmed_channels.fetch_sub(self.confirmed.len() as u64, Ordering::Relaxed);
+        self.stats
+            .confirmed_channels
+            .fetch_sub(self.confirmed.len() as u64, Ordering::Relaxed);
     }
 }
 
@@ -186,9 +264,19 @@ async fn join_slot(limiter: &Mutex<Instant>) {
     *next = Instant::now() + JOIN_SPACING;
 }
 
-async fn serve(reader: BufReader<OwnedReadHalf>, mut writer: OwnedWriteHalf, roster: &mut watch::Receiver<Vec<String>>, events: &mpsc::Sender<ReadEvent>, stats: &ReadStats, limiter: &Mutex<Instant>) {
+async fn serve(
+    reader: BufReader<OwnedReadHalf>,
+    mut writer: OwnedWriteHalf,
+    roster: &mut watch::Receiver<Vec<String>>,
+    events: &mpsc::Sender<ReadEvent>,
+    stats: &ReadStats,
+    limiter: &Mutex<Instant>,
+) {
     stats.connected_shards.fetch_add(1, Ordering::Relaxed);
-    let mut gauge = ConnectedGauge { stats, confirmed: BTreeSet::new() };
+    let mut gauge = ConnectedGauge {
+        stats,
+        confirmed: BTreeSet::new(),
+    };
     let mut desired: BTreeSet<String> = roster.borrow_and_update().iter().cloned().collect();
     let mut joined = BTreeSet::new();
     let mut lines = reader.lines(); // next_line is cancellation-safe inside select.
@@ -239,25 +327,51 @@ async fn serve(reader: BufReader<OwnedReadHalf>, mut writer: OwnedWriteHalf, ros
 }
 
 pub fn command_channel(line: &str) -> Option<(&str, &str)> {
-    let rest = if line.starts_with('@') { line.split_once(' ')?.1 } else { line };
-    let rest = if rest.starts_with(':') { rest.split_once(' ')?.1 } else { rest };
+    let rest = if line.starts_with('@') {
+        line.split_once(' ')?.1
+    } else {
+        line
+    };
+    let rest = if rest.starts_with(':') {
+        rest.split_once(' ')?.1
+    } else {
+        rest
+    };
     let mut words = rest.split_whitespace();
     let verb = words.next()?;
-    if verb == "RECONNECT" { return Some((verb, "")); }
+    if verb == "RECONNECT" {
+        return Some((verb, ""));
+    }
     let channel = words.next()?.strip_prefix('#')?;
     valid_channel(channel).then_some((verb, channel))
 }
 
 async fn membership(writer: &mut OwnedWriteHalf, join: bool, channel: &str) -> bool {
-    if !valid_channel(channel) { return false; }
+    if !valid_channel(channel) {
+        return false;
+    }
     let verb = if join { "JOIN" } else { "PART" };
-    tokio::time::timeout(Duration::from_secs(5), writer.write_all(format!("{verb} #{channel}\r\n").as_bytes())).await.is_ok_and(|r| r.is_ok())
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        writer.write_all(format!("{verb} #{channel}\r\n").as_bytes()),
+    )
+    .await
+    .is_ok_and(|r| r.is_ok())
 }
 
 async fn pong(writer: &mut OwnedWriteHalf, ping: &str) -> bool {
-    let Some(payload) = ping.strip_prefix("PING ") else { return false; };
-    if payload.contains(['\r', '\n']) { return false; }
-    tokio::time::timeout(Duration::from_secs(5), writer.write_all(format!("PONG {payload}\r\n").as_bytes())).await.is_ok_and(|r| r.is_ok())
+    let Some(payload) = ping.strip_prefix("PING ") else {
+        return false;
+    };
+    if payload.contains(['\r', '\n']) {
+        return false;
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        writer.write_all(format!("PONG {payload}\r\n").as_bytes()),
+    )
+    .await
+    .is_ok_and(|r| r.is_ok())
 }
 
 #[cfg(test)]
@@ -268,8 +382,16 @@ mod tests {
         assert!(handshake("real_bot").is_none());
         assert!(handshake("justinfan1\r\nPRIVMSG #x :bad").is_none());
         let commands = handshake(&anonymous_nick(1)).unwrap().join("");
-        for forbidden in ["PASS", "oauth:", "PRIVMSG", "WHISPER"] { assert!(!commands.contains(forbidden)); }
-        assert!(normalize_channels(&["#Good_name".into(), "bad\r\nJOIN #evil".into(), "élise".into()]) == ["good_name"]);
+        for forbidden in ["PASS", "oauth:", "PRIVMSG", "WHISPER"] {
+            assert!(!commands.contains(forbidden));
+        }
+        assert!(
+            normalize_channels(&[
+                "#Good_name".into(),
+                "bad\r\nJOIN #evil".into(),
+                "élise".into()
+            ]) == ["good_name"]
+        );
     }
     #[test]
     fn category_churn_preserves_shards_and_has_no_loss() {
@@ -287,13 +409,21 @@ mod tests {
     }
     #[test]
     fn read_events_include_deletions_but_not_fake_commands_in_text() {
-        assert_eq!(command_channel("@room-id=1 :tmi.twitch.tv CLEARCHAT #test :user"), Some(("CLEARCHAT", "test")));
-        assert_eq!(command_channel(":x!x@x PRIVMSG #test :RECONNECT #evil"), Some(("PRIVMSG", "test")));
+        assert_eq!(
+            command_channel("@room-id=1 :tmi.twitch.tv CLEARCHAT #test :user"),
+            Some(("CLEARCHAT", "test"))
+        );
+        assert_eq!(
+            command_channel(":x!x@x PRIVMSG #test :RECONNECT #evil"),
+            Some(("PRIVMSG", "test"))
+        );
     }
     #[tokio::test]
     async fn socket_transport_only_sends_membership_and_pong() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
         let (server, _) = listener.accept().await.unwrap();
         let (read, write) = client.into_split();
         let (server_read, mut server_write) = server.into_split();
@@ -303,16 +433,36 @@ mod tests {
         let stats = Arc::new(ReadStats::default());
         let task_stats = stats.clone();
         let task = tokio::spawn(async move {
-            serve(BufReader::new(read), write, &mut desired, &events, &task_stats, &Mutex::new(Instant::now())).await;
+            serve(
+                BufReader::new(read),
+                write,
+                &mut desired,
+                &events,
+                &task_stats,
+                &Mutex::new(Instant::now()),
+            )
+            .await;
         });
-        assert_eq!(commands.next_line().await.unwrap().as_deref(), Some("JOIN #safe"));
+        assert_eq!(
+            commands.next_line().await.unwrap().as_deref(),
+            Some("JOIN #safe")
+        );
         server_write.write_all(b"@room-id=1 :tmi.twitch.tv ROOMSTATE #safe\r\n@room-id=1;user-id=2;id=test :user!u@u PRIVMSG #safe :please send a message\r\nPING :tmi.twitch.tv\r\n").await.unwrap();
-        let event = tokio::time::timeout(Duration::from_secs(2), received.recv()).await.unwrap().unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(2), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(event.channel, "safe");
-        assert_eq!(commands.next_line().await.unwrap().as_deref(), Some("PONG :tmi.twitch.tv"));
+        assert_eq!(
+            commands.next_line().await.unwrap().as_deref(),
+            Some("PONG :tmi.twitch.tv")
+        );
         assert_eq!(stats.confirmed_channels.load(Ordering::Relaxed), 1);
         roster.send_replace(Vec::new());
-        assert_eq!(commands.next_line().await.unwrap().as_deref(), Some("PART #safe"));
+        assert_eq!(
+            commands.next_line().await.unwrap().as_deref(),
+            Some("PART #safe")
+        );
         task.await.unwrap();
         assert_eq!(stats.connected_shards.load(Ordering::Relaxed), 0);
         assert_eq!(stats.confirmed_channels.load(Ordering::Relaxed), 0);
