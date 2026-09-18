@@ -55,13 +55,14 @@ use crate::fun_responses::FunResponses;
 use crate::global_chatter_ban::GlobalChatterBanEnforcer;
 use crate::invite_question::InviteQuestionResponder;
 use crate::lfg_pitch::LfgPitchResponder;
-use crate::mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
+use crate::mention_scoring::{score_mention_patterns, MentionResolver};
 use crate::moderation::{
     AutoBanRequest, ModerationEngine, ModerationEvidence, BAN_REASON_GLOBAL, BAN_REASON_SPAM,
     NOTICE_GLOBAL_BAN,
 };
 use crate::moderation_settings::ModerationSettingsCache;
 use crate::promos::PromoEngine;
+use crate::reaction_guard::ReactionGuard;
 use crate::scam_pitch::{
     AccountAgePort, AiReviewOutcome, PitchDecision, ScamPitchDetector, SpamAiReviewer,
 };
@@ -750,6 +751,7 @@ pub struct ChatPipeline {
     /// Zuletzt verarbeitete Nachrichten-IDs (nach Shared-Chat-Normalisierung).
     seen_messages: Arc<SeenMessages>,
     moderation_settings: Arc<ModerationSettingsCache>,
+    reaction_guard: Arc<ReactionGuard>,
 }
 
 impl ChatPipeline {
@@ -764,7 +766,9 @@ impl ChatPipeline {
             false,
         ));
         let moderation_settings = Arc::new(ModerationSettingsCache::new(parts.pool.clone()));
+        let reaction_guard = Arc::new(ReactionGuard::new(parts.pool.clone()));
         Self {
+            reaction_guard,
             parts,
             crew_guard,
             spam_meta_cooldowns: Arc::new(DashMap::new()),
@@ -820,8 +824,9 @@ impl ChatPipeline {
 
         // Schritt 1: VoiceReaction — No-op bis Engagement-Phase (Modul-Doku).
 
-        // Schritt 2: Known-Bot-Whitelist (bot.py Z. 1548–1557)
-        if WHITELISTED_BOTS.contains(&chatter_login.as_str()) {
+        // Bekannte Bots dürfen ausschließlich den Trackingpfad erreichen.
+        // Das gilt auch für justinfan-Identitäten und vor der Kanalprüfung.
+        if tb_analytics::bekannte_bots::ist_ausgeschlossener_login(&chatter_login) {
             let tracker = Arc::clone(&p.tracker);
             let event_for_step = event.clone();
             run_pipeline_step(
@@ -831,16 +836,6 @@ impl ChatPipeline {
                 async move {
                     tracker.track(&event_for_step).await;
                 },
-            )
-            .await;
-            let commands = Arc::clone(&p.commands);
-            let event_for_step = event.clone();
-            run_pipeline_step(
-                "known_bot.commands",
-                &channel_login,
-                &chatter_login,
-                // Bekannte Fremdbots behalten ihren eingeschränkten Befehlszugang.
-                async move { commands.handle_known_bot(&event_for_step).await },
             )
             .await;
             return false;
@@ -924,6 +919,11 @@ impl ChatPipeline {
         .await
         .flatten();
 
+        // Moderation darf im freigegebenen Kanal weiter schützen. Ein Treffer
+        // darf danach aber keine Unterhaltung oder Befehlsantwort auslösen.
+        let mut reactions_allowed = mod_settings.global_ban_enabled
+            || !p.global_ban.is_banned(event).await;
+
         // Schritt 5: Global-Chatter-Ban (Z. 1589–1595) — Aktion über die
         // ModerationEngine, exakt wie Python via _auto_ban_and_cleanup.
         if mod_settings.global_ban_enabled {
@@ -940,6 +940,7 @@ impl ChatPipeline {
                 return false;
             };
             if let Some(global_ban_reason) = global_ban_reason {
+                reactions_allowed = false;
                 info!(
                     chatter = %chatter_login,
                     channel = %channel_login,
@@ -995,6 +996,9 @@ impl ChatPipeline {
                 })
                 .await
                 .unwrap_or(PitchDecision::None);
+            if !matches!(pitch, PitchDecision::None) {
+                reactions_allowed = false;
+            }
             match &pitch {
                 PitchDecision::StrongTimeout { text, duration } => {
                     debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
@@ -1078,6 +1082,13 @@ impl ChatPipeline {
         if mod_settings.sus_invite_enabled {
             self.handle_sus_invite(event, &channel_login, &chatter_login)
                 .await;
+        }
+
+        // Unabhängig von den Moderations-Toggles: Bots, aktive Scam-Belege
+        // und klare Werbemuster dürfen weder Gruß noch Promo/Command/AI triggern.
+        // Der Archivschritt ist bereits abgeschlossen; hier wird nichts gelöscht.
+        if !reactions_allowed || !self.reaction_guard.allows(event, &p.spam_filter).await {
+            return false;
         }
 
         // Schritt 8b: Feste Antworten ohne KI (Gruß kanalweit, Release-Frage
@@ -2560,6 +2571,16 @@ mod tests {
     }
 
     async fn moderation_test_ddl(pool: &PgPool) {
+        sqlx::raw_sql(crate::reaction_guard::SCAM_FIXTURE)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260918160000_chat_response_guard.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, is_partner_active INTEGER NOT NULL DEFAULT 0, silent_ban INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE twitch_partners (twitch_login TEXT, twitch_user_id TEXT)",
@@ -2904,6 +2925,109 @@ mod tests {
             .find(&call_needle)
             .expect("Conversation-Scam-Guard-Wiring fehlt");
         assert!(guard_call > partner_gate);
+    }
+
+    #[tokio::test]
+    async fn reaction_guard_bekannter_bot_darf_keinen_befehl_ausloesen() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        moderation_test_ddl(&pool).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = make_pipeline(api.clone(), pool);
+        let mut event = strong_timeout_event();
+        event.chatter_user_login = "Nightbot".into();
+        event.message.text = "!commands".into();
+        assert!(!pipeline.handle(&event).await);
+        assert!(
+            api.calls().is_empty(),
+            "Fremdbot darf auch ohne Partnerfreigabe keine Antwort auslösen: {:?}",
+            api.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_guard_sperrt_viewbot_auch_ohne_moderation_und_behaelt_rohchat() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        moderation_test_ddl(&pool).await;
+        seed_active_pipeline_channel(&pool).await;
+        sqlx::query("INSERT INTO twitch_moderation_settings VALUES ('broadcaster-id',FALSE,FALSE,FALSE,FALSE)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_response_blocks(chatter_user_id,kind,reason,source) VALUES ('101','viewer_bot','bestätigt','admin')")
+            .execute(&pool).await.unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = make_pipeline(api.clone(), pool.clone());
+        let mut event = strong_timeout_event();
+        event.chatter_user_id = "101".into();
+        event.message.text = "!commands".into();
+        assert!(!pipeline.handle(&event).await);
+        assert!(
+            api.calls().is_empty(),
+            "kein Chat-/Moderations-Aufruf bei deaktivierter Moderation"
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_chat_messages WHERE message_id='msg-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1, "Antwortsperre darf Rohchat nicht entfernen");
+        sqlx::query("UPDATE twitch_chat_response_blocks SET active=FALSE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        event.message_id = "msg-released".into();
+        assert!(pipeline.handle(&event).await);
+        assert!(
+            api.calls().iter().any(|call| call.starts_with("send:")),
+            "Aufhebung muss echte Antworten wieder zulassen"
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_guard_respektiert_globale_sperre_ohne_moderationsaktion() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        moderation_test_ddl(&pool).await;
+        seed_active_pipeline_channel(&pool).await;
+        sqlx::query("INSERT INTO twitch_moderation_settings VALUES ('broadcaster-id',FALSE,FALSE,FALSE,FALSE)")
+            .execute(&pool).await.unwrap();
+        let mut event = strong_timeout_event();
+        event.message.text = "!commands".into();
+        sqlx::query("INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id,reason,added_by) VALUES ($1,$2,'scam','admin')")
+            .bind(&event.chatter_user_login).bind(&event.chatter_user_id)
+            .execute(&pool).await.unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = make_pipeline(api.clone(), pool.clone());
+        assert!(!pipeline.handle(&event).await);
+        assert!(api.calls().is_empty(), "weder Unterhaltung noch deaktivierte Moderation auslösen");
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM twitch_chat_messages WHERE message_id='msg-1'")
+            .fetch_one(&pool).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn reaction_guard_sperrt_spamtext_ohne_moderation_und_behaelt_rohchat() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        moderation_test_ddl(&pool).await;
+        seed_active_pipeline_channel(&pool).await;
+        sqlx::query("INSERT INTO twitch_moderation_settings VALUES ('broadcaster-id',FALSE,FALSE,FALSE,FALSE)")
+            .execute(&pool).await.unwrap();
+        let api = Arc::new(RecordingChatApi::default());
+        let pipeline = make_pipeline(api.clone(), pool.clone());
+        let mut event = strong_timeout_event();
+        event.message.text = "!commands Best viewers streamboo.com".into();
+        assert!(!pipeline.handle(&event).await);
+        assert!(
+            api.calls().is_empty(),
+            "Spam darf Command/Promo/Engagement nicht auslösen"
+        );
+        let content: String =
+            sqlx::query_scalar("SELECT content FROM twitch_chat_messages WHERE message_id='msg-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(content, event.message.text);
     }
 
     #[tokio::test]
