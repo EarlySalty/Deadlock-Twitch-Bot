@@ -439,12 +439,23 @@ title_generator_preferences|experimental_auto_set|boolean|NO|false
 title_generator_preferences|style_preference|text|NO|''::text
 title_generator_preferences|twitch_user_id|text|NO|
 title_generator_preferences|updated_at|timestamp with time zone|NO|now()
+twitch_ad_break_events|chat_msgs_last_5min|integer|YES|
+twitch_ad_break_events|chat_msgs_last_min|integer|YES|
+twitch_ad_break_events|decision_id|bigint|YES|
 twitch_ad_break_events|duration_seconds|integer|YES|
+twitch_ad_break_events|first_chatter_in_window|boolean|YES|
 twitch_ad_break_events|id|bigint|NO|nextval('twitch_ad_break_events_id_seq'::regclass)
+twitch_ad_break_events|in_window|boolean|YES|
 twitch_ad_break_events|is_automatic|boolean|YES|false
+twitch_ad_break_events|match_state|text|YES|
+twitch_ad_break_events|raid_in_window|boolean|YES|
+twitch_ad_break_events|seconds_since_match_end|integer|YES|
+twitch_ad_break_events|seconds_since_match_start|integer|YES|
 twitch_ad_break_events|session_id|bigint|YES|
+twitch_ad_break_events|source|text|YES|
 twitch_ad_break_events|started_at|timestamp with time zone|NO|now()
 twitch_ad_break_events|twitch_user_id|text|NO|
+twitch_ad_break_events|viewers_before|integer|YES|
 twitch_ad_manager_actions|action|text|NO|
 twitch_ad_manager_actions|attempt_count|integer|NO|0
 twitch_ad_manager_actions|completed_at|timestamp with time zone|YES|
