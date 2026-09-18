@@ -79,3 +79,14 @@ Reihenfolge der Signale für co_streamer:
 1. Twitch Shared-Chat-Sitzung des Streamers: alle Teilnehmer außer ihm selbst, Login über die ID auflösen. Stärkstes Signal, gilt auch für Streamer, die nicht in unserem Discord sitzen oder nicht verknüpft sind.
 2. Discord-Voice plus twitch_live_state (schon gebaut), für alle, die ohne geteilten Chat zusammen streamen.
 Beide zusammenführen, doppelte IDs raus, höchstens zwei Logins, Shared-Chat-Teilnehmer zuerst. Ein einzelner Helix-Aufruf je "Titel bauen" über den bestehenden Helix-Client ist okay, kein Dauer-Poll und kein neues EventSub-Abo in diesem Auftrag. Schlägt der Aufruf fehl, läuft die Erkennung still mit Signal 2 weiter und loggt einmal eine Warnung. Die Dashboard-Zeile bleibt "Erkannt: du streamst mit @xy", ohne die Quelle zu nennen.
+
+## Nachtrag 3 (Nutzer, nach Fertigmeldung A, geht in die Fix-Runde)
+
+Live gegen Twitch belegt am 2026-09-18: `GET /helix/shared_chat/session` mit App-Token liefert für ein Anklopf-Duo (Stream Together, Verzeichnis zeigt "X mit Y") beide Teilnehmer, abgefragt über Host wie Gast. Das bleibt Signal 1.
+
+`voice.deadlock_party_members` ist trotz Schema-Name keine Discord-Voice-Tabelle, sondern Steam-Präsenz: der Steam-Bot schreibt `party_id` aus `steam_player_group` und `party_size` aus `steam_player_group_size` (`Deadlock-Steam-Bot/rust/crates/steam-core/src/steam/presence.rs:119` und `:123`, Insert in `steam-persistence/src/presence.rs:142`). Daraus folgt ein drittes, stärkeres Signal als der Voice-Kanal:
+
+- Signal 2 neu: gleiche frische `party_id` wie der Streamer (wirklich zusammen in einer Deadlock-Party), Mitglieder über `core.steam_links` und `twitch_streamer_identities` auf Twitch-User-IDs auflösen, nur die mit `twitch_live_state.is_live`.
+- Signal 3: derselbe Discord-Voice plus live, wie gebaut.
+- Reihenfolge Shared Chat, Party, Voice; doppelte IDs raus, höchstens zwei Logins.
+- In Texten und Doku heißt die Quelle des Party-Hinweises "Steam-Präsenz", nicht "Voice-Daten".
