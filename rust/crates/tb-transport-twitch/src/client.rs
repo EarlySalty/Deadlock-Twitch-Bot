@@ -407,6 +407,18 @@ impl HelixClient {
         &self,
         broadcaster_id: &str,
     ) -> Result<Vec<String>, HelixError> {
+        Ok(self
+            .get_shared_chat_users(broadcaster_id)
+            .await?
+            .into_iter()
+            .map(|user| user.login.to_lowercase())
+            .collect())
+    }
+
+    pub async fn get_shared_chat_users(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Vec<TwitchUser>, HelixError> {
         let path = format!("/shared_chat/session?broadcaster_id={broadcaster_id}");
         let resp = self.send_with_retry(self.get(&path).await?).await?;
         let body: SharedChatResponse = check_status_and_json(resp).await?;
@@ -423,11 +435,8 @@ impl HelixClient {
             return Ok(Vec::new());
         }
         let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let users = self.get_users_by_id(&id_refs).await?;
-        Ok(ids
-            .iter()
-            .filter_map(|id| users.get(id).map(|u| u.login.to_lowercase()))
-            .collect())
+        let mut users = self.get_users_by_id(&id_refs).await?;
+        Ok(ids.into_iter().filter_map(|id| users.remove(&id)).collect())
     }
 }
 
@@ -505,6 +514,86 @@ mod tests {
             token_url: token_url.to_string(),
             helix_base: helix_base.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn nachtrag3_shared_chat_behaelt_ids_ohne_namensabgleich() {
+        use wiremock::matchers::query_param;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-app-token", "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "100"))
+            .and(header("Authorization", "Bearer test-app-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"participants": [
+                    {"broadcaster_id": "300"}, {"broadcaster_id": "100"},
+                    {"broadcaster_id": "200"}, {"broadcaster_id": "200"},
+                    {"broadcaster_id": ""}, {"broadcaster_id": "400"}
+                ]}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .and(query_param("id", "200"))
+            .and(query_param("id", "300"))
+            .and(query_param("id", "400"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"id": "300", "login": "renamed", "display_name": "Someone Else"},
+                    {"id": "200", "login": "shared", "display_name": "renamed"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = HelixClient::new(test_config(
+            &format!("{}/oauth2/token", server.uri()),
+            &format!("{}/helix", server.uri()),
+        ))
+        .unwrap();
+        let users = client.get_shared_chat_users("100").await.unwrap();
+        assert_eq!(
+            users
+                .iter()
+                .map(|u| (u.id.as_str(), u.login.as_str()))
+                .collect::<Vec<_>>(),
+            [("200", "shared"), ("300", "renamed")]
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "500"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(client
+            .get_shared_chat_users("500")
+            .await
+            .unwrap()
+            .is_empty());
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "600"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            client.get_shared_chat_users("600").await,
+            Err(HelixError::Status { status: 401 })
+        ));
     }
 
     #[tokio::test]
