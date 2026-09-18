@@ -251,6 +251,23 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{change}");
         assert_eq!(response.headers()["x-robots-tag"], "noindex, nofollow");
         assert!(directory(&db.pool).await.unwrap().is_empty());
+        let own = get_handler(
+            partner(),
+            State(db.pool.clone()),
+            Query(OwnerParams::default()),
+        )
+        .await;
+        assert_eq!(
+            own.status(),
+            StatusCode::OK,
+            "Owner retains read access: {change}"
+        );
+        let own: serde_json::Value = serde_json::from_str(&body(own).await).unwrap();
+        assert_eq!(own["active"], false, "{change}");
+        assert_eq!(
+            own["published"], true,
+            "Publication intent is retained: {change}"
+        );
         assert_eq!(
             put_handler(
                 partner(),

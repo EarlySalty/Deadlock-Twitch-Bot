@@ -23,6 +23,20 @@ Aktueller Produktionsstand `5bc791c1` ist in den Feature-Branch integriert.
   Alte @-Adressen und deaktivierte Profile liefern 404 ohne Cache.
 - Profiltabellen-Snapshot aus einer isolierten PostgreSQL-Instanz erzeugt.
 
+## Nachprüfung des passiven Dashboard-Zugangs
+
+Der unabhängige Review fand einen echten Fehler in der vorgeschalteten
+`partner_status_gate`: Der eigene Profilabruf war für passive Partner gesperrt,
+bevor der Handler seinen gespeicherten, nicht öffentlichen Stand zeigen konnte.
+Korrigiert wird ausschließlich GET/HEAD auf dem exakten Eigentümer-Endpunkt.
+PUT/POST/PATCH/DELETE bleiben aktivitätspflichtig; Login, Besitzerbindung,
+CSRF und die öffentliche Abschaltung bleiben unverändert.
+
+Rote Gegenprobe: neuer Test 0/1 erfolgreich (GET wurde nicht zugelassen).
+Danach 7/7 Profiltests erfolgreich; alle sieben Deaktivierungsvarianten prüfen
+zusätzlich den privaten Lesezugang und die erhaltene Veröffentlichungsabsicht.
+Clippy erfolgreich, nur bestehende Warnungen außerhalb der Änderungen.
+
 Deployment-Auftrag: nach Review nach main integrieren, pushen, das komplette
 Release bauen, Migration ausführen, beide Caddy-Imports setzen sowie Dashboard
 und Twitch-Bot neu starten. Live-Nachweis wird nach der Ausführung ergänzt.
