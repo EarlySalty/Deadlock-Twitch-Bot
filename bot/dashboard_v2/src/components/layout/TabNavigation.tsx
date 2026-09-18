@@ -20,6 +20,7 @@ export type TabId =
   | 'audience'
   | 'growth'
   | 'planning'
+  | 'community'
   | 'coaching'
   | 'monetization';
 
@@ -37,6 +38,7 @@ const tabs: Tab[] = [
   { id: 'audience', label: 'Publikum', icon: Users },
   { id: 'growth', label: 'Wachstum', icon: BarChart3 },
   { id: 'planning', label: 'Planung', icon: Calendar },
+  { id: 'community', label: 'Zusammen spielen', icon: Users },
   { id: 'coaching', label: 'Was tun?', icon: GraduationCap },
   { id: 'monetization', label: 'Monetization', icon: DollarSign },
 ];
@@ -81,6 +83,7 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
             <button
               key={tab.id}
               data-tour-id={tourId}
+              aria-label={t(tab.label)}
               type="button"
               onClick={() => {
                 if (accessible) {
