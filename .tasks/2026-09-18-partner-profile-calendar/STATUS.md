@@ -37,9 +37,11 @@ Danach 7/7 Profiltests erfolgreich; alle sieben Deaktivierungsvarianten prüfen
 zusätzlich den privaten Lesezugang und die erhaltene Veröffentlichungsabsicht.
 Clippy erfolgreich, nur bestehende Warnungen außerhalb der Änderungen.
 
-Deployment-Auftrag: nach Review nach main integrieren, pushen, das komplette
-Release bauen, Migration ausführen, beide Caddy-Imports setzen sowie Dashboard
-und Twitch-Bot neu starten. Live-Nachweis wird nach der Ausführung ergänzt.
+Abgeschlossen: `76d58382` ist auf main, gepusht und live installiert. Migration
+und beide Caddy-Imports sind aktiv; Dashboard und Twitch-Bot wurden am
+18. September 2026 um 20:32 Uhr (Europe/Berlin) neu gestartet. Live-Nachweis,
+HTTP-Antworten, Browser-Abnahme und verbleibende nicht blockierende Hinweise
+stehen in `LIVE.md` neben dieser Datei.
 
 Bedienung und HTTP-Vertrag: `docs/PARTNER_PROFILES.md`.
 Die vollständige Dashboard-Suite hatte vor diesem Folgeauftrag sieben Fehler
