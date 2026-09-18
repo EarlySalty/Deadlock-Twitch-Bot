@@ -11,7 +11,7 @@
 | Paket | Thread-ID | Modell | Status | Worktree | Letzte Meldung |
 |---|---|---|---|---|---|
 | Vorcheck | ade64d1b | glm-token | tot, gesettelt, nicht wieder aufnehmen | keiner | OpenRouter 402, Guthaben leer; Vorcheck hat der Intent-Agent selbst per Graphify gelesen |
-| A | folgt | opus48 | gestartet | `/home/nathanael/.worktrees/tb-titel-costream` | |
+| A | 26e1c46d | opus48 | gestartet | `/home/nathanael/.worktrees/tb-titel-costream` | |
 
 ## Befund Voice-Quelle
 
