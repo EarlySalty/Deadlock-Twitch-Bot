@@ -279,7 +279,7 @@ impl RankLookup {
         };
         match select_profile(login, &profiles) {
             ProfileSelection::Exact(profile) => self.account_reply(profile.account_id, &profile.personaname, true).await,
-            ProfileSelection::None => format!("Für @{login} gibt es keine bestätigte Steam-Verknüpfung und keinen passenden Steam-Namensfund. Nutze !rank steam:<Account-ID> oder verbinde dein eigenes Konto mit !connect."),
+            ProfileSelection::None => format!("Für @{login} gibt es noch keine Steam-Verknüpfung. Direkt geht !rank steam:<Account-ID>, sonst hier verbinden: {}", crate::player_links::CONNECT_URL),
             ProfileSelection::Ambiguous(candidates) => {
                 let suggestions = candidates.into_iter().take(3).map(|profile|
                     format!("{} (!rank steam:{})", chat_label(&profile.personaname), profile.account_id)

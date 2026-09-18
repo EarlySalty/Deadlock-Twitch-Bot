@@ -321,6 +321,23 @@ async fn player_connect_steam_start_requires_login_csrf_and_same_origin() {
         .is_none());
 }
 #[tokio::test]
+async fn player_connect_steam_start_accepts_public_connect_origin() {
+    let (_db, state, created) = fixture().await;
+    let mut apex = headers(&created);
+    apex.insert(
+        "origin",
+        HeaderValue::from_static("https://deutsche-deadlock-community.de"),
+    );
+    let response = steam_start(
+        Some(Extension(state.clone())),
+        Some(Extension(config())),
+        apex,
+        form(&created),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+}
+#[tokio::test]
 async fn player_connect_steam_verified_roundtrip_and_replay_rejection() {
     let (_db, state, created) = fixture().await;
     let (token, callback) = start(&state, &created).await;

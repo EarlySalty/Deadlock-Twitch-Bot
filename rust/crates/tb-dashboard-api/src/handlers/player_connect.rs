@@ -74,6 +74,23 @@ fn origin(config: &OAuthLoginConfig) -> Option<String> {
         && url.password().is_none())
     .then(|| url.origin().ascii_serialization())
 }
+fn connect_origin() -> Option<String> {
+    let url = url::Url::parse(player_links::CONNECT_URL).ok()?;
+    (url.scheme() == "https" && url.host_str().is_some())
+        .then(|| url.origin().ascii_serialization())
+}
+fn allowed_form_origins(config: &OAuthLoginConfig) -> Vec<String> {
+    let mut origins = Vec::new();
+    if let Some(o) = connect_origin() {
+        origins.push(o);
+    }
+    if let Some(o) = origin(config) {
+        if !origins.contains(&o) {
+            origins.push(o);
+        }
+    }
+    origins
+}
 async fn session(
     state: &DashboardAuthState,
     headers: &HeaderMap,
@@ -94,11 +111,16 @@ fn valid_form(
     session: &PlayerSession,
     form: &ConnectForm,
 ) -> bool {
-    let Some(expected_origin) = origin(config) else {
+    let allowed = allowed_form_origins(config);
+    if allowed.is_empty() {
         return false;
-    };
+    }
     if let Some(value) = headers.get("origin") {
-        if value.to_str().ok() != Some(expected_origin.as_str()) {
+        let matches = value
+            .to_str()
+            .ok()
+            .is_some_and(|v| allowed.iter().any(|o| o == v));
+        if !matches {
             return false;
         }
     }
@@ -234,7 +256,7 @@ pub async fn steam_start(
             "Die Bestätigung ist ungültig. Bitte die Seite neu öffnen.",
         );
     }
-    let Some(origin) = origin(&config) else {
+    let Some(origin) = connect_origin().or_else(|| origin(&config)) else {
         return unavailable();
     };
     let state_token = tb_crypto::random_urlsafe_token(32);

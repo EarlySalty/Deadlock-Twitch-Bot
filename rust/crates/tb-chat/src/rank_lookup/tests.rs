@@ -184,7 +184,8 @@ async fn empty_search_404_is_not_a_service_outage() {
         .mount(&server)
         .await;
     let text = lookup(&server).name_reply("viewer").await;
-    assert!(text.contains("keinen passenden Steam-Namensfund"));
+    assert!(text.contains("noch keine Steam-Verknüpfung"));
+    assert!(text.contains(crate::player_links::CONNECT_URL));
 }
 
 #[tokio::test]
