@@ -331,7 +331,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary">
           <Toggle checked={includeLive} onChange={setIncludeLive} />
-          <span>Rang / Live-Hero / Party-Kontext nutzen, wenn vorhanden</span>
+          <span>Rang / Live-Hero / Party-Kontext aus Steam-Präsenz nutzen, wenn vorhanden</span>
         </label>
         {result?.co_streamers && result.co_streamers.length > 0 && (
           <p className="text-xs text-text-secondary">
