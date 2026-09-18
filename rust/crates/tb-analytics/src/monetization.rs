@@ -12,14 +12,107 @@
 //! `twitch_stream_sessions.streamer_login` per `session_id` — genau wie ads +
 //! hype_train im selben Loader. Der catch-all bleibt defensiver Fallback (Tabelle fehlt).
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering::Equal;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+const MIN_GROUP: usize = 15;
+const NETWORK_RECO_TTL: StdDuration = StdDuration::from_secs(15 * 60);
+
+type NetworkRecoCache = Mutex<HashMap<i64, (Instant, Vec<String>)>>;
+
+fn network_reco_cache() -> &'static NetworkRecoCache {
+    static CACHE: OnceLock<NetworkRecoCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn network_recommendations(
+    pool: &PgPool,
+    cutoff: DateTime<Utc>,
+    days: i64,
+) -> Result<Vec<String>, sqlx::Error> {
+    if let Some((at, recos)) = network_reco_cache().lock().unwrap().get(&days) {
+        if at.elapsed() < NETWORK_RECO_TTL {
+            return Ok(recos.clone());
+        }
+    }
+    let network = compute_ad_effects(pool, "", cutoff, 5000).await?;
+    let recos = build_network_recommendations(&network);
+    network_reco_cache()
+        .lock()
+        .unwrap()
+        .insert(days, (Instant::now(), recos.clone()));
+    Ok(recos)
+}
+const QUIET_CHAT_MAX: i32 = 3;
+const MOMENT_KEYS: [&str; 6] = [
+    "queue",
+    "first_match_minute",
+    "in_match",
+    "post_match",
+    "quiet_chat",
+    "active_chat",
+];
+
 fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+fn slope(points: &[(f64, f64)]) -> f64 {
+    let n = points.len() as f64;
+    if points.len() < 2 {
+        return 0.0;
+    }
+    let sx: f64 = points.iter().map(|(x, _)| *x).sum();
+    let sy: f64 = points.iter().map(|(_, y)| *y).sum();
+    let sxx: f64 = points.iter().map(|(x, _)| x * x).sum();
+    let sxy: f64 = points.iter().map(|(x, y)| x * y).sum();
+    let denom = n * sxx - sx * sx;
+    if denom.abs() < f64::EPSILON {
+        0.0
+    } else {
+        (n * sxy - sx * sy) / denom
+    }
+}
+
+fn sample_at(timeline: &[(f64, f64)], target: f64, tol: f64) -> Option<f64> {
+    timeline
+        .iter()
+        .filter(|(m, _)| (m - target).abs() <= tol)
+        .min_by(|a, b| {
+            (a.0 - target)
+                .abs()
+                .partial_cmp(&(b.0 - target).abs())
+                .unwrap_or(Equal)
+        })
+        .map(|(_, v)| *v)
+}
+
+fn moment_label(key: &str) -> &'static str {
+    match key {
+        "queue" => "in der Queue",
+        "first_match_minute" => "in der ersten Match-Minute",
+        "in_match" => "mitten im Match",
+        "post_match" => "kurz nach Matchende",
+        "quiet_chat" => "bei ruhigem Chat",
+        "active_chat" => "bei aktivem Chat",
+        _ => "im Stream",
+    }
+}
+
+fn effect_phrase(net_drop: f64) -> String {
+    if net_drop > 0.05 {
+        format!("verliert im Schnitt {:.1}% Zuschauer", net_drop)
+    } else if net_drop < -0.05 {
+        format!("gewinnt im Schnitt {:.1}% Zuschauer", net_drop.abs())
+    } else {
+        "bleibt im Schnitt neutral".to_string()
+    }
 }
 
 /// Die immer im Output vorhandenen, von der Ad-Drop-Analyse abgeleiteten Felder.
@@ -32,20 +125,74 @@ struct DropAnalysis {
     best_ad_time: Value,
     avg_recovery_min: Value,
     recovery_by_duration: Value,
-    recommendations: Vec<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct AdRow {
+    session_id: i64,
+    started_at: DateTime<Utc>,
+    duration_seconds: Option<i32>,
+    is_automatic: Option<bool>,
+    session_started_at: Option<DateTime<Utc>>,
+    match_state: Option<String>,
+    chat_msgs_last_min: Option<i32>,
+    source: Option<String>,
+}
+
+async fn load_ad_rows(
+    pool: &PgPool,
+    streamer: &str,
+    cutoff: DateTime<Utc>,
+    limit: i64,
+) -> Result<(Vec<AdRow>, HashMap<i64, Vec<(f64, f64)>>), sqlx::Error> {
+    let ad_rows = sqlx::query_as::<_, AdRow>(
+        "SELECT a.session_id AS session_id, a.started_at AS started_at, \
+                a.duration_seconds AS duration_seconds, a.is_automatic AS is_automatic, \
+                s.started_at AS session_started_at, a.match_state AS match_state, \
+                a.chat_msgs_last_min AS chat_msgs_last_min, a.source AS source \
+           FROM twitch_ad_break_events a \
+           JOIN twitch_stream_sessions s ON s.id = a.session_id \
+          WHERE a.started_at >= $1 AND a.session_id IS NOT NULL \
+            AND ($2 = '' OR LOWER(s.streamer_login) = $2) \
+          ORDER BY a.started_at DESC LIMIT $3",
+    )
+    .bind(cutoff)
+    .bind(streamer)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    let mut timeline_map: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
+    if !ad_rows.is_empty() {
+        let mut seen: HashSet<i64> = HashSet::new();
+        let mut session_ids: Vec<i64> = Vec::new();
+        for r in &ad_rows {
+            if seen.insert(r.session_id) {
+                session_ids.push(r.session_id);
+            }
+        }
+        let viewer_rows = sqlx::query_as::<_, (i64, Option<i32>, i32)>(
+            "SELECT session_id, minutes_from_start, viewer_count \
+               FROM twitch_session_viewers WHERE session_id = ANY($1) \
+              ORDER BY session_id, minutes_from_start",
+        )
+        .bind(&session_ids)
+        .fetch_all(pool)
+        .await?;
+        for (sid, mfs, vc) in viewer_rows {
+            timeline_map
+                .entry(sid)
+                .or_default()
+                .push((f64::from(mfs.unwrap_or(0)), f64::from(vc)));
+        }
+    }
+    Ok((ad_rows, timeline_map))
 }
 
 const POSITION_BUCKETS: [&str; 4] = ["early_0_30m", "mid_30_60m", "late_60_90m", "endgame_90m"];
 const DURATION_BUCKETS: [&str; 4] = ["30s", "60s", "90s", "120s_plus"];
 // Labels für best_ad_time bzw. die position-Empfehlung (unterschiedlicher Wortlaut!).
 const POSITION_LABELS_SLOT: [&str; 4] = ["ersten 30 Min", "Min 30-60", "Min 60-90", "nach Min 90"];
-const POSITION_LABELS_RECO: [&str; 4] = [
-    "in den ersten 30 Min",
-    "zwischen Min 30-60",
-    "zwischen Min 60-90",
-    "nach Min 90",
-];
-const DURATION_LABELS: [&str; 4] = ["30s", "60s", "90s", "120s+"];
 
 fn mean(values: &[f64]) -> f64 {
     values.iter().sum::<f64>() / values.len() as f64
@@ -111,47 +258,7 @@ async fn compute_drop_analysis(
     streamer: &str,
     cutoff: DateTime<Utc>,
 ) -> Result<DropAnalysis, sqlx::Error> {
-    let ad_rows = sqlx::query!(
-        "SELECT a.id::bigint AS \"id!\", a.session_id::bigint AS \"session_id!\", \
-                a.started_at AS \"started_at!\", a.duration_seconds, a.is_automatic, \
-                s.started_at AS \"session_started_at?\" \
-           FROM twitch_ad_break_events a \
-           JOIN twitch_stream_sessions s ON s.id = a.session_id \
-          WHERE a.started_at >= $1 AND a.session_id IS NOT NULL AND ($2 = '' OR LOWER(s.streamer_login) = $2) \
-          ORDER BY a.started_at DESC LIMIT 200",
-        cutoff,
-        streamer
-    )
-    .fetch_all(pool)
-    .await?;
-
-    // Viewer-Timeline je Session (nur wenn Ads vorhanden — wie Pythons `if ad_rows`).
-    let mut timeline_map: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
-    if !ad_rows.is_empty() {
-        let mut seen: HashSet<i64> = HashSet::new();
-        let mut session_ids: Vec<i64> = Vec::new();
-        for r in &ad_rows {
-            if seen.insert(r.session_id) {
-                session_ids.push(r.session_id);
-            }
-        }
-        if !session_ids.is_empty() {
-            let viewer_rows = sqlx::query!(
-                "SELECT session_id::bigint AS \"session_id!\", minutes_from_start, viewer_count AS \"viewer_count!\" \
-                   FROM twitch_session_viewers WHERE session_id = ANY($1::bigint[]) \
-                  ORDER BY session_id, minutes_from_start",
-                &session_ids
-            )
-            .fetch_all(pool)
-            .await?;
-            for row in viewer_rows {
-                timeline_map.entry(row.session_id).or_default().push((
-                    f64::from(row.minutes_from_start.unwrap_or(0)),
-                    f64::from(row.viewer_count),
-                ));
-            }
-        }
-    }
+    let (ad_rows, timeline_map) = load_ad_rows(pool, streamer, cutoff, 200).await?;
 
     let mut drop_pcts: Vec<f64> = Vec::new();
     let mut worst_ads: Vec<(f64, Value)> = Vec::new();
@@ -296,38 +403,6 @@ async fn compute_drop_analysis(
         json!(round1(mean(&recovery_times)))
     };
 
-    let mut recommendations: Vec<String> = Vec::new();
-    if let Some(best) = min_mean_index(&duration) {
-        recommendations.push(format!(
-            "{}-Ads verursachen den geringsten Drop (Ø {:.1}%)",
-            DURATION_LABELS[best],
-            mean(&duration[best])
-        ));
-    }
-    if !auto_drops.is_empty() && !manual_drops.is_empty() {
-        let auto_avg = mean(&auto_drops);
-        let manual_avg = mean(&manual_drops);
-        if manual_avg < auto_avg * 0.7 {
-            recommendations.push(format!(
-                "Manuelle Ads verlieren {:.0}% weniger Viewer als automatische",
-                (auto_avg - manual_avg) / auto_avg * 100.0
-            ));
-        }
-    }
-    if let Some(best) = min_mean_index(&position) {
-        recommendations.push(format!(
-            "Beste Ad-Zeit: {} (Ø {:.1}% Drop)",
-            POSITION_LABELS_RECO[best],
-            mean(&position[best])
-        ));
-    }
-    if !recovery_times.is_empty() {
-        recommendations.push(format!(
-            "Ø Recovery-Zeit: {:.1} Minuten nach Ad-Ende",
-            mean(&recovery_times)
-        ));
-    }
-
     Ok(DropAnalysis {
         avg_viewer_drop_pct,
         worst_ads: worst_ads_json,
@@ -337,8 +412,221 @@ async fn compute_drop_analysis(
         best_ad_time,
         avg_recovery_min,
         recovery_by_duration: impact_map(&DURATION_BUCKETS, &duration_recovery, "avg_recovery_min"),
-        recommendations,
     })
+}
+
+#[derive(Default)]
+struct AdEffects {
+    net3_all: Vec<f64>,
+    net_by_horizon: [Vec<f64>; 3],
+    moment: BTreeMap<&'static str, Vec<f64>>,
+    source: BTreeMap<&'static str, Vec<f64>>,
+}
+
+fn moment_match_key(state: &str) -> Option<&'static str> {
+    match state {
+        "queue" => Some("queue"),
+        "first_match_minute" => Some("first_match_minute"),
+        "in_match" => Some("in_match"),
+        "post_match" => Some("post_match"),
+        _ => None,
+    }
+}
+
+fn source_group_key(source: &str) -> Option<&'static str> {
+    match source {
+        "bot_own_block" | "bot_pulled_forward" => Some("bot"),
+        "twitch_plan" => Some("twitch_plan"),
+        "manual" => Some("manual"),
+        _ => None,
+    }
+}
+
+async fn compute_ad_effects(
+    pool: &PgPool,
+    streamer: &str,
+    cutoff: DateTime<Utc>,
+    limit: i64,
+) -> Result<AdEffects, sqlx::Error> {
+    let (ad_rows, timeline_map) = load_ad_rows(pool, streamer, cutoff, limit).await?;
+
+    struct Calc {
+        session_id: i64,
+        minutes_into: f64,
+        duration_minutes: f64,
+        match_state: Option<String>,
+        chat_last_min: Option<i32>,
+        source: Option<String>,
+    }
+    let mut windows: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
+    let mut calcs: Vec<Calc> = Vec::new();
+    for row in &ad_rows {
+        let Some(session_start) = row.session_started_at else {
+            continue;
+        };
+        if !timeline_map.contains_key(&row.session_id) {
+            continue;
+        }
+        let duration_seconds = row
+            .duration_seconds
+            .map(f64::from)
+            .filter(|d| *d != 0.0)
+            .unwrap_or(30.0);
+        let minutes_into = (row.started_at - session_start).num_milliseconds() as f64 / 60_000.0;
+        let duration_minutes = duration_seconds / 60.0;
+        windows
+            .entry(row.session_id)
+            .or_default()
+            .push((minutes_into - 3.0, minutes_into + duration_minutes + 6.0));
+        calcs.push(Calc {
+            session_id: row.session_id,
+            minutes_into,
+            duration_minutes,
+            match_state: row.match_state.clone(),
+            chat_last_min: row.chat_msgs_last_min,
+            source: row.source.clone(),
+        });
+    }
+
+    let mut slopes: HashMap<i64, f64> = HashMap::new();
+    for (sid, tl) in &timeline_map {
+        let win = windows.get(sid);
+        let free: Vec<(f64, f64)> = tl
+            .iter()
+            .filter(|(m, _)| win.is_none_or(|ws| !ws.iter().any(|(a, b)| *m >= *a && *m <= *b)))
+            .cloned()
+            .collect();
+        slopes.insert(*sid, slope(&free));
+    }
+
+    let horizons = [1.0_f64, 3.0, 5.0];
+    let mut eff = AdEffects::default();
+    for c in &calcs {
+        let Some(tl) = timeline_map.get(&c.session_id) else {
+            continue;
+        };
+        let pre: Vec<f64> = tl
+            .iter()
+            .filter(|(m, _)| (c.minutes_into - 3.0) <= *m && *m < c.minutes_into)
+            .map(|(_, v)| *v)
+            .collect();
+        if pre.is_empty() {
+            continue;
+        }
+        let pre_avg = mean(&pre);
+        if pre_avg <= 0.0 {
+            continue;
+        }
+        let session_slope = *slopes.get(&c.session_id).unwrap_or(&0.0);
+        let pre_center = c.minutes_into - 1.5;
+        let mut net3: Option<f64> = None;
+        for (hi, k) in horizons.iter().enumerate() {
+            let target = c.minutes_into + c.duration_minutes + k;
+            if let Some(post) = sample_at(tl, target, 1.5) {
+                let expected = pre_avg + session_slope * (target - pre_center);
+                let net_drop = (expected - post) / pre_avg * 100.0;
+                eff.net_by_horizon[hi].push(net_drop);
+                if (*k - 3.0).abs() < f64::EPSILON {
+                    net3 = Some(net_drop);
+                }
+            }
+        }
+        let Some(net) = net3 else {
+            continue;
+        };
+        eff.net3_all.push(net);
+        if let Some(key) = c.match_state.as_deref().and_then(moment_match_key) {
+            eff.moment.entry(key).or_default().push(net);
+        }
+        if let Some(count) = c.chat_last_min {
+            let key = if count <= QUIET_CHAT_MAX {
+                "quiet_chat"
+            } else {
+                "active_chat"
+            };
+            eff.moment.entry(key).or_default().push(net);
+        }
+        if let Some(key) = c.source.as_deref().and_then(source_group_key) {
+            eff.source.entry(key).or_default().push(net);
+        }
+    }
+    Ok(eff)
+}
+
+fn horizon_json(values: &[f64]) -> Value {
+    json!({ "avg_net_drop_pct": avg_round1(values), "count": values.len() })
+}
+
+fn effects_json(eff: &AdEffects) -> Value {
+    let mut moments = serde_json::Map::new();
+    for key in MOMENT_KEYS {
+        let empty = Vec::new();
+        let values = eff.moment.get(key).unwrap_or(&empty);
+        moments.insert(
+            key.to_string(),
+            json!({
+                "avg_net_drop_pct": avg_round1(values),
+                "count": values.len(),
+                "enough_data": values.len() >= MIN_GROUP,
+            }),
+        );
+    }
+    json!({
+        "avg_net_drop_pct": avg_round1(&eff.net3_all),
+        "sample": eff.net3_all.len(),
+        "by_horizon": {
+            "plus_1": horizon_json(&eff.net_by_horizon[0]),
+            "plus_3": horizon_json(&eff.net_by_horizon[1]),
+            "plus_5": horizon_json(&eff.net_by_horizon[2]),
+        },
+        "moment_impact": Value::Object(moments),
+    })
+}
+
+fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
+    let mut moment_avgs: Vec<(&str, f64, usize)> = MOMENT_KEYS
+        .iter()
+        .filter_map(|k| {
+            let values = eff.moment.get(k)?;
+            (values.len() >= MIN_GROUP).then(|| (*k, mean(values), values.len()))
+        })
+        .collect();
+    if moment_avgs.is_empty() {
+        return vec![format!(
+            "Noch zu wenig Werbungen für eine Empfehlung. Ab {} Werbungen je Moment zeigen wir, wann Werbung am wenigsten Zuschauer kostet.",
+            MIN_GROUP
+        )];
+    }
+    moment_avgs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Equal));
+    let mut recos = Vec::new();
+    let (best_key, best_avg, _) = moment_avgs[0];
+    recos.push(format!(
+        "Am besten läuft Werbung {}: {}.",
+        moment_label(best_key),
+        effect_phrase(best_avg)
+    ));
+    if let Some(&(worst_key, worst_avg, _)) = moment_avgs.last() {
+        if worst_key != best_key {
+            recos.push(format!(
+                "Am meisten kostet Werbung {}: {}.",
+                moment_label(worst_key),
+                effect_phrase(worst_avg)
+            ));
+        }
+    }
+    if let (Some(bot), Some(plan)) = (eff.source.get("bot"), eff.source.get("twitch_plan")) {
+        if bot.len() >= MIN_GROUP && plan.len() >= MIN_GROUP {
+            let (bot_avg, plan_avg) = (mean(bot), mean(plan));
+            if bot_avg + 1.0 < plan_avg {
+                recos.push(format!(
+                    "Selbst gesetzte Werbung kostet weniger Zuschauer als der Twitch-Plan: {} gegen {}.",
+                    effect_phrase(bot_avg),
+                    effect_phrase(plan_avg)
+                ));
+            }
+        }
+    }
+    recos
 }
 
 /// Lädt die Monetization-Übersicht (Python `load_monetization_payload`).
@@ -366,6 +654,8 @@ pub async fn load_monetization_payload(
         .await?;
 
     let analysis = compute_drop_analysis(pool, streamer, cutoff).await?;
+    let effects = compute_ad_effects(pool, streamer, cutoff, 200).await?;
+    let recommendations = network_recommendations(pool, cutoff, days).await?;
 
     let ads = json!({
         "total": ad_agg.total_ads,
@@ -381,7 +671,8 @@ pub async fn load_monetization_payload(
         "best_ad_time": analysis.best_ad_time,
         "avg_recovery_min": analysis.avg_recovery_min,
         "recovery_by_duration": analysis.recovery_by_duration,
-        "recommendations": analysis.recommendations,
+        "net_effect": effects_json(&effects),
+        "recommendations": recommendations,
     });
 
     // --- Hype-Train (filtert über JOIN; catch-all → Default wie Pythons try/except). ---
@@ -490,7 +781,7 @@ mod tests {
             .unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_ad_break_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE, started_at TIMESTAMPTZ)")
+        sqlx::query("CREATE TABLE twitch_ad_break_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT, duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE, started_at TIMESTAMPTZ, match_state TEXT, seconds_since_match_start INTEGER, seconds_since_match_end INTEGER, chat_msgs_last_min INTEGER, chat_msgs_last_5min INTEGER, viewers_before INTEGER, raid_in_window BOOLEAN, first_chatter_in_window BOOLEAN, source TEXT, in_window BOOLEAN, decision_id BIGINT)")
             .execute(&pool).await.unwrap();
         // Live-Schema: bits/subs OHNE streamer_login.
         sqlx::query("CREATE TABLE twitch_bits_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, amount INTEGER, received_at TIMESTAMPTZ)")
@@ -528,7 +819,12 @@ mod tests {
         assert_eq!(v["ads"]["worst_ads"], json!([]));
         assert_eq!(v["ads"]["position_impact"]["early_0_30m"]["count"], 0);
         assert!(v["ads"]["best_ad_time"].is_null());
-        assert_eq!(v["ads"]["recommendations"], json!([]));
+        assert_eq!(v["ads"]["recommendations"].as_array().unwrap().len(), 1);
+        assert!(v["ads"]["recommendations"][0]
+            .as_str()
+            .unwrap()
+            .contains("zu wenig Werbungen"));
+        assert!(v["ads"]["net_effect"]["avg_net_drop_pct"].is_null());
         // Hype-Train aggregiert.
         assert_eq!(v["hype_train"]["total"], 2);
         assert_eq!(v["hype_train"]["avg_level"], 4.0); // (3+5)/2
@@ -631,14 +927,55 @@ mod tests {
             ads["best_ad_time"],
             "Nach ersten 30 Min (Ø 50.0% statt 50.0% ersten 30 Min)"
         );
-        assert_eq!(
-            ads["recommendations"],
-            json!([
-                "60s-Ads verursachen den geringsten Drop (Ø 50.0%)",
-                "Beste Ad-Zeit: in den ersten 30 Min (Ø 50.0% Drop)",
-                "Ø Recovery-Zeit: 2.0 Minuten nach Ad-Ende"
-            ])
-        );
+        assert_eq!(ads["net_effect"]["sample"], 1);
+        assert_eq!(ads["net_effect"]["avg_net_drop_pct"], 5.0);
+        assert_eq!(ads["recommendations"].as_array().unwrap().len(), 1);
+        assert!(ads["recommendations"][0]
+            .as_str()
+            .unwrap()
+            .contains("zu wenig Werbungen"));
+    }
+
+    #[test]
+    fn effect_phrase_vorzeichen() {
+        assert!(effect_phrase(4.2).contains("verliert"));
+        assert!(effect_phrase(-4.2).contains("gewinnt"));
+        assert!(effect_phrase(-4.2).contains("4.2"));
+        assert!(effect_phrase(0.0).contains("neutral"));
+    }
+
+    #[test]
+    fn slope_und_sample() {
+        let pts = [(0.0, 0.0), (1.0, 2.0), (2.0, 4.0)];
+        assert!((slope(&pts) - 2.0).abs() < 1e-9);
+        assert_eq!(slope(&[(1.0, 5.0)]), 0.0);
+        let tl = [(9.0, 100.0), (13.0, 95.0)];
+        assert_eq!(sample_at(&tl, 14.0, 1.5), Some(95.0));
+        assert_eq!(sample_at(&tl, 20.0, 1.5), None);
+    }
+
+    #[test]
+    fn empfehlung_erst_ab_mindestzahl() {
+        let mut sparse = AdEffects::default();
+        sparse.moment.insert("queue", vec![-5.0; MIN_GROUP - 1]);
+        let recos = build_network_recommendations(&sparse);
+        assert_eq!(recos.len(), 1);
+        assert!(recos[0].contains("zu wenig Werbungen"));
+    }
+
+    #[test]
+    fn empfehlung_vorzeichen_und_reihenfolge() {
+        let mut eff = AdEffects::default();
+        eff.moment.insert("queue", vec![-5.0; MIN_GROUP]);
+        eff.moment.insert("in_match", vec![8.0; MIN_GROUP]);
+        eff.source.insert("bot", vec![2.0; MIN_GROUP]);
+        eff.source.insert("twitch_plan", vec![6.0; MIN_GROUP]);
+        let recos = build_network_recommendations(&eff);
+        assert!(recos[0].contains("Queue"));
+        assert!(recos[0].contains("gewinnt"));
+        assert!(recos[1].contains("Match"));
+        assert!(recos[1].contains("verliert"));
+        assert!(recos.iter().any(|r| r.contains("Selbst gesetzte Werbung")));
     }
 
     #[tokio::test]
