@@ -129,3 +129,5 @@ pub mod stat_command_settings;
 
 pub mod caster_overlay;
 pub mod brain_lab;
+
+pub mod community;

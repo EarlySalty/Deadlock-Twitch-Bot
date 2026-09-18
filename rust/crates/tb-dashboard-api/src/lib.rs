@@ -197,6 +197,13 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
 
     Router::new()
         .route(
+            "/twitch/api/v2/community",
+            get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(
+                RateLimitLayerConfig::new(rate_limiter.clone(), "community", 30, 60),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
             "/twitch/api/v2/auth-status",
             get(auth_status::auth_status_handler),
         )

@@ -10,6 +10,7 @@ import { Monetization } from '@/pages/Monetization';
 import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
 import { Planung } from '@/pages/Planung';
+import { Community } from '@/pages/Community';
 import { TitleGenerator } from '@/pages/TitleGenerator';
 import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
@@ -324,6 +325,10 @@ function AnalyticsDashboard() {
 
           {activeTab === 'planning' && (
             <Planung streamer={streamer} days={days} initialSub={pendingSub ?? undefined} />
+          )}
+
+          {activeTab === 'community' && (
+            <Community streamer={streamer} days={days} />
           )}
 
           {activeTab === 'coaching' && (

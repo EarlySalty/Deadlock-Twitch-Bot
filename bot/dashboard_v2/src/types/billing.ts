@@ -31,6 +31,7 @@ export type TabId =
   | 'audience'
   | 'growth'
   | 'planning'
+  | 'community'
   | 'coaching'
   | 'monetization';
 
