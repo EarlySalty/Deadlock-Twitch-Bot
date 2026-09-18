@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use tb_analytics::ad_manager::{
-    AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE, READ_SCOPE,
-    SNOOZE_SCOPE,
+    assess_plan, AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE,
+    READ_SCOPE, SNOOZE_SCOPE,
 };
 
 use crate::auth::level::DashboardAuthLevel;
@@ -149,6 +149,30 @@ struct LastAction {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PlanResponse {
+    next_block_at: Option<String>,
+    block_seconds: i32,
+    blocks_per_hour: i32,
+    budget_used_seconds_this_hour: i32,
+    source: &'static str,
+    fit: &'static str,
+}
+
+impl Default for PlanResponse {
+    fn default() -> Self {
+        Self {
+            next_block_at: None,
+            block_seconds: 30,
+            blocks_per_hour: 0,
+            budget_used_seconds_this_hour: 0,
+            source: "own",
+            fit: "good",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StatusResponse {
     is_live: bool,
     next_ad_at: Option<String>,
@@ -161,6 +185,8 @@ struct StatusResponse {
     worker_healthy: bool,
     worker_heartbeat_at: Option<String>,
     last_action: Option<LastAction>,
+    current_reason: Option<String>,
+    plan: PlanResponse,
     scopes: ScopeStatus,
     steam: SteamStatus,
 }
@@ -208,17 +234,47 @@ async fn response(
         }
     };
     let steam = steam_status(steam_summary);
-    let row=sqlx::query("SELECT is_live,next_ad_at,last_ad_at,duration_seconds,preroll_free_seconds,snooze_count,snooze_refresh_at,observed_at,worker_heartbeat_at,last_action_kind,last_action_outcome,last_action_detail,last_action_at FROM twitch_ad_manager_state WHERE twitch_user_id=$1").bind(uid).fetch_optional(pool).await?;
+    let row=sqlx::query("SELECT is_live,next_ad_at,last_ad_at,duration_seconds,preroll_free_seconds,snooze_count,snooze_refresh_at,observed_at,worker_heartbeat_at,last_action_kind,last_action_outcome,last_action_detail,last_action_at,last_decision_reason,plan_next_block_at,plan_block_seconds,plan_blocks_per_hour,budget_used_seconds,avg_match_seconds,avg_queue_seconds FROM twitch_ad_manager_state WHERE twitch_user_id=$1").bind(uid).fetch_optional(pool).await?;
     let status = if let Some(r) = row {
         let last_at: Option<DateTime<Utc>> = r.try_get("last_action_at")?;
         let heartbeat: Option<DateTime<Utc>> = r.try_get("worker_heartbeat_at")?;
+        let next_ad: Option<DateTime<Utc>> = r.try_get("next_ad_at")?;
+        let last_ad: Option<DateTime<Utc>> = r.try_get("last_ad_at")?;
+        let snooze_count: Option<i32> = r.try_get("snooze_count")?;
+        let interval = match (next_ad, last_ad) {
+            (Some(next), Some(last)) if next > last => {
+                i32::try_from(next.signed_duration_since(last).num_seconds()).ok()
+            }
+            _ => None,
+        };
+        let fit = assess_plan(
+            next_ad.is_some(),
+            interval,
+            i64::from(snooze_count.unwrap_or(0)),
+            r.try_get("avg_match_seconds")?,
+            r.try_get("avg_queue_seconds")?,
+        );
+        let plan = PlanResponse {
+            next_block_at: iso(r.try_get("plan_next_block_at")?),
+            block_seconds: r
+                .try_get::<Option<i32>, _>("plan_block_seconds")?
+                .unwrap_or(30),
+            blocks_per_hour: r
+                .try_get::<Option<i32>, _>("plan_blocks_per_hour")?
+                .unwrap_or(0),
+            budget_used_seconds_this_hour: r
+                .try_get::<Option<i32>, _>("budget_used_seconds")?
+                .unwrap_or(0),
+            source: if next_ad.is_some() { "twitch" } else { "own" },
+            fit,
+        };
         StatusResponse {
             is_live: r.try_get("is_live")?,
-            next_ad_at: iso(r.try_get("next_ad_at")?),
-            last_ad_at: iso(r.try_get("last_ad_at")?),
+            next_ad_at: iso(next_ad),
+            last_ad_at: iso(last_ad),
             duration_seconds: r.try_get("duration_seconds")?,
             preroll_free_seconds: r.try_get("preroll_free_seconds")?,
-            snooze_count: r.try_get("snooze_count")?,
+            snooze_count,
             snooze_refresh_at: iso(r.try_get("snooze_refresh_at")?),
             observed_at: iso(r.try_get("observed_at")?),
             worker_healthy: worker_is_healthy(heartbeat, Utc::now()),
@@ -236,6 +292,8 @@ async fn response(
                 }),
                 _ => None,
             },
+            current_reason: r.try_get("last_decision_reason")?,
+            plan,
             scopes: ScopeStatus {
                 read: has(&granted, READ_SCOPE),
                 snooze: has(&granted, SNOOZE_SCOPE),
@@ -256,6 +314,8 @@ async fn response(
             worker_healthy: false,
             worker_heartbeat_at: None,
             last_action: None,
+            current_reason: None,
+            plan: PlanResponse::default(),
             scopes: ScopeStatus {
                 read: has(&granted, READ_SCOPE),
                 snooze: has(&granted, SNOOZE_SCOPE),
@@ -281,14 +341,32 @@ pub async fn get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -
     }
 }
 
+fn bad_request(message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error":"validation_error","message":message})),
+    )
+        .into_response()
+}
+
 pub async fn save_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
-    Json(settings): Json<Settings>,
+    Json(raw): Json<serde_json::Value>,
 ) -> Response {
     let (uid, login) = match identity(auth) {
         Ok(v) => v,
         Err(error) => return error.into_response(),
+    };
+    if uid.trim().is_empty() {
+        return IdentityError::TwitchRequired.into_response();
+    }
+    if raw.get("strategy").and_then(|value| value.as_str()) == Some("monitor") {
+        return bad_request("Die Strategie 'monitor' gibt es nicht mehr.");
+    }
+    let settings: Settings = match serde_json::from_value(raw) {
+        Ok(value) => value,
+        Err(_) => return bad_request("Die Werbemanager-Einstellungen sind ungültig."),
     };
     if let Err(message) = settings.validate() {
         return (
@@ -388,6 +466,9 @@ pub async fn action_handler(
         Ok(v) => v,
         Err(error) => return error.into_response(),
     };
+    if uid.trim().is_empty() {
+        return IdentityError::TwitchRequired.into_response();
+    }
     let (duration, required) = match validate_action(&input) {
         Ok(value) => value,
         Err(message) => {
@@ -438,6 +519,24 @@ pub async fn action_handler(
         Ok(outcome) => enqueue_response(outcome),
         Err(error) => {
             tracing::error!(%error,"Werbeaktion konnte nicht eingereiht werden");
+            crate::auth::analytics_request_failed_json().into_response()
+        }
+    }
+}
+
+pub async fn history_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
+    let (uid, _login) = match identity(auth) {
+        Ok(v) => v,
+        Err(error) => return error.into_response(),
+    };
+    if uid.trim().is_empty() {
+        return IdentityError::TwitchRequired.into_response();
+    }
+    let store = AdManagerStore::new(pool);
+    match store.history(&uid).await {
+        Ok(history) => Json(history).into_response(),
+        Err(error) => {
+            tracing::error!(%error,"Werbemanager-Verlauf konnte nicht gelesen werden");
             crate::auth::analytics_request_failed_json().into_response()
         }
     }
