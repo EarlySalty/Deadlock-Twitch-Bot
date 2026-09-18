@@ -64,6 +64,15 @@ test('published profile links to its own public page', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={{ ...initial, published: true }} onReload={() => {}} />);
   assert.match(html, /href="\/streamer\/alice"/);
 });
+test('Twitch avatar is automatic and save action is not a sticky bottom bar', () => {
+  const avatar = 'https://static-cdn.jtvnw.net/jtv_user_pictures/alice-profile_image.png';
+  const html = renderToStaticMarkup(<ProfileEditor initial={initial} twitchAvatarUrl={avatar} onReload={() => {}} />);
+  assert.ok(html.includes(avatar));
+  assert.match(html, /Wird automatisch aus deinem Twitch-Konto übernommen/);
+  assert.doesNotMatch(html, /Twitch-Profilbild \(optional\)/);
+  const page = readFileSync(new URL('../src/pages/PartnerProfile.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /sticky bottom-/);
+});
 test('demo profile editor never starts a live request', () => {
   const client = new QueryClient();
   const html = renderToStaticMarkup(<QueryClientProvider client={client}><PlanProvider plan={null} isAdmin={false} isLocalhost={false} isDemoMode><PartnerProfile /></PlanProvider></QueryClientProvider>);
