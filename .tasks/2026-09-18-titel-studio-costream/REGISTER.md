@@ -12,7 +12,9 @@
 |---|---|---|---|---|---|
 | Vorcheck | ade64d1b | glm-token | tot, gesettelt, nicht wieder aufnehmen | keiner | OpenRouter 402, Guthaben leer; Vorcheck hat der Intent-Agent selbst per Graphify gelesen |
 | A | 26e1c46d | opus48 | fertig, gesettelt | `/home/nathanael/.worktrees/tb-titel-costream` | Commit 3f12d6f0 auf origin; Migrations-Kollision 20260918120000 ist auf main schon gelöst (1bc4ba94), Branch braucht vor dem Gate einen Merge von origin/main |
-| Review R1 | 52a77b4b | opus48 | gestartet | derselbe, nur lesen | |
+| Review R1 | 52a77b4b | über --rolle review_1 gewählt | tot, gesettelt, nicht wieder aufnehmen | keiner | ProviderAdapterSessionNotFoundError (grok-Adapter), kein Review gelaufen, keine REVIEW.md |
+| B (Nachtrag 3) | startet der Nutzer selbst | | offen | `/home/nathanael/.worktrees/tb-titel-costream` | Prompt im Intent-Thread übergeben |
+| Review R1 neu | startet der Nutzer selbst nach B | | offen | derselbe, nur lesen | |
 
 ## Befund Voice-Quelle
 
