@@ -91,8 +91,29 @@ strukturierten Ereignisse und Tabellen unterscheiden Vorbereitung von Send:
 - Conversation-Memory und Twitch-Sendeergebnis: erst diese belegen einen
   tatsaechlichen Chat-Send; generierter oder gespeicherter Text allein nicht.
 
-Die normale Installation fuehrt Migration und Runtime-Grants aus. Release
-immer aus einem eigenstaendigen Clone mit internem `.git` und allen drei
-Rust-Binaries sowie allen drei Frontend-Dists ueber
+Release immer aus einem eigenständigen Clone mit internem `.git` und allen
+drei Rust-Binaries sowie allen drei Frontend-Dists über
 `/usr/local/bin/deploy-twitch-release <sha> <source-clone>` installieren.
 Keine direkten Service-/Sudo-Aufrufe und kein manuelles Schalten der Gates.
+
+**Auf diesem Host führt der installierte Deploy-Wrapper Migrationen und
+Runtime-Grants nicht automatisch aus.** Ein grüner Deploy und MCP-Healthcheck
+beweisen deshalb noch keine funktionierende Kandidatenauswahl. Der Bot läuft
+mit abgeschalteten Startmigrationen und darf selbst kein DDL ausführen.
+
+Vor dem Releasewechsel den sauberen, geprüften Quell-Clone gegen den
+Datenbankstand prüfen. Ausstehende Migrationen mit dem vorhandenen
+`/usr/local/libexec/cargo-sqlx sqlx migrate run --no-dotenv` und explizitem
+`--source <source-clone>/rust/migrations` über den berechtigten lokalen
+DB-Zugang anwenden. Danach die versionierte Datei
+`<source-clone>/ops/systemd/twitch-runtime-roles.sql` mit
+`psql --no-psqlrc --single-transaction --dbname=twitch_analytics --file=...`
+anwenden. Keine eigenen Tabellenkopien, keine manuell gesetzten
+Migrationsmarker und keine erfundenen Kandidatennachweise erzeugen.
+
+Nach dem Deploy zusätzlich prüfen: Migration `20260918024500` erfolgreich,
+`twitch_smalltalk_candidate_state` vorhanden, `twitchbot` darf schreiben,
+`twitchdash` und `twitchlegacy` dürfen nicht schreiben. Eine vom laufenden
+Bot erzeugte Helix-Messung und der tatsächliche Sessionzustand sind der
+funktionale Nachweis. Der überprüfte Live-Stand vom 18.09.2026 steht in
+`.tasks/2026-09-18-smalltalk-live-resume/REPORT.md`.
