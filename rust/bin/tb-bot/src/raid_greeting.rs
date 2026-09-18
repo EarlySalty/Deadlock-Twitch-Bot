@@ -139,6 +139,7 @@ struct PendingGreeting {
     from_broadcaster_login: String,
     to_broadcaster_id: String,
     to_broadcaster_login: String,
+    raid_history_id: Option<i64>,
     probe_watched: bool,
     probe_started_at: Instant,
     /// Zeitpunkt des Raid-Starts für die gespeicherte Beobachtung.
@@ -369,12 +370,14 @@ impl RaidGreetingMonitor {
         let alias_group = stale.into_iter().find_map(|item| item.alias_group);
 
         // Quellchat-Hinweis bewusst nicht erneut senden — er ist beim Start schon raus.
+        let raid_history_id = registration.raid_history_id;
         if let Some(pending) = self.register(
             RaidGreetingRegistration {
                 from_broadcaster_id: from_id,
                 from_broadcaster_login: from_login,
                 to_broadcaster_id: to_id,
                 to_broadcaster_login: to_login,
+                raid_history_id,
             },
             alias_group,
         ) {
@@ -463,6 +466,7 @@ impl RaidGreetingMonitor {
             from_broadcaster_login,
             to_broadcaster_id,
             to_broadcaster_login,
+            raid_history_id: registration.raid_history_id,
             probe_watched,
             probe_started_at,
             started_at: Utc::now(),
@@ -604,7 +608,7 @@ impl RaidGreetingMonitor {
             if let Some(recorder) = &courtesy {
                 recorder
                     .record(CourtesyEvent {
-                        raid_history_id: None,
+                        raid_history_id: item.raid_history_id,
                         from_broadcaster_id: item.from_broadcaster_id.clone(),
                         from_broadcaster_login: item.from_broadcaster_login.clone(),
                         to_broadcaster_id: item.to_broadcaster_id.clone(),
@@ -957,6 +961,7 @@ mod tests {
             from_broadcaster_login: "Raider".into(),
             to_broadcaster_id: "to1".into(),
             to_broadcaster_login: "Ziel".into(),
+            raid_history_id: None,
         }
     }
 
@@ -1090,6 +1095,7 @@ mod tests {
             from_broadcaster_login: "Raider".into(),
             to_broadcaster_id: id.into(),
             to_broadcaster_login: login.into(),
+            raid_history_id: None,
         }
     }
 
