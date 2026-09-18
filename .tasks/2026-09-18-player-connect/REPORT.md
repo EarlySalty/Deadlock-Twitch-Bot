@@ -40,3 +40,13 @@ Daher keine Live-Aktivierung mit fehlendem Schema. Keine Produktions-DB-Schreibz
 Ein echter persönlicher Twitch-/Steam-Login wurde nicht im Namen des Nutzers durchgeführt. Er ist der verbleibende persönliche End-to-End-Abnahmeschritt nach erfolgreichem Deployment.
 
 Protokollreferenzen: Steamworks User Authentication and Ownership (OpenID), Twitch Authorization Code Grant und OpenID Authentication 2.0.
+
+## Fortsetzungsprüfung 2026-09-18
+
+- Die Implementierung war während der Prüfung bereits als `06acf95e` committed und über `59ae37db` mit `origin/main` zusammengeführt worden. Fremde Arbeitsstände wurden nicht zurückgesetzt.
+- Den vollständigen relevanten Command-/Katalog-/Stats-/Rank-/Player-Link-Testlauf erneut ausgeführt: **170 bestanden, 0 fehlgeschlagen, 0 ignoriert**.
+- Die wiederholbare private Datenbankprüfung führt jetzt auch die bisherigen Auth-/Session-Regressionen und die neuen Connect-/OpenID-Tests mit `TB_TEST_REQUIRE_DB=1` aus: **86 bestanden, 0 fehlgeschlagen, 0 ignoriert**. Das Tool erreichte beim Übersetzen sein Antwortzeitlimit; das vollständige Protokoll `.tasks/player-connect-auth-regression.log` dokumentiert den abgeschlossenen erfolgreichen Lauf. Der frische Migrations-/Schema-Test und die Rollenassertionen waren ebenfalls erfolgreich.
+- `rank_lookup/tests.rs` band bereits `player_tests.rs` ein, die Datei war jedoch noch unversioniert. Sie wird mit den vier geprüften Tests für direkte Zuordnung, Opt-out, Cache und laufende Abfragen aufgenommen, damit ein frischer Checkout keine fehlende Testquelle hat.
+- Doppelte Connect-Dokumentation bereinigt; Vorrang der direkten Verknüpfung und die verbleibende Twitch-ID mit Abschaltvermerk ausdrücklich beschrieben.
+- Live-Sperre nochmals abgeglichen: `bot-restart` listet keinen Migrationsdienst. Der installierte `/usr/local/bin/deploy-twitch-release` liegt außerhalb der erlaubten MCP-Dateiwurzeln und konnte hier nicht geprüft oder aktualisiert werden. Keine Ausweichroute über generisches sudo/systemctl, keine Live-Schaltung mit ungeprüftem Migrationsablauf.
+- Persönlicher Login bei Twitch und Steam weiterhin nicht stellvertretend ausgeführt.
