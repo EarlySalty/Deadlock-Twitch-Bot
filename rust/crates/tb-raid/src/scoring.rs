@@ -25,7 +25,7 @@
 //! FINAL_VIEWER_FAIRNESS_WEIGHT = 0.15    (neu)
 //! VIEWER_FAIRNESS_SMOOTHING   = 100.0
 //! VIEWER_VOLUME_REFERENCE     = 400.0
-//! VIEWER_VOLUME_BONUS_SHARE   = 0.2
+//! VIEWER_VOLUME_BONUS_SHARE   = 0.1
 //! FAIRNESS_BALANCE_DIVISOR    = 20.0
 //! FAIRNESS_RECEIVED_7D_THRESHOLD = 5.0
 //! ```
@@ -64,9 +64,10 @@ pub const VIEWER_FAIRNESS_SMOOTHING: f64 = 100.0;
 /// Referenz-Zuschauersumme, ab der der Volumen-Bonus voll ausschlägt.
 pub const VIEWER_VOLUME_REFERENCE: f64 = 400.0;
 
-/// Anteil des Volumen-Bonus am Zuschauer-Fairness-Score; der Rest kommt aus dem
-/// Geben-zu-Nehmen-Verhältnis.
-pub const VIEWER_VOLUME_BONUS_SHARE: f64 = 0.2;
+/// Höhe des additiven Volumen-Bonus, der oben auf das Geben-zu-Nehmen-Verhältnis
+/// kommt. Bei vollem Weitergabe-Volumen hebt er den Score um bis zu diesen Wert;
+/// ausgeglichene und historienlose Partner bleiben dadurch bei ~0.5.
+pub const VIEWER_VOLUME_BONUS_SHARE: f64 = 0.1;
 
 // Fairness-Parameter (Python Z. 30–31).
 const FAIRNESS_BALANCE_DIVISOR: f64 = 20.0;
@@ -283,13 +284,18 @@ pub fn compute_fairness_score(
 /// Zuschauer-Fairness: belohnt Partner, die mehr Zuschauer weitergeben als sie
 /// empfangen, und honoriert daneben das absolute Weitergabe-Volumen.
 ///
-/// Zwei Anteile, gewichtet über [`VIEWER_VOLUME_BONUS_SHARE`]:
+/// Das Verhältnis ist die Basis, der Volumen-Bonus kommt additiv oben drauf:
 ///
 /// - `ratio`: Geben-zu-Nehmen-Balance, um 0.5 zentriert und über
 ///   [`VIEWER_FAIRNESS_SMOOTHING`] gedämpft, damit ein einzelner großer Raid
-///   das Verhältnis nicht dominiert.
-/// - `volume_bonus`: absolutes Weitergabe-Volumen relativ zu
-///   [`VIEWER_VOLUME_REFERENCE`], geklemmt auf `[0, 1]`.
+///   das Verhältnis nicht dominiert. Ausgeglichen (`sent == recv`) ergibt 0.5.
+/// - `volume_bonus`: additiver Zuschlag bis [`VIEWER_VOLUME_BONUS_SHARE`],
+///   skaliert am Weitergabe-Volumen relativ zu [`VIEWER_VOLUME_REFERENCE`].
+///
+/// Additiv statt gewichtet, damit ausgeglichene und historienlose Partner bei
+/// ~0.5 landen: ein gewichtetes Mittel zöge Ausgeglichene unter den 0.5-Wert
+/// eines Partners ganz ohne Historie und kehrte den Geber-Anreiz um. Nur Geben
+/// über Nehmen und echtes Volumen heben über 0.5, Nehmen drückt darunter.
 ///
 /// Ohne jede Historie (`total <= 0`) gibt es [`NEUTRAL_SCORE`], keinen Ausschlag
 /// in eine Richtung.
@@ -302,10 +308,9 @@ pub fn compute_viewer_fairness_score(sent_viewers_30d: i64, received_viewers_30d
         0.5 + 0.5 * (sent_viewers_30d - received_viewers_30d) as f64
             / (total + VIEWER_FAIRNESS_SMOOTHING),
     );
-    let volume_bonus = clamp01(sent_viewers_30d as f64 / VIEWER_VOLUME_REFERENCE);
-    round_score(clamp01(
-        ratio * (1.0 - VIEWER_VOLUME_BONUS_SHARE) + volume_bonus * VIEWER_VOLUME_BONUS_SHARE,
-    ))
+    let volume_bonus =
+        VIEWER_VOLUME_BONUS_SHARE * clamp01(sent_viewers_30d as f64 / VIEWER_VOLUME_REFERENCE);
+    round_score(clamp01(ratio + volume_bonus))
 }
 
 /// Base-Score (Pre-Boost) = readiness * 0.49725 + fairness * 0.26775
@@ -701,46 +706,56 @@ mod tests {
 
     #[test]
     fn viewer_fairness_netto_geber_ueber_neutral() {
-        // sent=50, recv=10 → ratio=0.625, volume=0.125 → 0.625*0.8+0.125*0.2=0.525
+        // sent=50, recv=10 → ratio=0.625, bonus=0.1*0.125=0.0125 → 0.6375
         let score = compute_viewer_fairness_score(50, 10);
-        assert_eq!(score, round_score(0.525));
+        assert_eq!(
+            score,
+            round_score(clamp01(0.5 + 0.5 * 40.0 / 160.0) + 0.1 * (50.0 / 400.0))
+        );
         assert!(score > NEUTRAL_SCORE);
     }
 
     #[test]
     fn viewer_fairness_netto_nehmer_unter_neutral() {
-        // sent=10, recv=50 → ratio=0.375, volume=0.025 → 0.375*0.8+0.025*0.2=0.305
+        // sent=10, recv=50 → ratio=0.375, bonus=0.1*0.025=0.0025 → 0.3775
         let score = compute_viewer_fairness_score(10, 50);
-        assert_eq!(score, round_score(0.305));
+        assert_eq!(
+            score,
+            round_score(clamp01(0.5 + 0.5 * -40.0 / 160.0) + 0.1 * (10.0 / 400.0))
+        );
         assert!(score < NEUTRAL_SCORE);
     }
 
     #[test]
+    fn viewer_fairness_ausgeglichen_nie_unter_neutral() {
+        // sent == recv darf nie unter den Wert eines Partners ganz ohne Historie
+        // fallen, sonst kehrt sich der Geber-Anreiz um.
+        for v in [1_i64, 5, 50, 200] {
+            let score = compute_viewer_fairness_score(v, v);
+            assert!(score >= NEUTRAL_SCORE, "sent=recv={v} → {score}");
+        }
+    }
+
+    #[test]
     fn viewer_fairness_realer_grosser_geber() {
-        // sent=830, recv=82 → total=912
-        // ratio = clamp(0.5 + 0.5*748/1012) = 0.869565
-        // volume = clamp(830/400) = 1.0
-        // = 0.869565*0.8 + 1.0*0.2 = 0.895652
+        // sent=830, recv=82 → ratio=0.869565, bonus=0.1*1.0=0.1 → 0.969565
         let score = compute_viewer_fairness_score(830, 82);
         assert_eq!(
             score,
-            round_score(clamp01(0.5 + 0.5 * 748.0 / 1012.0) * 0.8 + 1.0 * 0.2)
+            round_score(clamp01(0.5 + 0.5 * 748.0 / 1012.0) + 0.1 * 1.0)
         );
-        assert!(score > 0.89 && score < 0.90, "{score}");
+        assert!(score > 0.96 && score < 0.98, "{score}");
     }
 
     #[test]
     fn viewer_fairness_realer_grosser_nehmer() {
-        // sent=80, recv=396 → total=476
-        // ratio = clamp(0.5 + 0.5*(-316)/576) = 0.225694
-        // volume = clamp(80/400) = 0.2
-        // = 0.225694*0.8 + 0.2*0.2 = 0.220556
+        // sent=80, recv=396 → ratio=0.225694, bonus=0.1*0.2=0.02 → 0.245694
         let score = compute_viewer_fairness_score(80, 396);
         assert_eq!(
             score,
-            round_score(clamp01(0.5 + 0.5 * -316.0 / 576.0) * 0.8 + 0.2 * 0.2)
+            round_score(clamp01(0.5 + 0.5 * -316.0 / 576.0) + 0.1 * (80.0 / 400.0))
         );
-        assert!(score > 0.21 && score < 0.23, "{score}");
+        assert!(score > 0.23 && score < 0.26, "{score}");
     }
 
     // ─── compute_scores (Integrationstest) ───────────────────────────────────
