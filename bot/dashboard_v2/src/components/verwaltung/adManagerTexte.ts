@@ -1,7 +1,11 @@
 import type {
   AdManagerHistoryEntry,
   AdManagerPlan,
+  AdManagerPlanFit,
+  AdManagerPlanSuggestion,
 } from '@/api/adManager';
+
+export const TWITCH_ADS_MANAGER_URL = 'https://dashboard.twitch.tv/monetization/ads/ads-manager';
 
 const ENTRY_TEXTE: Record<string, string> = {
   in_queue: 'Werbung in der Queue gestartet',
@@ -69,6 +73,21 @@ export function statusSatz(input: {
   if (gegenwart) teile.push(gegenwart);
   if (teile.length === 1) teile.push('Der Bot verteilt die Werbung über deinen Stream.');
   return teile.join(' ');
+}
+
+export function fitHinweisText(fit: AdManagerPlanFit): string | null {
+  if (fit === 'tight') {
+    return 'Dein Twitch-Werbeplan ist dicht. Der Bot spart die Pausen für deine wichtigsten Momente und zieht Werbung, wo es geht, in ruhige Fenster.';
+  }
+  if (fit === 'unprotectable') {
+    return 'Dein Twitch-Werbeplan lässt sich nicht immer aus dem Match halten. Der Bot nutzt trotzdem jede Pause und jedes ruhige Fenster.';
+  }
+  return null;
+}
+
+export function vorschlagText(suggestion: AdManagerPlanSuggestion | null): string | null {
+  if (!suggestion) return null;
+  return `Vorschlag: bei Twitch etwa ${suggestion.minutesPerHour} Werbeminuten pro Stunde in ${suggestion.blockSeconds}-Sekunden-Blöcken.`;
 }
 
 export function budgetVorschau(minutes: number, plan: AdManagerPlan | null): string {

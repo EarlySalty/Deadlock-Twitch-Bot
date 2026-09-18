@@ -40,8 +40,17 @@ export interface AdManagerSteamStatus {
   observedAt: string | null;
 }
 
+export type AdManagerPlanFit = 'good' | 'tight' | 'unprotectable';
+
+export interface AdManagerPlanSuggestion {
+  minutesPerHour: number;
+  blockSeconds: number;
+}
+
 export interface AdManagerPlan {
   source: 'twitch' | 'own';
+  fit: AdManagerPlanFit;
+  suggestion: AdManagerPlanSuggestion | null;
   nextBlockAt: string | null;
   blockSeconds: number;
   blocksPerHour: number;
