@@ -11,6 +11,7 @@ import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
 import { Planung } from '@/pages/Planung';
 import { Community } from '@/pages/Community';
+import { CategoryCollector } from '@/pages/CategoryCollector';
 import { TitleGenerator } from '@/pages/TitleGenerator';
 import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
@@ -406,7 +407,9 @@ export default function App() {
       <LanguageProvider>
         <ErrorBoundary>
         <OnboardingProvider>
-          {isSocialMediaAdminRoute ? (
+          {path === '/twitch/kategorie' ? (
+            <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
+          ) : isSocialMediaAdminRoute ? (
             <DashboardShell activeRoute="social">
               <SocialMediaAdminDashboard />
             </DashboardShell>

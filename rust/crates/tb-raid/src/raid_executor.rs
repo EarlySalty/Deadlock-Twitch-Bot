@@ -41,7 +41,7 @@ pub struct RaidRequest {
 /// Ergebnis eines Raid-Versuchs (Python: `(success, error_message)`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RaidOutcome {
-    Started,
+    Started { raid_history_id: Option<i64> },
     Failed(String),
 }
 
@@ -121,15 +121,19 @@ impl RaidExecutor {
             .await
         {
             Ok(()) => {
-                if let Err(error) = self.record(req, true, None).await {
-                    tracing::error!(
-                        %error,
-                        from = %req.from_broadcaster_login,
-                        to = %req.to_broadcaster_login,
-                        "Raid-History nach erfolgreichem Twitch-Raid nicht schreibbar"
-                    );
-                }
-                Ok(RaidOutcome::Started)
+                let raid_history_id = match self.record(req, true, None).await {
+                    Ok(id) => Some(id),
+                    Err(error) => {
+                        tracing::error!(
+                            %error,
+                            from = %req.from_broadcaster_login,
+                            to = %req.to_broadcaster_login,
+                            "Raid-History nach erfolgreichem Twitch-Raid nicht schreibbar"
+                        );
+                        None
+                    }
+                };
+                Ok(RaidOutcome::Started { raid_history_id })
             }
             Err(error) => {
                 self.record(req, false, Some(error.clone())).await?;
@@ -143,7 +147,7 @@ impl RaidExecutor {
         req: &RaidRequest,
         success: bool,
         error_message: Option<String>,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<i64, sqlx::Error> {
         self.history
             .record_raid(&RecordRaidInput {
                 from_broadcaster_id: req.from_broadcaster_id.clone(),
@@ -158,7 +162,6 @@ impl RaidExecutor {
                 target_stream_started_at: req.target_stream_started_at,
                 candidates_count: req.candidates_count,
             })
-            .await?;
-        Ok(())
+            .await
     }
 }

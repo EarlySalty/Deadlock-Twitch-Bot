@@ -306,6 +306,7 @@ pub struct RaidGreetingRegistration {
     pub from_broadcaster_login: String,
     pub to_broadcaster_id: String,
     pub to_broadcaster_login: String,
+    pub raid_history_id: Option<i64>,
 }
 
 #[async_trait::async_trait]
@@ -662,7 +663,7 @@ impl AutoRaidPipeline {
             };
 
             match outcome {
-                RaidOutcome::Started => {
+                RaidOutcome::Started { raid_history_id } => {
                     self.register_pending(req, &target, &flow_id, channel_raid_ready)
                         .await;
                     if let Some(monitor) = &self.raid_greeting {
@@ -672,6 +673,7 @@ impl AutoRaidPipeline {
                                 from_broadcaster_login: req.broadcaster_login.clone(),
                                 to_broadcaster_id: target.user_id.clone(),
                                 to_broadcaster_login: target.user_login.clone(),
+                                raid_history_id,
                             })
                             .await;
                     }

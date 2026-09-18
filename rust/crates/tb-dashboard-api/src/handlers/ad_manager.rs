@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use tb_analytics::ad_manager::{
-    assess_plan, AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE,
-    READ_SCOPE, SNOOZE_SCOPE,
+    AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE, READ_SCOPE,
+    SNOOZE_SCOPE,
 };
 
 use crate::auth::level::DashboardAuthLevel;
@@ -234,26 +234,18 @@ async fn response(
         }
     };
     let steam = steam_status(steam_summary);
-    let row=sqlx::query("SELECT is_live,next_ad_at,last_ad_at,duration_seconds,preroll_free_seconds,snooze_count,snooze_refresh_at,observed_at,worker_heartbeat_at,last_action_kind,last_action_outcome,last_action_detail,last_action_at,last_decision_reason,plan_next_block_at,plan_block_seconds,plan_blocks_per_hour,budget_used_seconds,avg_match_seconds,avg_queue_seconds FROM twitch_ad_manager_state WHERE twitch_user_id=$1").bind(uid).fetch_optional(pool).await?;
+    let row=sqlx::query("SELECT is_live,next_ad_at,last_ad_at,duration_seconds,preroll_free_seconds,snooze_count,snooze_refresh_at,observed_at,worker_heartbeat_at,last_action_kind,last_action_outcome,last_action_detail,last_action_at,last_decision_reason,plan_next_block_at,plan_block_seconds,plan_blocks_per_hour,budget_used_seconds,plan_fit FROM twitch_ad_manager_state WHERE twitch_user_id=$1").bind(uid).fetch_optional(pool).await?;
     let status = if let Some(r) = row {
         let last_at: Option<DateTime<Utc>> = r.try_get("last_action_at")?;
         let heartbeat: Option<DateTime<Utc>> = r.try_get("worker_heartbeat_at")?;
         let next_ad: Option<DateTime<Utc>> = r.try_get("next_ad_at")?;
         let last_ad: Option<DateTime<Utc>> = r.try_get("last_ad_at")?;
         let snooze_count: Option<i32> = r.try_get("snooze_count")?;
-        let interval = match (next_ad, last_ad) {
-            (Some(next), Some(last)) if next > last => {
-                i32::try_from(next.signed_duration_since(last).num_seconds()).ok()
-            }
-            _ => None,
+        let fit = match r.try_get::<Option<String>, _>("plan_fit")?.as_deref() {
+            Some("tight") => "tight",
+            Some("unprotectable") => "unprotectable",
+            _ => "good",
         };
-        let fit = assess_plan(
-            next_ad.is_some(),
-            interval,
-            i64::from(snooze_count.unwrap_or(0)),
-            r.try_get("avg_match_seconds")?,
-            r.try_get("avg_queue_seconds")?,
-        );
         let plan = PlanResponse {
             next_block_at: iso(r.try_get("plan_next_block_at")?),
             block_seconds: r

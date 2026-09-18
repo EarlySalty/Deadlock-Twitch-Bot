@@ -22,9 +22,11 @@ Ist der Schalter aus, liest der Bot nur mit und zeigt den Status, er greift nich
 
 ## Budget
 
-Ohne Twitch-Plan stellst du die Werbeminuten pro Stunde ein (1 bis 8, Standard 3). Daraus macht der Bot gleichmäßige Blöcke, zum Beispiel 3 Minuten als sechs Blöcke von 30 Sekunden, etwa alle 10 Minuten. Passt eine sehr dichte Menge nicht in 30-Sekunden-Blöcke mit dem Twitch-Mindestabstand, wachsen die Blöcke auf 60 Sekunden, damit dein Budget nicht verfehlt wird.
+Ohne Twitch-Plan stellst du die Werbeminuten pro Stunde ein (1 bis 8, Standard 3). Daraus macht der Bot gleichmäßige Blöcke. 3 Minuten werden sechs Blöcke von 30 Sekunden, etwa alle 10 Minuten. Nach jeder Werbung gilt die Sperrzeit von Twitch, üblich 8 Minuten. Passt die Menge nicht in 30-Sekunden-Blöcke mit diesem Abstand, wachsen die Blöcke auf 60 Sekunden. Mit der üblichen Sperrzeit von 8 Minuten passen bei 8 Minuten Budget 7 Blöcke in die Stunde, weil der Abstand den achten Block nicht mehr zulässt.
 
 Läuft bei dir ein Twitch-Plan, entscheidet allein Twitch über die Menge. Das Budgetfeld ist dann nur Anzeige.
+
+Der Mindestabstand in den Feineinstellungen gilt für Pausen und für Werbung, die du selbst startest. Die automatische Verteilung nach deinem Budget richtet sich nach Budget und Twitch-Sperrzeit, nicht nach diesem Abstand.
 
 ## Verlauf
 

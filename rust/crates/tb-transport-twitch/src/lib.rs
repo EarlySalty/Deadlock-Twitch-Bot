@@ -26,3 +26,5 @@ pub use streams::{
 };
 pub use token::{AppToken, AppTokenManager, TokenError};
 pub use user_token::{TokenOwner, UserTokenError, UserTokenResponse};
+
+pub mod irc_message;

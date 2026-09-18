@@ -87,6 +87,11 @@ generated=(
   bot/admin_dashboard/dist
   website/dist
 )
+collector_expected=0
+if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/Cargo.toml" 2>/dev/null; then
+  collector_expected=1
+  generated+=(rust/target/release/tb-category-collector)
+fi
 for relative in "${generated[@]}"; do
   if [[ ! -e "$checkout/$relative" ]]; then
     echo "Release-Artefakt fehlt: $relative" >&2
@@ -108,7 +113,9 @@ done
 # ausführen. Ein neuer Checkout-Name macht eine kopierte alte Binary nicht neu.
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
-  for binary in tb-bot tb-dashboard tb-stream-audit; do
+  local binaries=(tb-bot tb-dashboard tb-stream-audit)
+  if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
+  for binary in "${binaries[@]}"; do
     embedded_revision="$(readelf --string-dump=.twitch_build "$source_root/rust/target/release/$binary" 2>/dev/null | awk '/\[/{print $NF}')" || embedded_revision=""
     if [[ "$embedded_revision" != "$git_sha" ]]; then
       echo "Build-Herkunft stimmt nicht: $binary muss aus dem sauberen Commit $git_sha neu gebaut werden." >&2
@@ -145,6 +152,9 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-bot" "$stage/rust/target/release/tb-bot"
   install -m 0755 "$checkout/rust/target/release/tb-dashboard" "$stage/rust/target/release/tb-dashboard"
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
+  if [[ "$collector_expected" == 1 ]]; then
+    install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
+  fi
 
   # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des
   # angegebenen SHA. Unversionierte Dateien aus dem Build-Baum werden niemals
@@ -155,7 +165,7 @@ if [[ ! -e "$release" ]]; then
     rust/scripts/run_stream_audit_service.sh \
     rust/migrations \
     rust/knowledge \
-    ops/systemd/twitch-runtime-roles.sql \
+    ops/systemd \
     | tar --extract --file=- --directory="$stage" --no-same-owner --no-same-permissions
 
   # Vor jedem root-seitigen chmod/chown müssen archivierte Quellen echte
@@ -168,7 +178,7 @@ if [[ ! -e "$release" ]]; then
     rust/scripts/run_stream_audit_service.sh
     rust/migrations
     rust/knowledge
-    ops/systemd/twitch-runtime-roles.sql
+    ops/systemd
   )
   unsafe_archived="$({
     cd "$stage"

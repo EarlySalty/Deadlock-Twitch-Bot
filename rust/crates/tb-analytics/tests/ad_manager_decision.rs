@@ -90,17 +90,29 @@ fn budgetgrenzen_werden_geprueft() {
 
 #[test]
 fn planer_verteilt_budget_und_waehlt_blocklaenge() {
-    let three = plan_next_block(now(), Some(now() - Duration::hours(1)), 3, 0, None, 480);
+    let start = now() - Duration::hours(1);
+    let three = plan_next_block(now(), Some(start), 3, 0, None, 480);
     assert_eq!(three.block_seconds, 30);
     assert_eq!(three.blocks_per_hour, 6);
 
-    // Dichtes Budget passt nicht in 30-Sekunden-Blöcke mit der Sperrzeit.
-    let eight = plan_next_block(now(), Some(now() - Duration::hours(1)), 8, 0, None, 480);
-    assert_eq!(eight.block_seconds, 60);
-    assert_eq!(eight.blocks_per_hour, 8);
+    let last = now() - Duration::minutes(10);
+    let three_next = plan_next_block(now(), Some(start), 3, 0, Some(last), 480);
+    assert_eq!(
+        three_next.next_block_at,
+        Some(last + Duration::seconds(600))
+    );
 
-    // Budget ausgeschöpft: kein weiterer Block in dieser Stunde.
-    let spent = plan_next_block(now(), Some(now() - Duration::hours(1)), 3, 180, None, 480);
+    let eight = plan_next_block(now(), Some(start), 8, 0, None, 480);
+    assert_eq!(eight.block_seconds, 60);
+    assert_eq!(eight.blocks_per_hour, 7);
+
+    let eight_next = plan_next_block(now(), Some(start), 8, 0, Some(last), 480);
+    assert_eq!(
+        eight_next.next_block_at,
+        Some(last + Duration::seconds(480))
+    );
+
+    let spent = plan_next_block(now(), Some(start), 3, 180, None, 480);
     assert!(spent.next_block_at.is_none());
 }
 
@@ -206,6 +218,26 @@ fn nach_matchende_erst_warten_dann_chat_pruefen() {
 
     value.recent_chat_messages = 3;
     assert_eq!(decide(&value).reason, "post_match_chat_active");
+}
+
+#[test]
+fn matchende_schlaegt_erneute_queue() {
+    let mut value = base(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(false, true));
+
+    value.match_ended_at = Some(value.now - Duration::seconds(30));
+    assert_eq!(decide(&value).reason, "post_match_wait");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
+
+    value.match_ended_at = Some(value.now - Duration::seconds(90));
+    value.recent_chat_messages = 0;
+    assert_eq!(decide(&value).reason, "post_match_quiet");
+
+    value.recent_chat_messages = 3;
+    assert_eq!(decide(&value).reason, "post_match_chat_active");
+
+    value.match_ended_at = Some(value.now - Duration::seconds(150));
+    assert_eq!(decide(&value).reason, "in_queue");
 }
 
 #[test]
@@ -431,4 +463,15 @@ fn hinweistext_wiederholt_die_variante_nicht_und_fuellt_die_dauer() {
     assert!(!ohne_dauer.contains("{dur}"));
     assert!(!ohne_dauer.contains("Sekunden lang"));
     assert!(!mit_dauer.contains('—'));
+}
+
+#[test]
+fn kein_hinweis_direkt_nach_matchende() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = None;
+    input.steam_match_state = Some(steam_state(false, true));
+    input.plan = own_block_plan(now() + Duration::seconds(30));
+    input.match_ended_at = Some(now() - Duration::seconds(30));
+    let decision = decide(&input);
+    assert_eq!(ad_hint(&input, &decision, None, HINT_WINDOW_SECS), None);
 }
