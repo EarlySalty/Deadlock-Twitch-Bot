@@ -6,14 +6,24 @@
 - Branch: `feat/titel-studio-costream`
 - Worktree: `/home/nathanael/.worktrees/tb-titel-costream`
 
-## Thread-Register (T3)
+## Aktueller Fixstand nach dem Review
+
+Der Nutzer hat nach `REVIEW.md` das Beheben der Mängel und das Deployment beauftragt. Der Paket-B-Stand wurde vom Intent-Thread in `db20505b384fa057300c50150c029ff4a37404de` gesichert. Die nachfolgende Reparatur wird in `FIX.md` dokumentiert; die älteren Befunde darunter sind als Entstehungsgeschichte zu lesen.
+
+Wichtige Korrektur zum Vorcheck: In der Produktionsdatenbank `twitch_analytics` fehlen `core.steam_links` und `voice.deadlock_party_members`. Die behauptete Verfügbarkeit im selben Pool ist damit widerlegt. Der reparierte Twitch-Bot liest Party- und Sprachkanal-IDs über den token-geschützten Leseweg des vorhandenen Steam-Dienstes. Die Twitch-Identitäten und den frischen Twitch-Live-Stand löst er in seiner eigenen Datenbank auf.
+
+Der ergänzte Steam-Commit ist `f4ac4a868f9162ef9d9cbfd5874af1854b05b2a3`. Er ist auf `origin/fix/title-context-read-api` und auf dem dortigen Remote-`main` gespeichert. Für diesen Push ist keine belastbare Merge-Gate-Antwort belegt. Der nachfolgende ausdrückliche Gate-Aufruf wurde vom Werkzeugzugang blockiert. Es wurde kein neues Release aktiviert.
+
+Die bisherigen direkten zentralen Joins in `steam_lookup.rs` sind ersetzt. Shared Chat wird über `/streams` zusätzlich auf laufende Streams geprüft. Der finale Titel-Nachfilter gilt auch für Alternativen und Ersatz-Titel. Prüfungen, Grenzen und die noch offene Veröffentlichung stehen in `FIX.md`.
+
+## Thread-Register (T3, historisch)
 
 | Paket | Thread-ID | Modell | Status | Worktree | Letzte Meldung |
 |---|---|---|---|---|---|
 | Vorcheck | ade64d1b | glm-token | tot, gesettelt, nicht wieder aufnehmen | keiner | OpenRouter 402, Guthaben leer; Vorcheck hat der Intent-Agent selbst per Graphify gelesen |
 | A | 26e1c46d | opus48 | fertig, gesettelt | `/home/nathanael/.worktrees/tb-titel-costream` | Commit 3f12d6f0 auf origin; Migrations-Kollision 20260918120000 ist auf main schon gelöst (1bc4ba94), Branch braucht vor dem Gate einen Merge von origin/main |
 | Review R1 | 52a77b4b | über --rolle review_1 gewählt | tot, gesettelt, nicht wieder aufnehmen | keiner | ProviderAdapterSessionNotFoundError (grok-Adapter), kein Review gelaufen, keine REVIEW.md |
-| B (Nachtrag 3) | direkte ChatGPT-Sitzung, keine T3-Thread-ID verfügbar | GPT-6 Astra Pro | fertig, Review offen | `/home/nathanael/.worktrees/tb-titel-costream` | Main-Merge a77524fd; Shared Chat → Steam-Party → Voice, Deduplizierung nach Twitch-ID. 7 neue Tests grün mit Rot-Nachweisen; 9 vorbestehende Fehler unverändert. Clippy, Frontend und Schema-Vertrag geprüft. SQLx-Online-Prüfung mit dokumentierter Brain-Abhängigkeit. Details: REPORT-B.md. Kein weiterer Thread und keine Unter-Agenten gestartet. |
+| B (Nachtrag 3) | direkte ChatGPT-Sitzung, keine T3-Thread-ID verfügbar | GPT-6 Astra Pro | Abschluss blockiert: parallele Änderungen im selben Worktree | `/home/nathanael/.worktrees/tb-titel-costream` | Main-Merge a77524fd und Nachtrag-3-Umsetzung vorhanden, noch kein Implementierungscommit. Gespeicherte Testnachweise: 7 neue Tests grün, 9 vorbestehende Fehler unverändert. Bei Wiederaufnahme doppelte Einbindung des PostgreSQL-Testhelfers beseitigt. Neuer Clippy-/Testlauf wegen paralleler Änderungen an title_ai.rs, title_db.rs, handlers/title.rs und dem gemeinsam bearbeiteten Helix-Client gestoppt; daher keine neue Gesamtfreigabe und kein Push. Details: REPORT-B.md. Kein weiterer Thread und keine Unter-Agenten gestartet. |
 | Review R1 neu | startet der Nutzer selbst nach B | | offen | derselbe, nur lesen | |
 
 ## Befund Voice-Quelle

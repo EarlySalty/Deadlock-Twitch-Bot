@@ -1,3 +1,4 @@
+import { neverWordList } from '../utils/titlePreferences';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -104,13 +105,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
     setAutoSet(settings.experimental_auto_set ?? false);
   }, [settings]);
 
-  const neverWordList = (value: string): string[] =>
-    value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((line) => line.slice(0, 60))
-      .slice(0, 40);
+
 
   const insightQuery = useQuery({
     queryKey: ['title-insights', streamer],
@@ -141,7 +136,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
       streamer,
     }, csrfToken),
     onSuccess: (data) => {
-      queryClient.setQueryData(['title-settings', streamer], data);
+      queryClient.setQueryData<TitleSettings>(['title-settings', streamer], (previous) => ({ ...previous, ...data }));
       setStylePreference(data.style_preference);
       setNeverWords((data.never_words ?? []).join('\n'));
       setAutoSet(data.experimental_auto_set);
@@ -176,7 +171,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   });
 
   const addNeverWord = (phrase: string) => {
-    const clean = phrase.trim().slice(0, 60);
+    const clean = neverWordList(phrase)[0] ?? '';
     if (!clean) return;
     const current = neverWordList(neverWords);
     if (current.some((entry) => entry.toLowerCase() === clean.toLowerCase())) return;
@@ -272,7 +267,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
 
         <div>
           <div className="text-sm font-medium text-white">Das will ich nie im Titel</div>
-          <p className="mt-1 text-xs text-text-secondary">Ein Wort oder ganzer Satz je Zeile. Wird sicher weggelassen. Bis zu 40 Zeilen zu je 60 Zeichen.</p>
+          <p className="mt-1 text-xs text-text-secondary">Ein Wort oder Satz je Zeile, bis zu 40 Einträge mit jeweils 60 Zeichen. Die gespeicherten Formulierungen werden aus den Vorschlägen ausgeschlossen.</p>
           <textarea
             value={neverWords}
             onChange={(event) => setNeverWords(event.target.value)}
@@ -331,9 +326,9 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary">
           <Toggle checked={includeLive} onChange={setIncludeLive} />
-          <span>Rang / Live-Hero / Party-Kontext aus Steam-Präsenz nutzen, wenn vorhanden</span>
+          <span>Rang, gespielten Helden und gemeinsames Streamen berücksichtigen</span>
         </label>
-        {result?.co_streamers && result.co_streamers.length > 0 && (
+        {includeLive && result?.co_streamers && result.co_streamers.length > 0 && (
           <p className="text-xs text-text-secondary">
             Erkannt: du streamst mit {result.co_streamers.map((login) => `@${login}`).join(' und ')}
           </p>
@@ -393,9 +388,9 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               </div>
             )}
             {setTitleStatus === 'error' && <p className="text-xs text-error">Twitch hat das Setzen des Titels gerade nicht bestätigt.</p>}
-            {result.auto_set_status === 'set' && <p className="text-xs text-success">Auto-Set war aktiv: Dieser Titel wurde direkt auf Twitch übernommen.</p>}
+            {result.auto_set_status === 'set' && <p className="text-xs text-success">Dieser Titel wurde automatisch auf Twitch übernommen.</p>}
 
-            {feedbackState === 'disliked' && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === editableTitle.trim().slice(0, 60).toLowerCase()) && (
+            {feedbackState === 'disliked' && neverWordList(neverWords).length < 40 && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === (neverWordList(editableTitle)[0] ?? '').toLowerCase()) && (
               <button
                 type="button"
                 onClick={() => addNeverWord(editableTitle)}
@@ -403,6 +398,10 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               >
                 Diese Formulierung in "Das will ich nie im Titel" übernehmen (danach speichern)
               </button>
+            )}
+
+            {feedbackState === 'disliked' && neverWordList(neverWords).length >= 40 && (
+              <p className="text-xs text-text-secondary">Deine Liste enthält bereits 40 Einträge. Entferne dort einen Eintrag, bevor du eine weitere Formulierung übernimmst.</p>
             )}
 
             {result.alternatives.length > 0 && (

@@ -53,181 +53,249 @@ pub async fn get_live_state_for_discord_user(
 struct CoStreamer {
     twitch_user_id: String,
     login: String,
+    last_seen_at: Option<String>,
 }
 
-async fn party_co_streamers(pool: &PgPool, discord_user_id: i64) -> Vec<CoStreamer> {
-    let rows = sqlx::query_as::<_, CoStreamer>(
-        "WITH me AS ( \
-             SELECT pm.steam_id, pm.party_id \
-               FROM core.steam_links sl \
-               JOIN voice.deadlock_party_members pm ON pm.steam_id = sl.steam_id \
-              WHERE sl.discord_id = $1 \
-                AND NULLIF(BTRIM(pm.party_id), '') IS NOT NULL \
-                AND pm.seen_at > now() - INTERVAL '10 minutes' \
-              ORDER BY pm.seen_at DESC, pm.steam_id, pm.party_id \
-              LIMIT 1 \
-         ) \
-         SELECT DISTINCT ls.twitch_user_id, LOWER(ls.streamer_login) AS login \
-           FROM me \
-           JOIN voice.deadlock_party_members pm2 \
-             ON pm2.party_id = me.party_id \
-            AND pm2.steam_id <> me.steam_id \
-            AND pm2.seen_at > now() - INTERVAL '10 minutes' \
-           JOIN core.steam_links sl2 \
-             ON sl2.steam_id = pm2.steam_id AND sl2.discord_id <> $1 \
-           JOIN twitch_streamer_identities tsi \
-             ON tsi.discord_user_id::text = sl2.discord_id::text \
-           JOIN twitch_live_state ls ON ls.twitch_user_id = tsi.twitch_user_id \
-          WHERE COALESCE(ls.is_live, 0) = 1 \
-            AND COALESCE(BTRIM(ls.streamer_login), '') <> '' \
-          ORDER BY ls.twitch_user_id, login",
-    )
-    .bind(discord_user_id)
-    .fetch_all(pool)
-    .await;
-    match rows {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%error, "Co-Stream-Erkennung aus Steam-Präsenz fehlgeschlagen; andere Signale bleiben verfügbar");
-            Vec::new()
-        }
-    }
+#[derive(Debug, Default, serde::Deserialize)]
+struct CentralTitleContext {
+    captured_at: i64,
+    party_size: Option<i32>,
+    party_discord_ids: Vec<String>,
+    voice_discord_ids: Vec<String>,
 }
 
-async fn voice_co_streamers(pool: &PgPool, discord_user_id: i64) -> Vec<CoStreamer> {
-    let rows = sqlx::query_as::<_, CoStreamer>(
-        "WITH me AS ( \
-             SELECT vw.channel_id, vw.guild_id \
-               FROM core.steam_links sl \
-               JOIN voice.deadlock_voice_watch vw ON vw.steam_id = sl.steam_id \
-              WHERE sl.discord_id = $1 \
-                AND vw.channel_id IS NOT NULL \
-                AND vw.updated_at > now() - INTERVAL '10 minutes' \
-              ORDER BY vw.updated_at DESC, vw.steam_id \
-              LIMIT 1 \
-         ) \
-         SELECT DISTINCT ls.twitch_user_id, LOWER(ls.streamer_login) AS login \
-           FROM me \
-           JOIN voice.deadlock_voice_watch vw2 \
-             ON vw2.channel_id = me.channel_id \
-            AND vw2.guild_id = me.guild_id \
-            AND vw2.updated_at > now() - INTERVAL '10 minutes' \
-           JOIN core.steam_links sl2 \
-             ON sl2.steam_id = vw2.steam_id AND sl2.discord_id <> $1 \
-           JOIN twitch_streamer_identities tsi \
-             ON tsi.discord_user_id::text = sl2.discord_id::text \
-           JOIN twitch_live_state ls ON ls.twitch_user_id = tsi.twitch_user_id \
-          WHERE COALESCE(ls.is_live, 0) = 1 \
-            AND COALESCE(BTRIM(ls.streamer_login), '') <> '' \
-          ORDER BY ls.twitch_user_id, login",
-    )
-    .bind(discord_user_id)
-    .fetch_all(pool)
-    .await;
-    match rows {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%error, "Co-Stream-Erkennung aus Discord-Voice fehlgeschlagen; andere Signale bleiben verfügbar");
-            Vec::new()
-        }
-    }
+#[derive(Debug, Default)]
+pub struct CoStreamContext {
+    pub co_streamers: Vec<String>,
+    pub party_hint: Option<String>,
 }
 
 pub async fn detect_co_streamers_all(
     pool: &PgPool,
     twitch_user_id: &str,
     discord_user_id: Option<i64>,
-) -> Vec<String> {
-    let shared = shared_chat_streamers(twitch_user_id).await;
-    detect_co_streamers_with_shared(pool, twitch_user_id, discord_user_id, shared).await
+) -> CoStreamContext {
+    let (shared, central) = tokio::join!(
+        shared_chat_streamers(twitch_user_id),
+        central_title_context(discord_user_id)
+    );
+    detect_co_streamers_with_shared(pool, twitch_user_id, shared, &central).await
 }
 
 async fn detect_co_streamers_with_shared(
     pool: &PgPool,
     twitch_user_id: &str,
-    discord_user_id: Option<i64>,
     shared: Vec<CoStreamer>,
-) -> Vec<String> {
-    let (party, voice) = match discord_user_id {
-        Some(id) => (
-            party_co_streamers(pool, id).await,
-            voice_co_streamers(pool, id).await,
-        ),
-        None => (Vec::new(), Vec::new()),
+    central: &CentralTitleContext,
+) -> CoStreamContext {
+    let central_fresh = chrono::Utc::now()
+        .timestamp()
+        .checked_sub(central.captured_at)
+        .is_some_and(|age| (0..600).contains(&age));
+    let party_hint = central
+        .party_size
+        .filter(|size| central_fresh && (1..=6).contains(size))
+        .map(|size| party_size_word(i64::from(size)).to_string());
+    let own_live = if shared.is_empty() {
+        let stamp = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT last_seen_at FROM twitch_live_state WHERE twitch_user_id = $1 AND COALESCE(is_live, 0) = 1"
+        ).bind(twitch_user_id).fetch_optional(pool).await.ok().flatten().flatten();
+        fresh_live_stamp(stamp.as_deref())
+    } else {
+        true
     };
+    let mut local = Vec::new();
+    if central_fresh && own_live {
+        let ids = central
+            .party_discord_ids
+            .iter()
+            .chain(&central.voice_discord_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            let rows = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+                "SELECT tsi.discord_user_id::text, ls.twitch_user_id, ls.streamer_login, ls.last_seen_at \
+                   FROM twitch_streamer_identities tsi \
+                   JOIN twitch_live_state ls ON ls.twitch_user_id = tsi.twitch_user_id \
+                  WHERE tsi.discord_user_id::text = ANY($1) AND COALESCE(ls.is_live, 0) = 1 \
+                  ORDER BY ls.twitch_user_id"
+            ).bind(&ids).fetch_all(pool).await;
+            source_state(4, rows.is_err());
+            let rows = rows.unwrap_or_default();
+            for members in [&central.party_discord_ids, &central.voice_discord_ids] {
+                local.extend(
+                    rows.iter()
+                        .filter(|row| members.contains(&row.0))
+                        .map(|row| CoStreamer {
+                            twitch_user_id: row.1.clone(),
+                            login: row.2.clone(),
+                            last_seen_at: row.3.clone(),
+                        }),
+                );
+            }
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for streamer in shared.into_iter().chain(party).chain(voice) {
+    for streamer in shared.into_iter().chain(local) {
         let id = streamer.twitch_user_id.trim();
-        let login = streamer.login.trim().trim_start_matches('@').to_lowercase();
-        if id.is_empty() || id == twitch_user_id || login.is_empty() || !seen.insert(id.to_string())
+        let login = streamer
+            .login
+            .trim()
+            .trim_start_matches('@')
+            .to_ascii_lowercase();
+        if id.is_empty()
+            || id == twitch_user_id
+            || !crate::title_ai::valid_co_streamer_login(&login)
+            || !fresh_live_stamp(streamer.last_seen_at.as_deref())
+            || !seen.insert(id.to_string())
         {
             continue;
         }
         out.push(login);
-        if out.len() >= 2 {
+        if out.len() == 2 {
             break;
         }
     }
-    out
+    CoStreamContext {
+        co_streamers: out,
+        party_hint,
+    }
+}
+
+fn fresh_live_stamp(stamp: Option<&str>) -> bool {
+    stamp
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|stamp| {
+            let age = chrono::Utc::now().signed_duration_since(stamp);
+            age >= chrono::Duration::zero() && age < chrono::Duration::minutes(10)
+        })
+}
+
+fn source_transition(state: &std::sync::atomic::AtomicU8, source: u8, failed: bool) -> bool {
+    use std::sync::atomic::Ordering;
+    if failed {
+        state.fetch_or(source, Ordering::Relaxed) & source == 0
+    } else {
+        state.fetch_and(!source, Ordering::Relaxed);
+        false
+    }
+}
+
+fn source_state(source: u8, failed: bool) {
+    static FAILURES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    if source_transition(&FAILURES, source, failed) {
+        tracing::warn!(
+            source,
+            "title_costream_source_unavailable: Titel nutzt die übrigen verfügbaren Angaben"
+        );
+    }
+}
+
+async fn central_title_context(discord_id: Option<i64>) -> CentralTitleContext {
+    let Some(discord_id) = discord_id else {
+        return CentralTitleContext::default();
+    };
+    let token = [
+        "TWITCH_INTERNAL_API_TOKEN",
+        "STEAM_INTERNAL_API_TOKEN",
+        "INTERNAL_API_TOKEN",
+    ]
+    .iter()
+    .find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    });
+    let result = match token {
+        Some(token) => {
+            fetch_central_title_context(
+                "http://127.0.0.1:8783/internal/title-context",
+                &token,
+                discord_id,
+            )
+            .await
+        }
+        None => Err(()),
+    };
+    source_state(2, result.is_err());
+    result.unwrap_or_default()
+}
+
+async fn fetch_central_title_context(
+    url: &str,
+    token: &str,
+    discord_id: i64,
+) -> Result<CentralTitleContext, ()> {
+    let url = reqwest::Url::parse(url).map_err(|_| ())?;
+    if url.scheme() != "http"
+        || !url
+            .host_str()
+            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+            .is_some_and(|ip| ip.is_loopback())
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || token.trim().is_empty()
+    {
+        return Err(());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| ())?;
+    client
+        .get(url)
+        .header("X-Internal-Token", token)
+        .query(&[("discord_id", discord_id)])
+        .send()
+        .await
+        .map_err(|_| ())?
+        .error_for_status()
+        .map_err(|_| ())?
+        .json()
+        .await
+        .map_err(|_| ())
 }
 
 async fn shared_chat_streamers(twitch_user_id: &str) -> Vec<CoStreamer> {
-    let id = std::env::var("TWITCH_CLIENT_ID").unwrap_or_default();
-    let secret = std::env::var("TWITCH_CLIENT_SECRET").unwrap_or_default();
-    if id.trim().is_empty() || secret.trim().is_empty() {
-        return Vec::new();
-    }
-    let helix = match tb_transport_twitch::HelixClient::new(tb_transport_twitch::HelixConfig::new(
-        id.trim(),
-        secret.trim(),
-    )) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "Shared-Chat: Helix-Client nicht baubar; Co-Stream aus Steam-Präsenz und Discord-Voice");
-            return Vec::new();
-        }
+    static HELIX: tokio::sync::OnceCell<tb_transport_twitch::HelixClient> =
+        tokio::sync::OnceCell::const_new();
+    let helix = HELIX
+        .get_or_try_init(|| async {
+            let id = std::env::var("TWITCH_CLIENT_ID")
+                .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_ID"))
+                .unwrap_or_default();
+            let secret = std::env::var("TWITCH_CLIENT_SECRET")
+                .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_SECRET"))
+                .unwrap_or_default();
+            if id.trim().is_empty() || secret.trim().is_empty() {
+                return Err(());
+            }
+            tb_transport_twitch::HelixClient::new(tb_transport_twitch::HelixConfig::new(
+                id.trim(),
+                secret.trim(),
+            ))
+            .map_err(|_| ())
+        })
+        .await;
+    let result = match helix {
+        Ok(helix) => helix
+            .get_shared_chat_users(twitch_user_id)
+            .await
+            .map_err(|_| ()),
+        Err(()) => Err(()),
     };
-    match helix.get_shared_chat_users(twitch_user_id).await {
-        Ok(users) => users
-            .into_iter()
-            .map(|user| CoStreamer {
-                twitch_user_id: user.id,
-                login: user.login,
-            })
-            .collect(),
-        Err(error) => {
-            tracing::warn!(%error, "Shared-Chat-Abfrage fehlgeschlagen; Co-Stream aus Steam-Präsenz und Discord-Voice");
-            Vec::new()
-        }
-    }
-}
-
-pub async fn get_party_hint_for_discord_user(
-    pool: &PgPool,
-    discord_user_id: i64,
-) -> Option<String> {
-    use sqlx::Row;
-    let row = sqlx::query(
-        "SELECT MAX(LEAST(GREATEST(pm.party_size, 1), 6))::bigint AS size \
-           FROM core.steam_links sl \
-           JOIN voice.deadlock_party_members pm ON pm.steam_id = sl.steam_id \
-          WHERE sl.discord_id = $1 \
-            AND pm.party_size IS NOT NULL \
-            AND pm.seen_at > now() - INTERVAL '10 minutes'",
-    )
-    .bind(discord_user_id)
-    .fetch_optional(pool)
-    .await;
-    let size = match row {
-        Ok(Some(row)) => row.try_get::<Option<i64>, _>("size").ok().flatten(),
-        Ok(None) => None,
-        Err(error) => {
-            tracing::warn!(%error, "Party-Größe nicht lesbar; Titel ohne Party-Hinweis");
-            None
-        }
-    }?;
-    Some(party_size_word(size).to_string())
+    source_state(1, result.is_err());
+    result
+        .unwrap_or_default()
+        .into_iter()
+        .map(|user| CoStreamer {
+            twitch_user_id: user.id,
+            login: user.login,
+            last_seen_at: Some(chrono::Utc::now().to_rfc3339()),
+        })
+        .collect()
 }
 
 fn party_size_word(size: i64) -> &'static str {
@@ -260,74 +328,124 @@ fn live_context(
 }
 
 #[cfg(test)]
-#[path = "../../../test-support/postgres.rs"]
-mod test_postgres;
-
-#[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn detect_co_streamers(pool: &PgPool, discord_user_id: i64) -> Vec<String> {
-        detect_co_streamers_with_shared(pool, "100", Some(discord_user_id), Vec::new()).await
-    }
+    use crate::test_postgres;
 
     fn co_streamer(id: &str, login: &str) -> CoStreamer {
         CoStreamer {
-            twitch_user_id: id.to_string(),
-            login: login.to_string(),
+            twitch_user_id: id.into(),
+            login: login.into(),
+            last_seen_at: Some(chrono::Utc::now().to_rfc3339()),
+        }
+    }
+
+    fn central() -> CentralTitleContext {
+        CentralTitleContext {
+            captured_at: chrono::Utc::now().timestamp(),
+            party_size: Some(2),
+            party_discord_ids: vec!["43".into()],
+            voice_discord_ids: vec!["43".into(), "44".into(), "45".into()],
+        }
+    }
+
+    async fn co_stream_pool() -> test_postgres::TestPostgres {
+        let db = test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
+            CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT, is_live INTEGER, last_seen_at TEXT DEFAULT (to_json(now()) #>> '{}'));
+            INSERT INTO twitch_streamer_identities VALUES ('100','42'),('200','43'),('300','44'),('400','45');
+            INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live) VALUES ('100','myself',1),('200','party_live',1),('300','voice_one',1),('400','voice_two',1);")
+            .execute(&db.pool).await.unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn review_getrennte_datenbanken_shared_party_voice_und_ids() {
+        let db = co_stream_pool().await;
+        let result = detect_co_streamers_with_shared(
+            &db.pool,
+            "100",
+            vec![co_streamer("900", "shared")],
+            &central(),
+        )
+        .await;
+        assert_eq!(result.co_streamers, ["shared", "party_live"]);
+        assert_eq!(result.party_hint.as_deref(), Some("Duo"));
+        let result = detect_co_streamers_with_shared(
+            &db.pool,
+            "100",
+            vec![
+                co_streamer("100", "self_renamed"),
+                co_streamer("200", "Renamed"),
+                co_streamer("200", "old_alias"),
+            ],
+            &central(),
+        )
+        .await;
+        assert_eq!(result.co_streamers, ["renamed", "voice_one"]);
+        let result = detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central()).await;
+        assert_eq!(result.co_streamers, ["party_live", "voice_one"]);
+    }
+
+    #[tokio::test]
+    async fn review_veraltete_twitch_daten_sind_nicht_live() {
+        let db = co_stream_pool().await;
+        for stamp in [
+            None,
+            Some(""),
+            Some("kaputt"),
+            Some("2020-01-01T00:00:00Z"),
+            Some("2099-01-01T00:00:00Z"),
+        ] {
+            sqlx::query(
+                "UPDATE twitch_live_state SET last_seen_at = $1 WHERE twitch_user_id <> '100'",
+            )
+            .bind(stamp)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            assert!(
+                detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central())
+                    .await
+                    .co_streamers
+                    .is_empty(),
+                "{stamp:?}"
+            );
         }
     }
 
     #[tokio::test]
-    async fn nachtrag3_shared_party_voice_dedupliziert_nach_ids() {
+    async fn review_eigener_offline_kanal_hat_keine_co_streamer() {
         let db = co_stream_pool().await;
-        sqlx::raw_sql("INSERT INTO voice.deadlock_voice_watch VALUES ('own', 1, 7, now()), ('party', 1, 7, now()), ('voice1', 1, 7, now()), ('voice2', 1, 7, now());")
-            .execute(&db.pool).await.unwrap();
-        assert_eq!(
-            detect_co_streamers_with_shared(
-                &db.pool,
-                "100",
-                Some(42),
-                vec![co_streamer("900", "shared")]
-            )
-            .await,
-            ["shared", "party_live"]
-        );
-        assert_eq!(
-            detect_co_streamers_with_shared(
-                &db.pool,
-                "100",
-                Some(42),
-                vec![
-                    co_streamer("100", "other_self_name"),
-                    co_streamer("", "invalid"),
-                    co_streamer("900", "   "),
-                    co_streamer("200", " @Renamed "),
-                    co_streamer("200", "old_alias"),
-                ]
-            )
-            .await,
-            ["renamed", "voice_one"]
+        sqlx::query("UPDATE twitch_live_state SET is_live = 0 WHERE twitch_user_id = '100'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central())
+                .await
+                .co_streamers
+                .is_empty()
         );
     }
 
     #[tokio::test]
-    async fn nachtrag3_signalfehler_lassen_andere_signale_stehen() {
+    async fn review_quellausfall_und_alte_praesenz_lassen_shared_stehen() {
         let db = co_stream_pool().await;
-        sqlx::raw_sql("INSERT INTO voice.deadlock_voice_watch VALUES ('own', 1, 7, now()), ('voice1', 1, 7, now()); DROP TABLE voice.deadlock_party_members;")
-            .execute(&db.pool).await.unwrap();
-        assert_eq!(
-            detect_co_streamers_with_shared(
+        for age in [600, -60] {
+            let mut context = central();
+            context.captured_at -= age;
+            let result = detect_co_streamers_with_shared(
                 &db.pool,
                 "100",
-                Some(42),
-                vec![co_streamer("900", "shared")]
+                vec![co_streamer("900", "shared")],
+                &context,
             )
-            .await,
-            ["shared", "voice_one"]
-        );
-        assert_eq!(detect_co_streamers(&db.pool, 42).await, ["voice_one"]);
-        sqlx::raw_sql("DROP TABLE voice.deadlock_voice_watch;")
+            .await;
+            assert_eq!(result.co_streamers, ["shared"]);
+            assert!(result.party_hint.is_none());
+        }
+        sqlx::query("DROP TABLE twitch_streamer_identities")
             .execute(&db.pool)
             .await
             .unwrap();
@@ -335,143 +453,76 @@ mod tests {
             detect_co_streamers_with_shared(
                 &db.pool,
                 "100",
-                Some(42),
-                vec![co_streamer("900", "shared")]
+                vec![co_streamer("900", "shared")],
+                &central()
             )
-            .await,
+            .await
+            .co_streamers,
             ["shared"]
         );
     }
 
     #[tokio::test]
-    async fn nachtrag3_ohne_discord_nur_shared_chat() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/unused")
-            .unwrap();
-        assert_eq!(
-            detect_co_streamers_with_shared(
-                &pool,
-                "100",
-                None,
-                vec![
-                    co_streamer("900", "shared"),
-                    co_streamer("901", "second"),
-                    co_streamer("902", "third")
-                ]
-            )
-            .await,
-            ["shared", "second"]
+    async fn review_fehlende_ids_offline_und_falsche_logins_werden_verworfen() {
+        let db = co_stream_pool().await;
+        sqlx::raw_sql("DELETE FROM twitch_streamer_identities WHERE twitch_user_id='200'; UPDATE twitch_live_state SET is_live=0 WHERE twitch_user_id='300'; UPDATE twitch_live_state SET streamer_login='fremdä' WHERE twitch_user_id='400';")
+            .execute(&db.pool).await.unwrap();
+        assert!(
+            detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central())
+                .await
+                .co_streamers
+                .is_empty()
         );
     }
 
-    async fn co_stream_pool() -> test_postgres::TestPostgres {
-        let db = test_postgres::TestPostgres::start().await;
-        sqlx::raw_sql(
-            "CREATE SCHEMA core;
-             CREATE SCHEMA voice;
-             CREATE TABLE core.steam_links (
-                 discord_id BIGINT NOT NULL, steam_id TEXT NOT NULL,
-                 PRIMARY KEY (discord_id, steam_id)
-             );
-             CREATE TABLE voice.deadlock_party_members (
-                 party_id TEXT NOT NULL, steam_id TEXT NOT NULL,
-                 party_size INTEGER, seen_at TIMESTAMPTZ NOT NULL,
-                 PRIMARY KEY (party_id, steam_id)
-             );
-             CREATE TABLE voice.deadlock_voice_watch (
-                 steam_id TEXT PRIMARY KEY, guild_id BIGINT NOT NULL,
-                 channel_id BIGINT, updated_at TIMESTAMPTZ NOT NULL
-             );
-             CREATE TABLE twitch_streamer_identities (
-                 twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT
-             );
-             CREATE TABLE twitch_live_state (
-                 twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT, is_live BIGINT
-             );
-             INSERT INTO core.steam_links VALUES
-                 (42, 'own'), (43, 'party'), (44, 'voice1'), (45, 'voice2');
-             INSERT INTO twitch_streamer_identities VALUES
-                 ('100', '42'), ('200', '43'), ('300', '44'), ('400', '45');
-             INSERT INTO twitch_live_state VALUES
-                 ('100', 'myself', 1), ('200', 'Party_Live', 1),
-                 ('300', 'voice_one', 1), ('400', 'voice_two', 1);
-             INSERT INTO voice.deadlock_party_members VALUES
-                 ('group', 'own', 2, now()), ('group', 'party', 2, now());",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
-        db
+    #[test]
+    fn review_warnung_einmal_je_stoerung_mit_erholung() {
+        let state = std::sync::atomic::AtomicU8::new(0);
+        assert!(source_transition(&state, 1, true));
+        assert!(!source_transition(&state, 1, true));
+        assert!(source_transition(&state, 2, true));
+        assert!(!source_transition(&state, 1, false));
+        assert!(source_transition(&state, 1, true));
+        assert!(!source_transition(&state, 2, true));
     }
 
     #[tokio::test]
-    async fn nachtrag3_party_erkennung_prueft_frische_ids_und_live_status() {
-        let db = co_stream_pool().await;
-        assert_eq!(detect_co_streamers(&db.pool, 42).await, ["party_live"]);
-        assert!(detect_co_streamers(&db.pool, 999).await.is_empty());
-
-        for steam_id in ["own", "party"] {
-            sqlx::query("UPDATE voice.deadlock_party_members SET seen_at = now() - INTERVAL '10 minutes' WHERE steam_id = $1")
-                .bind(steam_id).execute(&db.pool).await.unwrap();
-            assert!(
-                detect_co_streamers(&db.pool, 42).await.is_empty(),
-                "{steam_id}"
-            );
-            sqlx::query("UPDATE voice.deadlock_party_members SET seen_at = now() - INTERVAL '9 minutes' WHERE steam_id = $1")
-                .bind(steam_id).execute(&db.pool).await.unwrap();
-            assert_eq!(detect_co_streamers(&db.pool, 42).await, ["party_live"]);
-        }
-        for party_id in ["", "   "] {
-            sqlx::query("UPDATE voice.deadlock_party_members SET party_id = $1")
-                .bind(party_id)
-                .execute(&db.pool)
-                .await
-                .unwrap();
-            assert!(detect_co_streamers(&db.pool, 42).await.is_empty());
-        }
-        sqlx::raw_sql("UPDATE voice.deadlock_party_members SET party_id = steam_id;")
-            .execute(&db.pool)
+    async fn review_bestehender_steam_dienst_auth_und_keine_token_weitergabe() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/internal/title-context"))
+            .and(query_param("discord_id", "42"))
+            .and(wiremock::matchers::header("x-internal-token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "captured_at":chrono::Utc::now().timestamp(), "party_size":2, "party_discord_ids":["43"], "voice_discord_ids":["44"]
+            }))).expect(1).mount(&server).await;
+        let url = format!("{}/internal/title-context", server.uri());
+        let context = fetch_central_title_context(&url, "test-token", 42)
             .await
             .unwrap();
-        assert!(detect_co_streamers(&db.pool, 42).await.is_empty());
-        sqlx::raw_sql("UPDATE voice.deadlock_party_members SET party_id = 'group'; UPDATE twitch_live_state SET is_live = 0 WHERE twitch_user_id = '200';")
-            .execute(&db.pool).await.unwrap();
-        assert!(detect_co_streamers(&db.pool, 42).await.is_empty());
-        sqlx::raw_sql("UPDATE twitch_live_state SET is_live = 1; DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '200';")
-            .execute(&db.pool).await.unwrap();
-        assert!(detect_co_streamers(&db.pool, 42).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn nachtrag3_party_hat_vorrang_vor_voice() {
-        let db = co_stream_pool().await;
-        sqlx::raw_sql("INSERT INTO voice.deadlock_voice_watch VALUES ('own', 1, 7, now()), ('voice1', 1, 7, now()), ('voice2', 1, 7, now());")
-            .execute(&db.pool).await.unwrap();
-        assert_eq!(
-            detect_co_streamers(&db.pool, 42).await,
-            ["party_live", "voice_one"]
-        );
-    }
-
-    #[tokio::test]
-    async fn nachtrag3_party_hinweis_liefert_steam_praesenz() {
-        let db = co_stream_pool().await;
-        assert_eq!(
-            get_party_hint_for_discord_user(&db.pool, 42)
-                .await
-                .as_deref(),
-            Some("Duo")
-        );
-        sqlx::raw_sql(
-            "UPDATE voice.deadlock_party_members SET seen_at = now() - INTERVAL '10 minutes';",
+        assert_eq!(context.party_discord_ids, ["43"]);
+        assert_eq!(context.voice_discord_ids, ["44"]);
+        assert!(fetch_central_title_context(&url, "", 42).await.is_err());
+        assert!(fetch_central_title_context(
+            "http://example.invalid/internal/title-context",
+            "test-token",
+            42
         )
-        .execute(&db.pool)
         .await
-        .unwrap();
-        assert!(get_party_hint_for_discord_user(&db.pool, 42)
-            .await
-            .is_none());
+        .is_err());
+        Mock::given(path("/redirect"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", url.as_str()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(fetch_central_title_context(
+            &format!("{}/redirect", server.uri()),
+            "test-token",
+            42
+        )
+        .await
+        .is_err());
     }
+
     use wiremock::{
         matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,

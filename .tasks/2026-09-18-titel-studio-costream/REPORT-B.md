@@ -1,6 +1,16 @@
-# Abschluss Paket B: Nachtrag 3
+# Paket B: Nachtrag 3, Abschluss blockiert
 
-Stand: 18. September 2026. Implementierung abgeschlossen, fachliches Review und Merge nach main bleiben beim Intent-Thread.
+Stand: 18. September 2026. Die Implementierung liegt im Worktree, ihr Commit und Push sind noch offen. Fachliches Review und Merge nach main bleiben beim Intent-Thread.
+
+## Wiederaufnahme und Überschneidung
+
+Bei der Wiederaufnahme stand der Branch auf `b861ab93ff6e9ae3378316b1949693d559dc7ecc`, einem bereits gepushten Review-Commit. Die sechs Paket-B-Dateien waren vorgemerkt, aber noch nicht committed. Der Migrations-Fix `1bc4ba94` ist nach einem erneuten Fetch nachweislich Vorfahr von HEAD; der vorangegangene Main-Merge `a77524fd` bleibt erhalten.
+
+Die gespeicherten Baseline-, Endlauf- und Rot-Protokolle wurden nachgelesen. Dabei fiel eine zusätzliche Clippy-Warnung auf: `steam_lookup.rs` band den vorhandenen PostgreSQL-Testhelfer ein zweites Mal als Modul ein. Die Tests verwenden jetzt `crate::test_postgres`; die beiden eigenen Rust-Dateien wurden mit Rustfmt 1.97.1 formatiert.
+
+Während des erneuten Prüflaufs erschienen weitere, nicht von dieser Wiederaufnahme stammende Änderungen an `title_ai.rs`, `title_db.rs`, `handlers/title.rs`, `tb-transport-twitch/src/client.rs` sowie die neue Datei `tb-chat/tests/title_costream_review.rs`. Der Helix-Client überschneidet sich unmittelbar mit Paket B. Deshalb ist der Arbeitsstand für eine getrennte Abnahme nicht mehr eindeutig. Der eigene temporäre Prüfdienst `tb-titel-b-verify-20260918.service` wurde gestoppt. Fremde Änderungen wurden nicht übernommen, zurückgesetzt oder gestaged. Kein Implementierungscommit und kein Push dieser Wiederaufnahme.
+
+Die nachfolgenden Zahlen sind die verifizierten gespeicherten Protokolle vor dieser Überschneidung, keine Abnahme des inzwischen gemischten Worktrees. Offen bleiben die Abstimmung der Dateiverantwortung, ein vollständiger Testlauf des abgegrenzten Endstands und der Paket-Commit mit Push. Die unvollständigen Wiederaufnahmeprotokolle heißen `B-resume-clippy.log` und gegebenenfalls `B-resume-final.log`.
 
 ## Arbeitsstand
 
@@ -57,7 +67,7 @@ Rot-Nachweise: Vor der Implementierung waren drei neue Tests rot (0 bestanden / 
 Weitere Prüfungen:
 
 - `cargo build -p tb-chat -p tb-dashboard-api`: erfolgreich, beide Ziel-Crates bauen nach dem Main-Merge und der Implementierung.
-- `cargo clippy -p tb-chat -p tb-dashboard-api -p tb-transport-twitch --all-targets`: erfolgreich. Bestehende Warnungen außerhalb der beiden geänderten Rust-Dateien; keine Warnung in diesen Dateien.
+- `cargo clippy -p tb-chat -p tb-dashboard-api -p tb-transport-twitch --all-targets`: Der gespeicherte Lauf ist durchgelaufen, enthält aber neben bestehenden Warnungen auch die zusätzliche Warnung `duplicate_mod` aus der neuen Testhelfer-Einbindung. Diese Einbindung wurde bei Wiederaufnahme korrigiert; die vollständige erneute Abnahme wurde wegen der parallelen Änderungen gestoppt.
 - `cargo test -p tb-chat -p tb-dashboard-api -p tb-transport-twitch --no-fail-fast`: obiger Endstand, exakt dieselben neun Fehler wie in der Baseline.
 - `fresh_migrations_match_committed_schema_snapshot`: 1 bestanden / 0 fehlgeschlagen, gegen eine neu erstellte isolierte Timescale/PostgreSQL-Datenbank.
 - `npm run build`: erfolgreich. Abhängigkeiten ausschließlich mit `npm ci --ignore-scripts --no-audit --no-fund` aus dem bestehenden Lockfile im eigenen Worktree installiert; keine Manifest- oder Lockfile-Änderung.

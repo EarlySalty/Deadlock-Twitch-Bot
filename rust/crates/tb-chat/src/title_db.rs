@@ -33,20 +33,22 @@ pub struct KnowledgeTitle {
 pub struct TitlePreferences {
     pub style_preference: String,
     pub experimental_auto_set: bool,
-    /// Eigene Verbotsliste des Streamers ("Das will ich nie im Titel"), eine
-    /// Phrase je Eintrag. Wirkt als Prompt-Block und harter Nachfilter.
     pub never_words: Vec<String>,
 }
 
-/// Zerlegt den gespeicherten Verbotslisten-Text (eine Phrase je Zeile) in
-/// höchstens 40 getrimmte Einträge zu je 60 Zeichen.
-pub fn parse_never_words(raw: &str) -> Vec<String> {
-    raw.lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .map(|line| line.chars().take(60).collect::<String>())
+pub fn normalize_never_words(words: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    words
+        .iter()
+        .map(|word| word.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|word| word.chars().take(60).collect::<String>().trim().to_string())
+        .filter(|word| !word.is_empty() && seen.insert(word.to_lowercase()))
         .take(40)
         .collect()
+}
+
+pub fn parse_never_words(raw: &str) -> Vec<String> {
+    normalize_never_words(&raw.lines().map(str::to_string).collect::<Vec<_>>())
 }
 
 /// Vom Streamer explizit bewertetes Beispiel fuer die Human-Feedback-Schleife.
@@ -173,26 +175,25 @@ pub async fn get_top_knowledge_titles(pool: &PgPool, limit: i64) -> Vec<Knowledg
     }
 }
 
-pub async fn get_title_preferences(pool: &PgPool, streamer_id: &str) -> TitlePreferences {
+pub async fn get_title_preferences(
+    pool: &PgPool,
+    streamer_id: &str,
+) -> Result<TitlePreferences, sqlx::Error> {
     let row = sqlx::query_as::<_, (String, bool, String)>(
         "SELECT style_preference, experimental_auto_set, never_words \
          FROM title_generator_preferences WHERE twitch_user_id = $1",
     )
     .bind(streamer_id)
     .fetch_optional(pool)
-    .await;
-    match row {
-        Ok(Some((style_preference, experimental_auto_set, never_words))) => TitlePreferences {
+    .await?;
+    Ok(match row {
+        Some((style_preference, experimental_auto_set, never_words)) => TitlePreferences {
             style_preference,
             experimental_auto_set,
             never_words: parse_never_words(&never_words),
         },
-        Ok(None) => TitlePreferences::default(),
-        Err(error) => {
-            tracing::debug!(%error, streamer_id, "title preferences konnten nicht geladen werden");
-            TitlePreferences::default()
-        }
-    }
+        None => TitlePreferences::default(),
+    })
 }
 
 pub async fn save_title_preferences(
@@ -202,7 +203,7 @@ pub async fn save_title_preferences(
     experimental_auto_set: bool,
     never_words: &[String],
 ) -> Result<(), sqlx::Error> {
-    let never_words = never_words.join("\n");
+    let never_words = normalize_never_words(never_words).join("\n");
     sqlx::query(
         "INSERT INTO title_generator_preferences \
          (twitch_user_id, style_preference, experimental_auto_set, never_words, updated_at) \
