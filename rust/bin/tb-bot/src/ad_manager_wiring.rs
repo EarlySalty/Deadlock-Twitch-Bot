@@ -294,6 +294,7 @@ async fn process_channel(
                 budget_used,
                 last_block_at,
                 retry_after_seconds,
+                channel.settings.min_interval_minutes,
             );
             plan_for_status = Some(plan);
             let (last_raid_at, last_raider) =
@@ -387,8 +388,6 @@ async fn process_channel(
                     .await?;
             }
             DecisionAction::Commercial { duration_seconds } => {
-                // Eigene Blöcke haben keinen Twitch-Termin: der Blocktermin des
-                // Plans hält den Schlüssel je Block eindeutig.
                 let key_time = schedule
                     .next_ad_at
                     .clone()
@@ -640,8 +639,6 @@ fn has(scopes: &[String], needle: &str) -> bool {
         .any(|value| value.trim().eq_ignore_ascii_case(needle))
 }
 
-/// Rundet die von Twitch gemeldete Werbedauer auf die nächste erlaubte
-/// Commercial-Länge, damit ein vorgezogener Block ihr entspricht.
 fn nearest_ad_length(planned_seconds: i32) -> Option<i32> {
     if planned_seconds <= 0 {
         return None;

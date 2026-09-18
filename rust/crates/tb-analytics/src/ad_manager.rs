@@ -28,15 +28,10 @@ pub enum Strategy {
     Smart,
 }
 
-/// Sperrzeit nach einem Twitch-Commercial, wenn Twitch selbst noch keine
-/// gemeldet hat. Der reale Wert kommt aus der Helix-Antwort und wird bevorzugt.
 pub const DEFAULT_RETRY_AFTER_SECS: i32 = 8 * 60;
 const RAID_LOCK_MIN: i64 = 10;
 const FIRST_CHATTER_LOCK_MIN: i64 = 5;
 const POST_MATCH_WAIT_MIN: i64 = 1;
-/// Reicht der Termin der geplanten Twitch-Werbung so weit in die Zukunft, dass
-/// ein jetzt beginnendes Match sie schlucken würde, zieht der Bot sie aus dem
-/// offenen Queue-Fenster vor.
 const PULL_FORWARD_HORIZON_MIN: i64 = 12;
 
 #[cfg(test)]
@@ -396,10 +391,6 @@ pub struct SteamMatchSummary {
     pub observed_at: Option<DateTime<Utc>>,
 }
 
-/// Ergebnis des Budget-Planers: der frühestmögliche Termin des nächsten eigenen
-/// Blocks samt Blockdauer, die Blockzahl pro Stunde und das in dieser Stunde
-/// bereits verbrauchte Werbebudget. `next_block_at` ist `None`, sobald das
-/// Stundenbudget ausgeschöpft ist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdPlan {
     pub next_block_at: Option<DateTime<Utc>>,
@@ -408,9 +399,6 @@ pub struct AdPlan {
     pub budget_used_seconds_this_hour: i32,
 }
 
-/// Reine Planungsfunktion: verteilt das Stundenbudget als gleichmäßige Blöcke.
-/// Passt das Budget nicht in 30-Sekunden-Blöcke mit dem Sperrzeit-Abstand,
-/// wächst der Block auf 60 Sekunden, statt das Budget zu verfehlen.
 pub fn plan_next_block(
     now: DateTime<Utc>,
     stream_started_at: Option<DateTime<Utc>>,
@@ -418,18 +406,21 @@ pub fn plan_next_block(
     budget_used_seconds_this_hour: i32,
     last_block_at: Option<DateTime<Utc>>,
     retry_after_seconds: i32,
+    min_interval_minutes: i32,
 ) -> AdPlan {
     let budget_seconds = budget_minutes_per_hour.clamp(1, 8) * 60;
-    let retry = retry_after_seconds.max(1);
+    let floor = retry_after_seconds
+        .max(1)
+        .max(min_interval_minutes.max(0) * 60);
 
     let count_30 = (budget_seconds / 30).max(1);
     let period_30 = 3600 / count_30;
-    let (block_seconds, blocks_per_hour) = if period_30 >= retry {
+    let (block_seconds, blocks_per_hour) = if period_30 >= floor {
         (30, count_30)
     } else {
         (60, (budget_seconds / 60).max(1))
     };
-    let period = (3600 / blocks_per_hour).max(retry);
+    let period = (3600 / blocks_per_hour).max(floor);
 
     let next_block_at = if budget_used_seconds_this_hour >= budget_seconds {
         None
@@ -448,8 +439,6 @@ pub fn plan_next_block(
     }
 }
 
-/// Ergebnis einer Match-Übergangsbuchung: aktueller Beginn und Ende sowie die
-/// über die Session gemittelten Match- und Queue-Längen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchTiming {
     pub match_started_at: Option<DateTime<Utc>>,
@@ -472,11 +461,6 @@ fn clamp_sample(seconds: i64, low: i64, high: i64) -> Option<i32> {
     i32::try_from(seconds).ok()
 }
 
-/// Internes Signal, ob der aktive Twitch-Werbeplan mit Vorziehen und den
-/// vorhandenen Pausen in Fenster gelegt werden kann: `good`, `tight` oder
-/// `unprotectable`. Es steuert nur das Vorgehen des Bots (Pausen aufsparen oder
-/// vorziehen) und ist keine Empfehlung an den Streamer. Ohne Plan (eigenes
-/// Budget) ist alles schützbar; ohne Kanaldaten bleibt es bei `good`.
 pub fn assess_plan(
     twitch_is_source: bool,
     planned_interval_seconds: Option<i32>,
@@ -528,9 +512,6 @@ pub struct DecisionInput {
 }
 
 impl DecisionInput {
-    /// Twitch selbst hat einen Werbeplan aktiv, sobald ein `next_ad_at` gesetzt
-    /// ist. Dann ist Twitch die Budgetquelle und der Bot legt keine eigenen
-    /// Blöcke obendrauf, sondern bewegt nur die geplante Werbung.
     pub fn twitch_is_budget_source(&self) -> bool {
         self.next_ad_at.is_some()
     }
@@ -597,9 +578,6 @@ fn chat_is_quiet(input: &DecisionInput) -> bool {
     input.chat_ingest_healthy && input.quiet_chat_messages == 0
 }
 
-/// Aktive Sperre in Prioritätsreihenfolge: Startschutz, Raid, Erstchatter, Match
-/// ab Minute 1. Eine Sperre verhindert einen eigenen Block; steht eine
-/// Twitch-Werbung an, wird sie stattdessen per Pause verschoben.
 fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> {
     let now = input.now;
     match input.stream_started_at {
@@ -652,8 +630,6 @@ fn cooldown_allows(input: &DecisionInput) -> bool {
     now >= last + Duration::seconds(retry) && now >= last + min_interval
 }
 
-/// Vorziehen: aus einem offenen Queue- oder Menü-Fenster heraus eine geplante
-/// Twitch-Werbung starten, die sonst erst später in einer Sperre fällig würde.
 fn should_pull_forward(input: &DecisionInput) -> bool {
     let in_window = input
         .steam_match_state
@@ -735,8 +711,6 @@ pub fn decide(input: &DecisionInput) -> Decision {
                         detail,
                     }
                 } else if input.snooze_count > 0 {
-                    // Bei dichtem Plan die Pause für wertvollere Momente aufsparen
-                    // und die geplante Werbung hier laufen lassen.
                     none("twitch_plan_active")
                 } else {
                     postpone(reason, detail)
@@ -746,9 +720,6 @@ pub fn decide(input: &DecisionInput) -> Decision {
         };
     }
 
-    // Twitch ist die Budgetquelle, sobald ein Werbeplan aktiv ist: dann keine
-    // eigenen Blöcke, nur die geplante Werbung bewegen oder aus dem Fenster
-    // heraus vorziehen.
     if input.twitch_is_budget_source() {
         if lock.is_none() && should_pull_forward(input) {
             return Decision {
@@ -783,9 +754,6 @@ pub fn decide(input: &DecisionInput) -> Decision {
         if state.in_match {
             return commercial("match_start_window");
         }
-        if state.in_deadlock {
-            return commercial("in_queue");
-        }
     }
 
     if let Some(ended) = input.match_ended_at {
@@ -801,6 +769,12 @@ pub fn decide(input: &DecisionInput) -> Decision {
             } else {
                 commercial("post_match_quiet")
             };
+        }
+    }
+
+    if let Some(state) = input.steam_match_state.as_ref() {
+        if state.in_deadlock {
+            return commercial("in_queue");
         }
     }
 
@@ -1150,9 +1124,6 @@ impl AdManagerStore {
         })
     }
 
-    /// In dieser Stunde bereits gelaufene Werbung (erfolgreiche Commercials der
-    /// letzten 60 Minuten) samt Zeitpunkt der letzten. Von Twitch selbst
-    /// geplante Werbung rechnet der Aufrufer über den aktuellen Plan dazu.
     pub async fn budget_used_this_hour(
         &self,
         uid: &str,
@@ -1168,7 +1139,6 @@ impl AdManagerStore {
         Ok((i32::try_from(used).unwrap_or(i32::MAX), last))
     }
 
-    /// Zuletzt von Helix gemeldete Sperrzeit nach einem Commercial.
     pub async fn last_commercial_retry_after(&self, uid: &str) -> Result<Option<i32>, sqlx::Error> {
         sqlx::query_scalar("SELECT retry_after_seconds FROM twitch_ad_manager_actions WHERE twitch_user_id=$1 AND action='commercial' AND status='succeeded' AND retry_after_seconds IS NOT NULL ORDER BY completed_at DESC LIMIT 1")
             .bind(uid)
@@ -1177,7 +1147,6 @@ impl AdManagerStore {
             .map(Option::flatten)
     }
 
-    /// Letzter eingehender Raid auf diesen Kanal samt Raider-Login.
     pub async fn last_incoming_raid(
         &self,
         uid: &str,
@@ -1195,7 +1164,6 @@ impl AdManagerStore {
         })
     }
 
-    /// Letzter bestätigte Erstchatter der Session samt Login.
     pub async fn last_first_chatter(
         &self,
         session_id: i64,
@@ -1213,9 +1181,6 @@ impl AdManagerStore {
         })
     }
 
-    /// Match-Übergänge im Zustand nachführen: steigende Flanke merkt den Beginn,
-    /// fallende Flanke das Ende. Gibt den aktuellen Beginn und das aktuelle Ende
-    /// zurück, damit der Entscheider Fenster und Wartezeit prüfen kann.
     pub async fn record_match_transition(
         &self,
         uid: &str,
@@ -1277,8 +1242,6 @@ impl AdManagerStore {
         })
     }
 
-    /// Match-Zeiten und gemittelte Längen ohne Übergangsbuchung lesen; genutzt,
-    /// wenn kein frischer Steam-Status vorliegt.
     pub async fn match_timing(&self, uid: &str) -> Result<MatchTiming, sqlx::Error> {
         let row = sqlx::query("SELECT match_started_at,match_ended_at,avg_match_seconds,avg_queue_seconds FROM twitch_ad_manager_state WHERE twitch_user_id=$1")
             .bind(uid)
@@ -1300,8 +1263,6 @@ impl AdManagerStore {
         })
     }
 
-    /// Schützbarkeit des Plans im Zustand halten und den Wechsel einmal in den
-    /// Verlauf schreiben.
     pub async fn store_plan_fit(
         &self,
         uid: &str,
@@ -1338,7 +1299,6 @@ impl AdManagerStore {
         Ok(())
     }
 
-    /// Aktuellen Plan im Zustand ablegen, damit ihn der Status anzeigen kann.
     pub async fn store_plan(&self, uid: &str, plan: &AdPlan) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE twitch_ad_manager_state SET plan_next_block_at=$2,plan_block_seconds=$3,plan_blocks_per_hour=$4,budget_used_seconds=$5,updated_at=NOW() WHERE twitch_user_id=$1")
             .bind(uid)
@@ -1351,8 +1311,6 @@ impl AdManagerStore {
         Ok(())
     }
 
-    /// Entscheidung nur beim Wechsel von Aktion oder Grund festhalten, nicht bei
-    /// jedem Tick.
     pub async fn record_decision_if_changed(
         &self,
         uid: &str,
@@ -1394,8 +1352,6 @@ impl AdManagerStore {
         Ok(result.rows_affected())
     }
 
-    /// Verlauf der laufenden Session, sonst der letzten: Bilanz und Einträge in
-    /// chronologischer Reihenfolge.
     pub async fn history(&self, uid: &str) -> Result<AdManagerHistory, sqlx::Error> {
         let state = sqlx::query("SELECT is_live,active_session_id,stream_started_at FROM twitch_ad_manager_state WHERE twitch_user_id=$1")
             .bind(uid)
@@ -1431,7 +1387,7 @@ impl AdManagerStore {
                 .flatten()
         };
 
-        let summary_row = sqlx::query("SELECT COUNT(*) FILTER (WHERE decision='commercial')::bigint AS blocks_run,COUNT(*) FILTER (WHERE decision='commercial' AND reason<>'fallback_least_bad')::bigint AS blocks_in_window,COALESCE(SUM(block_seconds) FILTER (WHERE decision='commercial'),0)::bigint AS budget_used,COUNT(*) FILTER (WHERE decision='postpone')::bigint AS postponed,MIN(decided_at) AS first_at FROM twitch_ad_manager_decisions WHERE twitch_user_id=$1 AND session_id IS NOT DISTINCT FROM $2")
+        let summary_row = sqlx::query("SELECT COUNT(*) FILTER (WHERE decision='commercial')::bigint AS blocks_run,COUNT(*) FILTER (WHERE decision='commercial' AND reason IN ('in_queue','match_start_window','post_match_quiet'))::bigint AS blocks_in_window,COALESCE(SUM(block_seconds) FILTER (WHERE decision='commercial'),0)::bigint AS budget_used,COUNT(*) FILTER (WHERE decision='postpone')::bigint AS postponed,MIN(decided_at) AS first_at FROM twitch_ad_manager_decisions WHERE twitch_user_id=$1 AND session_id IS NOT DISTINCT FROM $2")
             .bind(uid)
             .bind(session_id)
             .fetch_one(&self.pool)
