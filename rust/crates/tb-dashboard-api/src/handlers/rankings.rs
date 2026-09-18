@@ -58,7 +58,7 @@ pub async fn rankings_handler(
     }
 
     let metric = params.metric.as_deref().unwrap_or("viewers");
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

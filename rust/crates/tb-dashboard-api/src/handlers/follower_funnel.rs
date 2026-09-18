@@ -66,7 +66,7 @@ pub async fn follower_funnel_handler(
             }
             Err(resp) => return resp,
         };
-    let days = clamp(params.days.unwrap_or(30), 7, 365);
+    let days = clamp(params.days.unwrap_or(30), 7, 3650);
     let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
 
     // ── 1. Session-Stats ─────────────────────────────────────────────────────

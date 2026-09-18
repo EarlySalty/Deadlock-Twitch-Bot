@@ -402,27 +402,50 @@ where
                     .collect();
             for session_id in admin_session_ids {
                 if let Some(config) = central_config.as_ref() {
-                    let Ok(session) = config.client.validate_session(&session_id).await else {
-                        continue;
-                    };
-                    match state.load_admin_session(&session_id).await {
-                        Ok(Some(_)) => {}
-                        Ok(None) => {
-                            if state
-                                .import_central_admin_session(
-                                    &session_id,
-                                    &session.user_id.to_string(),
-                                    &session.username,
-                                    &session.display_name,
-                                    session.expires_at,
-                                )
-                                .await
-                                .is_err()
-                            {
-                                continue;
+                    if state.central_admin_validation_cached(&session_id).await {
+                        if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
+                            continue;
+                        }
+                    } else {
+                        match config.client.validate_session(&session_id).await {
+                            Ok(session) => {
+                                match state.load_admin_session(&session_id).await {
+                                    Ok(Some(_)) => {}
+                                    Ok(None) => {
+                                        if state
+                                            .import_central_admin_session(
+                                                &session_id,
+                                                &session.user_id.to_string(),
+                                                &session.username,
+                                                &session.display_name,
+                                                session.expires_at,
+                                            )
+                                            .await
+                                            .is_err()
+                                        {
+                                            continue;
+                                        }
+                                    }
+                                    Err(_) => continue,
+                                }
+                                state.cache_central_admin_validation(&session_id).await;
+                            }
+                            Err(_) => {
+                                // Der lokale Spiegel hält das Dashboard bei einem
+                                // kurzzeitigen Broker-Ausfall verfügbar. Ungültige
+                                // oder abgelaufene lokale Sessions bleiben fail-closed.
+                                if !matches!(
+                                    state.load_admin_session(&session_id).await,
+                                    Ok(Some(_))
+                                ) {
+                                    continue;
+                                }
+                                // Auch den lokalen Fallback kurz cachen, damit bei
+                                // einem Broker-Ausfall nicht jeder parallele Tab
+                                // erneut zwei Sekunden auf denselben Timeout wartet.
+                                state.cache_central_admin_validation(&session_id).await;
                             }
                         }
-                        Err(_) => continue,
                     }
                 } else if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
                     continue;
@@ -448,8 +471,16 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Clone)]
-    struct CentralSessionClient;
+    #[derive(Clone, Default)]
+    struct CentralSessionClient {
+        calls: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    }
+
+    impl CentralSessionClient {
+        fn counting(calls: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+            Self { calls: Some(calls) }
+        }
+    }
 
     #[async_trait]
     impl crate::auth::discord_admin_login::DiscordAdminOAuthClient for CentralSessionClient {
@@ -483,6 +514,9 @@ mod tests {
             crate::auth::discord_admin_login::ValidatedAdminSession,
             crate::auth::discord_admin_login::DiscordAdminOAuthError,
         > {
+            if let Some(calls) = self.calls.as_ref() {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             if session_id != "zentral-gueltig" {
                 return Err(crate::auth::discord_admin_login::DiscordAdminOAuthError);
             }
@@ -810,7 +844,7 @@ mod tests {
                 moderator_role_id: 1,
                 admin_role_ids: Vec::new(),
                 admin_guild_ids: Vec::new(),
-                client: std::sync::Arc::new(CentralSessionClient),
+                client: std::sync::Arc::new(CentralSessionClient::default()),
             });
 
         let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
@@ -829,6 +863,90 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key("zentral-gueltig"))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn zentrale_admin_session_faellt_bei_broker_fehler_auf_lokale_session_zurueck() {
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
+        let local = state
+            .create_admin_session("discord-fallback", "Fallback Admin")
+            .await
+            .unwrap();
+        let mut parts = request_parts(Some(format!(
+            "{}={}",
+            crate::auth::session::ADMIN_COOKIE_NAME,
+            local.session_id
+        )));
+        parts
+            .headers
+            .insert("x-dashboard-context", "admin".parse().unwrap());
+        parts.extensions.insert(state.clone());
+        parts
+            .extensions
+            .insert(crate::auth::discord_admin_login::DiscordAdminLoginConfig {
+                admin_base_url: "https://admin.test".into(),
+                cookie_secure: true,
+                cookie_domain: Some("example.com".into()),
+                owner_user_id: None,
+                moderator_role_id: 1,
+                admin_role_ids: Vec::new(),
+                admin_guild_ids: Vec::new(),
+                client: std::sync::Arc::new(CentralSessionClient::default()),
+            });
+
+        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(auth, DashboardAuthLevel::admin());
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key(&local.session_id))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn zentrale_admin_session_wird_kurz_gecached() {
+        let Some((pool, state)) = maybe_test_state().await else {
+            return;
+        };
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = crate::auth::discord_admin_login::DiscordAdminLoginConfig {
+            admin_base_url: "https://admin.test".into(),
+            cookie_secure: true,
+            cookie_domain: Some("example.com".into()),
+            owner_user_id: None,
+            moderator_role_id: 1,
+            admin_role_ids: Vec::new(),
+            admin_guild_ids: Vec::new(),
+            client: std::sync::Arc::new(CentralSessionClient::counting(calls.clone())),
+        };
+
+        for _ in 0..2 {
+            let mut parts = request_parts(Some(format!(
+                "{}=zentral-gueltig",
+                crate::auth::session::ADMIN_COOKIE_NAME
+            )));
+            parts
+                .headers
+                .insert("x-dashboard-context", "admin".parse().unwrap());
+            parts.extensions.insert(state.clone());
+            parts.extensions.insert(config.clone());
+            let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+                .await
+                .unwrap();
+            assert_eq!(auth, DashboardAuthLevel::admin());
+        }
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
             .bind(crate::auth::session::session_lookup_key("zentral-gueltig"))
             .execute(&pool)

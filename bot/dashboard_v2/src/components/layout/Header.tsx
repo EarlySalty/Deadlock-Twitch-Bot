@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { usePlan } from '@/context/PlanContext';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import type { TimeRange } from '@/types/analytics';
-import { clampDays } from '@/utils/zeitraum';
+import { clampDays, MAX_ANALYTICS_DAYS } from '@/utils/zeitraum';
 
 // Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
 // Auswahl behaelt ihren Ort im Raum. Kritisch gedaempft (bounce 0) — ein
 // Ueberschwingen gehoert nur dorthin, wo vorher eine Wischbewegung war.
 const SEGMENT_SPRING = { type: 'spring', bounce: 0, duration: 0.32 } as const;
+const PRESET_RANGE_VALUES = [7, 30, 90, 365] as const;
+
+function isPresetRange(days: number): boolean {
+  return PRESET_RANGE_VALUES.some(value => value === days);
+}
 
 // Menue-Eintritt: 200ms ease-out, aus dem Ausloeser heraus statt aus der Mitte,
 // und nie von scale(0) — nichts in der echten Welt entsteht aus dem Nichts.
@@ -49,9 +54,17 @@ export function Header({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [tageInput, setTageInput] = useState(String(days));
+  const [customRangeSelected, setCustomRangeSelected] = useState(() => !isPresetRange(days));
+  const pendingCustomCommit = useRef<number | null>(null);
 
   useEffect(() => {
     setTageInput(String(days));
+    if (pendingCustomCommit.current === days) {
+      pendingCustomCommit.current = null;
+      return;
+    }
+    pendingCustomCommit.current = null;
+    setCustomRangeSelected(!isPresetRange(days));
   }, [days]);
 
   const viewOptions: { value: 'basic' | 'extended'; label: string }[] = [
@@ -66,8 +79,6 @@ export function Header({
     { value: 365, label: t('Jahr') },
   ];
 
-  const istVoreinstellung = timeRanges.some(range => range.value === days);
-
   const uebernehmeTage = () => {
     const parsed = Number.parseInt(tageInput, 10);
     if (!Number.isFinite(parsed)) {
@@ -75,6 +86,8 @@ export function Header({
       return;
     }
     const naechster = clampDays(parsed);
+    setCustomRangeSelected(true);
+    pendingCustomCommit.current = naechster;
     if (naechster !== days) {
       onDaysChange(naechster);
     }
@@ -278,12 +291,18 @@ export function Header({
             {timeRanges.map(range => (
               <button
                 key={range.value}
-                onClick={() => onDaysChange(range.value)}
+                onClick={() => {
+                  pendingCustomCommit.current = null;
+                  setCustomRangeSelected(false);
+                  onDaysChange(range.value);
+                }}
                 className={`relative px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
-                  days === range.value ? 'text-[#0D0806]' : 'text-text-secondary hover:text-white'
+                  !customRangeSelected && days === range.value
+                    ? 'text-[#0D0806]'
+                    : 'text-text-secondary hover:text-white'
                 }`}
               >
-                {days === range.value && (
+                {!customRangeSelected && days === range.value && (
                   <motion.span
                     layoutId="headerRangeIndicator"
                     className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
@@ -295,7 +314,7 @@ export function Header({
               </button>
             ))}
             <div className="relative flex items-center gap-1 pl-1">
-              {!istVoreinstellung && (
+              {customRangeSelected && (
                 <motion.span
                   layoutId="headerRangeIndicator"
                   className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
@@ -306,10 +325,13 @@ export function Header({
               <input
                 type="number"
                 min={7}
-                max={365}
+                max={MAX_ANALYTICS_DAYS}
                 value={tageInput}
                 aria-label={t('Tage')}
-                onChange={event => setTageInput(event.target.value)}
+                onChange={event => {
+                  setCustomRangeSelected(true);
+                  setTageInput(event.target.value);
+                }}
                 onKeyDown={event => {
                   if (event.key === 'Enter') {
                     uebernehmeTage();
@@ -317,13 +339,13 @@ export function Header({
                   }
                 }}
                 onBlur={uebernehmeTage}
-                className={`relative z-10 w-14 rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold outline-none ${
-                  istVoreinstellung ? 'text-text-secondary' : 'text-[#0D0806]'
+                className={`relative z-10 w-[4.5rem] appearance-none rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
+                  customRangeSelected ? 'text-[#0D0806]' : 'text-text-secondary'
                 }`}
               />
               <span
                 className={`relative z-10 pr-2 text-sm font-semibold ${
-                  istVoreinstellung ? 'text-text-secondary' : 'text-[#0D0806]'
+                  customRangeSelected ? 'text-[#0D0806]' : 'text-text-secondary'
                 }`}
               >
                 {t('Tage')}

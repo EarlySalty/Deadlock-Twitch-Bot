@@ -47,7 +47,7 @@ const BROKER_IMPORT_SESSION_PATH: &str = "/internal/twitch/v1/discord/import-ses
 // Gegenroute: Deadlock-Bots d2558e19, enthalten in origin/main ab 7fc95051.
 const BROKER_REVOKE_SESSION_PATH: &str = "/internal/twitch/v1/discord/revoke-session";
 const BROKER_TOKEN_HEADER: &str = "X-Internal-Token";
-const BROKER_TIMEOUT: Duration = Duration::from_secs(20);
+const BROKER_TIMEOUT: Duration = Duration::from_secs(2);
 const FINGERPRINT_PATH: &str = "/twitch/auth/fingerprint";
 const ADMIN_LOGIN_PATH: &str = "/twitch/auth/discord/login";
 const ADMIN_COMPLETE_PATH: &str = "/twitch/auth/discord/complete";
@@ -1214,6 +1214,11 @@ p { opacity: 0.7; font-size: 0.95rem; }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broker_timeout_blockiert_dashboard_nicht_lange() {
+        assert!(BROKER_TIMEOUT <= Duration::from_secs(2));
+    }
     use std::{collections::HashMap, sync::Arc};
 
     use tokio::sync::Mutex;

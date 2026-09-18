@@ -77,12 +77,12 @@ pub async fn ai_analysis_handler(
             json!({ "error": "Analyse läuft bereits für diesen Streamer. Bitte warte bis sie abgeschlossen ist." }),
         );
     }
-    // days: parse-or-30, clamp 7..365 (Python int()-ValueError → 30).
+    // days: parse-or-30, clamp 7..3650 (Python int()-ValueError → 30).
     let days = params
         .days
         .as_deref()
         .and_then(|d| d.trim().parse::<i64>().ok())
-        .map(|d| d.clamp(7, 365))
+        .map(|d| d.clamp(7, 3650))
         .unwrap_or(30);
     // game_filter: deadlock|all, sonst all.
     let gf = params

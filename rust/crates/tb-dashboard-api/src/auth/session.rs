@@ -336,6 +336,7 @@ impl<T: Clone> TimedCache<T> {
 }
 
 const CACHE_TTL_SECS: u64 = 5;
+const CENTRAL_ADMIN_VALIDATION_CACHE_TTL_SECS: u64 = 30;
 
 /// Admin-Session-TTL beim Sliding-Refresh (Python: server_v2.py:330, 14 Tage).
 pub const ADMIN_SESSION_TTL_SECS: u64 = 14 * 24 * 3600;
@@ -433,6 +434,8 @@ pub struct DashboardAuthState {
     fernet_key: String,
     /// Cache für Admin-Sessions (discord_admin).
     admin_cache: Arc<Mutex<TimedCache<bool>>>,
+    /// Kurzzeit-Cache für erfolgreiche Validierungen beim zentralen Discord-Broker.
+    central_admin_validation_cache: Arc<Mutex<TimedCache<bool>>>,
     /// Cache für Partner-Sessions (twitch).
     partner_cache: Arc<Mutex<TimedCache<PartnerSession>>>,
     /// Cache für die aus `twitch_partners` aufgelöste `twitch_user_id` eines
@@ -449,9 +452,39 @@ impl DashboardAuthState {
             pool,
             fernet_key,
             admin_cache: Arc::new(Mutex::new(TimedCache::default())),
+            central_admin_validation_cache: Arc::new(Mutex::new(TimedCache::default())),
             partner_cache: Arc::new(Mutex::new(TimedCache::default())),
             admin_user_id_cache: Arc::new(Mutex::new(TimedCache::default())),
         }
+    }
+
+    /// Prüft, ob diese zentrale Discord-Admin-Session in den letzten 30 Sekunden
+    /// bereits erfolgreich beim Broker validiert wurde.
+    pub async fn central_admin_validation_cached(&self, session_id: &str) -> bool {
+        if session_id.is_empty() {
+            return false;
+        }
+        let now = unix_now();
+        let mut cache = self.central_admin_validation_cache.lock().await;
+        cache.prune(now);
+        cache.get(session_id, now).copied().unwrap_or(false)
+    }
+
+    /// Merkt eine erfolgreiche Broker-Validierung kurzzeitig. Der lokale
+    /// `discord_admin`-Datensatz bleibt weiterhin die eigentliche Session-Kopie.
+    pub async fn cache_central_admin_validation(&self, session_id: &str) {
+        if session_id.is_empty() {
+            return;
+        }
+        let now = unix_now();
+        let mut cache = self.central_admin_validation_cache.lock().await;
+        cache.prune(now);
+        cache.insert(
+            session_id.to_string(),
+            true,
+            CENTRAL_ADMIN_VALIDATION_CACHE_TTL_SECS,
+            now,
+        );
     }
 
     /// Löst die `twitch_user_id` eines aktiven Partners für den gegebenen Login auf.
@@ -1440,6 +1473,10 @@ impl DashboardAuthState {
         }
         {
             let mut cache = self.admin_cache.lock().await;
+            cache.entries.remove(session_id);
+        }
+        {
+            let mut cache = self.central_admin_validation_cache.lock().await;
             cache.entries.remove(session_id);
         }
     }

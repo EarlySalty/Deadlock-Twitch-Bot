@@ -3,7 +3,7 @@
 //! Port von `bot/analytics/api_audience.py:_api_v2_watch_time_distribution`.
 //! Auth: nur „eingeloggt" (kein Extended-Plan-Gate); stattdessen narrowed ein
 //! Lesefenster die Sichtbarkeit (Free → nur letzter Stream). `streamer` Pflicht,
-//! `days` 7..365.
+//! `days` 7..3650.
 //!
 //! Lesefenster (Python `_resolve_read_window`): Admin → `full`; sonst
 //! entscheidet der Plan des **abgefragten** Streamers — das konsolidierte
@@ -78,7 +78,7 @@ pub async fn watch_time_distribution_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(7, 3650) as i64;
     let window = resolve_read_window(&pool, &auth, &streamer).await;
 
     match tb_analytics::watch_time::load_watch_time_distribution(&pool, &streamer, days, window)

@@ -42,7 +42,7 @@ pub async fn retention_curve_handler(
     }
 
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_retention_curve).
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

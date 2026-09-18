@@ -46,7 +46,7 @@ pub async fn lurker_analysis_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(7, 3650) as i64;
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 

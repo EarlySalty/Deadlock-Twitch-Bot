@@ -121,6 +121,7 @@ const queryClient = new QueryClient({
     queries: {
       retry: shouldRetryApiQuery,
       refetchOnWindowFocus: false,
+      gcTime: 30 * 60 * 1000,
     },
   },
 });

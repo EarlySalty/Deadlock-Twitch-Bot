@@ -85,7 +85,7 @@ pub async fn category_comparison_handler(
         return crate::auth::unauthorized_v2_response();
     }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_category_comparison).
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };

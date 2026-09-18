@@ -1,7 +1,7 @@
 //! Handler für `/twitch/api/v2/exp/*` (experimentelle Analytics).
 //!
 //! Port von `bot/analytics/api_experimental.py`. Auth + Extended-Plan-Gate,
-//! `streamer` (Pflicht), `days` (1..365, Default 30), dann die Daten aus
+//! `streamer` (Pflicht), `days` (1..3650, Default 30), dann die Daten aus
 //! [`tb_analytics::exp_analytics`].
 
 use axum::{
@@ -45,7 +45,7 @@ pub async fn exp_overview_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(1, 3650) as i64;
 
     match tb_analytics::exp_analytics::load_exp_overview(&pool, &streamer, days).await {
         Ok(v) => Json(v).into_response(),
@@ -77,7 +77,7 @@ pub async fn exp_game_breakdown_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(1, 3650) as i64;
 
     match tb_analytics::exp_analytics::load_exp_game_breakdown(&pool, &streamer, days).await {
         Ok(v) => Json(v).into_response(),
@@ -109,7 +109,7 @@ pub async fn exp_game_transitions_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(1, 3650) as i64;
 
     match tb_analytics::exp_analytics::load_exp_game_transitions(&pool, &streamer, days).await {
         Ok(v) => Json(v).into_response(),
@@ -141,7 +141,7 @@ pub async fn exp_growth_curves_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(1, 3650) as i64;
 
     match tb_analytics::exp_analytics::load_exp_growth_curves(&pool, &streamer, days).await {
         Ok(v) => Json(v).into_response(),

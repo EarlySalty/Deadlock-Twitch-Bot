@@ -769,7 +769,7 @@ async fn build_market_share(
     days: Option<i64>,
     scope: Option<&str>,
 ) -> Result<Value, sqlx::Error> {
-    let days = days.unwrap_or(7).clamp(1, 365);
+    let days = days.unwrap_or(7).clamp(1, 3650);
     let scope: &'static str = match scope {
         Some("german") => "german",
         _ => "all",

@@ -146,7 +146,7 @@ pub async fn demo_streamers() -> Response {
 
 /// `GET /twitch/demo/api/v2/overview` — kompaktes Demo-Overview.
 pub async fn demo_overview(Query(q): Query<DemoOverviewQuery>) -> Response {
-    let days = q.days.unwrap_or(30).clamp(7, 365);
+    let days = q.days.unwrap_or(30).clamp(7, 3650);
     Json(demo_overview_payload(days)).into_response()
 }
 
@@ -308,7 +308,7 @@ fn count_priority(points: &Value, prio: &str) -> usize {
 /// statt der alten `summary/sections`-Form, damit die AI-Coach-Komponente die
 /// gleichen Felder wie unter `/twitch/api/v2/ai/analysis` rendert.
 pub async fn demo_ai_analysis(Query(q): Query<DemoAiQuery>) -> Response {
-    let days = q.days.unwrap_or(30).clamp(7, 365);
+    let days = q.days.unwrap_or(30).clamp(7, 3650);
     let game_filter = normalize_game_filter(q.game_filter.as_deref());
     Json(demo_ai_analysis_payload(
         days,
@@ -361,7 +361,7 @@ pub async fn demo_ai_history(Query(q): Query<DemoAiHistoryQuery>) -> Response {
 
 /// `GET /twitch/demo/api/v2/monthly-stats` — Monatsaggregat im Frontend-Vertrag.
 pub async fn demo_monthly_stats(Query(q): Query<DemoAnalyticsQuery>) -> Response {
-    let months = q.months.unwrap_or(12).clamp(1, 24) as usize;
+    let months = q.months.unwrap_or(12).clamp(1, 120) as usize;
     let items = vec![
         json!({"year": 2026, "month": 6, "monthLabel": "Jun", "totalHoursWatched": 5342.0, "totalAirtime": 14.0, "avgViewers": 382.0, "peakViewers": 1087, "followerDelta": 167, "totalChatterSessions": 634, "streamCount": 14}),
         json!({"year": 2026, "month": 5, "monthLabel": "Mai", "totalHoursWatched": 16892.0, "totalAirtime": 45.4, "avgViewers": 372.0, "peakViewers": 998, "followerDelta": 168, "totalChatterSessions": 780, "streamCount": 14}),
@@ -489,7 +489,7 @@ pub async fn demo_chat_analytics() -> Response {
 
 /// `GET /twitch/demo/api/v2/monetization` — Monetization-Stats im Frontend-Vertrag.
 pub async fn demo_monetization(Query(q): Query<DemoAnalyticsQuery>) -> Response {
-    let days = q.days.unwrap_or(30).clamp(7, 365);
+    let days = q.days.unwrap_or(30).clamp(7, 3650);
     Json(json!({
         "ads": {
             "total": 18,
@@ -972,7 +972,7 @@ pub async fn demo_viewer_profiles() -> Response {
 
 /// `GET /twitch/demo/api/v2/viewer-segments` — Viewer-Segmentierung im Frontend-Vertrag.
 pub async fn demo_viewer_segments(Query(q): Query<DemoAnalyticsQuery>) -> Response {
-    let days = q.days.unwrap_or(30).clamp(7, 365);
+    let days = q.days.unwrap_or(30).clamp(7, 3650);
     Json(json!({
         "days": days,
         "segments": {
@@ -1006,7 +1006,7 @@ pub async fn demo_viewer_segments(Query(q): Query<DemoAnalyticsQuery>) -> Respon
 
 /// `GET /twitch/demo/api/v2/viewer-directory` — Viewer-Verzeichnis im Frontend-Vertrag.
 pub async fn demo_viewer_directory(Query(q): Query<DemoAnalyticsQuery>) -> Response {
-    let days = q.days.unwrap_or(30).clamp(7, 365);
+    let days = q.days.unwrap_or(30).clamp(7, 3650);
     let page = q.page.unwrap_or(1).max(1);
     let per_page = q.per_page.unwrap_or(50).clamp(10, 100);
     Json(json!({
@@ -1115,7 +1115,7 @@ pub async fn demo_raid_retention() -> Response {
 
 /// `GET /twitch/demo/api/v2/raid-analytics` — Incoming-Raid-Analytics im Frontend-Vertrag.
 pub async fn demo_raid_analytics(Query(q): Query<DemoAnalyticsQuery>) -> Response {
-    let days = q.days.unwrap_or(30).clamp(7, 365);
+    let days = q.days.unwrap_or(30).clamp(7, 3650);
     Json(json!({
         "per_source": [
             { "from_channel": "partner_one", "raids_received": 3, "avg_viewers_sent": 148.0, "avg_new_chatters": 21.0, "avg_retention_30m": 38.4, "follows_attributed": 31, "conversion_rate": 7.0, "known_audience_overlap": 0.22 },

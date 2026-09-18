@@ -22,7 +22,7 @@ use crate::auth::level::DashboardAuthLevel;
 #[derive(Deserialize)]
 pub struct OverviewParams {
     pub streamer: Option<String>,
-    /// Zeitraum in Tagen. Default 30, min 7, max 365.
+    /// Zeitraum in Tagen. Default 30, min 7, max 3650.
     #[serde(default = "default_days")]
     pub days: i64,
 }
@@ -460,8 +460,8 @@ pub async fn overview_handler(
         return Err(ApiError::unauthorized());
     }
 
-    // days: clip to [7, 365]
-    let days = params.days.clamp(7, 365);
+    // days: clip to [7, 3650]
+    let days = params.days.clamp(7, crate::query_int::MAX_ANALYTICS_DAYS);
     // Partner darf nur eigene Daten sehen. Admin/Localhost kann beliebigen
     // Streamer über den Query-Param abfragen.
     let login = match &auth {

@@ -23,6 +23,9 @@
 use axum::{http::StatusCode, Json};
 use serde_json::{json, Value};
 
+/// Gemeinsame Obergrenze für frei wählbare Analytics-Zeiträume.
+pub const MAX_ANALYTICS_DAYS: i64 = 3650;
+
 /// 400-Fehler in der Python-Form `{"error": "<name> must be an integer"}`.
 /// Kleines Tupel statt `Response` als `Err`-Typ (vermeidet `result_large_err`,
 /// folgt dem Crate-Idiom z. B. in `performance::require_auth`). `.into_response()`
@@ -80,6 +83,18 @@ mod tests {
         // Python: min(max(parsed, minimum), maximum) — KEIN Fehler.
         assert_eq!(parse_bounded_query_int(Some("1"), "days", 30, 7, 365).unwrap(), 7);
         assert_eq!(parse_bounded_query_int(Some("9999"), "days", 30, 7, 365).unwrap(), 365);
+    }
+
+    #[test]
+    fn analytics_zeitraum_erlaubt_mehr_als_ein_jahr() {
+        assert_eq!(
+            parse_bounded_query_int(Some("730"), "days", 30, 7, MAX_ANALYTICS_DAYS).unwrap(),
+            730
+        );
+        assert_eq!(
+            parse_bounded_query_int(Some("5000"), "days", 30, 7, MAX_ANALYTICS_DAYS).unwrap(),
+            MAX_ANALYTICS_DAYS
+        );
     }
 
     #[test]

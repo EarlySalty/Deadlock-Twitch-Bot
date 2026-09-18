@@ -272,7 +272,7 @@ pub async fn viewer_directory_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365);
+    let days = params.days.unwrap_or(30).clamp(1, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
     let sort = match params.sort.as_deref().unwrap_or("sessions") {
@@ -590,7 +590,7 @@ pub async fn viewer_detail_handler(
         )
             .into_response();
     }
-    let days = params.days.unwrap_or(30).clamp(1, 365);
+    let days = params.days.unwrap_or(30).clamp(1, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
     let now = Utc::now();
 
@@ -934,7 +934,7 @@ pub async fn viewer_segments_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365);
+    let days = params.days.unwrap_or(30).clamp(1, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
     let now = Utc::now();
 

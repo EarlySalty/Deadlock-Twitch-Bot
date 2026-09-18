@@ -239,7 +239,7 @@ fn baseline_from(partners: &[PartnerAggregate]) -> Baseline {
 }
 
 fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
-    let days = parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365)
+    let days = parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650)
         .map_err(|error| Box::new(error.into_response()))?;
     if params
         .days
@@ -247,12 +247,12 @@ fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
         .and_then(|raw| raw.parse::<i64>().ok())
-        .is_some_and(|raw| !(7..=365).contains(&raw))
+        .is_some_and(|raw| !(7..=3650).contains(&raw))
     {
         return Err(Box::new(
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "days must be between 7 and 365"})),
+                Json(json!({"error": "days must be between 7 and 3650"})),
             )
                 .into_response(),
         ));
@@ -1009,7 +1009,7 @@ mod tests {
         )
         .await;
         let (range_status, range_body) =
-            request(DashboardAuthLevel::admin(), pool, "test", Some("500")).await;
+            request(DashboardAuthLevel::admin(), pool, "test", Some("5000")).await;
 
         assert_eq!(invalid_status, StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -1019,19 +1019,19 @@ mod tests {
         assert_eq!(range_status, StatusCode::BAD_REQUEST);
         assert_eq!(
             range_body,
-            serde_json::json!({"error": "days must be between 7 and 365"})
+            serde_json::json!({"error": "days must be between 7 and 3650"})
         );
     }
 
     #[test]
-    fn parse_days_akzeptiert_365_und_lehnt_366_ab() {
+    fn parse_days_akzeptiert_3650_und_lehnt_3651_ab() {
         let ok = parse_days(&ResearchQuery {
-            days: Some("365".into()),
+            days: Some("3650".into()),
         });
-        assert_eq!(ok.ok(), Some(365));
+        assert_eq!(ok.ok(), Some(3650));
 
         let zu_gross = parse_days(&ResearchQuery {
-            days: Some("366".into()),
+            days: Some("3651".into()),
         });
         assert!(zu_gross.is_err());
     }

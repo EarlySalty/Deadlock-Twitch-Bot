@@ -28,8 +28,10 @@ test('ein Wert unter der Untergrenze wird auf 7 geklemmt', () => {
   assert.deepEqual(uebernahme('3', 30), { onDaysChange: 7, feld: '7' });
 });
 
-test('ein Wert ueber der Obergrenze wird auf 365 geklemmt', () => {
-  assert.deepEqual(uebernahme('400', 30), { onDaysChange: 365, feld: '365' });
+test('mehr als ein Jahr wird uebernommen und erst bei zehn Jahren geklemmt', () => {
+  assert.deepEqual(uebernahme('400', 30), { onDaysChange: 400, feld: '400' });
+  assert.deepEqual(uebernahme('730', 30), { onDaysChange: 730, feld: '730' });
+  assert.deepEqual(uebernahme('5000', 30), { onDaysChange: 3650, feld: '3650' });
 });
 
 test('ein leeres Feld aendert nichts und stellt den aktuellen Wert wieder her', () => {
@@ -56,10 +58,25 @@ test('das Tage-Feld faengt Enter ab, uebernimmt und gibt den Fokus frei', () => 
 test('die Uebernahme klemmt, meldet nur echte Aenderungen und faengt leere Eingaben ab', () => {
   const start = HEADER.indexOf('const uebernehmeTage');
   assert.ok(start >= 0, 'uebernehmeTage muss existieren');
-  const block = HEADER.slice(start, start + 400);
+  const block = HEADER.slice(start, start + 500);
   assert.match(block, /Number\.parseInt\(tageInput, 10\)/);
   assert.match(block, /!Number\.isFinite\(parsed\)/, 'leere oder ungueltige Eingabe muss abgefangen werden');
   assert.match(block, /clampDays\(parsed\)/, 'die Eingabe muss geklemmt werden');
   assert.match(block, /naechster !== days/, 'onDaysChange darf nur bei echter Aenderung laufen');
   assert.match(block, /onDaysChange\(naechster\)/);
+});
+
+test('eine manuell eingegebene 365 bleibt am Tage-Feld sichtbar ausgewaehlt', () => {
+  assert.match(HEADER, /customRangeSelected/, 'Header muss die Quelle der Zeitraumwahl merken');
+  assert.match(HEADER, /setCustomRangeSelected\(true\)/, 'Tippen im Tage-Feld muss den manuellen Zustand aktivieren');
+  assert.match(HEADER, /setCustomRangeSelected\(false\)/, 'Preset-Klicks muessen den manuellen Zustand deaktivieren');
+  assert.match(HEADER, /\{customRangeSelected && \(/, 'der goldene Auswahlmarker muss vom manuellen Zustand abhaengen');
+});
+
+test('das Tage-Feld bietet mehr als ein Jahr ohne native Spinner an', () => {
+  const labelPos = HEADER.indexOf("aria-label={t('Tage')}");
+  const feldStart = HEADER.lastIndexOf('<input', labelPos);
+  const inputBlock = HEADER.slice(feldStart, feldStart + 900);
+  assert.match(inputBlock, /max=\{MAX_ANALYTICS_DAYS\}/);
+  assert.match(inputBlock, /appearance-none/, 'native Zahlenspinner sollen nicht die Auswahl verdecken');
 });

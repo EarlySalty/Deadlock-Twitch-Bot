@@ -370,7 +370,7 @@ pub async fn audience_sharing_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(7, 3650) as i64;
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
@@ -826,7 +826,7 @@ pub async fn audience_insights_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(7, 3650) as i64;
     let now = Utc::now();
     let since = now - chrono::Duration::days(days);
     let prev_since = now - chrono::Duration::days(days * 2);
