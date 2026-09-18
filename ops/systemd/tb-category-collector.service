@@ -1,0 +1,32 @@
+[Unit]
+Description=Deadlock category analytics (anonymous read-only Twitch chat)
+After=network-online.target
+Wants=network-online.target
+OnFailure=unit-failure-notify@%n.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+ConditionPathExists=%h/.config/deadlock/category-collector.json
+
+[Service]
+Type=simple
+ExecStart=/opt/deadlock/twitch/current/rust/target/release/tb-category-collector --config %h/.config/deadlock/category-collector.json
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=25
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryMax=256M
+MemoryHigh=192M
+CPUQuota=100%
+TasksMax=48
+Nice=10
+
+[Install]
+WantedBy=default.target

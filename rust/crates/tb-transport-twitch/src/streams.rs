@@ -107,8 +107,51 @@ struct ChannelsResponse {
     data: Vec<HelixChannelInfo>,
 }
 
+/// Profil-Stammdaten aus `/users` (Kategoriesammler: Kontalter, Typ, Text).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HelixUser {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub login: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub broadcaster_type: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsersResponse {
+    #[serde(default)]
+    data: Vec<HelixUser>,
+}
+
 /// Hartes Limit der Kategorie-Pagination (Python: `min(limit, 1200)`).
 const CATEGORY_HARD_CAP: usize = 1200;
+
+/// Ergebnis eines vollständigen Kategorie-Durchlaufs
+/// ([`HelixClient::get_streams_by_category_full`]).
+///
+/// `complete == false` bedeutet: Die Beobachtung war unvollständig (Cap,
+/// HTTP-Fehler oder Cursor-Schleife). Der Aufrufer darf solche Streams zwar
+/// verwenden, aber keine Roster-Ersetzung oder Offline-Ableitung darauf stützen.
+#[derive(Debug, Clone, Default)]
+pub struct CategoryStreamsFetch {
+    pub streams: Vec<HelixStream>,
+    /// `true` nur wenn die Pagination natuürlich endete (Cursor erschöpft),
+    /// nichts gekappt wurde und kein Seiten-Request fehlgeschlagen ist.
+    pub complete: bool,
+    /// Abgebrochen, weil das Aufrufer-Limit erreicht war (nicht Twitch leer).
+    pub truncated_by_cap: bool,
+    /// Letzter Fehler einer mittendrin fehlgeschlagenen Seite, falls vorhanden.
+    pub error: Option<String>,
+    /// Anzahl erfolgreicher Seiten-Requests.
+    pub pages_fetched: usize,
+}
 
 impl HelixClient {
     /// Live-Streams für die gegebenen stabilen Twitch-User-IDs (gebatcht à 100).
@@ -172,6 +215,47 @@ impl HelixClient {
         Ok(body.data.into_iter().next())
     }
 
+    /// Kanal-Metadaten für bis zu 100 Broadcasters in einem Request
+    /// (Kategoriesammler: Broadcaster-Sprache der neuen Kanäle).
+    pub async fn get_channel_information_batch(
+        &self,
+        broadcaster_ids: &[String],
+    ) -> Result<Vec<HelixChannelInfo>, HelixError> {
+        let clean: Vec<&String> = broadcaster_ids
+            .iter()
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+        let mut out = Vec::new();
+        for chunk in clean.chunks(100) {
+            let params: Vec<(&str, &str)> = chunk
+                .iter()
+                .map(|id| ("broadcaster_id", id.trim()))
+                .collect();
+            let resp = self.get("/channels").await?.query(&params).send().await?;
+            let body: ChannelsResponse = check_status_and_json(resp).await?;
+            out.extend(body.data);
+        }
+        Ok(out)
+    }
+
+    /// Profil-Stammdaten für bis zu 100 User-IDs (`/users`): Kontalter
+    /// (`created_at`), `broadcaster_type` und Beschreibung des
+    /// Kategoriesammlers. Reines Lesen.
+    pub async fn get_users_by_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<HelixUser>, HelixError> {
+        let clean: Vec<&String> = user_ids.iter().filter(|id| !id.trim().is_empty()).collect();
+        let mut out = Vec::new();
+        for chunk in clean.chunks(100) {
+            let params: Vec<(&str, &str)> = chunk.iter().map(|id| ("id", id.trim())).collect();
+            let resp = self.get("/users").await?.query(&params).send().await?;
+            let body: UsersResponse = check_status_and_json(resp).await?;
+            out.extend(body.data);
+        }
+        Ok(out)
+    }
+
     /// Bis zu `limit` Live-Streams einer Kategorie (Cursor-Pagination à 100).
     pub async fn get_streams_by_category(
         &self,
@@ -204,6 +288,208 @@ impl HelixClient {
         }
         out.truncate(limit);
         Ok(out)
+    }
+
+    /// Vollständige Kategorie-Pagination mit harten Sicherheitsbudgets.
+    /// Fehler behalten bereits gelesene Streams, aber niemals complete=true.
+    pub async fn get_streams_by_category_full(
+        &self,
+        game_id: &str,
+        hard_cap: usize,
+    ) -> CategoryStreamsFetch {
+        use std::collections::HashSet;
+        let mut fetch = CategoryStreamsFetch::default();
+        if game_id.trim().is_empty() || hard_cap == 0 {
+            fetch.error = Some("invalid category or cap".into());
+            return fetch;
+        }
+        let mut ids = HashSet::new();
+        let mut cursors = HashSet::new();
+        let mut after: Option<String> = None;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(55);
+        // Deduplizierte Streams dürfen nicht als einziges Fortschrittsmaß dienen.
+        let page_budget = hard_cap.div_ceil(100).saturating_mul(3).clamp(3, 300);
+        for _ in 0..page_budget {
+            let mut params = vec![("game_id", game_id.to_owned()), ("first", "100".to_owned())];
+            if let Some(cursor) = &after {
+                params.push(("after", cursor.clone()));
+            }
+            let page = tokio::time::timeout_at(deadline, async {
+                let response = self.category_read_get("/streams", &params).await?;
+                let value: serde_json::Value = check_status_and_json(response).await?;
+                let data = value
+                    .get("data")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or(HelixError::InvalidResponse(
+                        "streams.data missing or invalid",
+                    ))?;
+                if !value
+                    .get("pagination")
+                    .is_some_and(serde_json::Value::is_object)
+                {
+                    return Err(HelixError::InvalidResponse(
+                        "streams.pagination missing or invalid",
+                    ));
+                }
+                for row in data {
+                    for key in ["id", "user_id", "user_login", "game_id", "started_at"] {
+                        if !row
+                            .get(key)
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|s| !s.is_empty())
+                        {
+                            return Err(HelixError::InvalidResponse(
+                                "stream required field missing",
+                            ));
+                        }
+                    }
+                    let login = row["user_login"].as_str().unwrap_or_default();
+                    if login.len() > 25
+                        || !login
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        || row["game_id"].as_str() != Some(game_id)
+                        || !row["viewer_count"]
+                            .as_i64()
+                            .is_some_and(|n| (0..=i32::MAX as i64).contains(&n))
+                        || chrono::DateTime::parse_from_rfc3339(
+                            row["started_at"].as_str().unwrap_or_default(),
+                        )
+                        .is_err()
+                    {
+                        return Err(HelixError::InvalidResponse("invalid stream fields"));
+                    }
+                }
+                serde_json::from_value::<StreamsResponse>(value)
+                    .map_err(|_| HelixError::InvalidResponse("invalid streams payload"))
+            })
+            .await;
+            let body = match page {
+                Ok(Ok(body)) => body,
+                Ok(Err(error)) => {
+                    fetch.error = Some(error.to_string());
+                    return fetch;
+                }
+                Err(_) => {
+                    fetch.error = Some("category poll time budget exceeded".into());
+                    return fetch;
+                }
+            };
+            fetch.pages_fetched += 1;
+            let empty = body.data.is_empty();
+            for stream in body.data {
+                if !ids.insert(stream.id.clone()) {
+                    continue;
+                }
+                if fetch.streams.len() == hard_cap {
+                    fetch.truncated_by_cap = true;
+                    return fetch;
+                }
+                fetch.streams.push(stream);
+            }
+            let cursor = body.pagination.cursor.filter(|s| !s.is_empty());
+            if cursor.is_none() {
+                fetch.complete = true;
+                return fetch;
+            }
+            if empty {
+                fetch.error = Some("empty page with cursor".into());
+                return fetch;
+            }
+            if !cursors.insert(cursor.clone().unwrap()) {
+                fetch.error = Some("cursor repeated".into());
+                return fetch;
+            }
+            if fetch.streams.len() >= hard_cap {
+                fetch.truncated_by_cap = true;
+                return fetch;
+            }
+            after = cursor;
+        }
+        fetch.error = Some("category page budget exceeded".into());
+        fetch
+    }
+
+    /// Exakte Namensauflösung über denselben Helix-Client, ohne Präfix-Fallback
+    /// oder möglicherweise aus einer unscharfen Suche stammenden Cache.
+    pub async fn resolve_category_id_exact(
+        &self,
+        name: &str,
+    ) -> Result<Option<String>, HelixError> {
+        if name.trim().is_empty() {
+            return Ok(None);
+        }
+        let response = self
+            .category_read_get("/games", &[("name", name.to_owned())])
+            .await?;
+        let body: serde_json::Value = check_status_and_json(response).await?;
+        let rows = body
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(HelixError::InvalidResponse("games.data missing"))?;
+        let matches: Vec<_> = rows
+            .iter()
+            .filter(|row| row["name"].as_str() == Some(name))
+            .filter_map(|row| row["id"].as_str())
+            .filter(|id| !id.is_empty())
+            .collect();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [id] => Ok(Some((*id).to_owned())),
+            _ => Err(HelixError::InvalidResponse("ambiguous exact category")),
+        }
+    }
+
+    /// Zusatzdaten des Sammlers verwenden denselben signierten GET-Pfad.
+    /// Ratelimit-Header wirken auch über Client-Klone und Poll-Grenzen hinweg.
+    pub async fn category_read_get(
+        &self,
+        path: &str,
+        params: &[(&str, String)],
+    ) -> Result<reqwest::Response, HelixError> {
+        use std::sync::atomic::Ordering;
+        if !matches!(
+            path,
+            "/streams" | "/games" | "/users" | "/channels" | "/videos" | "/clips"
+        ) {
+            return Err(HelixError::InvalidResponse(
+                "unsupported category read endpoint",
+            ));
+        }
+        let now = crate::token::unix_now();
+        if self.category_read_blocked_until.load(Ordering::Acquire) > now {
+            return Err(HelixError::Status { status: 429 });
+        }
+        let request = self.get(path).await?.query(params);
+        let response = self.send_with_retry(request).await?;
+        let headers = response.headers();
+        let remaining = headers
+            .get("Ratelimit-Remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok());
+        if response.status().as_u16() == 429 || remaining == Some(0) {
+            let reset = headers
+                .get("Ratelimit-Reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or_else(|| crate::token::unix_now() + 60)
+                .max(crate::token::unix_now() + 1);
+            self.category_read_blocked_until
+                .fetch_max(reset, Ordering::AcqRel);
+        }
+        if response.status().as_u16() == 401 {
+            self.invalidate_app_token().await;
+        }
+        Ok(response)
+    }
+
+    /// JSON des ausschließlich lesenden Sammlerpfads, mit zentraler Statusprüfung.
+    pub async fn category_read_json(
+        &self,
+        path: &str,
+        params: &[(&str, String)],
+    ) -> Result<serde_json::Value, HelixError> {
+        check_status_and_json(self.category_read_get(path, params).await?).await
     }
 
     /// game_id einer Kategorie über `/search/categories` (exakter Treffer
@@ -397,20 +683,32 @@ impl HelixClient {
     /// Einzelstatus mit Broadcaster-Grant. Gefilterte Antworten haben null
     /// total/points; der Summensnapshot-Typ eignet sich deshalb hier nicht.
     pub async fn broadcaster_subscription_active(
-        &self, broadcaster_id: &str, viewer_id: &str, user_token: &str,
+        &self,
+        broadcaster_id: &str,
+        viewer_id: &str,
+        user_token: &str,
     ) -> Result<bool, HelixError> {
         #[derive(Deserialize)]
-        struct Subscriber { user_id: String, broadcaster_id: String }
+        struct Subscriber {
+            user_id: String,
+            broadcaster_id: String,
+        }
         #[derive(Deserialize)]
-        struct Response { data: Vec<Subscriber> }
-        let resp = self.get_with_user_token("/subscriptions", user_token)
+        struct Response {
+            data: Vec<Subscriber>,
+        }
+        let resp = self
+            .get_with_user_token("/subscriptions", user_token)
             .query(&[("broadcaster_id", broadcaster_id), ("user_id", viewer_id)])
-            .send().await?;
+            .send()
+            .await?;
         let response: Response = check_status_and_json(resp).await?;
         match response.data.as_slice() {
             [] => Ok(false),
-            [sub] if sub.user_id==viewer_id && sub.broadcaster_id==broadcaster_id => Ok(true),
-            _ => Err(HelixError::InvalidResponse("Abo-Antwort stimmt nicht mit angefragten Twitch-IDs überein")),
+            [sub] if sub.user_id == viewer_id && sub.broadcaster_id == broadcaster_id => Ok(true),
+            _ => Err(HelixError::InvalidResponse(
+                "Abo-Antwort stimmt nicht mit angefragten Twitch-IDs überein",
+            )),
         }
     }
 
@@ -846,6 +1144,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voller_durchlauf_folgt_cursor_bis_zum_ende_und_markiert_vollstaendig() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_id": format!("{id}0"), "user_login": format!("u{id}"),
+                "game_name": "Deadlock", "game_id": "g1", "viewer_count": 1,
+                "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1"), stream("2"), stream("3")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .expect(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .and(query_param("after", "c1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                // Duplikat über Seitengrenze hinweg → wird dedupliziert.
+                "data": [stream("3"), stream("4")],
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 1200).await;
+
+        assert!(fetch.complete);
+        assert!(!fetch.truncated_by_cap);
+        assert_eq!(fetch.error, None);
+        assert_eq!(fetch.pages_fetched, 2);
+        let ids: Vec<&str> = fetch.streams.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["1", "2", "3", "4"],
+            "Duplikat entfernt, Reihenfolge stabil"
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_cap_liefert_unvollstaendig_mit_kappungs_flag() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_id": format!("{id}0"), "user_login": format!("u{id}"), "game_name": "Deadlock", "game_id": "g1",
+                "viewer_count": 1, "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1"), stream("2")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 2).await;
+
+        assert!(!fetch.complete);
+        assert!(fetch.truncated_by_cap);
+        assert_eq!(fetch.streams.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_seitenfehler_liefert_teilmenge_mit_fehler() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_id": format!("{id}0"), "user_login": format!("u{id}"), "game_name": "Deadlock", "game_id": "g1",
+                "viewer_count": 1, "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        // Seite 1 ok, Seite 2 dauerhaft 500 (alle Retries).
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .expect(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("after", "c1"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 1200).await;
+
+        assert!(!fetch.complete);
+        assert!(!fetch.truncated_by_cap);
+        assert!(fetch.error.is_some());
+        assert_eq!(fetch.streams.len(), 1, "Seite 1 bleibt erhalten");
+        assert_eq!(fetch.pages_fetched, 1);
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_bricht_bei_wiederholtem_cursor_ab() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_id": format!("{id}0"), "user_login": format!("u{id}"), "game_name": "Deadlock", "game_id": "g1",
+                "viewer_count": 1, "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 1200).await;
+
+        assert!(!fetch.complete, "wiederholter Cursor ist nicht vollständig");
+        assert!(fetch.error.as_deref().is_some_and(|e| e.contains("cursor")));
+    }
+
+    #[tokio::test]
     async fn category_suche_bevorzugt_exakten_treffer_und_cacht() {
         let server = MockServer::start().await;
         let client = client_with(&server).await;
@@ -1000,21 +1439,44 @@ mod tests {
     #[tokio::test]
     async fn sub_reminder_status_strikt_und_null_summen() {
         for (body, expected) in [
-            (serde_json::json!({"data":[],"total":null,"points":null}),Some(false)),
-            (serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"b"}],"total":null}),Some(true)),
-            (serde_json::json!({"data":[{}]}),None),
-            (serde_json::json!({"data":null}),None),
-            (serde_json::json!({}),None),
-            (serde_json::json!({"data":[{"user_id":"other","broadcaster_id":"b"}]}),None),
-            (serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"other"}]}),None),
+            (
+                serde_json::json!({"data":[],"total":null,"points":null}),
+                Some(false),
+            ),
+            (
+                serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"b"}],"total":null}),
+                Some(true),
+            ),
+            (serde_json::json!({"data":[{}]}), None),
+            (serde_json::json!({"data":null}), None),
+            (serde_json::json!({}), None),
+            (
+                serde_json::json!({"data":[{"user_id":"other","broadcaster_id":"b"}]}),
+                None,
+            ),
+            (
+                serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"other"}]}),
+                None,
+            ),
         ] {
-            let server=MockServer::start().await;
-            let client=client_with(&server).await;
-            Mock::given(method("GET")).and(path("/helix/subscriptions"))
-                .and(query_param("broadcaster_id","b")).and(query_param("user_id","u"))
-                .and(header("Authorization","Bearer user-tok"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body)).expect(1).mount(&server).await;
-            assert_eq!(client.broadcaster_subscription_active("b","u","user-tok").await.ok(),expected);
+            let server = MockServer::start().await;
+            let client = client_with(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/helix/subscriptions"))
+                .and(query_param("broadcaster_id", "b"))
+                .and(query_param("user_id", "u"))
+                .and(header("Authorization", "Bearer user-tok"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                client
+                    .broadcaster_subscription_active("b", "u", "user-tok")
+                    .await
+                    .ok(),
+                expected
+            );
         }
     }
 

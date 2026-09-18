@@ -480,6 +480,70 @@ const EN: Record<string, string> = {
 
   'Partner Dashboard': 'Partner dashboard',
   'Zur Analyse': 'To analytics',
+
+  // -- Kategorien weltweit (globaler Kategoriesammler, Admin) -------------
+  'Kategorien weltweit': 'Categories worldwide',
+  'Globaler Kategoriesammler über alle beobachteten Kanäle. Auswertung nach Sprache, nicht nach Land oder Region. „und" bedeutet: Sprache nicht sicher erkannt.':
+    'Global category collector across all observed channels. Evaluated by language, not by country or region. "und" means: language not detected reliably.',
+  'Diese Seite braucht eine angemeldete Session. Bitte erneut einloggen.':
+    'This page requires a signed-in session. Please log in again.',
+  'Zugriffsprüfung fehlgeschlagen': 'Access check failed',
+  'Der Login-Status konnte nicht geladen werden. Bitte die Seite neu laden oder später erneut versuchen.':
+    'The login status could not be loaded. Please reload the page or try again later.',
+  'Der globale Kategoriesammler ist nur für Admins erreichbar.':
+    'The global category collector is restricted to admins.',
+  'Zeitraum wählen': 'Choose period',
+  '{tage} Tage': '{tage} days',
+  'Zeitraum wird geladen…': 'Loading period…',
+  Aktualisieren: 'Refresh',
+  'Auswertung wird geladen…': 'Loading report…',
+  'Fehler werden hier als Fehler gezeigt und nicht als leere Statistik.':
+    'Errors are shown as errors here, never as an empty statistic.',
+  'Sammler-Status': 'Collector status',
+  'Erfassung und Datenstand': 'Capture and data freshness',
+  Zeitraum: 'Period',
+  Messdauer: 'Measurement span',
+  'Letzte vollständige Abfrage': 'Last completed poll',
+  'Letzte gesicherte Nachricht': 'Last stored message',
+  'Erste Erfassung': 'First capture',
+  'Vollständige Abfragen im Zeitraum': 'Completed polls in period',
+  'Abbrüche im Zeitraum': 'Aborted polls in period',
+  'Nachrichten-Drops (kumulativ)': 'Dropped messages (cumulative)',
+  'Kumulativer Zähler seit Sammlerstart, nicht auf den Zeitraum begrenzt.':
+    'Cumulative counter since the collector started, not limited to the period.',
+  Speicher: 'Storage',
+  Aufbewahrung: 'Retention',
+  Zeitzone: 'Time zone',
+  'Noch keine Daten': 'No data yet',
+  'Der Sammler hat für diesen Zeitraum noch nichts beobachtet. Sobald erste Streams erfasst sind, erscheinen hier Sprachen, Trend und Top-Kanäle.':
+    'The collector has not observed anything for this period yet. As soon as first streams are captured, languages, trend and top channels appear here.',
+  'Stream-Sprachen': 'Stream languages',
+  'Aus der eingestellten Stream-Sprache der Kanäle. Der Zuschauerschnitt ist nach Sendestunden gewichtet.':
+    'From the stream language set on each channel. Average viewers are weighted by broadcast hours.',
+  Kanäle: 'Channels',
+  Sendestunden: 'Broadcast hours',
+  Zuschauerstunden: 'Viewer hours',
+  'Ø Zuschauer (gewichtet)': 'Avg viewers (weighted)',
+  'Ø Zuschauer': 'Avg viewers',
+  'Chat-Nachrichtensprachen': 'Chat message languages',
+  'Aus erkannten Chat-Nachrichten, unabhängig von der Stream-Sprache ermittelt. Keine Nachrichteninhalte, nur die Sprachverteilung.':
+    'From detected chat messages, determined independently of the stream language. No message contents, only the language distribution.',
+  Nachrichtensprache: 'Message language',
+  Nachrichten: 'Messages',
+  'keine Nachrichten beobachtet': 'no messages observed',
+  'Top-Kanäle': 'Top channels',
+  'Impact-Metrik ist Zuschauerstunden. Kanal- und Streamzahlen werden nicht über Stunden aufsummiert.':
+    'The impact metric is viewer hours. Channel and stream counts are not summed over hours.',
+  'Stream-Sprache': 'Stream language',
+  'Alle Sprachen': 'All languages',
+  Kanal: 'Channel',
+  'Chat-Nachrichten nach Tageszeit': 'Chat messages by time of day',
+  'Nachrichtensprache je Stunde, alle Zeiten in UTC.':
+    'Message language per hour, all times in UTC.',
+  'Stunde (UTC)': 'Hour (UTC)',
+  'Gleichzeitige Streams und Zuschauer': 'Concurrent streams and viewers',
+  'Tagesmittel je Messpunkt, in UTC. Tage ohne Erfassung bleiben Lücke und werden nicht interpoliert.':
+    'Daily average per poll, in UTC. Days without capture stay as gaps and are never interpolated.',
 };
 
 const TRANSLATIONS: Record<Language, Record<string, string>> = {

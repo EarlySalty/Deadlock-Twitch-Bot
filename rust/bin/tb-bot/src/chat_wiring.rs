@@ -494,9 +494,14 @@ impl ChatApiHandle {
         ))
     }
 
-    /// Bewusst abweichender Kontext, aktuell ausschließlich für den Raid-Pfad.
-    pub fn api_for_context(&self, context: PolicyContext) -> Arc<dyn ChatApi> {
-        Arc::new(ChannelPolicyChatApi::new(Arc::clone(&self.api), context))
+    /// Raid-Pfad: aktuelle Partnerfreigabe vor jeder Nachricht/Whisper prüfen.
+    /// Kein frei wählbarer Kontext kann diese Zielprüfung umgehen.
+    pub fn raid_api(&self) -> Arc<dyn ChatApi> {
+        let roster: Arc<dyn PartnerRoster> = self.roster.clone();
+        Arc::new(ChannelPolicyChatApi::new(
+            Arc::clone(&self.api),
+            PolicyContext::Raid(roster),
+        ))
     }
 
     /// Live rotierter Bot-User-Token-Manager — vom `!clip`-Fallback genutzt,

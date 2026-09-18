@@ -83,6 +83,7 @@ generated=(
   rust/target/release/tb-bot
   rust/target/release/tb-dashboard
   rust/target/release/tb-stream-audit
+  rust/target/release/tb-category-collector
   bot/analytics/dashboard_v2/dist
   bot/admin_dashboard/dist
   website/dist
@@ -108,7 +109,7 @@ done
 # ausführen. Ein neuer Checkout-Name macht eine kopierte alte Binary nicht neu.
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
-  for binary in tb-bot tb-dashboard tb-stream-audit; do
+  for binary in tb-bot tb-dashboard tb-stream-audit tb-category-collector; do
     embedded_revision="$(readelf --string-dump=.twitch_build "$source_root/rust/target/release/$binary" 2>/dev/null | awk '/\[/{print $NF}')" || embedded_revision=""
     if [[ "$embedded_revision" != "$git_sha" ]]; then
       echo "Build-Herkunft stimmt nicht: $binary muss aus dem sauberen Commit $git_sha neu gebaut werden." >&2
@@ -145,6 +146,7 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-bot" "$stage/rust/target/release/tb-bot"
   install -m 0755 "$checkout/rust/target/release/tb-dashboard" "$stage/rust/target/release/tb-dashboard"
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
+  install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
 
   # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des
   # angegebenen SHA. Unversionierte Dateien aus dem Build-Baum werden niemals

@@ -116,6 +116,9 @@ pub struct HelixClient {
     /// NICHT den App-Token, also braucht er seinen eigenen Schalter. Lock-frei,
     /// damit `is_client_auth_blocked` synchron im Sweep-Gate abgefragt werden kann.
     pub(crate) user_auth_blocked_until: Arc<AtomicI64>,
+    /// Vom Kategoriesammler beobachtete App-Token-Ratelimit-Sperre. Geteilt
+    /// über Client-Klone, ohne Retry-Semantik bestehender Schreibpfade zu ändern.
+    pub(crate) category_read_blocked_until: Arc<AtomicI64>,
 }
 
 impl HelixClient {
@@ -139,6 +142,7 @@ impl HelixClient {
             token,
             category_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             user_auth_blocked_until: Arc::new(AtomicI64::new(0)),
+            category_read_blocked_until: Arc::new(AtomicI64::new(0)),
         })
     }
 

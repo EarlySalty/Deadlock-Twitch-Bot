@@ -22,6 +22,7 @@
 //! Plan-Doc `docs/plans/2026-06-09-schritt-4-monitoring.md` dokumentiert.
 
 pub mod announce;
+pub mod anon_chat;
 pub mod chatters_poller;
 pub mod dispatch;
 pub mod exp_sessions;
@@ -44,6 +45,10 @@ pub mod telemetry;
 pub mod webhook_receiver;
 pub use webhook_receiver::WebhookReceiver;
 
+pub use anon_chat::{
+    validiere_login, AnonChatConfig, AnonChatHandle, AnonChatStats, AnonChatStatsSnapshot,
+    PrivmsgSink, TaskSpawner, TokioTaskSpawner,
+};
 pub use announce::{
     AnnouncementEditOutcome, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
     ChannelProfileSource, LivePingRoleProvider, NoChannelProfile, NoVodPreview, VodPreviewSource,

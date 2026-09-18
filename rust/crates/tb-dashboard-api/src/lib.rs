@@ -1907,6 +1907,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         ))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
+        .merge(handlers::category_collector::router(pool.clone(), token.clone()))
         .merge(build_admin_config_router(pool.clone(), token))
         .merge(handlers::admin_mode::build_admin_mode_router())
         .merge(handlers::legal::build_legal_router())

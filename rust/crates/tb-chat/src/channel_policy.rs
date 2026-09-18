@@ -13,7 +13,9 @@ const DENIED_REASON: &str = "channel_policy_denied";
 
 pub enum PolicyContext {
     Standard(Arc<dyn PartnerRoster>),
-    Raid,
+    /// Raid-Nachrichten brauchen dieselbe aktuelle Zielberechtigung wie
+    /// normale Bot-Aktionen; der Kontext erlaubt zusätzlich keine Moderation.
+    Raid(Arc<dyn PartnerRoster>),
 }
 
 pub struct ChannelPolicyChatApi {
@@ -34,7 +36,9 @@ impl ChannelPolicyChatApi {
     ) -> Result<(), String> {
         let allowed = match &self.context {
             PolicyContext::Standard(roster) => roster.is_operational_partner_channel(channel).await,
-            PolicyContext::Raid => action.allowed_for_raid(),
+            PolicyContext::Raid(roster) => {
+                action.allowed_for_raid() && roster.is_operational_partner_channel(channel).await
+            }
         };
         if allowed {
             return Ok(());

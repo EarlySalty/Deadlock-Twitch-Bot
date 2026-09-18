@@ -1,0 +1,20 @@
+[package]
+name = "tb-category-collector"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+tracing = { workspace = true }
+whatlang = { workspace = true }
+tb-engagement = { workspace = true }
+tb-monitoring = { workspace = true }
+tb-transport-twitch = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

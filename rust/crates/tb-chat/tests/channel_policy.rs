@@ -95,7 +95,7 @@ impl ChatApi for RecordingApi {
 }
 
 struct StaticRoster {
-    partner: bool,
+    partner: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -113,7 +113,7 @@ impl PartnerRoster for StaticRoster {
     }
 
     async fn is_operational_partner_channel(&self, _: &str) -> bool {
-        self.partner
+        self.partner.load(std::sync::atomic::Ordering::Acquire)
     }
 
     async fn global_ban_enforcement_enabled(&self, _: &str) -> bool {
@@ -129,7 +129,9 @@ fn policy(partner: bool) -> (Arc<RecordingApi>, ChannelPolicyChatApi) {
     let inner = Arc::new(RecordingApi::default());
     let api = ChannelPolicyChatApi::new(
         Arc::clone(&inner) as Arc<dyn ChatApi>,
-        PolicyContext::Standard(Arc::new(StaticRoster { partner })),
+        PolicyContext::Standard(Arc::new(StaticRoster {
+            partner: partner.into(),
+        })),
     );
     (inner, api)
 }
@@ -288,10 +290,26 @@ async fn partner_writes_and_reads_are_forwarded() {
 }
 
 #[tokio::test]
-async fn raid_context_allows_message_and_whisper_but_not_moderation() {
+async fn raid_context_rejects_unapproved_destination() {
     let inner = Arc::new(RecordingApi::default());
-    let api =
-        ChannelPolicyChatApi::new(Arc::clone(&inner) as Arc<dyn ChatApi>, PolicyContext::Raid);
+    let api = ChannelPolicyChatApi::new(
+        Arc::clone(&inner) as Arc<dyn ChatApi>,
+        PolicyContext::Raid(Arc::new(StaticRoster {
+            partner: false.into(),
+        })),
+    );
+    assert_denied(api.send_message("non_partner", "hello").await, &inner);
+}
+
+#[tokio::test]
+async fn authorized_raid_context_allows_message_and_whisper_but_not_moderation() {
+    let inner = Arc::new(RecordingApi::default());
+    let api = ChannelPolicyChatApi::new(
+        Arc::clone(&inner) as Arc<dyn ChatApi>,
+        PolicyContext::Raid(Arc::new(StaticRoster {
+            partner: true.into(),
+        })),
+    );
 
     assert_eq!(
         api.send_message("non_partner", "hello").await,
@@ -303,4 +321,38 @@ async fn raid_context_allows_message_and_whisper_but_not_moderation() {
     let result = api.ban_user("non_partner", "target", "reason").await;
     assert_eq!(result.err().as_deref(), Some("channel_policy_denied"));
     assert_eq!(inner.calls(), vec!["send_message", "send_whisper"]);
+}
+
+#[tokio::test]
+async fn raid_permission_is_checked_again_after_revocation() {
+    let inner = Arc::new(RecordingApi::default());
+    let roster = Arc::new(StaticRoster {
+        partner: true.into(),
+    });
+    let api = ChannelPolicyChatApi::new(
+        Arc::clone(&inner) as Arc<dyn ChatApi>,
+        PolicyContext::Raid(roster.clone()),
+    );
+    assert_eq!(
+        api.send_message("partner", "hello").await,
+        Ok(SendOutcome::Sent)
+    );
+    roster
+        .partner
+        .store(false, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        api.send_message("partner", "reminder")
+            .await
+            .err()
+            .as_deref(),
+        Some("channel_policy_denied")
+    );
+    assert_eq!(
+        api.send_whisper("unlinked_alias", "reminder")
+            .await
+            .err()
+            .as_deref(),
+        Some("channel_policy_denied")
+    );
+    assert_eq!(inner.calls(), vec!["send_message"]);
 }
