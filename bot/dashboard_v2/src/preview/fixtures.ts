@@ -461,6 +461,7 @@ const AD_MANAGER_FIXTURE: AdManagerResponse = {
     enabled: true,
     strategy: 'smart',
     adDurationSeconds: 90,
+    budgetMinutesPerHour: 3,
     minIntervalMinutes: 45,
     startupDelayMinutes: 20,
     quietWindowMinutes: 5,
@@ -484,6 +485,15 @@ const AD_MANAGER_FIXTURE: AdManagerResponse = {
       detail: 'Nächste Werbung um fünf Minuten verschoben.',
       at: '2026-04-22T09:27:00Z',
     },
+    plan: {
+      source: 'own',
+      fit: 'good',
+      nextBlockAt: '2026-04-22T09:38:00Z',
+      blockSeconds: 30,
+      blocksPerHour: 6,
+      budgetUsedSecondsThisHour: 60,
+    },
+    currentReason: 'in_match',
     scopes: {
       read: true,
       snooze: true,
