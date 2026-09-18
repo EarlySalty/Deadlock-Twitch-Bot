@@ -82,6 +82,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   const [keywords, setKeywords] = useState('');
   const [includeLive, setIncludeLive] = useState(true);
   const [stylePreference, setStylePreference] = useState('');
+  const [neverWords, setNeverWords] = useState('');
   const [autoSet, setAutoSet] = useState(false);
   const [result, setResult] = useState<TitleSuggestResult | null>(null);
   const [editableTitle, setEditableTitle] = useState('');
@@ -99,8 +100,17 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   useEffect(() => {
     if (!settings) return;
     setStylePreference(settings.style_preference ?? '');
+    setNeverWords((settings.never_words ?? []).join('\n'));
     setAutoSet(settings.experimental_auto_set ?? false);
   }, [settings]);
+
+  const neverWordList = (value: string): string[] =>
+    value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => line.slice(0, 60))
+      .slice(0, 40);
 
   const insightQuery = useQuery({
     queryKey: ['title-insights', streamer],
@@ -126,13 +136,14 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   });
 
   const settingsMutation = useMutation({
-    mutationFn: (next: Pick<TitleSettings, 'style_preference' | 'experimental_auto_set'>) => saveTitleSettings({
+    mutationFn: (next: Pick<TitleSettings, 'style_preference' | 'experimental_auto_set' | 'never_words'>) => saveTitleSettings({
       ...next,
       streamer,
     }, csrfToken),
     onSuccess: (data) => {
       queryClient.setQueryData(['title-settings', streamer], data);
       setStylePreference(data.style_preference);
+      setNeverWords((data.never_words ?? []).join('\n'));
       setAutoSet(data.experimental_auto_set);
     },
   });
@@ -150,13 +161,28 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
 
   const styleDirty = useMemo(() => {
     if (!settings) return false;
-    return stylePreference.trim() !== settings.style_preference.trim() || autoSet !== settings.experimental_auto_set;
-  }, [autoSet, settings, stylePreference]);
+    const savedNever = (settings.never_words ?? []).join('\n');
+    return (
+      stylePreference.trim() !== settings.style_preference.trim() ||
+      autoSet !== settings.experimental_auto_set ||
+      neverWordList(neverWords).join('\n') !== savedNever
+    );
+  }, [autoSet, settings, stylePreference, neverWords]);
 
   const saveSettings = () => settingsMutation.mutate({
     style_preference: stylePreference.trim(),
     experimental_auto_set: autoSet,
+    never_words: neverWordList(neverWords),
   });
+
+  const addNeverWord = (phrase: string) => {
+    const clean = phrase.trim().slice(0, 60);
+    if (!clean) return;
+    const current = neverWordList(neverWords);
+    if (current.some((entry) => entry.toLowerCase() === clean.toLowerCase())) return;
+    if (current.length >= 40) return;
+    setNeverWords([...current, clean].join('\n'));
+  };
 
   const submitFeedback = (feedback: 'liked' | 'disliked') => {
     feedbackMutation.mutate({ feedback }, {
@@ -244,6 +270,18 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           </div>
         )}
 
+        <div>
+          <div className="text-sm font-medium text-white">Das will ich nie im Titel</div>
+          <p className="mt-1 text-xs text-text-secondary">Ein Wort oder ganzer Satz je Zeile. Wird sicher weggelassen. Bis zu 40 Zeilen zu je 60 Zeichen.</p>
+          <textarea
+            value={neverWords}
+            onChange={(event) => setNeverWords(event.target.value)}
+            rows={3}
+            placeholder={'z.B.\nRanked Grind\ncringe\nheute wird abgeliefert'}
+            className="mt-2 w-full resize-y rounded-xl border border-border bg-background px-3.5 py-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-text-secondary/45 focus:border-primary/60"
+          />
+        </div>
+
         <div className="flex flex-col gap-3 rounded-xl border border-warning/20 bg-warning/5 p-3.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-white">
@@ -295,6 +333,11 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           <Toggle checked={includeLive} onChange={setIncludeLive} />
           <span>Rang / Live-Hero / Party-Kontext nutzen, wenn vorhanden</span>
         </label>
+        {result?.co_streamers && result.co_streamers.length > 0 && (
+          <p className="text-xs text-text-secondary">
+            Erkannt: du streamst mit {result.co_streamers.map((login) => `@${login}`).join(' und ')}
+          </p>
+        )}
         <AnimatePresence>
           {error && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="flex items-start gap-2 text-xs text-error">
@@ -351,6 +394,16 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             )}
             {setTitleStatus === 'error' && <p className="text-xs text-error">Twitch hat das Setzen des Titels gerade nicht bestätigt.</p>}
             {result.auto_set_status === 'set' && <p className="text-xs text-success">Auto-Set war aktiv: Dieser Titel wurde direkt auf Twitch übernommen.</p>}
+
+            {feedbackState === 'disliked' && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === editableTitle.trim().slice(0, 60).toLowerCase()) && (
+              <button
+                type="button"
+                onClick={() => addNeverWord(editableTitle)}
+                className="text-xs text-text-secondary underline decoration-dotted underline-offset-2 hover:text-white"
+              >
+                Diese Formulierung in "Das will ich nie im Titel" übernehmen (danach speichern)
+              </button>
+            )}
 
             {result.alternatives.length > 0 && (
               <div className="space-y-2 pt-1">

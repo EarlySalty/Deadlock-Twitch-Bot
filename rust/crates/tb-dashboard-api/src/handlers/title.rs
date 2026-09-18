@@ -67,6 +67,8 @@ pub struct TitleSettingsBody {
     pub style_preference: String,
     #[serde(default)]
     pub experimental_auto_set: bool,
+    #[serde(default)]
+    pub never_words: Vec<String>,
 }
 
 const TITLE_OAUTH_URL: &str = "/twitch/raid/auth?scope_profile=title&source=title_generator";
@@ -267,6 +269,8 @@ struct TitleContext {
     /// `true`, wenn `include_live` gesetzt war UND ein Live-State wirklich
     /// geladen wurde — nur dann floss Live-Kontext in den Prompt (P2.102).
     live_context_used: bool,
+    /// Erkannte, gerade live sitzende Co-Streamer (Twitch-Logins, höchstens zwei).
+    co_streamers: Vec<String>,
 }
 
 /// Löst die Discord-ID des Streamers auf (für die Steam-Lookup-DB).
@@ -301,32 +305,53 @@ async fn resolve_title_context(
     twitch_user_id: &str,
     include_live: bool,
 ) -> TitleContext {
-    let Some(discord_id) = resolve_discord_user_id(pool, twitch_user_id).await else {
-        return TitleContext::default();
-    };
+    // Der Rang- und Party-Pfad braucht die Discord-Verknüpfung; die Co-Stream-
+    // Erkennung läuft auch ohne, weil das Shared-Chat-Signal rein über Twitch geht.
+    let discord_id = resolve_discord_user_id(pool, twitch_user_id).await;
 
-    let rank_display = steam_lookup::get_rank_for_discord_user(pool, discord_id)
-        .await
-        .map(|rank| rank.rank_display);
+    let rank_display = match discord_id {
+        Some(discord_id) => steam_lookup::get_rank_for_discord_user(pool, discord_id)
+            .await
+            .map(|rank| rank.rank_display),
+        None => None,
+    };
 
     let mut live_state = None;
     let mut live_context_used = false;
+    let mut co_streamers: Vec<String> = Vec::new();
     if include_live {
-        live_state = match steam_lookup::get_live_state_for_discord_user(pool, discord_id).await {
-            Ok(live) => live.map(|l| PromptLiveState {
-                hero: l.hero,
-                party_hint: l.party_hint,
-            }),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    discord_id_tail = discord_id.rem_euclid(10_000),
-                    "Title-Kontext: Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
-                );
-                None
+        let steam_live = match discord_id {
+            Some(discord_id) => {
+                match steam_lookup::get_live_state_for_discord_user(pool, discord_id).await {
+                    Ok(live) => live,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            discord_id_tail = discord_id.rem_euclid(10_000),
+                            "Title-Kontext: Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
+                        );
+                        None
+                    }
+                }
             }
+            None => None,
         };
-        // Live-Kontext wurde nur dann genutzt, wenn auch ein State vorlag.
+        co_streamers =
+            steam_lookup::detect_co_streamers_all(pool, twitch_user_id, discord_id).await;
+        let party_hint = match discord_id {
+            Some(discord_id) => {
+                steam_lookup::get_party_hint_for_discord_user(pool, discord_id).await
+            }
+            None => None,
+        };
+        if steam_live.is_some() || party_hint.is_some() || !co_streamers.is_empty() {
+            live_state = Some(PromptLiveState {
+                hero: steam_live.as_ref().and_then(|l| l.hero.clone()),
+                party_hint,
+                co_streamer: co_streamers.clone(),
+            });
+        }
+        // Live-Kontext wurde nur dann genutzt, wenn Hero/Party oder Co-Streamer vorlagen.
         live_context_used = live_state.is_some();
     }
 
@@ -334,6 +359,7 @@ async fn resolve_title_context(
         rank_display,
         live_state,
         live_context_used,
+        co_streamers,
     }
 }
 
@@ -391,6 +417,7 @@ async fn finish_suggestion(
         "alternatives": alternatives,
         "title_analysis": analysis.into_iter().take(20).collect::<Vec<_>>(),
         "live_context_used": context.live_context_used,
+        "co_streamers": context.co_streamers,
         "auto_mode": keywords.trim().is_empty(),
         "generation_id": generation_id,
         "style_summary": derive_style_summary(prompt_history),
@@ -521,6 +548,7 @@ pub async fn suggest_handler(
         &prompt_knowledge,
         context.rank_display.as_deref(),
         context.live_state.as_ref(),
+        &preferences.never_words,
         "dashboard",
     )
     .await
@@ -634,6 +662,7 @@ pub async fn settings_handler(
     Json(json!({
         "style_preference": preferences.style_preference,
         "experimental_auto_set": preferences.experimental_auto_set,
+        "never_words": preferences.never_words,
         "style_summary": derive_style_summary(&prompt_history),
         "oauth_connected": can_manage_title(&pool, &user_id).await,
         "oauth_url": TITLE_OAUTH_URL,
@@ -670,6 +699,14 @@ pub async fn settings_update_handler(
         )
             .into_response();
     }
+    let never_words: Vec<String> = body
+        .never_words
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(|line| line.chars().take(60).collect::<String>())
+        .take(40)
+        .collect();
     if body.experimental_auto_set && !can_manage_title(&pool, &user_id).await {
         return (
             StatusCode::FORBIDDEN,
@@ -681,12 +718,20 @@ pub async fn settings_update_handler(
         )
             .into_response();
     }
-    match title_db::save_title_preferences(&pool, &user_id, style, body.experimental_auto_set).await
+    match title_db::save_title_preferences(
+        &pool,
+        &user_id,
+        style,
+        body.experimental_auto_set,
+        &never_words,
+    )
+    .await
     {
         Ok(()) => Json(json!({
             "ok": true,
             "style_preference": style,
             "experimental_auto_set": body.experimental_auto_set,
+            "never_words": never_words,
             "oauth_connected": can_manage_title(&pool, &user_id).await,
             "oauth_url": TITLE_OAUTH_URL,
         }))

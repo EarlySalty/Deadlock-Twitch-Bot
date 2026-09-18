@@ -272,41 +272,155 @@ pub fn sanitize_generated_title(title: &str, keywords: &str, rank_display: Optio
     cleaned.trim_matches(|c| " -|:,".contains(c)).to_string()
 }
 
-/// Sanitisiert primary + bis zu 2 deduplizierte Alternativen
-/// (Python `_sanitize_title_result`).
+/// Normalisierte Co-Streamer-Logins (klein, ohne führendes `@`) als Menge.
+fn co_streamer_set(co_streamer: &[String]) -> HashSet<String> {
+    co_streamer
+        .iter()
+        .map(|login| login.trim().trim_start_matches('@').to_lowercase())
+        .filter(|login| !login.is_empty())
+        .collect()
+}
+
+/// Erkennt verbotene Slop-Muster inklusive austauschbarer Varianten. Arbeitet
+/// auf der kleingeschriebenen, whitespace-normalisierten Fassung des Titels.
+fn is_slop_variant(title: &str) -> bool {
+    let normalized = Regex::new(r"\s+")
+        .unwrap()
+        .replace_all(&title.to_lowercase(), " ")
+        .into_owned();
+    const STEMS: [&str; 12] = [
+        "ranked grind",
+        "road to",
+        "gaming heute",
+        "wir sind live",
+        "heute wird rasiert",
+        "chilliger stream",
+        "chiller stream",
+        "chill stream",
+        "mal schauen",
+        "mal sehen",
+        "mal gucken",
+        "lets go",
+    ];
+    let lets_go = normalized.contains("let's go") || normalized.contains("lets go");
+    lets_go || STEMS.iter().any(|stem| normalized.contains(stem))
+}
+
+/// Trifft ein Titel einen Eintrag der streamer-eigenen Verbotsliste? Vergleich
+/// ohne Groß-/Kleinschreibung, Teilstring-Treffer genügt.
+fn matches_never_words(title: &str, never_words: &[String]) -> bool {
+    if never_words.is_empty() {
+        return false;
+    }
+    let haystack = title.to_lowercase();
+    never_words.iter().any(|word| {
+        let needle = word.trim().to_lowercase();
+        !needle.is_empty() && haystack.contains(&needle)
+    })
+}
+
+/// Entfernt jedes `@name`, das nicht zu einem erkannten Co-Streamer gehört, und
+/// räumt zurückbleibende Trenner/Leerzeichen auf.
+fn at_keep_or_drop(caps: &regex::Captures, allowed: &HashSet<String>) -> String {
+    if allowed.contains(&caps[1].to_lowercase()) {
+        caps[0].to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn strip_foreign_ats(title: &str, allowed: &HashSet<String>) -> String {
+    // Zuerst "mit @name" als Einheit entfernen, wenn der Name nicht erlaubt ist,
+    // damit kein dangling "mit" zurückbleibt.
+    let cleaned = Regex::new(r"(?i)\s*\bmit\s+@([A-Za-z0-9_]{1,25})")
+        .unwrap()
+        .replace_all(title, |caps: &regex::Captures| at_keep_or_drop(caps, allowed))
+        .into_owned();
+    // Verbleibende einzelne @name entfernen, wenn nicht erlaubt.
+    let cleaned = Regex::new(r"@([A-Za-z0-9_]{1,25})")
+        .unwrap()
+        .replace_all(&cleaned, |caps: &regex::Captures| at_keep_or_drop(caps, allowed))
+        .into_owned();
+    let cleaned = Regex::new(r"\s{2,}")
+        .unwrap()
+        .replace_all(&cleaned, " ")
+        .into_owned();
+    let cleaned = Regex::new(r"\s+([|:,-])")
+        .unwrap()
+        .replace_all(&cleaned, "$1")
+        .into_owned();
+    cleaned.trim_matches(|c| " -|:,".contains(c)).to_string()
+}
+
+/// Hängt fehlende Co-Streamer als ` mit @login` an, solange 140 Zeichen halten.
+fn ensure_co_in_primary(primary: String, co_streamer: &[String]) -> String {
+    let lower = primary.to_lowercase();
+    let missing: Vec<String> = co_streamer
+        .iter()
+        .map(|login| login.trim().trim_start_matches('@').to_lowercase())
+        .filter(|login| !login.is_empty() && !lower.contains(&format!("@{login}")))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect();
+    if missing.is_empty() {
+        return primary;
+    }
+    let tags = missing
+        .iter()
+        .map(|login| format!("@{login}"))
+        .collect::<Vec<_>>()
+        .join(" und ");
+    let candidate = format!("{primary} mit {tags}");
+    if candidate.chars().count() <= 140 {
+        candidate
+    } else {
+        primary
+    }
+}
+
+/// Sanitisiert primary + bis zu 2 deduplizierte Alternativen, verwirft
+/// Slop-Varianten, entfernt erfundene `@name` und sichert erkannte Co-Streamer
+/// im Haupttitel (Python `_sanitize_title_result` plus Co-Stream-Nachfilter).
 pub fn sanitize_title_result(
     parsed: ParsedTitle,
     keywords: &str,
     rank_display: Option<&str>,
+    co_streamer: &[String],
+    never_words: &[String],
 ) -> TitleResult {
-    let primary = sanitize_generated_title(&parsed.primary, keywords, rank_display);
-    let mut alternatives: Vec<String> = Vec::new();
+    let allowed = co_streamer_set(co_streamer);
     let mut seen: HashSet<String> = HashSet::new();
-    if !primary.is_empty() {
-        seen.insert(primary.to_lowercase());
-    }
-    for title in &parsed.alternatives {
-        let cleaned = sanitize_generated_title(title, keywords, rank_display);
-        if cleaned.is_empty() {
+    let mut kept: Vec<String> = Vec::new();
+    let candidates = std::iter::once(&parsed.primary).chain(parsed.alternatives.iter());
+    for raw in candidates {
+        let cleaned = strip_foreign_ats(
+            &sanitize_generated_title(raw, keywords, rank_display),
+            &allowed,
+        );
+        if cleaned.is_empty()
+            || is_slop_variant(&cleaned)
+            || matches_never_words(&cleaned, never_words)
+        {
             continue;
         }
         let key = cleaned.to_lowercase();
-        if seen.contains(&key) {
+        if !seen.insert(key) {
             continue;
         }
-        seen.insert(key);
-        alternatives.push(cleaned);
-        if alternatives.len() >= 2 {
+        kept.push(cleaned);
+        if kept.len() >= 3 {
             break;
         }
     }
-    let primary_final = if !primary.is_empty() {
+    let primary = kept.first().cloned().unwrap_or_default();
+    let alternatives: Vec<String> = kept.into_iter().skip(1).take(2).collect();
+    let primary = if primary.is_empty() {
         primary
     } else {
-        alternatives.first().cloned().unwrap_or_default()
+        ensure_co_in_primary(primary, co_streamer)
     };
     TitleResult {
-        primary: primary_final,
+        primary,
         alternatives,
         title_analysis: parsed.title_analysis,
     }
@@ -332,11 +446,12 @@ pub struct PromptKnowledgeItem {
     pub normalized_score: Option<f64>,
 }
 
-/// Live-Daten fürs Prompt (Hero/Party).
-#[derive(Debug, Clone)]
+/// Live-Daten fürs Prompt (Hero/Party/Co-Stream).
+#[derive(Debug, Clone, Default)]
 pub struct PromptLiveState {
     pub hero: Option<String>,
     pub party_hint: Option<String>,
+    pub co_streamer: Vec<String>,
 }
 
 /// Explizites Human-Feedback aus frueheren Generierungen.
@@ -433,6 +548,7 @@ pub fn derive_style_summary(title_history: &[PromptHistoryItem]) -> String {
 /// Personalisierter Prompt des Dashboard-Moduls. Die explizite Nutzerpräferenz
 /// steht über der automatisch erkannten Stil-DNA; Community-Titel dienen nur
 /// als Inspirationsquelle und dürfen nicht wörtlich kopiert werden.
+#[allow(clippy::too_many_arguments)]
 pub fn build_personalized_title_prompt_with_feedback(
     keywords: &str,
     style_preference: &str,
@@ -442,6 +558,7 @@ pub fn build_personalized_title_prompt_with_feedback(
     rank_display: Option<&str>,
     emoji_ratio: f64,
     live_state: Option<&PromptLiveState>,
+    never_words: &[String],
 ) -> String {
     let emoji_rule = if emoji_ratio >= 0.3 {
         "Maximal einen Emoji verwenden – und nur wenn er natürlich zum erkannten Eigenstil passt."
@@ -507,6 +624,7 @@ pub fn build_personalized_title_prompt_with_feedback(
         .map(|rd| format!("\nStreamer-Rang: {rd}"))
         .unwrap_or_default();
     let live_line = live_state
+        .filter(|ls| ls.hero.is_some() || ls.party_hint.is_some())
         .map(|ls| {
             format!(
                 "\nAktuelle Live-Daten: Hero={}, Party={}",
@@ -515,6 +633,55 @@ pub fn build_personalized_title_prompt_with_feedback(
             )
         })
         .unwrap_or_default();
+    let co_streamer_tags: Vec<String> = live_state
+        .map(|ls| ls.co_streamer.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .map(|login| format!("@{}", login.trim_start_matches('@')))
+        .collect();
+    let co_line = if co_streamer_tags.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nStreamt gerade zusammen mit: {}",
+            co_streamer_tags.join(", ")
+        )
+    };
+    let co_streamer_rule = if co_streamer_tags.is_empty() {
+        "- Erfinde niemals Mitspieler; nenne nur, was in HEUTIGER INPUT steht.".to_string()
+    } else {
+        format!(
+            "- Du streamst gerade zusammen mit {tags}. Schreibe \"mit {tags}\" in genau dieser Schreibweise in den Haupttitel und in beide Alternativen. Erfinde darüber hinaus keine weiteren Mitspieler.",
+            tags = co_streamer_tags.join(" und ")
+        )
+    };
+    let length_rule = if title_history.is_empty() {
+        "Zielbereich 45–105 Zeichen; harte Twitch-Grenze 140 Zeichen.".to_string()
+    } else {
+        let sample = title_history.iter().take(30);
+        let count = title_history.len().clamp(1, 30) as f64;
+        let avg = sample
+            .map(|item| item.title.chars().count() as f64)
+            .sum::<f64>()
+            / count;
+        let low = (avg * 0.6).round().max(12.0) as i64;
+        let high = (avg * 1.8).round().min(140.0) as i64;
+        format!(
+            "Ziel-Länge orientiert sich am Eigenstil: rund {avg:.0} Zeichen (etwa {low}–{high}); harte Twitch-Grenze 140 Zeichen."
+        )
+    };
+    let never_block = if never_words.is_empty() {
+        String::new()
+    } else {
+        let items = never_words
+            .iter()
+            .map(|word| format!("  - {word}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n\nDAS WILL DER STREAMER NIE IM TITEL (harte Verbotsliste, auch sinngemäße Varianten weglassen):\n{items}"
+        )
+    };
     let canonical_ranks = CANONICAL_RANK_NAMES.join(", ");
     let style_summary = derive_style_summary(title_history);
     let style_preference = style_preference.trim();
@@ -533,10 +700,10 @@ pub fn build_personalized_title_prompt_with_feedback(
         r#"Du schreibst Twitch-Titel für einen Deadlock-Streamer. Dein Job ist nicht, nach KI zu klingen, sondern einen Titel zu liefern, den dieser konkrete Streamer selbst hätte schreiben können – nur besser.
 
 HEUTIGER INPUT:
-{keyword_line}{rank_line}{live_line}
+{keyword_line}{rank_line}{live_line}{co_line}
 
 GESPEICHERTE STANDARD-PRÄFERENZ DES STREAMERS (höchste Stil-Priorität):
-{preference_line}
+{preference_line}{never_block}
 
 AUTOMATISCH ERKANNTE STIL-DNA:
 {style_summary}
@@ -554,18 +721,20 @@ COMMUNITY-INSPIRATION (starke Titel anderer Deadlock-Streamer; Hooks/Strukturen 
 {benchmark_lines}
 
 QUALITÄTSREGELN:
-- Liefere 1 starken Haupttitel und 2 deutlich unterschiedliche Alternativen.
+- Liefere genau 3 Titel mit klar verschiedenen Blickwinkeln, keiner darf eine Umformulierung eines anderen sein: Haupttitel trocken und klar auf den Punkt; Alternative 1 mit Selbstironie oder Understatement; Alternative 2 mit einem konkreten Tagesdetail aus den Stichwörtern als Aufhänger.
 - Der Haupttitel muss einen echten Hook haben. Kein Keyword-Dump, keine Meta-Sprache, kein Marketing-Sprech.
-- Verbotene Slop-Muster ohne konkreten Anlass: "Ranked Grind", "Road to ...", "Gaming heute", "Wir sind live", "Heute wird rasiert", "mal schauen was geht", "chilliger Stream", "let's go" und austauschbare Varianten davon.
+- Verbotene Slop-Muster ohne konkreten Anlass, samt aller austauschbaren Varianten und Umschreibungen davon: "Ranked Grind", "Road to ...", "Gaming heute", "Wir sind live", "Heute wird rasiert", "mal schauen was geht" (auch "mal schauen was die Games hergeben", "mal sehen", "mal gucken"), "chilliger Stream", "let's go".
+- Gib die Aussage der Stichwörter mit eigenen Worten wieder, wiederhole nicht ihren Wortlaut. Aus "bissle Ranked Emissary 6 hoffentlich paar gute Games" wird nicht "Ranked auf Emissary 6, hoffentlich gute Games", sondern eine eigene Formulierung derselben Aussage.
 - Kreativ sein heißt: einen überraschenden, aber glaubwürdigen Blickwinkel oder Satzrhythmus finden – NICHT Fakten, Ziele, Win-Streaks, Ränge oder Events erfinden.
 - Eigene erfolgreiche Formulierungsbausteine dürfen bewusst wiederverwendet und neu kombiniert werden.
 - Community-Titel niemals 1:1 übernehmen; höchstens Idee, Hook-Typ oder Struktur adaptieren.
 - Wenn Keywords vorhanden sind, müssen ihre Kernaussagen erkennbar im Titel landen. 2–3 Stichwörter sind Kontext, keine Pflicht-Reihenfolge.
 - Wenn keine Keywords vorhanden sind, baue einen hochwertigen Evergreen-Titel, der für einen normalen Deadlock-Stream wahr bleibt.
-- Zielbereich 45–105 Zeichen; harte Twitch-Grenze 140 Zeichen.
+- {length_rule}
 - {emoji_rule}
 - Verwende Rangbegriffe nur, wenn sie in HEUTIGER INPUT / Streamer-Rang stehen.
-- Erfinde niemals Rang, Hero, Party, Challenge, Streak, Turnier, Patch oder Mitspieler.
+- Erfinde niemals Rang, Hero, Party, Challenge, Streak, Turnier oder Patch.
+{co_streamer_rule}
 - Gültige Deadlock-Ränge: {canonical_ranks}.
 - "Asc 2" bleibt exakt "Asc 2"; keine künstliche Expansion zu "Ascension Rank 2".
 - Keine generischen Trailer-Floskeln wie "heute ist es soweit" oder "endlich soweit".
@@ -599,6 +768,7 @@ pub fn build_personalized_title_prompt(
         rank_display,
         emoji_ratio,
         live_state,
+        &[],
     )
 }
 
@@ -732,6 +902,7 @@ pub async fn generate_title_personalized_with(
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
     live_state: Option<&PromptLiveState>,
+    never_words: &[String],
 ) -> Result<TitleResult, GenerateTitleError> {
     let titles: Vec<&str> = title_history.iter().map(|h| h.title.as_str()).collect();
     let ratio = emoji_ratio(&titles);
@@ -744,19 +915,38 @@ pub async fn generate_title_personalized_with(
         rank_display,
         ratio,
         live_state,
+        never_words,
     );
+    let co_streamer: &[String] = live_state
+        .map(|ls| ls.co_streamer.as_slice())
+        .unwrap_or(&[]);
+    let endpoint = endpunkt(base_url, api_key, model);
     // Kreativer als der alte konservative Generator, aber mit wenig Output:
     // Die Titel selbst sind kurz und eine Analyse pro Klick waere nur Tokenlast.
-    let content = titel_completion(
-        &endpunkt(base_url, api_key, model),
-        "title",
-        &prompt,
-        0.68,
-        900,
-    )
-    .await
-    .map_err(GenerateTitleError::Http)?;
-    let result = sanitize_title_result(parse_title_response(&content), keywords, rank_display);
+    let content = titel_completion(&endpoint, "title", &prompt, 0.8, 900)
+        .await
+        .map_err(GenerateTitleError::Http)?;
+    let mut result = sanitize_title_result(
+        parse_title_response(&content),
+        keywords,
+        rank_display,
+        co_streamer,
+        never_words,
+    );
+    // Ein einziger Neuversuch, wenn der Nachfilter alle Vorschläge verworfen hat
+    // (Slop-Variante oder eigene Verbotsliste des Streamers).
+    if result.primary.is_empty() {
+        let retry = titel_completion(&endpoint, "title", &prompt, 0.8, 900)
+            .await
+            .map_err(GenerateTitleError::Http)?;
+        result = sanitize_title_result(
+            parse_title_response(&retry),
+            keywords,
+            rank_display,
+            co_streamer,
+            never_words,
+        );
+    }
     if result.primary.is_empty() {
         return Err(GenerateTitleError::Http(
             "KI returned no usable title".to_string(),
@@ -788,6 +978,7 @@ pub async fn generate_title_with(
         knowledge_titles,
         rank_display,
         live_state,
+        &[],
     )
     .await
 }
@@ -804,6 +995,7 @@ pub async fn generate_title_personalized(
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
     live_state: Option<&PromptLiveState>,
+    never_words: &[String],
     source: &str,
 ) -> Result<TitleResult, GenerateTitleError> {
     if !pentest_disable_rate_limits() {
@@ -827,6 +1019,7 @@ pub async fn generate_title_personalized(
         knowledge_titles,
         rank_display,
         live_state,
+        never_words,
     )
     .await
 }
@@ -841,6 +1034,7 @@ pub async fn generate_title(
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
     live_state: Option<&PromptLiveState>,
+    never_words: &[String],
     source: &str,
 ) -> Result<TitleResult, GenerateTitleError> {
     generate_title_personalized(
@@ -853,6 +1047,7 @@ pub async fn generate_title(
         knowledge_titles,
         rank_display,
         live_state,
+        never_words,
         source,
     )
     .await
@@ -1067,6 +1262,7 @@ mod tests {
             &[],
             None,
             None,
+            &[],
             "chat",
         )
         .await;
@@ -1190,13 +1386,13 @@ mod tests {
     #[test]
     fn sanitize_title_result_dedupliziert() {
         let parsed = ParsedTitle {
-            primary: "Ranked Grind".into(),
-            alternatives: vec!["ranked grind".into(), "Anderer Titel".into()],
+            primary: "Wände halten heute".into(),
+            alternatives: vec!["wände halten heute".into(), "Anderer Titel".into()],
             title_analysis: vec![],
         };
-        let result = sanitize_title_result(parsed, "ranked", None);
-        assert_eq!(result.primary, "Ranked Grind");
-        // "ranked grind" ist Dup von primary → raus; nur "Anderer Titel" bleibt.
+        let result = sanitize_title_result(parsed, "ranked", None, &[], &[]);
+        assert_eq!(result.primary, "Wände halten heute");
+        // Die kleingeschriebene Kopie ist ein Dup von primary → raus.
         assert_eq!(result.alternatives, vec!["Anderer Titel".to_string()]);
     }
 
@@ -1207,8 +1403,35 @@ mod tests {
             alternatives: vec!["Fallback Titel".into()],
             title_analysis: vec![],
         };
-        let result = sanitize_title_result(parsed, "ranked", None);
+        let result = sanitize_title_result(parsed, "ranked", None, &[], &[]);
         assert_eq!(result.primary, "Fallback Titel");
+    }
+
+    #[test]
+    fn sanitize_title_result_verwirft_slop_variante_und_promotet_alternative() {
+        let parsed = ParsedTitle {
+            primary: "mal schauen was die Games so hergeben".into(),
+            alternatives: vec![
+                "Die tägliche Wände-Frage".into(),
+                "road to nirgendwo".into(),
+            ],
+            title_analysis: vec![],
+        };
+        let result = sanitize_title_result(parsed, "ranked", None, &[], &[]);
+        assert_eq!(result.primary, "Die tägliche Wände-Frage");
+        assert!(result.alternatives.is_empty());
+    }
+
+    #[test]
+    fn sanitize_title_result_entfernt_fremdes_at_und_haengt_co_streamer_an() {
+        let parsed = ParsedTitle {
+            primary: "Duo-Chaos mit @fremder".into(),
+            alternatives: vec![],
+            title_analysis: vec![],
+        };
+        let co = vec!["kollege".to_string()];
+        let result = sanitize_title_result(parsed, "", None, &co, &[]);
+        assert_eq!(result.primary, "Duo-Chaos mit @kollege");
     }
 
     #[test]
@@ -1240,6 +1463,7 @@ mod tests {
         let live = PromptLiveState {
             hero: Some("Haze".into()),
             party_hint: None,
+            co_streamer: vec![],
         };
         let p = build_title_prompt("ranked", &hist, &[], Some("Archon 3"), 0.0, Some(&live));
         assert!(p.contains("Streamer-Rang: Archon 3"));
@@ -1275,6 +1499,7 @@ mod tests {
             None,
             0.0,
             None,
+            &[],
         );
         assert!(p.contains("HUMAN-FEEDBACK"));
         assert!(p.contains("SEHR STARKES SIGNAL"));
@@ -1290,7 +1515,7 @@ mod tests {
         let server = MockServer::start().await;
         let body = serde_json::json!({
             "choices": [{"message": {"content":
-                "{\"primary_title\":\"Ranked Grind\",\"alternatives\":[\"Alt Eins\"],\"title_analysis\":[]}"}}]
+                "{\"primary_title\":\"Ranked mit Plan\",\"alternatives\":[\"Alt Eins\"],\"title_analysis\":[]}"}}]
         });
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1310,7 +1535,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(result.primary, "Ranked Grind");
+        assert_eq!(result.primary, "Ranked mit Plan");
         assert_eq!(result.alternatives, vec!["Alt Eins".to_string()]);
     }
 

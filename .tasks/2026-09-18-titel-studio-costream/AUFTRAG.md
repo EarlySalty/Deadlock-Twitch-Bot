@@ -64,3 +64,18 @@ Gibt es keinen lesbaren Stand der aktuellen Belegung, stoppen und als Bump-up me
 ## Deploy-Weg
 
 Nach Review und Merge-Gate: Release im eigenen Worktree bauen, `deploy-twitch-release <sha>` (tb-bot und tb-dashboard), Frontend-Build von `bot/dashboard_v2`. Live-Prüfung unter `https://deutsche-deadlock-community.de/twitch/titel`: Schalter an, "Titel bauen", Zeile "Erkannt" und Vorschläge prüfen.
+
+## Nachtrag 1 (Nutzer, während des Baus)
+
+1. Eigene Verbotsliste je Streamer. Im Titel-Studio bekommt die Karte "Dein Standard-Stil" ein zweites Feld "Das will ich nie im Titel" (Wörter und ganze Sätze, eine Zeile je Eintrag, höchstens 40 Einträge zu je 60 Zeichen). Speichern über den bestehenden Weg settings_handler/settings_update_handler neben der Stil-Präferenz, je Twitch-User-ID, in Postgres (neue Spalte per neuer Migration, bestehende Migrationen nicht ändern). Wirkung doppelt: als eigener Block im Prompt UND hart im Nachfilter (Vergleich ohne Groß-/Kleinschreibung, Treffer führt zum selben Weg wie ein Slop-Treffer: ein Neuversuch, sonst nächste Alternative). Die eingebaute Slop-Liste bleibt als Grundschutz, die Nutzerliste kommt obendrauf. Klickt jemand "So nicht", bietet die Oberfläche in einer ruhigen Zeile an, eine Formulierung aus dem Vorschlag in die Liste zu übernehmen (kein Dialog, kein Pflichtschritt). Gilt auch für !title. Die Migration wendet der Intent-Thread beim Deploy als postgres an, Worker A legt nur die Datei an und zieht rust/.sqlx und den Schema-Snapshot nach.
+
+2. Party-Hinweis reparieren. get_live_state_for_discord_user liefert party_hint fest None (steam_lookup.rs:64). Prüfen, ob activity.live_player_state und voice.deadlock_party_members in der zentralen DB den Partystand hergeben (Spalten nachlesen, Schreiber in Deadlock-Bots per graphify finden). Wenn ja: party_hint daraus füllen (solo, Duo, Dreier und so weiter, keine Namen außer den erkannten Co-Streamern), gleiche Frische-Schranke wie bei der Voice-Belegung. Wenn die Daten das nicht hergeben: nichts erfinden, den Befund mit pfad:zeile ins REGISTER.md schreiben und den Schalter-Text im Dashboard ehrlich machen (das Wort Party raus), statt etwas zu versprechen, das nicht wirkt.
+
+## Nachtrag 2 (Nutzer, während des Baus)
+
+Co-Stream zusätzlich direkt von Twitch lesen. Twitch zeigt gemeinsames Streamen über Stream Together mit geteiltem Chat. Helix hat "Get Shared Chat Session" (GET /helix/shared_chat/session?broadcaster_id=<id>, App-Token reicht, liefert host_broadcaster_id und participants mit broadcaster_id), dazu EventSub channel.shared_chat.begin/.update/.end. Zuerst gegen die Twitch-Doku prüfen (nicht aus der Nachricht übernehmen) und per graphify nachsehen, ob tb-transport-twitch oder der EventSub-Teil Shared Chat schon kennt.
+
+Reihenfolge der Signale für co_streamer:
+1. Twitch Shared-Chat-Sitzung des Streamers: alle Teilnehmer außer ihm selbst, Login über die ID auflösen. Stärkstes Signal, gilt auch für Streamer, die nicht in unserem Discord sitzen oder nicht verknüpft sind.
+2. Discord-Voice plus twitch_live_state (schon gebaut), für alle, die ohne geteilten Chat zusammen streamen.
+Beide zusammenführen, doppelte IDs raus, höchstens zwei Logins, Shared-Chat-Teilnehmer zuerst. Ein einzelner Helix-Aufruf je "Titel bauen" über den bestehenden Helix-Client ist okay, kein Dauer-Poll und kein neues EventSub-Abo in diesem Auftrag. Schlägt der Aufruf fehl, läuft die Erkennung still mit Signal 2 weiter und loggt einmal eine Warnung. Die Dashboard-Zeile bleibt "Erkannt: du streamst mit @xy", ohne die Quelle zu nennen.

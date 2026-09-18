@@ -510,6 +510,7 @@ title_generator_knowledge|source_streamer|text|YES|
 title_generator_knowledge|streamer_size|text|YES|
 title_generator_knowledge|title|text|NO|
 title_generator_preferences|experimental_auto_set|boolean|NO|false
+title_generator_preferences|never_words|text|NO|''::text
 title_generator_preferences|style_preference|text|NO|''::text
 title_generator_preferences|twitch_user_id|text|NO|
 title_generator_preferences|updated_at|timestamp with time zone|NO|now()
