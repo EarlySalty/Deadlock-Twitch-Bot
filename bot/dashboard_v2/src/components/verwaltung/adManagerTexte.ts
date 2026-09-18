@@ -2,10 +2,7 @@ import type {
   AdManagerHistoryEntry,
   AdManagerPlan,
   AdManagerPlanFit,
-  AdManagerPlanSuggestion,
 } from '@/api/adManager';
-
-export const TWITCH_ADS_MANAGER_URL = 'https://dashboard.twitch.tv/monetization/ads/ads-manager';
 
 const ENTRY_TEXTE: Record<string, string> = {
   in_queue: 'Werbung in der Queue gestartet',
@@ -59,11 +56,17 @@ const GEGENWART_TEXTE: Record<string, string> = {
   no_snoozes: 'Keine Twitch-Pausen mehr verfügbar.',
 };
 
+const FIT_TEXTE: Partial<Record<AdManagerPlanFit, string>> = {
+  tight: 'Dein Werbeplan ist dicht, der Bot schützt deine wichtigsten Momente.',
+  unprotectable: 'Dein Werbeplan lässt sich nicht immer aus dem Match halten, der Bot nutzt jedes ruhige Fenster.',
+};
+
 export function statusSatz(input: {
   enabled: boolean;
   isLive: boolean;
   currentReason: string | null;
   nextBlockLabel: string | null;
+  fit: AdManagerPlanFit | null;
 }): string {
   if (!input.enabled) return 'Aus. Der Bot schaut nur zu.';
   if (!input.isLive) return 'An. Sobald dein Stream läuft, kümmert sich der Bot um die Werbung.';
@@ -71,23 +74,10 @@ export function statusSatz(input: {
   if (input.nextBlockLabel) teile.push(`Nächster Block ${input.nextBlockLabel}.`);
   const gegenwart = input.currentReason ? GEGENWART_TEXTE[input.currentReason] : undefined;
   if (gegenwart) teile.push(gegenwart);
+  const fitText = input.fit ? FIT_TEXTE[input.fit] : undefined;
+  if (fitText) teile.push(fitText);
   if (teile.length === 1) teile.push('Der Bot verteilt die Werbung über deinen Stream.');
   return teile.join(' ');
-}
-
-export function fitHinweisText(fit: AdManagerPlanFit): string | null {
-  if (fit === 'tight') {
-    return 'Dein Twitch-Werbeplan ist dicht. Der Bot spart die Pausen für deine wichtigsten Momente und zieht Werbung, wo es geht, in ruhige Fenster.';
-  }
-  if (fit === 'unprotectable') {
-    return 'Dein Twitch-Werbeplan lässt sich nicht immer aus dem Match halten. Der Bot nutzt trotzdem jede Pause und jedes ruhige Fenster.';
-  }
-  return null;
-}
-
-export function vorschlagText(suggestion: AdManagerPlanSuggestion | null): string | null {
-  if (!suggestion) return null;
-  return `Vorschlag: bei Twitch etwa ${suggestion.minutesPerHour} Werbeminuten pro Stunde in ${suggestion.blockSeconds}-Sekunden-Blöcken.`;
 }
 
 export function budgetVorschau(minutes: number, plan: AdManagerPlan | null): string {

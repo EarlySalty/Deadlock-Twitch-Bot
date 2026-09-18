@@ -488,7 +488,6 @@ const AD_MANAGER_FIXTURE: AdManagerResponse = {
     plan: {
       source: 'own',
       fit: 'good',
-      suggestion: null,
       nextBlockAt: '2026-04-22T09:38:00Z',
       blockSeconds: 30,
       blocksPerHour: 6,

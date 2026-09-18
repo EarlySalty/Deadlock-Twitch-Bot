@@ -62,7 +62,6 @@ const response: AdManagerResponse = {
     plan: {
       source: 'own',
       fit: 'good',
-      suggestion: null,
       nextBlockAt: '2026-09-01T10:12:00Z',
       blockSeconds: 30,
       blocksPerHour: 6,

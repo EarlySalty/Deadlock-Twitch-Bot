@@ -34,14 +34,7 @@ import {
   type AdManagerStrategy,
 } from '@/api/adManager';
 import { ApiHttpError } from '@/api/httpError';
-import {
-  TWITCH_ADS_MANAGER_URL,
-  beschreibeEintrag,
-  budgetVorschau,
-  fitHinweisText,
-  statusSatz,
-  vorschlagText,
-} from './adManagerTexte';
+import { beschreibeEintrag, budgetVorschau, statusSatz } from './adManagerTexte';
 
 interface AdManagerSectionProps {
   reconnectUrl: string;
@@ -430,8 +423,6 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
   const plan = status.plan ?? null;
   const budgetSource = plan?.source ?? 'own';
   const nextBlockLabel = formatRelativeMinutes(plan?.nextBlockAt ?? null);
-  const fitHinweis = plan ? fitHinweisText(plan.fit) : null;
-  const fitVorschlag = plan ? vorschlagText(plan.suggestion) : null;
   const steamView = steamStatusView(status.steam);
   const missingScopeLabels = [
     !status.scopes.read ? 'Werbeplan lesen' : null,
@@ -448,6 +439,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
     isLive: status.isLive,
     currentReason: status.currentReason,
     nextBlockLabel,
+    fit: plan?.fit ?? null,
   });
   const historyEntries = history?.entries ?? [];
   const summary = history?.summary ?? null;
@@ -552,21 +544,6 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             ) : null}
           </div>
         </div>
-
-        {fitHinweis ? (
-          <div className="mt-3 rounded-lg border border-border bg-background/40 px-3 py-2.5 text-xs leading-5 text-text-secondary">
-            <p>{fitHinweis}</p>
-            {fitVorschlag ? <p className="mt-1 text-white">{fitVorschlag}</p> : null}
-            <a
-              href={TWITCH_ADS_MANAGER_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1.5 inline-flex items-center gap-1.5 font-semibold text-primary transition-colors hover:text-primary/80"
-            >
-              Twitch-Werbungs-Manager öffnen <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          </div>
-        ) : null}
 
         <div className="mt-3.5 border-t border-border pt-3">
           <div className="flex flex-wrap items-center gap-2">
