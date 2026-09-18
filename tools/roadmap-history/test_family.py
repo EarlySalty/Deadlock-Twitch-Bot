@@ -2,7 +2,7 @@
 import copy
 from pathlib import Path
 import unittest
-from history_data import attribute, load_taxonomy, validate_taxonomy
+from history_data import attribute, load_taxonomy, parse_log, validate_taxonomy
 
 
 class FamilyTests(unittest.TestCase):
@@ -78,6 +78,28 @@ class FamilyTests(unittest.TestCase):
         ids, _, _ = attribute('feat: add AV1 native 2K controls and host hardware handoff', [], self.taxonomy)
         self.assertEqual(set(ids), {'uplink-av1', 'uplink-host'})
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_git_timestamps_sort_by_instant_not_offset_text(self):
+        records = [
+            ('a' * 40, '2026-09-17T22:10:00-01:00'),
+            ('b' * 40, '2026-09-18T00:50:00+02:00'),
+            ('c' * 40, '2026-09-18T01:30:00+02:00'),
+        ]
+        raw = ''.join('\x1e' + sha + '\x1f' + timestamp + '\x1ffix: uplink\nuplink.rs\n' for sha, timestamp in records)
+        commits = parse_log(raw, self.taxonomy)
+        self.assertEqual([c['id'] for c in commits], ['b' * 40, 'a' * 40, 'c' * 40])
+        self.assertEqual({c['date'] for c in commits}, {'2026-09-18'})
+        self.assertEqual(commits[1]['timestamp'], records[0][1])
+
+    def test_equal_instants_use_stable_commit_id_order(self):
+        raw = ('\x1e' + 'a' * 40 + '\x1f2026-09-18T01:10:00+02:00\x1ffix: uplink\n'
+               '\x1e' + 'b' * 40 + '\x1f2026-09-17T22:10:00-01:00\x1ffix: uplink\n')
+        self.assertEqual([c['id'] for c in parse_log(raw, self.taxonomy)], ['a' * 40, 'b' * 40])
+
+    def test_naive_git_timestamp_rejected_for_reproducibility(self):
+        raw = '\x1e' + 'a' * 40 + '\x1f2026-09-18T01:10:00\x1ffix: uplink\n'
+        with self.assertRaisesRegex(ValueError, 'timezone'):
+            parse_log(raw, self.taxonomy)
 
     def test_unknown_does_not_receive_an_invented_relationship(self):
         ids, basis, _ = attribute('Unbekannte Erweiterung', ['unrelated.txt'], self.taxonomy)

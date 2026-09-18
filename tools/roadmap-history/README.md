@@ -115,6 +115,10 @@ Der vollständige Hash, bekannte eindeutige Funktions-IDs und eine Begründung s
 Pflicht. Der originale Commit-Titel bleibt bei Korrekturen unverändert erhalten.
 Originaltitel, Zuordnungsgrund, Dateipfade und Code-Diff sind in den Details erreichbar.
 Datumsangaben verwenden Europe/Berlin; Zeitfenster beziehen sich auf den Datenstand.
+Die chronologische Sortierung verwendet die tatsächlichen Zeitpunkte, nicht den
+lexikografischen ISO-Text mit möglicherweise unterschiedlichen UTC-Offsets.
+Gleichzeitige Commits werden stabil nach SHA sortiert. Zeitstempel ohne explizite
+Zeitzone werden abgewiesen, statt von der Zeitzone des Generator-Rechners abzuhängen.
 Flache Klone und ein über sieben Tage alter Erzeugungsstand werden sichtbar gemeldet.
 
 ## Lokal erzeugen und testen
@@ -215,11 +219,16 @@ Backup-Snapshot atomar wiederherstellen; Backups niemals über den Webserver anb
 
 ## Nachgewiesene lokale Abnahme
 
-Mit Main-Datenrevision `95c28e982e68ab948b078009dba1e687eac43f6f`:
+Mit Main-Datenrevision `cd4ec7a80abbaa070165a666f0f6fd7d2ffdea11` (Nachprüfung am 18.09.2026):
 
-- 3.625 eindeutige Nicht-Merge-Commits, vollständiger Klon; 38 Taxonomie-Einträge.
-- 28 Python-Tests und 23 Node-Tests erfolgreich.
-- 12 Browser-Prüfgruppen erfolgreich, einschließlich tatsächlicher SVG-Anschlüsse,
+- 3.627 eindeutige Nicht-Merge-Commits, vollständiger Klon; 38 Taxonomie-Einträge.
+- 31 Python-Tests und 23 Node-Tests erfolgreich.
+- Drei neue Python-Regressionsfälle schlugen vor der Zeitkorrektur nachweislich fehl:
+  unterschiedliche UTC-Offsets, gleiche Zeitpunkte und Zeitstempel ohne Zeitzone.
+  Nach der Korrektur sind alle grün. Der Originalzeitstempel bleibt als Quelle erhalten.
+- 13 Browser-Prüfgruppen erfolgreich, einschließlich identischer chronologischer
+  Reihenfolge in Generator und Browser auf dem echten Datenbestand, lesbarer
+  zweispaltiger Mobilfilter und tatsächlicher SVG-Anschlüsse,
   Mehrgenerationen, Kontext-Eltern, Maus-/Tastaturbedienung, Zoom, Filter, Direktlinks,
   Seitenwechsel, HTML-Injektion und Desktop-/Mobil-Details.
 - Die lokale Uplink-Ansicht enthält keine Knotenüberschneidung; fünf tatsächlich

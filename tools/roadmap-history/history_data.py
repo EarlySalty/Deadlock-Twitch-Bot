@@ -134,7 +134,10 @@ def parse_log(raw, taxonomy):
         if not re.fullmatch(r'[0-9a-f]{40,64}', sha) or sha in seen:
             raise ValueError('Invalid or duplicate commit hash')
         seen.add(sha)
-        date = dt.datetime.fromisoformat(timestamp).astimezone(ZoneInfo('Europe/Berlin')).date().isoformat()
+        instant = dt.datetime.fromisoformat(timestamp)
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ValueError('Git timestamps require an explicit timezone')
+        date = instant.astimezone(ZoneInfo('Europe/Berlin')).date().isoformat()
         paths = [p for p in file_text.splitlines() if p]
         kind, title = kind_of(subject)
         ids, basis, evidence = attribute(subject, paths, taxonomy)
@@ -149,7 +152,11 @@ def parse_log(raw, taxonomy):
             'features': ids, 'basis': basis, 'evidence': evidence,
             'paths': paths[:20], 'pathCount': len(paths), 'note': override.get('note', ''),
         })
-    return sorted(commits, key=lambda c: (c['date'], c['timestamp'], c['id']))
+    # ISO strings with different offsets are not ordered by their actual instant.
+    # Preserve the original timestamp as evidence; use UTC only for ordering.
+    return sorted(commits, key=lambda c: (
+        c['date'], dt.datetime.fromisoformat(c['timestamp']).astimezone(dt.timezone.utc), c['id'],
+    ))
 
 
 def build_data(repo, ref, taxonomy):

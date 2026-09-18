@@ -28,7 +28,11 @@ let browser;
 const checks = [], errors = [], external = [];
 const pause = page => page.waitForTimeout(240);
 const screenshot = async (page, name, fullPage = true) => {
-  await page.screenshot({path: resolve(output, name + '.png'), fullPage});
+  // Capture the settled UI, not transient native touch highlights or a scrolled
+  // fixed skip link composited into a full-page screenshot.
+  if (fullPage) await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(400);
+  await page.screenshot({path: resolve(output, name + '.png'), fullPage, animations: 'disabled'});
 };
 function watch(page) {
   page.on('pageerror', error => errors.push(String(error)));
@@ -49,6 +53,11 @@ try {
   assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--gold').trim()), '#C5A059');
   await screenshot(page, 'family-desktop-1440');
   checks.push('1440px: echter Graph als Hauptansicht, Dashboard-Farben, lesbarer Start bei 100 Prozent, keine Seitenüberbreite');
+
+  const chronologicalIds = sourceData.commits.slice().sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || a.id.localeCompare(b.id)).map(c => c.id);
+  assert.deepEqual(sourceData.commits.map(c => c.id), chronologicalIds);
+  assert.deepEqual(await page.evaluate(() => INDEX.get('product').allCommits.map(c => c.id)), chronologicalIds);
+  checks.push('Echte Git-Zeitstempel: Generator und Browser sortieren denselben Datenbestand nach Zeitpunkten statt nach Zeitzonen-Text');
 
   const geometry = await page.evaluate(() => {
     let intersections = 0, badEndpoints = 0, checkedEndpoints = 0;
@@ -190,6 +199,10 @@ try {
   const mobile = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true}); watch(mobile);
   await mobile.goto(url + '?focus=product');
   assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  for (const id of ['group', 'period', 'kind']) {
+    assert.ok((await mobile.locator('#' + id).boundingBox()).width >= 150, 'Mobile Filter benötigen lesbare Breite: ' + id);
+  }
+  assert.equal(await mobile.locator('#kind').evaluate(node => getComputedStyle(node).webkitTapHighlightColor), 'rgba(197, 160, 89, 0.18)');
   await mobile.locator('[data-feature=product] .node-main').tap();
   assert.equal(await mobile.locator('#detail').evaluate(d => d.open && d.matches(':modal')), true);
   await mobile.keyboard.press('Tab');

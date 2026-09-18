@@ -22,7 +22,13 @@ function rangeFor(period, bounds, from = '', to = '') {
   return {from: start.toISOString().slice(0, 10), to: bounds.last};
 }
 function compareDates(a, b) {
-  return a.date.localeCompare(b.date) || (a.timestamp || '').localeCompare(b.timestamp || '') || a.id.localeCompare(b.id);
+  // Git retains the committer's offset; chronological order must use the instant.
+  // Date-only legacy fixtures fall back to UTC, never the browser's timezone.
+  const instant = commit => {
+    const parsed = Date.parse(commit.timestamp || '');
+    return Number.isFinite(parsed) ? parsed : Date.parse(commit.date + 'T00:00:00Z');
+  };
+  return a.date.localeCompare(b.date) || instant(a) - instant(b) || a.id.localeCompare(b.id);
 }
 function filterCommits(data, filters) {
   const features = new Map(data.features.map(f => [f.id, f]));
