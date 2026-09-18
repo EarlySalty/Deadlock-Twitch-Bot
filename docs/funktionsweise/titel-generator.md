@@ -11,7 +11,9 @@ Der KI-Titelgenerator schlägt Streamern fertige Stream-Titel für Deadlock vor.
 - Stützt sich auf die bisherige Titel-Historie des jeweiligen Streamers und darauf, welche dieser Titel besser oder schlechter performt haben.
 - Bezieht gelerntes Wissen über erfolgreiche Deadlock-Titel anderer, vergleichbarer Streamer mit ein.
 - Übernimmt den Deadlock-Rang des Streamers in den Titel, wenn dieser bekannt ist und die Keywords dazu passen.
-- Kann auf Wunsch den aktuellen Live-Spielzustand einbeziehen (welcher Held gerade gespielt wird, ob solo oder in Party).
+- Kann auf Wunsch den aktuellen Live-Spielzustand einbeziehen (welcher Held gerade gespielt wird, ob solo, Duo oder in größerer Party).
+- Erkennt gemeinsames Streamen: Streamt der Streamer gerade mit jemandem zusammen, baut der Bot den anderen mit `mit @login` in den Titel. Erkannt wird das über Twitch (geteilter Chat beim gemeinsamen Streamen) und zusätzlich über den gemeinsamen Deadlock-Voice-Kanal im Discord, sofern der andere gerade wirklich live ist. Höchstens zwei Mitstreamer landen im Titel, erfundene Namen filtert der Bot wieder heraus.
+- Beachtet die eigene Verbotsliste des Streamers: Was in "Das will ich nie im Titel" steht, taucht nicht auf, auch nicht sinngemäß.
 - Passt den Stil an die eigenen Gewohnheiten an: Wer normalerweise Emojis nutzt, bekommt gegebenenfalls einen sparsamen Emoji, wer keine nutzt, bekommt keine.
 - Hält Vorschläge bewusst nah an dem, was beim Streamer schon funktioniert hat, statt wild Neues zu erfinden; bei ungewohnten Keywords formuliert er eher konservativ.
 - Räumt typische KI-Macken auf: keine erfundenen Ränge, keine generischen Füllphrasen wie "heute ist es soweit", keine umgeschriebenen Keywords, und hält sich an die für Twitch zulässige Titel-Länge.
@@ -38,8 +40,10 @@ Der KI-Titelgenerator schlägt Streamern fertige Stream-Titel für Deadlock vor.
 
 - **Keywords:** Der Streamer bestimmt über die Stichworte, worum es im Titel gehen soll. Das ist die Hauptsteuerung.
 - **Live-Bezug an/aus:** Über einen Zusatz-Schalter am Befehl bzw. eine Option im Dashboard lässt sich entscheiden, ob der aktuelle Spielzustand einbezogen wird.
-- **Übernahme bleibt freiwillig:** Der Bot setzt den Titel nicht selbst – der Streamer entscheidet, ob und welchen Vorschlag er bei Twitch einträgt.
-- Eine darüber hinausgehende Konfiguration (Tonalität, Emoji-Verhalten) gibt es nicht; der Bot leitet diese aus den eigenen bisherigen Titeln ab.
+- **Standard-Stil:** In einer Notiz beschreibt der Streamer seinen bevorzugten Ton. Diese Präferenz steht über den erkannten Mustern.
+- **Verbotsliste "Das will ich nie im Titel":** Wörter und ganze Sätze, ein Eintrag je Zeile, bis zu 40 Zeilen zu je 60 Zeichen. Der Bot lässt diese Formulierungen sicher weg. Nach einem Klick auf "So nicht" bietet das Dashboard an, die abgelehnte Formulierung mit einem Klick in diese Liste zu übernehmen.
+- **Automatisch auf Twitch setzen (optional):** Wer das Schreibrecht verbunden und die experimentelle Option aktiviert hat, dem trägt der Bot den Hauptvorschlag direkt als Twitch-Titel ein. Ohne diese Option bleibt die Übernahme freiwillig, und der Streamer entscheidet selbst, welchen Vorschlag er einträgt.
+- Eine darüber hinausgehende Konfiguration der Tonalität oder des Emoji-Verhaltens leitet der Bot aus den eigenen bisherigen Titeln ab.
 
 ## Grenzen & Sonderfälle
 
@@ -70,7 +74,10 @@ Mit der Live-Option bezieht der Bot deinen aktuellen Spielzustand ein – etwa w
 Es gibt ein kurzes Tempolimit pro Streamer, damit der Dienst nicht überlastet wird. Sobald die genannte Wartezeit abgelaufen ist, kannst du wieder einen Vorschlag anfordern. Im Dashboard ist das Limit höher als im Chat.
 
 **Setzt der Bot den Titel automatisch bei Twitch?**
-Nein. Der Bot schlägt nur vor. Ob und welchen Titel du übernimmst, entscheidest du selbst.
+Nur wenn du es willst. Standardmäßig schlägt der Bot nur vor, und du entscheidest, welchen Titel du übernimmst. Es gibt aber eine experimentelle Option "automatisch auf Twitch setzen": Ist sie aktiv und dein Schreibrecht verbunden, trägt der Bot den Hauptvorschlag direkt bei Twitch ein.
+
+**Wie erkennt der Bot, dass ich mit jemandem zusammen streame?**
+Über zwei Wege. Erstens über Twitch selbst, wenn ihr gemeinsam streamt und euren Chat teilt. Zweitens über euren gemeinsamen Deadlock-Voice-Kanal im Discord, wenn der andere gerade wirklich live ist. Trifft eines davon zu, baut der Bot den anderen mit `mit @name` in den Titel. Sitzt jemand nur im Voice, ohne zu streamen, taucht er nicht auf.
 
 **Warum sind die Vorschläge am Anfang so generisch?**
 Die Wissensbasis wächst mit der Zeit: Ein nächtlicher Vorgang lernt laufend dazu, welche Titel gut funktionieren. Solange noch wenig Verlauf vorliegt, fallen die Vorschläge allgemeiner aus und werden mit mehr Daten treffsicherer.

@@ -23,6 +23,7 @@ export interface TitleSuggestResult {
   generation_id?: string;
   style_summary?: string;
   live_context_used?: boolean;
+  co_streamers?: string[];
   auto_mode?: boolean;
   oauth_connected?: boolean;
   oauth_url?: string;
@@ -42,6 +43,7 @@ export interface TitleInsight {
 export interface TitleSettings {
   style_preference: string;
   experimental_auto_set: boolean;
+  never_words: string[];
   style_summary: string;
   oauth_connected: boolean;
   oauth_url: string;
@@ -60,6 +62,7 @@ function previewSettings(): TitleSettings {
   return {
     style_preference: 'Direkt, trocken, eher ein Satz als Keyword-Liste. Keine übertriebenen Emojis.',
     experimental_auto_set: false,
+    never_words: [],
     style_summary: 'Ø ca. 72 Zeichen; Emojis sind untypisch; häufiger Trenner |; eher ruhige Satzzeichen.',
     oauth_connected: true,
     oauth_url: '/twitch/raid/auth?scope_profile=title&source=title_generator',
@@ -116,7 +119,7 @@ export async function fetchTitleSettings(streamer?: string | null): Promise<Titl
 }
 
 export async function saveTitleSettings(
-  settings: Pick<TitleSettings, 'style_preference' | 'experimental_auto_set'> & { streamer?: string | null },
+  settings: Pick<TitleSettings, 'style_preference' | 'experimental_auto_set' | 'never_words'> & { streamer?: string | null },
   csrfToken?: string | null,
 ): Promise<TitleSettings & { ok: boolean }> {
   if (isPreviewLocalhost()) return { ...previewSettings(), ...settings, ok: true };

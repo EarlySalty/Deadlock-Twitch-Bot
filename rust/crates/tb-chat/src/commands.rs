@@ -1237,30 +1237,49 @@ impl CommandEngine {
             if let Some(did) = discord_id {
                 let rank = crate::steam_lookup::get_rank_for_discord_user(&pool, did).await;
                 rank_display = rank.map(|r| r.rank_display);
-                if include_live {
-                    let live_res = match crate::steam_lookup::get_live_state_for_discord_user(
-                        &pool, did,
-                    )
-                    .await
-                    {
-                        Ok(live) => live,
-                        Err(error) => {
-                            tracing::warn!(
-                                %error,
-                                channel = %channel,
-                                discord_id_tail = did.rem_euclid(10_000),
-                                "!title Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
-                            );
-                            None
+            }
+            if include_live {
+                // Hero/Party brauchen die Discord-Verknüpfung; die Co-Stream-
+                // Erkennung läuft auch ohne, weil Shared Chat rein über Twitch geht.
+                let live_res = match discord_id {
+                    Some(did) => {
+                        match crate::steam_lookup::get_live_state_for_discord_user(&pool, did).await
+                        {
+                            Ok(live) => live,
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    channel = %channel,
+                                    discord_id_tail = did.rem_euclid(10_000),
+                                    "!title Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
+                                );
+                                None
+                            }
                         }
-                    };
-                    live = live_res.map(|l| crate::title_ai::PromptLiveState {
-                        hero: l.hero,
-                        party_hint: l.party_hint,
+                    }
+                    None => None,
+                };
+                let co_streamer =
+                    crate::steam_lookup::detect_co_streamers_all(&pool, &streamer_id, discord_id)
+                        .await;
+                let party_hint = match discord_id {
+                    Some(did) => {
+                        crate::steam_lookup::get_party_hint_for_discord_user(&pool, did).await
+                    }
+                    None => None,
+                };
+                if live_res.is_some() || party_hint.is_some() || !co_streamer.is_empty() {
+                    live = Some(crate::title_ai::PromptLiveState {
+                        hero: live_res.as_ref().and_then(|l| l.hero.clone()),
+                        party_hint,
+                        co_streamer,
                     });
                 }
             }
 
+            let never_words = crate::title_db::get_title_preferences(&pool, &streamer_id)
+                .await
+                .never_words;
             let result = crate::title_ai::generate_title(
                 &rate_limiter,
                 &streamer_id,
@@ -1269,6 +1288,7 @@ impl CommandEngine {
                 &prompt_knowledge,
                 rank_display.as_deref(),
                 live.as_ref(),
+                &never_words,
                 "chat",
             )
             .await;

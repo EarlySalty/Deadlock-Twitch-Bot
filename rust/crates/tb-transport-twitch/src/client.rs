@@ -398,6 +398,54 @@ impl HelixClient {
         }
         Ok(out)
     }
+
+    /// Twitch-Logins der Mit-Teilnehmer einer Stream-Together-Sitzung mit
+    /// geteiltem Chat (Helix `GET /shared_chat/session`), ohne den abgefragten
+    /// Broadcaster selbst. App-Token genügt. Leere Liste, wenn keine Sitzung
+    /// läuft. Löst die zurückgegebenen Broadcaster-IDs über `/users` zu Logins auf.
+    pub async fn get_shared_chat_logins(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Vec<String>, HelixError> {
+        let path = format!("/shared_chat/session?broadcaster_id={broadcaster_id}");
+        let resp = self.send_with_retry(self.get(&path).await?).await?;
+        let body: SharedChatResponse = check_status_and_json(resp).await?;
+        let mut ids: Vec<String> = body
+            .data
+            .into_iter()
+            .flat_map(|session| session.participants)
+            .map(|p| p.broadcaster_id)
+            .filter(|id| !id.trim().is_empty() && id != broadcaster_id)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let users = self.get_users_by_id(&id_refs).await?;
+        Ok(ids
+            .iter()
+            .filter_map(|id| users.get(id).map(|u| u.login.to_lowercase()))
+            .collect())
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SharedChatResponse {
+    #[serde(default)]
+    data: Vec<SharedChatSession>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SharedChatSession {
+    #[serde(default)]
+    participants: Vec<SharedChatParticipant>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SharedChatParticipant {
+    broadcaster_id: String,
 }
 
 /// Prüft den HTTP-Status einer Helix-Response und deserialisiert den Body.
