@@ -40,6 +40,7 @@ const response: AdManagerResponse = {
     enabled: true,
     strategy: 'smart',
     adDurationSeconds: 90,
+    budgetMinutesPerHour: 3,
     minIntervalMinutes: 45,
     startupDelayMinutes: 20,
     quietWindowMinutes: 8,
@@ -58,6 +59,14 @@ const response: AdManagerResponse = {
     workerHealthy: true,
     workerHeartbeatAt: '2026-09-01T09:59:58Z',
     lastAction: null,
+    plan: {
+      source: 'own',
+      nextBlockAt: '2026-09-01T10:12:00Z',
+      blockSeconds: 30,
+      blocksPerHour: 6,
+      budgetUsedSecondsThisHour: 60,
+    },
+    currentReason: 'in_queue',
     scopes: { read: true, snooze: true, commercial: true },
     steam: {
       linked: true,
@@ -110,8 +119,8 @@ test('Steam-Status ist verpflichtender Teil des Statusvertrags', async () => {
 test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Steuerung', () => {
   assert.match(
     adManagerSectionSource,
-    /Match-Status \(Steam\)/,
-    'die Status-Karte für die Steam-Anbindung muss existieren',
+    /Match-Status/,
+    'die Status-Kachel für die Steam-Anbindung muss existieren',
   );
   assert.match(
     adManagerSectionSource,
@@ -190,6 +199,7 @@ test('speichert nur normalisierte Eingabefelder ohne Server-Zeitstempel', async 
     enabled: true,
     strategy: 'snooze',
     adDurationSeconds: 77,
+    budgetMinutesPerHour: 12,
     minIntervalMinutes: 999,
     startupDelayMinutes: -4,
     quietWindowMinutes: 8.6,
@@ -203,6 +213,7 @@ test('speichert nur normalisierte Eingabefelder ohne Server-Zeitstempel', async 
     enabled: true,
     strategy: 'snooze',
     adDurationSeconds: 90,
+    budgetMinutesPerHour: 8,
     minIntervalMinutes: 180,
     startupDelayMinutes: 0,
     quietWindowMinutes: 9,
@@ -285,8 +296,9 @@ test('normalisiert alle Zahlen auf sichere und von Twitch unterstützte Werte', 
   assert.deepEqual(
     normalizeAdManagerSettings({
       enabled: false,
-      strategy: 'monitor',
+      strategy: 'smart',
       adDurationSeconds: Number.NaN,
+      budgetMinutesPerHour: 0,
       minIntervalMinutes: 7.7,
       startupDelayMinutes: 22.4,
       quietWindowMinutes: 70,
@@ -294,8 +306,9 @@ test('normalisiert alle Zahlen auf sichere und von Twitch unterstützte Werte', 
     }),
     {
       enabled: false,
-      strategy: 'monitor',
+      strategy: 'smart',
       adDurationSeconds: 90,
+      budgetMinutesPerHour: 1,
       minIntervalMinutes: 8,
       startupDelayMinutes: 22,
       quietWindowMinutes: 60,
@@ -305,9 +318,9 @@ test('normalisiert alle Zahlen auf sichere und von Twitch unterstützte Werte', 
   assert.equal(
     normalizeAdManagerSettings({
       ...response.settings,
-      strategy: 'unbekannt' as 'monitor',
+      strategy: 'monitor' as 'snooze',
     }).strategy,
-    'monitor',
+    'smart',
   );
 });
 
