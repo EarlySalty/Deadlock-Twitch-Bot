@@ -879,6 +879,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(session_detail::session_events_handler),
         )
         // SPA: Haupt-HTML + statische Assets
+        .route("/twitch/kategorie", get(handlers::category_collector::page))
+        .route("/twitch/api/v2/category-collector", get(handlers::category_collector::handler))
         .route("/analyse", get(spa::analyse_handler))
         .route("/analyse/{*path}", get(spa::analyse_assets_handler))
         .with_state(pool)

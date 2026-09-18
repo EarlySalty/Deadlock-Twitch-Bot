@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 
 export type DashboardRoute =
+  | 'category'
   | 'home'
   | 'analyse'
   | 'social'
@@ -96,6 +97,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const shownAvatar = avatarFailed ? null : avatarUrl;
 
   const mainNavItems: SidebarNavItem[] = [
+    ...(adminEligible && adminMode ? [{ href: '/twitch/kategorie', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
     { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: activeRoute === 'home' },
     ...(canAccessAnalyticsDashboard
       ? [

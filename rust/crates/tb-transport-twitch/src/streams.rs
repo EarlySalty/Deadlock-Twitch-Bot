@@ -206,6 +206,66 @@ impl HelixClient {
         Ok(out)
     }
 
+    /// Complete category pagination. Repeated cursors and malformed pages are
+    /// errors, never a successful partial/empty category snapshot.
+    pub async fn get_all_streams_by_category(&self, game_id: &str) -> Result<Vec<HelixStream>, HelixError> {
+        use std::collections::{HashMap, HashSet};
+        let mut found = HashMap::new();
+        let mut cursors = HashSet::new();
+        let mut after: Option<String> = None;
+        loop {
+            let mut params = vec![("game_id", game_id.to_owned()), ("first", "100".into())];
+            if let Some(cursor) = &after { params.push(("after", cursor.clone())); }
+            let response = self.send_with_retry(self.get("/streams").await?.query(&params)).await?;
+            #[derive(Deserialize)]
+            struct Page { data: Vec<HelixStream>, #[serde(default)] pagination: Pagination }
+            let page: Page = check_status_and_json(response).await?;
+            for stream in page.data {
+                if stream.id.is_empty() || stream.user_id.is_empty() || stream.game_id != game_id {
+                    return Err(HelixError::InvalidResponse("incomplete category stream identity"));
+                }
+                found.insert(stream.id.clone(), stream);
+            }
+            match page.pagination.cursor.filter(|c| !c.is_empty()) {
+                None => break,
+                Some(cursor) if cursors.insert(cursor.clone()) => after = Some(cursor),
+                Some(_) => return Err(HelixError::InvalidResponse("repeated category cursor")),
+            }
+            // <= 240 requests/min even for very large categories.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        let mut result: Vec<_> = found.into_values().collect();
+        result.sort_unstable_by(|a,b| a.user_id.cmp(&b.user_id));
+        Ok(result)
+    }
+
+    /// Public profile data only, deliberately excluding email/deprecated views.
+    pub async fn get_public_profiles(&self, ids: &[String]) -> Result<Vec<PublicProfile>, HelixError> {
+        let mut result = Vec::new();
+        for chunk in ids.chunks(100) {
+            let params: Vec<_> = chunk.iter().map(|id| ("id", id.as_str())).collect();
+            let response = self.send_with_retry(self.get("/users").await?.query(&params)).await?;
+            #[derive(Deserialize)] struct Page { data: Vec<PublicProfile> }
+            let page: Page = check_status_and_json(response).await?;
+            result.extend(page.data);
+        }
+        Ok(result)
+    }
+
+    /// One page of public media metadata; caller persists the cursor. No media
+    /// bytes are downloaded. Videos are channel-wide, clips use a time window.
+    pub async fn public_media_page(&self, clips: bool, user_id: &str, after: Option<&str>, since: &str, until: &str)
+        -> Result<(Vec<serde_json::Value>, Option<String>), HelixError> {
+        let endpoint = if clips { "/clips" } else { "/videos" };
+        let mut params = vec![(if clips { "broadcaster_id" } else { "user_id" }, user_id), ("first", "100")];
+        if clips { params.extend([("started_at", since), ("ended_at", until)]); }
+        if let Some(cursor) = after { params.push(("after", cursor)); }
+        let response = self.send_with_retry(self.get(endpoint).await?.query(&params)).await?;
+        #[derive(Deserialize)] struct Page { data: Vec<serde_json::Value>, #[serde(default)] pagination: Pagination }
+        let page: Page = check_status_and_json(response).await?;
+        Ok((page.data, page.pagination.cursor.filter(|c| !c.is_empty())))
+    }
+
     /// game_id einer Kategorie über `/search/categories` (exakter Treffer
     /// bevorzugt, sonst Präfix — wie Python `search_category_id`). Gecacht.
     pub async fn search_category_id(&self, query: &str) -> Result<Option<String>, HelixError> {
@@ -289,17 +349,9 @@ impl HelixClient {
         }))
     }
 
-    /// Follower-Gesamtzahl via `/channels/followers`. Best-effort: Der
-    /// `total`-Wert verlangt einen **Moderator-Token mit `moderator:read:followers`**
-    /// für genau diesen Broadcaster.
-    ///
-    /// `user_token`:
-    /// - `Some(tok)` → Request mit diesem Bearer (Streamer- oder zentraler
-    ///   Bot-Token, der den Kanal moderiert). Liefert die echte Zahl.
-    /// - `None` → App-Token-Pfad wie bisher; Twitch antwortet ohne Scope
-    ///   401/403 und es kommt `total = None` mit Diagnosefeldern zurück.
-    ///
-    /// Port: Python `twitch_api.get_followers_total(broadcaster_id, user_token=…)`.
+    /// Follower total via a user token, without requesting individual follower
+    /// identities. Moderator scope/role is needed for the list, not the total.
+    /// App-token failures remain unknown (None), never fabricated zero.
     pub async fn get_followers_total(
         &self,
         broadcaster_id: &str,
@@ -1109,4 +1161,17 @@ mod tests {
         let ad = client.get_ad_schedule("42", "user-tok").await.unwrap();
         assert!(ad.is_none());
     }
+}
+
+/// Public `/users` fields, kept separate from authenticated user information.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PublicProfile {
+    pub id: String,
+    pub login: String,
+    pub display_name: String,
+    #[serde(default)] pub created_at: String,
+    #[serde(default)] pub broadcaster_type: String,
+    #[serde(default)] pub description: String,
+    #[serde(default)] pub profile_image_url: String,
+    #[serde(default)] pub offline_image_url: String,
 }
