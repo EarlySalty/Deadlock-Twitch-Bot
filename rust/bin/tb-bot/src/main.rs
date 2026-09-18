@@ -1276,8 +1276,10 @@ async fn main() {
             let flip_unraid = Arc::new(flip_unraid::FlipUnraidHandler::new(
                 pending.clone(),
                 suppression.clone(),
-                token_provider.clone(),
-                helix_client.clone(),
+                Arc::new(flip_unraid::HelixSourceRaidCanceller::new(
+                    token_provider.clone(),
+                    helix_client.clone(),
+                )),
                 chat_api_handle.as_ref().map(|h| h.api()),
             ));
             let arrival = RaidArrivalCoordinator::new(

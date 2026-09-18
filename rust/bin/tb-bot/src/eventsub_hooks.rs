@@ -1218,9 +1218,7 @@ impl EventSubHooks for RaidEventSubHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
-        self.flip_unraid
-            .handle_go_live(twitch_user_id, login)
-            .await;
+        self.flip_unraid.handle_go_live(twitch_user_id, login).await;
         // Go-Live-Followup (B11): Partner mit needs_reauth einmalig im Chat
         // an die fällige Re-Authentifizierung erinnern. Best-effort, eigener
         // Dedupe-Guard — der stream.offline-Sub-Pfad bleibt davon unberührt.
