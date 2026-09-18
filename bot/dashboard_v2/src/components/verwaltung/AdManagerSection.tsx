@@ -755,7 +755,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <NumberSetting
             label="Mindestabstand"
-            description="So viele Minuten liegen mindestens zwischen zwei Werbungen, auch nach einer von Twitch gestarteten."
+            description="Gilt für Twitch-Pausen und für Werbung, die du selbst startest."
             value={draft.minIntervalMinutes}
             min={8}
             max={180}
@@ -793,6 +793,9 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             onChange={(value) => patch({ actionLeadSeconds: value })}
           />
         </div>
+        <p className="mt-1.5 text-[11px] text-text-secondary">
+          Der Mindestabstand gilt für Twitch-Pausen und für Werbung, die du selbst startest. Die automatische Verteilung nach deinem Budget richtet sich nicht nach diesem Abstand.
+        </p>
         {smartFieldsDisabled ? (
           <p className="mt-1.5 text-[11px] text-text-secondary">
             Abstand, Startschutz und Chat-Ruhe gelten nur für „Match schützen & Queue nutzen“.
