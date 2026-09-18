@@ -1,7 +1,3 @@
--- Werbemanager: Schalter fuer den Chat-Hinweis vor der Werbung und der
--- DB-Merker je Werbung, damit der Hinweis idempotent gegen Neustart und
--- doppelte Ticks bleibt.
-
 ALTER TABLE twitch_ad_manager_settings
     ADD COLUMN IF NOT EXISTS chat_notice_before_ad BOOLEAN NOT NULL DEFAULT TRUE;
 

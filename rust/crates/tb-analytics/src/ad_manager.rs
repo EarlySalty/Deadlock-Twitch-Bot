@@ -179,7 +179,12 @@ mod steam_tests {
         .unwrap();
     }
 
-    async fn presence(pool: &PgPool, steam_id: &str, in_match: bool, updated_at: Option<DateTime<Utc>>) {
+    async fn presence(
+        pool: &PgPool,
+        steam_id: &str,
+        in_match: bool,
+        updated_at: Option<DateTime<Utc>>,
+    ) {
         sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
             .bind(steam_id)
             .execute(pool)
@@ -253,7 +258,10 @@ mod steam_tests {
             .await
             .unwrap();
         assert!(summary.steam_linked);
-        assert!(summary.state.is_none(), "veraltete Presence entscheidet nicht");
+        assert!(
+            summary.state.is_none(),
+            "veraltete Presence entscheidet nicht"
+        );
         let observed = summary.observed_at.expect("Stale-Zeit bleibt sichtbar");
         assert!(
             (observed - stale).num_seconds().abs() <= 1,
@@ -814,6 +822,24 @@ const AD_HINT_WITHOUT_DURATION: [&str; 6] = [
     "Gleich kommt kurz Werbung. Einmal durchatmen, wir sehen uns gleich.",
 ];
 
+const AD_HINT_IMMEDIATE_WITH_DURATION: [&str; 6] = [
+    "Gleich läuft kurz Werbung, {dur} Sekunden, danach geht es weiter.",
+    "Guter Moment: gleich {dur} Sekunden Werbung, dann sind wir wieder da.",
+    "Gleich kommt kurz Werbung, {dur} Sekunden. Holt euch was zu trinken, bis gleich.",
+    "Kurze Pause für die Werbung, {dur} Sekunden. Gleich geht es normal weiter.",
+    "Gleich {dur} Sekunden Werbung, dafür bleibt das Match später frei.",
+    "Kurz Werbung, {dur} Sekunden, danach machen wir sofort weiter.",
+];
+
+const AD_HINT_IMMEDIATE_WITHOUT_DURATION: [&str; 6] = [
+    "Gleich läuft kurz Werbung, danach geht es normal weiter.",
+    "Guter Moment: gleich kurz Werbung, dann sind wir wieder da.",
+    "Gleich kommt kurz Werbung. Holt euch was zu trinken, bis gleich.",
+    "Kurze Pause für die Werbung. Gleich geht es normal weiter.",
+    "Gleich kurz Werbung, dafür bleibt das Match später frei.",
+    "Kurz Werbung, danach machen wir sofort weiter.",
+];
+
 pub fn ad_hint(
     input: &DecisionInput,
     decision: &Decision,
@@ -827,6 +853,12 @@ pub fn ad_hint(
     let secs_until = |at: DateTime<Utc>| at.signed_duration_since(now).num_seconds();
 
     if let Some(next_ad) = input.next_ad_at {
+        if decision.reason == "pulled_forward" {
+            return Some(AdHint {
+                key: format!("pull:{}", next_ad.to_rfc3339()),
+                duration_seconds: Some(input.pull_forward_seconds).filter(|value| *value > 0),
+            });
+        }
         let twitch_window = window_secs.min(i64::from(input.settings.action_lead_seconds));
         let secs = secs_until(next_ad);
         if secs <= 0 || secs > twitch_window {
@@ -876,15 +908,24 @@ pub fn ad_hint_text(
     duration_seconds: Option<i32>,
     previous_variant: Option<i16>,
     seed: u64,
+    immediate: bool,
 ) -> (String, i16) {
-    let count = AD_HINT_WITH_DURATION.len();
+    let (with_dur, without_dur): (&[&str; 6], &[&str; 6]) = if immediate {
+        (
+            &AD_HINT_IMMEDIATE_WITH_DURATION,
+            &AD_HINT_IMMEDIATE_WITHOUT_DURATION,
+        )
+    } else {
+        (&AD_HINT_WITH_DURATION, &AD_HINT_WITHOUT_DURATION)
+    };
+    let count = with_dur.len();
     let mut index = (seed % count as u64) as usize;
     if Some(index as i16) == previous_variant {
         index = (index + 1) % count;
     }
     let text = match duration_seconds.filter(|value| *value > 0) {
-        Some(dur) => AD_HINT_WITH_DURATION[index].replace("{dur}", &dur.to_string()),
-        None => AD_HINT_WITHOUT_DURATION[index].to_string(),
+        Some(dur) => with_dur[index].replace("{dur}", &dur.to_string()),
+        None => without_dur[index].to_string(),
     };
     (text, index as i16)
 }
@@ -1197,12 +1238,13 @@ impl AdManagerStore {
                 observed_at: None,
             });
         };
-        let steam_linked = row.try_get::<Option<bool>, _>("steam_linked")?.unwrap_or(false);
+        let steam_linked = row
+            .try_get::<Option<bool>, _>("steam_linked")?
+            .unwrap_or(false);
         let observed_at: Option<DateTime<Utc>> = row.try_get("observed_at")?;
         let fresh = observed_at
             .map(|seen| {
-                now.signed_duration_since(seen)
-                    <= Duration::seconds(MATCH_STATUS_FRESH_SECS)
+                now.signed_duration_since(seen) <= Duration::seconds(MATCH_STATUS_FRESH_SECS)
                     && seen <= now + Duration::minutes(1)
             })
             .unwrap_or(false);
@@ -1412,10 +1454,7 @@ impl AdManagerStore {
         Ok(())
     }
 
-    pub async fn last_hint(
-        &self,
-        uid: &str,
-    ) -> Result<(Option<String>, Option<i16>), sqlx::Error> {
+    pub async fn last_hint(&self, uid: &str) -> Result<(Option<String>, Option<i16>), sqlx::Error> {
         let row = sqlx::query(
             "SELECT last_hint_key,last_hint_variant FROM twitch_ad_manager_state WHERE twitch_user_id=$1",
         )

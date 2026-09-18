@@ -385,24 +385,53 @@ async fn process_channel(
         }
     }
 
+    let mut suppress_pull_forward_commercial = false;
     if let (Some(chat_api), Some(hint)) = (chat_api, hint_for_send.as_ref()) {
-        let (last_key, last_variant) = store.last_hint(&channel.twitch_user_id).await?;
-        if last_key.as_deref() != Some(hint.key.as_str()) {
-            let (text, variant) =
-                ad_hint_text(hint.duration_seconds, last_variant, now.timestamp_millis().unsigned_abs());
-            store
-                .record_hint(
-                    &channel.twitch_user_id,
-                    &channel.twitch_login,
-                    &hint.key,
-                    variant,
-                    now,
-                )
-                .await?;
-            match chat_api.send_message(&channel.twitch_user_id, &text).await {
-                Ok(SendOutcome::Sent) => {}
-                Ok(other) => tracing::warn!(user=%channel.twitch_user_id, ?other, "Werbemanager: Chat-Hinweis nicht zugestellt"),
-                Err(error) => tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Chat-Hinweis konnte nicht gesendet werden"),
+        let immediate = hint.key.starts_with("pull:");
+        match store.last_hint(&channel.twitch_user_id).await {
+            Ok((last_key, last_variant)) => {
+                let already_announced = last_key.as_deref() == Some(hint.key.as_str());
+                if immediate && !already_announced {
+                    suppress_pull_forward_commercial = true;
+                }
+                if !already_announced {
+                    let (text, variant) = ad_hint_text(
+                        hint.duration_seconds,
+                        last_variant,
+                        now.timestamp_millis().unsigned_abs(),
+                        immediate,
+                    );
+                    match store
+                        .record_hint(
+                            &channel.twitch_user_id,
+                            &channel.twitch_login,
+                            &hint.key,
+                            variant,
+                            now,
+                        )
+                        .await
+                    {
+                        Ok(()) => match chat_api.send_message(&channel.twitch_user_id, &text).await
+                        {
+                            Ok(SendOutcome::Sent) => {}
+                            Ok(other) => {
+                                tracing::warn!(user=%channel.twitch_user_id, ?other, "Werbemanager: Chat-Hinweis nicht zugestellt")
+                            }
+                            Err(error) => {
+                                tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Chat-Hinweis konnte nicht gesendet werden")
+                            }
+                        },
+                        Err(error) => {
+                            tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Hinweis-Merker konnte nicht geschrieben werden")
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Hinweis-Merker konnte nicht gelesen werden");
+                if immediate {
+                    suppress_pull_forward_commercial = true;
+                }
             }
         }
     }
@@ -421,7 +450,9 @@ async fn process_channel(
                     )
                     .await?;
             }
-            DecisionAction::Commercial { duration_seconds } => {
+            DecisionAction::Commercial { duration_seconds }
+                if !(decision.reason == "pulled_forward" && suppress_pull_forward_commercial) =>
+            {
                 let key_time = schedule
                     .next_ad_at
                     .clone()
@@ -442,6 +473,7 @@ async fn process_channel(
                     )
                     .await?;
             }
+            DecisionAction::Commercial { .. } => {}
             DecisionAction::Postpone | DecisionAction::None => {}
         }
     }

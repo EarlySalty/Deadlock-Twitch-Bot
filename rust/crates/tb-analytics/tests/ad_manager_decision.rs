@@ -455,14 +455,47 @@ fn kein_hinweis_wenn_die_werbung_noch_zu_weit_weg_ist() {
 
 #[test]
 fn hinweistext_wiederholt_die_variante_nicht_und_fuellt_die_dauer() {
-    let (mit_dauer, index) = ad_hint_text(Some(60), None, 0);
+    let (mit_dauer, index) = ad_hint_text(Some(60), None, 0, false);
     assert!(mit_dauer.contains("60 Sekunden"));
-    let (_, folge) = ad_hint_text(Some(60), Some(index), 0);
+    let (_, folge) = ad_hint_text(Some(60), Some(index), 0, false);
     assert_ne!(folge, index);
-    let (ohne_dauer, _) = ad_hint_text(None, None, 2);
+    let (ohne_dauer, _) = ad_hint_text(None, None, 2, false);
     assert!(!ohne_dauer.contains("{dur}"));
     assert!(!ohne_dauer.contains("Sekunden lang"));
     assert!(!mit_dauer.contains('—'));
+}
+
+#[test]
+fn sofort_hinweistext_nennt_kein_sekundenversprechen() {
+    for seed in 0..6 {
+        let (text, _) = ad_hint_text(Some(90), None, seed, true);
+        assert!(text.contains("90 Sekunden"), "{text}");
+        assert!(!text.contains("in etwa 30 Sekunden"), "{text}");
+        assert!(!text.contains("in 30 Sekunden"), "{text}");
+        assert!(!text.contains("halben Minute"), "{text}");
+        assert!(!text.contains('—'), "{text}");
+    }
+    let (ohne, _) = ad_hint_text(None, None, 1, true);
+    assert!(!ohne.contains("{dur}"));
+}
+
+#[test]
+fn vorgezogene_werbung_bekommt_sofort_hinweis() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = Some(input.now + Duration::minutes(6));
+    input.steam_match_state = Some(steam_state(false, true));
+    let decision = decide(&input);
+    assert_eq!(decision.reason, "pulled_forward");
+    let hint = ad_hint(&input, &decision, None, HINT_WINDOW_SECS).expect("Hinweis erwartet");
+    assert!(hint.key.starts_with("pull:"), "{}", hint.key);
+    assert_eq!(hint.duration_seconds, Some(90));
+    let (text, _) = ad_hint_text(
+        hint.duration_seconds,
+        None,
+        0,
+        hint.key.starts_with("pull:"),
+    );
+    assert!(!text.contains("in etwa 30 Sekunden"), "{text}");
 }
 
 #[test]
