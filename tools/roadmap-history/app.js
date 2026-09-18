@@ -31,7 +31,7 @@ let view = initial.get('view') === 'list' ? 'list' : 'tree';
 let focusId = initial.get('focus') || (initial.has('search') || initial.has('feature') ? 'product' : INDEX.has('uplink') ? 'uplink' : 'product');
 if (!INDEX.has(focusId)) focusId = 'product';
 let collapsed = new Set((initial.get('collapsed') || '').split(',').filter(id => INDEX.has(id)));
-let currentFeature = '', currentEvent = '', currentMonth = '';
+let currentFeature = '', currentEvent = '', currentMonth = '', currentBundle = null;
 let selectedCommits = [], selection, graph;
 let listLimit = 80, detailPage = 0, detailFull = false, includeChildren = true;
 let returnFocus = null, ignoreClose = false, searchTimer, cameraTimer, paintFrame;
@@ -93,10 +93,14 @@ function summary() {
 }
 function selectedKey() {
   if (currentEvent) {
-    const found = graph?.nodes.find(n => n.type === 'events' && n.featureId === currentFeature && n.events.some(c => c.id === currentEvent));
+    const found = graph?.nodes.find(n => n.type === 'milestone' && n.featureId === currentFeature && n.commitIds.includes(currentEvent));
     if (found) return found.key;
   }
-  return currentFeature ? 'f:' + currentFeature : '';
+  return currentFeature ? 'l:' + currentFeature : '';
+}
+function highlightBranch() {
+  const active = currentFeature;
+  for (const path of document.querySelectorAll('#edges .branch-line')) path.classList.toggle('is-active', path.dataset.feature === active);
 }
 function clampCamera() {
   if (!graph) return;
@@ -112,15 +116,15 @@ function paintWindow() {
   $('axis').style.transform = `translateX(${camera.x}px)`;
   const axisLabels = [...$('axis').children];
   if (axisLabels[0]) {
-    axisLabels[0].style.width = graph.calendarStart * camera.zoom + 'px';
-    axisLabels[0].textContent = graph.calendarStart * camera.zoom >= 190 ? 'FUNKTIONSGENERATIONEN' : '';
+    axisLabels[0].style.width = graph.axis.x0 * camera.zoom + 'px';
+    axisLabels[0].textContent = graph.axis.x0 * camera.zoom >= 118 ? 'ZEITACHSE' : '';
   }
-  const labelStep = Math.max(1, Math.ceil(140 / (264 * camera.zoom)));
-  axisLabels.slice(1).forEach((label, i) => {
-    label.style.left = (graph.calendarStart + i * 264) * camera.zoom + 'px';
-    label.style.width = 264 * camera.zoom * labelStep + 'px';
-    label.hidden = i % labelStep !== 0;
-  });
+  for (const label of axisLabels.slice(1)) {
+    const x = Number(label.dataset.x), width = Number(label.dataset.w);
+    label.style.left = x * camera.zoom + 'px';
+    label.style.width = width * camera.zoom + 'px';
+    label.hidden = width * camera.zoom < 44;
+  }
   const left = -camera.x / camera.zoom - 120, top = -camera.y / camera.zoom - 120;
   const right = left + $('viewport').clientWidth / camera.zoom + 240, bottom = top + $('viewport').clientHeight / camera.zoom + 240;
   const activeKey = document.activeElement?.closest('.graph-node')?.dataset.key;
@@ -166,42 +170,41 @@ function focusFeature(id, detail = false) {
   let node = INDEX.get(id);
   while (node) {collapsed.delete(node.id); node = INDEX.get(node.parentId);}
   resetCamera(); render();
-  reveal('f:' + id); saveState();
+  reveal('l:' + id); saveState();
   if (detail) openDetail(id);
 }
 function graphNode(node) {
-  if (node.type === 'events') {
-    const sample = node.sample;
-    const card = button('', 'graph-node event-node ' + sample.kind, () => openDetail(node.featureId, sample.id, node.events.length > 1 ? node.month : ''));
-    card.setAttribute('aria-label', INDEX.get(node.featureId).title + ', ' + dateLabel(node.first) + ', ' + (KINDS[sample.kind] || 'Änderung') + ': ' + sample.title + '. ' + node.events.length + ' Einzelereignisse öffnen');
-    const meta = el('span', 'event-meta');
-    meta.append(el('time', '', dateLabel(node.first) + (node.last !== node.first ? ' – ' + dateLabel(node.last) : '')));
-    meta.append(el('span', 'badge', KINDS[sample.kind] || 'Änderung'));
-    card.append(meta, el('span', 'event-title', sample.title));
-    if (node.events.length > 1) card.append(el('span', 'bundle-note', 'Monatsbündel · gezeigtes Beispiel: ' + dateLabel(sample.date)));
-    card.append(el('span', 'bundle-link', node.events.length > 1 ? 'Alle ' + number(node.events.length) + ' Einzelereignisse →' : 'Änderung & Code-Diff →'));
+  const feature = INDEX.get(node.featureId);
+  if (node.type === 'milestone') {
+    const card = button('', 'milestone kind-' + node.kind, () => openDetail(node.featureId, node.leadId, '', node.commitIds));
+    card.style.setProperty('--r', node.r + 'px');
+    card.setAttribute('aria-label', feature.title + ', ' + dateLabel(node.date) + ', ' + (KINDS[node.kind] || 'Änderung') + ': ' + node.title + '. ' + node.count + (node.count === 1 ? ' Änderung öffnen' : ' Änderungen im Bündel öffnen'));
+    const tip = el('span', 'milestone-tip');
+    tip.append(el('strong', '', node.title));
+    tip.append(el('time', '', dateLabel(node.first) + (node.last !== node.first ? ' bis ' + dateLabel(node.last) : '')));
+    tip.append(el('span', '', (KINDS[node.kind] || 'Änderung') + ' · ' + number(node.count) + (node.count === 1 ? ' Änderung' : ' Änderungen')));
+    card.append(tip);
     return card;
   }
-  const card = el('article', 'graph-node' + (node.context ? ' context' : '') + (node.id === 'product' ? ' root-node' : ''));
-  card.dataset.feature = node.id;
-  const main = button('', 'node-main', () => openDetail(node.id));
-  main.setAttribute('aria-label', node.title + '. Erster Git-Nachweis: ' + dateLabel(node.first) + '. ' + node.description + (node.context ? ' Kontext-Elternteil.' : ''));
-  main.append(el('span', 'node-overline', node.id === 'product' ? 'Produktursprung' : (node.depth === 1 ? 'Hauptfeature' : 'Unterfunktion') + (node.context ? ' · Kontext' : '')),
-    el('strong', '', node.title), el('span', 'node-description', node.description), el('span', 'node-date', 'Git-Nachweis: ' + dateLabel(node.first)));
-  const actions = el('div', 'node-actions');
-  if (node.visibleChildren.length) {
-    const collapse = button((node.collapsed ? '+ ' : '− ') + node.visibleChildren.length + ' Unterzweige', '', () => {
-      if (collapsed.has(node.id)) collapsed.delete(node.id); else collapsed.add(node.id);
-      render(); reveal('f:' + node.id);
-      nodeElements.get('f:' + node.id)?.querySelector('.node-actions button')?.focus({preventScroll: true});
+  const label = el('div', 'branch-label' + (node.context ? ' context' : '') + (node.dormant ? ' dormant' : ''));
+  label.dataset.feature = node.featureId;
+  const title = button('', 'branch-title', () => openDetail(node.featureId));
+  title.setAttribute('aria-label', feature.title + '. Zweigbeginn: ' + dateLabel(node.date) + (node.preexisting ? ', Bestand beim Start' : '') + '. ' + feature.description + (node.context ? ' Kontext-Elternteil.' : ''));
+  title.append(el('span', 'branch-name', node.text));
+  const stamp = el('time', 'branch-date', (node.preexisting ? 'Bestand beim Start' : dateLabel(node.date)));
+  stamp.dateTime = node.date; title.append(stamp);
+  label.append(title);
+  if (node.hasChildren) {
+    const caret = button(node.collapsed ? '+' : '−', 'branch-caret', () => {
+      if (collapsed.has(node.featureId)) collapsed.delete(node.featureId); else collapsed.add(node.featureId);
+      render(); reveal('l:' + node.featureId);
+      nodeElements.get('l:' + node.featureId)?.querySelector('.branch-caret')?.focus({preventScroll: true});
     });
-    collapse.setAttribute('aria-expanded', String(!node.collapsed));
-    collapse.setAttribute('aria-label', node.title + ': Unterzweige ' + (node.collapsed ? 'aufklappen' : 'zuklappen'));
-    actions.append(collapse);
-  } else actions.append(button(number(node.commits.length) + ' Änderungen', '', () => openDetail(node.id)));
-  const focus = button('Fokus ↗', '', () => focusFeature(node.id, true));
-  focus.setAttribute('aria-label', 'Zweig fokussieren: ' + node.title); actions.append(focus);
-  card.append(main, actions); return card;
+    caret.setAttribute('aria-expanded', String(!node.collapsed));
+    caret.setAttribute('aria-label', feature.title + ': Unterzweige ' + (node.collapsed ? 'aufklappen' : 'zuklappen'));
+    label.append(caret);
+  }
+  return label;
 }
 function renderGraph() {
   graph = layoutFamily(selection);
@@ -209,20 +212,33 @@ function renderGraph() {
   $('stage').style.width = graph.width + 'px'; $('stage').style.height = graph.height + 'px';
   $('edges').setAttribute('width', graph.width); $('edges').setAttribute('height', graph.height);
   $('axis').style.width = graph.width + 'px';
-  const structure = el('span', 'axis-label axis-structure', 'FUNKTIONSGENERATIONEN');
-  structure.style.width = graph.calendarStart + 'px'; $('axis').append(structure);
-  for (let i = 0; i < graph.months.length; i++) {
-    const x = graph.calendarStart + i * 264;
-    const label = el('span', 'axis-label', monthLabel(graph.months[i]));
-    Object.assign(label.style, {left: x + 'px', width: '264px'}); $('axis').append(label);
-    $('edges').append(svgEl('line', {x1: x, x2: x, y1: 0, y2: graph.height, class: 'calendar-line'}));
+  const structure = el('span', 'axis-label axis-structure', 'ZEITACHSE');
+  structure.style.width = graph.axis.x0 + 'px'; $('axis').append(structure);
+  for (const month of graph.axis.months) {
+    const label = el('span', 'axis-label', month.label);
+    Object.assign(label.style, {left: month.x + 'px', width: month.width + 'px'});
+    label.dataset.x = month.x; label.dataset.w = month.width; $('axis').append(label);
   }
-  for (const edge of graph.edges) {
-    const bend = Math.min(48, Math.max(10, (edge.x2 - edge.x1) / 2));
-    const d = `M${edge.x1},${edge.y1} C${edge.x1 + bend},${edge.y1} ${edge.x2 - bend},${edge.y2} ${edge.x2},${edge.y2}`;
-    const path = svgEl('path', {d, class: edge.kind + '-edge', 'data-source': edge.source, 'data-target': edge.target, 'vector-effect': 'non-scaling-stroke'});
-    $('edges').append(path);
+  const gridTop = 40, gridBottom = graph.height - 8;
+  for (const week of graph.weeks) $('edges').append(svgEl('line', {x1: week.x, x2: week.x, y1: gridTop, y2: gridBottom, class: 'week-line'}));
+  for (const month of graph.axis.months) $('edges').append(svgEl('line', {x1: month.x, x2: month.x, y1: gridTop, y2: gridBottom, class: 'month-line'}));
+  if (graph.trunk) {
+    $('edges').append(svgEl('line', {x1: graph.trunk.x0, x2: graph.trunk.x1, y1: graph.trunk.y, y2: graph.trunk.y, class: 'trunk-line', 'vector-effect': 'non-scaling-stroke'}));
+    const trunkLabel = svgEl('text', {x: graph.axis.x0, y: graph.trunk.y - 15, class: 'trunk-label'});
+    trunkLabel.textContent = INDEX.get('product').title; $('edges').append(trunkLabel);
   }
+  for (const fork of graph.forks) {
+    const lead = Math.min(16, fork.x - graph.axis.x0);
+    const drop = fork.y2 > fork.y1 ? 14 : -14;
+    const d = `M${fork.x - lead},${fork.y1} C${fork.x - 2},${fork.y1} ${fork.x},${fork.y1 + drop} ${fork.x},${fork.y2}`;
+    $('edges').append(svgEl('path', {d, class: 'fork-edge' + (fork.context ? ' context' : ''), 'data-target': fork.key, 'vector-effect': 'non-scaling-stroke'}));
+  }
+  for (const branch of graph.branches) {
+    const line = svgEl('path', {d: `M${branch.forkX},${branch.y} L${branch.endX},${branch.y}`, class: 'branch-line' + (branch.dormant ? ' dormant' : '') + (branch.context ? ' context' : ''), 'data-feature': branch.id, 'vector-effect': 'non-scaling-stroke'});
+    line.style.strokeWidth = branch.strokeWidth; line.style.opacity = branch.opacity;
+    $('edges').append(line);
+  }
+  highlightBranch();
   $('empty').hidden = selection.commitCount > 0;
   const range = rangeFor(filters().period, bounds, filters().from, filters().to);
   $('empty-message').textContent = range.from > range.to ? 'Das Startdatum liegt nach dem Enddatum. Bitte korrigiere den Zeitraum.' : !INDEX.get(focusId).first ? 'Für diese redaktionelle Funktion gibt es im ausgewerteten Git-Stand noch keinen zugeordneten Nachweis. Es wird kein Datum erfunden.' : 'Suchbegriff, Zeitraum oder fokussierten Zweig ändern. Doku, Tests und Pflege lassen sich zusätzlich einblenden.';
@@ -249,6 +265,10 @@ function historyEvent(c) {
   details.append(links); event.append(details); return event;
 }
 function detailEvents(node) {
+  if (currentBundle) {
+    const bundle = new Set(currentBundle);
+    return DATA.commits.filter(c => bundle.has(c.id)).slice().sort(compareDates);
+  }
   const ids = new Set((includeChildren ? node.allCommits : node.commits).map(c => c.id));
   return (detailFull ? DATA.commits : selectedCommits).filter(c => ids.has(c.id) && (!currentMonth || c.date.startsWith(currentMonth))).slice().sort(compareDates);
 }
@@ -285,10 +305,15 @@ function paintDetail() {
   }
   const events = detailEvents(node);
   const scope = el('div', 'detail-scope');
-  scope.append(el('p', '', number(events.length) + ' Änderungen · ' + (detailFull ? 'vollständige Historie' : 'passend zu den Filtern') + (includeChildren ? ' inkl. Unterfunktionen' : ' direkt an dieser Funktion') + (currentMonth ? ' · ' + monthLabel(currentMonth) : '') + '. Chronologisch von früher nach später.'));
-  scope.append(button(detailFull ? 'Gefilterte Historie' : 'Vollständige Historie', 'more', () => {detailFull = !detailFull; currentMonth = ''; detailPage = 0; paintDetail(); saveState();}));
-  if (node.children.length) scope.append(button(includeChildren ? 'Nur direkte Änderungen' : 'Unterfunktionen einbeziehen', 'more', () => {includeChildren = !includeChildren; detailPage = 0; paintDetail(); saveState();}));
-  if (currentMonth) scope.append(button('Alle Monate', 'more', () => {currentMonth = ''; detailPage = 0; paintDetail(); saveState();}));
+  if (currentBundle) {
+    scope.append(el('p', '', number(events.length) + (events.length === 1 ? ' Änderung' : ' Änderungen') + ' in diesem Meilenstein-Bündel. Chronologisch von früher nach später.'));
+    scope.append(button('Ganze Funktion zeigen', 'more', () => {currentBundle = null; currentEvent = ''; detailPage = 0; paintDetail(); saveState();}));
+  } else {
+    scope.append(el('p', '', number(events.length) + ' Änderungen · ' + (detailFull ? 'vollständige Historie' : 'passend zu den Filtern') + (includeChildren ? ' inkl. Unterfunktionen' : ' direkt an dieser Funktion') + (currentMonth ? ' · ' + monthLabel(currentMonth) : '') + '. Chronologisch von früher nach später.'));
+    scope.append(button(detailFull ? 'Gefilterte Historie' : 'Vollständige Historie', 'more', () => {detailFull = !detailFull; currentMonth = ''; detailPage = 0; paintDetail(); saveState();}));
+    if (node.children.length) scope.append(button(includeChildren ? 'Nur direkte Änderungen' : 'Unterfunktionen einbeziehen', 'more', () => {includeChildren = !includeChildren; detailPage = 0; paintDetail(); saveState();}));
+    if (currentMonth) scope.append(button('Alle Monate', 'more', () => {currentMonth = ''; detailPage = 0; paintDetail(); saveState();}));
+  }
   body.append(scope);
   detailPage = Math.max(0, Math.min(detailPage, Math.ceil(events.length / 40) - 1));
   const history = el('div', 'history');
@@ -304,15 +329,17 @@ function paintDetail() {
   }
   body.append(el('p', 'detail-intro', 'Git-Nachweise sind keine Einführungstermine oder Deploy-Belege. Automatische Ereigniszuordnungen können ungenau sein.'));
 }
-function openDetail(id, eventId = '', month = '') {
+function openDetail(id, eventId = '', month = '', bundle = null) {
   const node = INDEX.get(id);
   if (!node) return;
   if (!$('detail').open) returnFocus = document.activeElement;
   currentFeature = id;
+  currentBundle = Array.isArray(bundle) && bundle.length ? bundle.slice() : null;
   currentEvent = node.allCommits.some(c => c.id === eventId) ? eventId : '';
   currentMonth = /^\d{4}-\d{2}$/.test(month) ? month : '';
   includeChildren = true; detailFull = false;
-  if (currentEvent && !detailEvents(node).some(c => c.id === currentEvent)) {detailFull = true; currentMonth = '';}
+  if (!currentBundle && currentEvent && !detailEvents(node).some(c => c.id === currentEvent)) {detailFull = true; currentMonth = '';}
+  highlightBranch();
   detailPage = Math.max(0, Math.floor(detailEvents(node).findIndex(c => c.id === currentEvent) / 40));
   paintDetail();
   if (!$('detail').open) {
@@ -326,7 +353,8 @@ function openDetail(id, eventId = '', month = '') {
 function closeDetail() {if ($('detail').open) $('detail').close();}
 $('detail').addEventListener('close', () => {
   if (ignoreClose) {ignoreClose = false; return;}
-  currentFeature = ''; currentEvent = ''; currentMonth = ''; detailFull = false;
+  currentFeature = ''; currentEvent = ''; currentMonth = ''; currentBundle = null; detailFull = false;
+  highlightBranch();
   document.body.style.overflow = ''; schedulePaint(); saveState();
   if (returnFocus?.isConnected) returnFocus.focus({preventScroll: true}); else $('focus-feature').focus({preventScroll: true});
 });
