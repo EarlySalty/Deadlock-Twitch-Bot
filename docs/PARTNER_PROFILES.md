@@ -1,6 +1,6 @@
 # Öffentliche Partnerprofile
 
-Stand: 18. September 2026. Branch: `feat/partner-profile-calendar`.
+Stand: 19. September 2026.
 
 ## Nutzung
 
@@ -8,12 +8,13 @@ Im Twitch-Dashboard unter **Verwaltung → Mein Profil** öffnen:
 `/twitch/verwaltung#profil`. Zusätzlich gibt es im Analysebereich den Tab
 `profile` bzw. den Alias `profil`. Für das Profil ist kein Analyse-Abo nötig.
 
-Überschrift, Über-mich-Text, optionale Twitch-Profilbildadresse, Akzentfarbe,
-Social-Links und empfohlene Partner bearbeiten. Kalender: Monat wählen, Tag
-anklicken, Beginn/Ende und Beschreibung eintragen, **Termin übernehmen** und
-anschließend **Profil speichern**. Zeiten gelten für `Europe/Berlin`, unabhängig
-von der Gerätezeitzone. Nicht existierende oder mehrdeutige Ortszeiten bei der
-Zeitumstellung werden nicht stillschweigend verschoben.
+Überschrift, Über-mich-Text, Akzentfarbe, Social-Links und empfohlene Partner
+bearbeiten. Das Profilbild wird aus dem bereits geladenen Twitch-Profil übernommen
+und beim Speichern mit dem öffentlichen Profil synchronisiert. Kalender: Monat
+wählen, Tag anklicken, Beginn/Ende und Beschreibung eintragen, **Termin übernehmen**
+und anschließend oben **Änderungen speichern**. Zeiten gelten für `Europe/Berlin`,
+unabhängig von der Gerätezeitzone. Nicht existierende oder mehrdeutige Ortszeiten
+bei der Zeitumstellung werden nicht stillschweigend verschoben.
 
 Neue Profile sind private Entwürfe. **Profil veröffentlichen** aktivieren und
 speichern, um `/streamer/<twitch_login>` freizugeben. Ausschalten und Speichern
@@ -24,7 +25,8 @@ Profil unter „Aus meinem Umfeld“ empfohlen werden.
 ## Inhalt und Grenzen
 
 - Bis zu 120 Zeichen Überschrift und 4000 Zeichen Über mich; Gold, Violett oder
-  Petrol als Akzent; optional ein Twitch-CDN-Profilbild, ansonsten Initiale.
+  Petrol als Akzent. Das Twitch-Profilbild wird automatisch übernommen, bei einem
+  fehlenden Bild erscheint die Initiale.
 - Bis zu zwölf benannte HTTPS-Links und sechs Empfehlungen. Es werden nur
   veröffentlichte, aktive Partnerempfehlungen verlinkt.
 - Bis zu 200 selbst gepflegte Einzeltermine mit Titel, Beschreibung, Beginn und

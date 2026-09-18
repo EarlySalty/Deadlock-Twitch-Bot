@@ -436,7 +436,7 @@ export function VerwaltungPage() {
 
   const tabs: VerwaltungTabDef[] = [
     { id: 'konto', label: 'Konto & Verbindungen', icon: User, render: () => kontoTab },
-    { id: 'profil', label: 'Mein Profil', icon: User, render: () => <PlanProvider plan={authStatus?.plan ?? null} isAdmin={authStatus?.isAdmin ?? false} isLocalhost={authStatus?.isLocalhost ?? false} isDemoMode={Boolean(authStatus?.demoMode)}><PartnerProfile /></PlanProvider> },
+    { id: 'profil', label: 'Mein Profil', icon: User, render: () => <PlanProvider plan={authStatus?.plan ?? null} isAdmin={authStatus?.isAdmin ?? false} isLocalhost={authStatus?.isLocalhost ?? false} isDemoMode={Boolean(authStatus?.demoMode)}><PartnerProfile twitchAvatarUrl={home.avatarUrl} /></PlanProvider> },
     { id: 'chat', label: 'Chat-Befehle', icon: Terminal, render: () => chatTab },
     { id: 'bot', label: 'Bot & Schutz', icon: Bot, render: () => botTab },
     { id: 'overlay', label: 'Overlay', icon: Monitor, render: () => overlayTab },
