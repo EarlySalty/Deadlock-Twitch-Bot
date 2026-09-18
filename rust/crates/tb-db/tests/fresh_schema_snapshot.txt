@@ -1301,11 +1301,14 @@ twitch_partner_raid_scores|new_partner_multiplier|double precision|NO|1.0
 twitch_partner_raid_scores|raid_boost_multiplier|double precision|NO|1.0
 twitch_partner_raid_scores|readiness_score|double precision|NO|0.5
 twitch_partner_raid_scores|received_successful_raids_total|integer|NO|0
+twitch_partner_raid_scores|received_viewers_30d|bigint|NO|0
+twitch_partner_raid_scores|sent_viewers_30d|bigint|NO|0
 twitch_partner_raid_scores|time_pattern_score_base|double precision|NO|0.5
 twitch_partner_raid_scores|time_pattern_score|double precision|NO|0.5
 twitch_partner_raid_scores|today_received_raids|integer|NO|0
 twitch_partner_raid_scores|twitch_login|text|NO|
 twitch_partner_raid_scores|twitch_user_id|text|NO|
+twitch_partner_raid_scores|viewer_fairness_score|double precision|NO|0.5
 twitch_partner_signup_denylist|added_at|timestamp with time zone|NO|now()
 twitch_partner_signup_denylist|added_by|text|NO|
 twitch_partner_signup_denylist|partner_paused_by_block|boolean|NO|false

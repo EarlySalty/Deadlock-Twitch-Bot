@@ -63,6 +63,8 @@ struct InternalMetrics {
     sent_30d: i64,
     received_30d: i64,
     received_7d: i64,
+    sent_viewers_30d: i64,
+    received_viewers_30d: i64,
 }
 
 /// Boost-Zeile aus `streamer_plans` für einen Partner.
@@ -261,6 +263,7 @@ impl ScoreRefreshResolver {
                 time_pattern_score,
                 readiness_score,
                 fairness_score,
+                viewer_fairness_score,
                 base_score,
                 final_score,
             ) = match (is_live_flag, cached) {
@@ -272,6 +275,7 @@ impl ScoreRefreshResolver {
                         c.time_pattern_score,
                         c.readiness_score,
                         c.fairness_score,
+                        c.viewer_fairness_score,
                         c.base_score,
                         c.final_score,
                     )
@@ -281,6 +285,7 @@ impl ScoreRefreshResolver {
                     scores.time_pattern_score,
                     scores.readiness_score,
                     scores.fairness_score,
+                    scores.viewer_fairness_score,
                     scores.base_score,
                     scores.final_score,
                 ),
@@ -306,11 +311,14 @@ impl ScoreRefreshResolver {
                 time_pattern_score,
                 readiness_score,
                 fairness_score,
+                viewer_fairness_score,
                 base_score,
                 final_score,
                 internal_sent_raids_30d: metrics.sent_30d as i32,
                 internal_received_raids_30d: metrics.received_30d as i32,
                 internal_received_raids_7d: metrics.received_7d as i32,
+                sent_viewers_30d: metrics.sent_viewers_30d,
+                received_viewers_30d: metrics.received_viewers_30d,
                 today_received_raids: inputs.today_received_raids as i32,
                 last_computed_at: now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
                 // Courtesy hängt an der Raid-Historie, nicht am Live-Zustand:
@@ -409,6 +417,8 @@ fn build_scoring_inputs(ctx: &PartnerBuildCtx<'_>) -> ScoringInputs {
         internal_received_raids_7d: metrics.received_7d,
         today_received_raids: today_received_raids as i64,
         courtesy_score: ctx.courtesy_score,
+        sent_viewers_30d: metrics.sent_viewers_30d,
+        received_viewers_30d: metrics.received_viewers_30d,
     }
 }
 
@@ -669,9 +679,10 @@ async fn load_internal_metrics(
     let cutoff_30d = now - chrono::Duration::days(30);
     let cutoff_7d = now - chrono::Duration::days(7);
 
-    // Query 1: sent_30d — wer hat wie viele Raids gesendet?
-    let sent_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT from_broadcaster_id, COUNT(*)::bigint AS cnt \
+    // Query 1: sent_30d — wer hat wie viele Raids (und Zuschauer) gesendet?
+    let sent_rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT from_broadcaster_id, COUNT(*)::bigint AS cnt, \
+                COALESCE(SUM(viewer_count), 0)::bigint AS viewers \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE \
            AND from_broadcaster_id = ANY($1) \
@@ -683,15 +694,17 @@ async fn load_internal_metrics(
     .bind(cutoff_30d)
     .fetch_all(pool)
     .await?;
-    for (uid, cnt) in sent_rows {
+    for (uid, cnt, viewers) in sent_rows {
         if let Some(m) = map.get_mut(&uid) {
             m.sent_30d = cnt;
+            m.sent_viewers_30d = viewers;
         }
     }
 
     // Query 2: received_30d
-    let recv_30d_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT to_broadcaster_id, COUNT(*)::bigint AS cnt \
+    let recv_30d_rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT to_broadcaster_id, COUNT(*)::bigint AS cnt, \
+                COALESCE(SUM(viewer_count), 0)::bigint AS viewers \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE \
            AND from_broadcaster_id = ANY($1) \
@@ -703,9 +716,10 @@ async fn load_internal_metrics(
     .bind(cutoff_30d)
     .fetch_all(pool)
     .await?;
-    for (uid, cnt) in recv_30d_rows {
+    for (uid, cnt, viewers) in recv_30d_rows {
         if let Some(m) = map.get_mut(&uid) {
             m.received_30d = cnt;
+            m.received_viewers_30d = viewers;
         }
     }
 
@@ -852,9 +866,8 @@ mod tests {
         // geprüft über den Override-Ablauf, der Parser selbst liegt jetzt in
         // tb-analytics (`parse_datetime_value`).
         let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
-        let abgelaufen = |raw: &str| {
-            !boost_active(&boost_row(0, "", "bundle_komplett", Some(raw)), now)
-        };
+        let abgelaufen =
+            |raw: &str| !boost_active(&boost_row(0, "", "bundle_komplett", Some(raw)), now);
         assert!(abgelaufen("2026-01-01T00:00:00+00:00"));
         assert!(abgelaufen("2026-01-01T00:00:00Z"));
         assert!(abgelaufen("2026-01-01T00:00:00"));
@@ -1110,6 +1123,7 @@ mod tests {
                 id                   BIGSERIAL PRIMARY KEY,
                 from_broadcaster_id  TEXT NOT NULL,
                 to_broadcaster_id    TEXT NOT NULL,
+                viewer_count         INTEGER DEFAULT 0,
                 executed_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 success              BOOLEAN
             )
@@ -1152,11 +1166,14 @@ mod tests {
                 time_pattern_score           DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 readiness_score              DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 fairness_score               DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                viewer_fairness_score        DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 base_score                   DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 final_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 internal_sent_raids_30d      INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_30d  INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_7d   INTEGER NOT NULL DEFAULT 0,
+                sent_viewers_30d             BIGINT NOT NULL DEFAULT 0,
+                received_viewers_30d         BIGINT NOT NULL DEFAULT 0,
                 today_received_raids         INTEGER NOT NULL DEFAULT 0,
                 last_computed_at             TEXT NOT NULL DEFAULT '',
                 courtesy_score               DOUBLE PRECISION NOT NULL DEFAULT 1.0,

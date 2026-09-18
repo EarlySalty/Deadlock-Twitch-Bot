@@ -27,9 +27,12 @@
 //! | last_computed_at              | TEXT               | String              |
 //! | readiness_score               | DOUBLE PRECISION   | f64                 |
 //! | fairness_score                | DOUBLE PRECISION   | f64                 |
+//! | viewer_fairness_score         | DOUBLE PRECISION   | f64                 |
 //! | internal_sent_raids_30d       | INTEGER            | i32                 |
 //! | internal_received_raids_7d    | INTEGER            | i32                 |
 //! | internal_received_raids_30d   | INTEGER            | i32                 |
+//! | sent_viewers_30d              | BIGINT             | i64                 |
+//! | received_viewers_30d          | BIGINT             | i64                 |
 //! | courtesy_score                | DOUBLE PRECISION   | f64                 |
 //! | courtesy_class                | TEXT               | Option\<String\>    |
 //! | courtesy_observed             | INTEGER            | i32                 |
@@ -71,9 +74,16 @@ pub struct PartnerRaidScoreRow {
     pub last_computed_at: String,
     pub readiness_score: f64,
     pub fairness_score: f64,
+    /// Balance der weitergeraideten zu empfangenen Zuschauer plus Volumen-Bonus.
+    /// 0.5 ohne Zuschauer-Historie.
+    pub viewer_fairness_score: f64,
     pub internal_sent_raids_30d: i32,
     pub internal_received_raids_7d: i32,
     pub internal_received_raids_30d: i32,
+    /// Summe der in 30 Tagen weitergeraideten Zuschauer (Rohwert hinter `viewer_fairness_score`).
+    pub sent_viewers_30d: i64,
+    /// Summe der in 30 Tagen empfangenen Zuschauer (Rohwert hinter `viewer_fairness_score`).
+    pub received_viewers_30d: i64,
     /// Anteil eigener Raids mit Nachricht im Zielchat, gegen 1.0 geshrinkt.
     /// 1.0 = schreibt immer oder keine Historie, 0.0 = schweigt stets.
     pub courtesy_score: f64,
@@ -105,11 +115,17 @@ pub struct PartnerRaidScoreUpsert {
     pub time_pattern_score: f64,
     pub readiness_score: f64,
     pub fairness_score: f64,
+    /// Siehe [`PartnerRaidScoreRow::viewer_fairness_score`].
+    pub viewer_fairness_score: f64,
     pub base_score: f64,
     pub final_score: f64,
     pub internal_sent_raids_30d: i32,
     pub internal_received_raids_30d: i32,
     pub internal_received_raids_7d: i32,
+    /// Siehe [`PartnerRaidScoreRow::sent_viewers_30d`].
+    pub sent_viewers_30d: i64,
+    /// Siehe [`PartnerRaidScoreRow::received_viewers_30d`].
+    pub received_viewers_30d: i64,
     pub today_received_raids: i32,
     pub last_computed_at: String,
     /// Siehe [`PartnerRaidScoreRow::courtesy_score`].
@@ -147,8 +163,11 @@ impl ScoreStore {
                    current_uptime_sec, duration_score, time_pattern_score,
                    base_score, final_score, today_received_raids,
                    last_computed_at, readiness_score, fairness_score,
+                   COALESCE(viewer_fairness_score, 0.5) AS "viewer_fairness_score!",
                    internal_sent_raids_30d, internal_received_raids_7d,
                    internal_received_raids_30d,
+                   COALESCE(sent_viewers_30d, 0) AS "sent_viewers_30d!",
+                   COALESCE(received_viewers_30d, 0) AS "received_viewers_30d!",
                    COALESCE(courtesy_score, 1.0) AS "courtesy_score!",
                    courtesy_class,
                    COALESCE(courtesy_observed, 0) AS "courtesy_observed!"
@@ -183,8 +202,11 @@ impl ScoreStore {
                    current_uptime_sec, duration_score, time_pattern_score,
                    base_score, final_score, today_received_raids,
                    last_computed_at, readiness_score, fairness_score,
+                   COALESCE(viewer_fairness_score, 0.5) AS "viewer_fairness_score!",
                    internal_sent_raids_30d, internal_received_raids_7d,
                    internal_received_raids_30d,
+                   COALESCE(sent_viewers_30d, 0) AS "sent_viewers_30d!",
+                   COALESCE(received_viewers_30d, 0) AS "received_viewers_30d!",
                    COALESCE(courtesy_score, 1.0) AS "courtesy_score!",
                    courtesy_class,
                    COALESCE(courtesy_observed, 0) AS "courtesy_observed!"
@@ -219,8 +241,11 @@ impl ScoreStore {
                    current_uptime_sec, duration_score, time_pattern_score,
                    base_score, final_score, today_received_raids,
                    last_computed_at, readiness_score, fairness_score,
+                   COALESCE(viewer_fairness_score, 0.5) AS "viewer_fairness_score!",
                    internal_sent_raids_30d, internal_received_raids_7d,
                    internal_received_raids_30d,
+                   COALESCE(sent_viewers_30d, 0) AS "sent_viewers_30d!",
+                   COALESCE(received_viewers_30d, 0) AS "received_viewers_30d!",
                    COALESCE(courtesy_score, 1.0) AS "courtesy_score!",
                    courtesy_class,
                    COALESCE(courtesy_observed, 0) AS "courtesy_observed!"
@@ -265,13 +290,17 @@ impl ScoreStore {
                 last_computed_at,
                 courtesy_score,
                 courtesy_class,
-                courtesy_observed
+                courtesy_observed,
+                viewer_fairness_score,
+                sent_viewers_30d,
+                received_viewers_30d
             ) VALUES (
                 $1,  $2,  $3,  $4,  $5,
                 $6,  $7,  $8,  $9,  $10,
                 $11, $12, $13, $14, $15,
                 $16, $17, $18, $19, $20,
-                $21, $22, $23, $24, $25
+                $21, $22, $23, $24, $25,
+                $26, $27, $28
             )
             ON CONFLICT (twitch_user_id) DO UPDATE SET
                 twitch_login                    = EXCLUDED.twitch_login,
@@ -297,7 +326,10 @@ impl ScoreStore {
                 last_computed_at                = EXCLUDED.last_computed_at,
                 courtesy_score                  = EXCLUDED.courtesy_score,
                 courtesy_class                  = EXCLUDED.courtesy_class,
-                courtesy_observed               = EXCLUDED.courtesy_observed
+                courtesy_observed               = EXCLUDED.courtesy_observed,
+                viewer_fairness_score           = EXCLUDED.viewer_fairness_score,
+                sent_viewers_30d                = EXCLUDED.sent_viewers_30d,
+                received_viewers_30d            = EXCLUDED.received_viewers_30d
             WHERE EXCLUDED.last_computed_at >= twitch_partner_raid_scores.last_computed_at
             "#,
         )
@@ -326,6 +358,9 @@ impl ScoreStore {
         .bind(row.courtesy_score)
         .bind(row.courtesy_class.as_deref())
         .bind(row.courtesy_observed)
+        .bind(row.viewer_fairness_score)
+        .bind(row.sent_viewers_30d)
+        .bind(row.received_viewers_30d)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -400,9 +435,12 @@ mod tests {
                 last_computed_at                TEXT NOT NULL,
                 readiness_score                 DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 fairness_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                viewer_fairness_score           DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 internal_sent_raids_30d         INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_7d      INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0,
+                sent_viewers_30d                BIGINT NOT NULL DEFAULT 0,
+                received_viewers_30d            BIGINT NOT NULL DEFAULT 0,
                 courtesy_score                  DOUBLE PRECISION NOT NULL DEFAULT 1.0,
                 courtesy_class                  TEXT,
                 courtesy_observed               INTEGER NOT NULL DEFAULT 0
@@ -432,11 +470,14 @@ mod tests {
             time_pattern_score: 0.75,
             readiness_score: 0.6,
             fairness_score: 0.68,
+            viewer_fairness_score: 0.55,
             base_score: 0.628,
             final_score: 0.7065,
             internal_sent_raids_30d: 3,
             internal_received_raids_30d: 1,
             internal_received_raids_7d: 2,
+            sent_viewers_30d: 120,
+            received_viewers_30d: 45,
             today_received_raids: 0,
             courtesy_score: 1.0,
             courtesy_class: None,
@@ -479,6 +520,9 @@ mod tests {
         assert_eq!(loaded.internal_sent_raids_30d, 3);
         assert_eq!(loaded.internal_received_raids_30d, 1);
         assert_eq!(loaded.internal_received_raids_7d, 2);
+        assert!((loaded.viewer_fairness_score - 0.55).abs() < 1e-9);
+        assert_eq!(loaded.sent_viewers_30d, 120);
+        assert_eq!(loaded.received_viewers_30d, 45);
     }
 
     #[tokio::test]

@@ -73,9 +73,12 @@ async fn create_schema(pool: &PgPool) {
             last_computed_at                TEXT NOT NULL,
             readiness_score                 DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             fairness_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            viewer_fairness_score           DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             internal_sent_raids_30d         INTEGER NOT NULL DEFAULT 0,
             internal_received_raids_7d      INTEGER NOT NULL DEFAULT 0,
             internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0,
+            sent_viewers_30d                BIGINT NOT NULL DEFAULT 0,
+            received_viewers_30d            BIGINT NOT NULL DEFAULT 0,
             courtesy_score                  DOUBLE PRECISION NOT NULL DEFAULT 1.0,
             courtesy_class                  TEXT,
             courtesy_observed               INTEGER NOT NULL DEFAULT 0
@@ -148,6 +151,7 @@ async fn create_schema(pool: &PgPool) {
             id                  BIGSERIAL PRIMARY KEY,
             from_broadcaster_id TEXT,
             to_broadcaster_id   TEXT,
+            viewer_count        INTEGER DEFAULT 0,
             executed_at         TIMESTAMPTZ,
             success             BOOLEAN
         )
@@ -271,9 +275,11 @@ async fn refresh_all_schreibt_live_und_offline_partner() {
     assert_eq!(off_live, 0);
     assert_eq!(off_today, 0);
     // Offline neuer Partner: fairness(0,0,0,0)=0.75, courtesy=1.0 (keine
-    // Etikette-Historie, also kein Abzug),
-    // base = 0.5*0.585 + 0.75*0.315 + 1.0*0.10 = 0.62875, davon *1.25 new-mult.
-    let expected_final = ((0.62875_f64 * 1.25) * 1e6).round() / 1e6;
+    // Etikette-Historie, also kein Abzug), viewer_fairness=0.5 (keine
+    // Zuschauer-Historie).
+    // base = 0.5*0.49725 + 0.75*0.26775 + 1.0*0.085 + 0.5*0.15 = 0.6094375,
+    // im Code auf 0.609437 gerundet, davon *1.25 new-mult = 0.761796.
+    let expected_final = 0.761796_f64;
     assert!(
         (off_final - expected_final).abs() < 1e-6,
         "offline final_score Formel"
