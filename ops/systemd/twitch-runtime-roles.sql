@@ -122,6 +122,15 @@ BEGIN
         GRANT UPDATE (ended_at, end_message_id) ON TABLE public.twitch_sub_reminders TO twitchdash;
     END IF;
 
+    -- Smalltalk eligibility is measured by the bot's Helix preflight only.
+    -- Dashboard/legacy readers must not fabricate live/follower evidence.
+    IF to_regclass('public.twitch_smalltalk_candidate_state') IS NOT NULL THEN
+        REVOKE ALL PRIVILEGES ON TABLE public.twitch_smalltalk_candidate_state
+            FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_smalltalk_candidate_state TO twitchbot;
+        GRANT SELECT ON TABLE public.twitch_smalltalk_candidate_state TO twitchdash, twitchlegacy;
+    END IF;
+
     -- EventSub-Transporttabellen werden ausschließlich vom Bot geschrieben.
     -- Das Dashboard darf den Kapazitätsstand und Fehlerzustand weiterhin lesen.
     FOREACH ingest_table IN ARRAY ARRAY[

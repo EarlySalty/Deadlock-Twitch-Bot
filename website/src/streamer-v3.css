@@ -1,0 +1,14 @@
+.v2-pulse {
+  animation: v2-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes v2-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(70, 192, 123, 0.45); }
+  50%      { opacity: 0.7; box-shadow: 0 0 0 7px rgba(70, 192, 123, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-pulse {
+    animation: none !important;
+  }
+}

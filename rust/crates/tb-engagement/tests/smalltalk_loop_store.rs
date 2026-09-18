@@ -1,12 +1,9 @@
-use std::str::FromStr;
-
 // Testuhr ist bewusst `Utc::now()` und kein fixes Datum: die Tabelle setzt
 // `discord_next_attempt_at`/`expires_at` per DB-`NOW()`, und `claim_reports`
 // vergleicht beide gegen die übergebene Zeit. Eine erfundene Uhr lief dieser
 // Vergleichsbasis davon — der Report-Test wurde am 2026-07-27 um 20:08 UTC
 // von selbst rot, ohne dass sich Code geändert hatte.
 use chrono::{Duration, Utc};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Executor, PgPool};
 use tb_engagement::llm_chat::TestModeRejectReason;
 use tb_engagement::smalltalk_loop_store::{GeneratedOutcome, SmalltalkLoopStore};
@@ -32,7 +29,7 @@ const LIVE_MODE_MIGRATION: &str =
 /// uebersprungen, bekommt Cooldown und das steht im Log.
 #[tokio::test]
 async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
-    let Some(pool) = test_pool("smalltalk_loop_case").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_case").await else {
         return;
     };
     seed_candidate(&pool, "MixedCase", "7", None).await;
@@ -88,7 +85,7 @@ async fn kandidat_mit_abweichender_settings_schreibweise_wird_uebersprungen() {
 
 #[tokio::test]
 async fn live_test_nimmt_nur_kandidaten_unter_50_und_setzt_eigenen_modus() {
-    let Some(pool) = test_pool("smalltalk_loop_live_followers").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_live_followers").await else {
         return;
     };
     seed_candidate(&pool, "zu_gross", "50", None).await;
@@ -103,6 +100,21 @@ async fn live_test_nimmt_nur_kandidaten_unter_50_und_setzt_eigenen_modus() {
     .unwrap();
 
     let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(true);
+    for (id, login, count) in [("50", "zu_gross", 50), ("49", "klein", 49)] {
+        store
+            .record_live_preflight(
+                &tb_engagement::smalltalk_loop_store::LivePreflightTarget {
+                    twitch_user_id: id.into(),
+                    channel_login: login.into(),
+                },
+                Some(count),
+                true,
+                Utc::now(),
+                None,
+            )
+            .await
+            .unwrap();
+    }
     let session = store
         .start_next_session(Utc::now())
         .await
@@ -125,7 +137,7 @@ async fn live_test_nimmt_nur_kandidaten_unter_50_und_setzt_eigenen_modus() {
 /// Eintraege, denn beides heisst "in diesem Kanal nicht auftreten".
 #[tokio::test]
 async fn gebannte_und_geblacklistete_kanaele_werden_nie_ausgewaehlt() {
-    let Some(pool) = test_pool("smalltalk_loop_blacklist").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_blacklist").await else {
         return;
     };
     seed_candidate(&pool, "gebannt", "1", None).await;
@@ -158,7 +170,7 @@ async fn gebannte_und_geblacklistete_kanaele_werden_nie_ausgewaehlt() {
 /// Login-Abgleich haette ihn danach wieder als Kandidaten zugelassen.
 #[tokio::test]
 async fn gebannter_kanal_bleibt_nach_umbenennung_gesperrt() {
-    let Some(pool) = test_pool("smalltalk_loop_blacklist_id").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_blacklist_id").await else {
         return;
     };
     seed_candidate(&pool, "neuer_name", "42", None).await;
@@ -187,7 +199,7 @@ async fn gebannter_kanal_bleibt_nach_umbenennung_gesperrt() {
 
 #[tokio::test]
 async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
-    let Some(pool) = test_pool("smalltalk_loop_singleton").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_singleton").await else {
         return;
     };
     seed_candidate(&pool, "eins", "1", None).await;
@@ -254,7 +266,7 @@ async fn globale_sitzung_setzt_testmodus_und_stellt_settings_wieder_her() {
 
 #[tokio::test]
 async fn laufender_cooldown_in_postgres_textform_sperrt_den_kandidaten() {
-    let Some(pool) = test_pool("smalltalk_loop_cooldown").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_cooldown").await else {
         return;
     };
     seed_candidate(&pool, "gesperrt", "9", None).await;
@@ -279,7 +291,7 @@ async fn laufender_cooldown_in_postgres_textform_sperrt_den_kandidaten() {
 
 #[tokio::test]
 async fn erzeugte_nachricht_wird_unabhaengig_vom_filter_genau_einmal_gespeichert() {
-    let Some(pool) = test_pool("smalltalk_loop_messages").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_messages").await else {
         return;
     };
     seed_candidate(&pool, "eins", "1", None).await;
@@ -352,7 +364,7 @@ async fn erzeugte_nachricht_wird_unabhaengig_vom_filter_genau_einmal_gespeichert
 /// aufgenommen wurde.
 #[tokio::test]
 async fn stream_ton_haengt_an_der_offenen_sitzung_und_liegt_dem_report_bei() {
-    let Some(pool) = test_pool("smalltalk_loop_transcripts").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_transcripts").await else {
         return;
     };
     seed_candidate(&pool, "tonkanal", "1", None).await;
@@ -424,7 +436,7 @@ async fn stream_ton_haengt_an_der_offenen_sitzung_und_liegt_dem_report_bei() {
 
 #[tokio::test]
 async fn jede_beendete_sitzung_wird_mit_nachrichten_oder_providerfehler_geclaimt() {
-    let Some(pool) = test_pool("smalltalk_loop_reports").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_reports").await else {
         return;
     };
     seed_candidate(&pool, "leer", "1", None).await;
@@ -479,7 +491,7 @@ async fn jede_beendete_sitzung_wird_mit_nachrichten_oder_providerfehler_geclaimt
 
 #[tokio::test]
 async fn streamende_und_zeitlimit_beenden_die_aktive_sitzung() {
-    let Some(pool) = test_pool("smalltalk_loop_end_conditions").await else {
+    let Some((_db, pool)) = test_pool("smalltalk_loop_end_conditions").await else {
         return;
     };
     seed_candidate(&pool, "eins", "1", None).await;
@@ -517,6 +529,229 @@ async fn streamende_und_zeitlimit_beenden_die_aktive_sitzung() {
     );
 }
 
+#[tokio::test]
+async fn live_state_ohne_outreach_startet_genau_eine_session_und_behaelt_id_cooldown() {
+    let (_db, pool) = test_pool("independent_live").await.unwrap();
+    sqlx::query("INSERT INTO twitch_live_state VALUES ('101', 'eins', 1, 'Deadlock', 2), ('102', 'zwei', 1, 'Deadlock', 1)")
+        .execute(&pool).await.unwrap();
+    let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(true);
+    let now = Utc::now();
+    for (id, login) in [("101", "eins"), ("102", "zwei")] {
+        store
+            .record_live_preflight(
+                &tb_engagement::smalltalk_loop_store::LivePreflightTarget {
+                    twitch_user_id: id.into(),
+                    channel_login: login.into(),
+                },
+                Some(49),
+                true,
+                now,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    let first = store.start_next_session(now).await.unwrap().unwrap();
+    assert_eq!(first.streamer_user_id, "101");
+    assert!(store
+        .clone()
+        .start_next_session(now)
+        .await
+        .unwrap()
+        .is_none());
+    store
+        .close_active_session("test_done", now + Duration::seconds(1))
+        .await
+        .unwrap();
+    // The other candidate is still eligible, but this process consumed its slot.
+    assert!(store
+        .clone()
+        .start_next_session(now + Duration::seconds(2))
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .live_preflight_target(now + Duration::minutes(1))
+        .await
+        .unwrap()
+        .is_none());
+    let outreach: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_outreach")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(outreach, 0, "Smalltalk must never fabricate outreach rows");
+    let cooldown: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT cooldown_until FROM twitch_smalltalk_candidate_state WHERE twitch_user_id='101'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        (cooldown - (now + Duration::seconds(1) + Duration::hours(24)))
+            .num_microseconds()
+            .unwrap()
+            .abs()
+            <= 1,
+        "PostgreSQL stores microsecond precision"
+    );
+    sqlx::query(
+        "UPDATE twitch_live_state SET streamer_login='umbenannt' WHERE twitch_user_id='101'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE twitch_live_state SET is_live=0 WHERE twitch_user_id='102'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let restarted = SmalltalkLoopStore::new(pool.clone()).with_live_send(true);
+    assert!(restarted
+        .live_preflight_target(now + Duration::minutes(1))
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn live_auswahl_bleibt_bei_fehlenden_alten_oder_falschen_nachweisen_zu() {
+    let (_db, pool) = test_pool("live_evidence_matrix").await.unwrap();
+    let mutations = [
+        "UPDATE twitch_smalltalk_candidate_state SET follower_count=NULL",
+        "UPDATE twitch_smalltalk_candidate_state SET follower_count=50",
+        "UPDATE twitch_smalltalk_candidate_state SET checked_at=NOW()-INTERVAL '12 hours 1 second'",
+        "UPDATE twitch_smalltalk_candidate_state SET checked_at=NOW()+INTERVAL '1 minute'",
+        "UPDATE twitch_smalltalk_candidate_state SET live_checked_at=NOW()-INTERVAL '91 seconds'",
+        "UPDATE twitch_smalltalk_candidate_state SET live_deadlock=FALSE",
+        "UPDATE twitch_smalltalk_candidate_state SET channel_login='anderer'",
+        "UPDATE twitch_live_state SET twitch_user_id='999'",
+        "UPDATE twitch_live_state SET last_game='Just Chatting'",
+        "INSERT INTO twitch_raid_blacklist VALUES ('101', 'anderer_name', 'blocked')",
+        "INSERT INTO twitch_partners VALUES ('101', 'eins', 'active')",
+        "INSERT INTO twitch_streamers_partner_state VALUES ('101', 'eins', 1)",
+        "INSERT INTO twitch_partner_outreach VALUES ('eins', '101', 'now', 'pending', 'not-a-date')",
+    ];
+    for mutation in mutations {
+        sqlx::raw_sql("TRUNCATE twitch_smalltalk_sessions, twitch_engagement_settings, twitch_smalltalk_candidate_state, twitch_live_state, twitch_raid_blacklist, twitch_partners, twitch_streamers_partner_state, twitch_partner_outreach CASCADE")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('101', 'eins', 1, 'Deadlock', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(true);
+        store
+            .record_live_preflight(
+                &tb_engagement::smalltalk_loop_store::LivePreflightTarget {
+                    twitch_user_id: "101".into(),
+                    channel_login: "eins".into(),
+                },
+                Some(49),
+                true,
+                Utc::now(),
+                None,
+            )
+            .await
+            .unwrap();
+        sqlx::raw_sql(mutation).execute(&pool).await.unwrap();
+        let selected = store.start_next_session(Utc::now()).await;
+        if mutation.contains("not-a-date") {
+            assert!(selected.is_err(), "malformed cooldown must fail closed");
+        } else {
+            assert!(
+                selected.expect(mutation).is_none(),
+                "must fail closed: {mutation}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn fehlgeschlagener_refresh_loescht_alten_erfolgsnachweis() {
+    let (_db, pool) = test_pool("live_failed_refresh").await.unwrap();
+    sqlx::query("INSERT INTO twitch_live_state VALUES ('101', 'eins', 1, 'Deadlock', 1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(true);
+    let target = store
+        .live_preflight_target(Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .record_live_preflight(&target, Some(21), true, Utc::now(), None)
+        .await
+        .unwrap();
+    store
+        .record_live_preflight(&target, None, false, Utc::now(), Some("preflight_timeout"))
+        .await
+        .unwrap();
+    assert!(store
+        .start_next_session(Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn kandidaten_schema_und_runtime_rechte_passen_zum_release() {
+    let (_db, pool) = test_pool("live_schema_grants").await.unwrap();
+    let actual: std::collections::BTreeSet<String> =
+        sqlx::query_as::<_, (String, String, String, String, String)>(
+            "SELECT table_name, column_name, data_type, is_nullable, COALESCE(column_default, '')
+         FROM information_schema.columns WHERE table_schema='public'
+           AND (table_name='twitch_smalltalk_candidate_state'
+                OR (table_name='twitch_smalltalk_sessions' AND column_name='live_test'))",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(t, c, d, n, v)| format!("{t}|{c}|{d}|{n}|{v}"))
+        .collect();
+    let expected: std::collections::BTreeSet<String> =
+        include_str!("../../tb-db/tests/fresh_schema_snapshot.txt")
+            .lines()
+            .filter(|line| {
+                line.starts_with("twitch_smalltalk_candidate_state|")
+                    || line.starts_with("twitch_smalltalk_sessions|live_test|")
+            })
+            .map(str::to_owned)
+            .collect();
+    assert_eq!(actual.len(), 11);
+    assert_eq!(actual, expected);
+
+    // This is an isolated temporary PostgreSQL cluster, never the live DB.
+    sqlx::query("CREATE DATABASE twitch_analytics")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE ROLE postgres NOLOGIN")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let roles_sql = include_str!("../../../../ops/systemd/twitch-runtime-roles.sql")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('\\'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    sqlx::raw_sql(&roles_sql).execute(&pool).await.unwrap();
+    for role in ["twitchbot", "twitchdash", "twitchlegacy"] {
+        for privilege in ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"] {
+            let allowed: bool = sqlx::query_scalar(
+                "SELECT has_table_privilege($1, 'public.twitch_smalltalk_candidate_state', $2)",
+            )
+            .bind(role)
+            .bind(privilege)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let expected = privilege == "SELECT"
+                || (role == "twitchbot" && matches!(privilege, "INSERT" | "UPDATE"));
+            assert_eq!(allowed, expected, "{role} {privilege}");
+        }
+    }
+}
+
 async fn seed_candidate(pool: &PgPool, login: &str, user_id: &str, cooldown: Option<String>) {
     sqlx::query(
         "INSERT INTO twitch_partner_outreach
@@ -541,36 +776,13 @@ async fn seed_candidate(pool: &PgPool, login: &str, user_id: &str, cooldown: Opt
     .expect("Live-State setzen");
 }
 
-async fn test_pool(schema: &str) -> Option<PgPool> {
-    let Ok(url) = std::env::var("TB_TEST_DATABASE_URL")
-        .or_else(|_| std::env::var("TEST_DATABASE_URL"))
-        .or_else(|_| std::env::var("TWITCH_ANALYTICS_DSN"))
-    else {
-        return None;
-    };
-    let options = PgConnectOptions::from_str(&url)
-        .expect("Test-DSN parsen")
-        .options([("search_path", schema)]);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(options)
-        .await
-        .expect("Testdatenbank verbinden");
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await
-        .expect("Testdatenbank administrativ verbinden");
-    admin
-        .execute(format!("DROP SCHEMA IF EXISTS {schema} CASCADE").as_str())
-        .await
-        .expect("altes Testschema löschen");
-    admin
-        .execute(format!("CREATE SCHEMA {schema}").as_str())
-        .await
-        .expect("Testschema anlegen");
+async fn test_pool(_schema: &str) -> Option<(test_postgres::TestPostgres, PgPool)> {
+    // These safety tests must run, not silently skip without an environment
+    // variable. Never fall back to a production analytics DSN.
+    let db = test_postgres::TestPostgres::start().await;
+    let pool = db.pool.clone();
     create_test_tables(&pool).await;
-    Some(pool)
+    Some((db, pool))
 }
 
 async fn create_test_tables(pool: &PgPool) {
@@ -629,6 +841,11 @@ async fn create_test_tables(pool: &PgPool) {
     pool.execute(LIVE_MODE_MIGRATION)
         .await
         .expect("Smalltalk-Live-Modus-Migration ausführen");
+    pool.execute(include_str!(
+        "../../../migrations/20260918024500_smalltalk_candidate_state.sql"
+    ))
+    .await
+    .expect("Smalltalk-Kandidaten-Migration ausführen");
 }
 
 #[tokio::test]

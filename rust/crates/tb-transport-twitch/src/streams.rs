@@ -349,9 +349,18 @@ impl HelixClient {
         }))
     }
 
-    /// Follower total via a user token, without requesting individual follower
-    /// identities. Moderator scope/role is needed for the list, not the total.
-    /// App-token failures remain unknown (None), never fabricated zero.
+    /// Follower-Gesamtzahl via `/channels/followers`, ohne Schätzung oder Null-Fallback.
+    /// Für die reine `total`-Zahl darf ein OAuth-User-Token ohne Moderatorrolle
+    /// im Zielkanal verwendet werden. Scope `moderator:read:followers` UND
+    /// Broadcaster-/Moderatorrolle sind für einzelne Follower-Datensätze nötig,
+    /// nicht für die Gesamtzahl (Twitch API Reference: Get Channel Followers).
+    ///
+    /// `user_token`:
+    /// - `Some(tok)` → offizieller User-Token-Pfad, auch für fremde Kanäle.
+    /// - `None` → historischer App-Token-Pfad, nur best effort. 401/403 oder
+    ///   fehlendes `total` bleiben `None`, niemals erfundene 0 Follower.
+    ///
+    /// Port: Python `twitch_api.get_followers_total(broadcaster_id, user_token=…)`.
     pub async fn get_followers_total(
         &self,
         broadcaster_id: &str,

@@ -63,7 +63,7 @@ impl StealthSender {
             );
             return Some(false);
         }
-        self.send_after_gate(broadcaster_id, text).await
+        self.send_after_gate(broadcaster_id, text, None).await
     }
 
     /// Eng begrenzter Nicht-Partner-Pfad fuer den Live-Smalltalk-Test.
@@ -82,58 +82,19 @@ impl StealthSender {
         if broadcaster_id.is_empty() || channel_login.is_empty() {
             return Some(false);
         }
-        let allowed = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (\
-                SELECT 1\
-                FROM twitch_smalltalk_sessions s\
-                JOIN twitch_engagement_settings e\
-                  ON LOWER(e.channel_login) = LOWER(s.channel_login)\
-                WHERE s.ended_at IS NULL\
-                  AND s.streamer_user_id = $1\
-                  AND LOWER(s.channel_login) = LOWER($2)\
-                  AND e.enabled = TRUE\
-                  AND e.irc_read = TRUE\
-                  AND e.output_mode = 'smalltalk_live'\
-                  AND (\
-                    SELECT COALESCE(ss.followers_end, ss.followers_start)\
-                    FROM twitch_stream_sessions ss\
-                    WHERE LOWER(ss.streamer_login) = LOWER(s.channel_login)\
-                      AND COALESCE(ss.followers_end, ss.followers_start) IS NOT NULL\
-                      AND ss.started_at >= NOW() - INTERVAL '12 hours'\
-                    ORDER BY ss.started_at DESC NULLS LAST\
-                    LIMIT 1\
-                  ) BETWEEN 0 AND 49\
-            )",
-        )
-        .bind(broadcaster_id)
-        .bind(&channel_login)
-        .fetch_one(&self.pool)
-        .await;
-        match allowed {
-            Ok(true) => self.send_after_gate(broadcaster_id, text).await,
-            Ok(false) => {
-                tracing::warn!(
-                    channel = %channel_login,
-                    broadcaster_id,
-                    event = "smalltalk_loop.send_blocked",
-                    reason = "session_or_follower_gate",
-                );
-                Some(false)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    channel = %channel_login,
-                    broadcaster_id,
-                    event = "smalltalk_loop.send_blocked",
-                    reason = "database",
-                    %error,
-                );
-                Some(false)
-            }
-        }
+        let Ok(text) = crate::llm_chat::sanitize_test_mode_text(text) else {
+            return Some(false);
+        };
+        self.send_after_gate(broadcaster_id, &text, Some(&channel_login))
+            .await
     }
 
-    async fn send_after_gate(&self, broadcaster_id: &str, text: &str) -> Option<bool> {
+    async fn send_after_gate(
+        &self,
+        broadcaster_id: &str,
+        text: &str,
+        smalltalk_login: Option<&str>,
+    ) -> Option<bool> {
         let broadcaster_id = broadcaster_id.trim();
         let Some(text) = sanitize_chat_text(text, 120) else {
             return Some(false);
@@ -156,6 +117,34 @@ impl StealthSender {
             "sender_id": sender_id,
             "message": text,
         });
+        // Token refresh above may await the network. Re-read every live gate
+        // afterwards; there is no intervening await before the chat HTTP call.
+        if let Some(login) = smalltalk_login {
+            match crate::smalltalk_loop_store::live_send_allowed(
+                &self.pool,
+                broadcaster_id,
+                login,
+                chrono::Utc::now(),
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(
+                        event = "smalltalk_loop.send_blocked",
+                        channel = login,
+                        broadcaster_id,
+                        reason = "live_eligibility"
+                    );
+                    return Some(false);
+                }
+                Err(error) => {
+                    tracing::warn!(event = "smalltalk_loop.send_blocked", channel = login,
+                        broadcaster_id, reason = "database", %error);
+                    return Some(false);
+                }
+            }
+        }
         let resp = match self
             .http
             .post(&self.helix_url)
@@ -203,7 +192,6 @@ impl StealthSender {
             None => Some(true),
         }
     }
-
 }
 
 /// Kürzt einen String byte-sicher auf `max` Zeichen (für Log-Bodies).
@@ -212,11 +200,13 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod isolated_postgres;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use sqlx::PgPool;
-    use std::str::FromStr;
     use tb_crypto::{aad, FieldCipher};
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -225,35 +215,19 @@ mod tests {
         Arc::new(FieldCipher::from_hex_key(&"cd".repeat(32), "k1").unwrap())
     }
 
-    async fn make_pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn)
-            .unwrap()
-            .options([("search_path", schema)]);
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER);
+    async fn make_pool(_schema: &str) -> Option<(isolated_postgres::TestPostgres, PgPool)> {
+        let db = isolated_postgres::TestPostgres::start().await;
+        let pool = db.pool.clone();
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, twitch_login TEXT, is_partner_active INTEGER);
+             CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT,
+                 is_live INTEGER, last_game TEXT, last_viewer_count INTEGER);
+             CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT);
+             CREATE TABLE twitch_partner_outreach (streamer_user_id TEXT, streamer_login TEXT, cooldown_until TEXT);
+             CREATE TABLE twitch_raid_blacklist (target_id TEXT, target_login TEXT);
              CREATE TABLE twitch_smalltalk_sessions (
                  id UUID PRIMARY KEY, channel_login TEXT NOT NULL, streamer_user_id TEXT NOT NULL,
-                 ended_at TIMESTAMPTZ
+                 started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ended_at TIMESTAMPTZ
              );
              CREATE TABLE twitch_engagement_settings (
                  channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL, irc_read BOOLEAN NOT NULL,
@@ -267,7 +241,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        Some(pool)
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260918024500_smalltalk_candidate_state.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some((db, pool))
     }
 
     async fn add_active_partner(pool: &PgPool, channel_login: &str) {
@@ -307,8 +287,8 @@ mod tests {
 
     async fn seed_smalltalk_live(pool: &PgPool, followers: i32) {
         sqlx::query(
-            "INSERT INTO twitch_smalltalk_sessions (id, channel_login, streamer_user_id, ended_at)
-             VALUES ($1, 'tiny', '123', NULL)",
+            "INSERT INTO twitch_smalltalk_sessions (id, channel_login, streamer_user_id, ended_at, live_test)
+             VALUES ($1, 'tiny', '123', NULL, TRUE)",
         )
         .bind(uuid::Uuid::new_v4())
         .execute(pool)
@@ -321,10 +301,14 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('123', 'tiny', 1, 'Deadlock', 2)")
+            .execute(pool)
+            .await
+            .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_stream_sessions
-                (streamer_login, followers_start, followers_end, started_at)
-             VALUES ('tiny', $1, $1, NOW())",
+            "INSERT INTO twitch_smalltalk_candidate_state
+                (twitch_user_id, channel_login, follower_count, checked_at, source, live_deadlock, live_checked_at)
+             VALUES ('123', 'tiny', $1, NOW(), 'helix', TRUE, NOW())",
         )
         .bind(followers)
         .execute(pool)
@@ -334,7 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn smalltalk_live_sendet_nur_unter_50_follower() {
-        let Some(pool) = make_pool("t_eng_stealth_smalltalk_49").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_smalltalk_49").await else {
             return;
         };
         seed_smalltalk_live(&pool, 49).await;
@@ -364,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn smalltalk_live_blockiert_ab_50_follower_vor_http() {
-        let Some(pool) = make_pool("t_eng_stealth_smalltalk_50").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_smalltalk_50").await else {
             return;
         };
         seed_smalltalk_live(&pool, 50).await;
@@ -380,8 +364,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_send_revalidiert_alle_gates_ohne_chat_http() {
+        let (_db, pool) = make_pool("live_gate_matrix").await.unwrap();
+        let auth = auth_with_token(pool.clone(), cipher()).await;
+        let server = MockServer::start().await;
+        let sender = StealthSender::new(auth, "cid".into(), pool.clone())
+            .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
+        let mutations = [
+            "UPDATE twitch_smalltalk_candidate_state SET follower_count=NULL",
+            "UPDATE twitch_smalltalk_candidate_state SET follower_count=50",
+            "UPDATE twitch_smalltalk_candidate_state SET checked_at=NOW()-INTERVAL '12 hours 1 second'",
+            "UPDATE twitch_smalltalk_candidate_state SET checked_at=NOW()+INTERVAL '1 minute'",
+            "UPDATE twitch_smalltalk_candidate_state SET live_checked_at=NOW()-INTERVAL '91 seconds'",
+            "UPDATE twitch_smalltalk_candidate_state SET live_checked_at=NOW()+INTERVAL '1 minute'",
+            "UPDATE twitch_smalltalk_candidate_state SET live_deadlock=FALSE",
+            "UPDATE twitch_smalltalk_candidate_state SET channel_login='anderer'",
+            "UPDATE twitch_smalltalk_candidate_state SET cooldown_until=NOW()+INTERVAL '1 hour'",
+            "UPDATE twitch_live_state SET is_live=0",
+            "UPDATE twitch_live_state SET last_game='Just Chatting'",
+            "UPDATE twitch_live_state SET twitch_user_id='999'",
+            "UPDATE twitch_live_state SET streamer_login='umbenannt'",
+            "UPDATE twitch_smalltalk_sessions SET ended_at=NOW()",
+            "UPDATE twitch_smalltalk_sessions SET streamer_user_id='999'",
+            "UPDATE twitch_smalltalk_sessions SET started_at=NOW()-INTERVAL '61 minutes'",
+            "UPDATE twitch_smalltalk_sessions SET started_at=NOW()+INTERVAL '1 minute'",
+            "UPDATE twitch_smalltalk_sessions SET live_test=FALSE",
+            "UPDATE twitch_engagement_settings SET enabled=FALSE",
+            "UPDATE twitch_engagement_settings SET irc_read=FALSE",
+            "UPDATE twitch_engagement_settings SET output_mode='live'",
+            "INSERT INTO twitch_raid_blacklist VALUES ('123', 'anderer')",
+            "INSERT INTO twitch_raid_blacklist VALUES ('999', 'tiny')",
+            "INSERT INTO twitch_partners VALUES ('123', 'tiny', 'active')",
+            "INSERT INTO twitch_streamers_partner_state VALUES ('123', 'tiny', 1)",
+            "INSERT INTO twitch_partner_outreach VALUES ('123', 'tiny', (NOW()+INTERVAL '1 hour')::text)",
+            "INSERT INTO twitch_partner_outreach VALUES ('123', 'tiny', 'invalid-date')",
+        ];
+        for mutation in mutations {
+            sqlx::raw_sql("TRUNCATE twitch_smalltalk_sessions, twitch_engagement_settings, twitch_smalltalk_candidate_state, twitch_live_state, twitch_raid_blacklist, twitch_partners, twitch_streamers_partner_state, twitch_partner_outreach CASCADE")
+                .execute(&pool).await.unwrap();
+            seed_smalltalk_live(&pool, 49).await;
+            sqlx::raw_sql(mutation).execute(&pool).await.unwrap();
+            assert_eq!(
+                sender.send_smalltalk_live("123", "tiny", "hi").await,
+                Some(false),
+                "{mutation}"
+            );
+            assert!(
+                server.received_requests().await.unwrap().is_empty(),
+                "HTTP leaked: {mutation}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn live_send_blockiert_werbung_auch_bei_direktem_senderaufruf() {
+        let (_db, pool) = make_pool("live_no_pitch").await.unwrap();
+        seed_smalltalk_live(&pool, 0).await;
+        let auth = auth_with_token(pool.clone(), cipher()).await;
+        let server = MockServer::start().await;
+        let sender = StealthSender::new(auth, "cid".into(), pool)
+            .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
+        for text in [
+            "komm in unseren Discord",
+            "https://example.org",
+            "werde unser Partner",
+        ] {
+            assert_eq!(
+                sender.send_smalltalk_live("123", "tiny", text).await,
+                Some(false)
+            );
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn follower_aenderung_waehrend_token_refresh_blockiert_chat_http() {
+        let (_db, pool) = make_pool("live_token_race").await.unwrap();
+        seed_smalltalk_live(&pool, 49).await;
+        let c = cipher();
+        auth_with_token(pool.clone(), c.clone()).await;
+        sqlx::query("UPDATE twitch_engagement_sender_auth SET token_expires_at=1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/token"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(500))
+                .set_body_json(serde_json::json!({"access_token":"acc", "refresh_token":"ref", "expires_in":3600, "token_type":"bearer"})))
+            .expect(1).mount(&server).await;
+        let auth = Arc::new(
+            SenderAuthStore::new(pool.clone(), c, "cid".into(), "csec".into())
+                .with_token_url(format!("{}/token", server.uri())),
+        );
+        let sender = StealthSender::new(auth, "cid".into(), pool.clone())
+            .with_helix_url(format!("{}/helix/chat/messages", server.uri()));
+        let invalidate = async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while server.received_requests().await.unwrap().is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            sqlx::query("UPDATE twitch_smalltalk_candidate_state SET follower_count=50")
+                .execute(&pool)
+                .await
+                .unwrap();
+        };
+        let (sent, _) = tokio::join!(sender.send_smalltalk_live("123", "tiny", "hi"), invalidate);
+        assert_eq!(sent, Some(false));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "only token refresh, never chat"
+        );
+    }
+
+    #[tokio::test]
     async fn none_ohne_account() {
-        let Some(pool) = make_pool("t_eng_stealth_none").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_none").await else {
             return;
         };
         add_active_partner(&pool, "partner").await;
@@ -394,7 +496,7 @@ mod tests {
 
     #[tokio::test]
     async fn leerer_input_ist_false() {
-        let Some(pool) = make_pool("t_eng_stealth_empty").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_empty").await else {
             return;
         };
         add_active_partner(&pool, "partner").await;
@@ -406,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn nicht_partner_wird_blockiert_ohne_http() {
-        let Some(pool) = make_pool("t_eng_stealth_non_partner").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_non_partner").await else {
             return;
         };
         let auth = auth_with_token(pool.clone(), cipher()).await;
@@ -430,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn aktiver_partner_sendet() {
-        let Some(pool) = make_pool("t_eng_stealth_sent").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_sent").await else {
             return;
         };
         add_active_partner(&pool, "partner").await;
@@ -462,7 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_sent_false_ist_drop() {
-        let Some(pool) = make_pool("t_eng_stealth_drop").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_drop").await else {
             return;
         };
         add_active_partner(&pool, "partner").await;
@@ -482,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_error_ist_false() {
-        let Some(pool) = make_pool("t_eng_stealth_err").await else {
+        let Some((_db, pool)) = make_pool("t_eng_stealth_err").await else {
             return;
         };
         add_active_partner(&pool, "partner").await;

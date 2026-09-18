@@ -2,7 +2,7 @@
 
 ## Umfang und Einstieg
 
-Neuer kostenloser Tab **Zusammen spielen** im Analyse-Dashboard. Direkte Tab-Auswahl nach dem Rollout: `/analyse?tab=community`; auch `tab=lobbys` und `tab=zusammenspielen` funktionieren. Dies ist eine Implementierung in getrennten Feature-Worktrees, keine bereits erfolgte Live-Freischaltung.
+Kostenloser Tab **Zusammen spielen** im Analyse-Dashboard. Seit dem Rollout am 18. September 2026 live unter `/analyse?tab=community`; auch `tab=lobbys` und `tab=zusammenspielen` funktionieren. Die Änderungen aller drei beteiligten Repositories sind auf `origin/main`. Produktions-API und ausgeliefertes Frontend wurden erneut lesend geprüft.
 
 Die Oberfläche verbindet einen visuellen Wochenvergleich, nachvollziehbare Streamer-Vorschläge und einen personenbezogen berechtigungsgeprüften Discord-Lobbyüberblick. Der Streamer-Treffpunkt ist fest auf Guild `1289721245281292288`, VC `1326984426906714236` begrenzt. Der Link öffnet Discord; er betritt keinen Sprachkanal automatisch und überträgt kein Audio in den Browser.
 
@@ -49,7 +49,11 @@ Benötigt werden die Änderungen in **Deadlock-Steam-Bot** (additives `rank_upda
 
 Nicht blind eine der bereits anderweitig veränderten Haupt-Worktrees deployen. Die Implementierung entstand getrennt in `feature/community-coplay-dashboard-20260918`, `feature/community-lobby-directory-20260918` und `feature/community-rank-freshness-20260918`.
 
-Live-Abnahme nach einem bewussten Rollout: eigener Partner-Login, bestätigter Discord-/Steam-Link, belegter zugänglicher VC, voller VC, gesperrter VC, fehlende Verbindung, Discord-Reconnect und veralteter Snapshot. Ein Live-Rollout oder Test mit echten Teilnehmern wurde hier nicht vorgenommen.
+Live-Abnahme am 18. September 2026: Die tatsächlich laufende Twitch-API und das ausgelieferte Dashboard-Bundle wurden mit dem konfigurierten internen Zugang über Loopback geprüft. Für `earlysalty`, Zeitraum 56 Tage, wurden 16 Empfehlungen aus 62 Kandidaten geliefert; der eigene Rang war verfügbar. Die API liefert `Cache-Control: private, no-store`; anonyme Anfragen werden sowohl intern als auch am öffentlichen Host mit 401 abgewiesen.
+
+Der aktive Discord-Broker liefert ein frisches, ausschließlich aggregiertes Verzeichnis; ohne Token 401, bei unbekannter Mitgliedschaft 403. Bei dieser Abnahme wurden keine belegten, für den geprüften Betrachter sichtbaren Lobbys geliefert. Ein interner Admin-Zugang ohne persönliche Discord-Identität bleibt korrekt auf `link_required`; er erbt nicht die Rechte des betrachteten Streamers.
+
+Der erneute Browser-Test gegen den laufenden Dienst bestätigt den Tab, die Empfehlungskarten, den exakten Streamer-VC-Link, Desktop und 390px-Mobilbreite ohne horizontalen Seitenüberlauf sowie null JavaScript-Laufzeitfehler. Persönlicher Partner-Login mit belegtem VC, volle/gesperrte VCs und ein echter Discord-Reconnect wurden nicht live durch Teilnehmeraktionen ausgelöst; diese Grenzfälle sind durch die unten beschriebenen isolierten Tests abgedeckt. Es wurden keine Teilnehmer verschoben, Rechte verändert oder Nachrichten verschickt.
 
 ## Tests
 
@@ -61,4 +65,6 @@ Frontend: `node --import tsx --test tests/community.test.tsx` — 11 Tests. `npm
 
 Browser-Abnahme mit synthetischen Daten: Vite auf Loopback-Port 4199 starten und `npm exec --yes --package=playwright -- node tests/community-browser.cjs` ausführen. Geprüft werden Desktop und 390px-Mobilbreite ohne Seitenüberlauf, Filter, Vergleichsauswahl, volle VCs, exakter Streamer-Link, abgelaufene Snapshots und JavaScript-Laufzeitfehler. Die Fixture unter `tests/community-visual.html` ist kein Produktions-Einstiegspunkt und enthält ausschließlich gekennzeichnete Testdaten.
 
-Steam-Web kompiliert. Sein vollständiger bestehender Testlauf benötigt `CENTRAL_TEST_DSN`: ohne diese Testdatenbank-Konfiguration bestehen 22 Tests und 35 datenbankabhängige Tests brechen an der Testharness-Voraussetzung ab. Es wurde absichtlich keine Produktions-Datenbank dafür verwendet. Der additive Timestamp-Vertrag besteht zusätzlich als eigener Test ohne Datenbank oder externe Dienste. Insgesamt bestehen 33 gezielte Feature-Tests (16 Twitch, 11 Frontend, 5 Discord, 1 Steam) sowie die Browser-Abnahme.
+Steam-Web: Der vollständige Testlauf wurde nach Einrichtung einer privaten, kurzlebigen PostgreSQL-/TimescaleDB-Testinstanz erfolgreich ausgeführt: **58 bestanden, 0 fehlgeschlagen, 0 übersprungen**. Die Testinstanz wurde anschließend beendet; keine Produktions-Datenbank wurde dafür verwendet. Der zunächst fehlende `CENTRAL_TEST_DSN` ist damit als Testhindernis behoben. Der Primary-Account-Antwortvertrag wurde um das additive `rank_updated_at` ergänzt. Insgesamt bestehen außerdem die 33 gezielten Feature-Tests (16 Twitch, 11 Frontend, 5 Discord, 1 Steam), die synthetische Browser-Abnahme und die lesende Browser-Abnahme des Live-Bundles.
+
+Lokale Rollout-Belege liegen unter `community-rollout-20260918/`: `steam-full-db-tests.log`, `twitch-tests.log`, `dl-bot-tests.log`, `twitch-live.json`, `broker-live.json`, `browser-live.json` und `live-browser-current.log`. Die JSON-Berichte enthalten nur Prüfergebnisse und aggregierte Zählwerte, keine Zugangsdaten. Feature-Commits: Twitch `98f52d9a`, Discord `aff58e95`, Steam `9e6d5f5`; Steam-Vertragsergänzung `11656c1`.

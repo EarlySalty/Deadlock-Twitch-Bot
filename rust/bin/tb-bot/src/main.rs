@@ -639,7 +639,6 @@ async fn main() {
 
     let outreach_shadow =
         outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
-    let smalltalk_loop = smalltalk_loop_wiring::start(&supervisor, pool.clone(), &settings.broker);
     chat_typen_wiring::spawn(&supervisor, pool.clone());
     crew_archive::start(&supervisor, pool.clone(), &settings.broker);
 
@@ -685,6 +684,13 @@ async fn main() {
     // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
     let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone()).await;
+    let smalltalk_loop = smalltalk_loop_wiring::start(
+        &supervisor,
+        pool.clone(),
+        &settings.broker,
+        helix.as_ref().clone(),
+        chat_api_handle.as_ref().map(|handle| handle.bot_token_manager()),
+    );
     // Bot-User-ID früh sichern: `chat_api_handle` wird weiter unten beim
     // Pipeline-Aufbau konsumiert, der Trenn-Endpoint der internen API braucht
     // die ID aber erst ganz am Ende (Mod-Entzug im Streamer-Kanal).
