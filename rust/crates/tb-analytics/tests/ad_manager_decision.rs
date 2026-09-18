@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use tb_analytics::ad_manager::{
-    assess_plan, decide, plan_next_block, AdPlan, DecisionAction, DecisionInput, LiveState,
-    Settings, SteamMatchState, Strategy, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
+    ad_hint, ad_hint_text, assess_plan, decide, plan_next_block, AdHint, AdPlan, DecisionAction,
+    DecisionInput, LiveState, Settings, SteamMatchState, Strategy, COMMERCIAL_SCOPE,
+    HINT_WINDOW_SECS, READ_SCOPE, SNOOZE_SCOPE,
 };
 
 fn now() -> DateTime<Utc> {
@@ -353,4 +354,157 @@ fn live_state_freshness_hat_exakte_zeit_und_session_grenzen() {
     invalid.active_session_id = Some(7);
     invalid.observed_at = None;
     assert!(!invalid.is_fresh_live(now));
+}
+
+fn own_block_plan(next_block_at: DateTime<Utc>) -> AdPlan {
+    AdPlan {
+        next_block_at: Some(next_block_at),
+        block_seconds: 30,
+        blocks_per_hour: 6,
+        budget_used_seconds_this_hour: 0,
+    }
+}
+
+#[test]
+fn hinweis_vor_eigenem_block_traegt_dauer_und_schluessel() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = None;
+    input.steam_match_state = Some(steam_state(false, true));
+    let block_at = now() + Duration::seconds(30);
+    input.plan = own_block_plan(block_at);
+    let decision = decide(&input);
+    let hint = ad_hint(&input, &decision, None, HINT_WINDOW_SECS).expect("Hinweis erwartet");
+    assert_eq!(
+        hint,
+        AdHint {
+            key: format!("own:{}", block_at.to_rfc3339()),
+            duration_seconds: Some(30),
+        }
+    );
+}
+
+#[test]
+fn kein_hinweis_bei_aktiver_sperre() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = None;
+    input.steam_match_state = Some(steam_state(false, true));
+    input.plan = own_block_plan(now() + Duration::seconds(30));
+    input.last_raid_at = Some(now() - Duration::minutes(1));
+    input.last_raider = Some("cammy".into());
+    let decision = decide(&input);
+    assert_eq!(ad_hint(&input, &decision, None, HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn kein_hinweis_fuer_eigenen_block_ohne_offenes_fenster() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = None;
+    input.steam_match_state = None;
+    input.plan = own_block_plan(now() + Duration::seconds(30));
+    let decision = decide(&input);
+    assert_eq!(ad_hint(&input, &decision, None, HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn kein_hinweis_bei_ausgeschaltetem_schalter_oder_manager() {
+    let mut off = base(Strategy::Smart);
+    off.next_ad_at = None;
+    off.plan = own_block_plan(now() + Duration::seconds(30));
+    off.settings.chat_notice_before_ad = false;
+    let decision = decide(&off);
+    assert_eq!(ad_hint(&off, &decision, None, HINT_WINDOW_SECS), None);
+
+    let mut disabled = base(Strategy::Smart);
+    disabled.next_ad_at = None;
+    disabled.plan = own_block_plan(now() + Duration::seconds(30));
+    disabled.settings.enabled = false;
+    let decision = decide(&disabled);
+    assert_eq!(ad_hint(&disabled, &decision, None, HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn hinweis_vor_geplanter_twitch_werbung_die_laeuft() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = Some(now() + Duration::seconds(30));
+    let decision = decide(&input);
+    assert_eq!(decision.action, DecisionAction::None);
+    let hint = ad_hint(&input, &decision, Some(90), HINT_WINDOW_SECS).expect("Hinweis erwartet");
+    assert_eq!(hint.duration_seconds, Some(90));
+    assert!(hint.key.starts_with("twitch:"));
+}
+
+#[test]
+fn kein_hinweis_wenn_der_bot_die_twitch_werbung_verschiebt() {
+    let mut input = base(Strategy::Snooze);
+    input.next_ad_at = Some(now() + Duration::seconds(30));
+    input.snooze_count = 2;
+    let decision = decide(&input);
+    assert_eq!(decision.action, DecisionAction::Snooze);
+    assert_eq!(ad_hint(&input, &decision, Some(90), HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn kein_hinweis_wenn_die_werbung_noch_zu_weit_weg_ist() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = None;
+    input.steam_match_state = Some(steam_state(false, true));
+    input.plan = own_block_plan(now() + Duration::seconds(HINT_WINDOW_SECS + 20));
+    let decision = decide(&input);
+    assert_eq!(ad_hint(&input, &decision, None, HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn hinweistext_wiederholt_die_variante_nicht_und_fuellt_die_dauer() {
+    let (mit_dauer, index) = ad_hint_text(Some(60), None, 0, false);
+    assert!(mit_dauer.contains("60 Sekunden"));
+    let (_, folge) = ad_hint_text(Some(60), Some(index), 0, false);
+    assert_ne!(folge, index);
+    let (ohne_dauer, _) = ad_hint_text(None, None, 2, false);
+    assert!(!ohne_dauer.contains("{dur}"));
+    assert!(!ohne_dauer.contains("Sekunden lang"));
+    assert!(!mit_dauer.contains('—'));
+}
+
+#[test]
+fn sofort_hinweistext_nennt_kein_sekundenversprechen() {
+    for seed in 0..6 {
+        let (text, _) = ad_hint_text(Some(90), None, seed, true);
+        assert!(text.contains("90 Sekunden"), "{text}");
+        assert!(!text.contains("in etwa 30 Sekunden"), "{text}");
+        assert!(!text.contains("in 30 Sekunden"), "{text}");
+        assert!(!text.contains("halben Minute"), "{text}");
+        assert!(!text.contains('—'), "{text}");
+    }
+    let (ohne, _) = ad_hint_text(None, None, 1, true);
+    assert!(!ohne.contains("{dur}"));
+}
+
+#[test]
+fn vorgezogene_werbung_bekommt_sofort_hinweis() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = Some(input.now + Duration::minutes(6));
+    input.steam_match_state = Some(steam_state(false, true));
+    let decision = decide(&input);
+    assert_eq!(decision.reason, "pulled_forward");
+    let hint = ad_hint(&input, &decision, None, HINT_WINDOW_SECS).expect("Hinweis erwartet");
+    assert!(hint.key.starts_with("pull:"), "{}", hint.key);
+    assert_eq!(hint.duration_seconds, Some(90));
+    let (text, _) = ad_hint_text(
+        hint.duration_seconds,
+        None,
+        0,
+        hint.key.starts_with("pull:"),
+    );
+    assert!(!text.contains("in etwa 30 Sekunden"), "{text}");
+}
+
+#[test]
+fn kein_hinweis_direkt_nach_matchende() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = None;
+    input.steam_match_state = Some(steam_state(false, true));
+    input.plan = own_block_plan(now() + Duration::seconds(30));
+    input.match_ended_at = Some(now() - Duration::seconds(30));
+    let decision = decide(&input);
+    assert_eq!(ad_hint(&input, &decision, None, HINT_WINDOW_SECS), None);
 }

@@ -219,6 +219,7 @@ test('speichert nur normalisierte Eingabefelder ohne Server-Zeitstempel', async 
     startupDelayMinutes: 0,
     quietWindowMinutes: 9,
     actionLeadSeconds: 10,
+    chatNoticeBeforeAd: true,
   });
 });
 
@@ -314,6 +315,7 @@ test('normalisiert alle Zahlen auf sichere und von Twitch unterstützte Werte', 
       startupDelayMinutes: 22,
       quietWindowMinutes: 60,
       actionLeadSeconds: 88,
+      chatNoticeBeforeAd: true,
     },
   );
   assert.equal(
