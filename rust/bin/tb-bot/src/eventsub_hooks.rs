@@ -46,6 +46,7 @@ use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUser
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome};
 
 use crate::auto_raid::OfflineRaidHandler;
+use crate::flip_unraid::FlipUnraidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
 use crate::partner_lookup::{
     is_target_partner, known_source, resolve_active_partner_id_by_login, PrefetchedLookups,
@@ -1189,6 +1190,7 @@ pub struct RaidEventSubHooks {
     pub side_effects: OfflineSideEffects,
     pub arrival: RaidArrivalCoordinator,
     pub guard: BlacklistRaidGuard,
+    pub flip_unraid: Arc<FlipUnraidHandler>,
     /// Lernt aus `channel.moderate`, wohin ein Raid wirklich geht.
     pub outgoing_raid: OutgoingRaidObserver,
     /// Go-Live-ReAuth-Reminder (B11); `None`, wenn kein nativer Chat-Send-Pfad
@@ -1215,6 +1217,9 @@ impl EventSubHooks for RaidEventSubHooks {
     ) {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
+            .await;
+        self.flip_unraid
+            .handle_go_live(twitch_user_id, login)
             .await;
         // Go-Live-Followup (B11): Partner mit needs_reauth einmalig im Chat
         // an die fällige Re-Authentifizierung erinnern. Best-effort, eigener
