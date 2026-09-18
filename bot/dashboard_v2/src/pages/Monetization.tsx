@@ -375,7 +375,9 @@ export function Monetization({ streamer, days }: MonetizationProps) {
   const { ads, hype_train, bits, subs, window_days } = data;
   const noAds = ads.total === 0;
   const netAvg = ads.net_effect?.avg_net_drop_pct ?? null;
-  const netValue = netAvg != null ? fmtDrop(netAvg) : 'Noch zu wenig Daten';
+  const netSample = ads.net_effect?.sample ?? 0;
+  const netEnough = netSample >= 15 && netAvg != null;
+  const netValue = netEnough ? fmtDrop(netAvg!) : 'Noch zu wenig Daten';
 
   // Get max drop across all buckets for consistent bar scaling
   const allDropValues = [
@@ -419,8 +421,8 @@ export function Monetization({ streamer, days }: MonetizationProps) {
               <StatTile
                 label="Netto Viewer-Wirkung"
                 value={netValue}
-                valueClassName={netAvg != null ? dropTextClass(netAvg) : 'text-text-secondary'}
-                sub={netAvg != null ? 'gegenüber werbefreien Momenten' : undefined}
+                valueClassName={netEnough ? dropTextClass(netAvg!) : 'text-text-secondary'}
+                sub={netEnough ? 'gegenüber werbefreien Momenten' : `${netSample}/15`}
               />
               <StatTile
                 label="Ø Recovery"
@@ -429,7 +431,6 @@ export function Monetization({ streamer, days }: MonetizationProps) {
               />
             </div>
 
-            {/* Netto-Wirkung */}
             <div className="mb-4">
               <NetEffectSection net={ads.net_effect} />
             </div>

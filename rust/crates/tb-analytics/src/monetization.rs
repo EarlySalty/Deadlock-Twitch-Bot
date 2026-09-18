@@ -14,12 +14,41 @@
 
 use std::cmp::Ordering::Equal;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
 const MIN_GROUP: usize = 15;
+const NETWORK_RECO_TTL: StdDuration = StdDuration::from_secs(15 * 60);
+
+type NetworkRecoCache = Mutex<HashMap<i64, (Instant, Vec<String>)>>;
+
+fn network_reco_cache() -> &'static NetworkRecoCache {
+    static CACHE: OnceLock<NetworkRecoCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn network_recommendations(
+    pool: &PgPool,
+    cutoff: DateTime<Utc>,
+    days: i64,
+) -> Result<Vec<String>, sqlx::Error> {
+    if let Some((at, recos)) = network_reco_cache().lock().unwrap().get(&days) {
+        if at.elapsed() < NETWORK_RECO_TTL {
+            return Ok(recos.clone());
+        }
+    }
+    let network = compute_ad_effects(pool, "", cutoff, 5000).await?;
+    let recos = build_network_recommendations(&network);
+    network_reco_cache()
+        .lock()
+        .unwrap()
+        .insert(days, (Instant::now(), recos.clone()));
+    Ok(recos)
+}
 const QUIET_CHAT_MAX: i32 = 3;
 const MOMENT_KEYS: [&str; 6] = [
     "queue",
@@ -443,8 +472,7 @@ async fn compute_ad_effects(
             .map(f64::from)
             .filter(|d| *d != 0.0)
             .unwrap_or(30.0);
-        let minutes_into =
-            (row.started_at - session_start).num_milliseconds() as f64 / 60_000.0;
+        let minutes_into = (row.started_at - session_start).num_milliseconds() as f64 / 60_000.0;
         let duration_minutes = duration_seconds / 60.0;
         windows
             .entry(row.session_id)
@@ -465,9 +493,7 @@ async fn compute_ad_effects(
         let win = windows.get(sid);
         let free: Vec<(f64, f64)> = tl
             .iter()
-            .filter(|(m, _)| {
-                win.is_none_or(|ws| !ws.iter().any(|(a, b)| *m >= *a && *m <= *b))
-            })
+            .filter(|(m, _)| win.is_none_or(|ws| !ws.iter().any(|(a, b)| *m >= *a && *m <= *b)))
             .cloned()
             .collect();
         slopes.insert(*sid, slope(&free));
@@ -567,7 +593,7 @@ fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
         .collect();
     if moment_avgs.is_empty() {
         return vec![format!(
-            "Noch zu wenig Werbungen fuer eine Empfehlung. Ab {} Werbungen je Moment zeigen wir, wann Werbung am wenigsten Zuschauer kostet.",
+            "Noch zu wenig Werbungen für eine Empfehlung. Ab {} Werbungen je Moment zeigen wir, wann Werbung am wenigsten Zuschauer kostet.",
             MIN_GROUP
         )];
     }
@@ -575,7 +601,7 @@ fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
     let mut recos = Vec::new();
     let (best_key, best_avg, _) = moment_avgs[0];
     recos.push(format!(
-        "Am besten laeuft Werbung {}: {}.",
+        "Am besten läuft Werbung {}: {}.",
         moment_label(best_key),
         effect_phrase(best_avg)
     ));
@@ -629,8 +655,7 @@ pub async fn load_monetization_payload(
 
     let analysis = compute_drop_analysis(pool, streamer, cutoff).await?;
     let effects = compute_ad_effects(pool, streamer, cutoff, 200).await?;
-    let network = compute_ad_effects(pool, "", cutoff, 5000).await?;
-    let recommendations = build_network_recommendations(&network);
+    let recommendations = network_recommendations(pool, cutoff, days).await?;
 
     let ads = json!({
         "total": ad_agg.total_ads,
@@ -794,7 +819,6 @@ mod tests {
         assert_eq!(v["ads"]["worst_ads"], json!([]));
         assert_eq!(v["ads"]["position_impact"]["early_0_30m"]["count"], 0);
         assert!(v["ads"]["best_ad_time"].is_null());
-        // Ohne Viewer-Timeline keine Netto-Wirkung, also die Mindestdaten-Meldung.
         assert_eq!(v["ads"]["recommendations"].as_array().unwrap().len(), 1);
         assert!(v["ads"]["recommendations"][0]
             .as_str()
@@ -903,7 +927,6 @@ mod tests {
             ads["best_ad_time"],
             "Nach ersten 30 Min (Ø 50.0% statt 50.0% ersten 30 Min)"
         );
-        // Netto-Wirkung ohne Match-/Chat-Kontext: Empfehlung erst ab 15 je Gruppe.
         assert_eq!(ads["net_effect"]["sample"], 1);
         assert_eq!(ads["net_effect"]["avg_net_drop_pct"], 5.0);
         assert_eq!(ads["recommendations"].as_array().unwrap().len(), 1);
