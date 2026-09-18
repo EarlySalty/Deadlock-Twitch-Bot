@@ -379,6 +379,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/social-media/oauth/disconnect/{platform}",
             post(social_media::oauth_disconnect_handler),
         )
+        .route(
+            "/twitch/api/v2/admin/category-collector",
+            get(handlers::category_collector::get_handler).layer(Extension(
+                handlers::category_collector::CategoryCollectorCache::default(),
+            )),
+        )
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

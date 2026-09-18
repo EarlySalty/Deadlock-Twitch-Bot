@@ -39,6 +39,7 @@ pub mod billing_profile;
 pub mod billing_stripe_sync;
 pub mod billing_webhook;
 pub mod category_activity;
+pub mod category_collector;
 pub mod category_comparison;
 pub mod category_leaderboard;
 pub mod category_timings;
