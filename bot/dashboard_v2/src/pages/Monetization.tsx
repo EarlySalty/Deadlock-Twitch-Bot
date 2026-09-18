@@ -1,7 +1,7 @@
 import { TrendingDown, Zap, Gift, Radio, AlertCircle, Loader2, Clock, BarChart3, Lightbulb, ArrowLeftRight, Timer, BellOff, Calendar } from 'lucide-react';
 import { Rise } from '../motion/Rise';
 import { useMonetization, useAdsSchedule } from '@/hooks/useAnalytics';
-import type { TimeRange, AdBucketData, RecoveryBucketData, AdsSchedule } from '@/types/analytics';
+import type { TimeRange, AdBucketData, RecoveryBucketData, AdsSchedule, NetEffect } from '@/types/analytics';
 import { fmtDrop } from '@/utils/monetization';
 
 interface MonetizationProps {
@@ -30,6 +30,25 @@ function dropTextClass(n: number): string {
   return 'text-text-secondary';
 }
 
+const BRONZE_RAMP = ['#6B4E27', '#9C7A3C', '#C5A059', '#DDBD7A', '#F1D9A6'];
+
+function scaleFill(fraction: number): string {
+  const clamped = Math.min(1, Math.max(0, fraction));
+  const idx = Math.round((1 - clamped) * (BRONZE_RAMP.length - 1));
+  return `${BRONZE_RAMP[idx]}47`;
+}
+
+const momentLabels: Record<string, string> = {
+  queue: 'Queue',
+  first_match_minute: 'Erste Match-Minute',
+  in_match: 'Im Match',
+  post_match: 'Nach Matchende',
+  quiet_chat: 'Ruhiger Chat',
+  active_chat: 'Aktiver Chat',
+};
+
+const MOMENT_ORDER = ['queue', 'first_match_minute', 'in_match', 'post_match', 'quiet_chat', 'active_chat'];
+
 function formatRecovery(minutes: number | null | undefined): string {
   if (minutes === null || minutes === undefined) return 'nicht erreicht';
   if (minutes < 1) return '<1 Min';
@@ -48,16 +67,81 @@ function DropBar({ label, avgDrop, count, maxDrop }: { label: string; avgDrop: n
     );
   }
   const width = maxDrop > 0 ? Math.max(4, (Math.abs(avgDrop) / maxDrop) * 100) : 0;
-  const color = avgDrop > 0 ? 'bg-error/20' : avgDrop < 0 ? 'bg-success/20' : 'bg-text-secondary/20';
 
   return (
     <div className="flex items-center gap-3">
       <span className="text-xs text-text-secondary w-16 text-right shrink-0">{label}</span>
       <div className="flex-1 h-6 bg-background rounded overflow-hidden relative">
-        <div className={`h-full ${color} rounded`} style={{ width: `${width}%` }} />
+        <div className="h-full rounded" style={{ width: `${width}%`, backgroundColor: scaleFill(width / 100) }} />
         <span className={`absolute inset-0 flex items-center px-2 text-xs font-medium ${dropTextClass(avgDrop)}`}>
           {fmtDrop(avgDrop)} ({count}x)
         </span>
+      </div>
+    </div>
+  );
+}
+
+function NetEffectSection({ net }: { net: NetEffect | undefined }) {
+  if (!net || net.sample === 0) {
+    return (
+      <div className="bg-card border border-border rounded-xl p-4 text-text-secondary text-sm">
+        Noch keine belastbare Netto-Wirkung. Sie entsteht, sobald Werbungen mit Viewer-Verlauf vorliegen.
+      </div>
+    );
+  }
+  const horizons = [
+    { key: 'plus_1', label: '+1 Min', h: net.by_horizon.plus_1 },
+    { key: 'plus_3', label: '+3 Min', h: net.by_horizon.plus_3 },
+    { key: 'plus_5', label: '+5 Min', h: net.by_horizon.plus_5 },
+  ];
+  return (
+    <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <BarChart3 className="w-4 h-4 text-accent" />
+        <span className="text-sm font-medium text-white">Netto-Wirkung der Werbung</span>
+        <span className="text-xs text-text-secondary ml-auto">gegenüber werbefreien Momenten derselben Sendung</span>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {horizons.map(({ key, label, h }) => (
+          <div key={key} className="bg-background rounded-lg p-3 flex flex-col gap-1">
+            <span className="text-xs text-text-secondary">{label} nach Werbung</span>
+            <span className={`text-lg font-bold ${h.avg_net_drop_pct != null ? dropTextClass(h.avg_net_drop_pct) : 'text-text-secondary'}`}>
+              {h.avg_net_drop_pct != null ? fmtDrop(h.avg_net_drop_pct) : 'Keine Daten'}
+            </span>
+            <span className="text-xs text-text-secondary">{h.count}x</span>
+          </div>
+        ))}
+      </div>
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Clock className="w-4 h-4 text-accent" />
+          <span className="text-sm font-medium text-white">Wirkung nach Moment</span>
+        </div>
+        <div className="space-y-2">
+          {MOMENT_ORDER.map((key) => {
+            const m = net.moment_impact?.[key];
+            const label = momentLabels[key];
+            if (!m || !m.enough_data || m.avg_net_drop_pct == null) {
+              return (
+                <div key={key} className="flex items-center gap-3">
+                  <span className="text-xs text-text-secondary w-32 text-right shrink-0">{label}</span>
+                  <div className="flex-1 h-6 bg-background rounded flex items-center px-2">
+                    <span className="text-xs text-text-secondary">Noch zu wenig Daten ({m?.count ?? 0}/15)</span>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div key={key} className="flex items-center gap-3">
+                <span className="text-xs text-text-secondary w-32 text-right shrink-0">{label}</span>
+                <div className="flex-1 h-6 bg-background rounded flex items-center px-2 justify-between">
+                  <span className={`text-xs font-medium ${dropTextClass(m.avg_net_drop_pct)}`}>{fmtDrop(m.avg_net_drop_pct)}</span>
+                  <span className="text-xs text-text-secondary">{m.count}x</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -290,7 +374,10 @@ export function Monetization({ streamer, days }: MonetizationProps) {
 
   const { ads, hype_train, bits, subs, window_days } = data;
   const noAds = ads.total === 0;
-  const viewerDropValue = ads.avg_viewer_drop_pct !== null ? fmtDrop(ads.avg_viewer_drop_pct) : 'Keine Viewer-Timeline Daten';
+  const netAvg = ads.net_effect?.avg_net_drop_pct ?? null;
+  const netSample = ads.net_effect?.sample ?? 0;
+  const netEnough = netSample >= 15 && netAvg != null;
+  const netValue = netEnough ? fmtDrop(netAvg!) : 'Noch zu wenig Daten';
 
   // Get max drop across all buckets for consistent bar scaling
   const allDropValues = [
@@ -332,16 +419,20 @@ export function Monetization({ streamer, days }: MonetizationProps) {
               <StatTile label="Automatisch" value={fmt(ads.auto)} sub={`${fmt(ads.manual)} manuell`} />
               <StatTile label="Ø Dauer" value={`${ads.avg_duration_s.toFixed(0)} s`} />
               <StatTile
-                label="Ø Viewer-Drop"
-                value={viewerDropValue}
-                valueClassName={ads.avg_viewer_drop_pct !== null ? dropTextClass(ads.avg_viewer_drop_pct) : 'text-text-secondary'}
-                sub={ads.avg_viewer_drop_pct !== null ? 'nach Ad-Break' : undefined}
+                label="Netto Viewer-Wirkung"
+                value={netValue}
+                valueClassName={netEnough ? dropTextClass(netAvg!) : 'text-text-secondary'}
+                sub={netEnough ? 'gegenüber werbefreien Momenten' : `${netSample}/15`}
               />
               <StatTile
                 label="Ø Recovery"
                 value={ads.avg_recovery_min != null ? `${ads.avg_recovery_min} Min` : '-'}
                 sub="bis Pre-Ad Level"
               />
+            </div>
+
+            <div className="mb-4">
+              <NetEffectSection net={ads.net_effect} />
             </div>
 
             {/* Ad Analysis Grid */}

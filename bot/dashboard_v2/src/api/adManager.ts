@@ -17,6 +17,7 @@ export interface AdManagerSettingsInput {
   startupDelayMinutes: number;
   quietWindowMinutes: number;
   actionLeadSeconds: number;
+  chatNoticeBeforeAd?: boolean;
 }
 
 export interface AdManagerSettings extends AdManagerSettingsInput {
@@ -139,6 +140,7 @@ export function normalizeAdManagerSettings(
     startupDelayMinutes: clampInteger(settings.startupDelayMinutes, 0, 180, 15),
     quietWindowMinutes: clampInteger(settings.quietWindowMinutes, 0, 60, 5),
     actionLeadSeconds: clampInteger(settings.actionLeadSeconds, 10, 300, 60),
+    chatNoticeBeforeAd: settings.chatNoticeBeforeAd !== false,
   };
 }
 

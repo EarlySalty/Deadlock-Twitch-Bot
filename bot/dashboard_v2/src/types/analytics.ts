@@ -1055,6 +1055,24 @@ export interface AutoVsManual {
   manual_count: number;
 }
 
+export interface MomentImpactData {
+  avg_net_drop_pct: number | null;
+  count: number;
+  enough_data: boolean;
+}
+
+export interface NetHorizon {
+  avg_net_drop_pct: number | null;
+  count: number;
+}
+
+export interface NetEffect {
+  avg_net_drop_pct: number | null;
+  sample: number;
+  by_horizon: { plus_1: NetHorizon; plus_3: NetHorizon; plus_5: NetHorizon };
+  moment_impact: Record<string, MomentImpactData>;
+}
+
 export interface MonetizationStats {
   ads: {
     total: number;
@@ -1070,6 +1088,7 @@ export interface MonetizationStats {
     best_ad_time?: string | null;
     avg_recovery_min?: number | null;
     recovery_by_duration?: Record<string, RecoveryBucketData>;
+    net_effect?: NetEffect;
     recommendations?: string[];
   };
   hype_train: {
