@@ -433,6 +433,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
   const canSnooze = status.isLive && status.scopes.snooze && (status.snoozeCount ?? 0) > 0;
   const canRunCommercial = status.isLive && status.scopes.commercial;
   const smartFieldsDisabled = draft.strategy !== 'smart';
+  const chatNoticeOn = draft.chatNoticeBeforeAd !== false;
   const reauthUrl = adManagerReauthUrl(reconnectUrl);
   const laufText = statusSatz({
     enabled: draft.enabled,
@@ -587,6 +588,30 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           {!status.isLive ? (
             <p className="mt-2 text-[11px] text-text-secondary">Aktionen von Hand sind verfügbar, sobald Twitch deinen Stream als live meldet.</p>
           ) : null}
+        </div>
+
+        <div className="mt-3.5 flex flex-wrap items-center gap-3 border-t border-border pt-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={chatNoticeOn}
+            aria-label="Chat vor Werbung informieren"
+            title={chatNoticeOn ? 'Hinweis im Chat ausschalten' : 'Hinweis im Chat einschalten'}
+            onClick={() => patch({ chatNoticeBeforeAd: !chatNoticeOn })}
+            className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
+              chatNoticeOn ? 'border-primary bg-primary/25' : 'border-border bg-background'
+            }`}
+          >
+            <span className={`inline-block h-4 w-4 rounded-full transition-transform ${
+              chatNoticeOn ? 'translate-x-6 bg-primary' : 'translate-x-1 bg-text-secondary'
+            }`} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-white">Chat vor Werbung informieren</p>
+            <p className="mt-0.5 text-xs text-text-secondary">
+              Kurz vor jeder Werbung schreibt der Bot eine lockere Zeile in den Chat. Nur, wenn der Werbemanager an ist.
+            </p>
+          </div>
         </div>
       </div>
 

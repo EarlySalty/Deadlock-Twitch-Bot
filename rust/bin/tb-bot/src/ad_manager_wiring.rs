@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use tb_analytics::ad_manager::{
-    decide, ActionKind, AdManagerStore, DecisionAction, DecisionInput, ManagedChannel,
-    QueuedAction, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
+    ad_hint, ad_hint_text, decide, ActionKind, AdHint, AdManagerStore, DecisionAction,
+    DecisionInput, ManagedChannel, QueuedAction, COMMERCIAL_SCOPE, HINT_WINDOW_SECS, READ_SCOPE,
+    SNOOZE_SCOPE,
 };
+use tb_chat::{ChatApi, SendOutcome};
 use tb_raid::{RaidAuthStore, TokenProvider};
 use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule, HelixClient, HelixError};
 
@@ -18,6 +20,7 @@ pub fn spawn(
     helix: HelixClient,
     tokens: Arc<TokenProvider>,
     auth: RaidAuthStore,
+    chat_api: Option<Arc<dyn ChatApi>>,
 ) {
     let cleanup_store = AdManagerStore::new(pool.clone());
     supervisor.spawn("twitch_ad_manager_retention", async move {
@@ -65,6 +68,7 @@ pub fn spawn(
                 let helix = helix.clone();
                 let tokens = tokens.clone();
                 let auth = auth.clone();
+                let chat_api = chat_api.clone();
                 let limiter = limiter.clone();
                 tasks.spawn(async move {
                     let Ok(_permit) = limiter.acquire_owned().await else { return };
@@ -73,7 +77,7 @@ pub fn spawn(
                         Ok(None) => return,
                         Err(error) => { tracing::warn!(%error,"Werbemanager: Kanal-Lease konnte nicht gesetzt werden"); return; }
                     };
-                    match process_channel(&store,&helix,&tokens,&auth,&channel).await {
+                    match process_channel(&store,&helix,&tokens,&auth,chat_api.as_ref(),&channel).await {
                         Ok(RunHealth::Healthy) => {
                             if let Err(error) = store.touch_worker(&channel.twitch_user_id, &channel.twitch_login).await {
                                 tracing::warn!(user=%channel.twitch_user_id,%error,"Werbemanager: erfolgreicher Worker-Lauf konnte nicht als gesund gespeichert werden");
@@ -109,6 +113,7 @@ async fn process_channel(
     helix: &HelixClient,
     tokens: &TokenProvider,
     auth: &RaidAuthStore,
+    chat_api: Option<&Arc<dyn ChatApi>>,
     channel: &ManagedChannel,
 ) -> Result<RunHealth, WorkerError> {
     let now = Utc::now();
@@ -205,6 +210,7 @@ async fn process_channel(
         None => false,
     };
     let mut plan_for_status: Option<tb_analytics::ad_manager::AdPlan> = None;
+    let mut hint_for_send: Option<AdHint> = None;
     let decision = if channel.settings.enabled {
         if let Some(schedule) = schedule.as_ref() {
             let Some(session) = live.active_session_id else {
@@ -330,7 +336,14 @@ async fn process_channel(
                 pull_forward_seconds,
                 plan_fit,
             };
-            Some(decide(&input))
+            let decision = decide(&input);
+            hint_for_send = ad_hint(
+                &input,
+                &decision,
+                Some(schedule.duration as i32),
+                HINT_WINDOW_SECS,
+            );
+            Some(decision)
         } else {
             None
         }
@@ -369,6 +382,28 @@ async fn process_channel(
             store
                 .write_history_snapshot(&channel.twitch_user_id, &channel.twitch_login, schedule)
                 .await?;
+        }
+    }
+
+    if let (Some(chat_api), Some(hint)) = (chat_api, hint_for_send.as_ref()) {
+        let (last_key, last_variant) = store.last_hint(&channel.twitch_user_id).await?;
+        if last_key.as_deref() != Some(hint.key.as_str()) {
+            let (text, variant) =
+                ad_hint_text(hint.duration_seconds, last_variant, now.timestamp_millis().unsigned_abs());
+            store
+                .record_hint(
+                    &channel.twitch_user_id,
+                    &channel.twitch_login,
+                    &hint.key,
+                    variant,
+                    now,
+                )
+                .await?;
+            match chat_api.send_message(&channel.twitch_user_id, &text).await {
+                Ok(SendOutcome::Sent) => {}
+                Ok(other) => tracing::warn!(user=%channel.twitch_user_id, ?other, "Werbemanager: Chat-Hinweis nicht zugestellt"),
+                Err(error) => tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Chat-Hinweis konnte nicht gesendet werden"),
+            }
         }
     }
 
@@ -774,7 +809,7 @@ mod tests {
             .find(".steam_match_summary")
             .expect("Steam-Lookup im Kanal-Pfad");
         let decide = process
-            .find("Some(decide(&input))")
+            .find("decide(&input)")
             .expect("Entscheidung nach dem Lookup");
         assert!(
             summary < decide,

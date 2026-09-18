@@ -38,6 +38,7 @@ const POST_MATCH_WAIT_MIN: i64 = 1;
 /// ein jetzt beginnendes Match sie schlucken würde, zieht der Bot sie aus dem
 /// offenen Queue-Fenster vor.
 const PULL_FORWARD_HORIZON_MIN: i64 = 12;
+pub const HINT_WINDOW_SECS: i64 = 45;
 
 #[cfg(test)]
 mod tests {
@@ -332,6 +333,12 @@ pub struct Settings {
     pub startup_delay_minutes: i32,
     pub quiet_window_minutes: i32,
     pub action_lead_seconds: i32,
+    #[serde(default = "default_chat_notice_before_ad")]
+    pub chat_notice_before_ad: bool,
+}
+
+fn default_chat_notice_before_ad() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -345,6 +352,7 @@ impl Default for Settings {
             startup_delay_minutes: 15,
             quiet_window_minutes: 5,
             action_lead_seconds: 60,
+            chat_notice_before_ad: true,
         }
     }
 }
@@ -813,6 +821,93 @@ pub fn decide(input: &DecisionInput) -> Decision {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdHint {
+    pub key: String,
+    pub duration_seconds: Option<i32>,
+}
+
+const AD_HINT_WITH_DURATION: [&str; 6] = [
+    "Kurze Werbung in etwa 30 Sekunden, {dur} Sekunden lang, danach geht es weiter.",
+    "Gleich läuft kurz Werbung, {dur} Sekunden. Holt euch was zu trinken, bis gleich.",
+    "In einer halben Minute kommt Werbung, {dur} Sekunden, dann sind wir gleich wieder da.",
+    "Kurze Pause für die Werbung, {dur} Sekunden. Gleich geht es normal weiter.",
+    "Werbung in etwa 30 Sekunden, {dur} Sekunden lang. Bleibt dran, wir sehen uns gleich.",
+    "Gleich {dur} Sekunden Werbung. Perfekter Moment für einen Schluck, bis gleich.",
+];
+
+const AD_HINT_WITHOUT_DURATION: [&str; 6] = [
+    "Gleich kommt kurz Werbung, danach geht es normal weiter.",
+    "In etwa 30 Sekunden läuft kurz Werbung. Holt euch was zu trinken, bis gleich.",
+    "Kurze Werbung steht an. Wir sind gleich wieder da.",
+    "Kurze Pause für die Werbung. Danach geht es sofort weiter.",
+    "Werbung in etwa 30 Sekunden. Bleibt dran, dauert nicht lang.",
+    "Gleich kommt kurz Werbung. Einmal durchatmen, wir sehen uns gleich.",
+];
+
+pub fn ad_hint(
+    input: &DecisionInput,
+    decision: &Decision,
+    twitch_ad_duration_seconds: Option<i32>,
+    window_secs: i64,
+) -> Option<AdHint> {
+    if !input.settings.enabled || !input.settings.chat_notice_before_ad {
+        return None;
+    }
+    let now = input.now;
+    let secs_until = |at: DateTime<Utc>| at.signed_duration_since(now).num_seconds();
+
+    if let Some(next_ad) = input.next_ad_at {
+        let twitch_window = window_secs.min(i64::from(input.settings.action_lead_seconds));
+        let secs = secs_until(next_ad);
+        if secs <= 0 || secs > twitch_window {
+            return None;
+        }
+        if matches!(
+            decision.action,
+            DecisionAction::Snooze | DecisionAction::Commercial { .. }
+        ) {
+            return None;
+        }
+        return Some(AdHint {
+            key: format!("twitch:{}", next_ad.to_rfc3339()),
+            duration_seconds: twitch_ad_duration_seconds.filter(|value| *value > 0),
+        });
+    }
+
+    let block_at = input.plan.next_block_at?;
+    let secs = secs_until(block_at);
+    let window_open = input
+        .steam_match_state
+        .as_ref()
+        .map(|state| state.in_deadlock || state.in_match)
+        .unwrap_or(false);
+    if !window_open || secs <= 0 || secs > window_secs || active_lock(input).is_some() {
+        return None;
+    }
+    Some(AdHint {
+        key: format!("own:{}", block_at.to_rfc3339()),
+        duration_seconds: Some(input.plan.block_seconds),
+    })
+}
+
+pub fn ad_hint_text(
+    duration_seconds: Option<i32>,
+    previous_variant: Option<i16>,
+    seed: u64,
+) -> (String, i16) {
+    let count = AD_HINT_WITH_DURATION.len();
+    let mut index = (seed % count as u64) as usize;
+    if Some(index as i16) == previous_variant {
+        index = (index + 1) % count;
+    }
+    let text = match duration_seconds.filter(|value| *value > 0) {
+        Some(dur) => AD_HINT_WITH_DURATION[index].replace("{dur}", &dur.to_string()),
+        None => AD_HINT_WITHOUT_DURATION[index].to_string(),
+    };
+    (text, index as i16)
+}
+
 #[derive(Debug, Clone)]
 pub struct ManagedChannel {
     pub twitch_user_id: String,
@@ -940,7 +1035,7 @@ impl AdManagerStore {
     }
 
     pub async fn list_channels(&self) -> Result<Vec<ManagedChannel>, sqlx::Error> {
-        let rows = sqlx::query("SELECT s.twitch_user_id,s.twitch_login,s.enabled,s.strategy,s.budget_minutes_per_hour,s.ad_duration_seconds,s.min_interval_minutes,s.startup_delay_minutes,s.quiet_window_minutes,s.action_lead_seconds FROM twitch_ad_manager_settings s ORDER BY s.twitch_user_id").fetch_all(&self.pool).await?;
+        let rows = sqlx::query("SELECT s.twitch_user_id,s.twitch_login,s.enabled,s.strategy,s.budget_minutes_per_hour,s.ad_duration_seconds,s.min_interval_minutes,s.startup_delay_minutes,s.quiet_window_minutes,s.action_lead_seconds,s.chat_notice_before_ad FROM twitch_ad_manager_settings s ORDER BY s.twitch_user_id").fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|r| {
                 let raw: String = r.try_get("strategy")?;
@@ -959,6 +1054,7 @@ impl AdManagerStore {
                         startup_delay_minutes: r.try_get("startup_delay_minutes")?,
                         quiet_window_minutes: r.try_get("quiet_window_minutes")?,
                         action_lead_seconds: r.try_get("action_lead_seconds")?,
+                        chat_notice_before_ad: r.try_get("chat_notice_before_ad")?,
                     },
                 })
             })
@@ -983,7 +1079,7 @@ impl AdManagerStore {
         &self,
         uid: &str,
     ) -> Result<Option<(Settings, DateTime<Utc>)>, sqlx::Error> {
-        let row = sqlx::query("SELECT enabled,strategy,budget_minutes_per_hour,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds,updated_at FROM twitch_ad_manager_settings WHERE twitch_user_id=$1").bind(uid).fetch_optional(&self.pool).await?;
+        let row = sqlx::query("SELECT enabled,strategy,budget_minutes_per_hour,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds,chat_notice_before_ad,updated_at FROM twitch_ad_manager_settings WHERE twitch_user_id=$1").bind(uid).fetch_optional(&self.pool).await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -1000,6 +1096,7 @@ impl AdManagerStore {
                 startup_delay_minutes: row.try_get("startup_delay_minutes")?,
                 quiet_window_minutes: row.try_get("quiet_window_minutes")?,
                 action_lead_seconds: row.try_get("action_lead_seconds")?,
+                chat_notice_before_ad: row.try_get("chat_notice_before_ad")?,
             },
             row.try_get("updated_at")?,
         )))
@@ -1012,7 +1109,7 @@ impl AdManagerStore {
         settings: &Settings,
     ) -> Result<DateTime<Utc>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let row=sqlx::query("INSERT INTO twitch_ad_manager_settings(twitch_user_id,twitch_login,enabled,strategy,budget_minutes_per_hour,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,enabled=EXCLUDED.enabled,strategy=EXCLUDED.strategy,budget_minutes_per_hour=EXCLUDED.budget_minutes_per_hour,ad_duration_seconds=EXCLUDED.ad_duration_seconds,min_interval_minutes=EXCLUDED.min_interval_minutes,startup_delay_minutes=EXCLUDED.startup_delay_minutes,quiet_window_minutes=EXCLUDED.quiet_window_minutes,action_lead_seconds=EXCLUDED.action_lead_seconds,updated_at=NOW() RETURNING updated_at").bind(uid).bind(login).bind(settings.enabled).bind(settings.strategy.as_str()).bind(settings.budget_minutes_per_hour).bind(settings.ad_duration_seconds).bind(settings.min_interval_minutes).bind(settings.startup_delay_minutes).bind(settings.quiet_window_minutes).bind(settings.action_lead_seconds).fetch_one(&mut *tx).await?;
+        let row=sqlx::query("INSERT INTO twitch_ad_manager_settings(twitch_user_id,twitch_login,enabled,strategy,budget_minutes_per_hour,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds,chat_notice_before_ad) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,enabled=EXCLUDED.enabled,strategy=EXCLUDED.strategy,budget_minutes_per_hour=EXCLUDED.budget_minutes_per_hour,ad_duration_seconds=EXCLUDED.ad_duration_seconds,min_interval_minutes=EXCLUDED.min_interval_minutes,startup_delay_minutes=EXCLUDED.startup_delay_minutes,quiet_window_minutes=EXCLUDED.quiet_window_minutes,action_lead_seconds=EXCLUDED.action_lead_seconds,chat_notice_before_ad=EXCLUDED.chat_notice_before_ad,updated_at=NOW() RETURNING updated_at").bind(uid).bind(login).bind(settings.enabled).bind(settings.strategy.as_str()).bind(settings.budget_minutes_per_hour).bind(settings.ad_duration_seconds).bind(settings.min_interval_minutes).bind(settings.startup_delay_minutes).bind(settings.quiet_window_minutes).bind(settings.action_lead_seconds).bind(settings.chat_notice_before_ad).fetch_one(&mut *tx).await?;
         let allowed_action = match (settings.enabled, settings.strategy) {
             (true, Strategy::Snooze) => Some("snooze"),
             (true, Strategy::Smart) => None,
@@ -1348,6 +1445,43 @@ impl AdManagerStore {
             .bind(plan.budget_used_seconds_this_hour)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn last_hint(
+        &self,
+        uid: &str,
+    ) -> Result<(Option<String>, Option<i16>), sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT last_hint_key,last_hint_variant FROM twitch_ad_manager_state WHERE twitch_user_id=$1",
+        )
+        .bind(uid)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(r) => Ok((r.try_get("last_hint_key")?, r.try_get("last_hint_variant")?)),
+            None => Ok((None, None)),
+        }
+    }
+
+    pub async fn record_hint(
+        &self,
+        uid: &str,
+        login: &str,
+        key: &str,
+        variant: i16,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO twitch_ad_manager_state(twitch_user_id,twitch_login,last_hint_key,last_hint_variant,last_hint_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,last_hint_key=EXCLUDED.last_hint_key,last_hint_variant=EXCLUDED.last_hint_variant,last_hint_at=EXCLUDED.last_hint_at,updated_at=NOW()",
+        )
+        .bind(uid)
+        .bind(login)
+        .bind(key)
+        .bind(variant)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
