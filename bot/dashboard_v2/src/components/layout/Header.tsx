@@ -53,12 +53,12 @@ export function Header({
   const { language, setLanguage } = useLanguage();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [tageInput, setTageInput] = useState(String(days));
+  const [tageInput, setTageInput] = useState('');
   const [customRangeSelected, setCustomRangeSelected] = useState(() => !isPresetRange(days));
   const pendingCustomCommit = useRef<number | null>(null);
 
   useEffect(() => {
-    setTageInput(String(days));
+    setTageInput('');
     if (pendingCustomCommit.current === days) {
       pendingCustomCommit.current = null;
       return;
@@ -82,7 +82,7 @@ export function Header({
   const uebernehmeTage = () => {
     const parsed = Number.parseInt(tageInput, 10);
     if (!Number.isFinite(parsed)) {
-      setTageInput(String(days));
+      setTageInput('');
       return;
     }
     const naechster = clampDays(parsed);
@@ -91,7 +91,7 @@ export function Header({
     if (naechster !== days) {
       onDaysChange(naechster);
     }
-    setTageInput(String(naechster));
+    setTageInput('');
   };
 
   // Escape schliesst das Menue. Ein Menue, das nur per Klick daneben weggeht,
@@ -327,7 +327,9 @@ export function Header({
                 min={7}
                 max={MAX_ANALYTICS_DAYS}
                 value={tageInput}
+                placeholder={String(days)}
                 aria-label={t('Tage')}
+                onFocus={() => setCustomRangeSelected(true)}
                 onChange={event => {
                   setCustomRangeSelected(true);
                   setTageInput(event.target.value);
@@ -339,9 +341,7 @@ export function Header({
                   }
                 }}
                 onBlur={uebernehmeTage}
-                className={`relative z-10 w-[4.5rem] appearance-none rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
-                  customRangeSelected ? 'text-[#0D0806]' : 'text-text-secondary'
-                }`}
+                className="relative z-10 w-[4.5rem] appearance-none rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold text-white placeholder:text-text-secondary/70 outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               />
               <span
                 className={`relative z-10 pr-2 text-sm font-semibold ${

@@ -17,7 +17,7 @@ Integriert wurde der auf main vorhandene Collector aus `60013dfa`/`e73d02af`, ni
 
 ## Zusätzlicher Deploy-Blocker behoben
 
-`20260918120000` war auf main doppelt vergeben. Die erste vollständige frische Migrationsprobe scheiterte mit SQLSTATE 23505 an `_sqlx_migrations_pkey`. Die tatsächliche Produktionsmigration heißt `werbemanager budget smart`; deren SHA384 war identisch zur unveränderten Datei. Ausschließlich die noch nicht angewandte `viewer_fairness_score`-Datei wurde in `20260918121000_viewer_fairness_score.sql` umbenannt. Keine Produktionsprüfsumme und keine angewandte SQL-Datei wurden verändert.
+`20260918120000` war auf main doppelt vergeben. Die erste vollständige frische Migrationsprobe scheiterte mit SQLSTATE 23505 an `_sqlx_migrations_pkey`. Die tatsächliche Produktionsmigration heißt `werbemanager budget smart`; deren SHA384 war identisch zur unveränderten Datei. Ausschließlich die noch nicht angewandte `viewer_fairness_score`-Datei wurde zunächst auf die freie Version 121000 verschoben. Beim anschließenden Abgleich mit main lag dort bereits derselbe unabhängige Fix unter Version 124000 vor. Der integrierte Release übernimmt deshalb ausschließlich `20260918124000_viewer_fairness_score.sql`; es gibt keine zweite Kopie. Keine Produktionsprüfsumme und keine angewandte SQL-Datei wurden verändert.
 
 Danach lief die gesamte Migrationskette in einer neuen, ausschließlich per privatem Unix-Socket erreichbaren PostgreSQL16-/TimescaleDB-Instanz durch. Der Schema-Snapshot wurde aus der echten Datenbank erzeugt; anschließend bestand der reguläre Snapshot-Abgleich erneut. Die temporäre Instanz wurde sauber beendet.
 
