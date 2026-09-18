@@ -1,24 +1,33 @@
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use tb_analytics::ad_manager::{
-    decide, DecisionAction, DecisionInput, LiveState, Settings, SteamMatchState, Strategy,
-    COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
+    assess_plan, decide, plan_next_block, AdPlan, DecisionAction, DecisionInput, LiveState,
+    Settings, SteamMatchState, Strategy, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
 };
 
-fn now() -> chrono::DateTime<Utc> {
+fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap()
 }
 
-fn steam_state(in_match: bool) -> SteamMatchState {
+fn steam_state(in_match: bool, in_deadlock: bool) -> SteamMatchState {
     SteamMatchState {
         in_match,
-        in_deadlock: true,
+        in_deadlock,
         hero: Some("Haze".into()),
         stage: in_match.then_some("laning".into()),
         observed_at: now() - Duration::seconds(30),
     }
 }
 
-fn input(strategy: Strategy) -> DecisionInput {
+fn due_plan() -> AdPlan {
+    AdPlan {
+        next_block_at: Some(now() - Duration::seconds(60)),
+        block_seconds: 30,
+        blocks_per_hour: 6,
+        budget_used_seconds_this_hour: 0,
+    }
+}
+
+fn base(strategy: Strategy) -> DecisionInput {
     let now = now();
     DecisionInput {
         now,
@@ -28,25 +37,33 @@ fn input(strategy: Strategy) -> DecisionInput {
             ..Settings::default()
         },
         stream_started_at: Some(now - Duration::hours(1)),
-        next_ad_at: Some(now + Duration::seconds(60)),
-        last_ad_at: Some(now - Duration::minutes(30)),
+        next_ad_at: None,
+        last_ad_at: None,
         snooze_count: 1,
         quiet_chat_messages: 0,
+        recent_chat_messages: 0,
         chat_ingest_healthy: true,
         steam_match_state: None,
+        plan: due_plan(),
+        match_started_at: None,
+        match_ended_at: None,
+        last_raid_at: None,
+        last_raider: None,
+        last_first_chatter_at: None,
+        last_first_chatter: None,
+        retry_after_seconds: 480,
+        pull_forward_seconds: 90,
+        plan_fit: "good",
     }
 }
 
 #[test]
-fn strategien_und_scopes_sind_ein_strikter_oeffentlicher_vertrag() {
-    assert_eq!(Strategy::parse("monitor"), Some(Strategy::Monitor));
+fn strategien_und_scopes_kennen_kein_monitor_mehr() {
     assert_eq!(Strategy::parse("snooze"), Some(Strategy::Snooze));
     assert_eq!(Strategy::parse("smart"), Some(Strategy::Smart));
-    for invalid in ["", "SMART", " smart ", "intelligent", "💸"] {
+    for invalid in ["", "monitor", "SMART", " smart ", "💸"] {
         assert_eq!(Strategy::parse(invalid), None, "{invalid:?}");
     }
-
-    assert_eq!(Strategy::Monitor.required_scopes(), &[READ_SCOPE]);
     assert_eq!(
         Strategy::Snooze.required_scopes(),
         &[READ_SCOPE, SNOOZE_SCOPE]
@@ -58,244 +75,256 @@ fn strategien_und_scopes_sind_ein_strikter_oeffentlicher_vertrag() {
 }
 
 #[test]
-fn einstellungsgrenzen_akzeptieren_nur_den_definierten_bereich() {
+fn budgetgrenzen_werden_geprueft() {
     let mut settings = Settings::default();
-
-    for duration in [30, 60, 90, 120, 150, 180] {
-        settings.ad_duration_seconds = duration;
-        assert!(settings.validate().is_ok(), "Dauer {duration}");
+    for valid in [1, 3, 8] {
+        settings.budget_minutes_per_hour = valid;
+        assert!(settings.validate().is_ok(), "Budget {valid}");
     }
-    for invalid in [-30, 0, 29, 31, 179, 181, 10_000] {
-        settings.ad_duration_seconds = invalid;
-        assert!(settings.validate().is_err(), "Dauer {invalid}");
-    }
-    settings.ad_duration_seconds = 90;
-
-    for (field, valid_min, valid_max, below, above) in [
-        ("Mindestabstand", 8, 180, 7, 181),
-        ("Startschutz", 0, 180, -1, 181),
-        ("Chat-Ruhe", 0, 60, -1, 61),
-        ("Vorlauf", 10, 300, 9, 301),
-    ] {
-        match field {
-            "Mindestabstand" => settings.min_interval_minutes = valid_min,
-            "Startschutz" => settings.startup_delay_minutes = valid_min,
-            "Chat-Ruhe" => settings.quiet_window_minutes = valid_min,
-            "Vorlauf" => settings.action_lead_seconds = valid_min,
-            _ => unreachable!(),
-        }
-        assert!(settings.validate().is_ok(), "{field} Untergrenze");
-        match field {
-            "Mindestabstand" => settings.min_interval_minutes = valid_max,
-            "Startschutz" => settings.startup_delay_minutes = valid_max,
-            "Chat-Ruhe" => settings.quiet_window_minutes = valid_max,
-            "Vorlauf" => settings.action_lead_seconds = valid_max,
-            _ => unreachable!(),
-        }
-        assert!(settings.validate().is_ok(), "{field} Obergrenze");
-        match field {
-            "Mindestabstand" => settings.min_interval_minutes = below,
-            "Startschutz" => settings.startup_delay_minutes = below,
-            "Chat-Ruhe" => settings.quiet_window_minutes = below,
-            "Vorlauf" => settings.action_lead_seconds = below,
-            _ => unreachable!(),
-        }
-        assert!(settings.validate().is_err(), "{field} unter Bereich");
-        match field {
-            "Mindestabstand" => settings.min_interval_minutes = valid_min,
-            "Startschutz" => settings.startup_delay_minutes = valid_min,
-            "Chat-Ruhe" => settings.quiet_window_minutes = valid_min,
-            "Vorlauf" => settings.action_lead_seconds = valid_min,
-            _ => unreachable!(),
-        }
-        match field {
-            "Mindestabstand" => settings.min_interval_minutes = above,
-            "Startschutz" => settings.startup_delay_minutes = above,
-            "Chat-Ruhe" => settings.quiet_window_minutes = above,
-            "Vorlauf" => settings.action_lead_seconds = above,
-            _ => unreachable!(),
-        }
-        assert!(settings.validate().is_err(), "{field} über Bereich");
-        settings = Settings::default();
+    for invalid in [0, -1, 9, 100] {
+        settings.budget_minutes_per_hour = invalid;
+        assert!(settings.validate().is_err(), "Budget {invalid}");
     }
 }
 
 #[test]
-fn harte_gates_laufen_vor_jeder_aktion() {
-    let mut value = input(Strategy::Smart);
+fn planer_verteilt_budget_und_waehlt_blocklaenge() {
+    let start = now() - Duration::hours(1);
+    let three = plan_next_block(now(), Some(start), 3, 0, None, 480);
+    assert_eq!(three.block_seconds, 30);
+    assert_eq!(three.blocks_per_hour, 6);
+
+    let last = now() - Duration::minutes(10);
+    let three_next = plan_next_block(now(), Some(start), 3, 0, Some(last), 480);
+    assert_eq!(
+        three_next.next_block_at,
+        Some(last + Duration::seconds(600))
+    );
+
+    let eight = plan_next_block(now(), Some(start), 8, 0, None, 480);
+    assert_eq!(eight.block_seconds, 60);
+    assert_eq!(eight.blocks_per_hour, 7);
+
+    let eight_next = plan_next_block(now(), Some(start), 8, 0, Some(last), 480);
+    assert_eq!(
+        eight_next.next_block_at,
+        Some(last + Duration::seconds(480))
+    );
+
+    let spent = plan_next_block(now(), Some(start), 3, 180, None, 480);
+    assert!(spent.next_block_at.is_none());
+}
+
+#[test]
+fn ausgeschaltet_haelt_still() {
+    let mut value = base(Strategy::Smart);
     value.settings.enabled = false;
     assert_eq!(decide(&value).reason, "disabled");
     assert_eq!(decide(&value).action, DecisionAction::None);
-
-    value = input(Strategy::Monitor);
-    assert_eq!(decide(&value).reason, "monitor_only");
-
-    value = input(Strategy::Smart);
-    value.next_ad_at = None;
-    assert_eq!(decide(&value).reason, "no_next_ad");
 }
 
 #[test]
-fn vorlauf_und_stale_grenze_sind_inklusive() {
-    let mut value = input(Strategy::Smart);
-    value.settings.action_lead_seconds = 60;
-
-    value.next_ad_at = Some(value.now + Duration::seconds(61));
-    assert_eq!(decide(&value).reason, "outside_lead_window");
-
-    value.next_ad_at = Some(value.now + Duration::seconds(60));
-    assert_eq!(
-        decide(&value).action,
-        DecisionAction::Commercial {
-            duration_seconds: 90
-        }
-    );
-
-    value.next_ad_at = Some(value.now);
-    assert_eq!(
-        decide(&value).action,
-        DecisionAction::Commercial {
-            duration_seconds: 90
-        }
-    );
-    value.next_ad_at = Some(value.now - Duration::milliseconds(1));
-    assert_eq!(decide(&value).action, DecisionAction::None);
-    assert_eq!(decide(&value).reason, "ad_already_due");
-}
-
-#[test]
-fn snooze_strategie_verbraucht_nur_vorhandene_snoozes() {
-    let mut value = input(Strategy::Snooze);
+fn snooze_strategie_bewegt_nur_geplante_werbung() {
+    let mut value = base(Strategy::Snooze);
+    value.next_ad_at = Some(value.now + Duration::seconds(30));
     assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "snooze_due");
+    assert_eq!(decide(&value).reason, "twitch_ad_moved");
 
     value.snooze_count = 0;
-    assert_eq!(decide(&value).action, DecisionAction::None);
     assert_eq!(decide(&value).reason, "no_snoozes");
 
-    value.snooze_count = -1;
+    value.snooze_count = 1;
+    value.next_ad_at = None;
+    assert_eq!(decide(&value).reason, "cooldown");
     assert_eq!(decide(&value).action, DecisionAction::None);
 }
 
 #[test]
-fn smart_startschutz_endet_exakt_an_der_minutengrenze() {
-    let mut value = input(Strategy::Smart);
-    value.settings.startup_delay_minutes = 15;
-    value.stream_started_at = Some(value.now - Duration::minutes(15) + Duration::seconds(1));
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "startup_protection");
-
-    value.stream_started_at = Some(value.now - Duration::minutes(15));
+fn eigenes_budget_startet_block_bei_ruhigem_chat() {
+    let value = base(Strategy::Smart);
     assert_eq!(
         decide(&value).action,
+        DecisionAction::Commercial {
+            duration_seconds: 30
+        }
+    );
+    assert_eq!(decide(&value).reason, "quiet_chat");
+}
+
+#[test]
+fn eigenes_budget_ohne_faelligen_block_wartet() {
+    let mut value = base(Strategy::Smart);
+    value.plan.next_block_at = Some(value.now + Duration::seconds(60));
+    assert_eq!(decide(&value).reason, "cooldown");
+
+    value.plan.next_block_at = None;
+    assert_eq!(decide(&value).reason, "budget_reached");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
+}
+
+#[test]
+fn startschutz_raid_und_erstchatter_sperren() {
+    let mut value = base(Strategy::Smart);
+    value.stream_started_at = Some(value.now - Duration::minutes(14));
+    assert_eq!(decide(&value).reason, "startup_protection");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
+
+    let mut value = base(Strategy::Smart);
+    value.last_raid_at = Some(value.now - Duration::minutes(5));
+    value.last_raider = Some("1337cammy".into());
+    let decision = decide(&value);
+    assert_eq!(decision.reason, "recent_raid");
+    assert_eq!(decision.detail.as_deref(), Some("1337cammy"));
+
+    let mut value = base(Strategy::Smart);
+    value.last_first_chatter_at = Some(value.now - Duration::minutes(2));
+    value.last_first_chatter = Some("neuling".into());
+    assert_eq!(decide(&value).reason, "recent_first_chatter");
+}
+
+#[test]
+fn match_fenster_und_match_sperre() {
+    // Erste Minute eines Matches ist ein Werbefenster.
+    let mut value = base(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(true, true));
+    value.match_started_at = Some(value.now - Duration::seconds(30));
+    assert_eq!(decide(&value).reason, "match_start_window");
+    assert!(matches!(
+        decide(&value).action,
+        DecisionAction::Commercial { .. }
+    ));
+
+    // Ab Minute 1 sperrt das Match.
+    value.match_started_at = Some(value.now - Duration::minutes(2));
+    assert_eq!(decide(&value).reason, "in_match");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
+
+    // Queue oder Menü ist das Werbefenster.
+    let mut value = base(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(false, true));
+    assert_eq!(decide(&value).reason, "in_queue");
+}
+
+#[test]
+fn nach_matchende_erst_warten_dann_chat_pruefen() {
+    let mut value = base(Strategy::Smart);
+    value.match_ended_at = Some(value.now - Duration::seconds(30));
+    assert_eq!(decide(&value).reason, "post_match_wait");
+
+    value.match_ended_at = Some(value.now - Duration::seconds(90));
+    value.recent_chat_messages = 0;
+    assert_eq!(decide(&value).reason, "post_match_quiet");
+
+    value.recent_chat_messages = 3;
+    assert_eq!(decide(&value).reason, "post_match_chat_active");
+}
+
+#[test]
+fn matchende_schlaegt_erneute_queue() {
+    let mut value = base(Strategy::Smart);
+    value.steam_match_state = Some(steam_state(false, true));
+
+    value.match_ended_at = Some(value.now - Duration::seconds(30));
+    assert_eq!(decide(&value).reason, "post_match_wait");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
+
+    value.match_ended_at = Some(value.now - Duration::seconds(90));
+    value.recent_chat_messages = 0;
+    assert_eq!(decide(&value).reason, "post_match_quiet");
+
+    value.recent_chat_messages = 3;
+    assert_eq!(decide(&value).reason, "post_match_chat_active");
+
+    value.match_ended_at = Some(value.now - Duration::seconds(150));
+    assert_eq!(decide(&value).reason, "in_queue");
+}
+
+#[test]
+fn ueberfaelliger_block_nimmt_den_am_wenigsten_schlechten_moment() {
+    let mut value = base(Strategy::Smart);
+    value.quiet_chat_messages = 2;
+    // Nicht überfällig: verschieben.
+    assert_eq!(decide(&value).reason, "cooldown");
+
+    // Über eine halbe Blockperiode überfällig: Notbremse.
+    value.plan.next_block_at = Some(value.now - Duration::seconds(600));
+    assert_eq!(decide(&value).reason, "fallback_least_bad");
+    assert!(matches!(
+        decide(&value).action,
+        DecisionAction::Commercial { .. }
+    ));
+
+    // Eine Sperre schlägt die Notbremse: im Match nie selbst starten.
+    value.steam_match_state = Some(steam_state(true, true));
+    value.match_started_at = Some(value.now - Duration::minutes(3));
+    assert_eq!(decide(&value).reason, "in_match");
+}
+
+#[test]
+fn twitch_plan_ist_budgetquelle_und_wird_vorgezogen() {
+    // Aktiver Twitch-Plan: keine eigenen Blöcke, nur warten.
+    let mut value = base(Strategy::Smart);
+    value.next_ad_at = Some(value.now + Duration::minutes(6));
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+    assert_eq!(decide(&value).action, DecisionAction::None);
+
+    // Offenes Queue-Fenster: geplante Werbung vorziehen.
+    value.steam_match_state = Some(steam_state(false, true));
+    let decision = decide(&value);
+    assert_eq!(decision.reason, "pulled_forward");
+    assert_eq!(
+        decision.action,
         DecisionAction::Commercial {
             duration_seconds: 90
         }
     );
+
+    // Sperre und anstehende Werbung: per Pause verschieben.
+    let mut value = base(Strategy::Smart);
+    value.next_ad_at = Some(value.now + Duration::seconds(30));
+    value.last_raid_at = Some(value.now - Duration::minutes(3));
+    assert_eq!(decide(&value).reason, "twitch_ad_moved");
+    assert_eq!(decide(&value).action, DecisionAction::Snooze);
 }
 
 #[test]
-fn smart_mindestabstand_chatruhe_und_fallbacks() {
-    let mut value = input(Strategy::Smart);
-    value.settings.ad_duration_seconds = 180;
+fn dichter_plan_spart_pausen_fuer_wertvolle_momente() {
+    // Sperre ist nur ein Erstchatter, Plan dicht: Pause aufsparen, Werbung läuft.
+    let mut value = base(Strategy::Smart);
+    value.plan_fit = "unprotectable";
+    value.next_ad_at = Some(value.now + Duration::seconds(30));
+    value.last_first_chatter_at = Some(value.now - Duration::minutes(2));
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+    assert_eq!(decide(&value).action, DecisionAction::None);
 
-    value.last_ad_at = Some(value.now - Duration::minutes(30) + Duration::seconds(1));
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "commercial_cooldown");
+    // Wertvoller Moment (im Match): Pause trotzdem einsetzen.
+    let mut value = base(Strategy::Smart);
+    value.plan_fit = "unprotectable";
+    value.next_ad_at = Some(value.now + Duration::seconds(30));
+    value.steam_match_state = Some(steam_state(true, true));
+    value.match_started_at = Some(value.now - Duration::minutes(3));
+    assert_eq!(decide(&value).reason, "twitch_ad_moved");
+}
 
-    value.last_ad_at = Some(value.now - Duration::minutes(30));
+#[test]
+fn plan_schaetzung_ist_bei_wenig_daten_gutmuetig() {
+    assert_eq!(assess_plan(false, None, 0, None, None), "good");
+    assert_eq!(assess_plan(true, None, 1, Some(1800), None), "good");
+    // Abstand größer als Match plus Queue: gut schützbar.
     assert_eq!(
-        decide(&value).action,
-        DecisionAction::Commercial {
-            duration_seconds: 180
-        }
+        assess_plan(true, Some(2400), 1, Some(1500), Some(300)),
+        "good"
     );
-
-    value.last_ad_at = None;
-    value.quiet_chat_messages = 1;
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "chat_active");
-
-    value.snooze_count = 0;
-    assert_eq!(decide(&value).action, DecisionAction::None);
-    assert_eq!(decide(&value).reason, "chat_active_no_snooze");
-
-    value.last_ad_at = Some(value.now);
-    assert_eq!(decide(&value).reason, "cooldown_no_snooze");
-}
-
-#[test]
-fn smart_ist_bei_unbekanntem_streamstart_oder_krankem_chat_fail_closed() {
-    let mut value = input(Strategy::Smart);
-    value.stream_started_at = None;
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "stream_start_unknown");
-
-    value = input(Strategy::Smart);
-    value.chat_ingest_healthy = false;
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "chat_ingest_unhealthy");
-
-    value.settings.quiet_window_minutes = 0;
-    assert!(matches!(
-        decide(&value).action,
-        DecisionAction::Commercial { .. }
-    ));
-}
-
-#[test]
-fn smart_im_match_verschiebt_und_achtet_chatruhe_nicht() {
-    let mut value = input(Strategy::Smart);
-    value.steam_match_state = Some(steam_state(true));
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "in_match");
-
-    // Aktives und krankes Chat-Fenster dürfen den Match-Befund nicht drehen:
-    // Die Steam-Presence ist von der Chat-Pipeline unabhängig.
-    value.quiet_chat_messages = 0;
-    value.chat_ingest_healthy = false;
-    assert_eq!(decide(&value).reason, "in_match");
-
-    value.snooze_count = 0;
-    assert_eq!(decide(&value).action, DecisionAction::None);
-    assert_eq!(decide(&value).reason, "in_match_no_snooze");
-}
-
-#[test]
-fn smart_in_queue_ist_das_werbefenster() {
-    let mut value = input(Strategy::Smart);
-    value.steam_match_state = Some(steam_state(false));
-    assert!(matches!(
-        decide(&value).action,
-        DecisionAction::Commercial { .. }
-    ));
-    assert_eq!(decide(&value).reason, "in_queue");
-
-    // Mindestabstand läuft noch: verschieben statt doppelt werben, und ohne
-    // Snooze-Vorrat nichts tun.
-    value.last_ad_at = Some(value.now - Duration::minutes(30) + Duration::seconds(1));
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "in_queue_cooldown");
-
-    value.snooze_count = 0;
-    assert_eq!(decide(&value).action, DecisionAction::None);
-    assert_eq!(decide(&value).reason, "in_queue_cooldown_no_snooze");
-}
-
-#[test]
-fn startschutz_und_snooze_strategie_gelten_weiter_unabhaengig_vom_match() {
-    let mut value = input(Strategy::Smart);
-    value.steam_match_state = Some(steam_state(false));
-    value.settings.startup_delay_minutes = 15;
-    value.stream_started_at = Some(value.now - Duration::minutes(15) + Duration::seconds(1));
-    assert_eq!(decide(&value).reason, "startup_protection");
-
-    // Die Snooze-Strategie bleibt Match-blind: nur verschieben, sobald fällig.
-    let snooze = input(Strategy::Snooze);
-    value = snooze;
-    value.steam_match_state = Some(steam_state(false));
-    assert_eq!(decide(&value).action, DecisionAction::Snooze);
-    assert_eq!(decide(&value).reason, "snooze_due");
+    // Abstand kleiner als der Zyklus, aber Pausen da: eng.
+    assert_eq!(
+        assess_plan(true, Some(1600), 1, Some(1500), Some(300)),
+        "tight"
+    );
+    // Abstand kürzer als ein Match, keine Pausen: nicht schützbar.
+    assert_eq!(
+        assess_plan(true, Some(600), 0, Some(1500), Some(300)),
+        "unprotectable"
+    );
 }
 
 #[test]

@@ -835,6 +835,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(ad_manager::action_handler),
         )
         .route(
+            "/twitch/api/v2/streamer/ad-manager/history",
+            get(ad_manager::history_handler),
+        )
+        .route(
             "/twitch/api/v2/retention-curve",
             get(retention_curve::retention_curve_handler),
         )

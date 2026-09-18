@@ -542,21 +542,40 @@ twitch_ad_manager_actions|status|text|NO|'pending'::text
 twitch_ad_manager_actions|twitch_login|text|NO|
 twitch_ad_manager_actions|twitch_user_id|text|NO|
 twitch_ad_manager_actions|updated_at|timestamp with time zone|NO|now()
+twitch_ad_manager_decisions|block_seconds|integer|YES|
+twitch_ad_manager_decisions|decided_at|timestamp with time zone|NO|now()
+twitch_ad_manager_decisions|decision|text|NO|
+twitch_ad_manager_decisions|detail|text|YES|
+twitch_ad_manager_decisions|id|bigint|NO|nextval('twitch_ad_manager_decisions_id_seq'::regclass)
+twitch_ad_manager_decisions|reason|text|NO|
+twitch_ad_manager_decisions|session_id|bigint|YES|
+twitch_ad_manager_decisions|twitch_user_id|text|NO|
 twitch_ad_manager_settings|action_lead_seconds|integer|NO|60
 twitch_ad_manager_settings|ad_duration_seconds|integer|NO|90
+twitch_ad_manager_settings|budget_minutes_per_hour|integer|NO|3
 twitch_ad_manager_settings|created_at|timestamp with time zone|NO|now()
 twitch_ad_manager_settings|enabled|boolean|NO|false
 twitch_ad_manager_settings|min_interval_minutes|integer|NO|30
 twitch_ad_manager_settings|quiet_window_minutes|integer|NO|5
 twitch_ad_manager_settings|startup_delay_minutes|integer|NO|15
-twitch_ad_manager_settings|strategy|text|NO|'monitor'::text
+twitch_ad_manager_settings|strategy|text|NO|'smart'::text
 twitch_ad_manager_settings|twitch_login|text|NO|
 twitch_ad_manager_settings|twitch_user_id|text|NO|
 twitch_ad_manager_settings|updated_at|timestamp with time zone|NO|now()
 twitch_ad_manager_settings|worker_lease_token|text|YES|
 twitch_ad_manager_settings|worker_lease_until|timestamp with time zone|YES|
 twitch_ad_manager_state|active_session_id|bigint|YES|
+twitch_ad_manager_state|avg_match_seconds|integer|YES|
+twitch_ad_manager_state|avg_queue_seconds|integer|YES|
+twitch_ad_manager_state|budget_used_seconds|integer|YES|
 twitch_ad_manager_state|duration_seconds|integer|YES|
+twitch_ad_manager_state|match_active|boolean|NO|false
+twitch_ad_manager_state|match_ended_at|timestamp with time zone|YES|
+twitch_ad_manager_state|match_started_at|timestamp with time zone|YES|
+twitch_ad_manager_state|plan_block_seconds|integer|YES|
+twitch_ad_manager_state|plan_blocks_per_hour|integer|YES|
+twitch_ad_manager_state|plan_fit|text|YES|
+twitch_ad_manager_state|plan_next_block_at|timestamp with time zone|YES|
 twitch_ad_manager_state|is_live|boolean|NO|false
 twitch_ad_manager_state|last_action_at|timestamp with time zone|YES|
 twitch_ad_manager_state|last_action_detail|text|YES|
