@@ -478,7 +478,7 @@ impl CommandEngine {
 
         match cmd {
             "!connect" => {
-                self.reply(event, &format!("Verbinde dein Twitch- und Steam-Konto hier: {} — danach !rank @deinname. Kein Discord nötig.", crate::player_links::CONNECT_URL)).await;
+                self.reply(event, &format!("Verbinde Twitch und Steam (kein Discord nötig), danach klappt !rank @deinname. Hier entlang: {}", crate::player_links::CONNECT_URL)).await;
                 true
             }
             "!unconnect" | "!disconnect" => {
@@ -848,6 +848,12 @@ impl CommandEngine {
                 }
                 Some(target)
             },
+            Err(crate::command_target::TargetError::NotFound(login))
+                if event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank") =>
+            {
+                self.reply(event, &format!("Für @{login} gibt es noch keine Steam-Verknüpfung. Verbinden geht hier: {}", crate::player_links::CONNECT_URL)).await;
+                None
+            }
             Err(error) => { self.reply(event, &error.reply()).await; None }
         }
     }
