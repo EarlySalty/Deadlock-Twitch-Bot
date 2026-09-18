@@ -21,6 +21,7 @@ export type TabId =
   | 'growth'
   | 'planning'
   | 'community'
+  | 'profile'
   | 'coaching'
   | 'monetization';
 
@@ -39,6 +40,7 @@ const tabs: Tab[] = [
   { id: 'growth', label: 'Wachstum', icon: BarChart3 },
   { id: 'planning', label: 'Planung', icon: Calendar },
   { id: 'community', label: 'Zusammen spielen', icon: Users },
+  { id: 'profile', label: 'Mein Profil', icon: LayoutDashboard },
   { id: 'coaching', label: 'Was tun?', icon: GraduationCap },
   { id: 'monetization', label: 'Monetization', icon: DollarSign },
 ];

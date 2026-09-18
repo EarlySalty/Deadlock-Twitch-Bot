@@ -132,3 +132,5 @@ pub mod caster_overlay;
 pub mod brain_lab;
 
 pub mod community;
+
+pub mod partner_profiles;

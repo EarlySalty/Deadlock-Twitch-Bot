@@ -1,0 +1,18 @@
+# Import inside the deutsche-deadlock-community.de site block, alongside
+# (not inside) the existing `handle /streamer*` landing handler.
+# Specific path wins over /streamer*. Preserve upstream status, CSP and no-store.
+handle /streamer/@* {
+    reverse_proxy 127.0.0.1:8769 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}
+# The existing public Twitch matcher enumerates paths; it is NOT /twitch/*.
+# The stylesheet therefore needs an explicit public route as well.
+handle /twitch/profile-assets/* {
+    reverse_proxy 127.0.0.1:8769 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}
+# /twitch/api/v2/* already uses the dashboard proxy, including the new directory.

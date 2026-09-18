@@ -1,6 +1,6 @@
 //! Authenticated co-stream/co-play recommendations and permission-scoped Discord lobbies.
 //! Read only: no invitations, voice moves, joins, role changes or unsolicited messages.
-mod matching;
+pub(super) mod matching;
 mod sources;
 #[cfg(test)]
 mod integration_tests;

@@ -11,6 +11,7 @@ import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
 import { Planung } from '@/pages/Planung';
 import { Community } from '@/pages/Community';
+import { PartnerProfile } from '@/pages/PartnerProfile';
 import { CategoryCollector } from '@/pages/CategoryCollector';
 import { TitleGenerator } from '@/pages/TitleGenerator';
 import { WasTun } from '@/pages/WasTun';
@@ -328,6 +329,8 @@ function AnalyticsDashboard() {
           {activeTab === 'planning' && (
             <Planung streamer={streamer} days={days} initialSub={pendingSub ?? undefined} />
           )}
+
+          {activeTab === 'profile' && <PartnerProfile key={streamer || 'own'} streamer={streamer ?? undefined} />}
 
           {activeTab === 'community' && (
             <Community streamer={streamer} days={days} />

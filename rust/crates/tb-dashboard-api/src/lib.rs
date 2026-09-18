@@ -99,6 +99,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
     };
 
     let public_api = Router::new()
+        .route("/twitch/api/v2/public/partner-profiles", get(handlers::partner_profiles::directory_handler))
         .route("/healthz", get(health_probe::healthz_handler))
         .route("/readyz", get(health_probe::readyz_handler))
         .route("/health", get(health_probe::readyz_handler))
@@ -145,6 +146,8 @@ pub fn build_public_router(pool: PgPool) -> Router {
     // aber keine browserübergreifende API. Wildcard-CORS auf diesen Antworten
     // vergrößert nur die Angriffsfläche und löste den ZAP-CORS-Fund aus.
     let public_pages = Router::new()
+        .route("/streamer/{handle}", get(handlers::partner_profiles::page_handler))
+        .route("/twitch/profile-assets/profile.css", get(handlers::partner_profiles::css_handler))
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
         .route("/twitch/caster-overlay", get(crate::handlers::caster_overlay::html_handler))
         .route("/twitch/caster-overlay/background.png", get(crate::handlers::caster_overlay::background_handler))
@@ -196,6 +199,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
     Router::new()
+        .route("/twitch/api/v2/streamer/profile", get(handlers::partner_profiles::get_handler).put(handlers::partner_profiles::put_handler)
+            .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)))
         .route(
             "/twitch/api/v2/community",
             get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(

@@ -106,6 +106,14 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Profile gehören zur Dashboard-Selbstverwaltung. Kein Bot überschreibt
+    -- Texte oder Termine und keine Routine löscht Entwürfe.
+    IF to_regclass('public.twitch_partner_profiles') IS NOT NULL THEN
+        REVOKE ALL ON twitch_partner_profiles FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT ON twitch_partner_profiles TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE ON twitch_partner_profiles TO twitchdash;
+    END IF;
+
     -- Die Planprüfung des Bots braucht nur diese fünf Abo-Merkmale.
     -- Stripe-IDs, Zahlungsereignisse und sämtliche Schreibrechte bleiben gesperrt.
     IF to_regclass('public.twitch_billing_subscriptions') IS NOT NULL THEN

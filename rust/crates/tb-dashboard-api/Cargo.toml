@@ -34,7 +34,7 @@ uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" 
 tokio        = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 url          = { workspace = true }
 percent-encoding = "2.3.2"
-uuid         = { workspace = true }
+uuid         = { workspace = true, features = ["serde"] }
 thiserror    = { workspace = true }
 regex        = { workspace = true }
 aes          = { workspace = true }

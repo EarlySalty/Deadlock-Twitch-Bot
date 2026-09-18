@@ -6,6 +6,8 @@ import { fetchInternalHome } from '@/api/home';
 import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { useAuthStatus } from '@/hooks/useAnalytics';
+import { PartnerProfile } from './PartnerProfile';
+import { PlanProvider } from '../context/PlanContext';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
 import { StatCommandSection } from '@/components/verwaltung/StatCommandSection';
@@ -434,6 +436,7 @@ export function VerwaltungPage() {
 
   const tabs: VerwaltungTabDef[] = [
     { id: 'konto', label: 'Konto & Verbindungen', icon: User, render: () => kontoTab },
+    { id: 'profil', label: 'Mein Profil', icon: User, render: () => <PlanProvider plan={authStatus?.plan ?? null} isAdmin={authStatus?.isAdmin ?? false} isLocalhost={authStatus?.isLocalhost ?? false} isDemoMode={Boolean(authStatus?.demoMode)}><PartnerProfile /></PlanProvider> },
     { id: 'chat', label: 'Chat-Befehle', icon: Terminal, render: () => chatTab },
     { id: 'bot', label: 'Bot & Schutz', icon: Bot, render: () => botTab },
     { id: 'overlay', label: 'Overlay', icon: Monitor, render: () => overlayTab },
