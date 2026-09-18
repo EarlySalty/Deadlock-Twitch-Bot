@@ -399,10 +399,6 @@ impl HelixClient {
         Ok(out)
     }
 
-    /// Twitch-Logins der Mit-Teilnehmer einer Stream-Together-Sitzung mit
-    /// geteiltem Chat (Helix `GET /shared_chat/session`), ohne den abgefragten
-    /// Broadcaster selbst. App-Token genügt. Leere Liste, wenn keine Sitzung
-    /// läuft. Löst die zurückgegebenen Broadcaster-IDs über `/users` zu Logins auf.
     pub async fn get_shared_chat_logins(
         &self,
         broadcaster_id: &str,
@@ -434,9 +430,29 @@ impl HelixClient {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let mut users = self.get_users_by_id(&id_refs).await?;
-        Ok(ids.into_iter().filter_map(|id| users.remove(&id)).collect())
+        let mut stream_ids = ids.clone();
+        stream_ids.push(broadcaster_id.to_string());
+        let streams = self.get_streams_by_user_ids(&stream_ids, None).await?;
+        if !streams
+            .iter()
+            .any(|stream| stream.user_id == broadcaster_id)
+        {
+            return Ok(Vec::new());
+        }
+        let mut live: std::collections::HashMap<_, _> = streams
+            .into_iter()
+            .map(|stream| (stream.user_id.clone(), stream))
+            .collect();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| live.remove(&id))
+            .map(|stream| TwitchUser {
+                id: stream.user_id,
+                login: stream.user_login,
+                display_name: stream.user_name,
+                profile_image_url: None,
+            })
+            .collect())
     }
 }
 
@@ -517,6 +533,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_shared_chat_nur_mit_laufenden_streams() {
+        let server = MockServer::start().await;
+        Mock::given(path("/oauth2/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"access_token":"test-token", "expires_in":3600}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/helix/shared_chat/session"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"participants":[{"broadcaster_id":"100"},{"broadcaster_id":"200"},{"broadcaster_id":"300"}]}]})))
+            .mount(&server).await;
+        Mock::given(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"id":"200","login":"live","display_name":"Live"},{"id":"300","login":"offline","display_name":"Offline"}]})))
+            .mount(&server).await;
+        let client = HelixClient::new(test_config(
+            &format!("{}/oauth2/token", server.uri()),
+            &format!("{}/helix", server.uri()),
+        ))
+        .unwrap();
+        let live = Mock::given(path("/helix/streams"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"user_id":"100","user_login":"self"},{"user_id":"200","user_login":"live"}]})))
+            .mount_as_scoped(&server).await;
+        let users = client.get_shared_chat_users("100").await.unwrap();
+        assert_eq!(
+            users.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),
+            ["200"]
+        );
+        drop(live);
+        Mock::given(path("/helix/streams"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"data":[{"user_id":"200","user_login":"live"}]}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        assert!(client
+            .get_shared_chat_users("100")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
     async fn nachtrag3_shared_chat_behaelt_ids_ohne_namensabgleich() {
         use wiremock::matchers::query_param;
 
@@ -544,14 +606,16 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/helix/users"))
-            .and(query_param("id", "200"))
-            .and(query_param("id", "300"))
-            .and(query_param("id", "400"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "100"))
+            .and(query_param("user_id", "200"))
+            .and(query_param("user_id", "300"))
+            .and(query_param("user_id", "400"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
-                    {"id": "300", "login": "renamed", "display_name": "Someone Else"},
-                    {"id": "200", "login": "shared", "display_name": "renamed"}
+                    {"user_id": "100", "user_login": "myself"},
+                    {"user_id": "300", "user_login": "renamed", "user_name": "Someone Else"},
+                    {"user_id": "200", "user_login": "shared", "user_name": "renamed"}
                 ]
             })))
             .expect(1)

@@ -74,6 +74,34 @@ pub struct TitleSettingsBody {
 const TITLE_OAUTH_URL: &str = "/twitch/raid/auth?scope_profile=title&source=title_generator";
 const TITLE_MANAGE_SCOPE: &str = "channel:manage:broadcast";
 
+fn requested_user_id(
+    auth: &DashboardAuthLevel,
+    requested: Option<&str>,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let (own_login, own_id) = match auth {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => (twitch_login, twitch_user_id),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+            (&actor.twitch_login, &actor.twitch_user_id)
+        }
+        _ => return Err(crate::auth::unauthorized_v2_json()),
+    };
+    if own_id.trim().is_empty() {
+        return Err(crate::auth::unauthorized_v2_json());
+    }
+    let requested = requested.unwrap_or("").trim();
+    if !requested.is_empty() && !requested.eq_ignore_ascii_case(own_login.trim()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"Du kannst nur deinen eigenen Twitch-Account bearbeiten."})),
+        ));
+    }
+    Ok(own_id.clone())
+}
+
 fn requested_login(
     auth: &DashboardAuthLevel,
     requested: Option<&str>,
@@ -124,6 +152,27 @@ async fn resolve_user_id(pool: &PgPool, login: &str) -> Result<Option<String>, s
     )
     .fetch_optional(pool)
     .await
+}
+
+async fn resolve_target_user_id(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    requested: Option<&str>,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if matches!(auth, DashboardAuthLevel::Admin { .. }) {
+        let login = requested_login(auth, requested)?;
+        resolve_user_id(pool, &login)
+            .await
+            .map_err(|_| crate::auth::analytics_request_failed_json())?
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error":"streamer not found"})),
+                )
+            })
+    } else {
+        requested_user_id(auth, requested)
+    }
 }
 
 async fn can_manage_title(pool: &PgPool, twitch_user_id: &str) -> bool {
@@ -269,7 +318,6 @@ struct TitleContext {
     /// `true`, wenn `include_live` gesetzt war UND ein Live-State wirklich
     /// geladen wurde — nur dann floss Live-Kontext in den Prompt (P2.102).
     live_context_used: bool,
-    /// Erkannte, gerade live sitzende Co-Streamer (Twitch-Logins, höchstens zwei).
     co_streamers: Vec<String>,
 }
 
@@ -305,8 +353,6 @@ async fn resolve_title_context(
     twitch_user_id: &str,
     include_live: bool,
 ) -> TitleContext {
-    // Der Rang- und Party-Pfad braucht die Discord-Verknüpfung; die Co-Stream-
-    // Erkennung läuft auch ohne, weil das Shared-Chat-Signal rein über Twitch geht.
     let discord_id = resolve_discord_user_id(pool, twitch_user_id).await;
 
     let rank_display = match discord_id {
@@ -336,14 +382,10 @@ async fn resolve_title_context(
             }
             None => None,
         };
-        co_streamers =
+        let co_context =
             steam_lookup::detect_co_streamers_all(pool, twitch_user_id, discord_id).await;
-        let party_hint = match discord_id {
-            Some(discord_id) => {
-                steam_lookup::get_party_hint_for_discord_user(pool, discord_id).await
-            }
-            None => None,
-        };
+        co_streamers = co_context.co_streamers;
+        let party_hint = co_context.party_hint;
         if steam_live.is_some() || party_hint.is_some() || !co_streamers.is_empty() {
             live_state = Some(PromptLiveState {
                 hero: steam_live.as_ref().and_then(|l| l.hero.clone()),
@@ -351,7 +393,6 @@ async fn resolve_title_context(
                 co_streamer: co_streamers.clone(),
             });
         }
-        // Live-Kontext wurde nur dann genutzt, wenn Hero/Party oder Co-Streamer vorlagen.
         live_context_used = live_state.is_some();
     }
 
@@ -376,6 +417,22 @@ async fn finish_suggestion(
     alternatives: Vec<String>,
     generated_by: &str,
 ) -> Response {
+    let safe = tb_chat::title_ai::sanitize_title_result(
+        tb_chat::title_ai::ParsedTitle {
+            primary,
+            alternatives,
+            title_analysis: Vec::new(),
+        },
+        keywords,
+        context.rank_display.as_deref(),
+        &context.co_streamers,
+        &preferences.never_words,
+    );
+    if safe.primary.is_empty() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error":"Mit deinen ausgeschlossenen Formulierungen ist gerade kein passender Titel verfügbar. Passe die Stichwörter oder die Liste an."}))).into_response();
+    }
+    let primary = safe.primary;
+    let alternatives = safe.alternatives;
     let generation_id = tb_crypto::random_hex_token(16);
     if let Err(error) = title_db::insert_title_generation(
         pool,
@@ -464,23 +521,9 @@ pub async fn suggest_handler(
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
         });
-    let login = match requested_login(&auth, requested_streamer) {
+    let user_id = match resolve_target_user_id(&pool, &auth, requested_streamer).await {
         Ok(login) => login,
         Err(resp) => return resp.into_response(),
-    };
-    let user_id = match resolve_user_id(&pool, &login).await {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":"streamer not found"})),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("title user-id lookup fehlgeschlagen: {e}");
-            return crate::auth::analytics_request_failed_json().into_response();
-        }
     };
 
     let history = title_db::get_streamer_title_history(&pool, &user_id, 30).await;
@@ -521,7 +564,10 @@ pub async fn suggest_handler(
             normalized_score: item.normalized_score,
         })
         .collect();
-    let preferences = title_db::get_title_preferences(&pool, &user_id).await;
+    let preferences = match title_db::get_title_preferences(&pool, &user_id).await {
+        Ok(preferences) => preferences,
+        Err(_) => return crate::auth::analytics_request_failed_json().into_response(),
+    };
     let feedback = title_db::get_recent_title_feedback(&pool, &user_id, 20).await;
     let prompt_feedback: Vec<PromptFeedbackItem> = feedback
         .into_iter()
@@ -533,9 +579,7 @@ pub async fn suggest_handler(
         })
         .collect();
 
-    // Im Auto-Modus nutzen wir Live-Kontext automatisch, sofern vorhanden.
-    let context =
-        resolve_title_context(&pool, &user_id, body.include_live || keywords.is_empty()).await;
+    let context = resolve_title_context(&pool, &user_id, body.include_live).await;
 
     let limiter = TITLE_RATE_LIMITER.get_or_init(TitleRateLimiter::default);
     match generate_title_personalized(
@@ -612,13 +656,11 @@ pub async fn insights_handler(
     State(pool): State<PgPool>,
     Query(query): Query<TitleQuery>,
 ) -> impl IntoResponse {
-    let login = match requested_login(&auth, query.streamer.as_deref()) {
-        Ok(login) => login,
+    let user_id = match resolve_target_user_id(&pool, &auth, query.streamer.as_deref()).await {
+        Ok(id) => id,
         Err(resp) => return resp.into_response(),
     };
-    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
-        return Json(json!({"insight": null})).into_response();
-    };
+
     match title_db::get_latest_insight(&pool, &user_id).await {
         Ok(insight) => Json(json!({"insight": insight})).into_response(),
         Err(e) => {
@@ -633,18 +675,15 @@ pub async fn settings_handler(
     State(pool): State<PgPool>,
     Query(query): Query<TitleQuery>,
 ) -> impl IntoResponse {
-    let login = match requested_login(&auth, query.streamer.as_deref()) {
-        Ok(login) => login,
+    let user_id = match resolve_target_user_id(&pool, &auth, query.streamer.as_deref()).await {
+        Ok(id) => id,
         Err(resp) => return resp.into_response(),
     };
-    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error":"streamer not found"})),
-        )
-            .into_response();
+
+    let preferences = match title_db::get_title_preferences(&pool, &user_id).await {
+        Ok(preferences) => preferences,
+        Err(_) => return crate::auth::analytics_request_failed_json().into_response(),
     };
-    let preferences = title_db::get_title_preferences(&pool, &user_id).await;
     let history = title_db::get_streamer_title_history(&pool, &user_id, 30).await;
     let own_avg = title_db::get_streamer_avg_viewers(&pool, &user_id).await;
     let prompt_history: Vec<PromptHistoryItem> = history
@@ -680,17 +719,11 @@ pub async fn settings_update_handler(
     State(pool): State<PgPool>,
     Json(body): Json<TitleSettingsBody>,
 ) -> impl IntoResponse {
-    let login = match requested_login(&auth, body.streamer.as_deref()) {
+    let user_id = match requested_user_id(&auth, body.streamer.as_deref()) {
         Ok(login) => login,
         Err(resp) => return resp.into_response(),
     };
-    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error":"streamer not found"})),
-        )
-            .into_response();
-    };
+
     let style = body.style_preference.trim();
     if style.chars().count() > 1200 {
         return (
@@ -699,14 +732,7 @@ pub async fn settings_update_handler(
         )
             .into_response();
     }
-    let never_words: Vec<String> = body
-        .never_words
-        .iter()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .map(|line| line.chars().take(60).collect::<String>())
-        .take(40)
-        .collect();
+    let never_words = title_db::normalize_never_words(&body.never_words);
     if body.experimental_auto_set && !can_manage_title(&pool, &user_id).await {
         return (
             StatusCode::FORBIDDEN,
@@ -748,17 +774,11 @@ pub async fn feedback_handler(
     State(pool): State<PgPool>,
     Json(body): Json<TitleFeedbackBody>,
 ) -> impl IntoResponse {
-    let login = match requested_login(&auth, body.streamer.as_deref()) {
+    let user_id = match resolve_target_user_id(&pool, &auth, body.streamer.as_deref()).await {
         Ok(login) => login,
         Err(resp) => return resp.into_response(),
     };
-    let Some(user_id) = resolve_user_id(&pool, &login).await.ok().flatten() else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error":"streamer not found"})),
-        )
-            .into_response();
-    };
+
     let feedback = body.feedback.trim().to_lowercase();
     if !matches!(
         feedback.as_str(),
@@ -823,19 +843,9 @@ pub async fn update_channel_title_handler(
         )
             .into_response();
     }
-    let login = match requested_login(&auth, query.streamer.as_deref()) {
-        Ok(login) => login,
+    let user_id = match resolve_target_user_id(&pool, &auth, query.streamer.as_deref()).await {
+        Ok(id) => id,
         Err(resp) => return resp.into_response(),
-    };
-    let user_id = match resolve_user_id(&pool, &login).await {
-        Ok(Some(id)) => id,
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":"streamer not found"})),
-            )
-                .into_response()
-        }
     };
 
     match set_channel_title(&pool, &user_id, title).await {
@@ -889,6 +899,168 @@ pub async fn update_channel_title_handler(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn review_einstellungen_bleiben_bei_der_session_id() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE title_generator_preferences (twitch_user_id TEXT PRIMARY KEY, style_preference TEXT NOT NULL DEFAULT '', experimental_auto_set BOOLEAN NOT NULL DEFAULT false, never_words TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT now()); CREATE TABLE twitch_raid_auth (twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN); INSERT INTO title_generator_preferences (twitch_user_id, never_words) VALUES ('2', 'unverändert');")
+            .execute(&db.pool).await.unwrap();
+        let submitted = (0..45)
+            .map(|n| format!("{n}\n{}", "ä".repeat(80)))
+            .collect::<Vec<_>>();
+        let response = settings_update_handler(
+            partner(),
+            State(db.pool.clone()),
+            Json(TitleSettingsBody {
+                streamer: Some("NANI".into()),
+                style_preference: "trocken".into(),
+                experimental_auto_set: false,
+                never_words: submitted,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 20000)
+            .await
+            .unwrap();
+        let returned: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let saved = title_db::get_title_preferences(&db.pool, "1")
+            .await
+            .unwrap();
+        assert_eq!(saved.never_words.len(), 40);
+        assert!(saved
+            .never_words
+            .iter()
+            .all(|s| s.chars().count() <= 60 && !s.contains('\n')));
+        assert_eq!(returned["never_words"], json!(saved.never_words));
+        let response = settings_update_handler(
+            partner(),
+            State(db.pool.clone()),
+            Json(TitleSettingsBody {
+                streamer: Some("other".into()),
+                style_preference: "".into(),
+                experimental_auto_set: false,
+                never_words: vec!["fremd".into()],
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            title_db::get_title_preferences(&db.pool, "2")
+                .await
+                .unwrap()
+                .never_words,
+            ["unverändert"]
+        );
+    }
+
+    #[tokio::test]
+    async fn review_unzulaessiger_ersatztitel_wird_vor_speichern_und_twitch_abgewiesen() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(10))
+            .connect_lazy("postgresql://test@127.0.0.1:1/test")
+            .unwrap();
+        let preferences = title_db::TitlePreferences {
+            never_words: vec!["Deadlock".into()],
+            experimental_auto_set: true,
+            ..Default::default()
+        };
+        let context = TitleContext::default();
+        let (primary, alternatives) = auto_fallback_titles(&context);
+        let response = finish_suggestion(
+            &pool,
+            "1",
+            "",
+            vec![],
+            &[],
+            &preferences,
+            &context,
+            primary,
+            alternatives,
+            "fallback",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn review_ersatztitel_enthalten_dieselben_bestaetigten_mitstreamer() {
+        let context = TitleContext {
+            co_streamers: vec!["kollege".into()],
+            ..Default::default()
+        };
+        let (primary, alternatives) = auto_fallback_titles(&context);
+        let safe = tb_chat::title_ai::sanitize_title_result(
+            tb_chat::title_ai::ParsedTitle {
+                primary,
+                alternatives,
+                title_analysis: vec![],
+            },
+            "",
+            None,
+            &context.co_streamers,
+            &[],
+        );
+        assert!(std::iter::once(&safe.primary)
+            .chain(&safe.alternatives)
+            .all(|title| title.contains("mit @kollege") && title.chars().count() <= 140));
+    }
+
+    #[tokio::test]
+    async fn review_admin_leseziel_bleibt_erhalten_partner_nutzt_session_id() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_user_id TEXT, twitch_login TEXT); INSERT INTO twitch_streamers VALUES ('2', 'other'), ('wrong-id', 'nani');")
+            .execute(&db.pool).await.unwrap();
+        assert_eq!(
+            resolve_target_user_id(&db.pool, &DashboardAuthLevel::admin(), Some("other"))
+                .await
+                .unwrap(),
+            "2"
+        );
+        assert!(requested_user_id(&DashboardAuthLevel::admin(), Some("other")).is_err());
+        assert_eq!(
+            resolve_target_user_id(&db.pool, &partner(), Some("nani"))
+                .await
+                .unwrap(),
+            "1"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_migration_ist_additiv_und_passt_zum_snapshot() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE title_generator_preferences (twitch_user_id TEXT PRIMARY KEY, style_preference TEXT NOT NULL DEFAULT '', experimental_auto_set BOOLEAN NOT NULL DEFAULT false, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()); INSERT INTO title_generator_preferences (twitch_user_id, style_preference) VALUES ('1', 'vorher');")
+            .execute(&db.pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260918164500_title_generator_never_words.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let preferences = title_db::get_title_preferences(&db.pool, "1")
+            .await
+            .unwrap();
+        assert_eq!(preferences.style_preference, "vorher");
+        assert!(preferences.never_words.is_empty());
+        assert!(sqlx::query(
+            "UPDATE title_generator_preferences SET never_words = repeat('x', 2600)"
+        )
+        .execute(&db.pool)
+        .await
+        .is_ok());
+        assert!(sqlx::query(
+            "UPDATE title_generator_preferences SET never_words = repeat('x', 2601)"
+        )
+        .execute(&db.pool)
+        .await
+        .is_err());
+        assert!(
+            include_str!("../../../tb-db/tests/fresh_schema_snapshot.txt")
+                .contains("title_generator_preferences|never_words|text|NO|''::text")
+        );
+    }
+
     fn partner() -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
             twitch_login: "nani".into(),
@@ -899,17 +1071,22 @@ mod tests {
 
     #[test]
     fn partner_darf_nur_eigenen_login_nutzen() {
-        assert_eq!(requested_login(&partner(), None).unwrap(), "nani");
-        assert!(requested_login(&partner(), Some("other")).is_err());
+        assert_eq!(requested_user_id(&partner(), None).unwrap(), "1");
+        assert!(requested_user_id(&partner(), Some("other")).is_err());
     }
 
     #[test]
-    fn admin_braucht_auswahl_oder_actor() {
-        assert!(requested_login(&DashboardAuthLevel::admin(), None).is_err());
-        assert_eq!(
-            requested_login(&DashboardAuthLevel::admin(), Some("Nani")).unwrap(),
-            "nani"
-        );
+    fn admin_braucht_eigene_twitch_session() {
+        assert!(requested_user_id(&DashboardAuthLevel::admin(), None).is_err());
+        assert!(requested_user_id(&DashboardAuthLevel::admin(), Some("Nani")).is_err());
+        let admin = DashboardAuthLevel::Admin {
+            actor: Some(crate::auth::level::AdminActor {
+                twitch_login: "nani".into(),
+                twitch_user_id: "1".into(),
+            }),
+        };
+        assert_eq!(requested_user_id(&admin, Some("Nani")).unwrap(), "1");
+        assert!(requested_user_id(&admin, Some("other")).is_err());
     }
 
     // ── DB-gestützte Kontext-Auflösung (P2.101/P2.102) ──────────────────────
