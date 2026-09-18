@@ -1,7 +1,7 @@
-"""Read-only Git history extraction and explicit, deterministic feature attribution."""
+"""Read-only Git extraction with explicit, reviewable feature relationships."""
 import datetime as dt
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 from zoneinfo import ZoneInfo
@@ -20,23 +20,49 @@ def git(repo, *args):
     return result.stdout
 
 
-def load_taxonomy(path):
-    data = json.loads(Path(path).read_text(encoding='utf-8'))
+def validate_taxonomy(data):
     group_ids = {g['id'] for g in data['groups']}
     ids = [f['id'] for f in data['features']]
-    if len(ids) != len(set(ids)) or 'other' not in ids:
-        raise ValueError('Feature IDs must be unique and include other')
+    if len(ids) != len(set(ids)) or 'other' not in ids or 'product' in ids:
+        raise ValueError('Feature IDs must be unique, exclude product and include other')
+    parents = {}
     for f in data['features']:
         if f['group'] not in group_ids or not re.fullmatch(r'[a-z][a-z0-9-]*', f['id']):
             raise ValueError('Invalid feature ID or group')
         re.compile(f['subject'], re.I)
         re.compile(f['paths'], re.I)
+        parent = f.get('parentId')
+        if parent not in set(ids) | {'product'}:
+            raise ValueError('Unknown parent: ' + str(parent))
+        parents[f['id']] = parent
+        relation = f.get('relation', {})
+        if relation.get('kind') not in {'editorial', 'historical'} or not relation.get('reason', '').strip():
+            raise ValueError('Every relationship requires an explicit kind and reason')
+        if relation['kind'] == 'historical' and not re.fullmatch(r'[0-9a-f]{40,64}', relation.get('commit', '')):
+            raise ValueError('Historical relationships require a full evidence commit')
+        for source in relation.get('sources', []):
+            if not source or PurePosixPath(source).is_absolute() or '..' in PurePosixPath(source).parts or any(ord(c) < 32 for c in source):
+                raise ValueError('Source paths must be repository-relative')
+    for feature in ids:
+        seen, cursor = set(), feature
+        while cursor != 'product':
+            if cursor in seen:
+                raise ValueError('Cycle in feature relationships: ' + feature)
+            seen.add(cursor)
+            cursor = parents[cursor]
     for sha, override in data.get('overrides', {}).items():
         if not re.fullmatch(r'[0-9a-f]{40,64}', sha):
             raise ValueError('Overrides require a full commit hash')
-        if not override.get('features') or not set(override['features']) <= set(ids):
-            raise ValueError('Unknown feature in override')
+        assigned = override.get('features', [])
+        if not assigned or not set(assigned) <= set(ids) or len(assigned) != len(set(assigned)):
+            raise ValueError('Unknown or duplicate feature in override')
+        if not override.get('reason', '').strip():
+            raise ValueError('Manual overrides require a reason')
     return data
+
+
+def load_taxonomy(path):
+    return validate_taxonomy(json.loads(Path(path).read_text(encoding='utf-8')))
 
 
 def kind_of(subject):
@@ -57,25 +83,41 @@ def kind_of(subject):
     return kind, title.strip()
 
 
+def most_specific(features, taxonomy):
+    """Suppress a broad parent tag, never infer or create a parent relationship."""
+    parents = {f['id']: f.get('parentId', 'product') for f in taxonomy['features']}
+    ancestors = set()
+    for feature in features:
+        parent, seen = parents[feature['id']], set()
+        while parent != 'product' and parent not in seen:
+            ancestors.add(parent)
+            seen.add(parent)
+            parent = parents.get(parent, 'product')
+    return [f for f in features if f['id'] not in ancestors]
+
+
 def attribute(subject, paths, taxonomy):
     features = taxonomy['features']
     matches = [f for f in features if re.search(f['subject'], subject, re.I)]
-    specific = [f for f in matches if f['id'] not in GENERIC]
+    specific = most_specific([f for f in matches if f['id'] not in GENERIC], taxonomy)
     if specific:
-        return [f['id'] for f in specific[:3]], 'subject', ['Commit-Titel']
+        if len(specific) > 3:
+            return ['other'], 'ambiguous', ['Mehrdeutiger Commit-Titel; mögliche Funktionen: ' + ', '.join(f['id'] for f in specific)]
+        return [f['id'] for f in specific], 'subject', ['Commit-Titel']
     path_matches = []
     for f in features:
         hits = [p for p in paths if re.search(f['paths'], p, re.I)]
         if hits:
             path_matches.append((f, hits))
-    specific_paths = [(f, hits) for f, hits in path_matches if f['id'] not in GENERIC]
+    specific_ids = {f['id'] for f in most_specific([f for f, _ in path_matches if f['id'] not in GENERIC], taxonomy)}
+    specific_paths = [(f, hits) for f, hits in path_matches if f['id'] in specific_ids]
     if 0 < len(specific_paths) <= 3:
         evidence = sorted({p for _, hits in specific_paths for p in hits})[:8]
         return [f['id'] for f, _ in specific_paths], 'path', evidence
+    if len(specific_paths) > 3:
+        return ['other'], 'ambiguous', ['Bereichsübergreifende Pfade; mögliche Funktionen: ' + ', '.join(f['id'] for f, _ in specific_paths)]
     if matches:
         return [matches[0]['id']], 'subject', ['Commit-Titel']
-    if len(specific_paths) > 3:
-        return ['runtime'], 'crosscut', ['Mehr als drei Feature-Pfade: bereichsübergreifend']
     if path_matches:
         feature, hits = path_matches[0]
         return [feature['id']], 'path', hits[:8]
@@ -100,7 +142,7 @@ def parse_log(raw, taxonomy):
         if override:
             ids, basis = override['features'], 'curated'
             title = override.get('title', title)
-            evidence = [override.get('reason', 'Redaktionelle Zuordnung')]
+            evidence = [override['reason']]
         commits.append({
             'id': sha, 'date': date, 'timestamp': timestamp,
             'title': title, 'subject': subject, 'kind': kind,
@@ -111,19 +153,31 @@ def parse_log(raw, taxonomy):
 
 
 def build_data(repo, ref, taxonomy):
-    revision = git(repo, 'rev-parse', '--verify', ref + '^{commit}').strip()
+    validate_taxonomy(taxonomy)
+    revision = git(repo, 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}').strip()
     shallow = git(repo, 'rev-parse', '--is-shallow-repository').strip() == 'true'
     raw = git(repo, 'log', revision, '--no-merges', '--no-renames', '--name-only',
               '--format=%x1e%H%x1f%cI%x1f%s')
     commits = parse_log(raw, taxonomy)
     if not commits:
         raise ValueError('The selected revision contains no commits')
+    tree = set(git(repo, 'ls-tree', '-r', '--name-only', revision).splitlines())
+    commit_ids = {c['id'] for c in commits}
+    features = []
+    for feature in taxonomy['features']:
+        item = {key: feature[key] for key in ('id', 'parentId', 'group', 'title', 'description')}
+        relation = dict(feature['relation'])
+        relation['verifiedSources'] = [p for p in relation.get('sources', []) if p in tree or any(t.startswith(p.rstrip('/') + '/') for t in tree)]
+        relation['missingSources'] = [p for p in relation.get('sources', []) if p not in relation['verifiedSources']]
+        relation['verified'] = bool(relation['verifiedSources']) and not relation['missingSources']
+        if relation['kind'] == 'historical':
+            relation['verified'] = relation['verified'] and relation['commit'] in commit_ids
+        item['relation'] = relation
+        features.append(item)
     return {
-        'schemaVersion': 1,
+        'schemaVersion': 2,
         'generatedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
         'revision': revision, 'ref': ref, 'shallow': shallow,
         'repository': 'EarlySalty/Deadlock-Twitch-Bot', 'timezone': 'Europe/Berlin',
-        'groups': taxonomy['groups'],
-        'features': [{k: f[k] for k in ('id', 'group', 'title', 'description')} for f in taxonomy['features']],
-        'commits': commits,
+        'groups': taxonomy['groups'], 'features': features, 'commits': commits,
     }

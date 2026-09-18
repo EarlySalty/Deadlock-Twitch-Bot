@@ -1,0 +1,57 @@
+name: Roadmap history proof
+
+# Intentionally narrow: no deployment, no timer, no full frontend matrix.
+# Unrelated bot/dashboard PRs do not spend Actions minutes on this browser check.
+on:
+  pull_request:
+    paths:
+      - tools/generate_roadmap.py
+      - tools/roadmap-history/**
+      - .github/workflows/roadmap-history.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roadmap-history-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  history-proof:
+    name: Feature family tree / model and browser proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      # Same audited action pins as the existing frontend/security workflows.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Python provenance and attribution tests
+        run: python3 -m unittest discover -s tools/roadmap-history -p 'test_*.py' -v
+      - name: JavaScript model and graph tests
+        run: node --test tools/roadmap-history/model.test.mjs tools/roadmap-history/family.test.mjs
+      - name: Generate from the pinned real main history
+        run: python3 tools/generate_roadmap.py --ref origin/main
+      - name: Install the isolated browser test runtime
+        run: |
+          npm install --prefix .roadmap-test-runtime --no-audit --no-fund --ignore-scripts playwright@1.58.2
+          .roadmap-test-runtime/node_modules/.bin/playwright install --with-deps chromium
+      - name: Test desktop, mobile, direct links and real graph geometry
+        run: node tools/roadmap-history/browser.test.mjs
+      - name: Preserve real browser screenshots and evidence report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: roadmap-history-browser-proof
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            dist/roadmap-history/*.png
+            dist/roadmap-history/browser-report.json

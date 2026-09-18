@@ -19,16 +19,16 @@ class HistoryTests(unittest.TestCase):
 
     def test_uplink_intent_wins_over_shared_dashboard(self):
         ids, basis, _ = attribute('feat(admin): add AV1 native 2K controls', ['bot/admin_dashboard/src/App.tsx'], self.taxonomy)
-        self.assertEqual(ids, ['uplink'])
+        self.assertEqual(ids, ['uplink-av1'])
         self.assertEqual(basis, 'subject')
 
     def test_caster_history_is_not_generic_admin(self):
         ids, _, _ = attribute('fix: remove duplicate caster camera routes', ['rust/crates/tb-dashboard-api/src/lib.rs'], self.taxonomy)
-        self.assertEqual(ids, ['caster'])
+        self.assertEqual(ids, ['caster-camera'])
 
     def test_specific_path_beats_generic_subject(self):
         ids, basis, _ = attribute('fix(dashboard): layout verbessern', ['bot/admin_dashboard/src/CasterOverlay.tsx'], self.taxonomy)
-        self.assertEqual(ids, ['caster'])
+        self.assertEqual(ids, ['caster-overlay'])
         self.assertEqual(basis, 'path')
 
     def test_unknown_not_fabricated(self):
@@ -42,8 +42,8 @@ class HistoryTests(unittest.TestCase):
 
     def test_cross_cutting_migration_not_every_feature(self):
         ids, basis, _ = attribute('general cleanup', ['uplink.rs', 'caster_overlay.rs', 'pause_loop.rs', 'announcements.rs'], self.taxonomy)
-        self.assertEqual(ids, ['runtime'])
-        self.assertEqual(basis, 'crosscut')
+        self.assertEqual(ids, ['other'])
+        self.assertEqual(basis, 'ambiguous')
 
     def test_kinds_not_feature_count(self):
         self.assertEqual(kind_of('feat(uplink)!: AV1 hinzufügen'), ('feat', 'AV1 hinzufügen'))
@@ -56,7 +56,7 @@ class HistoryTests(unittest.TestCase):
         raw = '\x1e' + 'a' * 40 + '\x1f2026-09-16T23:30:00+00:00\x1ffeat(uplink): AV1\n\nuplink.rs\n'
         parsed = parse_log(raw, self.taxonomy)
         self.assertEqual(parsed[0]['date'], '2026-09-17')
-        self.assertEqual(parsed[0]['features'], ['uplink'])
+        self.assertEqual(parsed[0]['features'], ['uplink-av1'])
         self.assertEqual(parsed[0]['pathCount'], 1)
         self.assertEqual(parsed[0]['subject'], 'feat(uplink): AV1')
 
@@ -117,6 +117,14 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(data['revision'], main_sha)
             self.assertTrue(all(c['features'] == ['uplink'] for c in data['commits']))
             self.assertFalse(data['shallow'])
+            self.assertEqual(data['schemaVersion'], 2)
+            # Empty test repository: named components must remain explicitly unverified.
+            self.assertTrue(all(not f['relation']['verified'] for f in data['features']))
+            uplink = next(f for f in data['features'] if f['id'] == 'uplink')
+            self.assertTrue(uplink['relation']['missingSources'])
+            again = build_data(repo, 'main', self.taxonomy)
+            self.assertEqual(data['commits'], again['commits'])
+            self.assertEqual(data['features'], again['features'])
 
 
 if __name__ == '__main__':

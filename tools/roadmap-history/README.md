@@ -1,142 +1,231 @@
-# Feature-Roadmap und Entwicklungshistorie
+# Interaktiver Feature-Stammbaum
 
-Ersetzt die unbeschriftete Commit-Punktewolke der privaten Admin-Seite
-`/twitch/admin/roadmap-history/` durch drei zusammenhängende Ansichten:
+Die private Admin-Seite `/twitch/admin/roadmap-history/` ist ein zusammenhängender
+Graph mit expliziten Eltern-/Kindbeziehungen und datierten Änderungsstationen.
+Die frühere Bereichskarten-Ansicht ist entfernt. Die Änderungsliste bleibt eine
+ergänzende, paginierte Ansicht und ersetzt nicht den Graphen.
 
-- **Roadmap:** Feature-Zeilen mit beschrifteten Monatskarten und einer Zeitachse.
-- **Feature-Stammbaum:** Produktbereich → Feature → datierte Entwicklungsstationen.
-- **Änderungsliste:** Einzelne Änderungen, neueste zuerst, mit Feature- und Commit-Links.
+## Bedienung und Darstellung
 
-Ein Klick öffnet die Entwicklungslinie im Detail. Die Ansicht unterstützt Suche,
-Bereich, Zeitspanne, eigene Datumsgrenzen, Änderungsart, technische Pflege und
-teilbare Direktlinks. Der Dialog kann zwischen der gefilterten Auswahl und der
-vollständigen Feature-Historie wechseln. Lange Listen werden seitenweise geladen.
+Der Start zeigt den Uplink-Zweig bei lesbaren **100 %**, nicht eine winzige
+Gesamtübersicht. „Alle Zweige“ öffnet den ganzen Stammbaum; die Funktionsauswahl
+fokussiert einen Teilbaum einschließlich seiner notwendigen Vorfahren. Beispiele:
 
-## Datenvertrag
+- Twitch Bot → Uplink → Ausgabemodi → AV1 & 2K.
+- Twitch Bot → Partneraufnahme → Aufnahmesperren → Stream-Tag-Regeln.
+- Twitch Bot → Chat-Befehle → Rang/Spielerabfragen → Steam-Verknüpfung.
+- Twitch Bot → Caster-Studio → Caster-Overlay → Kamera-Portal.
 
-Quelle sind ausschließlich die vom angegebenen Git-Ref erreichbaren Commits im
-Twitch-Bot-Repository. Der Generator pinnt den Ref vor der Auswertung. Merge-Commits
-werden nicht zusätzlich gezählt; ungemergte Branches werden nicht als geliefert
-angezeigt. Die unveränderten Commit-Titel und Dateipfade bleiben als Belege sichtbar.
+**Zwei ausdrücklich beschriftete Koordinatenräume:** Links stehen Funktionen
+nach Generation, nicht nach Datum. Rechts folgen ihre Änderungsstationen von
+links nach rechts in beschrifteten Monatsspalten. Innerhalb eines Monats gibt es
+keinen Tagesmaßstab. Die tatsächlichen Daten stehen auf den Knoten und in den
+chronologischen Einzelereignissen. Ein zur Lesbarkeit positionierter Elternknoten
+behauptet damit kein falsches Einführungsdatum.
 
-Ein Commit belegt **keinen** erfolgreichen Deploy. Der früheste zugeordnete Commit
-ist ein **erster Nachweis**, kein verifiziertes Einführungsdatum. Die Verbindungen
-im Stammbaum sind fachliche Gruppierungen, keine technischen Abhängigkeiten und
-kein Git-Branch-Graph. `feat` bedeutet Erweiterung, nicht ein zusätzliches Feature.
-Ein Commit kann mehrere Feature-Linien berühren; die globale Summe zählt ihn einmal.
+Jede Funktion hat eine eigene Spur. Verbindungslinien beginnen am Elternknoten;
+Änderungen bleiben auf der Spur ihrer Funktion. Dichte Ereignisse werden vollständig
+in Monatsbündeln zusammengefasst. Ein klar als Beispiel gekennzeichneter Commit
+steht auf dem Bündel; der Klick öffnet **alle** zugehörigen Einzelereignisse, nicht
+eine willkürliche Auswahl von drei Meldungen. Knoten außerhalb des sichtbaren
+Ausschnitts werden nicht als DOM-Elemente gehalten. Die vollständige Auswahl bleibt
+im Modell und in der paginierten Historie erhalten.
 
-Die Feature-Taxonomie steht in `features.json`. Spezifische Commit-Titel haben
-Vorrang vor allgemeinen Router-/Dashboard-Dateien. Anschließend werden spezifische
-Dateipfade geprüft. Unklare Änderungen bleiben sichtbar unter „Noch nicht
-zugeordnet“. Automatische Zuordnungen werden ausdrücklich gekennzeichnet.
-Neue Feature-Familien können durch einen weiteren Taxonomie-Eintrag ergänzt werden.
+Ziehen verschiebt den Graphen; Mausrad und Pfeiltasten navigieren. Strg + Mausrad
+oder +/− zoomen. „100 %“ stellt die lesbare Ausgangsgröße wieder her; „Ansicht
+einpassen“ ist eine ausdrücklich gewählte Übersicht. Unterzweige lassen sich
+auf-/zuklappen. Suche, Zeitraum, Änderungsart und Bereich filtern die Historie.
+Dokumentation, Tests, Abhängigkeiten und Pflege sind optional sichtbar.
+Notwendige Vorfahren bleiben als gestrichelte Kontextknoten erhalten. Eine neue
+Suche öffnet zuvor eingeklappte Pfade und sucht über alle Hauptzweige.
 
-Redaktionelle Korrekturen sind optional unter `overrides` möglich, mit vollständigem
-Commit-Hash und `features`, optional `title`, `reason`, `note`. Der originale
-Commit-Titel bleibt auch bei einer Korrektur erhalten. Keine Daten oder technischen
-Abhängigkeiten werden aus generierten Beschreibungstexten erfunden.
+Filter, Fokus, Klappzustand, Zoom/Position und Auswahl werden im Direktlink
+wiederhergestellt. Die rechte Detailleiste ist auf Desktop **nicht modal**: Der
+Graph bleibt sichtbar und bedienbar. Auf Mobilgeräten ist sie ein nativer modaler
+Dialog mit Fokusbegrenzung, zuverlässigem Schließen, Escape und Fokusrückgabe.
+Eltern und Kinder sind anklickbar. Historien haben 40 Ereignisse pro Seite mit
+Vor-/Zurück-Navigation; die zusätzliche Änderungsliste lädt jeweils 80 Einträge.
 
-Der Datenstand und die Erzeugungszeit stehen auf der Seite. Zeitfenster beziehen
-sich auf das letzte Commit-Datum. Datumsanzeige: Europe/Berlin. Ein flacher Klon und
-ein über sieben Tage alter Erzeugungsstand werden sichtbar angemahnt. Dokumentation,
-Tests, Abhängigkeiten und Pflege sind standardmäßig ausgeblendet, nicht gelöscht.
+## Stil und Abhängigkeiten
 
-## Erzeugen
+Die Oberfläche verwendet die aktuellen neutralen Flächen und Gold-/Messingtöne
+von `bot/dashboard_v2/src/index.css` sowie die Schriftstapel und Laufweiten aus
+`bot/shared-theme/typography.css`. Keine braunen Vollflächen, keine unterschiedlich
+gefärbten Produktbereiche, keine erfundenen Profile oder Kennzahlen. Statusfarben
+kennzeichnen Änderungsarten. Alle Repository-Texte werden als Textknoten gerendert.
+
+Das Produkt bleibt eine einzelne selbständige HTML-Datei mit eingebetteten Styles,
+JavaScript und inertem JSON. Kein Framework-Build, keine Diagramm-CDN, keine neue
+externe Schriftabhängigkeit, keine GitHub-API und kein LLM im Generator. Python
+benötigt nur die Standardbibliothek einschließlich `zoneinfo`. Playwright wird
+lediglich für die Browser-Abnahme gebraucht.
+
+## Datenvertrag (Schema 2)
+
+`features.json` enthält explizit `id`, `parentId`, `group`, `title`, `description`,
+Zuordnungsregeln und `relation`. `product` ist die reservierte Produktwurzel.
+`other` erhält unklare Ereignisse, ohne einen echten Funktionsbereich vorzutäuschen.
+Doppelte IDs, Zyklen, verwaiste Kinder und unbegründete Beziehungen werden verworfen.
+
+Jede Beziehung hat eine `kind`-Angabe (`editorial` oder `historical`), eine nichtleere
+`reason` und nach Möglichkeit konkrete Repository-Pfade in `sources`. Die hier
+enthaltenen Beziehungen sind **redaktionelle fachliche Einordnungen**, keine aus
+ähnlichen Commit-Wörtern erfundenen historischen Abspaltungen oder technischen
+Abhängigkeiten. Das Modell kann historisch belegte Beziehungen unterscheiden;
+diese benötigen zusätzlich einen vollständigen Beleg-Commit. Der Generator prüft
+Komponentenpfade gegen den ausgewerteten Git-Baum und bewahrt fehlende Quellen als
+`missingSources`. Unbelegte Beziehungen werden nicht als bestätigt angezeigt.
+
+Quelle sind ausschließlich die vom angegebenen Git-Ref erreichbaren Commits des
+Twitch-Bot-Repositorys. Der Generator pinnt den Ref vor der Auswertung. Ein erneuter
+Lauf mit derselben Revision und Taxonomie liefert dieselben Ereignisse und
+Zuordnungen; nur die Erzeugungszeit ändert sich. Merge-Commits werden nicht nochmals
+gezählt. Nicht gemergte Arbeiten erscheinen bei `--ref origin/main` nicht als
+Bestandteil des Main-Datenstands.
+
+Ein Commit belegt **keinen Deploy**. „Erster Git-Nachweis inkl. Kinder“ ist der
+früheste zugeordnete Commit im Teilbaum, kein verifiziertes Einführungsdatum. Der
+erste direkte Nachweis an der Funktion steht separat in den Details. Beispielsweise
+belegen ältere Titel-Performance-Commits nicht die Einführung des späteren Studios;
+der Elternbereich heißt deshalb fachlich „Twitch Titel-Werkzeuge“.
+
+Ein `feat`-Commit erzeugt **niemals automatisch eine neue Funktion**. Neue Funktionen
+benötigen einen eigenen begründeten Taxonomie-Eintrag. Spezifische Commit-Titel haben
+Vorrang vor allgemeinen Router-/Dashboard-Pfaden; danach folgen spezifische
+Dateipfade. Bei einem Treffer für Kind und Vorfahr erhält nur das spezifische Kind
+den Ereigniseintrag. Übergreifende Zuordnungen zu unabhängigen Funktionen bleiben
+möglich. Mehrdeutige Ereignisse bleiben mit ihren Kandidaten unter „Noch nicht
+zugeordnet“ erhalten, statt sie abzuschneiden oder pauschal Infrastruktur zu nennen.
+Globale Zahlen und Teilbaumhistorien deduplizieren nach Commit-SHA.
+
+Manuelle Korrekturen stehen unter `overrides`. Beispielstruktur, kein echter Eintrag:
+
+```json
+{
+  "<vollständiger Commit-SHA>": {
+    "features": ["uplink-av1"],
+    "title": "Optionaler, anhand des Diffs geprüfter Anzeigetitel",
+    "reason": "Pflicht: konkrete Begründung der geprüften Zuordnung",
+    "note": "Optionale ergänzende Einordnung"
+  }
+}
+```
+
+Der vollständige Hash, bekannte eindeutige Funktions-IDs und eine Begründung sind
+Pflicht. Der originale Commit-Titel bleibt bei Korrekturen unverändert erhalten.
+Originaltitel, Zuordnungsgrund, Dateipfade und Code-Diff sind in den Details erreichbar.
+Datumsangaben verwenden Europe/Berlin; Zeitfenster beziehen sich auf den Datenstand.
+Flache Klone und ein über sieben Tage alter Erzeugungsstand werden sichtbar gemeldet.
+
+## Lokal erzeugen und testen
 
 Aus dem Repository-Root:
 
 ```sh
 git fetch origin main
+python3 -m unittest discover -s tools/roadmap-history -p 'test_*.py' -v
+node --test tools/roadmap-history/model.test.mjs tools/roadmap-history/family.test.mjs
 python3 tools/generate_roadmap.py --ref origin/main
 ```
 
-Ergebnis: `dist/roadmap-history/index.html`. Alternativ `--repo`, `--ref` und
-`--output` angeben. Python benötigt nur die Standardbibliothek einschließlich
-`zoneinfo`. Keine GitHub-API, kein LLM, keine CDN-Abhängigkeit und kein Frontend-Build.
-Die Ausgabe ist eine einzige selbständige HTML-Datei mit eingebetteten Styles,
-JavaScript und inertem JSON. Repository-Texte werden als Text, nicht HTML gerendert;
-das eingebettete JSON schützt insbesondere vor dem Schließen eines Script-Tags.
+Ergebnis: `dist/roadmap-history/index.html`. `--repo`, `--ref` und `--output` sind
+konfigurierbar. Veröffentlichung ersetzt die Datei erst nach erfolgreicher
+vollständiger Erzeugung atomar.
 
-Die Ausgabe enthält private Repository-Historie. Sie darf ausschließlich hinter
-der vorhandenen Admin-Authentifizierung veröffentlicht werden. Generierte HTMLs,
-Test-Screenshots und der Browser-Testcache sind nicht Teil des Git-Commits.
-
-## Tests
+Für die Browser-Abnahme:
 
 ```sh
-python3 -m unittest discover -s tools/roadmap-history -p 'test_*.py' -v
-node --test tools/roadmap-history/model.test.mjs
-python3 tools/generate_roadmap.py
-```
-
-Optionaler Browser-Test mit einem ausschließlich lokalen HTTP-Server:
-
-```sh
-npm install --prefix .roadmap-test-runtime --no-save --ignore-scripts --no-audit --no-fund playwright@1.58.2
-# Falls Chromium noch nicht im lokalen Playwright-Cache vorhanden ist:
+npm install --prefix .roadmap-test-runtime --no-audit --no-fund --ignore-scripts playwright@1.58.2
 node .roadmap-test-runtime/node_modules/playwright/cli.js install chromium
 node tools/roadmap-history/browser.test.mjs
 ```
 
-Auf dem Entwicklungsserver wurde Playwright 1.58.2 aus dem bestehenden npm-Cache
-mit `--offline` installiert. Der Test deckt Desktop 1440 × 1120 und Mobile
-390 × 844 ab, inklusive Dialog, Escape, Belege, Filter-Reset, leerer Suche,
-ungültigem Zeitraum, Pagination und Direktlink-Wiederherstellung. Screenshots
-werden unter `dist/roadmap-history/` abgelegt. Testserver und Browser schließen
-auch bei fehlgeschlagenen Assertions.
+Der Testserver bindet ausschließlich `127.0.0.1` und wird auch nach Fehlschlägen
+zusammen mit dem Browser geschlossen. Der Browser testet den echten generierten
+Datenbestand; nur der separate Angriffstest verändert eine Kopie dieser Daten.
+Keine öffentliche Debug-Route, keine Produktionssession und kein Auth-Bypass.
 
-## Einmalige Veröffentlichung auf v50671
+Nachweise unter `dist/roadmap-history/`:
 
-**Diese Installation benötigt eine ausdrücklich autorisierte Root-Ausführung.**
-Das Schreiben und Testen im Arbeitsbaum allein veröffentlicht die Seite nicht.
-Der bisherige statische Webroot `/srv/deadlock-roadmap` ist root-eigen; der
-reguläre Entwicklungszugang besitzt dort keine Schreibrechte.
+- `family-desktop.png` und `family-desktop-1440.png`: echte Desktop-Oberfläche.
+- `family-detail.png`: ausgewählte datierte Station mit rechter Detailleiste.
+- `family-mobile.png` und `family-mobile-detail.png`: 390-Pixel-Ansichten.
+- `family-hostile-long-text.png`: lange Texte und HTML-Injektionsversuch.
+- `browser-report.json`: tatsächlich bestandene Prüfgruppen, Quellrevision,
+  Datenmenge und Graphgeometrie.
 
-Aus einem geprüften Checkout:
+Die PNGs müssen zusätzlich visuell angesehen werden. Erfolgreiche Modell- oder
+Browser-Assertions allein ersetzen keine Kontrolle von Lesbarkeit und Linienführung.
+Generiertes HTML, Screenshots und Testcache bleiben außerhalb der Git-Historie.
 
-```sh
-sudo bash ops/systemd/install-roadmap-history.sh
+`.github/workflows/roadmap-history.yml` führt dieselben Prüfungen nur für relevante
+Roadmap-PRs aus. Andere Bot-/Frontend-Änderungen lösen diesen Job nicht aus. Ein
+neuer Push ersetzt einen noch laufenden Prüflauf; es gibt keine zusätzliche
+regelmäßige Ausführung und keinen Deploy. Die bestehenden Action-Pins werden
+wiederverwendet. Screenshots und Bericht liegen sieben Tage als zugriffsgeschütztes
+Actions-Artefakt `roadmap-history-browser-proof` vor. Das vollständige private
+Historien-HTML wird nicht als Artefakt hochgeladen.
+
+## Vorhandener Veröffentlichungspfad und fehlende Freigabe
+
+Ziel bleibt `/twitch/admin/roadmap-history/`. Die bisher beschriebene Caddy-Route
+liefert `/srv/deadlock-roadmap` mit vorgeschalteter Admin-Authentifizierung. Weder
+Caddy noch Authentifizierung wurden für diesen Auftrag geändert.
+
+Der bestehende Installer `ops/systemd/install-roadmap-history.sh`, der Dienst
+`deadlock-roadmap-history.service` und sein stündlicher Timer werden weiterverwendet.
+Es wird kein zweiter Deploy-Mechanismus oder Timer aufgebaut. Ein Twitch-Binary-Deploy
+veröffentlicht diese statische Seite **nicht**.
+
+**In diesem Entwicklungszugang ist der Produktionsstatus nicht bestätigt.** Der
+MCP-Zugriff auf `/srv/deadlock-roadmap` wurde als außerhalb der erlaubten Roots
+abgewiesen; `systemctl` und `curl` sind nicht in der Programm-Allowlist. Diese
+Grenzen werden nicht über Python, andere Prozesse, generisches sudo oder eine
+Änderung der Allowlist umgangen. Ein erfolgreicher lokaler Generator- oder
+Browser-Test ist kein Live-Nachweis.
+
+Der exakt noch erforderliche Installationsschritt ist die **freigegebene Ausführung
+des vorhandenen Installers aus dem geprüften, vollständig gemergten Quellstand**:
+
+```text
+ops/systemd/install-roadmap-history.sh
 ```
 
-Der Installer sichert die vorhandene Seite einschließlich ihrer undatierten
-kuratierten Alt-Einträge außerhalb des Webroots unter
-`/var/backups/deadlock-roadmap/`. Diese Alt-Einträge werden nicht ohne Datumsbeleg
-in die neue Zeitachse einsortiert. Der Installer kopiert den Generator und seine
-Assets nach `/opt/deadlock-roadmap/`, richtet einen unprivilegierten Dienst ein
-und veröffentlicht eine vollständig erzeugte HTML-Datei atomar.
+Dafür benötigt der Betrieb einen ausdrücklich autorisierten, auf diesen Installer
+begrenzten Ausführungsweg. Der Installer kopiert Generator und sechs Assets nach
+`/opt/deadlock-roadmap/`, installiert die vorhandenen Unit-Dateien, erzeugt
+`/srv/deadlock-roadmap/index.html` und aktiviert den vorhandenen Timer. Diese
+Ausführung wurde in der vorliegenden Entwicklungsabnahme nicht vorgenommen.
 
-Anschließend aktualisiert `deadlock-roadmap-history.timer` stündlich aus
-`origin/main`. Änderungen an Taxonomie oder Generator benötigen die erneute
-Installation aus einem geprüften Checkout; normale neue Commits werden automatisch
-aufgenommen. Der Update-Dienst arbeitet ohne Root und darf nur den Webroot und das
-Git-Metadatenverzeichnis beschreiben. Git-Fetch- oder Generatorfehler lassen die
-vorherige HTML-Datei unverändert. Die Caddy-Route und deren `forward_auth` bleiben
-unverändert. Bot, Dashboard-Runtime und Datenbank müssen nicht neu gestartet werden.
+Der Installer sichert eine alte Seite einschließlich undatierter kuratierter
+Einträge außerhalb des Webroots in `/var/backups/deadlock-roadmap/`. Er erfindet
+für diese Alt-Einträge keine Datumswerte. Der Update-Dienst läuft anschließend als
+`nathanael`, pinnt `origin/main` und darf nur Webroot und Git-Metadatenverzeichnis
+beschreiben. Fetch-/Generatorfehler lassen die bisherige HTML-Datei unverändert.
+Normale neue Commits werden automatisch aufgenommen; geänderte UI-/Generator-Assets
+benötigen eine erneute autorisierte Installation. Fremde Arbeitsbaumänderungen
+werden weder ausgecheckt noch gestasht oder zurückgesetzt.
 
-Nach einer Installation prüfen:
+Nach autorisierter Installation sind Dienst-/Timerstatus und Logs zu prüfen.
+Zusätzlich muss der Betrieb die tatsächliche Seite **angemeldet** öffnen, den
+neuen Stammbaum und seinen Quellstand bestätigen und **unangemeldet** den weiterhin
+wirksamen Zugriffsschutz prüfen. Keine öffentliche Abnahme-Route hinzufügen.
+Rollback benötigt dieselben Betriebsrechte: Timer stoppen und einen geprüften
+Backup-Snapshot atomar wiederherstellen; Backups niemals über den Webserver anbieten.
 
-```sh
-systemctl status deadlock-roadmap-history.service deadlock-roadmap-history.timer
-journalctl -u deadlock-roadmap-history.service --no-pager -n 30
-```
+## Nachgewiesene lokale Abnahme
 
-Zusätzlich angemeldet im Admin-Panel die Roadmap öffnen und unangemeldet prüfen,
-dass weiterhin die Discord-Anmeldung verlangt wird. Die vorliegende Browser-Abnahme
-prüft das statische Artefakt lokal, nicht eine authentifizierte Produktionssession.
+Mit Main-Datenrevision `95c28e982e68ab948b078009dba1e687eac43f6f`:
 
-Rollback: Timer stoppen, einen zuvor geprüften Backup-Snapshot als temporäre Datei
-im Webroot bereitstellen und per atomarem Rename auf `index.html` zurücksetzen.
-Dazu werden dieselben autorisierten Betriebsrechte benötigt. Die Backups dürfen
-nicht direkt über den Webserver angeboten werden.
+- 3.625 eindeutige Nicht-Merge-Commits, vollständiger Klon; 38 Taxonomie-Einträge.
+- 28 Python-Tests und 23 Node-Tests erfolgreich.
+- 12 Browser-Prüfgruppen erfolgreich, einschließlich tatsächlicher SVG-Anschlüsse,
+  Mehrgenerationen, Kontext-Eltern, Maus-/Tastaturbedienung, Zoom, Filter, Direktlinks,
+  Seitenwechsel, HTML-Injektion und Desktop-/Mobil-Details.
+- Die lokale Uplink-Ansicht enthält keine Knotenüberschneidung; fünf tatsächlich
+  gerenderte Elternanschlüsse wurden gegen Browser-Koordinaten geprüft.
+- Der dichte Modelltest bewahrt 1.200 Ereignisse vollständig ohne 1.200 DOM-Knoten.
+- Keine JavaScript-Laufzeitfehler oder externe Font-/Diagramm-/CDN-Anfragen im Browser-Test.
 
-## Abnahmestand
-
-Am Quellstand `4a377acfa832c77eaa2f3e3f8769627669e9ce94`:
-
-- 3.622 eindeutige Nicht-Merge-Commits, 24.02.2026 bis 17.09.2026, vollständiger Klon.
-- 14 Python- und 16 Node-Tests erfolgreich.
-- 9 Browser-Prüfgruppen erfolgreich, keine JavaScript-Laufzeitfehler und keine
-  horizontale Seitenüberbreite an den beiden geprüften Bildschirmgrößen.
-- Produktionsinstaller und Timer vorbereitet, aber bei dieser Abnahme **nicht
-  installiert oder ausgeführt**. Der unveränderte Produktions-Webroot ist noch
-  geschützt; die bestehende Live-Seite wurde nicht ausgetauscht.
+Spätere Actions-Berichte nennen ihren eigenen gepinnten Datenstand. Die lokale
+Abnahme behauptet weder eine authentifizierte Produktionsprüfung noch einen Deploy.

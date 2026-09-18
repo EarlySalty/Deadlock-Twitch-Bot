@@ -1,11 +1,9 @@
-/* DOM rendering uses textContent for all repository-derived strings. */
+/* Repository-derived content is always inserted as text, never as HTML. */
 const DATA = JSON.parse(document.getElementById('roadmap-data').textContent);
-const featureMap = new Map(DATA.features.map(f => [f.id, f]));
-const groupMap = new Map(DATA.groups.map(g => [g.id, g]));
-const allRows = new Map(featureRows(DATA, DATA.commits).map(f => [f.id, f]));
+const INDEX = familyIndex(DATA);
 const bounds = dateBounds(DATA.commits);
-const number = value => value.toLocaleString('de-DE');
 const $ = id => document.getElementById(id);
+const number = value => value.toLocaleString('de-DE');
 const el = (tag, className = '', text) => {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -13,45 +11,55 @@ const el = (tag, className = '', text) => {
   return node;
 };
 const button = (text, className, handler) => {
-  const node = el('button', className, text);
-  node.type = 'button';
-  node.addEventListener('click', handler);
+  const node = el('button', className, text); node.type = 'button';
+  node.addEventListener('click', handler); return node;
+};
+const svgEl = (tag, attributes = {}) => {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, String(value));
   return node;
 };
-const colorize = (node, group) => node.style.setProperty('--group-color', group.color);
-const kindLabel = c => KINDS[c.kind] || 'Änderung';
-const commitLink = c => {
-  const link = el('a', 'commit-link', c.id.slice(0, 8) + ' ↗');
-  link.href = 'https://github.com/EarlySalty/Deadlock-Twitch-Bot/commit/' + c.id;
-  link.target = '_blank'; link.rel = 'noopener noreferrer';
-  link.setAttribute('aria-label', 'Commit ' + c.id.slice(0, 8) + ' auf GitHub öffnen');
-  return link;
+const externalLink = (label, suffix, className = '') => {
+  const node = el('a', className, label);
+  node.href = 'https://github.com/EarlySalty/Deadlock-Twitch-Bot/' + suffix;
+  node.target = '_blank'; node.rel = 'noopener noreferrer'; return node;
 };
+const commitLink = c => externalLink(c.id.slice(0, 8) + ' · Code-Diff ↗', 'commit/' + encodeURIComponent(c.id), 'commit-link');
+const sourceLink = path => externalLink(path, 'blob/' + DATA.revision + '/' + path.split('/').map(encodeURIComponent).join('/'));
 const initial = new URLSearchParams(location.search);
-let view = ['roadmap', 'tree', 'list'].includes(initial.get('view')) ? initial.get('view') : 'roadmap';
-let selectedCommits = [];
-let currentFeature = '';
-let currentMonth = '';
-let listLimit = 80;
-let searchTimer;
-
-for (const g of DATA.groups) {
-  const option = el('option', '', g.title); option.value = g.id; $('group').append(option);
+let view = initial.get('view') === 'list' ? 'list' : 'tree';
+let focusId = initial.get('focus') || (initial.has('search') || initial.has('feature') ? 'product' : INDEX.has('uplink') ? 'uplink' : 'product');
+if (!INDEX.has(focusId)) focusId = 'product';
+let collapsed = new Set((initial.get('collapsed') || '').split(',').filter(id => INDEX.has(id)));
+let currentFeature = '', currentEvent = '', currentMonth = '';
+let selectedCommits = [], selection, graph;
+let listLimit = 80, detailPage = 0, detailFull = false, includeChildren = true;
+let returnFocus = null, ignoreClose = false, searchTimer, cameraTimer, paintFrame;
+const mobileLayout = matchMedia('(max-width:760px)');
+const camera = {x: 0, y: 0, zoom: 1};
+for (const [key, param] of [['x', 'x'], ['y', 'y'], ['zoom', 'zoom']]) {
+  const value = Number(initial.get(param));
+  if (initial.has(param) && Number.isFinite(value)) camera[key] = value;
 }
-for (const key of ['group', 'period', 'kind']) {
-  const value = initial.get(key);
-  if ([...$(key).options].some(option => option.value === value)) $(key).value = value;
+camera.zoom = Math.max(.08, Math.min(1.75, camera.zoom));
+const nodeElements = new Map();
+for (const group of DATA.groups) {const option = el('option', '', group.title); option.value = group.id; $('group').append(option);}
+for (const node of INDEX.values()) {
+  if (node.id === 'product') continue;
+  const option = el('option', '', '　'.repeat(Math.max(0, node.depth - 1)) + node.title + (!node.first ? ' (ohne Git-Nachweis)' : ''));
+  option.value = node.id; $('focus-feature').append(option);
+}
+for (const id of ['group', 'period', 'kind']) {
+  if ([...$(id).options].some(o => o.value === initial.get(id))) $(id).value = initial.get(id);
 }
 $('search').value = initial.get('search') || '';
 $('maintenance').checked = initial.get('maintenance') === '1';
-for (const key of ['from', 'to']) {
-  const value = initial.get(key);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value || '')) $(key).value = value;
-  $(key).min = bounds.first; $(key).max = bounds.last;
+for (const id of ['from', 'to']) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(initial.get(id) || '')) $(id).value = initial.get(id);
+  $(id).min = bounds.first; $(id).max = bounds.last;
 }
 function filters() {
-  return {search: $('search').value, group: $('group').value, period: $('period').value, kind: $('kind').value,
-    maintenance: $('maintenance').checked, from: $('from').value, to: $('to').value};
+  return {search: $('search').value, group: $('group').value, period: $('period').value, kind: $('kind').value, maintenance: $('maintenance').checked, from: $('from').value, to: $('to').value};
 }
 function saveState() {
   const params = new URLSearchParams();
@@ -59,246 +67,374 @@ function saveState() {
   for (const key of ['search', 'group', 'period', 'kind']) if (state[key]) params.set(key, state[key]);
   if (state.period === 'custom') for (const key of ['from', 'to']) if (state[key]) params.set(key, state[key]);
   if (state.maintenance) params.set('maintenance', '1');
-  params.set('view', view);
+  params.set('view', view); params.set('focus', focusId);
+  if (collapsed.size) params.set('collapsed', [...collapsed].sort().join(','));
   if (currentFeature) params.set('feature', currentFeature);
+  if (currentEvent) params.set('event', currentEvent);
   if (currentMonth) params.set('month', currentMonth);
+  if (detailFull) params.set('full', '1');
+  if (!includeChildren) params.set('children', '0');
+  for (const key of ['x', 'y', 'zoom']) params.set(key, String(Math.round(camera[key] * 100) / 100));
   history.replaceState(null, '', location.pathname + '?' + params.toString());
 }
 function summary() {
   $('snapshot-date').textContent = dateLabel(bounds.last);
   $('snapshot-ref').textContent = DATA.ref + ' · ' + DATA.revision.slice(0, 8);
-  const active = DATA.features.filter(f => f.id !== 'other' && allRows.has(f.id)).length;
-  const items = [
-    [number(active), 'Features mit Historie', 'Nach Fachgebieten geordnet'],
-    [number(DATA.commits.length), 'Codeänderungen', 'Gesamte Historie · ohne Merges'],
-    [number(DATA.commits.filter(c => c.kind === 'fix').length), 'Fehlerbehebungen', 'Commit-Typ fix · gesamte Historie'],
-    [number(monthsBetween(bounds.first, bounds.last).length), 'Monate Entwicklung', dateLabel(bounds.first) + ' – ' + dateLabel(bounds.last)],
-  ];
-  for (const [value, label, hint] of items) {
-    const node = el('div', 'stat'); node.append(el('strong', '', value), el('span', '', label), el('small', '', hint)); $('stats').append(node);
+  const active = [...INDEX.values()].filter(f => f.id !== 'product' && f.id !== 'other' && f.first).length;
+  for (const [value, label] of [[active, 'Funktionen mit Git-Nachweis'], [new Set(DATA.commits.map(c => c.id)).size, 'eindeutige Codeänderungen'], [DATA.commits.filter(c => ['ambiguous', 'unassigned'].includes(c.basis)).length, 'offene Zuordnungen']]) {
+    const stat = el('span'); stat.append(el('strong', '', number(value)), document.createTextNode(label)); $('stats').append(stat);
   }
   const generated = new Date(DATA.generatedAt);
   $('generated-at').textContent = 'Erzeugt: ' + generated.toLocaleString('de-DE', {timeZone: 'Europe/Berlin'}) + ' · Europe/Berlin';
-  if (DATA.shallow) $('notices').append(el('p', 'notice', 'Unvollständige Git-Historie: Diese Quelle ist ein flacher Klon. Frühe Änderungen können fehlen.'));
-  if (Date.now() - generated.getTime() > 7 * 86400000) $('notices').append(el('p', 'notice', 'Dieser Datenstand wurde seit über sieben Tagen nicht aktualisiert. Neuere Änderungen können fehlen.'));
+  if (DATA.shallow) $('notices').append(el('p', 'notice', 'Flacher Klon: Frühere Git-Nachweise können fehlen.'));
+  if (Date.now() - generated.getTime() > 7 * 86400000) $('notices').append(el('p', 'notice', 'Dieser Datenstand ist über sieben Tage alt. Neuere Änderungen können fehlen.'));
+  const unverified = DATA.features.filter(f => f.id !== 'other' && !f.relation?.verified);
+  if (unverified.length) $('notices').append(el('p', 'notice', number(unverified.length) + ' Funktionszuordnungen haben in diesem Git-Stand keinen vollständigen Komponentenbeleg. Die Details benennen die fehlenden Quellen.'));
 }
-function empty(message) {
-  const box = el('div', 'empty');
-  box.append(el('strong', '', 'Keine passenden Änderungen'), el('p', '', message));
-  $('content').append(box);
+function selectedKey() {
+  if (currentEvent) {
+    const found = graph?.nodes.find(n => n.type === 'events' && n.featureId === currentFeature && n.events.some(c => c.id === currentEvent));
+    if (found) return found.key;
+  }
+  return currentFeature ? 'f:' + currentFeature : '';
 }
-function orderedGroups(rows) {
-  return DATA.groups.map(group => ({...group, rows: rows.filter(f => f.group === group.id).sort((a, b) => compareDates(b.commits.at(-1), a.commits.at(-1)) || a.title.localeCompare(b.title, 'de'))})).filter(g => g.rows.length);
+function clampCamera() {
+  if (!graph) return;
+  const width = $('viewport').clientWidth, height = $('viewport').clientHeight;
+  camera.x = Math.max(Math.min(24, width - graph.width * camera.zoom - 24), Math.min(24, camera.x));
+  camera.y = Math.max(Math.min(12, height - graph.height * camera.zoom - 16), Math.min(12, camera.y));
 }
-function renderRoadmap(rows, range) {
-  const months = monthsBetween(range.from, range.to);
-  const board = el('div', 'board');
-  board.tabIndex = 0;
-  board.setAttribute('role', 'region');
-  board.setAttribute('aria-label', 'Horizontal scrollbare Zeitachse, Monate von links nach rechts');
-  const grid = el('div', 'board-grid');
-  const labelWidth = matchMedia('(max-width:600px)').matches ? 145 : 230;
-  grid.style.gridTemplateColumns = labelWidth + 'px repeat(' + months.length + ', minmax(230px, 1fr))';
-  grid.append(el('div', 'axis-label', 'FEATURE / ENTWICKLUNG'));
-  for (const month of months) grid.append(el('div', 'month-label', monthLabel(month)));
-  for (const group of orderedGroups(rows)) {
-    const heading = el('div', 'group-row'); colorize(heading, group);
-    heading.append(el('span', '', '↳ ' + group.title + ' · ' + group.rows.length + ' Features'));
-    grid.append(heading);
-    for (const feature of group.rows) {
-      const label = button('', 'feature-label', () => openDetail(feature.id));
-      colorize(label, group);
-      label.append(el('span', 'feature-group', 'Feature-Entwicklung'), el('strong', '', feature.title), el('small', '', number(feature.commits.length) + ' Änderungen im Zeitraum'), el('small', '', 'Gesamte Linie öffnen →'));
-      label.setAttribute('aria-label', feature.title + ': gefilterte Entwicklung öffnen');
-      grid.append(label);
-      const first = feature.commits[0].date.slice(0, 7), last = feature.commits.at(-1).date.slice(0, 7);
-      for (const month of months) {
-        const cell = el('div', 'month-cell' + (month >= first && month <= last ? ' active' : ''));
-        colorize(cell, group);
-        const events = feature.commits.filter(c => c.date.startsWith(month));
-        if (events.length) {
-          const sample = representative(events);
-          const card = button('', 'milestone ' + sample.kind, () => openDetail(feature.id, month));
-          const meta = el('span', 'event-meta');
-          meta.append(el('span', 'badge', kindLabel(sample)), el('span', '', dateLabel(sample.date).slice(0, 6)));
-          const additions = events.filter(c => c.kind === 'feat').length, fixes = events.filter(c => c.kind === 'fix').length;
-          const counts = [additions ? additions + ' Erweiterungen' : '', fixes ? fixes + ' Fixes' : ''].filter(Boolean).join(' · ');
-          card.append(meta, el('span', 'milestone-title', sample.title), el('span', 'counts', counts || number(events.length) + ' Änderungen'), el('span', 'counts', number(events.length) + ' Änderungen ansehen →'));
-          card.title = feature.title + ' · ' + monthLabel(month) + '\n' + sample.title;
-          card.setAttribute('aria-label', feature.title + ', ' + monthLabel(month) + ', ' + events.length + ' Änderungen anzeigen');
-          cell.append(card);
-        }
-        grid.append(cell);
-      }
+function paintWindow() {
+  paintFrame = null;
+  if (view !== 'tree' || !graph) return;
+  clampCamera();
+  $('stage').style.transform = `translate(${camera.x}px,${camera.y}px) scale(${camera.zoom})`;
+  $('axis').style.transform = `translateX(${camera.x}px)`;
+  const axisLabels = [...$('axis').children];
+  if (axisLabels[0]) {
+    axisLabels[0].style.width = graph.calendarStart * camera.zoom + 'px';
+    axisLabels[0].textContent = graph.calendarStart * camera.zoom >= 190 ? 'FUNKTIONSGENERATIONEN' : '';
+  }
+  const labelStep = Math.max(1, Math.ceil(140 / (264 * camera.zoom)));
+  axisLabels.slice(1).forEach((label, i) => {
+    label.style.left = (graph.calendarStart + i * 264) * camera.zoom + 'px';
+    label.style.width = 264 * camera.zoom * labelStep + 'px';
+    label.hidden = i % labelStep !== 0;
+  });
+  const left = -camera.x / camera.zoom - 120, top = -camera.y / camera.zoom - 120;
+  const right = left + $('viewport').clientWidth / camera.zoom + 240, bottom = top + $('viewport').clientHeight / camera.zoom + 240;
+  const activeKey = document.activeElement?.closest('.graph-node')?.dataset.key;
+  const keep = new Set();
+  for (const node of graph.nodes) {
+    if (!(node.x < right && node.x + node.width > left && node.y < bottom && node.y + node.height > top) && node.key !== activeKey && node.key !== selectedKey()) continue;
+    keep.add(node.key);
+    if (!nodeElements.has(node.key)) {
+      const element = graphNode(node);
+      Object.assign(element.style, {left: node.x + 'px', top: node.y + 'px', width: node.width + 'px', height: node.height + 'px'});
+      element.dataset.key = node.key;
+      nodeElements.set(node.key, element); $('nodes').append(element);
     }
+    nodeElements.get(node.key).classList.toggle('is-selected', node.key === selectedKey());
   }
-  board.append(grid); $('content').append(board);
+  for (const [key, node] of nodeElements) if (!keep.has(key)) {node.remove(); nodeElements.delete(key);}
+  $('zoom-reset').textContent = Math.round(camera.zoom * 100) + ' %';
+  $('graph-status').textContent = number(nodeElements.size) + ' / ' + number(graph.nodes.length) + ' Knoten im Ausschnitt';
 }
-function renderTree(rows) {
-  const container = el('div', 'tree-content');
-  const root = el('div', 'tree-root');
-  root.append(el('span', 'brand-mark', 'D'));
-  const info = el('div'); info.append(el('strong', '', 'Twitch-Plattform'), el('small', '', 'Bereich → Feature → datierte Entwicklung · fachlich gruppiert, keine technischen Abhängigkeiten'));
-  root.append(info); container.append(root);
-  for (const group of orderedGroups(rows)) {
-    const family = el('section', 'family'); colorize(family, group);
-    const heading = el('div', 'family-heading'); heading.append(el('h3', '', group.title), el('span', '', group.description)); family.append(heading);
-    const cards = el('div', 'feature-cards');
-    for (const feature of group.rows) {
-      const card = el('article', 'feature-card');
-      card.append(el('h3', '', feature.title), el('p', 'description', feature.description));
-      const dates = el('div', 'dates');
-      const full = allRows.get(feature.id).commits;
-      for (const [label, value] of [['Erster Nachweis', full[0].date], ['Zuletzt geändert', full.at(-1).date]]) {
-        const entry = el('span', '', label); entry.append(el('strong', '', dateLabel(value))); dates.append(entry);
-      }
-      card.append(dates);
-      const history = el('div', 'mini-history');
-      for (const c of milestones(feature.commits)) {
-        const node = el('div', 'mini-node ' + c.kind);
-        const time = el('time', '', dateLabel(c.date) + ' · ' + kindLabel(c)); time.dateTime = c.date;
-        node.append(time, el('p', '', c.title)); history.append(node);
-      }
-      card.append(history, button(number(feature.commits.length) + ' Änderungen im Filter öffnen →', 'open-feature', () => openDetail(feature.id)));
-      cards.append(card);
-    }
-    family.append(cards); container.append(family);
-  }
-  $('content').append(container);
+function schedulePaint() {if (!paintFrame) paintFrame = requestAnimationFrame(paintWindow);}
+function reveal(key) {
+  const node = graph?.nodes.find(n => n.key === key);
+  if (!node || view !== 'tree') return;
+  const margin = 22, width = $('viewport').clientWidth, height = $('viewport').clientHeight;
+  const left = node.x * camera.zoom + camera.x, right = (node.x + node.width) * camera.zoom + camera.x;
+  const top = node.y * camera.zoom + camera.y, bottom = (node.y + node.height) * camera.zoom + camera.y;
+  if (right > width - margin) camera.x -= right - width + margin;
+  if (left < margin) camera.x += margin - left;
+  if (bottom > height - margin) camera.y -= bottom - height + margin;
+  if (top < margin) camera.y += margin - top;
+  paintWindow();
 }
-function renderList() {
-  const container = el('div', 'list-content');
-  const events = selectedCommits.slice().sort(compareDates).reverse();
-  const days = new Map();
-  for (const c of events.slice(0, listLimit)) {
-    if (!days.has(c.date)) days.set(c.date, []);
-    days.get(c.date).push(c);
+function resetCamera() {Object.assign(camera, {x: 0, y: 0, zoom: 1});}
+function zoomTo(value, x = $('viewport').clientWidth / 2, y = $('viewport').clientHeight / 2) {
+  const next = Math.max(.08, Math.min(1.75, value));
+  camera.x = x - (x - camera.x) / camera.zoom * next;
+  camera.y = y - (y - camera.y) / camera.zoom * next;
+  camera.zoom = next; paintWindow(); saveState();
+}
+function focusFeature(id, detail = false) {
+  if (!INDEX.has(id)) return;
+  focusId = id; view = 'tree';
+  let node = INDEX.get(id);
+  while (node) {collapsed.delete(node.id); node = INDEX.get(node.parentId);}
+  resetCamera(); render();
+  reveal('f:' + id); saveState();
+  if (detail) openDetail(id);
+}
+function graphNode(node) {
+  if (node.type === 'events') {
+    const sample = node.sample;
+    const card = button('', 'graph-node event-node ' + sample.kind, () => openDetail(node.featureId, sample.id, node.events.length > 1 ? node.month : ''));
+    card.setAttribute('aria-label', INDEX.get(node.featureId).title + ', ' + dateLabel(node.first) + ', ' + (KINDS[sample.kind] || 'Änderung') + ': ' + sample.title + '. ' + node.events.length + ' Einzelereignisse öffnen');
+    const meta = el('span', 'event-meta');
+    meta.append(el('time', '', dateLabel(node.first) + (node.last !== node.first ? ' – ' + dateLabel(node.last) : '')));
+    meta.append(el('span', 'badge', KINDS[sample.kind] || 'Änderung'));
+    card.append(meta, el('span', 'event-title', sample.title));
+    if (node.events.length > 1) card.append(el('span', 'bundle-note', 'Monatsbündel · gezeigtes Beispiel: ' + dateLabel(sample.date)));
+    card.append(el('span', 'bundle-link', node.events.length > 1 ? 'Alle ' + number(node.events.length) + ' Einzelereignisse →' : 'Änderung & Code-Diff →'));
+    return card;
   }
-  for (const [date, commits] of days) {
-    const day = el('section', 'list-day');
-    const time = el('h3', 'list-date', dateLabel(date)); day.append(time);
-    const entries = el('div', 'list-events');
-    for (const c of commits) {
-      const entry = el('article', 'event-line ' + c.kind);
-      entry.append(el('span', 'badge', kindLabel(c)), el('h3', '', c.title));
-      const links = el('div', 'event-links');
-      for (const id of c.features) if (featureMap.has(id)) links.append(button(featureMap.get(id).title, 'feature-link', () => openDetail(id)));
-      links.append(commitLink(c)); entry.append(links); entries.append(entry);
-    }
-    day.append(entries); container.append(day);
+  const card = el('article', 'graph-node' + (node.context ? ' context' : '') + (node.id === 'product' ? ' root-node' : ''));
+  card.dataset.feature = node.id;
+  const main = button('', 'node-main', () => openDetail(node.id));
+  main.setAttribute('aria-label', node.title + '. Erster Git-Nachweis: ' + dateLabel(node.first) + '. ' + node.description + (node.context ? ' Kontext-Elternteil.' : ''));
+  main.append(el('span', 'node-overline', node.id === 'product' ? 'Produktursprung' : (node.depth === 1 ? 'Hauptfeature' : 'Unterfunktion') + (node.context ? ' · Kontext' : '')),
+    el('strong', '', node.title), el('span', 'node-description', node.description), el('span', 'node-date', 'Git-Nachweis: ' + dateLabel(node.first)));
+  const actions = el('div', 'node-actions');
+  if (node.visibleChildren.length) {
+    const collapse = button((node.collapsed ? '+ ' : '− ') + node.visibleChildren.length + ' Unterzweige', '', () => {
+      if (collapsed.has(node.id)) collapsed.delete(node.id); else collapsed.add(node.id);
+      render(); reveal('f:' + node.id);
+      nodeElements.get('f:' + node.id)?.querySelector('.node-actions button')?.focus({preventScroll: true});
+    });
+    collapse.setAttribute('aria-expanded', String(!node.collapsed));
+    collapse.setAttribute('aria-label', node.title + ': Unterzweige ' + (node.collapsed ? 'aufklappen' : 'zuklappen'));
+    actions.append(collapse);
+  } else actions.append(button(number(node.commits.length) + ' Änderungen', '', () => openDetail(node.id)));
+  const focus = button('Fokus ↗', '', () => focusFeature(node.id, true));
+  focus.setAttribute('aria-label', 'Zweig fokussieren: ' + node.title); actions.append(focus);
+  card.append(main, actions); return card;
+}
+function renderGraph() {
+  graph = layoutFamily(selection);
+  nodeElements.clear(); $('nodes').replaceChildren(); $('edges').replaceChildren(); $('axis').replaceChildren();
+  $('stage').style.width = graph.width + 'px'; $('stage').style.height = graph.height + 'px';
+  $('edges').setAttribute('width', graph.width); $('edges').setAttribute('height', graph.height);
+  $('axis').style.width = graph.width + 'px';
+  const structure = el('span', 'axis-label axis-structure', 'FUNKTIONSGENERATIONEN');
+  structure.style.width = graph.calendarStart + 'px'; $('axis').append(structure);
+  for (let i = 0; i < graph.months.length; i++) {
+    const x = graph.calendarStart + i * 264;
+    const label = el('span', 'axis-label', monthLabel(graph.months[i]));
+    Object.assign(label.style, {left: x + 'px', width: '264px'}); $('axis').append(label);
+    $('edges').append(svgEl('line', {x1: x, x2: x, y1: 0, y2: graph.height, class: 'calendar-line'}));
   }
-  if (events.length > listLimit) container.append(button('Weitere Änderungen laden (' + number(events.length - listLimit) + ' verbleibend)', 'more', () => {
-    listLimit += 80; $('content').replaceChildren(); renderList();
-  }));
-  $('content').append(container);
+  for (const edge of graph.edges) {
+    const bend = Math.min(48, Math.max(10, (edge.x2 - edge.x1) / 2));
+    const d = `M${edge.x1},${edge.y1} C${edge.x1 + bend},${edge.y1} ${edge.x2 - bend},${edge.y2} ${edge.x2},${edge.y2}`;
+    const path = svgEl('path', {d, class: edge.kind + '-edge', 'data-source': edge.source, 'data-target': edge.target, 'vector-effect': 'non-scaling-stroke'});
+    $('edges').append(path);
+  }
+  $('empty').hidden = selection.commitCount > 0;
+  const range = rangeFor(filters().period, bounds, filters().from, filters().to);
+  $('empty-message').textContent = range.from > range.to ? 'Das Startdatum liegt nach dem Enddatum. Bitte korrigiere den Zeitraum.' : !INDEX.get(focusId).first ? 'Für diese redaktionelle Funktion gibt es im ausgewerteten Git-Stand noch keinen zugeordneten Nachweis. Es wird kein Datum erfunden.' : 'Suchbegriff, Zeitraum oder fokussierten Zweig ändern. Doku, Tests und Pflege lassen sich zusätzlich einblenden.';
+  paintWindow();
 }
 function historyEvent(c) {
-  const event = el('article', 'history-event ' + c.kind);
+  const event = el('article', 'history-event ' + c.kind + (currentEvent === c.id ? ' selected-event' : ''));
+  event.dataset.commit = c.id;
+  if (currentEvent === c.id) event.append(el('div', 'selected-label', 'AUSGEWÄHLTE ÄNDERUNG'));
   const meta = el('div', 'event-meta');
-  const date = el('time', '', dateLabel(c.date)); date.dateTime = c.date;
-  meta.append(date, el('span', 'badge', kindLabel(c)), commitLink(c));
+  const time = el('time', '', dateLabel(c.date)); time.dateTime = c.date;
+  meta.append(time, el('span', 'badge', KINDS[c.kind] || 'Änderung'), commitLink(c));
   event.append(meta, el('h3', '', c.title));
   if (c.note) event.append(el('p', '', c.note));
   const details = el('details');
-  const basis = {subject: 'Automatisch · Commit-Titel', path: 'Automatisch · Dateipfade', crosscut: 'Automatisch · bereichsübergreifend', curated: 'Redaktionell zugeordnet', unassigned: 'Noch nicht zugeordnet'};
-  details.append(el('summary', '', (basis[c.basis] || 'Automatische Zuordnung') + ' · Belege anzeigen'));
+  const labels = {subject: 'Automatisch · Commit-Titel', path: 'Automatisch · Dateipfade', crosscut: 'Bereichsübergreifend', ambiguous: 'Unklare Zuordnung', curated: 'Redaktionell korrigiert', unassigned: 'Noch nicht zugeordnet'};
+  details.append(el('summary', '', (labels[c.basis] || 'Zuordnung') + ' · Belege'));
   details.append(el('p', '', 'Originaler Commit-Titel'), el('pre', '', c.subject));
-  if (c.evidence.length) details.append(el('p', '', 'Zuordnungsgrund'), el('pre', '', c.evidence.join('\n')));
-  details.append(el('p', '', number(c.pathCount) + ' geänderte Dateien' + (c.pathCount > c.paths.length ? ' · erste ' + c.paths.length + ' angezeigt; alle im Commit-Link' : '')));
-  if (c.paths.length) details.append(el('pre', '', c.paths.join('\n')));
-  event.append(details);
-  return event;
+  if (c.evidence?.length) details.append(el('p', '', 'Zuordnungsgrund'), el('pre', '', c.evidence.join('\n')));
+  details.append(el('p', '', number(c.pathCount || 0) + ' geänderte Dateien' + (c.pathCount > c.paths.length ? ' · vollständige Liste im Code-Diff' : '')));
+  if (c.paths?.length) details.append(el('pre', '', c.paths.join('\n')));
+  const links = el('div', 'relation-links');
+  for (const id of c.features) links.append(button(INDEX.get(id).title, 'feature-link', () => {focusFeature(id); openDetail(id, c.id);}));
+  details.append(links); event.append(details); return event;
 }
-function openDetail(id, month = '', full = false) {
-  const feature = allRows.get(id);
-  if (!feature) return;
-  currentFeature = id;
-  currentMonth = month;
-  const group = groupMap.get(feature.group);
-  const total = feature.commits;
-  const matching = selectedCommits.filter(c => c.features.includes(id) && (!month || c.date.startsWith(month))).sort(compareDates);
-  const events = full ? total : matching;
-  colorize($('detail'), group);
-  $('detail-group').textContent = group.title + ' / FEATURE-ENTWICKLUNG';
-  $('detail-title').textContent = feature.title;
+function detailEvents(node) {
+  const ids = new Set((includeChildren ? node.allCommits : node.commits).map(c => c.id));
+  return (detailFull ? DATA.commits : selectedCommits).filter(c => ids.has(c.id) && (!currentMonth || c.date.startsWith(currentMonth))).slice().sort(compareDates);
+}
+function paintDetail() {
+  const node = INDEX.get(currentFeature);
+  if (!node) return;
+  $('detail-group').textContent = node.id === 'product' ? 'PRODUKTURSPRUNG / GIT-NACHWEISE' : 'FUNKTION / ' + (node.relation?.kind === 'historical' && node.relation?.verified ? 'HISTORISCH BELEGT' : 'FACHLICH ZUGEORDNET');
+  $('detail-title').textContent = node.title;
   const body = $('detail-body'); body.replaceChildren();
-  body.append(el('p', 'detail-intro', feature.description));
+  body.append(el('p', 'detail-intro', node.description));
   const facts = el('div', 'detail-facts');
-  for (const [label, value] of [['Erster Nachweis im Repository', dateLabel(total[0].date)], ['Zuletzt im Repository geändert', dateLabel(total.at(-1).date)], ['Gesamte Historie inkl. Technik & Pflege', number(total.length) + ' Änderungen'], ['Davon Fehlerbehebungen', number(total.filter(c => c.kind === 'fix').length)]]) {
-    const fact = el('div', '', label); fact.append(el('strong', '', value)); facts.append(fact);
+  for (const [label, value] of [['Erster Git-Nachweis inkl. Kinder', dateLabel(node.first)], ['Letzte Änderung inkl. Kinder', dateLabel(node.last)], ['Erster direkter Git-Nachweis', dateLabel(node.firstDirect)], ['Eindeutig im gesamten Teilbaum', number(node.allCommits.length) + ' Änderungen']]) {
+    const item = el('div', '', label); item.append(el('strong', '', value)); facts.append(item);
   }
   body.append(facts);
-  const scope = el('div', 'detail-scope');
-  scope.append(el('p', '', full ? 'Gesamte Entwicklung einschließlich Doku, Tests und Pflege. Zeitlich von früher nach heute.' : number(matching.length) + ' Änderungen passend zu deinen Filtern' + (month ? ' · ' + monthLabel(month) : '') + '. Zeitlich von früher nach heute.'));
-  scope.append(button(full ? 'Zur gefilterten Auswahl' : 'Vollständige Entwicklung zeigen (' + number(total.length) + ')', 'more', () => openDetail(id, month, !full)));
-  body.append(scope);
-  const history = el('div', 'history'); body.append(history);
-  let loaded = 0;
-  const more = button('Weitere Änderungen laden', 'more', () => appendPage());
-  function appendPage() {
-    for (const c of events.slice(loaded, loaded + 40)) history.append(historyEvent(c));
-    loaded = Math.min(loaded + 40, events.length);
-    more.textContent = 'Weitere Änderungen laden (' + number(events.length - loaded) + ' verbleibend)';
-    more.hidden = loaded >= events.length;
+  const relatives = el('div', 'detail-relations');
+  if (node.parentId) {
+    relatives.append(el('span', '', 'Elternfeature'), button('← ' + INDEX.get(node.parentId).title, 'feature-link', () => focusFeature(node.parentId, true)));
   }
-  appendPage(); body.append(more);
-  if (!events.length) history.append(el('p', 'detail-intro', 'Keine Änderungen in dieser Auswahl. Öffne die vollständige Entwicklung oder passe die Filter an.'));
-  if (!$('detail').open) $('detail').showModal();
-  document.body.style.overflow = 'hidden';
+  relatives.append(el('span', '', node.children.length + ' direkte Unterfunktionen'));
+  const children = el('div', 'relation-links');
+  for (const id of node.children) children.append(button(INDEX.get(id).title, 'feature-link', () => focusFeature(id, true)));
+  relatives.append(children); body.append(relatives);
+  if (node.relation) {
+    const evidence = el('details', 'evidence');
+    evidence.append(el('summary', '', 'Grundlage der Funktion & Elternzuordnung'));
+    evidence.append(el('p', '', node.relation.kind === 'historical' ? 'Als historische Beziehung eingetragen. ' + (node.relation.verified ? 'Beleg ist im ausgewerteten Stand enthalten.' : 'Der Beleg ist in diesem Stand NICHT bestätigt.') : 'Redaktionelle, fachliche Einordnung. Kein Beweis einer historischen Abspaltung.'));
+    evidence.append(el('p', '', node.relation.reason));
+    for (const path of node.relation.verifiedSources || []) evidence.append(sourceLink(path));
+    for (const path of node.relation.missingSources || []) evidence.append(el('p', '', 'Im ausgewerteten Stand nicht belegt: ' + path));
+    if (node.relation.commit) evidence.append(externalLink('Eingetragener historischer Beleg ↗', 'commit/' + encodeURIComponent(node.relation.commit)));
+    if (!node.relation.verified && node.id !== 'other') evidence.append(el('p', '', 'Kein vollständiger Komponentenbeleg in diesem Git-Stand.'));
+    body.append(evidence);
+  }
+  const events = detailEvents(node);
+  const scope = el('div', 'detail-scope');
+  scope.append(el('p', '', number(events.length) + ' Änderungen · ' + (detailFull ? 'vollständige Historie' : 'passend zu den Filtern') + (includeChildren ? ' inkl. Unterfunktionen' : ' direkt an dieser Funktion') + (currentMonth ? ' · ' + monthLabel(currentMonth) : '') + '. Chronologisch von früher nach später.'));
+  scope.append(button(detailFull ? 'Gefilterte Historie' : 'Vollständige Historie', 'more', () => {detailFull = !detailFull; currentMonth = ''; detailPage = 0; paintDetail(); saveState();}));
+  if (node.children.length) scope.append(button(includeChildren ? 'Nur direkte Änderungen' : 'Unterfunktionen einbeziehen', 'more', () => {includeChildren = !includeChildren; detailPage = 0; paintDetail(); saveState();}));
+  if (currentMonth) scope.append(button('Alle Monate', 'more', () => {currentMonth = ''; detailPage = 0; paintDetail(); saveState();}));
+  body.append(scope);
+  detailPage = Math.max(0, Math.min(detailPage, Math.ceil(events.length / 40) - 1));
+  const history = el('div', 'history');
+  for (const c of events.slice(detailPage * 40, (detailPage + 1) * 40)) history.append(historyEvent(c));
+  if (!events.length) history.append(el('p', 'detail-intro', 'Keine Ereignisse in dieser Auswahl. Die vollständige Historie und Unterfunktionen können zusätzlich eingeblendet werden.'));
+  body.append(history);
+  if (events.length > 40) {
+    const pagination = el('div', 'history-pagination');
+    const changePage = delta => {detailPage += delta; paintDetail(); $('detail').scrollTop = 0; $('close-detail').focus({preventScroll: true});};
+    const previous = button('Frühere Änderungen', 'more', () => changePage(-1)); previous.disabled = detailPage === 0;
+    const next = button('Weitere Änderungen', 'more', () => changePage(1)); next.disabled = (detailPage + 1) * 40 >= events.length;
+    pagination.append(previous, el('span', '', (detailPage + 1) + ' / ' + Math.ceil(events.length / 40)), next); body.append(pagination);
+  }
+  body.append(el('p', 'detail-intro', 'Git-Nachweise sind keine Einführungstermine oder Deploy-Belege. Automatische Ereigniszuordnungen können ungenau sein.'));
+}
+function openDetail(id, eventId = '', month = '') {
+  const node = INDEX.get(id);
+  if (!node) return;
+  if (!$('detail').open) returnFocus = document.activeElement;
+  currentFeature = id;
+  currentEvent = node.allCommits.some(c => c.id === eventId) ? eventId : '';
+  currentMonth = /^\d{4}-\d{2}$/.test(month) ? month : '';
+  includeChildren = true; detailFull = false;
+  if (currentEvent && !detailEvents(node).some(c => c.id === currentEvent)) {detailFull = true; currentMonth = '';}
+  detailPage = Math.max(0, Math.floor(detailEvents(node).findIndex(c => c.id === currentEvent) / 40));
+  paintDetail();
+  if (!$('detail').open) {
+    if (mobileLayout.matches) {$('detail').showModal(); document.body.style.overflow = 'hidden';}
+    else $('detail').show();
+  }
   $('detail').scrollTop = 0;
+  requestAnimationFrame(() => {reveal(selectedKey()); saveState();});
   saveState();
+}
+function closeDetail() {if ($('detail').open) $('detail').close();}
+$('detail').addEventListener('close', () => {
+  if (ignoreClose) {ignoreClose = false; return;}
+  currentFeature = ''; currentEvent = ''; currentMonth = ''; detailFull = false;
+  document.body.style.overflow = ''; schedulePaint(); saveState();
+  if (returnFocus?.isConnected) returnFocus.focus({preventScroll: true}); else $('focus-feature').focus({preventScroll: true});
+});
+$('detail').addEventListener('cancel', event => {event.preventDefault(); closeDetail();});
+$('close-detail').addEventListener('click', closeDetail);
+document.addEventListener('keydown', event => {if (event.key === 'Escape' && $('detail').open) {event.preventDefault(); closeDetail();}});
+mobileLayout.addEventListener('change', () => {
+  if ($('detail').open) {
+    ignoreClose = true; $('detail').close();
+    if (mobileLayout.matches) {$('detail').showModal(); document.body.style.overflow = 'hidden';}
+    else {$('detail').show(); document.body.style.overflow = '';}
+  }
+  schedulePaint();
+});
+function renderList() {
+  $('list').replaceChildren();
+  const events = selectedCommits.slice().sort(compareDates).reverse();
+  const days = new Map();
+  for (const c of events.slice(0, listLimit)) {if (!days.has(c.date)) days.set(c.date, []); days.get(c.date).push(c);}
+  for (const [date, commits] of days) {
+    const day = el('section', 'list-day'); day.append(el('h3', 'list-date', dateLabel(date)));
+    const entries = el('div', 'list-events');
+    for (const c of commits) {
+      const entry = el('article', 'event-line ' + c.kind); entry.append(el('span', 'badge', KINDS[c.kind]), el('h3', '', c.title));
+      const links = el('div', 'event-links');
+      for (const id of c.features) links.append(button(INDEX.get(id).title, 'feature-link', () => openDetail(id, c.id)));
+      links.append(commitLink(c)); entry.append(links); entries.append(entry);
+    }
+    day.append(entries); $('list').append(day);
+  }
+  if (events.length > listLimit) $('list').append(button('Weitere Änderungen laden (' + number(events.length - listLimit) + ')', 'more', () => {listLimit += 80; renderList();}));
+  if (!events.length) {const empty = el('div', 'empty'); empty.append(el('strong', '', 'Keine passenden Änderungen'), el('p', '', $('empty-message').textContent)); $('list').append(empty);}
 }
 function render() {
   const state = filters();
-  selectedCommits = filterCommits(DATA, state);
-  const range = rangeFor(state.period, bounds, state.from, state.to);
-  const rows = featureRows(DATA, selectedCommits, state.group);
+  selection = selectFamily(DATA, filterCommits(DATA, state), {focus: focusId, collapsed: [...collapsed]}, INDEX);
+  selectedCommits = selection.commits;
+  $('focus-feature').value = focusId;
   $('custom-dates').hidden = state.period !== 'custom';
   for (const node of document.querySelectorAll('[data-view]')) node.setAttribute('aria-pressed', String(node.dataset.view === view));
-  $('result-count').textContent = number(rows.length) + ' Feature-Linien · ' + number(selectedCommits.length) + ' eindeutige Änderungen · ' + dateLabel(range.from) + ' – ' + dateLabel(range.to);
-  $('view-hint').textContent = {
-    roadmap: 'Zeit läuft von links nach rechts. Jede Karte bündelt einen Monat und zeigt eine Erweiterung oder die jüngste Änderung. Anklicken öffnet alle Änderungen. Die Zeitachse lässt sich horizontal scrollen.',
-    tree: 'Jeder Bereich verzweigt sich in Features und deren datierte Entwicklung. Gezeigt werden bis zu drei Stationen aus deiner Auswahl; ein Klick öffnet die vollständige Linie.',
-    list: 'Alle passenden Änderungen, neueste zuerst. Feature-Namen öffnen die Entwicklungslinie; der Commit-Link führt zum tatsächlichen Code-Diff.'
-  }[view];
-  $('content').replaceChildren();
-  if (range.from > range.to) empty('Das Startdatum liegt nach dem Enddatum. Bitte korrigiere den Zeitraum.');
-  else if (!rows.length) empty('Probiere einen anderen Suchbegriff, einen längeren Zeitraum oder blende Technik & Pflege ein.');
-  else if (view === 'roadmap') renderRoadmap(rows, {from: range.from > bounds.first ? range.from : bounds.first, to: range.to < bounds.last ? range.to : bounds.last});
-  else if (view === 'tree') renderTree(rows);
-  else renderList();
+  $('result-count').textContent = number(selection.commitCount) + ' eindeutige Änderungen · ' + INDEX.get(focusId).title;
+  $('graph-pane').hidden = view !== 'tree'; $('list').hidden = view !== 'list';
+  for (const id of ['zoom-out', 'zoom-reset', 'zoom-in', 'fit']) $(id).disabled = view !== 'tree';
+  renderGraph();
+  if (view === 'list') renderList();
+  if (currentFeature && $('detail').open) paintDetail();
   saveState();
+}
+function applyFilters() {
+  listLimit = 80; detailPage = 0; collapsed.clear(); resetCamera(); render();
 }
 $('filters').addEventListener('submit', event => event.preventDefault());
 $('search').addEventListener('input', () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {listLimit = 80; render();}, 160);
+  searchTimer = setTimeout(() => {focusId = 'product'; applyFilters();}, 160);
 });
-for (const id of ['group', 'period', 'kind', 'maintenance', 'from', 'to']) $(id).addEventListener('change', () => {
-  listLimit = 80; render();
+for (const id of ['group', 'period', 'kind', 'maintenance', 'from', 'to']) $(id).addEventListener('change', applyFilters);
+$('focus-feature').addEventListener('change', () => focusFeature($('focus-feature').value));
+$('all-branches').addEventListener('click', () => focusFeature('product'));
+$('reset-filters').addEventListener('click', () => {clearTimeout(searchTimer); $('filters').reset(); $('from').value = ''; $('to').value = ''; focusId = 'product'; applyFilters();});
+for (const node of document.querySelectorAll('[data-view]')) node.addEventListener('click', () => {view = node.dataset.view; render();});
+$('zoom-in').addEventListener('click', () => zoomTo(camera.zoom * 1.2));
+$('zoom-out').addEventListener('click', () => zoomTo(camera.zoom / 1.2));
+$('zoom-reset').addEventListener('click', () => {resetCamera(); paintWindow(); saveState();});
+$('fit').addEventListener('click', () => {
+  camera.zoom = Math.max(.08, Math.min(1, ($('viewport').clientWidth - 32) / graph.width, ($('viewport').clientHeight - 28) / graph.height));
+  camera.x = 12; camera.y = 8; paintWindow(); saveState();
 });
-for (const node of document.querySelectorAll('[data-view]')) node.addEventListener('click', () => {
-  view = node.dataset.view; listLimit = 80; render();
+let drag = null;
+$('viewport').addEventListener('pointerdown', event => {
+  if (event.button !== 0 || event.target.closest('button,a,input,select')) return;
+  drag = {id: event.pointerId, x: event.clientX, y: event.clientY, startX: camera.x, startY: camera.y};
+  $('viewport').setPointerCapture(event.pointerId); $('viewport').classList.add('dragging');
+  $('viewport').focus({preventScroll: true});
 });
-$('reset-filters').addEventListener('click', () => {
-  clearTimeout(searchTimer);
-  $('filters').reset(); $('from').value = ''; $('to').value = ''; listLimit = 80; render();
+$('viewport').addEventListener('pointermove', event => {
+  if (!drag || drag.id !== event.pointerId) return;
+  camera.x = drag.startX + event.clientX - drag.x; camera.y = drag.startY + event.clientY - drag.y; schedulePaint();
 });
-$('close-detail').addEventListener('click', () => $('detail').close());
-$('detail').addEventListener('close', () => {
-  currentFeature = ''; currentMonth = ''; document.body.style.overflow = ''; saveState();
+function finishDrag() {drag = null; $('viewport').classList.remove('dragging'); saveState();}
+$('viewport').addEventListener('pointerup', finishDrag);
+$('viewport').addEventListener('pointercancel', finishDrag);
+$('viewport').addEventListener('wheel', event => {
+  event.preventDefault();
+  if (event.ctrlKey || event.metaKey) {
+    const rect = $('viewport').getBoundingClientRect();
+    zoomTo(camera.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1), event.clientX - rect.left, event.clientY - rect.top);
+  } else {
+    camera.x -= event.shiftKey ? event.deltaY : event.deltaX;
+    camera.y -= event.shiftKey ? 0 : event.deltaY;
+    schedulePaint(); clearTimeout(cameraTimer); cameraTimer = setTimeout(saveState, 120);
+  }
+}, {passive: false});
+$('viewport').addEventListener('keydown', event => {
+  if (event.target !== $('viewport')) return;
+  const movement = {ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80]}[event.key];
+  if (movement) {event.preventDefault(); camera.x += movement[0]; camera.y += movement[1]; paintWindow(); saveState();}
+  else if (['+', '=', '-'].includes(event.key)) {event.preventDefault(); zoomTo(camera.zoom * (event.key === '-' ? 1 / 1.2 : 1.2));}
+  else if (event.key === 'Home') {event.preventDefault(); resetCamera(); paintWindow(); saveState();}
 });
-$('detail').addEventListener('click', event => {
-  const rect = $('detail').getBoundingClientRect();
-  if (event.target === $('detail') && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) $('detail').close();
-});
-const compactLayout = matchMedia('(max-width:600px)');
-compactLayout.addEventListener('change', () => {if (view === 'roadmap') render();});
-summary();
-render();
+new ResizeObserver(schedulePaint).observe($('viewport'));
+window.addEventListener('popstate', () => location.reload());
+summary(); render();
 if (initial.has('feature')) {
-  if (allRows.has(initial.get('feature'))) {
-    const month = /^\d{4}-\d{2}$/.test(initial.get('month') || '') ? initial.get('month') : '';
-    openDetail(initial.get('feature'), month);
+  if (INDEX.has(initial.get('feature'))) {
+    openDetail(initial.get('feature'), initial.get('event') || '', initial.get('month') || '');
+    detailFull = detailFull || initial.get('full') === '1'; includeChildren = initial.get('children') !== '0';
+    detailPage = Math.max(0, Math.floor(detailEvents(INDEX.get(currentFeature)).findIndex(c => c.id === currentEvent) / 40));
+    paintDetail(); saveState();
   } else $('notices').append(el('p', 'notice', 'Das verlinkte Feature ist in diesem Datenstand nicht enthalten.'));
 }
