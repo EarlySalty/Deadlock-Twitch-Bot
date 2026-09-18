@@ -32,7 +32,15 @@ Zusätzlich unabhängig im ursprünglichen Collector-Worktree ausgeführt: `carg
 
 Read-only-Produktionsprüfung am 18.09.2026: Hauptbot und Dashboard aktiv, Live-Release weiterhin `44cc2aa90e1d1b59269533b5d50b643e56bfbba8`. Keine Collector-Systemunit und keine `public.category_collector_config`, `category_stream_snapshots` oder `category_chat_messages` vorhanden. Daher ausdrücklich noch kein Live-Nachweis und keine kategorieweite 24–48-Stunden-Messung.
 
+## Veröffentlichung und zusätzlicher Sendeschutz-Nachweis
+
+Implementierung `ed6c78d96fa07e5662318d933997bad7d11f2878` wurde auf `origin/feat/category-admin-api-20260918` gepusht und die Remote-Referenz per `git ls-remote` verifiziert. Das Push-Gate hat den Push zugelassen. Bestehende OSV-Hinweise betrafen das unveränderte Legacy-Python-Manifest `ops/highlight-detector/requirements.txt`; daraus folgt kein pauschaler Sicherheitsnachweis für das gesamte Repository.
+
+Im parallelen Collector-Arbeitsbaum wurde inzwischen `PolicyContext::Raid` an denselben aktuellen Partner-Roster gebunden wie Standardaktionen. Unabhängig ausgeführt: `cargo test -p tb-chat --test channel_policy -j 2`, Job `j-1789729238-462`: **11 bestanden, 0 fehlgeschlagen**. Darunter fremde Raid-Ziele blockieren, Freigabe nach Widerruf erneut prüfen, fremde Nachrichten/Whispers/Moderation blockieren und autorisierte Raid-Nachrichten erlauben, jedoch keine Raid-Moderation. Dieser Code gehört zum parallelen Collector-Paket, nicht zu Commit ed6c78d9, und ist damit nicht automatisch live.
+
 ## Integrationsvoraussetzungen
+
+Der zuletzt erneut gelesene Collector-Startcode `rust/bin/tb-category-collector/src/main.rs` liest weiterhin `TWITCH_ANALYTICS_DSN`, `TWITCH_CLIENT_ID` und `TWITCH_CLIENT_SECRET` über die Prozessumgebung. Das widerspricht dem Auftrag ohne ENV-Konfiguration und muss vor der Live-Freigabe auf einen expliziten geschützten Bootstrap-/Credentialpfad umgestellt werden.
 
 Das neue Schema muss vom Collector-Paket als postgres migriert und für die Dashboard-Rolle lesbar sein. Ohne Schema antwortet die API absichtlich mit 503. Die Collector-Migration braucht für die Minuten-Snapshot-Abfrage einen Index bzw. UNIQUE auf `(poll_id, stream_id)`; das ursprüngliche Scaffold hatte nur Zeit-/Stream-/User-Indizes. Im Dashboard müssen `avg_viewers` und `retention_days` als nullable behandelt werden. Aktuelle und abgeschlossene Stunden dürfen nicht doppelt gezählt werden; der Writer muss vollständige Rollups und seinen Datenstand zuverlässig pflegen.
 
