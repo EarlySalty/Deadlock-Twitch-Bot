@@ -325,6 +325,17 @@ async fn maintenance(pool: PgPool, counters: Arc<Counters>) -> Result<(), Error>
             .ok()
             .map(|disk| disk.blocks_available().saturating_mul(disk.fragment_size()));
         let (raw_paused, disk_paused, warning) = storage_state(bytes, &settings, free);
+        // A pause can span UTC midnight. Ensure today's partition exists before
+        // releasing either writer, not up to ten minutes after collection resumes.
+        if partitions_due(
+            counters.disk_paused.load(Ordering::Relaxed),
+            disk_paused,
+            iteration,
+        ) {
+            sqlx::query("SELECT category_prepare_partitions()")
+                .execute(&pool)
+                .await?;
+        }
         counters.raw_paused.store(raw_paused, Ordering::Relaxed);
         counters.disk_paused.store(disk_paused, Ordering::Relaxed);
         if last_paused != Some((raw_paused, disk_paused)) {
@@ -354,14 +365,13 @@ async fn maintenance(pool: PgPool, counters: Arc<Counters>) -> Result<(), Error>
         // aggregates and partitions are retained, never pruned to make room.
         if !disk_paused {
             category::flush_rollups(&pool, 2000).await?;
-            if iteration.is_multiple_of(20) {
-                sqlx::query("SELECT category_prepare_partitions()")
-                    .execute(&pool)
-                    .await?;
-            }
         }
         iteration += 1;
     }
+}
+
+fn partitions_due(was_disk_paused: bool, disk_paused: bool, iteration: u64) -> bool {
+    !disk_paused && (was_disk_paused || iteration.is_multiple_of(20))
 }
 
 fn storage_state(
@@ -431,6 +441,14 @@ mod storage_tests {
         assert_eq!(storage_state(1000, &cfg, Some(1000)), (true, false, true));
         assert_eq!(storage_state(0, &cfg, Some(99)), (true, true, true));
         assert_eq!(storage_state(0, &cfg, None), (true, true, true));
+    }
+
+    #[test]
+    fn resuming_after_midnight_prepares_partitions_before_the_periodic_tick() {
+        assert!(partitions_due(true, false, 1));
+        assert!(partitions_due(false, false, 20));
+        assert!(!partitions_due(false, false, 1));
+        assert!(!partitions_due(true, true, 20));
     }
 
     #[test]

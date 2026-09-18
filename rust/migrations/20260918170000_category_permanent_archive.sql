@@ -37,6 +37,13 @@ CREATE TABLE category_chat_redactions (
     PRIMARY KEY(room_user_id,message_id)
 );
 
+-- Gezielte Shared-Chat-Entfernungen brauchen einen Ausdrucksindex in jeder
+-- Partition. Der gleiche Teilindex-Filter steht ausdrücklich im DELETE,
+-- damit PostgreSQL ihn auch für generische vorbereitete Pläne nutzen kann.
+CREATE INDEX category_chat_shared_source ON public.category_chat_messages
+    ((tags->>'source-room-id'), (tags->>'source-id'))
+    WHERE tags ? 'source-room-id' AND tags ? 'source-id';
+
 -- Der Dienst bekommt keine freie DELETE-Berechtigung auf Rohdaten.
 -- Nur explizite Moderationsziele werden durch diese eng begrenzte Funktion bearbeitet.
 -- Ein kanalweiter CLEARCHAT ohne Ziel ist ausdrücklich KEINE Archivlöschung.
@@ -51,7 +58,8 @@ RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public A
         WHERE nullif(btrim($1),'') IS NOT NULL AND (
             (nullif(btrim($2),'') IS NOT NULL AND (
                 (m.room_user_id=$1 AND m.message_id=$2)
-                OR (m.tags->>'source-room-id'=$1 AND m.tags->>'source-id'=$2)
+                OR (m.tags ? 'source-room-id' AND m.tags ? 'source-id'
+                    AND m.tags->>'source-room-id'=$1 AND m.tags->>'source-id'=$2)
             )) OR (
                 $2 IS NULL AND nullif(btrim($3),'') IS NOT NULL
                 AND m.room_user_id=$1 AND m.chatter_user_id=$3

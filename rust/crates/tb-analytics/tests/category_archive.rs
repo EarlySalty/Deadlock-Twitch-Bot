@@ -218,3 +218,58 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn targeted_removal_has_bounded_index_work_in_a_large_archive() {
+    let db = fixture().await;
+    sqlx::raw_sql("INSERT INTO category_chat_messages
+        (sent_at,received_at,room_user_id,message_id,chatter_user_id,chatter_login,message_text,
+         detected_lang,stream_language,language_confidence,message_len,emote_count,shared_chat_copy,tags)
+        SELECT now(),now(), 'bulk-room', 'copy-'||n, 'user-'||(n%1000), 'fixture', 'synthetic archive record',
+               'de','de',1,24,0,true,jsonb_build_object('source-room-id','100','source-id','source-'||n)
+        FROM generate_series(1,60000) n;
+        ANALYZE category_chat_messages;")
+        .execute(&db.pool).await.unwrap();
+    let body: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='category_redact_chat_event(text,text,text)'::regprocedure")
+        .fetch_one(&db.pool).await.unwrap();
+    let mut connection = db.pool.acquire().await.unwrap();
+    sqlx::query("SET plan_cache_mode=force_generic_plan")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&format!(
+        "PREPARE archive_redact_plan(text,text,text) AS {body}"
+    ))
+    .execute(&mut *connection)
+    .await
+    .unwrap();
+    let plan = sqlx::query_scalar::<_, String>(
+        "EXPLAIN (ANALYZE, BUFFERS) EXECUTE archive_redact_plan('100','source-30000',NULL)",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .unwrap()
+    .join("\n");
+    println!("{plan}");
+    let filter = regex::Regex::new(r"Rows Removed by Filter: ([0-9]+)").unwrap();
+    let most_removed = filter
+        .captures_iter(&plan)
+        .map(|hit| hit[1].parse::<u64>().unwrap())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        most_removed < 100,
+        "targeted removal scanned unrelated archived rows: {most_removed}"
+    );
+    assert!(
+        plan.contains("Index Cond") && plan.contains("source-room-id"),
+        "shared-source lookup must use an index"
+    );
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM category_chat_messages WHERE room_user_id='bulk-room'",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 59999);
+}
