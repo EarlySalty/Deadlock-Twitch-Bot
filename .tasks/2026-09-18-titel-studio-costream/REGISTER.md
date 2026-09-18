@@ -11,7 +11,8 @@
 | Paket | Thread-ID | Modell | Status | Worktree | Letzte Meldung |
 |---|---|---|---|---|---|
 | Vorcheck | ade64d1b | glm-token | tot, gesettelt, nicht wieder aufnehmen | keiner | OpenRouter 402, Guthaben leer; Vorcheck hat der Intent-Agent selbst per Graphify gelesen |
-| A | 26e1c46d | opus48 | gestartet | `/home/nathanael/.worktrees/tb-titel-costream` | |
+| A | 26e1c46d | opus48 | fertig, gesettelt | `/home/nathanael/.worktrees/tb-titel-costream` | Commit 3f12d6f0 auf origin; Migrations-Kollision 20260918120000 ist auf main schon gelöst (1bc4ba94), Branch braucht vor dem Gate einen Merge von origin/main |
+| Review R1 | 52a77b4b | opus48 | gestartet | derselbe, nur lesen | |
 
 ## Befund Voice-Quelle
 
