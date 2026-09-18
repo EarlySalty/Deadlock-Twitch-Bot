@@ -1163,15 +1163,12 @@ impl AdManagerStore {
         &self,
         session_id: i64,
     ) -> Result<Option<(DateTime<Utc>, String)>, sqlx::Error> {
-        let row = sqlx::query("SELECT NULLIF(BTRIM(first_message_at),'')::timestamptz AS at,chatter_login FROM twitch_session_chatters WHERE session_id=$1 AND confirmed_first_ever ORDER BY NULLIF(BTRIM(first_message_at),'')::timestamptz DESC NULLS LAST LIMIT 1")
+        let row = sqlx::query("SELECT first_message_at AS at,chatter_login FROM twitch_session_chatters WHERE session_id=$1 AND confirmed_first_ever ORDER BY first_message_at DESC NULLS LAST LIMIT 1")
             .bind(session_id)
             .fetch_optional(&self.pool)
             .await?;
         Ok(match row {
-            Some(row) => match row.try_get::<Option<DateTime<Utc>>, _>("at")? {
-                Some(at) => Some((at, row.try_get("chatter_login")?)),
-                None => None,
-            },
+            Some(row) => Some((row.try_get("at")?, row.try_get("chatter_login")?)),
             None => None,
         })
     }
