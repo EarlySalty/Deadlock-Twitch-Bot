@@ -279,6 +279,8 @@ pub fn start(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &BrokerConfig,
+    helix: Option<tb_transport_twitch::HelixClient>,
+    follower_token: Option<Arc<tb_chat::token::BotTokenManager>>,
 ) -> SmalltalkLoopRuntime {
     let config = SmalltalkConfig::from_env();
     let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(config.live_send);
@@ -321,10 +323,22 @@ pub fn start(
         return inactive_runtime(supervisor, store, "discord_unavailable");
     };
 
+    if config.live_send && (helix.is_none() || follower_token.is_none()) {
+        tracing::warn!(event = "smalltalk_loop.preflight_unavailable");
+        return inactive_runtime(supervisor, store, "preflight_unavailable");
+    }
+
     // Ein Gate, zwei Leser: der Monitor setzt es, der Loop respektiert es.
     let last_gate = Arc::new(AtomicBool::new(false));
     spawn_last_monitor(supervisor, store.clone(), Arc::clone(&last_gate));
-    spawn_loop(supervisor, store.clone(), last_gate, config.live_send);
+    spawn_loop(
+        supervisor,
+        store.clone(),
+        last_gate,
+        config.live_send,
+        helix,
+        follower_token,
+    );
     spawn_transcript_capture(supervisor, store.clone(), pool);
     tracing::info!(
         event = "smalltalk_loop.started",
@@ -359,6 +373,8 @@ fn spawn_loop(
     store: SmalltalkLoopStore,
     gate: Arc<AtomicBool>,
     one_shot: bool,
+    helix: Option<tb_transport_twitch::HelixClient>,
+    follower_token: Option<Arc<tb_chat::token::BotTokenManager>>,
 ) {
     supervisor.spawn("smalltalk_loop", async move {
         if let Err(error) = store
@@ -373,6 +389,13 @@ fn spawn_loop(
         loop {
             tick.tick().await;
             let allow_start = !one_shot || !session_started_once;
+            if one_shot && !gate.load(Ordering::Relaxed) {
+                if let (Some(helix), Some(token)) = (&helix, &follower_token) {
+                    if let Err(error) = refresh_live_evidence(&store, helix, token).await {
+                        tracing::warn!(event = "smalltalk_loop.preflight_failed", %error);
+                    }
+                }
+            }
             match process_once(&store, Utc::now(), &gate, allow_start).await {
                 Ok(started) => session_started_once |= started,
                 Err(error) => tracing::warn!(event = "smalltalk_loop.process_failed", %error),
@@ -538,6 +561,74 @@ fn spawn_transcript_capture(supervisor: &TaskSupervisor, store: SmalltalkLoopSto
             }
         }
     });
+}
+
+/// Reuses the official Helix client. Streams and follower total are read in
+/// parallel under one five-second preflight deadline, without provider fallback.
+async fn refresh_live_evidence(
+    store: &SmalltalkLoopStore,
+    helix: &tb_transport_twitch::HelixClient,
+    follower_token: &tb_chat::token::BotTokenManager,
+) -> Result<(), StoreError> {
+    let Some(target) = store.live_preflight_target(Utc::now()).await? else {
+        return Ok(());
+    };
+    let ids = vec![target.twitch_user_id.clone()];
+    let observed_at = Utc::now();
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        // Total-only needs an OAuth user token, not a moderator role in this
+        // channel. Reuse the existing manager; never create a second refresher.
+        let token = match follower_token.access_token().await {
+            Ok(token) if !token.trim().is_empty() => token,
+            _ => return None,
+        };
+        let token = token.trim().strip_prefix("oauth:").unwrap_or(token.trim());
+        Some(tokio::join!(
+            helix.get_streams_by_user_ids(&ids, None),
+            helix.get_followers_total(&target.twitch_user_id, Some(token)),
+        ))
+    })
+    .await;
+    let (followers, live, error) = match result {
+        Ok(Some((Ok(streams), Ok(fetch)))) => preflight_evidence(&target, &streams, &fetch),
+        Ok(_) => (None, false, Some("helix_read_failed")),
+        Err(_) => (None, false, Some("preflight_timeout")),
+    };
+    store
+        .record_live_preflight(&target, followers, live, observed_at, error)
+        .await
+}
+
+fn preflight_evidence(
+    target: &tb_engagement::smalltalk_loop_store::LivePreflightTarget,
+    streams: &[tb_transport_twitch::HelixStream],
+    fetch: &tb_transport_twitch::FollowersTotalFetch,
+) -> (Option<i32>, bool, Option<&'static str>) {
+    let followers = if fetch.http_status == Some(200) && fetch.error_code.is_none() {
+        fetch
+            .total
+            .and_then(|value| i32::try_from(value).ok())
+            .filter(|value| *value >= 0)
+    } else {
+        None
+    };
+    let live = streams.len() == 1
+        && streams.first().is_some_and(|stream| {
+            stream.user_id == target.twitch_user_id
+                && stream
+                    .user_login
+                    .eq_ignore_ascii_case(&target.channel_login)
+                && stream.game_name.eq_ignore_ascii_case("deadlock")
+                && !stream.id.trim().is_empty()
+        });
+    let error = if followers.is_none() {
+        Some("followers_unavailable")
+    } else if !live {
+        Some("not_live_deadlock_or_identity_mismatch")
+    } else {
+        None
+    };
+    (followers, live, error)
 }
 
 async fn process_once(
@@ -941,6 +1032,88 @@ mod tests {
     use tb_engagement::smalltalk_loop_store::{ReportSession, SmalltalkMessage, SmalltalkReport};
 
     use super::*;
+
+    fn preflight_fixture() -> (
+        tb_engagement::smalltalk_loop_store::LivePreflightTarget,
+        tb_transport_twitch::HelixStream,
+        tb_transport_twitch::FollowersTotalFetch,
+    ) {
+        (
+            tb_engagement::smalltalk_loop_store::LivePreflightTarget {
+                twitch_user_id: "123".into(),
+                channel_login: "tiny".into(),
+            },
+            tb_transport_twitch::HelixStream {
+                id: "stream1".into(),
+                user_id: "123".into(),
+                user_login: "tiny".into(),
+                game_name: "Deadlock".into(),
+                viewer_count: 1,
+                ..Default::default()
+            },
+            tb_transport_twitch::FollowersTotalFetch {
+                total: Some(49),
+                http_status: Some(200),
+                error_code: None,
+            },
+        )
+    }
+
+    #[test]
+    fn preflight_akzeptiert_nur_echte_ganzzahlige_erfolgsantworten() {
+        let (target, stream, mut fetch) = preflight_fixture();
+        for value in [0, 49, 50] {
+            fetch.total = Some(value);
+            assert_eq!(
+                preflight_evidence(&target, &[stream.clone()], &fetch),
+                (Some(value as i32), true, None)
+            );
+        }
+        for value in [
+            None,
+            Some(-1),
+            Some(i64::MAX),
+            Some(i64::from(i32::MAX) + 1),
+        ] {
+            fetch.total = value;
+            assert_eq!(
+                preflight_evidence(&target, &[stream.clone()], &fetch).0,
+                None,
+                "one viewer must never stand in for a follower count"
+            );
+        }
+        fetch.total = Some(49);
+        for status in [None, Some(401), Some(403), Some(429), Some(500)] {
+            fetch.http_status = status;
+            assert_eq!(
+                preflight_evidence(&target, &[stream.clone()], &fetch).0,
+                None
+            );
+        }
+        fetch.http_status = Some(200);
+        fetch.error_code = Some("failed".into());
+        assert_eq!(preflight_evidence(&target, &[stream], &fetch).0, None);
+    }
+
+    #[test]
+    fn preflight_verlangt_genau_den_angefragten_live_deadlock_kanal() {
+        let (target, stream, fetch) = preflight_fixture();
+        assert!(preflight_evidence(&target, &[stream.clone()], &fetch).1);
+        assert!(!preflight_evidence(&target, &[], &fetch).1);
+        assert!(!preflight_evidence(&target, &[stream.clone(), stream.clone()], &fetch).1);
+        let mut invalid = stream.clone();
+        invalid.user_id = "999".into();
+        assert!(!preflight_evidence(&target, &[invalid], &fetch).1);
+        let mut invalid = stream.clone();
+        invalid.user_login = "another".into();
+        assert!(!preflight_evidence(&target, &[invalid], &fetch).1);
+        let mut invalid = stream.clone();
+        invalid.game_name = "Just Chatting".into();
+        assert!(!preflight_evidence(&target, &[invalid], &fetch).1);
+        let mut invalid = stream;
+        invalid.id.clear();
+        assert!(!preflight_evidence(&target, &[invalid], &fetch).1);
+    }
 
     #[test]
     fn feature_ist_standardmaessig_aus() {

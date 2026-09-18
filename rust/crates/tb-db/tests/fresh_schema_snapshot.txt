@@ -1529,6 +1529,16 @@ twitch_smalltalk_bench_runs|note|text|YES|
 twitch_smalltalk_bench_runs|sample_count|integer|NO|0
 twitch_smalltalk_bench_runs|started_at|timestamp with time zone|NO|now()
 twitch_smalltalk_bench_runs|variant|text|NO|
+twitch_smalltalk_candidate_state|channel_login|text|NO|
+twitch_smalltalk_candidate_state|checked_at|timestamp with time zone|YES|
+twitch_smalltalk_candidate_state|cooldown_until|timestamp with time zone|YES|
+twitch_smalltalk_candidate_state|follower_count|integer|YES|
+twitch_smalltalk_candidate_state|last_error|text|YES|
+twitch_smalltalk_candidate_state|live_checked_at|timestamp with time zone|YES|
+twitch_smalltalk_candidate_state|live_deadlock|boolean|NO|false
+twitch_smalltalk_candidate_state|next_refresh_at|timestamp with time zone|NO|now()
+twitch_smalltalk_candidate_state|source|text|YES|
+twitch_smalltalk_candidate_state|twitch_user_id|text|NO|
 twitch_smalltalk_messages|channel_login|text|NO|
 twitch_smalltalk_messages|channel_user_id|text|YES|
 twitch_smalltalk_messages|created_at|timestamp with time zone|NO|now()
@@ -1557,6 +1567,7 @@ twitch_smalltalk_sessions|ended_at|timestamp with time zone|YES|
 twitch_smalltalk_sessions|expires_at|timestamp with time zone|NO|(now() + '6 mons'::interval)
 twitch_smalltalk_sessions|id|uuid|NO|
 twitch_smalltalk_sessions|last_provider_error|text|YES|
+twitch_smalltalk_sessions|live_test|boolean|NO|false
 twitch_smalltalk_sessions|previous_enabled|boolean|NO|
 twitch_smalltalk_sessions|previous_irc_read|boolean|NO|
 twitch_smalltalk_sessions|previous_output_mode|text|NO|
