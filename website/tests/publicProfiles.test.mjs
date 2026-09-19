@@ -24,6 +24,8 @@ test('both landing variants expose the shared profile directory', () => {
 });
 test('directory fails closed and refreshes without cached credentials', () => {
   const source = readFileSync(new URL('../src/components/partner-clean/PublicProfiles.tsx', import.meta.url), 'utf8');
+  assert.match(source, /max-w-\[1600px\]/);
+  assert.match(source, /px-6/);
   assert.match(source, /cache: "no-store"/);
   assert.match(source, /credentials: "omit"/);
   assert.match(source, /setProfiles\(\[\]\)/);

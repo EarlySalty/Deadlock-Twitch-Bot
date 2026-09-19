@@ -30,7 +30,7 @@ export function PublicProfiles() {
     return () => { disposed = true; controller?.abort(); window.clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
   if (!profiles.length) return null;
-  return <section aria-labelledby="public-profiles-heading" className="mt-10 rounded-2xl border border-border bg-white/[0.02] p-5 sm:p-7">
+  return <div className="mx-auto max-w-[1600px] px-6"><section aria-labelledby="public-profiles-heading" className="mt-10 rounded-2xl border border-border bg-white/[0.02] p-5 sm:p-7">
     <p className="text-xs font-semibold uppercase tracking-widest text-primary">Lern uns kennen</p>
     <h3 id="public-profiles-heading" className="mt-2 text-2xl font-semibold text-text-primary">Die Menschen hinter den Streams</h3>
     <p className="mt-2 text-sm text-text-secondary">Eigene Profile, Socials und Streamkalender. Entdecke deinen nächsten Lieblingsstream.</p>
@@ -39,5 +39,5 @@ export function PublicProfiles() {
       <p className="mt-2 break-words text-sm text-text-secondary">{profile.headline || "Profil und Streamkalender entdecken"}</p>
     </a>)}</div>
     {profiles.length > 6 && <button type="button" aria-expanded={expanded} className="mt-5 text-sm font-semibold text-primary" onClick={() => setExpanded(value => !value)}>{expanded ? "Weniger zeigen" : `Alle ${profiles.length} Profile entdecken`}</button>}
-  </section>;
+  </section></div>;
 }
