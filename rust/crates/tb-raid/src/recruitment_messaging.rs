@@ -252,7 +252,7 @@ pub fn plan_recruitment_delivery(
     }
 }
 
-pub const OUTREACH_TRUST_STAGE_1_MESSAGE: &str = "Hey! Wir bringen dir gerade ein bisschen Unterstützung aus der Deutschen Deadlock Community 💜 Wir wünschen dir noch nen geilen Stream! Und falls du öfter mal Support bekommen möchtest, schau gerne bei uns im Profil vorbei. (Keine Sorge, wir sind kein Scam oder sowas. 😅)";
+pub const OUTREACH_TRUST_STAGE_1_MESSAGE: &str = "Hey! Wir bringen dir gerade ein bisschen Unterstützung aus der Deutschen Deadlock Community 💜 Wir wünschen dir noch nen geilen Stream! Und falls du öfter mal Support bekommen möchtest, schau gerne bei uns im Profil vorbei.";
 pub const OUTREACH_TRUST_STAGE_2_MESSAGE: &str = "Und wieder ein bisschen Support für dich 👋 Falls du uns noch nicht kennst: Wir sind die größte und aktivste Deutsche Deadlock Community. Viel Spaß weiterhin!";
 pub const OUTREACH_TRUST_STAGE_3_MESSAGE: &str = "Schon wieder wir 😄 Bei uns sind echte Leute, echte Streamer, die Deadlock genauso lieben wie du. Schön, dich dabei zu haben — viel Spaß weiterhin!";
 pub const OUTREACH_TRUST_STAGE_4_MESSAGE: &str = "Nächste Ladung Support für dich 💜 Wenn du Bock hast, dauerhaft dabei zu sein — alles dazu findest du auf unserer Website (Link im Profil), und unser Discord ist auch da. Kein Stress, schau einfach mal rein. Weiter so!";

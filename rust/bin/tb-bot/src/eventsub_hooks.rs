@@ -256,6 +256,7 @@ pub struct RaidArrivalCoordinator {
     runtime: RaidArrivalRuntime,
     /// P2.43: Recent-Arrival-Lookup für das Sekundär-Signal-Pre-Gate.
     arrival_store: ArrivalTrackingStore,
+    raid_dank_promos: Option<Arc<std::sync::OnceLock<Arc<tb_chat::promos::PromoEngine>>>>,
 }
 
 /// Recent-Raid-Arrival-TTL (Python `recent_raid_arrival_ttl_seconds = 600`,
@@ -274,7 +275,16 @@ impl RaidArrivalCoordinator {
             pending,
             runtime,
             arrival_store,
+            raid_dank_promos: None,
         }
+    }
+
+    pub fn with_raid_dank_promos(
+        mut self,
+        promos: Arc<std::sync::OnceLock<Arc<tb_chat::promos::PromoEngine>>>,
+    ) -> Self {
+        self.raid_dank_promos = Some(promos);
+        self
     }
 
     /// P2.43-Pre-Gate: existiert für (Ziel, Quelle) ein bestätigter Arrival
@@ -366,6 +376,23 @@ impl RaidArrivalCoordinator {
         };
 
         // Manual-Raid-Key: from-ID, sonst Auflösung über den Partner-Login.
+        if independent_manual_detected {
+            if let (Some(raider_user_id), Some(promos)) = (
+                from_id.as_deref(),
+                self.raid_dank_promos.as_ref().and_then(|slot| slot.get()),
+            ) {
+                promos
+                    .maybe_send_raid_dank_pitch(
+                        &to_id,
+                        &to_login,
+                        raider_user_id,
+                        &from_login,
+                        viewer_count,
+                    )
+                    .await;
+            }
+        }
+
         let manual_raid_source_key = if recent_arrival_present {
             None
         } else {

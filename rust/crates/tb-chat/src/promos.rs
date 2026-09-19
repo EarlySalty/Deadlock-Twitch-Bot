@@ -32,6 +32,7 @@
 //! - `twitch_session_chatters.messages` = `integer` → `i32`
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -165,6 +166,21 @@ const PROMO_DUE_CONCURRENCY: usize = 4;
 pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// Partner-Seite für Streamer-Pitches in den Promo-Texten.
 pub const STREAMER_PARTNER_URL: &str = "https://deutsche-deadlock-community.de/streamer";
+
+const RAID_DANK_PITCH_VARIANTS: [&str; 4] = [
+    "Danke für den Raid <3 @{user} wenn du öfter Deadlock streamst, kannst du dich gern unserer Streamer-Gemeinde anschließen: {url}",
+    "Raid ist angekommen <3 @{user} wenn Deadlock bei dir öfter läuft, kannst du gern bei unserer Streamer-Gemeinde mitmachen: {url}",
+    "Danke fürs Rüberschicken <3 @{user} wenn du öfter Deadlock streamst, unsere Streamer-Gemeinde ist hier: {url}",
+    "Stabiler Raid, danke <3 @{user} wenn Deadlock regelmäßig bei dir läuft, kannst du dich gern unserer Streamer-Gemeinde anschließen: {url}",
+];
+static RAID_DANK_PITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn next_raid_dank_pitch(user: &str) -> String {
+    RAID_DANK_PITCH_VARIANTS
+        [RAID_DANK_PITCH_INDEX.fetch_add(1, Ordering::Relaxed) % RAID_DANK_PITCH_VARIANTS.len()]
+    .replace("{user}", user)
+    .replace("{url}", STREAMER_PARTNER_URL)
+}
 
 /// Liefert den konfigurierten globalen Promo-Invite oder den Python-paritären
 /// Default. Ein fehlendes/leeres Secret darf keinen leeren `{invite}`-Text
@@ -474,6 +490,7 @@ pub trait PartnerChannelCheck: Send + Sync {
 pub enum PitchCardKind {
     Anlass,
     Partner,
+    RaidDank,
 }
 
 #[async_trait]
@@ -1236,7 +1253,14 @@ impl PromoEngine {
         .await;
         drop(_guard);
 
-        self.record_partner_ledger(&candidate.login, target_user_id, login)
+        let _ = self
+            .record_partner_ledger(
+                &candidate.login,
+                target_user_id,
+                login,
+                "chat_partner_pitch",
+                "partner_pitch",
+            )
             .await;
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
@@ -1257,6 +1281,199 @@ impl PromoEngine {
                 .await
             {
                 self.set_review_message_id(log_id, message_id).await;
+            }
+        }
+    }
+
+    pub async fn maybe_send_raid_dank_pitch(
+        &self,
+        target_channel_id: &str,
+        target_channel_login: &str,
+        raider_user_id: &str,
+        raider_login: &str,
+        viewer_count: i32,
+    ) {
+        let target_channel_id = target_channel_id.trim();
+        let target_channel_login = target_channel_login.trim().to_lowercase();
+        let raider_user_id = raider_user_id.trim();
+        let raider_login = raider_login.trim().trim_start_matches('#').to_lowercase();
+        if target_channel_id.is_empty()
+            || target_channel_login.is_empty()
+            || raider_user_id.is_empty()
+            || raider_login.is_empty()
+        {
+            return;
+        }
+
+        if !self
+            .raid_dank_target_ready(target_channel_id, &target_channel_login)
+            .await
+        {
+            return;
+        }
+        if self.raid_dank_promo_blocked(&target_channel_login).await {
+            return;
+        }
+
+        let lock_key = format!("raid_dank:{raider_user_id}");
+        let lock = self.get_send_lock(&lock_key);
+        let _guard = lock.lock().await;
+
+        let Some(candidate) = self.partner_candidate(raider_user_id).await else {
+            return;
+        };
+
+        let trigger = format!("Raid mit {viewer_count} Zuschauern");
+        let out_text = next_raid_dank_pitch(&raider_login);
+        let Some(log_id) = self
+            .insert_pitch_log_pending(PitchLogEntry {
+                channel_login: target_channel_login.clone(),
+                target_user_id: Some(raider_user_id.to_string()),
+                pfad: "raid_dank",
+                occasion: None,
+                trigger_text: Some(trigger.clone()),
+                generated_text: Some(out_text.clone()),
+                reject_reason: None,
+                sent_at: None,
+            })
+            .await
+        else {
+            return;
+        };
+
+        if !self
+            .record_partner_ledger(
+                &candidate.login,
+                raider_user_id,
+                &target_channel_login,
+                "raid_dank",
+                "raid_dank",
+            )
+            .await
+        {
+            self.mark_pitch_log_dropped(log_id, "ledger_blocked").await;
+            return;
+        }
+
+        let outcome = self
+            .guarded_api_for("promo", &target_channel_login)
+            .send_message(target_channel_id, &out_text)
+            .await;
+        self.record_suppression_on_drop(
+            &target_channel_login,
+            target_channel_id,
+            "promo",
+            &outcome,
+        )
+        .await;
+        if !matches!(outcome, Ok(crate::types::SendOutcome::Sent)) {
+            self.mark_pitch_log_dropped(log_id, "send_dropped").await;
+            return;
+        }
+
+        self.mark_pitch_log_sent(log_id).await;
+
+        if let Some(sink) = self.pitch_review_sink.as_ref() {
+            let hint = format!(
+                "Kandidat: {} streamt Deadlock, letzte Session {}",
+                candidate.login,
+                candidate.last_session.format("%Y-%m-%d")
+            );
+            if let Some(message_id) = sink
+                .send_card(
+                    &target_channel_login,
+                    &raider_login,
+                    &trigger,
+                    &out_text,
+                    PitchCardKind::RaidDank,
+                    Some(&hint),
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
+        }
+    }
+
+    async fn raid_dank_target_ready(
+        &self,
+        target_channel_id: &str,
+        target_channel_login: &str,
+    ) -> bool {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM twitch_streamers_partner_state p
+                    WHERE ((NULLIF($1, '') IS NOT NULL AND p.twitch_user_id = $1)
+                        OR LOWER(p.twitch_login) = LOWER($2))
+                      AND COALESCE(p.is_partner_active, 0) = 1
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM twitch_live_state l
+                    WHERE ((NULLIF($1, '') IS NOT NULL AND l.twitch_user_id = $1)
+                        OR LOWER(l.streamer_login) = LOWER($2))
+                      AND COALESCE(l.is_live, 0) = 1
+                      AND LOWER(COALESCE(l.last_game, '')) = 'deadlock'
+                )",
+        )
+        .bind(target_channel_id)
+        .bind(target_channel_login)
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(ready) => ready,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    channel = %target_channel_login,
+                    "raid-dank: zielpruefung fehlgeschlagen, blockiere"
+                );
+                false
+            }
+        }
+    }
+
+    async fn raid_dank_promo_blocked(&self, target_channel_login: &str) -> bool {
+        let normalized = target_channel_login.trim().to_lowercase();
+        if normalized.is_empty() {
+            return true;
+        }
+
+        let promo_disabled = match sqlx::query_scalar::<_, i32>(
+            "SELECT COALESCE(promo_disabled, 0)
+               FROM streamer_plans
+              WHERE LOWER(COALESCE(twitch_login, '')) = $1
+              LIMIT 1",
+        )
+        .bind(&normalized)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    channel = %normalized,
+                    "raid-dank: werbefrei-flag nicht lesbar, blockiere"
+                );
+                return true;
+            }
+        };
+        if promo_disabled.is_some_and(|flag| flag != 0) {
+            return true;
+        }
+
+        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, &normalized, "").await {
+            Ok(snapshot) => snapshot.entitlements.contains(&"chat.promos.disable"),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    channel = %normalized,
+                    "raid-dank: werbefrei-plan nicht lesbar, blockiere"
+                );
+                true
             }
         }
     }
@@ -1566,19 +1783,46 @@ impl PromoEngine {
         own_login: &str,
         chatter_user_id: &str,
         channel_login: &str,
-    ) {
-        if let Err(error) = sqlx::query!(
-            "INSERT INTO twitch_scout_pitch_ledger
-                 (streamer_login, trigger_type, judge_verdict, action, detail, twitch_user_id)
-             VALUES ($1, 'chat_partner_pitch', 'partner_pitch', 'posted', $2, $3)",
-            own_login,
-            channel_login,
-            chatter_user_id,
-        )
-        .execute(&self.pool)
-        .await
-        {
-            tracing::warn!(%error, login = %own_login, "partner-pitch: ledger-eintrag fehlgeschlagen");
+        trigger_type: &str,
+        judge_verdict: &str,
+    ) -> bool {
+        let reservation = async {
+            let mut transaction = self.pool.begin().await?;
+            // Die bestehende Ledger-Tabelle hat keinen passenden Unique-Key.
+            // NOT EXISTS allein lässt parallele INSERTs durch. Der kurze
+            // Schreiblock serialisiert die Prüfung auch über Worker hinweg und
+            // gegenüber anderen Ledger-Schreibern. Kein Netzwerkaufruf im Lock.
+            sqlx::query("LOCK TABLE twitch_scout_pitch_ledger IN SHARE ROW EXCLUSIVE MODE")
+                .execute(&mut *transaction)
+                .await?;
+            let result = sqlx::query(
+                "INSERT INTO twitch_scout_pitch_ledger
+                     (streamer_login, trigger_type, judge_verdict, action, detail, twitch_user_id)
+                 SELECT $1, $2, $3, 'posted', $4, $5
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM twitch_scout_pitch_ledger
+                     WHERE action = 'posted'
+                       AND (twitch_user_id = $5 OR LOWER(streamer_login) = LOWER($1))
+                 )",
+            )
+            .bind(own_login)
+            .bind(trigger_type)
+            .bind(judge_verdict)
+            .bind(channel_login)
+            .bind(chatter_user_id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            Ok::<bool, sqlx::Error>(result.rows_affected() == 1)
+        }
+        .await;
+        match reservation {
+            Ok(reserved) => reserved,
+            Err(error) => {
+                tracing::warn!(%error, login = %own_login, "partner-pitch: ledger-eintrag fehlgeschlagen");
+                false
+            }
         }
     }
 
@@ -3451,7 +3695,7 @@ mod tests {
     fn periodischer_promo_text_traegt_invite_am_ende_ohne_strich() {
         let invite = "https://discord.gg/deadlock";
         let out = crate::promo_pitch::finalize_channel_promo(
-            "komm vorbei und zock ne runde mit uns",
+            "Solo Queue würfelt wieder? Im Discord laufen Voice-Lanes für gemeinsame Deadlock-Runden :)",
             invite,
         )
         .unwrap();
@@ -4718,6 +4962,28 @@ mod db_tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260918233000_werbetexte_neu.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let migrated_announcements = tb_analytics::community_announcements::load(&pool)
+            .await
+            .unwrap();
+        let enabled_announcements: Vec<_> = migrated_announcements
+            .entries
+            .iter()
+            .filter(|entry| entry.enabled)
+            .collect();
+        assert_eq!(enabled_announcements.len(), 5);
+        assert!(migrated_announcements
+            .entries
+            .iter()
+            .any(|entry| !entry.enabled));
+        assert!(enabled_announcements
+            .iter()
+            .all(|entry| entry.text.matches("{invite}").count() == 1));
         seed_partner_channel(&pool, COMMUNITY_BROADCASTER_ID, "community-renamed").await;
         seed_partner_channel(&pool, "other-id", "other").await;
         let api = Arc::new(super::tests::MockApi::default());
@@ -4841,24 +5107,44 @@ mod db_tests {
                 .await
         );
         assert_eq!(api.announcement_colors().await, vec!["purple", "green"]);
-        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,6)")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "DELETE FROM twitch_promo_pitch_log
+             WHERE channel_login = 'community-renamed' AND pfad = 'periodic'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let active_event = engine
             .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
             .await
             .unwrap();
-        assert!(active_event.0.starts_with("Unser bestehender Hinweis"));
+        assert_eq!(
+            active_event.0,
+            format!("Unser bestehender Hinweis {DEFAULT_PROMO_DISCORD_INVITE}")
+        );
         assert_eq!(active_event.1, "green");
         sqlx::query("UPDATE twitch_global_promo_modes SET ends_at = '2000-01-01T00:00:00+00:00'")
             .execute(&pool)
             .await
             .unwrap();
+        let expected_community = tb_analytics::community_announcements::load(&pool)
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.enabled)
+            .expect("mindestens eine aktive Community-Ankündigung");
         let expired_event = engine
             .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
             .await
             .unwrap();
-        assert_eq!(expired_event.0, format!("Scrim ohne Gegnerteam? Bei uns kannst du gezielt andere Teams suchen, statt einzelne Leute per DM abzuklappern. {}", DEFAULT_PROMO_DISCORD_INVITE));
-        assert_eq!(expired_event.1, "purple");
+        assert_eq!(
+            expired_event.0,
+            expected_community
+                .text
+                .replace("{invite}", DEFAULT_PROMO_DISCORD_INVITE)
+        );
+        assert_eq!(expired_event.1, expected_community.color);
         use tb_analytics::community_announcements::{load, save, Announcement};
         let mut config = load(&pool).await.unwrap();
         config.include_global_event = false;
@@ -5849,7 +6135,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
+            "deadlock ist echt unterschätzt, gegen solo queue helfen wenigstens voice-lanes :)",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
@@ -5878,7 +6164,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
+            "deadlock ist echt unterschätzt, gegen solo queue helfen wenigstens voice-lanes :)",
         ))));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
@@ -5928,7 +6214,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
-            "haze sieht wirklich spannend aus. im discord findest du mitspieler für gemeinsame runden",
+            "haze sieht wirklich spannend aus, für gemeinsame runden laufen voice-lanes :)",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
@@ -5954,7 +6240,7 @@ mod db_tests {
             1,
             "neuer interessierter Zuschauer soll einen Pitch bekommen"
         );
-        assert!(msgs[0].1.contains("discord findest du mitspieler"));
+        assert!(msgs[0].1.contains("voice-lanes"));
 
         let occasion: Option<String> = sqlx::query_scalar(
             "SELECT occasion FROM twitch_promo_pitch_log WHERE target_user_id = 'u-neu' AND sent_at IS NOT NULL",
@@ -6009,7 +6295,7 @@ mod db_tests {
         let judge = Arc::new(MockPitchJudge::new(Some(
             crate::promo_pitch::PitchResponse {
                 occasion: Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
-                reply: "im discord findest du mitspieler für gemeinsame runden".to_string(),
+                reply: "gegen solo queue helfen wenigstens voice-lanes :)".to_string(),
                 confidence: 0.45,
                 ernst_gemeint: true,
             },
@@ -6047,7 +6333,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
-            "spannend. im discord findest du mitspieler für gemeinsame runden",
+            "spannend, für gemeinsame runden laufen voice-lanes :)",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
@@ -6083,13 +6369,295 @@ mod db_tests {
     }
 
     #[tokio::test]
+    async fn raid_dank_ledger_reservierung_ist_instanzuebergreifend_atomar() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        // Das verzögerte INSERT macht das Rennen zwischen getrennten Engines
+        // sichtbar. Ein lokaler Mutex schützt nicht vor einem zweiten Worker.
+        sqlx::raw_sql(
+            "CREATE FUNCTION slow_raid_ledger_insert() RETURNS trigger AS $$
+             BEGIN
+                 PERFORM pg_sleep(0.25);
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql;
+             CREATE TRIGGER slow_raid_ledger_insert
+             BEFORE INSERT ON twitch_scout_pitch_ledger
+             FOR EACH ROW EXECUTE FUNCTION slow_raid_ledger_insert();",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let first = make_engine(pool.clone());
+        let second = make_engine(pool.clone());
+        let (first_reserved, second_reserved) = tokio::join!(
+            first.record_partner_ledger("raider", "u-race", "ziel-a", "raid_dank", "raid_dank"),
+            second.record_partner_ledger("Raider", "u-race", "ziel-b", "raid_dank", "raid_dank"),
+        );
+        assert_eq!(
+            usize::from(first_reserved) + usize::from(second_reserved),
+            1,
+            "nur ein Worker darf die Sendefreigabe erhalten"
+        );
+        let entries: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_scout_pitch_ledger WHERE twitch_user_id = 'u-race'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(entries, 1, "nur eine dauerhafte Reservierung");
+    }
+
+    #[tokio::test]
+    async fn raid_dank_sendet_einmal_und_blockt_unzulaessige_raider() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner_channel(&pool, "target-id", "targetkanal").await;
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let sink = RecordingReviewSink::default();
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "darf nicht aufgerufen werden",
+        )));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_partner_pitch_gen(gen.clone())
+            .set_pitch_review_sink(Arc::new(sink.clone()));
+
+        seed_deadlock_candidate(&pool, "raider_ok", "u-ok").await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-ok", "Raider_OK", 42)
+            .await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-ok", "Raider_OK", 42)
+            .await;
+
+        assert_eq!(api.message_count().await, 1);
+        let messages = api.messages_sent().await;
+        assert_eq!(messages[0].0, "target-id");
+        assert!(messages[0].1.contains("@raider_ok"));
+        assert!(messages[0].1.contains(STREAMER_PARTNER_URL));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'raid_dank' AND sent_at IS NOT NULL"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM twitch_scout_pitch_ledger WHERE twitch_user_id = 'u-ok' AND trigger_type = 'raid_dank' AND action = 'posted'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        let cards = sink.cards.lock().await.clone();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].4, PitchCardKind::RaidDank);
+        assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        seed_deadlock_candidate(&pool, "raider_partner", "u-partner").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status) VALUES ('raider_partner', 'u-partner', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch(
+                "target-id",
+                "targetkanal",
+                "u-partner",
+                "raider_partner",
+                10,
+            )
+            .await;
+
+        seed_deadlock_candidate(&pool, "raider_ex", "u-ex").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status) VALUES ('raider_ex', 'u-ex', 'archived')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-ex", "raider_ex", 10)
+            .await;
+
+        seed_deadlock_candidate(&pool, "raider_black", "u-black").await;
+        sqlx::query(
+            "INSERT INTO twitch_scout_pitch_blacklist (streamer_login, twitch_user_id) VALUES ('raider_black', 'u-black')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-black", "raider_black", 10)
+            .await;
+
+        seed_deadlock_candidate(&pool, "raider_outreach", "u-outreach").await;
+        sqlx::query(
+            "INSERT INTO twitch_partner_outreach (streamer_login, twitch_user_id) VALUES ('raider_outreach', 'u-outreach')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch(
+                "target-id",
+                "targetkanal",
+                "u-outreach",
+                "raider_outreach",
+                10,
+            )
+            .await;
+
+        seed_deadlock_candidate(&pool, "raider_ledger", "u-ledger").await;
+        sqlx::query(
+            "INSERT INTO twitch_scout_pitch_ledger (streamer_login, trigger_type, judge_verdict, action, twitch_user_id) VALUES ('raider_ledger', 'old', 'old', 'posted', 'u-ledger')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-ledger", "raider_ledger", 10)
+            .await;
+
+        seed_deadlock_candidate(&pool, "raider_alt", "u-alt").await;
+        sqlx::query(
+            "UPDATE twitch_stream_sessions SET started_at = NOW() - INTERVAL '61 days'
+             WHERE twitch_user_id = 'u-alt'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-alt", "raider_alt", 10)
+            .await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-ohne", "raider_ohne", 10)
+            .await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "", "raider_ok", 10)
+            .await;
+        assert_eq!(api.message_count().await, 1);
+        assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn raid_dank_respektiert_deadlock_live_und_werbefrei_fail_closed() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner_channel(&pool, "target-id", "targetkanal").await;
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, promo_disabled) VALUES ('target-id', 'targetkanal', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_deadlock_candidate(&pool, "raider_plan", "u-plan").await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-plan", "raider_plan", 8)
+            .await;
+        assert_eq!(api.message_count().await, 0);
+
+        sqlx::query(
+            "UPDATE streamer_plans SET promo_disabled = 0 WHERE twitch_user_id = 'target-id'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE twitch_live_state SET last_game = 'Just Chatting' WHERE twitch_user_id = 'target-id'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_deadlock_candidate(&pool, "raider_game", "u-game").await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-game", "raider_game", 8)
+            .await;
+        assert_eq!(api.message_count().await, 0);
+
+        sqlx::query("UPDATE twitch_live_state SET last_game = 'Deadlock', is_live = 0 WHERE twitch_user_id = 'target-id'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_deadlock_candidate(&pool, "raider_gate", "u-gate").await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-gate", "raider_gate", 8)
+            .await;
+        assert_eq!(api.message_count().await, 0, "offline bleibt still");
+
+        sqlx::query("UPDATE twitch_live_state SET is_live = 1 WHERE twitch_user_id = 'target-id'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active = 0 WHERE twitch_user_id = 'target-id'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-gate", "raider_gate", 8)
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "inaktiver Partner bleibt still"
+        );
+
+        sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active = 1 WHERE twitch_user_id = 'target-id'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE streamer_plans RENAME TO streamer_plans_unavailable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-gate", "raider_gate", 8)
+            .await;
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "fehlende Plan-Tabelle blockiert"
+        );
+        sqlx::query("ALTER TABLE streamer_plans_unavailable RENAME TO streamer_plans")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query("DROP TABLE twitch_streamers_partner_state")
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_deadlock_candidate(&pool, "raider_db", "u-db").await;
+        engine
+            .maybe_send_raid_dank_pitch("target-id", "targetkanal", "u-db", "raider_db", 8)
+            .await;
+        assert_eq!(api.message_count().await, 0);
+    }
+
+    #[tokio::test]
     async fn deadlock_streamer_bekommt_keinen_kalten_partner_pitch() {
         let pool = pool_or_skip!("promo_partner_kandidat");
         seed_partner_channel(&pool, "c-pk", "pkkanal").await;
         seed_deadlock_candidate(&pool, "kandidatlogin", "u-pk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "dieser text darf nie erzeugt werden",
+        )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_partner_pitch_gen(gen.clone());
 
@@ -6114,7 +6682,10 @@ mod db_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(count, 0, "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log");
+        assert_eq!(
+            count, 0,
+            "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log"
+        );
     }
 
     #[tokio::test]
@@ -6163,7 +6734,9 @@ mod db_tests {
         seed_deadlock_candidate(&pool, "ledgerlogin", "u-lk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "dieser text darf nie erzeugt werden",
+        )));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_partner_pitch_gen(gen.clone())
@@ -6180,11 +6753,15 @@ mod db_tests {
 
         assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(api.message_count().await, 0);
-        let ledger_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(ledger_count, 0, "kein kalter Streamer-Outreach-Ledger-Eintrag");
+        let ledger_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            ledger_count, 0,
+            "kein kalter Streamer-Outreach-Ledger-Eintrag"
+        );
         assert!(sink.cards.lock().await.is_empty(), "keine Review-Karte");
     }
 
@@ -6195,7 +6772,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
+            "deadlock ist echt unterschätzt, gegen solo queue helfen wenigstens voice-lanes :)",
         ))));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
