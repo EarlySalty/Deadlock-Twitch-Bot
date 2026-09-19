@@ -25,17 +25,19 @@ Profil unter „Aus meinem Umfeld“ empfohlen werden.
 ## Inhalt und Grenzen
 
 - Bis zu 120 Zeichen Überschrift und 4000 Zeichen Über mich; Gold, Violett oder
-  Petrol als Akzent. Das Twitch-Profilbild wird automatisch übernommen, bei einem
-  fehlenden Bild erscheint die Initiale.
+  Petrol als persönlicher Akzent. Die Oberfläche bleibt im gemeinsamen Industrial-Gold-Design.
+  Das Twitch-Profilbild wird beim öffentlichen Abruf direkt über die vorhandene Twitch-Anbindung
+  aktualisiert; falls der Abruf fehlschlägt, dient das zuletzt gespeicherte Bild als Rückfall.
 - Bis zu zwölf benannte HTTPS-Links und sechs Empfehlungen. Es werden nur
   veröffentlichte, aktive Partnerempfehlungen verlinkt.
 - Bis zu 200 selbst gepflegte Einzeltermine mit Titel, Beschreibung, Beginn und
   Ende. Höchstens 48 Stunden pro Termin. Keine Serienautomatik oder externe
   Kalender-Synchronisierung in dieser Version.
 - Öffentlicher Monatskalender zwischen 2000 und 2100, getrennte Darstellung von
-  geplanten Terminen und tatsächlich abgeschlossenen Streams. Vergangene Monate
-  sind nicht auf das letzte Jahr begrenzt. Zusätzlich 90-Tage-Wochenraster aus
-  tatsächlich erfassten Streams, mit vorhandener Gewichtung neuerer Daten.
+  geplanten Terminen und tatsächlich abgeschlossenen Streams. Pro Tag bleiben drei Einträge
+  direkt sichtbar; weitere Einträge werden als Anzahl zusammengefasst, damit einzelne Tage
+  die Monatsansicht nicht in die Höhe ziehen. Zusätzlich gibt es das 90-Tage-Wochenraster
+  aus tatsächlich erfassten Streams mit der vorhandenen Gewichtung neuerer Daten.
 - Historie folgt `twitch_stream_sessions.twitch_user_id`, nicht einem wieder
   vergebenen Twitch-Namen. Alte Zeilen ohne eindeutige Kanal-ID werden nicht
   öffentlich zugerechnet. Erfassungslücken, offene Streams und offensichtlich

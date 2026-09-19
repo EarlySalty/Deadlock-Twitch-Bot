@@ -44,6 +44,15 @@ HTTP-Antworten, Browser-Abnahme und verbleibende nicht blockierende Hinweise
 stehen in `LIVE.md` neben dieser Datei.
 
 Bedienung und HTTP-Vertrag: `docs/PARTNER_PROFILES.md`.
-Die vollständige Dashboard-Suite hatte vor diesem Folgeauftrag sieben Fehler
-in unveränderten Farb-/Social-Media-/OBS-Bereichen. Keine pauschale Behauptung,
-dass die gesamte Suite fehlerfrei sei.
+
+## Nachtrag: Profiloberfläche am 19. September 2026
+
+Der Profil-Editor folgt jetzt der gemeinsamen Industrial-Gold-Oberfläche, stellt den Streamer
+mit einer direkten Vorschau vor und hat Veröffentlichen sowie Speichern oben im Profilkopf.
+Das Twitch-Profilbild wird aus der vorhandenen Twitch-Anbindung übernommen. Die öffentliche
+Profilseite nutzt dieselbe Gestaltung und begrenzt sehr volle Kalendertage auf drei sichtbare
+Einträge plus Restanzahl, damit einzelne Tage die Monatsansicht nicht mehr aufziehen.
+
+Gezielte Dashboard-Tests: 14 erfolgreich. Partnerprofil-Backend: 8 erfolgreich. Caddy-Routing:
+1 erfolgreich. Der Dashboard-Produktionsbuild ist erfolgreich. Die vollständige Dashboard-Suite
+hat weiterhin bekannte Fehler außerhalb dieser Änderung und wird nicht als vollständig grün bezeichnet.
