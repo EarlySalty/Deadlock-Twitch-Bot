@@ -82,3 +82,29 @@ test('empty selection stays empty; no invented evidence dates', () => {
   assert.equal(empty.branches.length, 0);
   assert.equal(empty.milestones.length, 0);
 });
+test('collapsed context parents keep filtered descendant bounds and their expand control', () => {
+  const matches = data.commits.filter(c => c.id === 'shared');
+  for (const id of ['main', 'child']) {
+    const selection = m.selectFamily(data, matches, {collapsed: [id]});
+    const graph = m.layoutFamily(selection);
+    const parent = graph.branches.find(b => b.id === id);
+    assert.ok(parent, 'context parent remains drawn');
+    assert.equal(parent.first, '2026-09-17', 'unmatched January history must not leak into bounds');
+    const label = graph.nodes.find(n => n.featureId === id && n.type === 'label');
+    assert.ok(label.collapsed && label.hasChildren, 'expand control remains available');
+    assert.ok(!graph.branches.some(b => b.id === 'leaf'));
+    const restored = m.layoutFamily(m.selectFamily(data, matches, {collapsed: []}));
+    assert.ok(restored.branches.some(b => b.id === 'leaf'));
+    assert.equal(restored.branches.find(b => b.id === id).first, parent.first);
+  }
+});
+test('every connector starts within its parent segment even for import-era descendants', () => {
+  const sample = {...data, commits: [event('origin', '2026-01-01', ['unknown']), event('early', '2026-01-04', ['leaf'])]};
+  const graph = m.layoutFamily(m.selectFamily(sample, sample.commits, {}));
+  for (const fork of graph.forks) {
+    const parent = graph.branches.find(b => b.key === fork.source);
+    assert.equal(fork.sourceX, parent?.forkX ?? graph.trunk.x0);
+    assert.ok(fork.x >= fork.sourceX);
+    assert.ok(fork.x <= (parent?.endX ?? graph.trunk.x1));
+  }
+});

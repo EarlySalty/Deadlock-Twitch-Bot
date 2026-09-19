@@ -127,7 +127,7 @@ function paintWindow() {
   }
   const left = -camera.x / camera.zoom - 120, top = -camera.y / camera.zoom - 120;
   const right = left + $('viewport').clientWidth / camera.zoom + 240, bottom = top + $('viewport').clientHeight / camera.zoom + 240;
-  const activeKey = document.activeElement?.closest('.graph-node')?.dataset.key;
+  const activeKey = document.activeElement?.closest('.branch-label, .milestone')?.dataset.key;
   const keep = new Set();
   for (const node of graph.nodes) {
     if (!(node.x < right && node.x + node.width > left && node.y < bottom && node.y + node.height > top) && node.key !== activeKey && node.key !== selectedKey()) continue;
@@ -228,7 +228,7 @@ function renderGraph() {
     trunkLabel.textContent = INDEX.get('product').title; $('edges').append(trunkLabel);
   }
   for (const fork of graph.forks) {
-    const lead = Math.min(16, fork.x - graph.axis.x0);
+    const lead = Math.min(16, Math.max(0, fork.x - fork.sourceX));
     const drop = fork.y2 > fork.y1 ? 14 : -14;
     const d = `M${fork.x - lead},${fork.y1} C${fork.x - 2},${fork.y1} ${fork.x},${fork.y1 + drop} ${fork.x},${fork.y2}`;
     $('edges').append(svgEl('path', {d, class: 'fork-edge' + (fork.context ? ' context' : ''), 'data-target': fork.key, 'vector-effect': 'non-scaling-stroke'}));

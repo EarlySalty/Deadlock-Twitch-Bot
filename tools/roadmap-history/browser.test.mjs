@@ -73,6 +73,9 @@ try {
     for (const fork of graph.forks) {
       const expected = fork.source === 'trunk' ? graph.trunk.y : branchY.get(fork.source);
       if (Math.abs(fork.y1 - expected) > 0.5 || Math.abs(fork.y2 - branchY.get(fork.key)) > 0.5) badForks++;
+      const parent = graph.branches.find(b => b.key === fork.source);
+      const start = document.querySelector('.fork-edge[data-target="' + fork.key + '"]').getPointAtLength(0);
+      if (start.x < (parent?.forkX ?? graph.trunk.x0) - 0.5 || start.x > (parent?.endX ?? graph.trunk.x1) + 0.5) badForks++;
     }
     const total = graph.milestones.reduce((sum, m) => sum + m.commitIds.length, 0);
     return {labelOverlaps, badForks, forks: graph.forks.length, branches: graph.branches.length, milestones: graph.milestones.length, milestoneCommits: total, depth: INDEX.get('uplink-av1').depth, months: graph.months, weeks: graph.weeks.length, drawnOther: graph.branches.some(b => b.id === 'other'), height: graph.height};
@@ -112,6 +115,15 @@ try {
   await page.locator('#to').fill(steam.date); await page.locator('#to').dispatchEvent('change');
   assert.equal(await page.evaluate(() => selection.commitCount), 1);
   assert.equal(await page.evaluate(() => selection.nodes.find(n => n.id === 'chat').context), true);
+  const contextCaret = page.locator('.branch-label[data-feature="chat"] .branch-caret');
+  await contextCaret.click();
+  assert.equal(await contextCaret.getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('.branch-label[data-feature="rank-steam"]').count(), 0);
+  await contextCaret.click();
+  assert.equal(await contextCaret.getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('.branch-label[data-feature="rank-steam"]').count(), 1);
+  checks.push('Kontext-Eltern behalten beim Zuklappen ihren sichtbaren Aufklappknopf und stellen den gefilterten Unterbaum wieder her');
+
   assert.ok(await page.locator('.branch-label[data-feature="rank-steam"]').count());
   await page.locator('.branch-label[data-feature="rank-steam"] .branch-title').click();
   assert.equal(await page.locator('#detail').evaluate(d => d.open && !d.matches(':modal')), true);
@@ -192,6 +204,20 @@ try {
   assert.ok(await page.evaluate(() => document.querySelectorAll('#nodes > *').length <= graph.nodes.length));
   await page.locator('#zoom-reset').click(); assert.equal(await page.locator('#zoom-reset').textContent(), '100 %');
   assert.ok(await page.evaluate(() => document.querySelectorAll('#nodes > *').length < graph.nodes.length));
+  for (const selector of ['.branch-label .branch-title', '.milestone']) {
+    const focused = page.locator(selector).first();
+    await focused.focus();
+    const focusResult = await page.evaluate(() => {
+      const active = document.activeElement;
+      const previous = {...camera};
+      camera.x -= graph.width + 5000;
+      paintWindow();
+      const result = active.isConnected && document.activeElement === active;
+      Object.assign(camera, previous); paintWindow();
+      return result;
+    });
+    assert.equal(focusResult, true, 'Virtualisierung muss das fokussierte Element behalten: ' + selector);
+  }
   const cameraURL = page.url(); await page.goto(cameraURL);
   assert.ok(await page.evaluate(() => collapsed.has('uplink')));
   checks.push('Mausziehen, Pfeiltasten, Zoom, Einpassen, lesbarer Reset, virtuelle Knoten und wiederhergestellter Klappzustand');

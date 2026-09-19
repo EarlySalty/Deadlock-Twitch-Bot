@@ -157,12 +157,14 @@ function selectFamily(data, commits, options = {}, cachedIndex) {
     let cursor = index.get(id);
     while (cursor && !keep.has(cursor.id)) {keep.add(cursor.id); cursor = index.get(cursor.parentId);}
   }
+  const selectedIds = new Set(selected.map(c => c.id));
   const collapsed = new Set(options.revealMatches ? [] : options.collapsed || []);
   const nodes = [];
   function visit(id) {
     if (!keep.has(id)) return;
     const f = index.get(id);
-    nodes.push({...f, context: !direct.has(id), selected: (direct.get(id) || []).slice().sort(compareDates), collapsed: collapsed.has(id), visibleChildren: f.children.filter(child => keep.has(child))});
+    const subtreeBounds = dateBounds(f.allCommits.filter(c => selectedIds.has(c.id)));
+    nodes.push({...f, selectedFirst: subtreeBounds.first, selectedLast: subtreeBounds.last, context: !direct.has(id), selected: (direct.get(id) || []).slice().sort(compareDates), collapsed: collapsed.has(id), visibleChildren: f.children.filter(child => keep.has(child))});
     if (!collapsed.has(id)) for (const child of f.children) visit(child);
   }
   visit('product');
@@ -228,7 +230,7 @@ function layoutFamily(selection) {
   const meta = new Map();
   for (const node of drawable) {
     const direct = (node.selected || []).slice().sort(compareDates);
-    meta.set(node.id, {node, direct, bundles: bundleCommits(direct), start: direct[0]?.date || '', end: direct.at(-1)?.date || ''});
+    meta.set(node.id, {node, direct, bundles: bundleCommits(direct), start: node.selectedFirst || direct[0]?.date || '', end: node.selectedLast || direct.at(-1)?.date || ''});
   }
   for (let i = drawable.length - 1; i >= 0; i--) {
     const m = meta.get(drawable[i].id);
@@ -240,7 +242,11 @@ function layoutFamily(selection) {
     }
   }
   const preexOf = id => !meta.get(id).node.context && daySpan(importDate, meta.get(id).start) <= IMPORT_WINDOW;
-  const forkXOf = id => preexOf(id) ? AXIS_X0 : timeX(meta.get(id).start);
+  const forkXOf = id => {
+    const m = meta.get(id);
+    const ownX = preexOf(id) ? AXIS_X0 : timeX(m.start);
+    return meta.has(m.node.parentId) ? Math.max(ownX, forkXOf(m.node.parentId)) : ownX;
+  };
   const laid = drawable.filter(n => meta.get(n.id).start);
   laid.sort((a, b) => forkXOf(a.id) - forkXOf(b.id) || a.depth - b.depth || a.id.localeCompare(b.id));
   const laneEnd = [], laneOf = new Map();
@@ -275,7 +281,7 @@ function layoutFamily(selection) {
       dormant: m.end < last, first: m.start, last: m.end, directCount: activity, title: node.title,
     };
     branches.push(branch);
-    forks.push({key: branch.key, source: parentDrawn ? 'f:' + node.parentId : 'trunk', x: forkX, y1: parentY, y2: y, context: branch.context});
+    forks.push({key: branch.key, source: parentDrawn ? 'f:' + node.parentId : 'trunk', x: forkX, sourceX: parentDrawn ? forkXOf(node.parentId) : AXIS_X0, y1: parentY, y2: y, context: branch.context});
     nodes.push({type: 'label', key: 'l:' + node.id, featureId: node.id, x: forkX + 9, y: y - 20, width: LABEL_W, height: 16, text: node.title, date: m.start, context: branch.context, preexisting, depth: node.depth, dormant: branch.dormant, hasChildren: (node.visibleChildren || []).length, collapsed: !!node.collapsed});
     for (const b of m.bundles) {
       const cx = timeX(b.firstDate);
