@@ -99,6 +99,64 @@ fn calendar_limits_and_dst() {
     let (_, a, b) = month_range(Some("2026-10"), start).unwrap();
     assert_eq!((b - a).num_hours(), 31 * 24 + 1);
 }
+
+#[tokio::test]
+async fn public_profile_prefers_twitch_avatar_and_caps_busy_calendar_days() {
+    let now = Utc::now();
+    let month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap();
+    let starts_at = Berlin
+        .from_local_datetime(&month.and_hms_opt(18, 0, 0).unwrap())
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    let monthly: Vec<Session> = (0..8)
+        .map(|index| Session {
+            streamer_login: "alice".into(),
+            started_at: starts_at + Duration::minutes(index * 5),
+            ended_at: starts_at + Duration::hours(1) + Duration::minutes(index * 5),
+            game_name: Some("Deadlock".into()),
+            stream_title: Some(format!("Stream {index}")),
+        })
+        .collect();
+    let observed = schedule(&monthly, now - Duration::days(90), now + Duration::days(90));
+    let record = Record {
+        twitch_user_id: "1".into(),
+        login: "alice".into(),
+        active: true,
+        published: true,
+        revision: 1,
+        content: SqlJson(Content::default()),
+        is_live: 0,
+        last_seen_at: None,
+        last_game: None,
+    };
+    let avatar = "https://static-cdn.jtvnw.net/jtv_user_pictures/alice-profile_image.png";
+    let response = html::page(
+        &record,
+        Some(avatar),
+        &observed,
+        &monthly,
+        &[],
+        month,
+        now,
+        false,
+    );
+    let csp = response
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(csp.contains("img-src 'self' https://static-cdn.jtvnw.net"));
+    let html = body(response).await;
+    assert!(html.contains("/streamer/brand/deadlock-d-logo.png"));
+    assert!(html.contains(avatar));
+    assert_eq!(html.matches("calendar-event observed").count(), 3);
+    assert!(html.contains("+5 weitere"));
+    assert!(html.contains("Streamerprofil"));
+    assert!(html.contains("Streamplan ansehen"));
+}
+
 #[test]
 fn owners_are_bound_to_session() {
     assert!(owner(&partner(), &OwnerParams::default()).is_ok());

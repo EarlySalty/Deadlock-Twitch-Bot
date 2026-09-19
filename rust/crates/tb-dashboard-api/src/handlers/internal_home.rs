@@ -327,7 +327,7 @@ impl AvatarCache {
         }
     }
 
-    async fn profile_image_url(&self, login: &str) -> Option<String> {
+    pub(crate) async fn profile_image_url(&self, login: &str) -> Option<String> {
         let login = login.trim().to_lowercase();
         if login.is_empty() {
             return None;

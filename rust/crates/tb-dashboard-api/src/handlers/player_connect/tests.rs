@@ -174,7 +174,17 @@ async fn player_connect_public_page_is_accessible_without_partner_and_never_cach
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["cache-control"], "no-store");
     assert_eq!(response.headers()["referrer-policy"], "no-referrer");
-    assert!(text(response).await.contains("Mit Twitch anmelden"));
+    let csp = response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap();
+    assert!(csp.contains("font-src 'self'"));
+    assert!(csp.contains("img-src 'self'"));
+    let body = text(response).await;
+    assert!(body.contains("Mit Twitch anmelden"));
+    assert!(body.contains("flow-steps"));
+    assert!(body.contains("Sora"));
+    assert!(body.contains("/streamer/brand/deadlock-d-logo.png"));
+    assert!(body.contains("Twitch-Konto bestätigen."));
 }
 #[tokio::test]
 async fn player_connect_twitch_login_uses_existing_callback_without_raid_scopes() {
@@ -337,6 +347,41 @@ async fn player_connect_steam_start_accepts_public_connect_origin() {
     .await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
 }
+
+#[tokio::test]
+async fn player_connect_steam_start_trusts_same_site_fetch_metadata_with_valid_csrf() {
+    let (_db, state, created) = fixture().await;
+    let mut proxied = headers(&created);
+    proxied.insert(
+        "origin",
+        HeaderValue::from_static("https://www.deutsche-deadlock-community.de"),
+    );
+    proxied.insert("sec-fetch-site", HeaderValue::from_static("same-site"));
+    let response = steam_start(
+        Some(Extension(state.clone())),
+        Some(Extension(config())),
+        proxied,
+        form(&created),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn player_connect_steam_start_rejects_cross_site_fetch_metadata() {
+    let (_db, state, created) = fixture().await;
+    let mut cross_site = headers(&created);
+    cross_site.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+    let response = steam_start(
+        Some(Extension(state.clone())),
+        Some(Extension(config())),
+        cross_site,
+        form(&created),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 #[tokio::test]
 async fn player_connect_steam_verified_roundtrip_and_replay_rejection() {
     let (_db, state, created) = fixture().await;

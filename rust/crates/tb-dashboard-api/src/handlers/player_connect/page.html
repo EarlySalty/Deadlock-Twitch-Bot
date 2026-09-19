@@ -1,33 +1,388 @@
 <!doctype html>
-<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Twitch &amp; Steam verbinden · Deutsche Deadlock Community</title><style>
-:root{color-scheme:dark;--gold:#c8a86b;--gold-bright:#e6cf9a;--bg:#0c0a07;--card-top:#17130d;--card-bottom:#120f0a;--line:rgba(200,168,107,.30);--ink:#f3ead9;--muted:#b7ad98;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
-*{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:var(--bg) radial-gradient(1100px 460px at 50% -8%,rgba(200,168,107,.12),transparent 62%)}
-main{width:min(100% - 40px,680px);margin:7vh auto 40px}
-.brand{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--gold);margin-bottom:26px;font-weight:700}
-h1{font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacing:-.035em;margin:0 0 14px;color:var(--ink)}
-.lead{color:var(--muted);line-height:1.6;margin:0 0 32px}
-.card{background:linear-gradient(180deg,var(--card-top),var(--card-bottom));border:1px solid var(--line);border-radius:18px;padding:clamp(24px,5vw,40px);box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 0 1px rgba(200,168,107,.10),inset 0 1px 0 rgba(255,255,255,.06)}
-.eyebrow{font-size:11px;font-weight:800;letter-spacing:.16em;color:var(--gold);text-transform:uppercase}
-h2{font-size:28px;line-height:1.25;margin:12px 0 18px;overflow-wrap:anywhere;color:var(--ink)}
-p,li{font-size:15px;line-height:1.75;color:#ddd3bf}
-ol{padding-left:22px;margin:24px 0}
-li{padding:5px 0}
-code{font-size:13px;background:#0f0c08;border:1px solid rgba(200,168,107,.28);padding:3px 7px;border-radius:6px;color:var(--gold-bright);overflow-wrap:anywhere}
-a{color:var(--gold-bright);text-underline-offset:4px}
-.button,button{display:inline-block;border:0;border-radius:11px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:#241c0d;font:800 15px/1.4 inherit;cursor:pointer;text-decoration:none;padding:14px 24px;max-width:100%;text-align:center;box-shadow:0 8px 22px rgba(200,168,107,.22)}
-.button:hover,button:hover{filter:brightness(1.07)}
-.button:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid var(--gold-bright);outline-offset:4px}
-.secondary{background:transparent;border:1px solid rgba(200,168,107,.45);color:var(--gold-bright);padding:10px 16px;box-shadow:none}
-.secondary:hover{background:rgba(200,168,107,.10);filter:none}
-.muted{font-size:13px;color:var(--muted);margin-top:24px}
-.notice,.success{padding:18px;border:1px solid rgba(200,168,107,.35);border-radius:12px;background:#14110b;line-height:1.65;margin:20px 0}
-.notice{background:#1c1608;border-color:rgba(230,207,154,.4)}
-.success{border-color:rgba(120,200,140,.4);background:#0f150f}
-.success strong{color:#9fe0ac}
-.success p{margin:8px 0 0}
-.actions{display:flex;gap:16px;flex-wrap:wrap;align-items:center;border-top:1px solid rgba(200,168,107,.18);margin-top:28px;padding-top:24px;font-size:13px}
-footer{display:flex;flex-wrap:wrap;gap:20px;font-size:12px;padding:26px 4px;color:var(--muted)}
-footer a{color:inherit}
-@media(max-width:440px){main{width:calc(100% - 24px);margin-top:30px}.card{padding:24px 20px}.button,button{width:100%}.actions form{width:100%}}
-</style></head><body><main><div class="brand">Deutsche Deadlock Community</div><h1>Twitch &amp; Steam verbinden</h1><p class="lead">Einmal bestätigen. Im Chat den richtigen Account finden.</p><section class="card">{{CONTENT}}</section><footer><a href="/twitch/datenschutz">Datenschutz</a><a href="/twitch/impressum">Impressum</a><a href="/streamer/commands">Chat-Befehle</a></footer></main></body></html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Twitch &amp; Steam verbinden · Deutsche Deadlock Community</title>
+  <style>
+    @font-face{font-family:"Manrope";font-style:normal;font-weight:400 800;font-display:swap;src:url("/streamer/fonts/manrope-latin.woff2") format("woff2")}
+    @font-face{font-family:"Sora";font-style:normal;font-weight:400 800;font-display:swap;src:url("/streamer/fonts/sora-latin.woff2") format("woff2")}
+    :root{
+      color-scheme:dark;
+      --bg:#0b0b0b;
+      --bg-soft:#101010;
+      --card:rgba(20,20,20,.88);
+      --card-strong:rgba(26,26,25,.96);
+      --gold:#c8a86b;
+      --gold-bright:#efd49d;
+      --gold-pale:#f6ddb0;
+      --gold-soft:rgba(201,168,106,.14);
+      --teal:#55978f;
+      --success:#46c07b;
+      --danger:#ff7a5c;
+      --text:#f2eee6;
+      --muted:#a9a196;
+      --subtle:#777067;
+      --line:rgba(239,212,157,.16);
+      --line-strong:rgba(239,212,157,.34);
+      --radius-sm:10px;
+      --radius-md:16px;
+      --radius-lg:24px;
+      --shadow:0 26px 70px rgba(0,0,0,.56),inset 0 1px 0 rgba(255,255,255,.025);
+      font-family:"Manrope","Segoe UI",sans-serif;
+      background:var(--bg);
+      color:var(--text)
+    }
+    *{box-sizing:border-box}
+    html{min-height:100%;background:var(--bg)}
+    body{
+      margin:0;
+      min-height:100vh;
+      color:var(--text);
+      background:
+        radial-gradient(95% 70% at 50% 0%,rgba(201,168,106,.15),transparent 68%),
+        radial-gradient(75% 60% at 92% 86%,rgba(85,151,143,.055),transparent 72%),
+        linear-gradient(180deg,#0f0f0e 0%,#0b0b0b 58%,#101010 100%);
+      position:relative;
+      overflow-x:hidden
+    }
+    body::before{
+      content:"";
+      position:fixed;
+      inset:0;
+      pointer-events:none;
+      background-image:
+        linear-gradient(rgba(239,212,157,.038) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(239,212,157,.038) 1px,transparent 1px);
+      background-size:36px 36px;
+      -webkit-mask-image:radial-gradient(ellipse at top,black 36%,transparent 78%);
+      mask-image:radial-gradient(ellipse at top,black 36%,transparent 78%);
+      opacity:.66
+    }
+    a{color:inherit;text-underline-offset:4px}
+    a:hover{color:var(--gold-bright)}
+    a:focus-visible,button:focus-visible{outline:3px solid var(--gold-bright);outline-offset:4px}
+    .site-header{
+      width:min(calc(100% - 40px),1080px);
+      margin:0 auto;
+      min-height:76px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:20px;
+      position:relative;
+      z-index:1
+    }
+    .site-brand{
+      display:inline-flex;
+      align-items:center;
+      gap:12px;
+      text-decoration:none;
+      min-width:0
+    }
+    .brand-mark{
+      width:38px;
+      height:38px;
+      flex:0 0 auto;
+      display:block;
+      object-fit:contain
+    }
+    .brand-copy{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+    .brand-copy strong{font:700 13px/1.2 "Sora","Manrope",sans-serif;white-space:nowrap}
+    .brand-copy span{font-size:11px;color:var(--muted);margin-top:3px}
+    .back-link{
+      font-size:13px;
+      color:var(--muted);
+      text-decoration:none;
+      padding:9px 12px;
+      border-radius:10px;
+      border:1px solid transparent
+    }
+    .back-link:hover{background:rgba(255,255,255,.035);border-color:var(--line);color:var(--text)}
+    main{
+      width:min(calc(100% - 40px),980px);
+      margin:clamp(34px,6vw,78px) auto 54px;
+      position:relative;
+      z-index:1
+    }
+    .hero{max-width:760px;margin-bottom:30px}
+    .hero-kicker,.eyebrow{
+      margin:0 0 12px;
+      font-size:11px;
+      font-weight:800;
+      letter-spacing:.14em;
+      text-transform:uppercase;
+      color:var(--gold)
+    }
+    h1,h2{font-family:"Sora","Manrope",sans-serif}
+    h1{
+      margin:0;
+      font-size:clamp(34px,5.6vw,58px);
+      line-height:1.04;
+      letter-spacing:-.04em;
+      font-weight:800;
+      background:linear-gradient(120deg,var(--gold-pale) 0%,var(--gold-bright) 32%,var(--gold) 68%,#a98746 100%);
+      -webkit-background-clip:text;
+      background-clip:text;
+      color:transparent
+    }
+    .lead{
+      max-width:640px;
+      margin:16px 0 0;
+      color:var(--muted);
+      font-size:16px;
+      line-height:1.65
+    }
+    .connect-card{
+      background:
+        linear-gradient(180deg,rgba(239,212,157,.04),transparent 44%),
+        var(--card);
+      border:1px solid var(--line);
+      border-radius:var(--radius-lg);
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(16px);
+      overflow:hidden
+    }
+    .flow-steps{
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:1px;
+      background:var(--line);
+      border-bottom:1px solid var(--line)
+    }
+    .flow-step{
+      min-width:0;
+      display:flex;
+      align-items:center;
+      gap:11px;
+      padding:15px 18px;
+      background:rgba(12,12,12,.72);
+      color:var(--subtle)
+    }
+    .step-dot{
+      flex:0 0 auto;
+      width:26px;
+      height:26px;
+      display:grid;
+      place-items:center;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.11);
+      font-size:11px;
+      font-weight:800;
+      color:var(--muted)
+    }
+    .step-label{min-width:0;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .flow-step.active{background:rgba(201,168,106,.075);color:var(--text)}
+    .flow-step.active .step-dot{color:#171109;background:var(--gold);border-color:var(--gold-bright)}
+    .flow-step.done{color:var(--muted)}
+    .flow-step.done .step-dot{color:#08140d;background:var(--success);border-color:rgba(126,224,163,.65)}
+    .panel{
+      padding:clamp(26px,5vw,48px)
+    }
+    .panel-grid{
+      display:grid;
+      grid-template-columns:minmax(0,1.5fr) minmax(240px,.72fr);
+      gap:clamp(26px,5vw,52px);
+      align-items:start
+    }
+    .panel-main{min-width:0}
+    h2{
+      margin:0 0 14px;
+      color:var(--text);
+      font-size:clamp(26px,4vw,36px);
+      line-height:1.14;
+      letter-spacing:-.035em;
+      overflow-wrap:anywhere
+    }
+    p,li{font-size:15px;line-height:1.7;color:#cbc4b8}
+    p{margin:0 0 18px}
+    .supporting{color:var(--muted)}
+    code{
+      font-family:"JetBrains Mono","Fira Code","Consolas",monospace;
+      font-size:.86em;
+      background:rgba(201,168,106,.08);
+      border:1px solid var(--line);
+      padding:.18em .48em;
+      border-radius:7px;
+      color:var(--gold-bright);
+      overflow-wrap:anywhere
+    }
+    .account-chip{
+      display:inline-flex;
+      align-items:center;
+      gap:10px;
+      padding:8px 11px 8px 8px;
+      margin:0 0 20px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      background:rgba(201,168,106,.06);
+      color:var(--text);
+      font-size:13px;
+      font-weight:700
+    }
+    .account-avatar{
+      width:26px;
+      height:26px;
+      border-radius:999px;
+      display:grid;
+      place-items:center;
+      background:#9146ff;
+      color:white;
+      font:800 12px/1 "Sora","Manrope",sans-serif
+    }
+    .side-card{
+      border:1px solid var(--line);
+      border-radius:var(--radius-md);
+      background:rgba(255,255,255,.022);
+      padding:20px
+    }
+    .side-card h3{
+      margin:0 0 12px;
+      font:700 15px/1.35 "Sora","Manrope",sans-serif;
+      color:var(--text)
+    }
+    .side-card p,.side-card li{font-size:13px;line-height:1.58;color:var(--muted)}
+    .side-card p:last-child{margin-bottom:0}
+    .side-list{list-style:none;margin:0;padding:0;display:grid;gap:11px}
+    .side-list li{display:grid;grid-template-columns:18px 1fr;gap:8px;align-items:start}
+    .side-list .check{color:var(--success);font-weight:900}
+    .button,button{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-height:48px;
+      border:1px solid var(--gold-bright);
+      border-radius:12px;
+      background:linear-gradient(135deg,var(--gold-pale) 0%,var(--gold-bright) 35%,var(--gold) 68%,#a98746 100%);
+      color:#16100a;
+      font:800 14px/1.25 "Manrope","Segoe UI",sans-serif;
+      cursor:pointer;
+      text-decoration:none;
+      padding:0 20px;
+      box-shadow:0 12px 28px rgba(201,168,106,.19);
+      transition:transform 160ms ease,box-shadow 160ms ease,filter 160ms ease
+    }
+    .button:hover,button:hover{color:#16100a;transform:translateY(-1px);filter:brightness(1.035);box-shadow:0 16px 36px rgba(201,168,106,.25)}
+    .secondary{
+      min-height:40px;
+      padding:0 14px;
+      background:transparent;
+      border-color:var(--line-strong);
+      color:var(--gold-bright);
+      box-shadow:none
+    }
+    .secondary:hover{color:var(--gold-bright);background:var(--gold-soft);box-shadow:none}
+    .muted{
+      margin-top:18px;
+      margin-bottom:0;
+      color:var(--muted);
+      font-size:12.5px;
+      line-height:1.6
+    }
+    .status-box{
+      margin:20px 0 22px;
+      padding:16px 18px;
+      border:1px solid var(--line);
+      border-radius:14px;
+      background:rgba(255,255,255,.024)
+    }
+    .status-box strong{display:block;color:var(--text);font-size:14px;margin-bottom:5px}
+    .status-box p{margin:0;font-size:13px;line-height:1.55;color:var(--muted)}
+    .status-box.success{border-color:rgba(70,192,123,.28);background:rgba(70,192,123,.07)}
+    .status-box.success strong{color:#8adca8}
+    .status-box.notice{border-color:rgba(224,145,47,.32);background:rgba(224,145,47,.07)}
+    .status-box.danger{border-color:rgba(255,122,92,.3);background:rgba(255,122,92,.065)}
+    .success-code{
+      display:flex;
+      flex-wrap:wrap;
+      align-items:center;
+      gap:8px 12px;
+      margin-top:10px
+    }
+    .actions{
+      display:flex;
+      gap:14px;
+      flex-wrap:wrap;
+      align-items:center;
+      border-top:1px solid var(--line);
+      margin-top:28px;
+      padding-top:20px;
+      font-size:12.5px
+    }
+    .actions>a{color:var(--muted)}
+    .error-panel{text-align:left;max-width:650px}
+    .error-icon{
+      width:46px;
+      height:46px;
+      display:grid;
+      place-items:center;
+      margin-bottom:20px;
+      border-radius:14px;
+      border:1px solid rgba(255,122,92,.28);
+      background:rgba(255,122,92,.08);
+      color:var(--danger);
+      font:800 20px/1 "Sora","Manrope",sans-serif
+    }
+    footer{
+      width:min(calc(100% - 40px),980px);
+      margin:0 auto 30px;
+      padding:0 4px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:18px;
+      position:relative;
+      z-index:1;
+      color:var(--subtle);
+      font-size:11px
+    }
+    footer a{color:inherit}
+    @media(max-width:760px){
+      .site-header{width:min(calc(100% - 28px),1080px)}
+      .brand-copy span{display:none}
+      main{width:min(calc(100% - 28px),980px);margin-top:28px}
+      .panel-grid{grid-template-columns:1fr}
+      .side-card{order:2}
+      .flow-step{padding:13px 11px;gap:8px}
+      .step-label{font-size:11px}
+      footer{width:min(calc(100% - 28px),980px)}
+    }
+    @media(max-width:500px){
+      .back-link{display:none}
+      .flow-step{display:grid;justify-items:center;text-align:center;gap:6px}
+      .step-label{white-space:normal;line-height:1.25}
+      .panel{padding:24px 20px}
+      .button,button{width:100%}
+      .actions{align-items:stretch}
+      .actions>a{text-align:center;padding:8px 0}
+      .actions form{width:100%}
+    }
+    @media(prefers-reduced-motion:reduce){
+      .button,button{transition:none}
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-brand" href="/" aria-label="Deutsche Deadlock Community">
+      <img class="brand-mark" src="/streamer/brand/deadlock-d-logo.png" alt="" width="38" height="38">
+      <span class="brand-copy"><strong>Deutsche Deadlock Community</strong><span>Account-Verknüpfung</span></span>
+    </a>
+    <a class="back-link" href="/">Zur Community</a>
+  </header>
+  <main>
+    <div class="hero">
+      <p class="hero-kicker">Deutsche Deadlock Community</p>
+      <h1>Twitch &amp; Steam verbinden</h1>
+      <p class="lead">Ein kurzer, sicherer Abgleich – damit <code>!rank @deinname</code> im Chat immer den richtigen Deadlock-Account findet.</p>
+    </div>
+    <section class="connect-card" aria-label="Twitch und Steam verbinden">{{CONTENT}}</section>
+  </main>
+  <footer>
+    <a href="/twitch/datenschutz">Datenschutz</a>
+    <a href="/twitch/impressum">Impressum</a>
+    <a href="/streamer/commands">Chat-Befehle</a>
+  </footer>
+</body>
+</html>

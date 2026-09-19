@@ -39,11 +39,39 @@ fn secure_response(mut response: Response) -> Response {
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://steamcommunity.com; base-uri 'none'; frame-ancestors 'none'"));
+    headers.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; form-action 'self' https://steamcommunity.com; base-uri 'none'; frame-ancestors 'none'"));
     response
 }
+fn stepper(stage: u8) -> String {
+    const LABELS: [&str; 3] = ["Twitch bestätigen", "Steam verbinden", "Fertig"];
+    let steps = LABELS
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let number = (index + 1) as u8;
+            let class = if number < stage {
+                "flow-step done"
+            } else if number == stage {
+                "flow-step active"
+            } else {
+                "flow-step"
+            };
+            let marker = if number < stage { "✓".to_string() } else { number.to_string() };
+            let current = if number == stage { " aria-current=\"step\"" } else { "" };
+            format!(
+                "<div class=\"{class}\"{current}><span class=step-dot>{marker}</span><span class=step-label>{label}</span></div>"
+            )
+        })
+        .collect::<String>();
+    format!("<div class=flow-steps aria-label=\"Verknüpfungsfortschritt\">{steps}</div>")
+}
+
 fn error(status: StatusCode, message: &str) -> Response {
-    secure_response((status, Html(render_page(&format!("<h2>Verknüpfung nicht abgeschlossen</h2><p>{}</p><a class=button href=/twitch/connect>Zurück zur Kontoverknüpfung</a>", escape(message))))).into_response())
+    let body = format!(
+        "<div class=panel><div class=error-panel><div class=error-icon aria-hidden=true>!</div><div class=eyebrow>Verknüpfung unterbrochen</div><h2>Das hat noch nicht geklappt.</h2><p>{}</p><a class=button href=/twitch/connect>Zurück zur Kontoverknüpfung</a></div></div>",
+        escape(message)
+    );
+    secure_response((status, Html(render_page(&body))).into_response())
 }
 fn unavailable() -> Response {
     error(
@@ -105,30 +133,56 @@ async fn session(
 pub struct ConnectForm {
     csrf_token: String,
 }
+fn normalized_origin(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    (matches!(url.scheme(), "https" | "http")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then(|| url.origin().ascii_serialization())
+}
+
 fn valid_form(
     headers: &HeaderMap,
     config: &OAuthLoginConfig,
     session: &PlayerSession,
     form: &ConnectForm,
 ) -> bool {
+    if form.csrf_token.is_empty()
+        || !tb_crypto::constant_time_eq(form.csrf_token.as_bytes(), session.csrf_token.as_bytes())
+    {
+        return false;
+    }
+
+    let fetch_site = headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok());
+    if fetch_site == Some("cross-site") {
+        return false;
+    }
+
+    // Moderne Browser liefern Fetch-Metadata. Wenn der Browser selbst den POST
+    // als same-origin/same-site einordnet, ist die starke Session-CSRF-Bindung
+    // maßgeblich. Das hält den Flow auch hinter Canonical-Host-/Proxy-Redirects
+    // stabil, bei denen ein streng verglichener Origin-String abweichen kann.
+    if matches!(fetch_site, Some("same-origin" | "same-site")) {
+        return true;
+    }
+
     let allowed = allowed_form_origins(config);
     if allowed.is_empty() {
         return false;
     }
     if let Some(value) = headers.get("origin") {
-        let matches = value
-            .to_str()
-            .ok()
-            .is_some_and(|v| allowed.iter().any(|o| o == v));
-        if !matches {
+        let Some(presented) = value.to_str().ok().and_then(normalized_origin) else {
             return false;
-        }
+        };
+        return allowed.iter().any(|allowed| allowed == &presented);
     }
-    if headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
-        return false;
-    }
-    !form.csrf_token.is_empty()
-        && tb_crypto::constant_time_eq(form.csrf_token.as_bytes(), session.csrf_token.as_bytes())
+
+    // Ältere Clients ohne Origin/Fetch-Metadata bleiben über den zufälligen,
+    // sessiongebundenen CSRF-Token geschützt.
+    true
 }
 
 pub async fn page(state: Option<Extension<DashboardAuthState>>, headers: HeaderMap) -> Response {
@@ -146,24 +200,47 @@ pub async fn page(state: Option<Extension<DashboardAuthState>>, headers: HeaderM
         };
         let who = escape(&session.twitch_login);
         let csrf = escape(&session.csrf_token);
+        let steam_id = link.as_ref().and_then(|link| link.steam_id64);
+        let lookup_enabled = link.as_ref().is_some_and(|link| link.lookup_enabled);
+        let ready = lookup_enabled && steam_id.is_some();
+        let stage = if ready { 3 } else { 2 };
         let status = match link.as_ref() {
-            Some(link) if !link.lookup_enabled => "<div class=notice>Deine Steam-Zuordnung ist deaktiviert. Automatische Zuordnung über Discord oder Namenssuche bleibt aus, bis du hier erneut verbindest.</div>".to_string(),
-            Some(link) if link.steam_id64.is_some() => format!("<div class=success><strong>Verbunden</strong><p>Steam-ID: {}<br>Im Chat: <code>!rank @{who}</code></p></div>", link.steam_id64.unwrap_or_default()),
-            _ => "<p>Dein Twitch-Konto ist bestätigt. Verbinde jetzt deinen Steam-Account.</p>".to_string(),
+            Some(link) if !link.lookup_enabled => "<div class=\"status-box notice\"><strong>Verknüpfung pausiert</strong><p>Deine bisherige Steam-Zuordnung ist deaktiviert. Verbinde Steam erneut, um die automatische Rang-Zuordnung wieder einzuschalten.</p></div>".to_string(),
+            Some(link) if link.steam_id64.is_some() => format!(
+                "<div class=\"status-box success\"><strong>Alles verbunden</strong><p>Steam-ID: {}</p><div class=success-code><span>Im Chat</span><code>!rank @{who}</code></div></div>",
+                link.steam_id64.unwrap_or_default()
+            ),
+            _ => "<p class=supporting>Dein Twitch-Konto ist bestätigt. Jetzt fehlt nur noch dein Steam-Konto.</p>".to_string(),
         };
-        let button = if link.as_ref().and_then(|l| l.steam_id64).is_some() {
+        let button = if !lookup_enabled && steam_id.is_some() {
+            "Steam erneut verbinden"
+        } else if steam_id.is_some() {
             "Steam-Konto wechseln"
         } else {
             "Mit Steam verbinden"
         };
-        format!("<div class=eyebrow>TWITCH BESTÄTIGT</div><h2>@{who}</h2>{status}
-            <p>Mit dem nächsten Schritt verknüpfst du dieses Twitch-Konto mit dem Steam-Konto, das du bei Steam bestätigst. Der Bot darf damit deinen verfügbaren Deadlock-Rang auf <code>!rank @{who}</code> öffentlich im Chat anzeigen.</p>
-            <form method=post action=/twitch/connect/steam><input type=hidden name=csrf_token value=\"{csrf}\"><button type=submit>{button}</button></form>
-            <p class=muted>Wir speichern die Twitch-ID und die bestätigte Steam-ID. Steam-Passwort und Inventarberechtigungen erhalten wir nicht. Der Steam-Login garantiert keine Rangdaten; diese müssen in der Deadlock API verfügbar sein.</p>
-            <div class=actions><a href=/twitch/connect/twitch>Anderes Twitch-Konto</a>
-            <form method=post action=/twitch/connect/unlink><input type=hidden name=csrf_token value=\"{csrf}\"><button class=secondary type=submit>Verknüpfung entfernen</button></form></div>")
+        let headline = if ready {
+            "Verbindung steht."
+        } else {
+            "Jetzt Steam verbinden."
+        };
+        let side = if ready {
+            format!(
+                "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank @{who}</code> schreiben.</span></li><li><span class=check>✓</span><span>Der Bot ordnet deinen bestätigten Deadlock-Account automatisch zu.</span></li><li><span class=check>✓</span><span>Du kannst Steam jederzeit wechseln oder die Verbindung entfernen.</span></li></ul></aside>"
+            )
+        } else {
+            "<aside class=side-card><h3>Was passiert jetzt?</h3><ul class=side-list><li><span class=check>✓</span><span>Der Login öffnet direkt Steam.</span></li><li><span class=check>✓</span><span>Wir bekommen nur deine bestätigte öffentliche Steam-ID.</span></li><li><span class=check>✓</span><span>Passwort und Inventarberechtigungen sehen wir nicht.</span></li></ul></aside>".to_string()
+        };
+        format!(
+            "{}<div class=panel><div class=panel-grid><div class=panel-main><div class=account-chip><span class=account-avatar aria-hidden=true>T</span><span>@{who}</span></div><div class=eyebrow>{}</div><h2>{headline}</h2>{status}<p>Damit darf der Bot deinen verfügbaren Deadlock-Rang dem bestätigten Twitch-Namen zuordnen und auf <code>!rank @{who}</code> öffentlich im Chat anzeigen.</p><form method=post action=/twitch/connect/steam><input type=hidden name=csrf_token value=\"{csrf}\"><button type=submit>{button}</button></form><p class=muted>Der Steam-Login garantiert keine Rangdaten; sie müssen in der Deadlock API verfügbar sein.</p><div class=actions><a href=/twitch/connect/twitch>Anderes Twitch-Konto verwenden</a><form method=post action=/twitch/connect/unlink><input type=hidden name=csrf_token value=\"{csrf}\"><button class=secondary type=submit>Verknüpfung entfernen</button></form></div></div>{side}</div></div>",
+            stepper(stage),
+            if ready { "VERBUNDEN" } else { "SCHRITT 2 VON 3" }
+        )
     } else {
-        "<div class=eyebrow>FÜR ALLE ZUSCHAUER</div><h2>Dein Rang. Dein Account.</h2><p>Verbinde Twitch und Steam, damit <code>!rank @deinname</code> deinen richtigen Deadlock-Account findet – auch bei unterschiedlichen Namen.</p><ol><li>Twitch-Konto bestätigen</li><li>Bei Steam anmelden und Verbindung bestätigen</li><li>Im Chat <code>!rank @deinname</code> nutzen</li></ol><a class=button href=/twitch/connect/twitch>Mit Twitch anmelden</a><p class=muted>Kein Discord-Konto und keine Streamer-Partnerschaft nötig. Freiwillig; mit <code>!unconnect</code> im Chat oder hier auf der Seite wieder trennbar.</p>".to_string()
+        format!(
+            "{}<div class=panel><div class=panel-grid><div class=panel-main><div class=eyebrow>SCHRITT 1 VON 3</div><h2>Twitch-Konto bestätigen.</h2><p>Wir gleichen zuerst deinen Twitch-Account ab. So weiß der Bot später genau, zu welchem Chat-Namen dein bestätigter Deadlock-Account gehört – auch wenn Twitch- und Steam-Name verschieden sind.</p><a class=button href=/twitch/connect/twitch>Mit Twitch anmelden</a><p class=muted>Freiwillig. Kein Discord-Konto und keine Streamer-Partnerschaft nötig.</p></div><aside class=side-card><h3>Danach geht es so weiter</h3><ul class=side-list><li><span class=check>2</span><span>Bei Steam anmelden und den gewünschten Account bestätigen.</span></li><li><span class=check>3</span><span>Im Chat <code>!rank @deinname</code> nutzen.</span></li><li><span class=check>✓</span><span>Mit <code>!unconnect</code> oder hier jederzeit wieder trennbar.</span></li></ul></aside></div></div>",
+            stepper(1)
+        )
     };
     secure_response(Html(render_page(&body)).into_response())
 }

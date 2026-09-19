@@ -21,7 +21,7 @@ fn document(
 ) -> String {
     let metadata = canonical.map(|url| format!(r#"<link rel="canonical" href="{}"><meta property="og:url" content="{}"><meta property="og:type" content="profile"><meta property="og:title" content="{}"><meta property="og:description" content="{}">"#,escape(url),escape(url),escape(title),escape(description))).unwrap_or_else(|| "<meta name=\"robots\" content=\"noindex\">".into());
     format!(
-        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><meta name="description" content="{}">{}<link rel="stylesheet" href="/twitch/profile-assets/profile.css"></head><body class="{}"><header class="site-head"><a href="/" class="brand">DDC<span>Deutsche Deadlock Community</span></a><nav aria-label="Community"><a href="/streamer#partner">Partner entdecken</a><a href="/twitch/verwaltung#profil">Mein Profil</a></nav></header><main>{}</main><footer><a href="/streamer">Teil des Partnernetzwerks werden</a><span><a href="/twitch/impressum">Impressum</a> · <a href="/twitch/datenschutz">Datenschutz</a></span></footer></body></html>"#,
+        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><meta name="description" content="{}">{}<link rel="stylesheet" href="/twitch/profile-assets/profile.css"></head><body class="{}"><header class="site-head"><a href="/" class="brand" aria-label="Deutsche Deadlock Community"><img class="brand-mark" src="/streamer/brand/deadlock-d-logo.png" alt="" width="38" height="38"><span class="brand-copy"><strong>DDC</strong><span>Deutsche Deadlock Community</span></span></a><nav aria-label="Community"><a href="/streamer#partner">Partner entdecken</a><a href="/twitch/verwaltung#profil">Mein Profil</a></nav></header><main>{}</main><footer><a href="/streamer">Teil des Partnernetzwerks werden</a><span><a href="/twitch/impressum">Impressum</a> · <a href="/twitch/datenschutz">Datenschutz</a></span></footer></body></html>"#,
         escape(title),
         escape(description),
         metadata,
@@ -31,7 +31,7 @@ fn document(
 }
 fn response(status: StatusCode, html: String) -> Response {
     let mut response = no_store((status, Html(html)).into_response());
-    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src https://static-cdn.jtvnw.net; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".parse().unwrap());
+    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' https://static-cdn.jtvnw.net; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".parse().unwrap());
     response
         .headers_mut()
         .insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
@@ -67,8 +67,10 @@ fn timestamp(at: DateTime<Utc>) -> String {
 fn event_card(event: &Event) -> String {
     format!("<article class=\"event-card\"><span class=\"eyebrow\">Geplant</span><h3>{}</h3><p><time datetime=\"{}\">{}</time> bis <time datetime=\"{}\">{}</time></p><p class=\"multiline\">{}</p></article>",escape(&event.title),event.starts_at.to_rfc3339(),timestamp(event.starts_at),event.ends_at.to_rfc3339(),timestamp(event.ends_at),escape(&event.description))
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn page(
     record: &Record,
+    twitch_avatar_url: Option<&str>,
     observed: &Schedule,
     monthly: &[Session],
     directory: &[DirectoryEntry],
@@ -88,8 +90,11 @@ pub(super) fn page(
         Accent::Violet => "violet",
         Accent::Teal => "teal",
     };
-    let image = if !p.avatar_url.is_empty() && safe_url(&p.avatar_url) {
-        format!("<img class=\"avatar\" src=\"{}\" alt=\"Profilbild von {}\" width=\"112\" height=\"112\">",escape(&p.avatar_url),login)
+    let avatar_url = twitch_avatar_url.filter(|url| safe_url(url)).or_else(|| {
+        (!p.avatar_url.is_empty() && safe_url(&p.avatar_url)).then_some(p.avatar_url.as_str())
+    });
+    let image = if let Some(avatar_url) = avatar_url {
+        format!("<img class=\"avatar\" src=\"{}\" alt=\"Profilbild von {}\" width=\"112\" height=\"112\">",escape(avatar_url),login)
     } else {
         format!(
             "<div class=\"avatar initial\" aria-hidden=\"true\">{}</div>",
@@ -109,7 +114,7 @@ pub(super) fn page(
         "<span class=\"badge\">DDC-Partner</span>".into()
     };
     let mut body = format!(
-        r#"<a class="back" href="/streamer#partner">← Partnernetzwerk</a><section class="hero">{image}<div class="hero-copy">{live}<p class="eyebrow">@{login}</p><h1>{}</h1><p>Hier findest du mich, meine nächsten Streams und Menschen aus meinem Umfeld.</p><a class="button" href="https://www.twitch.tv/{login}" rel="noopener noreferrer" target="_blank">Auf Twitch vorbeischauen ↗</a></div></section><nav class="socials" aria-label="Social-Links">"#,
+        r##"<a class="back" href="/streamer#partner">← Partnernetzwerk</a><section class="hero"><div class="hero-avatar">{image}</div><div class="hero-copy"><div class="hero-status">{live}<span class="network-mark">Deutsche Deadlock Community</span></div><p class="eyebrow">Streamerprofil · @{login}</p><h1>{}</h1><p class="hero-lead">Hier lernst du mich, meinen Stream und mein Umfeld kennen. Im Kalender siehst du geplante Termine und meine erfassten Livezeiten.</p><div class="hero-actions"><a class="button" href="https://www.twitch.tv/{login}" rel="noopener noreferrer" target="_blank">Auf Twitch vorbeischauen ↗</a><a class="button secondary" href="#kalender">Streamplan ansehen</a></div></div></section><nav class="socials" aria-label="Social-Links">"##,
         escape(headline)
     );
     for social in &p.socials {
@@ -209,11 +214,17 @@ pub(super) fn page(
             "<div class=\"day{today}\"><time class=\"date\" datetime=\"{day}\">{}</time>",
             day.day()
         );
-        for event in p
+        let planned_events: Vec<_> = p
             .events
             .iter()
-            .filter(|e| e.starts_at < end && e.ends_at > start)
-        {
+            .filter(|event| event.starts_at < end && event.ends_at > start)
+            .collect();
+        let observed_sessions: Vec<_> = monthly
+            .iter()
+            .filter(|session| session.started_at < end && session.ended_at > start)
+            .collect();
+        let mut shown = 0usize;
+        for event in planned_events.iter().take(2) {
             let label = format!(
                 "{} · {} bis {}",
                 event.title,
@@ -221,11 +232,9 @@ pub(super) fn page(
                 timestamp(event.ends_at)
             );
             let _=write!(body,"<div class=\"calendar-event planned\" title=\"{}\"><span>{:02}:{:02} · Geplant</span><strong>{}</strong></div>",escape(&label),event.starts_at.max(start).with_timezone(&Berlin).hour(),event.starts_at.max(start).with_timezone(&Berlin).minute(),escape(&event.title));
+            shown += 1;
         }
-        for session in monthly
-            .iter()
-            .filter(|s| s.started_at < end && s.ended_at > start)
-        {
+        for session in observed_sessions.iter().take(3usize.saturating_sub(shown)) {
             let game = session.game_name.as_deref().unwrap_or("Stream");
             let label = format!(
                 "Tatsächlich live: {} bis {} · {}",
@@ -234,6 +243,14 @@ pub(super) fn page(
                 game
             );
             let _=write!(body,"<div class=\"calendar-event observed\" title=\"{}\"><span>{:02}:{:02} · War live</span><strong>{}</strong></div>",escape(&label),session.started_at.max(start).with_timezone(&Berlin).hour(),session.started_at.max(start).with_timezone(&Berlin).minute(),escape(game));
+            shown += 1;
+        }
+        let hidden = planned_events.len() + observed_sessions.len() - shown;
+        if hidden > 0 {
+            let _ = write!(
+                body,
+                "<span class=\"calendar-more\">+{hidden} weitere</span>"
+            );
         }
         body.push_str("</div>");
         day = day.succ_opt().unwrap();

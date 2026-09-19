@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rise } from '../motion/Rise';
 import {
@@ -451,17 +451,22 @@ export function Viewers({ streamer, days }: ViewersProps) {
   const [page, setPage] = useState(1);
   const [expandedViewer, setExpandedViewer] = useState<string | null>(null);
 
-  // Debounce search
-  const handleSearchChange = useCallback((value: string) => {
-    setSearch(value);
-    setPage(1);
-    const timeout = setTimeout(() => setDebouncedSearch(value), 300);
+  // Event-handler return values are not cleanups. Cancel the previous timer
+  // on every edit/unmount and update the search + page together after the pause.
+  useEffect(() => {
+    if (search === debouncedSearch) return;
+    const timeout = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
     return () => clearTimeout(timeout);
-  }, []);
+  }, [search, debouncedSearch]);
 
   const {
     data: directory,
     isLoading: loadingDirectory,
+    isFetching: fetchingDirectory,
+    isPlaceholderData: placeholderDirectory,
     isError: directoryError,
     refetch: refetchDirectory,
   } = useViewerDirectory(streamer, days, sort, order, filter, debouncedSearch, page);
@@ -469,9 +474,11 @@ export function Viewers({ streamer, days }: ViewersProps) {
   const {
     data: segments,
     isLoading: loadingSegments,
+    isError: segmentsError,
+    refetch: refetchSegments,
   } = useViewerSegments(streamer, days);
 
-  const isLoading = loadingDirectory || loadingSegments;
+  const directoryBusy = search !== debouncedSearch || fetchingDirectory || placeholderDirectory;
 
   const handleSort = (field: ViewerSortField) => {
     if (sort === field) {
@@ -508,35 +515,19 @@ export function Viewers({ streamer, days }: ViewersProps) {
     );
   }
 
-  if (isLoading && !directory) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (directoryError) {
-    return (
-      <div className="bg-error/10 border border-error/30 rounded-lg p-4 text-error">
-        <div className="flex items-center gap-2 font-semibold mb-2">
-          <AlertCircle className="w-5 h-5" />
-          <span>Fehler beim Laden der Viewer-Daten</span>
-        </div>
-        <button
-          onClick={() => refetchDirectory()}
-          className="px-3 py-1.5 rounded-md bg-error/20 text-error text-sm font-semibold hover:bg-error/30"
-        >
-          Erneut laden
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {directory?.rawChatStatus && (
         <RawChatGapNotice status={directory.rawChatStatus} />
+      )}
+
+      {segmentsError && (
+        <div role="alert" className="bg-error/10 border border-error/30 rounded-lg p-4 text-error">
+          Die Zuschauer-Übersicht konnte nicht geladen werden.
+          <button onClick={() => refetchSegments()} className="ml-3 underline">
+            Übersicht erneut laden
+          </button>
+        </div>
       )}
 
       {/* ── Segment Cards ── */}
@@ -599,8 +590,10 @@ export function Viewers({ streamer, days }: ViewersProps) {
                 <p className="text-xs text-success">Keine vermissten Chatter</p>
               )}
             </div>
+          ) : loadingSegments ? (
+            <Loader2 aria-label="Zuschauer-Übersicht wird geladen" className="w-5 h-5 animate-spin text-text-secondary" />
           ) : (
-            <Loader2 className="w-5 h-5 animate-spin text-text-secondary" />
+            <p className="text-xs text-text-secondary">Keine Daten verfügbar</p>
           )}
         </div>
 
@@ -613,7 +606,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
             <div>
               <h3 className="text-sm font-bold text-white">Top Shared Channels</h3>
               <p className="text-xs text-text-secondary">
-                Ø {segments?.crossChannelStats.avgOtherChannels ?? directory?.summary.avgOtherChannels ?? 0} andere Channels
+                Ø {segments?.crossChannelStats.avgOtherChannels ?? directory?.summary.avgOtherChannels ?? '…'} andere Channels
               </p>
             </div>
           </div>
@@ -627,7 +620,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
               ))}
             </div>
           ) : (
-            <p className="text-xs text-text-secondary">Keine Shared-Channel-Daten</p>
+            <p className="text-xs text-text-secondary">{loadingSegments ? 'Wird geladen …' : 'Keine Shared-Channel-Daten'}</p>
           )}
         </div>
 
@@ -640,7 +633,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
             <div>
               <h3 className="text-sm font-bold text-white">Exklusiv vs Shared</h3>
               <p className="text-xs text-text-secondary">
-                {segments?.crossChannelStats.exclusiveViewersPct ?? 0}% exklusiv
+                {segments ? `${segments.crossChannelStats.exclusiveViewersPct}% exklusiv` : loadingSegments ? 'Wird geladen …' : 'Keine Daten verfügbar'}
               </p>
             </div>
           </div>
@@ -689,12 +682,21 @@ export function Viewers({ streamer, days }: ViewersProps) {
             <div>
               <h3 className="text-lg font-bold text-white">Viewer-Verzeichnis</h3>
               <p className="text-sm text-text-secondary">
-                {formatNumber(directory?.total || 0)} Viewer
+                {directory ? `${formatNumber(directory.total)} Viewer` : loadingDirectory ? 'Viewer werden geladen …' : 'Keine Viewer-Daten verfügbar'}
                 {directory?.summary ? ` · ${formatNumber(directory.summary.totalViewers)} gesamt` : ''}
                 {` · Fenster ${days} Tage`}
               </p>
             </div>
           </div>
+        </div>
+
+        <div role="status" aria-live="polite" className="min-h-5 mb-2 text-xs text-text-secondary">
+          {directoryBusy && directory && (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 aria-hidden="true" className="w-3 h-3 animate-spin" />
+              Liste wird aktualisiert …
+            </span>
+          )}
         </div>
 
         {/* Search + Filter */}
@@ -705,7 +707,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
               type="text"
               placeholder="Viewer suchen..."
               value={search}
-              onChange={e => handleSearchChange(e.target.value)}
+              onChange={e => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-lg bg-background border border-border text-white text-sm placeholder:text-text-secondary focus:outline-none focus:border-primary/50"
             />
           </div>
@@ -726,8 +728,23 @@ export function Viewers({ streamer, days }: ViewersProps) {
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto">
+        {directoryError && (
+          <div role="alert" className="bg-error/10 border border-error/30 rounded-lg p-4 mb-4 text-error">
+            <div className="flex items-center gap-2 font-semibold mb-2">
+              <AlertCircle className="w-5 h-5" />
+              <span>Die Viewer-Liste konnte nicht geladen werden.</span>
+            </div>
+            <button
+              onClick={() => refetchDirectory()}
+              className="px-3 py-1.5 rounded-md bg-error/20 text-error text-sm font-semibold hover:bg-error/30"
+            >
+              Erneut laden
+            </button>
+          </div>
+        )}
+
+        {/* Keep the controls mounted; only this table is busy. */}
+        <div className="overflow-x-auto" aria-busy={directoryBusy}>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-text-secondary text-left">
@@ -740,7 +757,17 @@ export function Viewers({ streamer, days }: ViewersProps) {
                 <th className="py-2 px-2 w-8"></th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className={directoryBusy ? 'opacity-60' : undefined}>
+              {loadingDirectory && !directory && (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-text-secondary">
+                    <span role="status" className="inline-flex items-center gap-2">
+                      <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />
+                      Viewer werden geladen …
+                    </span>
+                  </td>
+                </tr>
+              )}
               {directory?.viewers.map(viewer => (
                 <ViewerRow
                   key={viewer.login}
@@ -753,7 +780,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
                   days={days}
                 />
               ))}
-              {directory?.viewers.length === 0 && (
+              {directory?.viewers.length === 0 && !directoryBusy && (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-text-secondary">
                     Keine Viewer gefunden
@@ -769,17 +796,17 @@ export function Viewers({ streamer, days }: ViewersProps) {
           <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page <= 1}
+              disabled={directoryBusy || page <= 1}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-background border border-border text-text-secondary hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Zurück
             </button>
             <span className="text-sm text-text-secondary">
-              Seite {page} von {totalPages}
+              Seite {directory?.page ?? page} von {totalPages}
             </span>
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
+              disabled={directoryBusy || page >= totalPages}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-background border border-border text-text-secondary hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Weiter

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('./model.js', import.meta.url), 'utf8');
-const model = vm.runInNewContext(source + ';({normalize,dateLabel,monthLabel,dateBounds,rangeFor,filterCommits,monthsBetween,featureRows,milestones,representative})');
+const model = vm.runInNewContext(source + ';({normalize,dateLabel,monthLabel,dateBounds,rangeFor,filterCommits,monthsBetween,featureRows,milestones,representative,bundleCommits,weeksBetween,daySpan})');
 const plain = value => JSON.parse(JSON.stringify(value));
 const event = (id, date, kind, features = ['uplink'], title = id) => ({id, date, kind, features, title, subject: title, timestamp: date + 'T12:00:00Z'});
 const data = {
@@ -78,4 +78,26 @@ test('empty history remains a valid empty model', () => {
 });
 test('German accents and uppercase normalize for search', () => {
   assert.equal(model.normalize('ÄNDERUNG'), model.normalize('anderung'));
+});
+test('milestones bundle changes closer than the gap and split larger gaps', () => {
+  const values = [event('a', '2026-03-01', 'feat'), event('b', '2026-03-02', 'fix'), event('c', '2026-03-03', 'feat'), event('d', '2026-03-20', 'fix')];
+  const bundles = model.bundleCommits(values);
+  assert.equal(bundles.length, 2);
+  assert.equal(bundles[0].commits.length, 3);
+  assert.equal(bundles[1].commits.length, 1);
+  assert.equal(bundles[0].kind, 'feat');
+});
+test('maintenance-only changes carry no milestone', () => {
+  const values = [event('a', '2026-03-01', 'docs'), event('b', '2026-03-02', 'chore'), event('c', '2026-03-03', 'deps')];
+  assert.equal(model.bundleCommits(values).length, 0);
+});
+test('bundle title prefers the latest feat, else the largest commit', () => {
+  const feats = [{...event('a', '2026-03-01', 'feat', ['uplink'], 'kleiner Ausbau'), pathCount: 1}, {...event('b', '2026-03-02', 'feat', ['uplink'], 'zweiter Ausbau'), pathCount: 1}];
+  assert.equal(model.bundleCommits(feats)[0].title, 'zweiter Ausbau');
+  const fixes = [{...event('a', '2026-03-01', 'fix', ['uplink'], 'klein'), pathCount: 1}, {...event('b', '2026-03-02', 'fix', ['uplink'], 'groß'), pathCount: 9}];
+  assert.equal(model.bundleCommits(fixes)[0].title, 'groß');
+});
+test('week ticks land on Mondays inside the range', () => {
+  assert.deepEqual(plain(model.weeksBetween('2026-02-24', '2026-03-10')), ['2026-03-02', '2026-03-09']);
+  assert.equal(model.weeksBetween('', '').length, 0);
 });

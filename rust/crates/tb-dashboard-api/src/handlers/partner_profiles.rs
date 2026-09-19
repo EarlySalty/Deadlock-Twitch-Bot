@@ -5,12 +5,13 @@ mod html;
 mod tests;
 
 use super::community::matching::{schedule, Session};
+use super::internal_home::AvatarCache;
 use crate::auth::{level::DashboardAuthLevel, streamer_scope::resolve_settings_target};
 use axum::{
     extract::{OriginalUri, Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    Json,
+    Extension, Json,
 };
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
@@ -19,8 +20,9 @@ use serde_json::json;
 use sqlx::{types::Json as SqlJson, PgPool};
 use std::collections::HashSet;
 
-// This deliberately does not use an auth/session or network cache. A revoked
+// Visibility deliberately does not use an auth/session or profile cache. A revoked
 // channel must disappear on the next request, including calendar and directory.
+// The optional Twitch avatar cache contains image metadata only and never decides visibility.
 const ACTIVE: &str = "p.status='active' AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL AND COALESCE(p.manual_partner_opt_out,0)=0 AND COALESCE(p.raid_bot_enabled,0)=1 AND COALESCE(p.technical_pause_reason,'')=''";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -430,6 +432,7 @@ pub async fn streamer_handler(
     State(pool): State<PgPool>,
     Path(path): Path<String>,
     OriginalUri(uri): OriginalUri,
+    avatar_cache: Option<Extension<AvatarCache>>,
 ) -> Response {
     let handle = path.strip_suffix('/').unwrap_or(&path);
     if profile_login(handle).is_some() || handle.starts_with('@') {
@@ -437,15 +440,29 @@ pub async fn streamer_handler(
             Ok(Query(params)) => params,
             Err(err) => return no_store(err.into_response()),
         };
-        return page_handler(State(pool), Path(handle.to_string()), Query(params)).await;
+        return page_handler_with_avatar(
+            State(pool),
+            Path(handle.to_string()),
+            Query(params),
+            avatar_cache,
+        )
+        .await;
     }
     // Existing pages/assets keep their original query handling and traversal guard.
     super::website::streamer_asset_handler(Path(path)).await
 }
 pub async fn page_handler(
+    state: State<PgPool>,
+    path: Path<String>,
+    query: Query<PageParams>,
+) -> Response {
+    page_handler_with_avatar(state, path, query, None).await
+}
+async fn page_handler_with_avatar(
     State(pool): State<PgPool>,
     Path(handle): Path<String>,
     Query(params): Query<PageParams>,
+    avatar_cache: Option<Extension<AvatarCache>>,
 ) -> Response {
     let Some(login) = profile_login(&handle) else {
         return html::missing(StatusCode::NOT_FOUND);
@@ -459,6 +476,16 @@ pub async fn page_handler(
         }
     };
     let now = Utc::now();
+    let twitch_avatar = match avatar_cache {
+        Some(Extension(cache)) => tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            cache.profile_image_url(&record.login),
+        )
+        .await
+        .ok()
+        .flatten(),
+        None => None,
+    };
     let Some((month, start, end)) = month_range(params.month.as_deref(), now) else {
         return html::missing(StatusCode::BAD_REQUEST);
     };
@@ -499,6 +526,7 @@ pub async fn page_handler(
     let observed = schedule(&recent, recent_start, now);
     html::page(
         &record,
+        twitch_avatar.as_deref(),
         &observed,
         &monthly,
         &entries,
