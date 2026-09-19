@@ -103,7 +103,10 @@ struct InviteQuestionSignal {
 
 fn classify_invite_question(content: &str) -> InviteQuestionSignal {
     let raw = content.trim();
-    if raw.is_empty() || raw.starts_with('!') {
+    if raw.is_empty()
+        || raw.starts_with('!')
+        || crate::streamer_voice::is_explicit_group_join_request(raw)
+    {
         return InviteQuestionSignal {
             is_candidate: false,
             has_strong_access: false,
@@ -1298,6 +1301,18 @@ mod tests {
         fn now(&self) -> Instant {
             *self.now.lock().unwrap()
         }
+    }
+
+    #[test]
+    fn discord_group_invite_is_not_game_access_but_beta_invite_is() {
+        assert!(
+            !classify_invite_question("Kannste mich nach der runde über dc direk einladen?")
+                .is_candidate
+        );
+        assert!(!classify_invite_question("Kannst du mich in die Lobby einladen?").is_candidate);
+        assert!(classify_invite_question("Kannst du mich einladen?").is_candidate);
+        assert!(classify_invite_question("Kannst du mich für die Beta einladen?").is_candidate);
+        assert!(classify_invite_question("Wie bekomme ich Zugang zum Spiel?").is_candidate);
     }
 
     struct FakeStore {

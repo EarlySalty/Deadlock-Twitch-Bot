@@ -131,3 +131,5 @@ pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOu
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
+
+pub mod streamer_voice;

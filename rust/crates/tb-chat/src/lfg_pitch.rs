@@ -37,7 +37,7 @@ Regeln:
 - "yes", wenn die Person Mitspieler sucht oder sich selbst einer Runde anschließen will ("ich hau mich dazu", "kann ich mit?", "noch Platz frei?", "wer zockt noch").
 - "no", wenn die Nachricht eine Antwort auf eine Frage im Verlauf ist, eine Aufzählung (Helden, Namen, Ergebnisse) oder ein Kommentar zum Stream ohne eigenen Wunsch mitzuspielen.
 - "no" bei Builds, reinen Gameplay-Fragen ("spielt ihr ranked oder normal?"), Smalltalk oder Zugang/Invite-Fragen ohne Bezug zum Mitspielen.
-- "yes" nur, wenn die Person selbst und ausdrücklich Mitspieler sucht oder mitspielen will.
+- "yes" nur, wenn die Person selbst und ausdrücklich Mitspieler sucht oder mitspielen will. Eine Bitte an den Streamer, nach der Runde oder über Discord eingeladen zu werden, zählt als Anschlusswunsch. Eine Einladung für den Spielzugang oder Beta-Key zählt nicht.
 - "unsure" wenn die Absicht unklar ist."#;
 
 fn direct_lfg_re() -> &'static Result<Regex, regex::Error> {
@@ -90,6 +90,7 @@ pub fn classify_lfg(content: &str) -> bool {
 
     is_match(direct_lfg_re(), raw)
         || is_match(join_lfg_re(), raw)
+        || crate::streamer_voice::is_group_join_request(raw)
         || (is_match(search_lfg_re(), raw) && is_match(object_lfg_re(), raw))
 }
 
