@@ -95,3 +95,9 @@ wurden isoliert getestet.
 Beim Bot-Neustart meldete systemd einmal einen zurückgebliebenen yt-dlp-Prozess
 vom vorherigen Lauf. Dieser Prozess war bei der anschließenden Prüfung bereits
 beendet; kein fremder Download wurde manuell beendet. Keine Neustartschleife.
+
+## Live-Abnahme des Profil-Redesigns am 19. September 2026
+
+- Aktiv ist weiterhin Release `bd5b888ff29b91d8b2ebfa0ef6f7410a525eae2c`; `/opt/deadlock/twitch/current` zeigt auf dieses Release, der Dashboard-Prozess läuft als PID `3202277`, und der Binäranker `Streamplan ansehen` ist im ausgelieferten `tb-dashboard` enthalten. `https://deutsche-deadlock-community.de/streamer/earlysalty?month=2026-09` antwortet mit HTTP 200, `text/html; charset=utf-8`, `no-store` und enthält den Streamplan-CTA, den Twitch-CDN-Avatar sowie den komprimierten Kalendertag `+11 weitere`.
+- Chrome Headless prüfte das öffentliche Profil bei 1440×1000 und 390×844 sowie den Profil-Editor aus demselben Produktionsbundle. Das echte Twitch-Bild lädt, Speichern liegt im sichtbaren Bereich und ist am Klickpunkt nicht überdeckt, die Live-Vorschau ist sichtbar, ein manuelles Profilbildfeld fehlt, und die Seite erzeugt keine horizontale Dokumentüberbreite; im öffentlichen Kalender sind pro Tag höchstens drei Einträge sichtbar und die Heatmap umfasst 336 Halb-Stunden-Zellen.
+- `/twitch/verwaltung` verlangt ohne Sitzung erwartungsgemäß Twitch-Anmeldung und antwortet mit 303. Daher wurde der Editor ohne Produktionsschreibzugriff gegen eine kontrollierte lokale API-Sitzung mit dem aktuell ausgelieferten Bundle geprüft; die öffentliche Seite `earlysalty` wurde dagegen direkt live geprüft. Das dominante Farbbild der erzeugten Viewport-Screenshots ist Anthrazit mit Gold und warmen Neutralfarben, ohne fremde blau-violette Flächensprache.
