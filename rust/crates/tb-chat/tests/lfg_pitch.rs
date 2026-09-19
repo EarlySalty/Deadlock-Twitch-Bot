@@ -25,6 +25,7 @@ fn classify_lfg_erkennt_anschluss_an_laufende_runde() {
         "noch platz frei?",
         "wer zockt noch",
         "will mitspielen",
+        "Kann auch mitmachen",
         "adde mich mal",
     ] {
         assert!(classify_lfg(text), "{text:?}");
