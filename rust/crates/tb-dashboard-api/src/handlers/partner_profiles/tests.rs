@@ -141,7 +141,15 @@ async fn public_profile_prefers_twitch_avatar_and_caps_busy_calendar_days() {
         now,
         false,
     );
+    let csp = response
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(csp.contains("img-src 'self' https://static-cdn.jtvnw.net"));
     let html = body(response).await;
+    assert!(html.contains("/streamer/brand/deadlock-d-logo.png"));
     assert!(html.contains(avatar));
     assert_eq!(html.matches("calendar-event observed").count(), 3);
     assert!(html.contains("+5 weitere"));

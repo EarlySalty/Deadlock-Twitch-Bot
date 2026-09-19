@@ -21,7 +21,7 @@ fn document(
 ) -> String {
     let metadata = canonical.map(|url| format!(r#"<link rel="canonical" href="{}"><meta property="og:url" content="{}"><meta property="og:type" content="profile"><meta property="og:title" content="{}"><meta property="og:description" content="{}">"#,escape(url),escape(url),escape(title),escape(description))).unwrap_or_else(|| "<meta name=\"robots\" content=\"noindex\">".into());
     format!(
-        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><meta name="description" content="{}">{}<link rel="stylesheet" href="/twitch/profile-assets/profile.css"></head><body class="{}"><header class="site-head"><a href="/" class="brand">DDC<span>Deutsche Deadlock Community</span></a><nav aria-label="Community"><a href="/streamer#partner">Partner entdecken</a><a href="/twitch/verwaltung#profil">Mein Profil</a></nav></header><main>{}</main><footer><a href="/streamer">Teil des Partnernetzwerks werden</a><span><a href="/twitch/impressum">Impressum</a> · <a href="/twitch/datenschutz">Datenschutz</a></span></footer></body></html>"#,
+        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><meta name="description" content="{}">{}<link rel="stylesheet" href="/twitch/profile-assets/profile.css"></head><body class="{}"><header class="site-head"><a href="/" class="brand" aria-label="Deutsche Deadlock Community"><img class="brand-mark" src="/streamer/brand/deadlock-d-logo.png" alt="" width="38" height="38"><span class="brand-copy"><strong>DDC</strong><span>Deutsche Deadlock Community</span></span></a><nav aria-label="Community"><a href="/streamer#partner">Partner entdecken</a><a href="/twitch/verwaltung#profil">Mein Profil</a></nav></header><main>{}</main><footer><a href="/streamer">Teil des Partnernetzwerks werden</a><span><a href="/twitch/impressum">Impressum</a> · <a href="/twitch/datenschutz">Datenschutz</a></span></footer></body></html>"#,
         escape(title),
         escape(description),
         metadata,
@@ -31,7 +31,7 @@ fn document(
 }
 fn response(status: StatusCode, html: String) -> Response {
     let mut response = no_store((status, Html(html)).into_response());
-    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src https://static-cdn.jtvnw.net; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".parse().unwrap());
+    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' https://static-cdn.jtvnw.net; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".parse().unwrap());
     response
         .headers_mut()
         .insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
