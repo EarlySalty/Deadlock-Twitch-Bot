@@ -67,4 +67,4 @@ Gibt den ersten Text des aktuellen Themas als Announcement aus. Für den Streame
 
 Heute: "@{chatter} Schau gerne mal in unsere Community rein: {invite} da findest du jederzeit passende Mitspieler :)"
 
-Neu: "@{chatter} Im Discord hängt die Mitspieler-Suche direkt am Voice, ein Klick und du hast Leute: {invite}"
+Neu: "@{chatter} Klar, gern! Auf unserem Discord verabredet sich die Community zum gemeinsamen Deadlock-Spielen – komm einfach hier dazu: {invite}"

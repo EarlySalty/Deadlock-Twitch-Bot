@@ -22,7 +22,7 @@ const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub const LFG_PITCH_REPLY: &str =
-    "@{chatter} Schau gerne mal in unsere Community rein: {invite} da findest du jederzeit passende Mitspieler :)";
+    "@{chatter} Klar, gern! Auf unserem Discord verabredet sich die Community zum gemeinsamen Deadlock-Spielen – komm einfach hier dazu: {invite}";
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
