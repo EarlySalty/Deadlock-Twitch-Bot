@@ -39,7 +39,7 @@ fn secure_response(mut response: Response) -> Response {
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action 'self' https://steamcommunity.com; base-uri 'none'; frame-ancestors 'none'"));
+    headers.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; form-action 'self' https://steamcommunity.com; base-uri 'none'; frame-ancestors 'none'"));
     response
 }
 fn stepper(stage: u8) -> String {

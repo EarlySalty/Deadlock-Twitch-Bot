@@ -174,14 +174,16 @@ async fn player_connect_public_page_is_accessible_without_partner_and_never_cach
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["cache-control"], "no-store");
     assert_eq!(response.headers()["referrer-policy"], "no-referrer");
-    assert!(response.headers()["content-security-policy"]
+    let csp = response.headers()["content-security-policy"]
         .to_str()
-        .unwrap()
-        .contains("font-src 'self'"));
+        .unwrap();
+    assert!(csp.contains("font-src 'self'"));
+    assert!(csp.contains("img-src 'self'"));
     let body = text(response).await;
     assert!(body.contains("Mit Twitch anmelden"));
     assert!(body.contains("flow-steps"));
     assert!(body.contains("Sora"));
+    assert!(body.contains("/streamer/brand/deadlock-d-logo.png"));
     assert!(body.contains("Twitch-Konto bestätigen."));
 }
 #[tokio::test]
