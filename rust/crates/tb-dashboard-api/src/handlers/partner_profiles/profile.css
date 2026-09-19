@@ -748,11 +748,14 @@ footer a:hover {
 
   .site-head {
     min-height: 72px;
-    align-items: flex-start;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
     padding-block: 14px;
   }
 
   .site-head nav {
+    justify-content: flex-start;
     gap: 2px;
   }
 
@@ -762,7 +765,7 @@ footer a:hover {
   }
 
   .brand-wordmark-img {
-    display: none;
+    height: 42px;
   }
 
   main {
