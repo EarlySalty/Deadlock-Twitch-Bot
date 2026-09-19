@@ -149,40 +149,25 @@ footer {
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 10px;
+  gap: 0.45rem;
 }
 
-.brand-mark {
+.brand-logo {
   display: block;
-  width: 38px;
-  height: 38px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   object-fit: contain;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.35));
 }
 
-.brand-copy {
-  display: flex;
+.brand-wordmark-img {
+  display: block;
+  width: auto;
+  height: 54px;
   min-width: 0;
-  flex-direction: column;
-  line-height: 1.1;
-}
-
-.brand-copy strong {
-  color: var(--primary);
-  font-family: "Sora", "Manrope", sans-serif;
-  font-size: 1rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-}
-
-.brand-copy span {
-  margin-top: 2px;
-  color: var(--muted);
-  font-family: "Manrope", sans-serif;
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  flex: 0 1 auto;
+  object-fit: contain;
 }
 
 .site-head nav {
@@ -776,9 +761,8 @@ footer a:hover {
     font-size: 0.68rem;
   }
 
-  .brand-copy span {
-    max-width: 112px;
-    font-size: 0.53rem;
+  .brand-wordmark-img {
+    display: none;
   }
 
   main {
