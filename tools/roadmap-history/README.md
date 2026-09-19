@@ -1,35 +1,46 @@
 # Interaktiver Feature-Stammbaum
 
-Die private Admin-Seite `/twitch/admin/roadmap-history/` ist ein zusammenhängender
-Graph mit expliziten Eltern-/Kindbeziehungen und datierten Änderungsstationen.
-Die frühere Bereichskarten-Ansicht ist entfernt. Die Änderungsliste bleibt eine
-ergänzende, paginierte Ansicht und ersetzt nicht den Graphen.
+Die private Admin-Seite `/twitch/admin/roadmap-history/` zeigt die Entwicklung als
+maßstäbliche Zeitachse im Stil eines Git-Graphen oder U-Bahn-Plans: ein Stamm,
+aus dem jede Funktion als Ast an ihrem ersten datierten Nachweis abzweigt. Die
+frühere Swimlane-Tabelle mit Monatsspalten ist entfernt. Die Änderungsliste bleibt
+eine ergänzende, paginierte Ansicht und ersetzt nicht den Graphen.
 
 ## Bedienung und Darstellung
 
 Der Start zeigt den Uplink-Zweig bei lesbaren **100 %**, nicht eine winzige
-Gesamtübersicht. „Alle Zweige“ öffnet den ganzen Stammbaum; die Funktionsauswahl
-fokussiert einen Teilbaum einschließlich seiner notwendigen Vorfahren. Beispiele:
+Gesamtübersicht. „Alle Zweige“ öffnet den ganzen Stammbaum; „Ansicht einpassen“
+zeigt ihn als Übersicht. Die Funktionsauswahl fokussiert einen Teilbaum
+einschließlich seiner notwendigen Vorfahren. Beispiele:
 
 - Twitch Bot → Uplink → Ausgabemodi → AV1 & 2K.
 - Twitch Bot → Partneraufnahme → Aufnahmesperren → Stream-Tag-Regeln.
 - Twitch Bot → Chat-Befehle → Rang/Spielerabfragen → Steam-Verknüpfung.
 - Twitch Bot → Caster-Studio → Caster-Overlay → Kamera-Portal.
 
-**Zwei ausdrücklich beschriftete Koordinatenräume:** Links stehen Funktionen
-nach Generation, nicht nach Datum. Rechts folgen ihre Änderungsstationen von
-links nach rechts in beschrifteten Monatsspalten. Innerhalb eines Monats gibt es
-keinen Tagesmaßstab. Die tatsächlichen Daten stehen auf den Knoten und in den
-chronologischen Einzelereignissen. Ein zur Lesbarkeit positionierter Elternknoten
-behauptet damit kein falsches Einführungsdatum.
+**Eine gemeinsame, maßstäbliche Zeitachse trägt alle Elemente.** Die x-Position ist
+überall das echte Datum; oben stehen Monate mit feinen Wochenstrichen. Der Stamm
+„Twitch Bot“ läuft vom ersten bis zum letzten Nachweis. Jede Funktion ist ein Ast,
+der am ersten datierten Beleg aus seinem Elternast abzweigt (weiche Kurve) und bis
+zur letzten Änderung läuft. Astdicke und Helligkeit zeigen die Aktivität; ruhende
+Äste laufen dünn und blass aus. Funktionen aus dem Import teilen sich den
+Stammanfang und sind als „Bestand beim Start“ gekennzeichnet, weil ihr gemeinsames
+Startdatum eine Datengrenze ist und kein echter gleichzeitiger Beginn. „other“ bleibt
+ein ehrlicher Rest in der Liste und wird nicht als Ast gezeichnet.
 
-Jede Funktion hat eine eigene Spur. Verbindungslinien beginnen am Elternknoten;
-Änderungen bleiben auf der Spur ihrer Funktion. Dichte Ereignisse werden vollständig
-in Monatsbündeln zusammengefasst. Ein klar als Beispiel gekennzeichneter Commit
-steht auf dem Bündel; der Klick öffnet **alle** zugehörigen Einzelereignisse, nicht
-eine willkürliche Auswahl von drei Meldungen. Knoten außerhalb des sichtbaren
-Ausschnitts werden nicht als DOM-Elemente gehalten. Die vollständige Auswahl bleibt
-im Modell und in der paginierten Historie erhalten.
+Auf jedem Ast sitzen **Meilensteine** als Punkte am echten Datum. Ein Meilenstein
+bündelt zusammenhängende Änderungen derselben Funktion, deren Abstand kleiner als
+etwa drei Tage ist. Punktgröße zeigt den Umfang, Farbe die Änderungsart (neu,
+Ausbau, Fehlerbehebung, Sicherheit). Der Titel ist der aussagekräftigste
+`feat`-Betreff des Bündels, sonst der größte Commit, nie ein zufälliger. Reine
+Pflege (Doku, Tests, Abhängigkeiten, Merges) erzeugt keinen Meilenstein. Hover zeigt
+Datum, Titel und Anzahl; der Klick öffnet **alle** Einzelereignisse des Bündels in
+der Detailleiste.
+
+Äste werden nicht als feste Zeilen gestapelt, sondern platzsparend in freie Bahnen
+gelegt: Eine Bahn wird wiederverwendet, sobald ein früherer Ast endet. Knoten
+außerhalb des sichtbaren Ausschnitts werden nicht als DOM-Elemente gehalten. Die
+vollständige Auswahl bleibt im Modell und in der paginierten Historie erhalten.
 
 Ziehen verschiebt den Graphen; Mausrad und Pfeiltasten navigieren. Strg + Mausrad
 oder +/− zoomen. „100 %“ stellt die lesbare Ausgangsgröße wieder her; „Ansicht
@@ -151,8 +162,9 @@ Keine öffentliche Debug-Route, keine Produktionssession und kein Auth-Bypass.
 
 Nachweise unter `dist/roadmap-history/`:
 
-- `family-desktop.png` und `family-desktop-1440.png`: echte Desktop-Oberfläche.
-- `family-detail.png`: ausgewählte datierte Station mit rechter Detailleiste.
+- `family-desktop.png` und `family-desktop-1440.png`: fokussierter Uplink-Ast.
+- `family-all-fit.png`: eingepasste Gesamtansicht aller Zweige auf der Zeitachse.
+- `family-detail.png`: geöffnetes Meilenstein-Bündel mit rechter Detailleiste.
 - `family-mobile.png` und `family-mobile-detail.png`: 390-Pixel-Ansichten.
 - `family-hostile-long-text.png`: lange Texte und HTML-Injektionsversuch.
 - `browser-report.json`: tatsächlich bestandene Prüfgruppen, Quellrevision,
@@ -219,21 +231,23 @@ Backup-Snapshot atomar wiederherstellen; Backups niemals über den Webserver anb
 
 ## Nachgewiesene lokale Abnahme
 
-Mit Main-Datenrevision `cd4ec7a80abbaa070165a666f0f6fd7d2ffdea11` (Nachprüfung am 18.09.2026):
+Mit Main-Datenrevision `bca7e4d4f0ab605266ce730311dbee4077d7e502` (Nachprüfung am 19.09.2026):
 
-- 3.627 eindeutige Nicht-Merge-Commits, vollständiger Klon; 38 Taxonomie-Einträge.
-- 31 Python-Tests und 23 Node-Tests erfolgreich.
-- Drei neue Python-Regressionsfälle schlugen vor der Zeitkorrektur nachweislich fehl:
-  unterschiedliche UTC-Offsets, gleiche Zeitpunkte und Zeitstempel ohne Zeitzone.
-  Nach der Korrektur sind alle grün. Der Originalzeitstempel bleibt als Quelle erhalten.
-- 13 Browser-Prüfgruppen erfolgreich, einschließlich identischer chronologischer
-  Reihenfolge in Generator und Browser auf dem echten Datenbestand, lesbarer
-  zweispaltiger Mobilfilter und tatsächlicher SVG-Anschlüsse,
-  Mehrgenerationen, Kontext-Eltern, Maus-/Tastaturbedienung, Zoom, Filter, Direktlinks,
+- 3.677 eindeutige Nicht-Merge-Commits, vollständiger Klon; 52 Taxonomie-Einträge
+  nach der Verfeinerung der Sammeleimer (Dashboard, Social, Raids, Runtime,
+  Moderation, Partner in echte Unterfeatures geteilt).
+- 31 Python-Tests und 29 Node-Tests erfolgreich.
+- 14 Browser-Prüfgruppen erfolgreich, einschließlich identischer chronologischer
+  Reihenfolge in Generator und Browser auf dem echten Datenbestand, echter
+  Astwurzeln auf der Elternbahn (keine falschen Anschlüsse), überschneidungsfreier
+  Astbeschriftungen, Meilenstein-Bündel mit vollständigen Einzelereignissen,
+  Kontext-Eltern, Maus-/Tastaturbedienung, Zoom, Einpassen, Filter, Direktlinks,
   Seitenwechsel, HTML-Injektion und Desktop-/Mobil-Details.
-- Die lokale Uplink-Ansicht enthält keine Knotenüberschneidung; fünf tatsächlich
-  gerenderte Elternanschlüsse wurden gegen Browser-Koordinaten geprüft.
-- Der dichte Modelltest bewahrt 1.200 Ereignisse vollständig ohne 1.200 DOM-Knoten.
+- Die Gesamtansicht zeichnet 51 Äste auf einer maßstäblichen Zeitachse über acht
+  Monate und passt sich ohne vertikales Dauer-Scrollen ein; „other“ erscheint nicht
+  als Ast. 463 Meilensteine bündeln 2.966 zugeordnete Änderungen.
+- Der dichte Modelltest bewahrt 1.200 Ereignisse vollständig in wenigen Bündeln
+  ohne 1.200 DOM-Knoten; nur der sichtbare Ausschnitt wird gehalten.
 - Keine JavaScript-Laufzeitfehler oder externe Font-/Diagramm-/CDN-Anfragen im Browser-Test.
 
 Spätere Actions-Berichte nennen ihren eigenen gepinnten Datenstand. Die lokale

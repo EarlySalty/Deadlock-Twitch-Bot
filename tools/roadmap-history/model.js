@@ -157,47 +157,153 @@ function selectFamily(data, commits, options = {}, cachedIndex) {
     let cursor = index.get(id);
     while (cursor && !keep.has(cursor.id)) {keep.add(cursor.id); cursor = index.get(cursor.parentId);}
   }
+  const selectedIds = new Set(selected.map(c => c.id));
   const collapsed = new Set(options.revealMatches ? [] : options.collapsed || []);
   const nodes = [];
   function visit(id) {
     if (!keep.has(id)) return;
     const f = index.get(id);
-    nodes.push({...f, context: !direct.has(id), selected: (direct.get(id) || []).slice().sort(compareDates), collapsed: collapsed.has(id), visibleChildren: f.children.filter(child => keep.has(child))});
+    const subtreeBounds = dateBounds(f.allCommits.filter(c => selectedIds.has(c.id)));
+    nodes.push({...f, selectedFirst: subtreeBounds.first, selectedLast: subtreeBounds.last, context: !direct.has(id), selected: (direct.get(id) || []).slice().sort(compareDates), collapsed: collapsed.has(id), visibleChildren: f.children.filter(child => keep.has(child))});
     if (!collapsed.has(id)) for (const child of f.children) visit(child);
   }
   visit('product');
   return {nodes, index, commits: selected, commitCount: selected.length, focus};
 }
-/* Two explicitly labelled spaces: generations on the left; monthly event lanes
- * on the right. Feature positions are NOT dates. Event columns are months, not
- * day-scale coordinates. A feature's first evidence is shown as a real date.
- * This prevents collision avoidance from implying a false introduction date.
- */
-function layoutFamily(selection) {
-  if (!selection.nodes.length) return {nodes: [], edges: [], months: [], width: 800, height: 500, calendarStart: 0};
-  const maxDepth = Math.max(...selection.nodes.map(n => n.depth));
-  const calendarStart = (maxDepth + 1) * 248 + 36;
-  const dates = dateBounds(selection.commits);
-  const months = monthsBetween(dates.first, dates.last);
-  const nodes = [], edges = [], byFeature = new Map();
-  const connect = (a, b, kind) => edges.push({source: a.key, target: b.key, kind, x1: a.x + a.width, y1: a.y + a.height / 2, x2: b.x, y2: b.y + b.height / 2});
-  selection.nodes.forEach((feature, row) => {
-    const node = {...feature, key: 'f:' + feature.id, type: 'feature', x: 24 + feature.depth * 248, y: 28 + row * 170, width: 216, height: 146};
-    nodes.push(node); byFeature.set(feature.id, node);
-    let previous = node;
-    const grouped = new Map();
-    for (const c of feature.selected) {
-      const month = c.date.slice(0, 7);
-      if (!grouped.has(month)) grouped.set(month, []);
-      grouped.get(month).push(c);
-    }
-    for (const [month, events] of [...grouped].sort(([a], [b]) => a.localeCompare(b))) {
-      const eventNode = {key: 'e:' + feature.id + ':' + month, type: 'events', featureId: feature.id, month, events, sample: representative(events), first: events[0].date, last: events.at(-1).date, x: calendarStart + months.indexOf(month) * 264 + 12, y: node.y, width: 236, height: 146};
-      nodes.push(eventNode); connect(previous, eventNode, 'history'); previous = eventNode;
-    }
-  });
-  for (const feature of selection.nodes) {
-    if (byFeature.has(feature.parentId)) connect(byFeature.get(feature.parentId), byFeature.get(feature.id), 'family');
+function dayNumber(date) {
+  return Math.round(Date.parse((date || '') + 'T00:00:00Z') / 86400000);
+}
+function daySpan(from, to) {
+  return dayNumber(to) - dayNumber(from);
+}
+function weeksBetween(from, to) {
+  if (!from || !to || from > to) return [];
+  const result = [];
+  const cursor = new Date(from + 'T00:00:00Z');
+  const shift = (8 - cursor.getUTCDay()) % 7;
+  cursor.setUTCDate(cursor.getUTCDate() + shift);
+  const end = new Date(to + 'T00:00:00Z');
+  while (cursor <= end) {
+    result.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
   }
-  return {nodes, edges, months, calendarStart, width: calendarStart + Math.max(1, months.length) * 264 + 32, height: selection.nodes.length * 170 + 40};
+  return result;
+}
+const MILESTONE_ORDER = ['security', 'feat', 'change', 'fix'];
+function bundleKind(commits) {
+  const present = new Set(commits.map(c => c.kind));
+  return MILESTONE_ORDER.find(kind => present.has(kind)) || 'change';
+}
+function bundleLead(commits) {
+  const feats = commits.filter(c => c.kind === 'feat').sort(compareDates);
+  if (feats.length) return feats.at(-1);
+  return commits.slice().sort((a, b) => (b.pathCount || 0) - (a.pathCount || 0) || compareDates(a, b))[0];
+}
+function bundleCommits(commits, gapDays = 3) {
+  const events = commits.filter(c => !MAINTENANCE.has(c.kind)).slice().sort(compareDates);
+  const bundles = [];
+  for (const c of events) {
+    const current = bundles.at(-1);
+    if (current && daySpan(current.lastDate, c.date) <= gapDays) {
+      current.commits.push(c); current.lastDate = c.date;
+    } else {
+      bundles.push({commits: [c], firstDate: c.date, lastDate: c.date});
+    }
+  }
+  return bundles.map(b => {
+    const lead = bundleLead(b.commits);
+    return {...b, kind: bundleKind(b.commits), lead, title: lead.title, scope: b.commits.reduce((sum, c) => sum + (c.pathCount || 1), 0)};
+  });
+}
+const LANE_TOP = 58, LANE_H = 30, AXIS_X0 = 156, RIGHT_PAD = 220, LABEL_W = 172, LANE_GAP = LABEL_W + 26, IMPORT_WINDOW = 7;
+function layoutFamily(selection) {
+  const blank = {nodes: [], branches: [], forks: [], milestones: [], trunk: null, months: [], weeks: [], axis: {x0: AXIS_X0, dayWidth: 0, months: [], weeks: [], first: '', last: '', width: 0}, calendarStart: AXIS_X0, width: 900, height: 420, focus: selection.focus};
+  if (!selection.nodes.length) return blank;
+  const bounds = dateBounds(selection.commits);
+  const first = bounds.first, last = bounds.last;
+  if (!first || !last) return blank;
+  const totalDays = Math.max(1, daySpan(first, last));
+  const dayWidth = Math.max(4.2, Math.min(9, 1560 / totalDays));
+  const timeX = date => AXIS_X0 + Math.max(0, daySpan(first, date)) * dayWidth;
+  const importDate = selection.index?.get('product')?.first || first;
+  const drawable = selection.nodes.filter(n => n.id !== 'product' && n.id !== 'other');
+  const meta = new Map();
+  for (const node of drawable) {
+    const direct = (node.selected || []).slice().sort(compareDates);
+    meta.set(node.id, {node, direct, bundles: bundleCommits(direct), start: node.selectedFirst || direct[0]?.date || '', end: node.selectedLast || direct.at(-1)?.date || ''});
+  }
+  for (let i = drawable.length - 1; i >= 0; i--) {
+    const m = meta.get(drawable[i].id);
+    for (const childId of drawable[i].visibleChildren || []) {
+      const cm = meta.get(childId);
+      if (!cm || !cm.start) continue;
+      if (!m.start || cm.start < m.start) m.start = cm.start;
+      if (!m.end || cm.end > m.end) m.end = cm.end;
+    }
+  }
+  const preexOf = id => !meta.get(id).node.context && daySpan(importDate, meta.get(id).start) <= IMPORT_WINDOW;
+  const forkXOf = id => {
+    const m = meta.get(id);
+    const ownX = preexOf(id) ? AXIS_X0 : timeX(m.start);
+    return meta.has(m.node.parentId) ? Math.max(ownX, forkXOf(m.node.parentId)) : ownX;
+  };
+  const laid = drawable.filter(n => meta.get(n.id).start);
+  laid.sort((a, b) => forkXOf(a.id) - forkXOf(b.id) || a.depth - b.depth || a.id.localeCompare(b.id));
+  const laneEnd = [], laneOf = new Map();
+  for (const node of laid) {
+    const m = meta.get(node.id);
+    const forkX = forkXOf(node.id);
+    const right = Math.max(timeX(m.end), forkX + LABEL_W) + LANE_GAP - LABEL_W;
+    let lane = laneEnd.findIndex(x => x <= forkX - 8);
+    if (lane === -1) {lane = laneEnd.length; laneEnd.push(0);}
+    laneEnd[lane] = right;
+    laneOf.set(node.id, lane);
+  }
+  const laneY = lane => LANE_TOP + (lane + 1) * LANE_H;
+  const trunkY = LANE_TOP, trunkX1 = timeX(last);
+  const branches = [], forks = [], milestones = [], nodes = [];
+  for (const node of laid) {
+    const m = meta.get(node.id);
+    const lane = laneOf.get(node.id);
+    const y = laneY(lane);
+    const preexisting = preexOf(node.id);
+    const forkX = forkXOf(node.id);
+    const endX = Math.max(timeX(m.end), forkX + 3);
+    const parentDrawn = laneOf.has(node.parentId);
+    const parentY = parentDrawn ? laneY(laneOf.get(node.parentId)) : trunkY;
+    const activity = m.direct.length;
+    const recency = 1 - daySpan(m.end, last) / totalDays;
+    const branch = {
+      id: node.id, key: 'f:' + node.id, featureId: node.id, depth: node.depth,
+      context: !!node.context, preexisting, y, forkX, endX, parentId: node.parentId, parentY,
+      strokeWidth: node.context ? 1.2 : Math.max(1.5, Math.min(5, 1.5 + Math.log2(1 + activity) * 0.7)),
+      opacity: node.context ? 0.45 : Math.max(0.5, Math.min(1, 0.58 + recency * 0.42)),
+      dormant: m.end < last, first: m.start, last: m.end, directCount: activity, title: node.title,
+    };
+    branches.push(branch);
+    forks.push({key: branch.key, source: parentDrawn ? 'f:' + node.parentId : 'trunk', x: forkX, sourceX: parentDrawn ? forkXOf(node.parentId) : AXIS_X0, y1: parentY, y2: y, context: branch.context});
+    nodes.push({type: 'label', key: 'l:' + node.id, featureId: node.id, x: forkX + 9, y: y - 20, width: LABEL_W, height: 16, text: node.title, date: m.start, context: branch.context, preexisting, depth: node.depth, dormant: branch.dormant, hasChildren: (node.visibleChildren || []).length, collapsed: !!node.collapsed});
+    for (const b of m.bundles) {
+      const cx = timeX(b.firstDate);
+      const r = Math.max(4.5, Math.min(13, 4 + Math.sqrt(b.scope)));
+      milestones.push({type: 'milestone', key: 'm:' + node.id + ':' + b.lead.id, featureId: node.id, cx, cy: y, x: cx - r, y: y - r, width: 2 * r, height: 2 * r, r, kind: b.kind, title: b.title, date: b.firstDate, first: b.firstDate, last: b.lastDate, count: b.commits.length, scope: b.scope, commitIds: b.commits.map(c => c.id), leadId: b.lead.id});
+    }
+  }
+  nodes.push(...milestones);
+  const months = monthsBetween(first, last);
+  const monthAxis = months.map(key => {
+    const start = key + '-01';
+    return {key, x: timeX(start < first ? first : start), label: monthLabel(key)};
+  });
+  for (let i = 0; i < monthAxis.length; i++) monthAxis[i].width = (i + 1 < monthAxis.length ? monthAxis[i + 1].x : trunkX1 + dayWidth) - monthAxis[i].x;
+  const weeks = weeksBetween(first, last).map(date => ({x: timeX(date), date}));
+  const width = trunkX1 + RIGHT_PAD;
+  const height = LANE_TOP + (laneEnd.length + 1) * LANE_H + 46;
+  return {
+    nodes, branches, forks, milestones,
+    trunk: {y: trunkY, x0: AXIS_X0, x1: trunkX1, strokeWidth: 6},
+    months, weeks,
+    axis: {x0: AXIS_X0, dayWidth, first, last, months: monthAxis, weeks, width},
+    calendarStart: AXIS_X0, width, height, focus: selection.focus,
+  };
 }

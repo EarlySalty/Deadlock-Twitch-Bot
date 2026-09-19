@@ -439,7 +439,8 @@ export async function fetchViewerDirectory(
   filter: ViewerFilterType = 'all',
   search: string = '',
   page: number = 1,
-  perPage: number = 50
+  perPage: number = 50,
+  signal?: AbortSignal
 ): Promise<ViewerDirectory> {
   return fetchApi<ViewerDirectory>('/viewer-directory', {
     streamer: streamer || '',
@@ -450,7 +451,7 @@ export async function fetchViewerDirectory(
     ...(search && { search }),
     page,
     per_page: perPage,
-  });
+  }, undefined, signal);
 }
 
 export async function fetchViewerDetail(
