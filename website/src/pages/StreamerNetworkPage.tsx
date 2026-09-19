@@ -5,6 +5,7 @@ import { GlowOrb } from "@/components/effects/GlowOrb";
 import { Hero } from "@/components/partner-clean/Hero";
 import { PartnerPitch } from "@/components/partner-clean/PartnerPitch";
 import { PartnerNetwork } from "@/components/partner-clean/PartnerNetwork";
+import { PublicProfiles } from "@/components/partner-clean/PublicProfiles";
 import { RaidExplainer } from "@/components/partner-clean/RaidExplainer";
 import { BanFeed } from "@/components/partner-clean/BanFeed";
 import { Features } from "@/components/partner-clean/Features";
@@ -32,6 +33,7 @@ export function StreamerNetworkPage() {
         <Community />
         <Security />
         <CTA />
+        <PublicProfiles />
       </main>
       <Footer />
       <SiteChatbot />

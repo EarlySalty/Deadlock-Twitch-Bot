@@ -1,4 +1,3 @@
-import { PublicProfiles } from "./PublicProfiles";
 import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, ChevronDown, Users } from "lucide-react";
@@ -355,8 +354,6 @@ export function PartnerNetwork({
             </p>
           )}
         </ScrollReveal>
-
-        <PublicProfiles />
 
         <div className="mt-14">
           {status === "loading" ? (

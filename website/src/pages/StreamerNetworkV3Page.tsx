@@ -3,6 +3,7 @@ import { Footer } from "@/components/layout/Footer";
 import { SiteChatbot } from "@/components/layout/SiteChatbot";
 import { GlowOrb } from "@/components/effects/GlowOrb";
 import { PartnerNetwork } from "@/components/partner-clean/PartnerNetwork";
+import { PublicProfiles } from "@/components/partner-clean/PublicProfiles";
 import { CTA } from "@/components/partner-clean/CTA";
 import { Hero } from "@/components/partner-v3/Hero";
 import { ZuschauerWanderung } from "@/components/partner-v3/ZuschauerWanderung";
@@ -26,6 +27,7 @@ export function StreamerNetworkV3Page() {
         <Vertrauen />
         <CommunityPitch />
         <CTA />
+        <PublicProfiles />
       </main>
       <Footer />
       <SiteChatbot />
