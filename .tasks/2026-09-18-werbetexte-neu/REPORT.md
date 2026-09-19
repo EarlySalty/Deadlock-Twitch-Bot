@@ -137,3 +137,13 @@ Präfix: `/tmp/tb-werbetexte-session-20260919-`.
 - `unowned-hashes.json`: Fingerabdrücke der zwölf nicht zum Auftrag gehörenden Dateien.
 
 Diese Akte dokumentiert die Eigenverifikation des Executors, keine unabhängige Review-Freigabe. Produktionsfreigabe und eine vollständig grüne Gesamtsuite werden nicht behauptet.
+
+## Push und Aufräumen
+
+Der Integrationscommit `40bab68708a2b9e4a6b604f88dde0e003061d739` wurde mit normalem Push aus dem detached Rettungsbaum ausschließlich nach `origin/feat/werbetexte-neu-raid-dank` übertragen. `git ls-remote` bestätigte danach diesen Feature-HEAD und den unveränderten Remote-Main `0c053e4628dc0b45184fbbf32dae25542eed49a5`. Der lokale Branch im kontaminierten Original-Worktree wurde absichtlich nicht verschoben. Ein anschließender reiner Dokumentationscommit hält diese Nachweise fest.
+
+Das vorhandene lokale Push-Gate wurde nicht umgangen. Gitleaks, Cargo Audit, Cargo Deny und Trivy ließen den Push zu; es gab bestehende Abhängigkeitswarnungen. OSV meldete zusätzlich 22 Befunde zu drei Paketen in `ops/highlight-detector/requirements.txt`, darunter einen als kritisch eingestuften Befund. Dies ist die Ausgabe des lokalen Scanners, keine separat durchgeführte Sicherheitsbewertung. Die Datei und die Dependencies wurden in diesem Auftrag nicht verändert. Der Hook behandelt diese OSV-Meldungen als Hinweise und nicht als Push-Sperre. Eine pauschale Sicherheitsfreigabe wird daraus nicht abgeleitet.
+
+Nach dem bestätigten Feature-Push wurde ausschließlich der Wegwerfcontainer `tb-test-werbetexte-neu` mit `rust/scripts/test_db.sh down` entfernt. Eine anschließende Docker-Abfrage bestätigte, dass dieser Container nicht mehr existiert.
+
+Der Rettungs-Worktree bleibt wegen der zwölf unverändert erhaltenen fremden Formatierungsänderungen bestehen. Kein Produktionsdienst wurde neu gestartet und keine Migration auf Produktion angewendet.
