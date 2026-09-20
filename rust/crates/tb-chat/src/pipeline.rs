@@ -192,7 +192,6 @@ impl ReviewLog {
 
 /// Discord-Alert-Kanal (moderation.py Z. 903: `_MOD_ALERT_CHANNEL_ID`).
 const DEFAULT_MOD_ALERT_CHANNEL_ID: u64 = 1374364800817303632;
-const MOD_ALERT_CHANNEL_ID_ENV: &str = "TWITCH_ALERT_CHANNEL_ID";
 
 /// Postet Moderations-Alerts in den Discord-Mod-Kanal — Port von
 /// `_send_moderation_alert` (moderation.py Z. 905–951). Fire-and-forget.
@@ -290,7 +289,7 @@ impl ModAlerter {
     }
 
     pub fn with_endpoint(http: reqwest::Client, endpoint: impl Into<String>) -> Self {
-        Self::with_endpoint_and_channel_id(http, endpoint, alert_channel_id_from_env())
+        Self::with_endpoint_and_channel_id(http, endpoint, DEFAULT_MOD_ALERT_CHANNEL_ID)
     }
 
     pub fn with_endpoint_and_channel_id(
@@ -523,10 +522,7 @@ impl ModAlerter {
     }
 }
 
-fn alert_channel_id_from_env() -> u64 {
-    parse_alert_channel_id(std::env::var(MOD_ALERT_CHANNEL_ID_ENV).ok())
-}
-
+#[cfg(test)]
 fn parse_alert_channel_id(raw: Option<String>) -> u64 {
     raw.as_deref()
         .map(str::trim)

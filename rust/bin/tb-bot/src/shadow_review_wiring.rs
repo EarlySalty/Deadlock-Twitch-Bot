@@ -39,13 +39,6 @@ const FIELD_VALUE_MAX: usize = 1024;
 
 /// Liest die Review-Kanal-ID aus der Env. `None`, wenn ungesetzt/leer/0 —
 /// dann bleibt der Scheduler aus (Default AUS).
-fn review_channel_id_from_env() -> Option<i64> {
-    std::env::var("ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .filter(|&id| id > 0)
-}
-
 /// Kappt `text` auf `max` Zeichen (an Char-Grenzen, nicht an Bytes) und hängt bei
 /// Kürzung ein Ellipsis-Suffix an. Verhindert einen Broker-Validation-Error bei
 /// langen Antworten.
@@ -113,10 +106,11 @@ pub fn spawn_shadow_review_scheduler(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
+    channel_id: Option<i64>,
 ) {
-    let Some(channel_id) = review_channel_id_from_env() else {
+    let Some(channel_id) = channel_id else {
         tracing::info!(
-            "Shadow-Review-Scheduler aus — ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID nicht gesetzt"
+            "Shadow-Review-Scheduler aus — kein Kanal in der Betriebskonfiguration"
         );
         return;
     };

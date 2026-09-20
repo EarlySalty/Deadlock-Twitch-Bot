@@ -117,6 +117,30 @@ export function buildDiscordAdminLoginUrl(nextPath?: string): string {
   return `/twitch/auth/discord/login?next=${encodeURIComponent(next)}`;
 }
 
+export interface OperatingOptions {
+  pool_max: number;
+  acquire_timeout_ms: number;
+  connect_timeout_seconds: number;
+}
+
+export interface OperatingConfig {
+  saved_fingerprint: string;
+  saved_revision: string;
+  options: OperatingOptions;
+  services: Array<{
+    name: string;
+    active_fingerprint: string | null;
+    restart_required: boolean | null;
+  }>;
+  activation: 'restart_required';
+}
+
+export const fetchOperatingConfig = () => admin<OperatingConfig>('/config/operating');
+export const saveOperatingConfig = (expected_revision: string, options: OperatingOptions) =>
+  postAdminJson<OperatingConfig, { expected_revision: string; options: OperatingOptions }>(
+    '/config/operating', { expected_revision, options },
+  );
+
 export function buildRaidAuthUrl(login: string): string {
   return `/twitch/raid/auth?login=${encodeURIComponent(login.trim())}`;
 }

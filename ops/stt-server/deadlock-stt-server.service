@@ -5,12 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/tb-stt-server
+ExecStart=%h/.local/bin/tb-stt-server --config /var/lib/deadlock-twitch/config/bot.toml
 Restart=on-failure
 RestartSec=3
-Environment=STT_HOST=127.0.0.1
-Environment=STT_PORT=8791
-Environment=STT_THREADS=8
 
 # The service is deliberately local-only; callers are the Rust Twitch services
 # on the same host. Models are downloaded once into ~/.cache/deadlock-stt.

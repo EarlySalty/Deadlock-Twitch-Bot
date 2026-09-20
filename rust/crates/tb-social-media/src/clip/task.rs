@@ -12,8 +12,8 @@ const INITIAL_DELAY: Duration = Duration::from_secs(60);
 /// Periodischer Hintergrund-Task für den Clip-Fetcher.
 ///
 /// In Python (`ClipFetcher.__init__`) bedingungslos gestartet (always-on, 6h).
-/// [`start`](Self::start) spiegelt das; [`start_if_enabled`](Self::start_if_enabled)
-/// bleibt als gegateter Einstieg für den Vor-Cutover-Zustand erhalten.
+/// [`start`](Self::start) startet den Loop nach ausdrücklicher Freigabe
+/// durch die typisierte Bot-Konfiguration in der Composition-Root.
 pub struct ClipFetchTask {
     service: Arc<ClipFetchService>,
     interval: Duration,
@@ -37,29 +37,6 @@ impl ClipFetchTask {
             self.initial_delay.as_secs(),
         );
         spawn_logged("clip_fetch", self.run());
-    }
-
-    /// Startet den Task, falls `TB_CLIP_FETCHER_ENABLED=1` gesetzt ist.
-    ///
-    /// Gibt `true` zurück wenn tatsächlich gestartet, `false` wenn übersprungen.
-    pub fn start_if_enabled(self) -> bool {
-        let enabled = std::env::var("TB_CLIP_FETCHER_ENABLED")
-            .map(|v| v.trim() == "1")
-            .unwrap_or(false);
-
-        if !enabled {
-            tracing::info!("clip_fetch: Task deaktiviert (TB_CLIP_FETCHER_ENABLED≠1)");
-            return false;
-        }
-
-        tracing::info!(
-            "clip_fetch: Task startet (Intervall={}s, InitialDelay={}s)",
-            self.interval.as_secs(),
-            self.initial_delay.as_secs(),
-        );
-
-        spawn_logged("clip_fetch", self.run());
-        true
     }
 
     async fn run(self) {

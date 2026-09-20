@@ -45,7 +45,7 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
+    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
     ChatPipelineParts, ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper,
     GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
     LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster,
@@ -74,21 +74,15 @@ use crate::task_supervisor::TaskSupervisor;
 /// Channel-Join alle 30 Minuten, connection.py).
 const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
-/// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
-const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
-
-fn knowledge_dir() -> PathBuf {
-    std::env::var("KNOWLEDGE_DIR")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("rust/knowledge"))
+fn knowledge_dir() -> Result<PathBuf, String> {
+    let snapshot = tb_config::runtime::active()
+        .ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
+    snapshot.resolve(&snapshot.settings().knowledge.directory).map_err(|e| e.to_string())
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
-    KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
+    KB.get_or_init(|| match knowledge_dir().and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string())) {
         Ok(kb) => {
             tracing::info!(
                 "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
@@ -195,6 +189,7 @@ pub fn build_clip_port(
     cipher: Option<Arc<FieldCipher>>,
     pool: PgPool,
     bot_token: Arc<BotTokenManager>,
+    redirect_uri: &str,
 ) -> Option<Arc<dyn ClipPort>> {
     let (Some(helix), Some(cipher)) = (helix, cipher) else {
         return None;
@@ -205,7 +200,7 @@ pub fn build_clip_port(
         cipher.clone(),
         Arc::new(HelixTokenClient {
             helix: (*helix).clone(),
-            redirect_uri: std::env::var("TWITCH_RAID_REDIRECT_URI").unwrap_or_default(),
+            redirect_uri: redirect_uri.to_owned(),
         }),
         blacklist.clone(),
     );
@@ -538,13 +533,10 @@ pub struct ChatRuntime {
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
 /// `None` = Chat bleibt aus (Python bedient weiter).
-pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<ChatApiHandle> {
-    let enabled = std::env::var("TB_CHAT_ENABLED")
-        .map(|v| v.trim() == "1")
-        .unwrap_or(false);
+pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool, enabled: bool) -> Option<ChatApiHandle> {
     if !enabled {
         tracing::info!(
-            "TB_CHAT_ENABLED nicht gesetzt — nativer Chat bleibt aus (Python-Chat aktiv)"
+            "Nativer Chat laut Betriebskonfiguration deaktiviert"
         );
         return None;
     }
@@ -627,11 +619,17 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<C
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
+    pub discord_chat: tb_config::discord::DiscordChat,
     pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     pub clip_port: Option<Arc<dyn ClipPort>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
+    pub invite_channel_id: u64,
+    pub golive_tips_enabled: bool,
+    pub chat_persist_all_games: bool,
+    pub lfg_pitch_enabled: bool,
+    pub review_log_directory: std::path::PathBuf,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
@@ -647,11 +645,17 @@ pub async fn build_runtime(
     supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
+        discord_chat,
         subscription_status,
         manual_raid,
         clip_port,
         bot_ban_handler,
         invite_relay,
+        invite_channel_id,
+        golive_tips_enabled,
+        chat_persist_all_games,
+        lfg_pitch_enabled,
+        review_log_directory,
         review_relay,
         member_relay,
         scam_notifier,
@@ -737,7 +741,8 @@ pub async fn build_runtime(
     let invite_resolver = Arc::new(DbInviteResolver {
         pool: pool.clone(),
         relay: invite_relay,
-        invite_channel_id: invite_channel_id_from_env(),
+        invite_channel_id: Some(invite_channel_id),
+        fallback: discord_chat.promo_invite.clone(),
     });
     if let Some(relay) = review_relay.clone() {
         let pool = pool.clone();
@@ -795,7 +800,7 @@ pub async fn build_runtime(
             pool: pool.clone(),
         }),
         Arc::clone(&discord_link),
-        Arc::new(DbInvitePort { pool: pool.clone() }),
+        Arc::new(DbInvitePort { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
     )
@@ -815,9 +820,6 @@ pub async fn build_runtime(
         Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>
     );
     let commands = Arc::new(command_engine);
-
-    let review_log_dir =
-        std::env::var("TB_CHAT_REVIEW_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
 
     // Spam-Filter halten, damit ein Hintergrund-Task die gelernten Muster
     // periodisch neu laden kann (Python-Cache-TTL 120 s). Ohne Reload griffen
@@ -839,7 +841,9 @@ pub async fn build_runtime(
     let account_age: Arc<dyn AccountAgePort> = Arc::new(HelixAccountAge {
         api: Arc::clone(&api),
     });
-    let alerter = Arc::new(ModAlerter::new(http.clone()));
+    let alerter = Arc::new(ModAlerter::with_endpoint_and_channel_id(
+        http.clone(), "http://localhost:8899/changelog", discord_chat.moderation_alert_channel_id,
+    ));
     let scout_crew_guard = Arc::new(CrewGuard::new(
         true,
         Arc::clone(&alerter),
@@ -854,7 +858,7 @@ pub async fn build_runtime(
         api: Arc::clone(&api),
         pool: pool.clone(),
         classifier: Arc::new(ChannelClassifier::new(pool.clone())),
-        tracker: Arc::new(ChatterTracker::new(pool.clone())),
+        tracker: Arc::new(ChatterTracker::with_persist_all_games(pool.clone(), chat_persist_all_games)),
         global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
         scam_pitch: Arc::new(ScamPitchDetector::new(
             Arc::clone(&api),
@@ -874,7 +878,7 @@ pub async fn build_runtime(
         )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+            Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
@@ -885,11 +889,11 @@ pub async fn build_runtime(
         lfg_pitch: Arc::new({
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
-                Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+                Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
                 Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
                     None, None, None, None,
                 ))),
-                lfg_pitch_enabled_from_env(),
+                lfg_pitch_enabled,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
@@ -902,7 +906,7 @@ pub async fn build_runtime(
         promos: Arc::clone(&promos),
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
-        review_log: Arc::new(ReviewLog::new(review_log_dir)),
+        review_log: Arc::new(ReviewLog::new(review_log_directory)),
         alerter,
         account_age,
         crew_centroid,
@@ -965,6 +969,7 @@ pub async fn build_runtime(
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
         hooks: Arc::new(ChatHooks {
+            golive_tips_enabled,
             inner: inner_hooks,
             pipeline,
             api: Arc::clone(&api),
@@ -991,13 +996,6 @@ pub async fn build_runtime(
         scout_crew_guard,
         supervisor,
     }
-}
-
-fn invite_channel_id_from_env() -> Option<u64> {
-    std::env::var("TWITCH_NOTIFY_CHANNEL_ID")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|&value| value > 0)
 }
 
 impl ChatRuntime {
@@ -1436,6 +1434,7 @@ pub fn build_lurker_reward_checker(
 }
 
 struct ChatHooks {
+    golive_tips_enabled: bool,
     inner: Arc<dyn EventSubHooks>,
     pipeline: Arc<ChatPipeline>,
     /// Go-Live-Tipp-Hook: nutzt denselben dekorierten Chat-Sendepfad wie die
@@ -1568,8 +1567,8 @@ impl ChatHooks {
         // Go-Live-Tipps sind temporär global deaktiviert (GH #565): Die Tipp-Texte
         // sind inhaltlich zu schwach ("das wusste ich schon") und werden überarbeitet.
         // Bis dahin bleibt nur der Versand gesperrt — Auswahl-/Gate-/Persistenz-Logik
-        // darunter ist unverändert. Reaktivierung ohne Rebuild via TB_GOLIVE_TIPS_ENABLED=1.
-        if std::env::var("TB_GOLIVE_TIPS_ENABLED").as_deref() != Ok("1") {
+        // darunter ist unverändert. Freigabe über bot.golive_tips_enabled in TOML.
+        if !self.golive_tips_enabled {
             return;
         }
 
@@ -2396,6 +2395,7 @@ impl DiscordLinkPort for DbDiscordLink {
 /// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
 struct DbInviteUrlWithFallback {
     pool: PgPool,
+    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2412,17 +2412,14 @@ impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
         Ok(row
             .map(|(url,)| url)
             .filter(|url| !url.trim().is_empty())
-            .or_else(|| {
-                std::env::var(PROMO_DISCORD_INVITE_ENV)
-                    .ok()
-                    .filter(|url| !url.trim().is_empty())
-            }))
+            .or_else(|| self.fallback.clone()))
     }
 }
 
 /// !invite — Antwortzeile unabhängig von Streamstatus und Kategorie.
 struct DbInvitePort {
     pool: PgPool,
+    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2443,11 +2440,7 @@ impl InvitePort for DbInvitePort {
         let invite_url = row
             .map(|(url,)| url)
             .filter(|u| !u.trim().is_empty())
-            .or_else(|| {
-                std::env::var(PROMO_DISCORD_INVITE_ENV)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-            });
+            .or_else(|| self.fallback.clone());
         let Some(invite_url) = invite_url else {
             return Ok(None);
         };
@@ -2510,6 +2503,7 @@ impl PartnerChannelCheck for DbPartnerCheck {
 /// Promo-Invite: streamer-spezifisch → Broker-Erstellung → globaler Fallback.
 struct DbInviteResolver {
     pool: PgPool,
+    fallback: Option<String>,
     relay: Option<BrokerRelay>,
     invite_channel_id: Option<u64>,
 }
@@ -2535,7 +2529,7 @@ impl InviteResolver for DbInviteResolver {
             return (url, true);
         }
         (
-            promo_invite_fallback(std::env::var(PROMO_DISCORD_INVITE_ENV).ok().as_deref()),
+            promo_invite_fallback(self.fallback.as_deref()),
             false,
         )
     }
@@ -3946,6 +3940,7 @@ mod db_tests {
             pool: pool.clone(),
             relay: None,
             invite_channel_id: None,
+            fallback: None,
         };
         let logins = resolver.partners_without_invite().await.unwrap();
         assert_eq!(logins, vec!["fresh".to_string()]);
@@ -3984,7 +3979,7 @@ mod invite_offline_tests {
             .execute(&pool)
             .await
             .unwrap();
-        let port = DbInvitePort { pool: pool.clone() };
+        let port = DbInvitePort { pool: pool.clone(), fallback: None };
         for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
             sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
                 .bind(live)

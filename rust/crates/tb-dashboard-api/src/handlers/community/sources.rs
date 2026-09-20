@@ -140,11 +140,8 @@ pub async fn lobbies(discord_id: Option<&str>) -> LobbyResult {
     let token = ["MASTER_BROKER_TOKEN","MAIN_BOT_INTERNAL_TOKEN","TWITCH_INTERNAL_API_TOKEN"].iter()
         .find_map(|key| std::env::var(key).ok().filter(|s| !s.trim().is_empty()));
     let Some(token) = token else { return LobbyResult::unavailable("unavailable"); };
-    let base = std::env::var("MASTER_BROKER_BASE_URL").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
-        let host = std::env::var("MASTER_BROKER_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-        let port = std::env::var("MASTER_BROKER_PORT").unwrap_or_else(|_| "8770".into());
-        format!("http://{host}:{port}")
-    });
+    let Ok(config) = tb_config::runtime::settings() else { return LobbyResult::unavailable("unavailable"); };
+    let base = &config.broker.base_url;
     let response = client().post(format!("{}/internal/master/v1/discord/community-lobbies",base.trim_end_matches('/')))
         .header("X-Internal-Token",token).json(&serde_json::json!({"guild_id":"1289721245281292288","user_id":id})).send().await;
     let Ok(response) = response else { return LobbyResult::unavailable("unavailable"); };

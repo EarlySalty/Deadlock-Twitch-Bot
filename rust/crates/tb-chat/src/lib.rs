@@ -88,7 +88,7 @@ pub use invite_question::{
     InviteQuestionVerdictKind, LlmInviteQuestionJudge, PgInviteQuestionStore,
 };
 pub use lfg_pitch::{
-    lfg_pitch_enabled_from_env, LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
+    LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
     LfgVerdictKind, LlmLfgJudge, LFG_PITCH_REPLY,
 };
 pub use lurker_policy::{

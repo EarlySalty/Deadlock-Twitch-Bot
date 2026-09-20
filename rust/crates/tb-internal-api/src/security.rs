@@ -298,40 +298,6 @@ fn resolve_runtime_role(raw: Option<&str>) -> String {
     }
 }
 
-/// Liest die Runtime-Rolle aus der Umgebung (`TWITCH_RUNTIME_ROLE`, Fallback
-/// `TWITCH_SPLIT_RUNTIME_ROLE`) und normalisiert sie.
-fn runtime_role_from_env() -> String {
-    let raw = nonempty_env("TWITCH_RUNTIME_ROLE")
-        .or_else(|| nonempty_env("TWITCH_SPLIT_RUNTIME_ROLE"));
-    resolve_runtime_role(raw.as_deref())
-}
-
-/// Ob die Split-Runtime-Härtung aktiv ist — Parität zu `split_runtime_enforced`
-/// (`runtime_mode.py:38`): `TWITCH_RUNTIME_ENFORCE` hat Vorrang, sonst
-/// `TWITCH_SPLIT_RUNTIME_ENFORCE`; Default ist aktiv (`true`).
-fn split_runtime_enforced() -> bool {
-    if let Some(raw) = nonempty_env("TWITCH_RUNTIME_ENFORCE") {
-        return parse_env_bool(&raw, true);
-    }
-    if let Some(raw) = nonempty_env("TWITCH_SPLIT_RUNTIME_ENFORCE") {
-        return parse_env_bool(&raw, true);
-    }
-    true
-}
-
-/// Optionaler Legacy-Port während des Rust-Takeovers — Parität zu
-/// `legacy_internal_api_port` (`runtime_mode.py:130`): aus
-/// `TWITCH_INTERNAL_API_LEGACY_PORT`; <=0 oder der reservierte Master-Port
-/// werden verworfen.
-fn legacy_internal_api_port() -> Option<u16> {
-    let raw = nonempty_env("TWITCH_INTERNAL_API_LEGACY_PORT")?;
-    let port: i64 = raw.trim().parse().ok()?;
-    if port <= 0 || port == i64::from(MASTER_API_RESERVED_PORT) {
-        return None;
-    }
-    u16::try_from(port).ok()
-}
-
 /// Verweigert den Start bei Fehlkonfiguration — Parität zu
 /// `enforce_internal_api_runtime` (`runtime_mode.py:147`).
 ///
@@ -340,22 +306,21 @@ fn legacy_internal_api_port() -> Option<u16> {
 /// deaktiviert (`TWITCH_RUNTIME_ENFORCE=0`), wird nur die aufgelöste Rolle
 /// zurückgegeben.
 ///
-/// `role = None` liest aus der Umgebung; expliziter Wert (Tests) hat Vorrang.
+/// Alle Werte stammen explizit aus dem Dienstkontext; None bedeutet fehlende Rolle.
 pub fn enforce_internal_api_runtime(
     role: Option<&str>,
     port: u16,
+    enforced: bool,
+    legacy_port: Option<u16>,
 ) -> Result<String, RuntimeHardeningError> {
-    let resolved_role = match role {
-        Some(value) => resolve_runtime_role(Some(value)),
-        None => runtime_role_from_env(),
-    };
+    let resolved_role = resolve_runtime_role(role);
 
-    if !split_runtime_enforced() {
+    if !enforced {
         return Ok(resolved_role);
     }
 
     let mut expected_port = INTERNAL_API_PORT;
-    if let Some(legacy) = legacy_internal_api_port() {
+    if let Some(legacy) = legacy_port.filter(|port| *port != 0 && *port != MASTER_API_RESERVED_PORT) {
         if port == legacy {
             expected_port = legacy;
         }
@@ -378,8 +343,7 @@ fn role_error_message(got_role: &str) -> String {
     if got_role.is_empty() {
         return format!(
             "Runtime hardening violation for internal_api: runtime role is missing. \
-             Set TWITCH_RUNTIME_ROLE={ROLE_TWITCH_WORKER} \
-             (or TWITCH_SPLIT_RUNTIME_ROLE={ROLE_TWITCH_WORKER})."
+             Set bot.runtime_role={ROLE_TWITCH_WORKER} in the TOML configuration."
         );
     }
     if !ALLOWED.contains(&got_role) {
@@ -408,13 +372,8 @@ fn port_error_message(expected_port: u16, got_port: u16) -> String {
     )
 }
 
-/// Liest eine Env-Variable und gibt `None` zurück, wenn sie fehlt oder (nach
-/// Trim) leer ist.
-fn nonempty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
-}
-
 /// Parst einen Env-Bool — Parität zu `_parse_env_bool` (`runtime_mode.py:28`).
+#[cfg(test)]
 fn parse_env_bool(raw: &str, default: bool) -> bool {
     match raw.trim().to_lowercase().as_str() {
         "" => default,
@@ -597,49 +556,49 @@ mod tests {
 
     #[test]
     fn runtime_ok_for_worker_on_default_port() {
-        let role = enforce_internal_api_runtime(Some("twitch_worker"), INTERNAL_API_PORT)
+        let role = enforce_internal_api_runtime(Some("twitch_worker"), INTERNAL_API_PORT, true, None)
             .expect("worker on 8776 must be accepted");
         assert_eq!(role, ROLE_TWITCH_WORKER);
     }
 
     #[test]
     fn runtime_role_aliases_resolve_to_worker() {
-        assert!(enforce_internal_api_runtime(Some("bot"), INTERNAL_API_PORT).is_ok());
-        assert!(enforce_internal_api_runtime(Some("twitch-worker"), INTERNAL_API_PORT).is_ok());
-        assert!(enforce_internal_api_runtime(Some("WORKER"), INTERNAL_API_PORT).is_ok());
+        assert!(enforce_internal_api_runtime(Some("bot"), INTERNAL_API_PORT, true, None).is_ok());
+        assert!(enforce_internal_api_runtime(Some("twitch-worker"), INTERNAL_API_PORT, true, None).is_ok());
+        assert!(enforce_internal_api_runtime(Some("WORKER"), INTERNAL_API_PORT, true, None).is_ok());
     }
 
     #[test]
     fn runtime_rejects_wrong_role() {
-        let err = enforce_internal_api_runtime(Some("master"), INTERNAL_API_PORT)
+        let err = enforce_internal_api_runtime(Some("master"), INTERNAL_API_PORT, true, None)
             .expect_err("master role must be rejected");
         assert!(err.0.contains("expected role 'twitch_worker'"));
     }
 
     #[test]
     fn runtime_rejects_missing_role() {
-        let err = enforce_internal_api_runtime(Some(""), INTERNAL_API_PORT)
+        let err = enforce_internal_api_runtime(Some(""), INTERNAL_API_PORT, true, None)
             .expect_err("missing role must be rejected");
         assert!(err.0.contains("runtime role is missing"));
     }
 
     #[test]
     fn runtime_rejects_unsupported_role() {
-        let err = enforce_internal_api_runtime(Some("frobnicate"), INTERNAL_API_PORT)
+        let err = enforce_internal_api_runtime(Some("frobnicate"), INTERNAL_API_PORT, true, None)
             .expect_err("unknown role must be rejected");
         assert!(err.0.contains("unsupported runtime role"));
     }
 
     #[test]
     fn runtime_rejects_wrong_port() {
-        let err = enforce_internal_api_runtime(Some("twitch_worker"), 9999)
+        let err = enforce_internal_api_runtime(Some("twitch_worker"), 9999, true, None)
             .expect_err("wrong port must be rejected");
         assert!(err.0.contains("expected port 8776"));
     }
 
     #[test]
     fn runtime_rejects_reserved_master_port() {
-        let err = enforce_internal_api_runtime(Some("twitch_worker"), MASTER_API_RESERVED_PORT)
+        let err = enforce_internal_api_runtime(Some("twitch_worker"), MASTER_API_RESERVED_PORT, true, None)
             .expect_err("reserved master port must be rejected");
         assert!(err.0.contains("reserved for the master API service"));
     }

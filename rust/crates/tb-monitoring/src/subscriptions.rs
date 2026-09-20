@@ -359,70 +359,15 @@ impl RevocationSink for SubscriptionManager {
 /// Default-Sampling-Intervall der Capacity-Zeitreihe (Sekunden).
 /// Python `_eventsub_capacity_sample_interval_seconds`: Default 300, Clamp 30–3600.
 const CAPACITY_SAMPLE_DEFAULT_SECONDS: u64 = 300;
-const CAPACITY_SAMPLE_MIN_SECONDS: u64 = 30;
-const CAPACITY_SAMPLE_MAX_SECONDS: u64 = 3600;
 
 /// Default-Retention der Capacity-Zeitreihe (Tage).
 /// Python `_eventsub_capacity_retention_days`: Default 45, Clamp 7–365.
 const CAPACITY_RETENTION_DEFAULT_DAYS: i64 = 45;
-const CAPACITY_RETENTION_MIN_DAYS: i64 = 7;
-const CAPACITY_RETENTION_MAX_DAYS: i64 = 365;
 
 /// Retention-Cleanup läuft höchstens stündlich (Python: `>= 3600`).
 const CAPACITY_CLEANUP_INTERVAL_SECONDS: f64 = 3600.0;
 
-/// Sample-Intervall aus `TWITCH_EVENTSUB_CAPACITY_SAMPLE_SECONDS`, geclamped.
-fn capacity_sample_interval_seconds() -> u64 {
-    parse_env_clamped(
-        "TWITCH_EVENTSUB_CAPACITY_SAMPLE_SECONDS",
-        CAPACITY_SAMPLE_DEFAULT_SECONDS,
-        CAPACITY_SAMPLE_MIN_SECONDS,
-        CAPACITY_SAMPLE_MAX_SECONDS,
-    )
-}
 
-/// Retention-Fenster aus `TWITCH_EVENTSUB_CAPACITY_RETENTION_DAYS`, geclamped.
-fn capacity_retention_days() -> i64 {
-    parse_env_clamped(
-        "TWITCH_EVENTSUB_CAPACITY_RETENTION_DAYS",
-        CAPACITY_RETENTION_DEFAULT_DAYS,
-        CAPACITY_RETENTION_MIN_DAYS,
-        CAPACITY_RETENTION_MAX_DAYS,
-    )
-}
-
-fn parse_env_clamped<T>(key: &str, default: T, min: T, max: T) -> T
-where
-    T: std::str::FromStr + Ord + std::fmt::Display + Copy,
-{
-    match std::env::var(key) {
-        Ok(raw) => match raw.trim().parse::<T>() {
-            Ok(value) => {
-                let clamped = value.clamp(min, max);
-                if clamped != value {
-                    tracing::warn!(
-                        setting = key,
-                        value = %value,
-                        minimum = %min,
-                        maximum = %max,
-                        "Optionaler EventSub-Capacity-Env-Wert ausserhalb des Bereichs; Clamp wird verwendet"
-                    );
-                }
-                clamped
-            }
-            Err(_) => {
-                tracing::warn!(
-                    setting = key,
-                    value = %raw,
-                    default = %default,
-                    "Ungültiger optionaler EventSub-Capacity-Env-Wert; Default wird verwendet"
-                );
-                default
-            }
-        },
-        Err(_) => default,
-    }
-}
 
 /// Normalisiert einen Kanal-Login wie Pythons `_record_chat_subscription_state`:
 /// trimmen, Kleinschreibung, führendes `#` entfernen.
@@ -599,6 +544,8 @@ pub struct SubscriptionManager {
     subscription_state: Mutex<HashMap<String, HashMap<String, SubscriptionState>>>,
     /// Drosselung der periodischen Capacity-Zeitreihe (B5-08).
     capacity_throttle: Mutex<CapacityThrottle>,
+    capacity_sample_seconds: u64,
+    capacity_retention_days: i64,
     /// Monotone Uhr (Epoch-Sek.) für die Throttle-Fenster — in Tests injizierbar.
     clock: ClockFn,
     /// Optionaler Mod-Provisioner für die 403-Selbstheilung im Chat-Pfad
@@ -634,6 +581,8 @@ impl SubscriptionManager {
             failure_counters: Mutex::new(HashMap::new()),
             subscription_state: Mutex::new(HashMap::new()),
             capacity_throttle: Mutex::new(CapacityThrottle::default()),
+            capacity_sample_seconds: CAPACITY_SAMPLE_DEFAULT_SECONDS,
+            capacity_retention_days: CAPACITY_RETENTION_DEFAULT_DAYS,
             clock: Arc::new(epoch_clock),
             moderator_provisioner: None,
             bot_ban_handler: None,
@@ -641,6 +590,13 @@ impl SubscriptionManager {
             mod_retry_cooldown: Mutex::new(HashMap::new()),
             retry_config: SubscriptionRetryConfig::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_capacity_config(mut self, config: &tb_config::reliability::MonitoringOptions) -> Self {
+        self.capacity_sample_seconds = config.capacity_sample_seconds;
+        self.capacity_retention_days = config.capacity_retention_days;
+        self
     }
 
     /// Ersetzt die Throttle-Uhr (Tests). Default ist die System-Epoch-Uhr.
@@ -2228,7 +2184,7 @@ impl SubscriptionManager {
     /// Uhr). `trigger` landet in `trigger_reason` (z. B. `"poll_tick"`).
     pub async fn record_capacity_snapshot_periodic(&self, trigger: &str) {
         let now_monotonic = (self.clock)();
-        let interval = capacity_sample_interval_seconds() as f64;
+        let interval = self.capacity_sample_seconds as f64;
 
         // Sample-Throttle: erster Aufruf schreibt immer, danach erst nach `interval`.
         let due = {
@@ -2274,7 +2230,7 @@ impl SubscriptionManager {
 
         // Retention-Cleanup höchstens stündlich.
         if cleanup_due {
-            let cutoff = Utc::now() - Duration::days(capacity_retention_days());
+            let cutoff = Utc::now() - Duration::days(self.capacity_retention_days);
             if let Err(error) = self.capacity.delete_older_than(cutoff).await {
                 tracing::debug!(%error, "Capacity-Retention-Cleanup fehlgeschlagen");
             }

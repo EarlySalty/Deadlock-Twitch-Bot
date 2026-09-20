@@ -87,19 +87,15 @@ const HELP_BASE_URL: &str = "https://deutsche-deadlock-community.de/streamer/hel
 const COMMANDS_URL: &str = "https://deutsche-deadlock-community.de/streamer/commands";
 const DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/twitch/dashboard";
 
-fn knowledge_dir() -> PathBuf {
-    match std::env::var("KNOWLEDGE_DIR")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-    {
-        Some(p) => PathBuf::from(p),
-        None => PathBuf::from("rust/knowledge"),
-    }
+fn knowledge_dir() -> Result<PathBuf, String> {
+    let snapshot = tb_config::runtime::active()
+        .ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
+    snapshot.resolve(&snapshot.settings().knowledge.directory).map_err(|e| e.to_string())
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
-    KB.get_or_init(|| KnowledgeBase::load_from_dir(&knowledge_dir()).unwrap_or_default())
+    KB.get_or_init(|| knowledge_dir().and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string())).unwrap_or_default())
 }
 
 /// `!commands` schickt nur den Link — die Befehlsliste im Chat war eine

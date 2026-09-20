@@ -3,54 +3,10 @@
 //! Bindet ausschließlich auf 127.0.0.1 (Loopback). UFW blockt 8776 extern.
 //! Auth: X-Internal-Token + loopback_only-Layer (Defense-in-Depth).
 //!
-//! Env-Variablen:
-//!   TWITCH_ANALYTICS_DSN          — PostgreSQL-DSN
-//!   TWITCH_INTERNAL_API_TOKEN     — Auth-Token
-//!   TWITCH_CLIENT_ID              — Twitch Helix Client-ID (optional)
-//!   TWITCH_CLIENT_SECRET          — Twitch Helix Client-Secret (optional)
-//!   TWITCH_TARGET_GAME_NAME       — Ziel-Kategorie (default "Deadlock")
-//!   TWITCH_WEBHOOK_SECRET         — EventSub-Webhook-Secret (optional)
-//!   TWITCH_EVENTSUB_CALLBACK_URL  — öffentliche Callback-URL (optional;
-//!                                   beide gesetzt → Subscription-Verwaltung)
-//!   TB_MONITORING_POLL_ENABLED    — "1" startet den Poll-Loop (Cutover-Gate,
-//!                                   default aus — Python bleibt Live-Writer)
-//!   TWITCH_NOTIFY_CHANNEL_ID      — Discord-Kanal der Go-Live-Postings
-//!   TWITCH_ALERT_MENTION          — optionale Alert-Mention (z. B. <@&id>)
-//!   TWITCH_DISCORD_REF_CODE       — Referral-Code für Twitch-URLs
-//!   TWITCH_LANGUAGE_FILTERS       — Komma-Liste (z. B. "de,en"), leer = alle
-//!   DB_MASTER_KEY_V1              — AES-Master-Key (Hex); ohne ihn bleiben
-//!                                   die Raid-Hooks deaktiviert (kein Token-Read)
-//!   TB_INTERNAL_API_LEGACY_FALLBACK_URL — Basis-URL der Legacy-Python-API
-//!                                   (z. B. http://127.0.0.1:8779); unbekannte
-//!                                   interne-API-Routen werden dorthin
-//!                                   geproxyt, leer = 404 wie bisher
-//!   PORT                          — optional, default 8776
-//!   TB_HIGHLIGHT_CLIPPER_ENABLED  — "1" startet die Highlight-Erstellung
-//!                                   (default aus; benötigt Helix-Client)
-//!   TB_CLIP_FETCHER_ENABLED       — "1" startet den Clip-Fetch-Task
-//!                                   (default aus; benötigt Helix-Client)
-//!   TB_SCOUT_ENABLED              — "1" startet den Scout-Task für live Deadlock-DE-Streams
-//!                                   (default aus; benötigt Helix-Client)
-//!   ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID — Discord-Kanal-ID für den Shadow-KI-
-//!                                   Review-Ausgang (B19). Fehlt sie, bleibt der
-//!                                   Forward-Loop aus (default aus, opt-in)
-//!   TB_VOD_ARCHIVE_DIR            — Wurzel der geladenen VODs, je Streamer
-//!                                   ein Unterordner (default data/vod-archive)
-//!   TB_VOD_ARCHIVE_MAX_DOWNLOADS  — Downloads je Lauf über alle Streamer
-//!                                   zusammen (default 6)
-//!   TB_VOD_ARCHIVE_MAX_UPLOADS    — Uploads je Lauf über alle Streamer
-//!                                   zusammen (default 2; ein Upload kostet
-//!                                   1600 der 10000 Einheiten Tagesquota)
-//!   TB_VOD_ARCHIVE_MIN_FREE_GB    — Plattenplatz-Untergrenze (default 80)
-//!   TB_VOD_ARCHIVE_KEEP_LOCAL_DAYS — lokale Dateien nach N Tagen löschen
-//!                                   (default 0 = nie)
-//!   TB_VOD_ARCHIVE_INTERVAL_HOURS — Abstand zweier Läufe (default 12)
-//!   TB_VOD_ARCHIVE_RATE_LIMIT     — yt-dlp-Bandbreitenbremse (z. B. "5M")
-//!   TB_VOD_ARCHIVE_DOWNLOAD_TIMEOUT_SECS — Zeitgrenze je Download (default 21600)
-//!   TB_VOD_ARCHIVE_FFMPEG / _FFPROBE / _CATEGORY_ID / _TITLE_TEMPLATE /
-//!   _PLAYLIST_ID                  — optional; welche Kanäle archiviert werden
-//!                                   und wie sichtbar, steht dagegen je
-//!                                   Streamer im Dashboard, nicht hier
+//! Gemeinsame Betriebsdatei: `--config /absoluter/pfad/bot.toml`.
+//! Zugangsdaten kommen ausschließlich aus dem bestehenden Infisical-Startpfad.
+//! Die noch offenen Fachverbraucher und ihre bisherigen Quellen sind in
+//! `.tasks/2026-09-20-global-toml/KLASSIFIKATION.md` dokumentiert.
 
 include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
 
@@ -91,33 +47,6 @@ mod token_lifecycle_wiring;
 mod user_id_backfill;
 mod wiring;
 
-fn optional_env_bool(name: &str, default: bool) -> bool {
-    match std::env::var(name) {
-        Ok(value) => {
-            let raw = value.trim().to_lowercase();
-            match raw.as_str() {
-                "" => default,
-                "1" | "true" | "yes" | "on" => true,
-                "0" | "false" | "no" | "off" => false,
-                _ => {
-                    tracing::warn!(
-                        setting = name,
-                        value = %value,
-                        default,
-                        "Ungültiger optionaler Bool-Env-Wert; Default wird verwendet"
-                    );
-                    default
-                }
-            }
-        }
-        Err(_) => default,
-    }
-}
-
-fn opt_in_enabled(name: &str) -> bool {
-    optional_env_bool(name, false)
-}
-
 /// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
 /// dann `~/.local/bin/yt-dlp`, sonst der blanke Name für die PATH-Suche.
 ///
@@ -157,10 +86,12 @@ fn ist_ausfuehrbar(pfad: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-fn yt_dlp_path() -> std::path::PathBuf {
+fn yt_dlp_path(snapshot: &tb_config::BotConfigSnapshot) -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let pfad = resolve_yt_dlp_path(std::env::var("YT_DLP_PATH").ok(), &cwd, home.as_deref());
+    let configured = snapshot.settings().bot.yt_dlp_binary.as_ref().map(|path|
+        snapshot.resolve(path).expect("yt-dlp-Pfad wurde beim Konfigurationsstart geprüft").to_string_lossy().into_owned());
+    let pfad = resolve_yt_dlp_path(configured, &cwd, home.as_deref());
     // Ohne diese Zeile beginnt die nächste Fehlersuche wieder bei "welcher Pfad
     // war es eigentlich" — das Symptom hier war genau ein toter Pfad.
     tracing::info!(pfad = %pfad.display(), "yt-dlp-Pfad aufgeloest");
@@ -173,85 +104,6 @@ fn watch_one_shot_task(task: &'static str, handle: tokio::task::JoinHandle<()>) 
             tracing::error!(task, %error, "One-Shot-Task fehlerhaft beendet");
         }
     });
-}
-
-fn optional_env_u16(name: &str, default: u16) -> u16 {
-    match std::env::var(name) {
-        Ok(value) if value.trim().is_empty() => default,
-        Ok(value) => match value.trim().parse::<u16>() {
-            Ok(parsed) if parsed > 0 => parsed,
-            _ => {
-                tracing::warn!(
-                    setting = name,
-                    value = %value,
-                    default,
-                    "Ungültiger optionaler Port-Env-Wert; Default wird verwendet"
-                );
-                default
-            }
-        },
-        Err(_) => default,
-    }
-}
-
-fn optional_env_i64(name: &str, default: i64) -> i64 {
-    match std::env::var(name) {
-        Ok(value) if value.trim().is_empty() => default,
-        Ok(value) => match value.trim().parse::<i64>() {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                tracing::warn!(
-                    setting = name,
-                    value = %value,
-                    default,
-                    "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
-                );
-                default
-            }
-        },
-        Err(_) => default,
-    }
-}
-
-fn optional_env_u64_with_fallback(primary: &str, fallback: &str, default: u64) -> u64 {
-    for name in [primary, fallback] {
-        match std::env::var(name) {
-            Ok(value) if value.trim().is_empty() => {}
-            Ok(value) => match value.trim().parse::<u64>() {
-                Ok(parsed) if parsed > 0 => return parsed,
-                _ => {
-                    tracing::warn!(
-                        setting = name,
-                        value = %value,
-                        default,
-                        "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
-                    );
-                    return default;
-                }
-            },
-            Err(_) => {}
-        }
-    }
-    default
-}
-
-fn optional_env_positive_i64(name: &str, default: i64) -> i64 {
-    match std::env::var(name) {
-        Ok(value) if value.trim().is_empty() => default,
-        Ok(value) => match value.trim().parse::<i64>() {
-            Ok(parsed) if parsed > 0 => parsed,
-            _ => {
-                tracing::warn!(
-                    setting = name,
-                    value = %value,
-                    default,
-                    "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
-                );
-                default
-            }
-        },
-        Err(_) => default,
-    }
 }
 
 async fn shutdown_signal() {
@@ -312,7 +164,6 @@ async fn bind_internal_listener_with_retry(
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tb_config::Settings;
 use tb_crypto::FieldCipher;
 use tb_internal_api::build_internal_router;
 use tb_monitoring::poller::{ChannelInfoSource, PollHooks, StreamSource};
@@ -582,39 +433,39 @@ impl PollHooks for SubscriptionPollHooks {
     }
 }
 
-/// Sprachfilter fürs Kategorie-Sampling/Scout. Python hartkodiert
-/// `TWITCH_LANGUAGE="de de-de de-at de-ch"` (core/constants.py); hier ist ein
-/// Env-Override via `TWITCH_LANGUAGE_FILTERS` erlaubt, aber leer/ungesetzt fällt
-/// auf den deutschen Default zurück — **nicht** auf „alle Sprachen", sonst landet
-/// das Kategorie-Sample sprachgemischt in den Stats (Port-Bug bis 13.6.).
-fn language_filters_from_env() -> Vec<String> {
-    let parsed: Vec<String> = std::env::var("TWITCH_LANGUAGE_FILTERS")
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-    if parsed.is_empty() {
-        ["de", "de-de", "de-at", "de-ch"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        parsed
-    }
-}
-
 #[tokio::main]
 async fn main() {
     if print_build_revision() {
         return;
     }
-    tracing_subscriber::fmt::init();
+    let (snapshot, remaining) = tb_config::runtime::start(std::env::args_os().skip(1))
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(2);
+        });
+    let config = snapshot.settings();
+    let runtime_role = tb_internal_api::enforce_internal_api_runtime(
+        Some(&config.bot.runtime_role), config.internal_api.port,
+        config.bot.runtime_enforce, config.bot.legacy_internal_api_port,
+    ).unwrap_or_else(|error| {
+        eprintln!("Internal-API Runtime-Härtung verletzt: {error}");
+        std::process::exit(2);
+    });
+    if remaining.len() == 1 && remaining[0] == "--check-config" {
+        println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
+        return;
+    }
+    if !remaining.is_empty() {
+        eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
+        std::process::exit(2);
+    }
+    tracing_subscriber::fmt()
+        .with_max_level(config.logging.level.tracing_level())
+        .init();
+    tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_BOT_CONFIG_V1");
     let supervisor = task_supervisor::TaskSupervisor::start();
 
-    let settings = Settings::from_env().unwrap_or_else(|e| {
+    let settings = snapshot.runtime_settings(&|key| std::env::var(key).ok()).unwrap_or_else(|e| {
         tracing::error!("Konfigurationsfehler: {e}");
         std::process::exit(1);
     });
@@ -626,7 +477,7 @@ async fn main() {
 
     // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
     // mit kaputtem oder halb migriertem Schema darf der Bot nicht starten.
-    if optional_env_bool("TB_DB_MIGRATE", true) {
+    if config.bot.run_database_migrations {
         match tb_db::run_migrations(&pool).await {
             Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
             Err(e) => {
@@ -635,15 +486,15 @@ async fn main() {
             }
         }
     } else {
-        tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
+        tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
 
     let outreach_shadow =
-        outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
+        outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker, &config.bot);
     chat_typen_wiring::spawn(&supervisor, pool.clone());
     crew_archive::start(&supervisor, pool.clone(), &settings.broker);
 
-    let port: u16 = optional_env_u16("PORT", 8776);
+    let port = config.internal_api.port;
 
     // HelixClient aus Env bauen — optional, Bot startet auch ohne Helix
     let helix: Arc<Option<HelixClient>> = {
@@ -672,25 +523,25 @@ async fn main() {
     // EventSub-Ingress: Inbox-Worker + Dispatcher. Mit Webhook-Config + Helix
     // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
     // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).
-    let target_game =
-        std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
+    let target_game = config.twitch.target_game.trim().to_string();
     let guard = GuardStore::new(pool.clone());
     // P2.57: `mut`, weil der inbound Bot-Timeout-Guard erst nach dem
     // ChatRuntime-Aufbau injiziert wird (s. `with_bot_timeout_guard` unten).
     let mut telemetry = TelemetryStore::new(pool.clone());
-    let live_state = LiveStateStore::new(pool.clone());
+    let live_state = LiveStateStore::new(pool.clone()).with_retry_config(&config.database.retry);
     // Welle B Phase 1: Bot-Token booten + ChatApi bauen (TB_CHAT_ENABLED=1).
     // Früh gezogen (vor Follower-Source + Hooks-Komposition): die Follower-Total-
     // Quelle (P1.7) braucht den Bot-Token mit `moderator:read:followers`, und die
     // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
-    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone()).await;
+    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone(), config.bot.chat_enabled).await;
     let smalltalk_loop = smalltalk_loop_wiring::start(
         &supervisor,
         pool.clone(),
         &settings.broker,
         helix.as_ref().clone(),
         chat_api_handle.as_ref().map(|handle| handle.bot_token_manager()),
+        &config.bot,
     );
     // Bot-User-ID früh sichern: `chat_api_handle` wird weiter unten beim
     // Pipeline-Aufbau konsumiert, der Trenn-Endpoint der internen API braucht
@@ -764,12 +615,9 @@ async fn main() {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let callback_url = std::env::var("TWITCH_EVENTSUB_CALLBACK_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    let callback_url = Some(config.twitch.eventsub_callback_url.clone());
     let bot_ban_handler =
-        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker);
+        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker, &config.discord.token_lifecycle);
     let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
@@ -784,7 +632,8 @@ async fn main() {
                     },
                     CapacitySnapshotStore::new(pool.clone()),
                 )
-                .with_bot_ban_handler(bot_ban_handler.clone());
+                .with_bot_ban_handler(bot_ban_handler.clone())
+                .with_capacity_config(&config.monitoring);
                 // P1.2: Mod-Provisioner für die 403-Selbstheilung im Chat-/Sub-Pfad
                 // (Python `_ensure_bot_is_mod`). Braucht den Streamer-Token-Resolver
                 // (cipher-gated) + die Bot-User-ID aus dem gebooteten Chat-Handle.
@@ -888,7 +737,7 @@ async fn main() {
     if let (Some(client), Some(manager)) = (helix.as_ref().clone(), chatters_bot_token_manager.clone()) {
         supervisor.spawn("category_public_followers", crate::category_followers::run(pool.clone(), client, manager));
     }
-    let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone());
+    let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone(), config.bot.irc_lurker_enabled);
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
         chat_api_handle.as_ref().map(|h| {
             let probe = irc_lurker_tracker.as_ref().map(|tracker| {
@@ -937,12 +786,8 @@ async fn main() {
             }
         };
         // Ziel ist der Google-Drive-Ordner hinter dem rclone-Remote `gdrive:`.
-        let remote_base = std::env::var("VOD_EXPORT_REMOTE_BASE")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| tb_highlight::vod_export::DEFAULT_REMOTE_BASE.to_string());
-        let yt_dlp_path = yt_dlp_path();
+        let remote_base = config.bot.vod_export_remote_base.trim().to_string();
+        let yt_dlp_path = yt_dlp_path(snapshot);
         let api: Arc<dyn tb_highlight::twitch_vod::TwitchVodApi> = Arc::new(HelixVodSource {
             helix: helix_client,
         });
@@ -965,13 +810,7 @@ async fn main() {
             // Token-Client zur Composition-Root verdrahten. redirect_uri wie
             // Python (TWITCH_RAID_REDIRECT_URI mit Hardcode-Default,
             // runtime_bootstrap.py:341).
-            let raid_redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| {
-                    "https://deutsche-deadlock-community.de/callback/twitch".to_string()
-                });
+            let raid_redirect_uri = config.bot.raid_redirect_uri.trim().to_string();
             if let Ok(client_id) = std::env::var("TWITCH_CLIENT_ID") {
                 // Followup-Service: Discord via Master-Broker, Moderator via
                 // Helix, Chat-Begrüßung via Legacy-Python (8779).
@@ -1008,6 +847,7 @@ async fn main() {
                     raid_redirect_uri.clone(),
                     partner_setup,
                     Some(Arc::clone(&chat_subscription_reconcile)),
+                    &config.discord.raid_oauth,
                 )
                 .with_requirements_relay(followup_relay);
                 raid_oauth_port = Some(Arc::new(raid_oauth_impl));
@@ -1168,6 +1008,7 @@ async fn main() {
                 followers.clone(),
                 pipeline,
                 &target_game,
+                std::time::Duration::from_secs(config.bot.auto_raid_offline_grace_seconds),
             ));
 
             // Orphan-Sweeper: promotet channel.chat.notification ohne
@@ -1287,6 +1128,7 @@ async fn main() {
                     helix_client.clone(),
                 )),
                 chat_api_handle.as_ref().map(|h| h.api()),
+                &config.bot,
             ));
             let arrival = RaidArrivalCoordinator::new(
                 pool.clone(),
@@ -1365,18 +1207,20 @@ async fn main() {
                 FieldCipher::from_env().ok().map(Arc::new),
                 pool.clone(),
                 handle.bot_token_manager(),
+                &config.bot.clip_raid_redirect_uri,
             );
             // Discord-Sichtbarkeit des Scam-Wächters: postet Bans/Vorschläge in
             // den Aufsichts-Channel (Default 1374364800817303632, per Env
             // überschreibbar) mit Revoke-Button. Ohne Broker → None (kein Post).
             let scam_notifier = scam_notify_impl::build_scam_notifier(
                 &settings.broker,
-                optional_env_positive_i64("SCAM_GUARD_DISCORD_CHANNEL_ID", 1374364800817303632),
+                config.bot.scam_guard_discord_channel_id as i64,
             );
             let runtime = chat_wiring::build_runtime(
                 handle,
                 pool.clone(),
                 chat_wiring::ChatRuntimePorts {
+                    discord_chat: config.discord.chat.clone(),
                     subscription_status: chat_wiring::build_subscription_status(
                         helix.as_ref().clone().map(Arc::new),
                         follower_streamer_token_provider.clone(),
@@ -1385,6 +1229,13 @@ async fn main() {
                     clip_port,
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
+                    golive_tips_enabled: config.bot.golive_tips_enabled,
+                    chat_persist_all_games: config.bot.chat_persist_all_games,
+                    lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
+                    invite_channel_id: config.twitch.notify_channel_id.parse()
+                        .expect("notify_channel_id wurde beim Konfigurationsstart geprüft"),
+                    review_log_directory: snapshot.resolve(&config.bot.chat_review_log_directory)
+                        .expect("Reviewpfad wurde beim Konfigurationsstart geprüft"),
                     review_relay: BrokerRelay::new(&settings.broker).ok(),
                     member_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
@@ -1453,7 +1304,7 @@ async fn main() {
         Arc::new(tb_monitoring::epoch_clock),
     ));
     let inbox = InboxRuntime::new(
-        tb_monitoring::ProcessingInboxStore::new(pool.clone()),
+        tb_monitoring::ProcessingInboxStore::new(pool.clone()).with_retry_config(&config.database.retry),
         handler,
     )
     .start();
@@ -1473,7 +1324,7 @@ async fn main() {
     if let Ok(secret) = std::env::var("TWITCH_WEBHOOK_SECRET") {
         let secret = secret.trim().to_string();
         if !secret.is_empty() {
-            let receiver_port: u16 = optional_env_u16("TB_EVENTSUB_RECEIVER_PORT", 8786);
+            let receiver_port: u16 = config.bot.eventsub_receiver_port;
             // P1.17/18/20: Revocation-Sink verdrahten. Bei EventSub-Revocation
             // (z. B. stream.online/offline/channel.update widerrufen) untrackt der
             // SubscriptionManager die Sub, sodass der nächste Reconcile-Zyklus sie
@@ -1641,12 +1492,12 @@ async fn main() {
 
     // Highlight-Erstellung bleibt nach Grillme Block 15/20 standardmäßig AUS.
     // Der Port bleibt testbar und kann später bewusst per Opt-in aktiviert werden.
-    if opt_in_enabled("TB_HIGHLIGHT_CLIPPER_ENABLED") {
+    if config.bot.highlight_clipper_enabled {
         if let Some(helix_client) = helix.as_ref().clone() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
                 cwd.join("tools/boon"),
-                yt_dlp_path(),
+                yt_dlp_path(snapshot),
             );
             let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
                 pool.clone(),
@@ -1668,7 +1519,7 @@ async fn main() {
             tracing::warn!("HighlightClipper: aktiviert, aber kein HelixClient verfügbar");
         }
     } else {
-        tracing::info!("HighlightClipper deaktiviert (TB_HIGHLIGHT_CLIPPER_ENABLED != 1)");
+        tracing::info!("HighlightClipper laut Betriebskonfiguration deaktiviert");
     }
 
     // Social-Media-Posting-Pipeline (Port von bot/social_media): sieben
@@ -1702,7 +1553,7 @@ async fn main() {
         // cipher-gated Upload-Worker nach der Freigabe lief.
         let prep = tb_social_media::clip_prep_worker::ClipPrepWorker::new(
             pool.clone(),
-            yt_dlp_path().to_string_lossy().into_owned(),
+            yt_dlp_path(snapshot).to_string_lossy().into_owned(),
         );
         supervisor.spawn("social_clip_prep_worker", async move { prep.run().await });
 
@@ -1711,7 +1562,7 @@ async fn main() {
         // die Datei (data/clips), das Dashboard liest und streamt sie nur.
         let preview = tb_social_media::preview::PreviewWorker::new(
             pool.clone(),
-            yt_dlp_path().to_string_lossy().into_owned(),
+            yt_dlp_path(snapshot).to_string_lossy().into_owned(),
             "data/clips",
         );
         supervisor.spawn("social_clip_preview_worker", async move { preview.run().await });
@@ -1750,7 +1601,7 @@ async fn main() {
                 // clips_dir = Python-Default data/clips.
                 let upload =
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
-                        .with_yt_dlp(yt_dlp_path().to_string_lossy().into_owned());
+                        .with_yt_dlp(yt_dlp_path(snapshot).to_string_lossy().into_owned());
                 supervisor.spawn("social_upload_worker", async move { upload.run().await });
 
                 let refresh_oauth =
@@ -1789,7 +1640,7 @@ async fn main() {
                 let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
-                vod_config.yt_dlp = yt_dlp_path();
+                vod_config.yt_dlp = yt_dlp_path(snapshot);
                 let vod_archive =
                     tb_vod_archive::VodArchiveWorker::new(pool.clone(), vod_config, vod_creds);
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
@@ -1805,11 +1656,14 @@ async fn main() {
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
     // Live-Writer, bis der Flip (04-cutover-plan) explizit erfolgt.
-    let poll_enabled = opt_in_enabled("TB_MONITORING_POLL_ENABLED");
+    let poll_enabled = config.bot.monitoring_poll_enabled;
     let _poll_stop = if poll_enabled {
         match helix.as_ref().clone() {
             Some(helix_client) => {
-                let notify_channel_id: i64 = optional_env_i64("TWITCH_NOTIFY_CHANNEL_ID", 0);
+                let notify_channel_id: i64 = config.twitch.notify_channel_id.parse().unwrap_or_else(|_| {
+                    tracing::error!("Geprüfte Discord-Ziel-ID konnte nicht übernommen werden.");
+                    std::process::exit(2);
+                });
                 let sink: Arc<dyn AnnouncementSink> = if notify_channel_id > 0 {
                     match BrokerRelay::new(&settings.broker) {
                         Ok(relay) => {
@@ -1820,18 +1674,10 @@ async fn main() {
                                 Arc::new(HelixChannelProfile {
                                     helix: helix_client.clone(),
                                 });
-                            // Ziel-Guild der Live-Ping-Rolle: Env-Override
-                            // (STREAMER_GUILD_ID → MAIN_GUILD_ID) oder Default auf
-                            // die Haupt-Community-Guild — identisch zu streamer_link.rs,
-                            // wo Discord-Rollen-Operationen bereits auf diese Guild
-                            // defaulten. Ohne Default wäre die Auto-Anlage still aus,
-                            // sobald die Env-Var fehlt; der Notify-Channel liegt ohnehin
-                            // in dieser Guild, also wird die Rolle dort angelegt.
-                            let live_ping_guild_id = optional_env_u64_with_fallback(
-                                "STREAMER_GUILD_ID",
-                                "MAIN_GUILD_ID",
-                                1_289_721_245_281_292_288,
-                            );
+                            // Eigener typisierter Live-Ping-Wert; der bisherige
+                            // Community-Default bleibt erhalten. Kein Gleichsetzen
+                            // mit dem anders vorbelegten Token-Lifecycle-Pfad.
+                            let live_ping_guild_id = config.bot.live_ping_guild_id;
                             tracing::info!(
                                 guild_id = live_ping_guild_id,
                                 "Live-Ping-Rollen-Auto-Anlage verdrahtet"
@@ -1850,8 +1696,8 @@ async fn main() {
                                 profile,
                                 AnnouncementSettings {
                                     notify_channel_id,
-                                    alert_mention: std::env::var("TWITCH_ALERT_MENTION").ok(),
-                                    ref_code: std::env::var("TWITCH_DISCORD_REF_CODE").ok(),
+                                    alert_mention: config.bot.alert_mention.clone(),
+                                    ref_code: config.bot.discord_ref_code.clone(),
                                     target_game: target_game.clone(),
                                 },
                                 live_ping_role_provider,
@@ -1879,7 +1725,7 @@ async fn main() {
                     }),
                     None => Arc::new(tb_monitoring::NoopPollHooks),
                 };
-                let language_filters: Vec<String> = language_filters_from_env();
+                let language_filters = config.twitch.language_filters.clone();
                 let source: Arc<dyn StreamSource> = Arc::new(HelixStreamSource {
                     helix: helix_client,
                 });
@@ -1907,18 +1753,18 @@ async fn main() {
                 Some(stop_tx)
             }
             None => {
-                tracing::error!("TB_MONITORING_POLL_ENABLED=1, aber kein HelixClient — Poll aus");
+                tracing::error!("Monitoring aktiviert, aber kein HelixClient — Poll aus");
                 None
             }
         }
     } else {
-        tracing::info!("Poll-Loop deaktiviert (TB_MONITORING_POLL_ENABLED != 1)");
+        tracing::info!("Poll-Loop laut Betriebskonfiguration deaktiviert");
         None
     };
 
     // Auch der Twitch-Clip-Fetch bleibt vorerst deaktiviert. Der reparierte
     // Datenpfad kann später mit explizitem Opt-in wieder aufgenommen werden.
-    if opt_in_enabled("TB_CLIP_FETCHER_ENABLED") {
+    if config.bot.clip_fetcher_enabled {
         if let Some(ref h) = *helix {
             tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
                 .start();
@@ -1926,15 +1772,14 @@ async fn main() {
             tracing::warn!("clip_fetch: aktiviert, aber kein HelixClient verfügbar");
         }
     } else {
-        tracing::info!("clip_fetch deaktiviert (TB_CLIP_FETCHER_ENABLED != 1)");
+        tracing::info!("Clip-Abruf laut Betriebskonfiguration deaktiviert");
     }
 
     // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.
     // Deaktiviert bis TB_SCOUT_ENABLED=1 gesetzt ist.
     if let Some(ref h) = *helix {
-        let scout_game =
-            std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
-        let scout_lang_filters: Vec<String> = language_filters_from_env();
+        let scout_game = config.twitch.target_game.clone();
+        let scout_lang_filters = config.twitch.language_filters.clone();
         let scout_chat_adapter = scout_crew_guard.as_ref().map_or_else(
             || scout_chat::ScoutChatAdapter::storage_only(pool.clone(), &supervisor),
             |crew_guard| {
@@ -1953,7 +1798,7 @@ async fn main() {
         .with_session_tracker(scout_tracker)
         // Anonymer Read-only-Chat-Harvester für die Scout-Roster-Kanäle.
         .with_chat_sink(std::sync::Arc::new(scout_chat_adapter));
-        if let Some(run) = scout_task.run_if_enabled() {
+        if let Some(run) = scout_task.run_if_enabled(config.monitoring.scout_enabled) {
             supervisor.spawn("monitoring_scout", run);
         }
     }
@@ -1966,6 +1811,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        &config.discord.token_lifecycle,
         bot_ban_status_probe.clone(),
     );
 
@@ -1977,12 +1823,14 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        config.discord.shadow_review_channel_id,
     );
 
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
     if let Ok(sl_relay) = BrokerRelay::new(&settings.broker) {
-        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_env());
+        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_config(snapshot)
+            .expect("Streamer-Link-Pfad wurde beim Konfigurationsstart geprüft"));
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
@@ -2030,6 +1878,7 @@ async fn main() {
             _ => None,
         };
         chatters_wiring::spawn_chatters_schedulers(
+            config.monitoring.observability_retention_days,
             &supervisor,
             pool.clone(),
             chatters_auth,
@@ -2041,12 +1890,9 @@ async fn main() {
 
     irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone(), irc_lurker_tracker);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::new(config.internal_api.host, port);
     let token = settings.internal_api.token.clone();
-    let legacy_proxy = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty())
+    let legacy_proxy = config.bot.legacy_proxy_base_url.clone()
         .map(|url| {
             tracing::info!("Legacy-Fallback aktiv: unbekannte interne-API-Routen → {url}");
             Arc::new(tb_internal_api::LegacyProxy::new(url))
@@ -2065,7 +1911,7 @@ async fn main() {
     // Frischer Relay aus der Broker-Config; ohne Relay loggt der Port nur einen
     // Hinweis (best-effort, wie Python `sync_streamer_role`).
     let discord_role: Option<Arc<dyn tb_internal_api::DiscordRolePort>> = Some(Arc::new(
-        oauth_followups::BrokerDiscordDirectory::from_env(BrokerRelay::new(&settings.broker).ok()),
+        oauth_followups::BrokerDiscordDirectory::from_config(BrokerRelay::new(&settings.broker).ok(), &config.discord.oauth_followup),
     )
         as Arc<dyn tb_internal_api::DiscordRolePort>);
     // Bot-Token-Bridge (F3): Owner-Chat-Action sendet über den live rotierten
@@ -2115,6 +1961,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        &config.discord.token_lifecycle,
         moderator_remover.map(|r| r as Arc<dyn tb_raid::DeadlockPauseUnmodPort>),
         bot_ban_status_probe.clone(),
     );
@@ -2160,20 +2007,7 @@ async fn main() {
         legacy_proxy,
     );
 
-    // Block 10: Split-Deployment-Härtung vor dem Bind. `role = None` liest die
-    // Runtime-Rolle aus der Umgebung (kombiniertes Deployment: tb-bot fährt die
-    // interne API selbst). Bei Fehlkonfiguration sauberer Abbruch (Log + exit),
-    // kein Panic im Prod-Pfad. Härtung ist via TWITCH_RUNTIME_ENFORCE=0
-    // abschaltbar (Python-Parität).
-    match tb_internal_api::enforce_internal_api_runtime(None, port) {
-        Ok(role) => {
-            tracing::info!(runtime_role = %role, port, "Internal-API Runtime-Härtung bestanden");
-        }
-        Err(e) => {
-            tracing::error!("Internal-API Runtime-Härtung verletzt: {e}");
-            std::process::exit(1);
-        }
-    }
+    tracing::info!(%runtime_role, port, "Internal-API Runtime-Härtung vor Dienststart bestanden");
 
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = bind_internal_listener_with_retry(addr)
@@ -2228,11 +2062,7 @@ fn build_telemetry_sub_auth(
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<(Arc<TokenProvider>, RaidAuthStore)> {
     let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "https://deutsche-deadlock-community.de/callback/twitch".to_string());
+    let redirect_uri = tb_config::runtime::settings().ok()?.bot.raid_redirect_uri.trim().to_string();
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
     let refresher = RaidTokenRefresher::new(
         pool.clone(),
@@ -2310,11 +2140,7 @@ fn build_moderator_token_provider(
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<Arc<TokenProvider>> {
     let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "https://deutsche-deadlock-community.de/callback/twitch".to_string());
+    let redirect_uri = tb_config::runtime::settings().ok()?.bot.raid_redirect_uri.trim().to_string();
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
     let refresher = RaidTokenRefresher::new(
         pool.clone(),

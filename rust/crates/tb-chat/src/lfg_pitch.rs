@@ -295,16 +295,6 @@ impl LfgClock for SystemLfgClock {
     }
 }
 
-pub fn lfg_pitch_enabled_from_env() -> bool {
-    match std::env::var("LFG_PITCH_ENABLED") {
-        Ok(value) => !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ),
-        Err(_) => true,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LfgPitchAction {
     Silent(SilentReason),

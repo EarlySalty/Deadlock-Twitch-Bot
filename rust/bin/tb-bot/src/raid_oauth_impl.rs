@@ -111,6 +111,7 @@ fn normalize_discord_user_id_db(value: &str) -> Option<String> {
 /// `None` (Variable nicht gesetzt) → kein Guard. GESETZTE Variable — auch
 /// leer oder ohne gültige IDs — → `Some(set)`; ein leeres Set bedeutet
 /// deny-all, nicht guard-aus.
+#[cfg(test)]
 fn parse_allowlist(raw: Option<&str>) -> Option<HashSet<i64>> {
     let raw = raw?;
     let ids: HashSet<i64> = raw
@@ -744,10 +745,7 @@ impl TbRaidOAuthImpl {
     /// (in `tb-bot` `HelixTokenClient`).
     /// `client_id` + `redirect_uri` werden für `build_authorize_url` benötigt.
     ///
-    /// Die Discord-Scope-Allowlists werden aus Env gelesen:
-    /// - `TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS`
-    /// - `TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS`
-    /// - `TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS`
+    /// Discord-Scope-Allowlists stammen aus der typisierten Startkonfiguration.
     #[allow(clippy::too_many_arguments)] // Composition-Root: alle Parameter sind echte Abhängigkeiten.
     pub fn new(
         pool: PgPool,
@@ -758,31 +756,13 @@ impl TbRaidOAuthImpl {
         redirect_uri: String,
         partner_setup: Option<Arc<PartnerSetupService>>,
         chat_subscription_reconcile: Option<Arc<tokio::sync::Notify>>,
+        config: &tb_config::discord::RaidOAuth,
     ) -> Self {
-        // Fail-closed: gesetzte (auch leere) Variable aktiviert den Guard —
-        // nur eine NICHT gesetzte Variable bedeutet guard-aus (policy.py).
-        let allowed_guild_ids = parse_allowlist(
-            std::env::var("TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS")
-                .ok()
-                .as_deref(),
-        );
-        let allowed_channel_ids = parse_allowlist(
-            std::env::var("TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS")
-                .ok()
-                .as_deref(),
-        );
-        let allowed_role_ids = parse_allowlist(
-            std::env::var("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS")
-                .ok()
-                .as_deref(),
-        );
-        let success_redirect_url = std::env::var("TWITCH_RAID_SUCCESS_REDIRECT_URL")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| {
-                "https://deutsche-deadlock-community.de/twitch/dashboard".to_string()
-            });
+        // None lässt den bisherigen Guard aus; Some([]) sperrt vollständig.
+        let allowed_guild_ids = config.allowed_guild_ids.as_ref().map(|ids| ids.iter().copied().collect());
+        let allowed_channel_ids = config.allowed_channel_ids.as_ref().map(|ids| ids.iter().copied().collect());
+        let allowed_role_ids = config.allowed_role_ids.as_ref().map(|ids| ids.iter().copied().collect());
+        let success_redirect_url = config.success_redirect_url.clone();
         Self {
             pool,
             state_store,
@@ -2181,6 +2161,7 @@ mod db_tests {
             "https://example.test/callback".to_string(),
             None,
             None,
+            &tb_config::discord::RaidOAuth::default(),
         )
         .with_requirements_relay(Some(relay))
     }
@@ -3106,6 +3087,7 @@ mod callback_tests {
             "https://example.test/callback".to_string(),
             partner_setup,
             None,
+            &tb_config::discord::RaidOAuth::default(),
         )
     }
 
@@ -3545,6 +3527,7 @@ mod callback_tests {
             "https://example.test/callback".to_string(),
             None,
             Some(Arc::clone(&reconcile)),
+            &tb_config::discord::RaidOAuth::default(),
         );
 
         let result = imp
