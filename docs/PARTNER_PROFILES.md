@@ -1,6 +1,6 @@
 # Öffentliche Partnerprofile
 
-Stand: 19. September 2026.
+Stand: 20. September 2026.
 
 ## Nutzung
 
@@ -8,12 +8,18 @@ Im Twitch-Dashboard unter **Verwaltung → Mein Profil** öffnen:
 `/twitch/verwaltung#profil`. Zusätzlich gibt es im Analysebereich den Tab
 `profile` bzw. den Alias `profil`. Für das Profil ist kein Analyse-Abo nötig.
 
-Überschrift, Über-mich-Text, Akzentfarbe, Social-Links und empfohlene Partner
-bearbeiten. Das Profilbild wird aus dem bereits geladenen Twitch-Profil übernommen
-und beim Speichern mit dem öffentlichen Profil synchronisiert. Kalender: Monat
-wählen, Tag anklicken, Beginn/Ende und Beschreibung eintragen, **Termin übernehmen**
-und anschließend oben **Änderungen speichern**. Zeiten gelten für `Europe/Berlin`,
-unabhängig von der Gerätezeitzone. Nicht existierende oder mehrdeutige Ortszeiten
+Im Kopfbereich zeigt der Editor den Einrichtungsstand und bietet **Aus Twitch
+importieren**. Der Import lädt einen frischen Twitch-Stand und übernimmt Bio,
+Profilbild und Offline-Banner in den Profilentwurf. Gleichzeitig wird die
+Streamplan-Synchronisierung aktiviert und der aktuelle Twitch-Streamplan neu
+abgerufen. Zusätzliche Social-Links bleiben eigene Profilfelder, weil der
+verwendete Twitch-Profilabruf dafür keine vergleichbare Linkliste liefert.
+
+Für Deadlock stehen feste Auswahlfelder für bis zu drei Main Heroes, Rang,
+Stream-Stil und typische Streamingzeiten bereit. Der Twitch Stream Schedule kann
+aktiviert bleiben und wird dann für die kommenden Termine direkt gelesen. Eigene
+Zusatztermine bleiben für Community-Abende und besondere Events verfügbar.
+Zeiten gelten für `Europe/Berlin`; nicht existierende oder mehrdeutige Ortszeiten
 bei der Zeitumstellung werden nicht stillschweigend verschoben.
 
 Neue Profile sind private Entwürfe. **Profil veröffentlichen** aktivieren und
@@ -25,19 +31,24 @@ Profil unter „Aus meinem Umfeld“ empfohlen werden.
 ## Inhalt und Grenzen
 
 - Bis zu 120 Zeichen Überschrift und 4000 Zeichen Über mich; Gold, Violett oder
-  Petrol als persönlicher Akzent. Die Oberfläche bleibt im gemeinsamen Industrial-Gold-Design.
-  Das Twitch-Profilbild wird beim öffentlichen Abruf direkt über die vorhandene Twitch-Anbindung
-  aktualisiert; falls der Abruf fehlschlägt, dient das zuletzt gespeicherte Bild als Rückfall.
-- Bis zu zwölf benannte HTTPS-Links und sechs Empfehlungen. Es werden nur
-  veröffentlichte, aktive Partnerempfehlungen verlinkt.
-- Bis zu 200 selbst gepflegte Einzeltermine mit Titel, Beschreibung, Beginn und
-  Ende. Höchstens 48 Stunden pro Termin. Keine Serienautomatik oder externe
-  Kalender-Synchronisierung in dieser Version.
-- Öffentlicher Monatskalender zwischen 2000 und 2100, getrennte Darstellung von
-  geplanten Terminen und tatsächlich abgeschlossenen Streams. Pro Tag bleiben drei Einträge
-  direkt sichtbar; weitere Einträge werden als Anzahl zusammengefasst, damit einzelne Tage
-  die Monatsansicht nicht in die Höhe ziehen. Zusätzlich gibt es das 90-Tage-Wochenraster
-  aus tatsächlich erfassten Streams mit der vorhandenen Gewichtung neuerer Daten.
+  Petrol als persönlicher Akzent. Aktuelle Twitch-Daten können Bio, Profilbild,
+  Offline-Banner, Live-Status und Live-Vorschaubild ergänzen. Gespeicherte Bildwerte
+  dienen als Rückfall, wenn Twitch-Daten beim Abruf fehlen.
+- Bis zu drei Main Heroes, ein Rangwert, sechs Stream-Stile und sechs typische
+  Streamingzeiten. Die Werte erscheinen als kompakte Orientierung im öffentlichen
+  Profilkopf.
+- Bis zu zwölf benannte HTTPS-Links und sechs Empfehlungen. Veröffentlichte,
+  aktive Partnerempfehlungen werden verlinkt.
+- Der Twitch Stream Schedule wird bei aktivierter Synchronisierung für kommende
+  Termine eingelesen. Zusätzlich sind bis zu 200 selbst gepflegte Einzeltermine
+  mit Titel, Beschreibung, Beginn und Ende möglich, jeweils bis zu 48 Stunden.
+- Die drei meistgesehenen Twitch-Clips des angefragten 30-Tage-Fensters werden
+  als Twitch-Player eingebettet, wenn der Abruf Daten liefert. Die Clip-Auswahl
+  stammt aus der von Twitch gelieferten Reihenfolge nach Aufrufen.
+- Der Monatskalender zwischen 2000 und 2100 und das 90-Tage-Wochenraster aus
+  erfassten Streams bleiben erhalten, liegen auf der öffentlichen Seite aber in
+  einer nachgeordneten Detailansicht. Pro Kalendertag werden bis zu drei Einträge
+  direkt dargestellt; weitere Einträge werden als Anzahl zusammengefasst.
 - Historie folgt `twitch_stream_sessions.twitch_user_id`, nicht einem wieder
   vergebenen Twitch-Namen. Alte Zeilen ohne eindeutige Kanal-ID werden nicht
   öffentlich zugerechnet. Erfassungslücken, offene Streams und offensichtlich
@@ -72,10 +83,12 @@ atomares Versionsvergleichsverfahren. Gleichzeitige Änderungen überschreiben
 sich nicht unbemerkt: der zweite veraltete Stand erhält 409, der Editor behält
 seine Eingaben. Profil und alle Termine werden gemeinsam gespeichert.
 
-Tabelle: `twitch_partner_profiles`, neue Migration
-`20260918210000_partner_profiles.sql`. Das Dashboard erhält SELECT/INSERT/UPDATE,
-der Bot nur SELECT. Die vorhandene Runtime-Rechtematrix wurde entsprechend
-angepasst. Die bestehenden Sammler werden nicht verändert.
+Die Daten bleiben in `twitch_partner_profiles`, die ursprüngliche Tabelle stammt
+aus Migration `20260918210000_partner_profiles.sql`. Für die zusätzlichen
+Profilfelder ist keine weitere Datenbankmigration nötig, weil der Profilinhalt als
+JSON gespeichert und beim Lesen mit Standardwerten ergänzt wird. Die Twitch-Daten
+werden beim Abruf über einen kurzlebigen Prozesscache ergänzt und nicht als neue
+Analysequelle in die Profiltabelle geschrieben.
 
 ## HTTP-Vertrag
 
@@ -87,9 +100,14 @@ angepasst. Die bestehenden Sammler werden nicht verändert.
 | `GET /twitch/api/v2/streamer/profile` | Angemeldeter Partner / Admin-Scope | Eigener gespeicherter Stand |
 | `PUT /twitch/api/v2/streamer/profile` | Aktiver Partner / Admin-Scope + CSRF | Atomare Speicherung mit `revision` |
 
-PUT sendet `{ revision, published, profile }`. Die vollständigen Feldtypen liegen
-in `bot/dashboard_v2/src/api/partnerProfile.ts`. `streamer` ist nur für den
-bestehenden Admin-Scope frei wählbar. Maximale Requestgröße: 512 KiB.
+GET liefert zusätzlich zum gespeicherten Profil einen `twitch`-Block mit dem
+aktuellen Profilbild, Banner, Live-Status, Clips und kommenden Schedule-Segmenten,
+wenn Twitch erreichbar ist. `refresh_twitch=true` umgeht den kurzen Prozesscache
+für einen bewusst ausgelösten Neuimport. PUT sendet weiterhin
+`{ revision, published, profile }`; die Live-Daten werden nicht zurückgeschrieben.
+Die vollständigen Feldtypen liegen in `bot/dashboard_v2/src/api/partnerProfile.ts`.
+`streamer` ist für den bestehenden Admin-Scope frei wählbar. Maximale
+Requestgröße: 512 KiB.
 
 ## Deployment
 

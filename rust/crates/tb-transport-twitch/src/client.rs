@@ -423,7 +423,11 @@ pub struct TwitchUser {
     pub login: String,
     pub display_name: String,
     #[serde(default)]
+    pub description: String,
+    #[serde(default)]
     pub profile_image_url: Option<String>,
+    #[serde(default)]
+    pub offline_image_url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]

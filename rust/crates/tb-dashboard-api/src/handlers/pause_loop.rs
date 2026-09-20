@@ -1304,6 +1304,10 @@ mod tests {
             id: id.to_owned(),
             broadcaster_name: broadcaster_name.to_owned(),
             title: title.to_owned(),
+            url: String::new(),
+            thumbnail_url: String::new(),
+            view_count: 0,
+            created_at: String::new(),
             duration,
             game_id: game_id.to_owned(),
         }

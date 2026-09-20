@@ -429,6 +429,9 @@ async fn main() {
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));
     }
+    if let Some(profile_cache) = tb_dashboard_api::handlers::partner_profiles::TwitchProfileCache::from_env() {
+        app = app.layer(axum::Extension(profile_cache));
+    }
 
     // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
     // portierte Dashboard-Routen. Ohne konfigurierte URL bleibt der Proxy

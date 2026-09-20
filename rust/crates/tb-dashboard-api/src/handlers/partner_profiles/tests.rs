@@ -71,7 +71,13 @@ fn input_and_url_validation() {
     u.profile.headline = "a".repeat(121);
     assert!(validate(&mut u).is_err());
     u.profile.headline = "Grüße aus der Community".into();
+    u.profile.main_heroes = vec!["Pocket".into(), "Seven".into()];
+    u.profile.rank = "Oracle".into();
+    u.profile.playstyles = vec!["community".into(), "chill".into()];
+    u.profile.preferred_times = vec!["weekday_evening".into()];
     assert!(validate(&mut u).is_ok());
+    u.profile.playstyles.push("unbekannt".into());
+    assert!(validate(&mut u).is_err());
 }
 #[test]
 fn calendar_limits_and_dst() {
@@ -119,21 +125,55 @@ async fn public_profile_prefers_twitch_avatar_and_caps_busy_calendar_days() {
         })
         .collect();
     let observed = schedule(&monthly, now - Duration::days(90), now + Duration::days(90));
+    let content = Content {
+        headline: "Pocket, Community und gute Runden".into(),
+        main_heroes: vec!["Pocket".into()],
+        rank: "Oracle".into(),
+        playstyles: vec!["community".into()],
+        preferred_times: vec!["weekday_evening".into()],
+        ..Content::default()
+    };
     let record = Record {
         twitch_user_id: "1".into(),
         login: "alice".into(),
         active: true,
         published: true,
         revision: 1,
-        content: SqlJson(Content::default()),
+        content: SqlJson(content),
         is_live: 0,
         last_seen_at: None,
         last_game: None,
     };
     let avatar = "https://static-cdn.jtvnw.net/jtv_user_pictures/alice-profile_image.png";
+    let twitch = TwitchProfileSnapshot {
+        available: true,
+        display_name: "Alice".into(),
+        description: "Twitch Bio".into(),
+        profile_image_url: avatar.into(),
+        banner_url: "https://static-cdn.jtvnw.net/jtv_user_pictures/alice-channel_offline_image.png".into(),
+        live: Some(TwitchLiveProfile {
+            title: "Ranked mit der Community".into(),
+            game_name: "Deadlock".into(),
+            thumbnail_url: "https://static-cdn.jtvnw.net/previews-ttv/live_user_alice-960x540.jpg".into(),
+        }),
+        clips: vec![TwitchClipProfile {
+            id: "clip1".into(),
+            title: "Pocket Play".into(),
+            url: "https://clips.twitch.tv/clip1".into(),
+            thumbnail_url: "https://clips-media-assets.twitch.tv/clip1-preview-480x272.jpg".into(),
+            view_count: 123,
+        }],
+        schedule: vec![TwitchScheduleProfile {
+            id: "schedule1".into(),
+            title: "Community Abend".into(),
+            starts_at: now + Duration::hours(12),
+            ends_at: now + Duration::hours(14),
+            is_recurring: true,
+        }],
+    };
     let response = html::page(
         &record,
-        Some(avatar),
+        &twitch,
         &observed,
         &monthly,
         &[],
@@ -148,13 +188,22 @@ async fn public_profile_prefers_twitch_avatar_and_caps_busy_calendar_days() {
         .to_str()
         .unwrap();
     assert!(csp.contains("img-src 'self' https://static-cdn.jtvnw.net"));
+    assert!(csp.contains("frame-src https://clips.twitch.tv"));
     let html = body(response).await;
     assert!(html.contains("/streamer/brand/deadlock-d-logo.png"));
     assert!(html.contains(avatar));
     assert_eq!(html.matches("calendar-event observed").count(), 3);
     assert!(html.contains("+5 weitere"));
     assert!(html.contains("Streamerprofil"));
-    assert!(html.contains("Streamplan ansehen"));
+    assert!(html.contains("Nächste Streams"));
+    assert!(html.contains("Kalender und bisherige Livezeiten"));
+    assert!(html.contains("Ranked mit der Community"));
+    assert!(html.contains("Rang: Oracle"));
+    assert!(html.contains("Main: Pocket"));
+    assert!(html.contains("Clips aus den letzten 30 Tagen"));
+    assert!(html.contains("Pocket Play"));
+    assert!(html.contains("clips.twitch.tv/embed?clip=clip1"));
+    assert!(html.contains("Community Abend"));
 }
 
 #[test]
@@ -164,7 +213,8 @@ fn owners_are_bound_to_session() {
         owner(
             &partner(),
             &OwnerParams {
-                streamer: Some("bob".into())
+                streamer: Some("bob".into()),
+                ..OwnerParams::default()
             }
         )
         .unwrap_err()
@@ -196,6 +246,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
         partner(),
         State(db.pool.clone()),
         Query(OwnerParams::default()),
+        None,
     )
     .await;
     let value: serde_json::Value = serde_json::from_str(&body(get).await).unwrap();
@@ -210,6 +261,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
         partner(),
         State(db.pool.clone()),
         Query(OwnerParams::default()),
+        None,
         Json(first),
     )
     .await;
@@ -218,6 +270,7 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
         partner(),
         State(db.pool.clone()),
         Query(OwnerParams::default()),
+        None,
         Json(update(0, false)),
     )
     .await;
@@ -247,12 +300,14 @@ async fn profiles_are_opt_in_atomic_and_xss_safe() {
             partner(),
             State(db.pool.clone()),
             Query(OwnerParams::default()),
+            None,
             Json(update(1, false))
         ),
         put_handler(
             partner(),
             State(db.pool.clone()),
             Query(OwnerParams::default()),
+            None,
             Json(update(1, false))
         )
     );
@@ -279,6 +334,7 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
             partner(),
             State(db.pool.clone()),
             Query(OwnerParams::default()),
+            None,
             Json(update(0, true))
         )
         .await
@@ -313,6 +369,7 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
             partner(),
             State(db.pool.clone()),
             Query(OwnerParams::default()),
+            None,
         )
         .await;
         assert_eq!(
@@ -331,6 +388,7 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
                 partner(),
                 State(db.pool.clone()),
                 Query(OwnerParams::default()),
+                None,
                 Json(update(1, true))
             )
             .await
@@ -395,6 +453,7 @@ async fn mounted_routes_and_csrf_are_enforced() {
         partner(),
         State(db.pool.clone()),
         Query(OwnerParams::default()),
+        None,
         Json(update(0, true)),
     )
     .await;

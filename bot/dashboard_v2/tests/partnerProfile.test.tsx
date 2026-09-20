@@ -15,7 +15,8 @@ Object.defineProperty(globalThis, 'window', { configurable: true, value: { locat
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 const { ProfileEditor, PartnerProfile } = await import('../src/pages/PartnerProfile');
 const initial: PartnerProfileData = { login: 'alice', public_path: '/streamer/alice', active: true, published: false, revision: 0,
-  profile: { headline: '<script>bad()</script>', about: 'Grüße & Spaß', avatar_url: '', accent: 'gold', socials: [], featured: [], show_history: true, events: [] } };
+  profile: { headline: '<script>bad()</script>', about: 'Grüße & Spaß', avatar_url: '', banner_url: '', accent: 'gold', socials: [], featured: [], main_heroes: [], rank: '', playstyles: [], preferred_times: [], show_history: true, sync_twitch_schedule: true, events: [] },
+  twitch: { available: true, display_name: 'Alice', description: 'Twitch Bio', profile_image_url: 'https://static-cdn.jtvnw.net/jtv_user_pictures/alice-profile_image.png', banner_url: 'https://static-cdn.jtvnw.net/jtv_user_pictures/alice-channel_offline_image.png', live: null, clips: [], schedule: [] } };
 
 test('profile is reachable in free partner management and analytics', () => {
   assert.deepEqual(resolveTabParam('profil'), { tab: 'profile' });
@@ -73,6 +74,19 @@ test('Twitch avatar is automatic and save action is not a sticky bottom bar', ()
   const page = readFileSync(new URL('../src/pages/PartnerProfile.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /sticky bottom-/);
 });
+test('Twitch automation and Deadlock profile controls are visible', () => {
+  const html = renderToStaticMarkup(<ProfileEditor initial={initial} onReload={() => {}} />);
+  const api = readFileSync(new URL('../src/api/partnerProfile.ts', import.meta.url), 'utf8');
+  assert.match(html, /Aus Twitch importieren/);
+  assert.match(api, /refresh_twitch/);
+  assert.match(html, /Profil zu \d+% vollständig/);
+  assert.match(html, /Twitch-Streamplan synchronisieren/);
+  assert.match(html, /Deadlock auf einen Blick/);
+  assert.match(html, /Main Hero 1/);
+  assert.match(html, /Typische Streamingzeiten/);
+  assert.match(html, /Eigene Zusatztermine/);
+});
+
 test('demo profile editor never starts a live request', () => {
   const client = new QueryClient();
   const html = renderToStaticMarkup(<QueryClientProvider client={client}><PlanProvider plan={null} isAdmin={false} isLocalhost={false} isDemoMode><PartnerProfile /></PlanProvider></QueryClientProvider>);

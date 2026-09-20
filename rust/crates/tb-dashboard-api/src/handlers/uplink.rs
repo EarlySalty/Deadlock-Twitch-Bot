@@ -2088,7 +2088,9 @@ mod tests {
                 id: "1367527782".into(),
                 login: "coolstreamer".into(),
                 display_name: "CoolStreamer".into(),
+                description: String::new(),
                 profile_image_url: None,
+                offline_image_url: None,
             },
         );
 

@@ -2,11 +2,16 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
+  CheckCircle2,
+  Clock3,
   ExternalLink,
   Eye,
+  Gamepad2,
   Link2,
   Palette,
   Plus,
+  Radio,
+  RefreshCw,
   Save,
   Sparkles,
   UserRound,
@@ -30,6 +35,24 @@ const primaryButton =
 const secondaryButton =
   'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border bg-background/65 px-3.5 py-2 text-sm font-semibold text-text-secondary transition-colors hover:border-border-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-45';
 const panel = 'panel-card rounded-2xl p-5 md:p-6';
+
+const HERO_OPTIONS = [
+  'Abrams', 'Apollo', 'Bebop', 'Billy', 'Calico', 'Celeste', 'Drifter', 'Dynamo', 'Graves', 'Grey Talon',
+  'Haze', 'Holliday', 'Infernus', 'Ivy', 'Kelvin', 'Lady Geist', 'Lash', 'McGinnis', 'Mina', 'Mirage',
+  'Mo & Krill', 'Paige', 'Paradox', 'Pocket', 'Rem', 'Seven', 'Shiv', 'Silver', 'Sinclair', 'The Doorman',
+  'Venator', 'Victor', 'Vindicta', 'Viscous', 'Vyper', 'Warden', 'Wraith', 'Yamato',
+];
+const RANK_OPTIONS = ['Initiate', 'Seeker', 'Alchemist', 'Arcanist', 'Ritualist', 'Emissary', 'Archon', 'Oracle', 'Phantom', 'Ascendant', 'Eternus'];
+const PLAYSTYLE_OPTIONS = [
+  ['competitive', 'Competitive'], ['tryhard', 'Tryhard'], ['chill', 'Chill'], ['community', 'Community'],
+  ['educational', 'Erklärend'], ['variety', 'Variety'],
+] as const;
+const TIME_OPTIONS = [
+  ['weekday_day', 'Unter der Woche tagsüber'], ['weekday_evening', 'Unter der Woche abends'],
+  ['weekday_late', 'Unter der Woche spät'], ['weekend_day', 'Am Wochenende tagsüber'],
+  ['weekend_evening', 'Am Wochenende abends'], ['spontaneous', 'Spontan'],
+] as const;
+const SOCIAL_OPTIONS = ['YouTube', 'TikTok', 'Instagram', 'Discord', 'X', 'Bluesky', 'Website'];
 
 interface EventDraft {
   id: string;
@@ -115,6 +138,7 @@ export function ProfileEditor({
   const [dirty, setDirty] = useState(false);
   const [savedPublished, setSavedPublished] = useState(initial.published);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [month, setMonth] = useState(() => berlinInput(new Date().toISOString()).slice(0, 7));
@@ -122,9 +146,20 @@ export function ProfileEditor({
   const [eventError, setEventError] = useState('');
 
   const profile = data.profile;
+  const twitch = data.twitch;
   const calendar = monthDays(month);
-  const locked = saving || !data.active;
-  const effectiveAvatar = twitchAvatarUrl?.trim() || profile.avatar_url.trim();
+  const locked = saving || importing || !data.active;
+  const effectiveAvatar = twitchAvatarUrl?.trim() || twitch?.profile_image_url?.trim() || profile.avatar_url.trim();
+  const completionChecks = [
+    Boolean(profile.headline.trim()),
+    Boolean(profile.about.trim() || twitch?.description?.trim()),
+    profile.main_heroes.length > 0,
+    Boolean(profile.rank.trim()),
+    profile.playstyles.length > 0,
+    profile.socials.length > 0,
+    profile.sync_twitch_schedule || profile.events.length > 0,
+  ];
+  const completion = Math.round((completionChecks.filter(Boolean).length / completionChecks.length) * 100);
 
   useEffect(() => {
     if (!dirty && !draft) return;
@@ -140,6 +175,34 @@ export function ProfileEditor({
     setData(current => ({ ...current, profile: { ...current.profile, ...values } }));
     setDirty(true);
     setNotice('');
+  }
+
+  async function importFromTwitch() {
+    setImporting(true);
+    setError('');
+    setNotice('');
+    try {
+      const fresh = await fetchPartnerProfile(streamer, true);
+      const snapshot = fresh.twitch;
+      if (!snapshot?.available) throw new Error('Twitch Profildaten sind gerade nicht verfügbar. Bitte erneut versuchen.');
+      setData(current => ({
+        ...current,
+        twitch: snapshot,
+        profile: {
+          ...current.profile,
+          about: snapshot.description.trim() || current.profile.about,
+          avatar_url: snapshot.profile_image_url.trim() || current.profile.avatar_url,
+          banner_url: snapshot.banner_url.trim() || current.profile.banner_url,
+          sync_twitch_schedule: true,
+        },
+      }));
+      setDirty(true);
+      setNotice('Twitch-Bio, Profilbild, Banner und Streamplan sind aktualisiert. Bitte Änderungen speichern.');
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setImporting(false);
+    }
   }
 
   async function save() {
@@ -158,10 +221,11 @@ export function ProfileEditor({
         },
         streamer,
       );
-      setData(saved);
+      const savedWithTwitch = { ...saved, twitch: saved.twitch ?? data.twitch };
+      setData(savedWithTwitch);
       setSavedPublished(saved.published);
       setDirty(false);
-      onSaved?.(saved);
+      onSaved?.(savedWithTwitch);
       setNotice(
         saved.published
           ? 'Gespeichert. Dein Profil ist öffentlich erreichbar.'
@@ -321,6 +385,31 @@ export function ProfileEditor({
           </div>
         </div>
 
+        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="panel-inset rounded-xl px-4 py-3.5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-white">Profil zu {completion}% vollständig</p>
+                <p className="mt-0.5 text-xs text-text-secondary">Überschrift, Bio, Deadlock-Angaben, Links und Streamplan zählen in die Einrichtung.</p>
+              </div>
+              {completion === 100 ? <CheckCircle2 className="h-5 w-5 shrink-0 text-success" /> : null}
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-background">
+              <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${completion}%` }} />
+            </div>
+          </div>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={locked}
+            onClick={() => void importFromTwitch()}
+          >
+            <RefreshCw className={`h-4 w-4 ${importing ? 'animate-spin' : ''}`} />
+            {importing ? 'Twitch wird aktualisiert' : 'Aus Twitch importieren'}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-text-secondary">Lädt Twitch-Bio, Profilbild, Banner und Streamplan neu. Zusätzliche Social-Links stellt Twitch hier nicht bereit.</p>
+
         {!data.active ? (
           <p role="status" className="mt-4 rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
             Dein Profil bleibt gespeichert, ist aber nicht öffentlich. Du kannst es bearbeiten, sobald dein Bot wieder aktiv ist.{' '}
@@ -381,6 +470,66 @@ export function ProfileEditor({
                 <span className="block text-xs font-normal text-text-secondary">{profile.about.length} / 4000 Zeichen</span>
               </label>
 
+              <div className="rounded-2xl border border-border bg-background/35 p-4">
+                <div className="flex items-start gap-3">
+                  <Gamepad2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Deadlock auf einen Blick</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-text-secondary">Diese Angaben erscheinen als kompakte Badges direkt im Profilkopf.</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <label className="block space-y-1.5 text-sm font-semibold text-white">
+                    Rangbereich
+                    <select className={field} value={profile.rank} onChange={event => change({ rank: event.target.value })}>
+                      <option value="">Nicht angegeben</option>
+                      {RANK_OPTIONS.map(rank => <option key={rank} value={rank}>{rank}</option>)}
+                    </select>
+                  </label>
+                  <div className="space-y-1.5">
+                    <span className="block text-sm font-semibold text-white">Main Heroes, bis zu drei</span>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {[0, 1, 2].map(index => (
+                        <select
+                          key={index}
+                          aria-label={`Main Hero ${index + 1}`}
+                          className={field}
+                          value={profile.main_heroes[index] ?? ''}
+                          onChange={event => {
+                            const next = [...profile.main_heroes];
+                            if (event.target.value) next[index] = event.target.value;
+                            else next.splice(index, 1);
+                            change({ main_heroes: next.filter((hero, current) => hero && next.indexOf(hero) === current).slice(0, 3) });
+                          }}
+                        >
+                          <option value="">Hero {index + 1}</option>
+                          {HERO_OPTIONS.map(hero => <option key={hero} value={hero}>{hero}</option>)}
+                        </select>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <fieldset className="mt-4">
+                  <legend className="text-sm font-semibold text-white">Streamstil</legend>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {PLAYSTYLE_OPTIONS.map(([value, label]) => {
+                      const checked = profile.playstyles.includes(value);
+                      return (
+                        <label key={value} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${checked ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border bg-background/60 text-text-secondary'}`}>
+                          <input
+                            className="sr-only"
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => change({ playstyles: checked ? profile.playstyles.filter(item => item !== value) : [...profile.playstyles, value] })}
+                          />
+                          {label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              </div>
+
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="block space-y-1.5 text-sm font-semibold text-white">
                   Akzentfarbe
@@ -433,10 +582,16 @@ export function ProfileEditor({
                   {profile.headline.trim() || 'Deine Profilüberschrift'}
                 </h3>
                 <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">
-                  {profile.about.trim() || 'Hier erscheint deine Vorstellung. Erzähl kurz, was deinen Stream und deine Community ausmacht.'}
+                  {profile.about.trim() || twitch?.description?.trim() || 'Hier erscheint deine Vorstellung. Erzähl kurz, was deinen Stream und deine Community ausmacht.'}
                 </p>
               </div>
               <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                {profile.rank ? <span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-primary">Rang: {profile.rank}</span> : null}
+                {profile.main_heroes.map(hero => <span key={hero} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">Main: {hero}</span>)}
+                {profile.playstyles.map(style => {
+                  const label = PLAYSTYLE_OPTIONS.find(([value]) => value === style)?.[1] ?? style;
+                  return <span key={style} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{label}</span>;
+                })}
                 <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">
                   {profile.socials.length} Links
                 </span>
@@ -470,11 +625,9 @@ export function ProfileEditor({
                   <div className="grid gap-3 sm:grid-cols-[minmax(140px,0.4fr)_minmax(0,1fr)_auto] sm:items-end">
                     <label className="block space-y-1.5 text-xs font-semibold text-text-secondary">
                       Plattform
-                      <input
+                      <select
                         aria-label={`Link ${index + 1}: Name`}
                         className={field}
-                        maxLength={40}
-                        placeholder="YouTube"
                         value={social.label}
                         onChange={event =>
                           change({
@@ -483,7 +636,11 @@ export function ProfileEditor({
                             ),
                           })
                         }
-                      />
+                      >
+                        <option value="">Plattform wählen</option>
+                        {social.label && !SOCIAL_OPTIONS.includes(social.label) ? <option value={social.label}>{social.label}</option> : null}
+                        {SOCIAL_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                      </select>
                     </label>
                     <label className="block space-y-1.5 text-xs font-semibold text-text-secondary">
                       Adresse
@@ -573,8 +730,8 @@ export function ProfileEditor({
           <SectionTitle
             icon={<CalendarDays className="h-5 w-5 text-on-gold" />}
             eyebrow="Streamplan"
-            title="Dein Kalender"
-            description="Plane Streams, Community-Abende oder besondere Termine. Alle Uhrzeiten gelten für Berlin."
+            title="Dein Streamplan"
+            description="Nutze deinen Twitch-Streamplan automatisch. Eigene Zusatztermine kannst du darunter weiterhin eintragen."
             aside={
               <label className="block text-xs font-semibold text-text-secondary">
                 Monat
@@ -591,7 +748,69 @@ export function ProfileEditor({
             }
           />
 
-          <div className="mt-5 overflow-x-auto pb-2">
+          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.75fr)]">
+            <label className="soft-elevate flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/60 p-4">
+              <input
+                className="mt-0.5 h-5 w-5 accent-primary"
+                type="checkbox"
+                checked={profile.sync_twitch_schedule}
+                onChange={event => change({ sync_twitch_schedule: event.target.checked })}
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-sm font-bold text-white"><Radio className="h-4 w-4 text-primary" /> Twitch-Streamplan synchronisieren</span>
+                <span className="mt-1 block text-xs leading-relaxed text-text-secondary">Künftige Twitch-Termine erscheinen automatisch im öffentlichen Profil. Du musst sie hier nicht doppelt pflegen.</span>
+              </span>
+            </label>
+            <div className="panel-inset rounded-xl p-4">
+              <div className="flex items-center gap-2 text-sm font-bold text-white"><Clock3 className="h-4 w-4 text-primary" /> Typische Streamingzeiten</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {TIME_OPTIONS.map(([value, label]) => {
+                  const checked = profile.preferred_times.includes(value);
+                  return (
+                    <label key={value} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold ${checked ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border bg-background/60 text-text-secondary'}`}>
+                      <input
+                        className="sr-only"
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => change({ preferred_times: checked ? profile.preferred_times.filter(item => item !== value) : [...profile.preferred_times, value] })}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {profile.sync_twitch_schedule ? (
+            <div className="panel-inset mt-4 rounded-xl p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-white">Twitch Termine</p>
+                  <p className="mt-0.5 text-xs text-text-secondary">Automatisch gelesen, nicht manuell gespeichert.</p>
+                </div>
+                <span className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs text-text-secondary">{twitch?.schedule?.length ?? 0} gefunden</span>
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {(twitch?.schedule ?? []).slice(0, 6).map(item => (
+                  <div key={item.id} className="rounded-xl border border-border bg-background/45 p-3">
+                    <p className="truncate text-xs font-bold text-white">{item.title || 'Twitch Stream'}</p>
+                    <p className="mt-1 text-[11px] text-text-secondary">{berlinInput(item.starts_at).replace('T', ' · ')} Uhr</p>
+                  </div>
+                ))}
+                {(twitch?.schedule?.length ?? 0) === 0 ? <p className="text-xs text-text-secondary">Aktuell sind keine kommenden Twitch Termine verfügbar.</p> : null}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mt-6 flex items-center justify-between gap-4 border-t border-border/70 pt-5">
+            <div>
+              <h3 className="text-base font-bold text-white">Eigene Zusatztermine</h3>
+              <p className="mt-1 text-xs text-text-secondary">Für Community-Abende, Events oder Termine außerhalb deines Twitch-Streamplans.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto pb-2">
             <div className="grid min-w-[680px] grid-cols-7 gap-2">
               {['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(day => (
                 <span key={day} className="px-2 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
