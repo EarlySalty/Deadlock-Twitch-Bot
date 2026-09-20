@@ -36,6 +36,10 @@ pub struct BotConfig {
     pub logging: Logging,
     #[serde(default)]
     pub stt: crate::stt::SttConfig,
+    #[serde(default)]
+    pub knowledge: crate::shared_options::KnowledgePaths,
+    #[serde(default)]
+    pub media: crate::shared_options::MediaPublicOptions,
 }
 
 impl fmt::Debug for BotConfig {
@@ -89,13 +93,30 @@ impl Default for Database {
 pub struct InternalApi {
     pub host: IpAddr,
     pub port: u16,
+    /// Eigenständiges Clientziel; nicht mit der Listeneradresse gleichsetzen.
+    pub client_base_url: Option<String>,
+    /// Nur die bestehende Health-Probe darf damit entfernte HTTPS-Ziele prüfen.
+    pub probe_allow_non_loopback: bool,
 }
 impl Default for InternalApi {
     fn default() -> Self {
         Self {
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 8776,
+            client_base_url: None,
+            probe_allow_non_loopback: false,
         }
+    }
+}
+
+impl InternalApi {
+    pub fn client_base_url(&self) -> String {
+        self.client_base_url
+            .as_deref()
+            .map(|url| url.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| {
+                format!("http://{}", std::net::SocketAddr::new(self.host, self.port))
+            })
     }
 }
 
@@ -270,6 +291,9 @@ impl Schema for BotConfig {
             300,
             "database.connect_timeout_seconds",
         )?;
+        if let Some(url) = &self.internal_api.client_base_url {
+            public_url(url, "internal_api.client_base_url", false)?;
+        }
         if !self.internal_api.host.is_loopback() {
             return Err(FileError::invalid("internal_api.host"));
         }
@@ -290,6 +314,8 @@ impl Schema for BotConfig {
         }
         public_url(&self.broker.base_url, "broker.base_url", true)?;
         self.stt.validate()?;
+        self.knowledge.validate()?;
+        self.media.validate()?;
         self.bot.validate()?;
         self.discord.validate()?;
         let eventsub = (
