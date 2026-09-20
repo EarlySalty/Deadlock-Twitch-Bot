@@ -77,18 +77,15 @@ const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
 
-fn knowledge_dir() -> PathBuf {
-    std::env::var("KNOWLEDGE_DIR")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("rust/knowledge"))
+fn knowledge_dir() -> Result<PathBuf, String> {
+    let snapshot = tb_config::runtime::active()
+        .ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
+    snapshot.resolve(&snapshot.settings().knowledge.directory).map_err(|e| e.to_string())
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
-    KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
+    KB.get_or_init(|| match knowledge_dir().and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string())) {
         Ok(kb) => {
             tracing::info!(
                 "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
@@ -195,6 +192,7 @@ pub fn build_clip_port(
     cipher: Option<Arc<FieldCipher>>,
     pool: PgPool,
     bot_token: Arc<BotTokenManager>,
+    redirect_uri: &str,
 ) -> Option<Arc<dyn ClipPort>> {
     let (Some(helix), Some(cipher)) = (helix, cipher) else {
         return None;
@@ -205,7 +203,7 @@ pub fn build_clip_port(
         cipher.clone(),
         Arc::new(HelixTokenClient {
             helix: (*helix).clone(),
-            redirect_uri: std::env::var("TWITCH_RAID_REDIRECT_URI").unwrap_or_default(),
+            redirect_uri: redirect_uri.to_owned(),
         }),
         blacklist.clone(),
     );
@@ -633,6 +631,7 @@ pub struct ChatRuntimePorts {
     pub golive_tips_enabled: bool,
     pub chat_persist_all_games: bool,
     pub lfg_pitch_enabled: bool,
+    pub review_log_directory: std::path::PathBuf,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
@@ -657,6 +656,7 @@ pub async fn build_runtime(
         golive_tips_enabled,
         chat_persist_all_games,
         lfg_pitch_enabled,
+        review_log_directory,
         review_relay,
         member_relay,
         scam_notifier,
@@ -821,9 +821,6 @@ pub async fn build_runtime(
     );
     let commands = Arc::new(command_engine);
 
-    let review_log_dir =
-        std::env::var("TB_CHAT_REVIEW_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
-
     // Spam-Filter halten, damit ein Hintergrund-Task die gelernten Muster
     // periodisch neu laden kann (Python-Cache-TTL 120 s). Ohne Reload griffen
     // KI-neu-gelernte Spam-/Safe-Muster im nativen Betrieb erst nach Neustart.
@@ -907,7 +904,7 @@ pub async fn build_runtime(
         promos: Arc::clone(&promos),
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
-        review_log: Arc::new(ReviewLog::new(review_log_dir)),
+        review_log: Arc::new(ReviewLog::new(review_log_directory)),
         alerter,
         account_age,
         crew_centroid,

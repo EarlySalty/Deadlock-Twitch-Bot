@@ -1427,21 +1427,19 @@ impl ScamPitchDetector {
     }
 }
 
-/// Verzeichnis für den Service-Warning-Trail. `logs/` relativ zum CWD (gleiche
-/// Konvention wie `tb-dashboard-api::read_log_tail`); per
-/// `TWITCH_SERVICE_WARNING_LOG_DIR` überschreibbar (Tests, abweichendes Deploy).
-fn service_warning_log_dir() -> std::path::PathBuf {
-    std::env::var_os("TWITCH_SERVICE_WARNING_LOG_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("logs"))
-}
-
 /// Hängt eine vorformatierte Zeile (ohne Zeilenumbruch) an
 /// `<dir>/twitch_service_warnings.log` an. Legt das Verzeichnis bei Bedarf an
 /// (`mkdir(parents=True)` in Python Z. 763).
 fn append_service_warning(line: &str) -> std::io::Result<()> {
+    let snapshot = tb_config::runtime::active()
+        .ok_or_else(|| std::io::Error::other("Betriebskonfiguration fehlt"))?;
+    let dir = snapshot.resolve(&snapshot.settings().bot.service_warning_log_directory)
+        .map_err(|_| std::io::Error::other("Ungültiger Warnprotokollpfad"))?;
+    append_service_warning_in(&dir, line)
+}
+
+fn append_service_warning_in(dir: &std::path::Path, line: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let dir = service_warning_log_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("twitch_service_warnings.log");
     let mut file = std::fs::OpenOptions::new()
@@ -3487,17 +3485,13 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        // Nur in diesem Test gesetzt; sonst nutzt keine Crate-Logik diese Variable.
-        std::env::set_var("TWITCH_SERVICE_WARNING_LOG_DIR", &dir);
-
-        append_service_warning("zeile-a").unwrap();
-        append_service_warning("zeile-b").unwrap();
+        append_service_warning_in(&dir, "zeile-a").unwrap();
+        append_service_warning_in(&dir, "zeile-b").unwrap();
 
         let path = dir.join("twitch_service_warnings.log");
         let body = std::fs::read_to_string(&path).unwrap();
         assert_eq!(body, "zeile-a\nzeile-b\n");
 
-        std::env::remove_var("TWITCH_SERVICE_WARNING_LOG_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

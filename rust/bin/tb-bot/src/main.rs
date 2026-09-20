@@ -86,10 +86,12 @@ fn ist_ausfuehrbar(pfad: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-fn yt_dlp_path() -> std::path::PathBuf {
+fn yt_dlp_path(snapshot: &tb_config::BotConfigSnapshot) -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let pfad = resolve_yt_dlp_path(std::env::var("YT_DLP_PATH").ok(), &cwd, home.as_deref());
+    let configured = snapshot.settings().bot.yt_dlp_binary.as_ref().map(|path|
+        snapshot.resolve(path).expect("yt-dlp-Pfad wurde beim Konfigurationsstart geprüft").to_string_lossy().into_owned());
+    let pfad = resolve_yt_dlp_path(configured, &cwd, home.as_deref());
     // Ohne diese Zeile beginnt die nächste Fehlersuche wieder bei "welcher Pfad
     // war es eigentlich" — das Symptom hier war genau ein toter Pfad.
     tracing::info!(pfad = %pfad.display(), "yt-dlp-Pfad aufgeloest");
@@ -776,12 +778,8 @@ async fn main() {
             }
         };
         // Ziel ist der Google-Drive-Ordner hinter dem rclone-Remote `gdrive:`.
-        let remote_base = std::env::var("VOD_EXPORT_REMOTE_BASE")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| tb_highlight::vod_export::DEFAULT_REMOTE_BASE.to_string());
-        let yt_dlp_path = yt_dlp_path();
+        let remote_base = config.bot.vod_export_remote_base.trim().to_string();
+        let yt_dlp_path = yt_dlp_path(snapshot);
         let api: Arc<dyn tb_highlight::twitch_vod::TwitchVodApi> = Arc::new(HelixVodSource {
             helix: helix_client,
         });
@@ -804,13 +802,7 @@ async fn main() {
             // Token-Client zur Composition-Root verdrahten. redirect_uri wie
             // Python (TWITCH_RAID_REDIRECT_URI mit Hardcode-Default,
             // runtime_bootstrap.py:341).
-            let raid_redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| {
-                    "https://deutsche-deadlock-community.de/callback/twitch".to_string()
-                });
+            let raid_redirect_uri = config.bot.raid_redirect_uri.trim().to_string();
             if let Ok(client_id) = std::env::var("TWITCH_CLIENT_ID") {
                 // Followup-Service: Discord via Master-Broker, Moderator via
                 // Helix, Chat-Begrüßung via Legacy-Python (8779).
@@ -1207,6 +1199,7 @@ async fn main() {
                 FieldCipher::from_env().ok().map(Arc::new),
                 pool.clone(),
                 handle.bot_token_manager(),
+                &config.bot.clip_raid_redirect_uri,
             );
             // Discord-Sichtbarkeit des Scam-Wächters: postet Bans/Vorschläge in
             // den Aufsichts-Channel (Default 1374364800817303632, per Env
@@ -1232,6 +1225,8 @@ async fn main() {
                     lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
                     invite_channel_id: config.twitch.notify_channel_id.parse()
                         .expect("notify_channel_id wurde beim Konfigurationsstart geprüft"),
+                    review_log_directory: snapshot.resolve(&config.bot.chat_review_log_directory)
+                        .expect("Reviewpfad wurde beim Konfigurationsstart geprüft"),
                     review_relay: BrokerRelay::new(&settings.broker).ok(),
                     member_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,
@@ -1493,7 +1488,7 @@ async fn main() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
                 cwd.join("tools/boon"),
-                yt_dlp_path(),
+                yt_dlp_path(snapshot),
             );
             let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
                 pool.clone(),
@@ -1549,7 +1544,7 @@ async fn main() {
         // cipher-gated Upload-Worker nach der Freigabe lief.
         let prep = tb_social_media::clip_prep_worker::ClipPrepWorker::new(
             pool.clone(),
-            yt_dlp_path().to_string_lossy().into_owned(),
+            yt_dlp_path(snapshot).to_string_lossy().into_owned(),
         );
         supervisor.spawn("social_clip_prep_worker", async move { prep.run().await });
 
@@ -1558,7 +1553,7 @@ async fn main() {
         // die Datei (data/clips), das Dashboard liest und streamt sie nur.
         let preview = tb_social_media::preview::PreviewWorker::new(
             pool.clone(),
-            yt_dlp_path().to_string_lossy().into_owned(),
+            yt_dlp_path(snapshot).to_string_lossy().into_owned(),
             "data/clips",
         );
         supervisor.spawn("social_clip_preview_worker", async move { preview.run().await });
@@ -1597,7 +1592,7 @@ async fn main() {
                 // clips_dir = Python-Default data/clips.
                 let upload =
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
-                        .with_yt_dlp(yt_dlp_path().to_string_lossy().into_owned());
+                        .with_yt_dlp(yt_dlp_path(snapshot).to_string_lossy().into_owned());
                 supervisor.spawn("social_upload_worker", async move { upload.run().await });
 
                 let refresh_oauth =
@@ -1636,7 +1631,7 @@ async fn main() {
                 let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
-                vod_config.yt_dlp = yt_dlp_path();
+                vod_config.yt_dlp = yt_dlp_path(snapshot);
                 let vod_archive =
                     tb_vod_archive::VodArchiveWorker::new(pool.clone(), vod_config, vod_creds);
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
@@ -1887,10 +1882,7 @@ async fn main() {
 
     let addr = SocketAddr::new(config.internal_api.host, port);
     let token = settings.internal_api.token.clone();
-    let legacy_proxy = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty())
+    let legacy_proxy = config.bot.legacy_proxy_base_url.clone()
         .map(|url| {
             tracing::info!("Legacy-Fallback aktiv: unbekannte interne-API-Routen → {url}");
             Arc::new(tb_internal_api::LegacyProxy::new(url))
@@ -2073,11 +2065,7 @@ fn build_telemetry_sub_auth(
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<(Arc<TokenProvider>, RaidAuthStore)> {
     let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "https://deutsche-deadlock-community.de/callback/twitch".to_string());
+    let redirect_uri = tb_config::runtime::settings().ok()?.bot.raid_redirect_uri.trim().to_string();
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
     let refresher = RaidTokenRefresher::new(
         pool.clone(),
@@ -2155,11 +2143,7 @@ fn build_moderator_token_provider(
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<Arc<TokenProvider>> {
     let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "https://deutsche-deadlock-community.de/callback/twitch".to_string());
+    let redirect_uri = tb_config::runtime::settings().ok()?.bot.raid_redirect_uri.trim().to_string();
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
     let refresher = RaidTokenRefresher::new(
         pool.clone(),

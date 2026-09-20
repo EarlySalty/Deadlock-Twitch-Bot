@@ -37,3 +37,15 @@ Unter `[discord]` werden die bisherigen Verbraucher getrennt abgebildet:
 - shadow_review_channel_id(None): bisher ENGAGEMENT_SHADOW_REVIEW_CHANNEL_ID; kein Kanal bedeutet weiterhin kein Scheduler.
 
 Anschluss über explizite Konstruktorparameter an alle drei Token-Lifecycle-Builder, beide produktiven BrokerDiscordDirectory-Wege und Raid-OAuth; keine pro-Poll-Nachkorrektur. Alte Allowlist-Stringparser bleiben ausschließlich Testreferenz. Configsuite27 und kompletter Bot-Test-Codecheck grün. Kein produktiver Restart/Deploy.
+
+## B3: Pfade, Redirects und bestehende Legacy-Ziele
+
+Quellbasis `ca398cc9` (zusätzlich gemeinsames Schema aus A `e937f659`, hier `89d6e063`). Keine produktiven Overrides ausgelesen oder geraten.
+
+- `TWITCH_RAID_REDIRECT_URI`: Main/Telemetry/Moderator bisher HTTPS-Callback als Default, Clip-Port bisher leer. Deshalb getrennte Felder `bot.raid_redirect_uri` und `bot.clip_raid_redirect_uri`; nur vorhandene Token-Refresher konsumieren sie.
+- `TB_INTERNAL_API_LEGACY_FALLBACK_URL`: API-Proxy bisher aus ohne Wert; OAuth-Greeter bisher `http://127.0.0.1:8779`. Getrennte `legacy_proxy_base_url`/`legacy_greeter_base_url` erhalten das.
+- `TB_CHAT_REVIEW_LOG_DIR` und `TWITCH_SERVICE_WARNING_LOG_DIR`: je `logs`, getrennte Felder; nun relativ zur TOML-Quelle aufgelöst. Warnlog-Test schreibt explizit ins Testverzeichnis statt globale ENV zu setzen.
+- `KNOWLEDGE_DIR`: Bot- und Command-Wissensbasis konsumieren ausschließlich gemeinsame `knowledge.directory` aus A (bisher `rust/knowledge`). Lesefehler behalten den bestehenden leeren Wissensbestand; Bot protokolliert den Fehler. Kein zweites Bot-Knowledge-Feld.
+- `YT_DLP_PATH`: `bot.yt_dlp_binary`; ohne Wert bestehende ausführbare CWD/Home/Binary-Suche unverändert. HOME bleibt reine OS-Quelle, keine Konfigurationsquelle. Outreach hatte zusätzlich `YTDLP_BIN` vor diesem Fallback: eigenes `outreach_yt_dlp_binary` erhält dessen Vorrang. Explizite Dateipfade werden quellrelativ vor Dienststart geprüft.
+- `VOD_EXPORT_REMOTE_BASE`: `bot.vod_export_remote_base`, bisheriger `DEFAULT_REMOTE_BASE` bleibt `gdrive:Deadlock/Twitch-VODs`. Keine Remote-Erstellung oder Datenverschiebung.
+- Globale Pfadauflösung wird vor Snapshot-Installation geprüft. Credentials dieses Pakets bleiben für den späteren Infisical-Quellenabschluss sichtbar klassifiziert; kein ENV/Secretinhalt wurde gelesen.

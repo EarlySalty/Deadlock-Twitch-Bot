@@ -672,9 +672,8 @@ mod grace_tests {
     }
 
     #[test]
-    fn grace_kommt_aus_der_env_mit_default() {
-        // Default ohne Env; der gesetzte Wert wird in einem eigenen Prozess
-        // getestet — hier zählt nur, dass der Default stimmt.
+    fn grace_behält_bisherigen_konfigurationsstandard() {
+        // Historischer Standard bleibt in der typisierten Betriebskonfiguration erhalten.
         assert_eq!(tb_config::operations::BotOperations::default().auto_raid_offline_grace_seconds, 5);
     }
 }

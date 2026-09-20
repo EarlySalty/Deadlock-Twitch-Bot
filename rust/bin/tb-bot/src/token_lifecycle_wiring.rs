@@ -43,8 +43,8 @@ const DEADLOCK_PAUSE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// Embed-Farbe für Token-Fehler-Alerts (rot).
 const ALERT_COLOR: i64 = 0xE7_4C_3C;
 
-/// Streamer-Guild/Rolle (gleiche Defaults wie [`crate::oauth_followups`] /
-/// `streamer_link`): Env `STREAMER_GUILD_ID`/`MAIN_GUILD_ID` und `STREAMER_ROLE_ID`.
+// Token-Lifecycle hat ohne konfigurierte Guild keine Rollenpflege.
+// OAuth und Streamer-Link behalten unabhängig ihre bisherigen Guild-Defaults.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TokenLifecycleSweepPolicy {

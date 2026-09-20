@@ -37,5 +37,16 @@ pub fn start(
     let snapshot = BotConfigSnapshot::load(&arguments.path)?;
     // Quellrelative Betriebspfade prüfen, bevor ein Dienst Clients/Jobs startet.
     snapshot.resolve(&snapshot.settings().discord.streamer_link.state_path)?;
+    snapshot.resolve(&snapshot.settings().knowledge.directory)?;
+    let bot = &snapshot.settings().bot;
+    for path in [
+        &bot.chat_review_log_directory,
+        &bot.service_warning_log_directory,
+    ] {
+        snapshot.resolve(path)?;
+    }
+    for path in [&bot.yt_dlp_binary, &bot.outreach_yt_dlp_binary].into_iter().flatten() {
+        snapshot.resolve(path)?;
+    }
     Ok((install(snapshot)?, arguments.remaining))
 }

@@ -296,16 +296,12 @@ impl LegacyChatGreeter {
     /// `base_url` = `TB_INTERNAL_API_LEGACY_FALLBACK_URL` (Python-Seitenport
     /// 8779), `token` = `TWITCH_INTERNAL_API_TOKEN` (gleicher Token wie die
     /// interne API selbst).
-    pub fn from_env() -> Option<Self> {
+    pub fn from_runtime() -> Option<Self> {
         let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())?;
-        let base_url = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
-            .ok()
-            .map(|v| v.trim().trim_end_matches('/').to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "http://127.0.0.1:8779".to_string());
+        let base_url = tb_config::runtime::settings().ok()?.bot.legacy_greeter_base_url.trim_end_matches('/').to_string();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -436,7 +432,7 @@ pub fn build_partner_setup_service(
     // Chat (TB_CHAT_ENABLED=0) bleibt der Legacy-Weg über Python 8779.
     let greeter: Arc<dyn ChatGreeterPort> = match native_chat {
         Some(api) => Arc::new(NativeChatGreeter::new(api)),
-        None => LegacyChatGreeter::from_env()
+        None => LegacyChatGreeter::from_runtime()
             .map(|g| Arc::new(g) as Arc<dyn ChatGreeterPort>)
             .unwrap_or_else(|| {
                 tracing::warn!(

@@ -2,6 +2,7 @@
 //! Composition-Root; keine Aktivierung neuer Aufgaben durch die Migration.
 use crate::{file::FileError, global::range};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -29,6 +30,15 @@ pub struct BotOperations {
     pub flip_pause_seconds: f64,
     pub mcp_host: std::net::IpAddr,
     pub mcp_port: u16,
+    pub raid_redirect_uri: String,
+    pub clip_raid_redirect_uri: String,
+    pub legacy_proxy_base_url: Option<String>,
+    pub legacy_greeter_base_url: String,
+    pub chat_review_log_directory: PathBuf,
+    pub service_warning_log_directory: PathBuf,
+    pub yt_dlp_binary: Option<PathBuf>,
+    pub outreach_yt_dlp_binary: Option<PathBuf>,
+    pub vod_export_remote_base: String,
 }
 
 impl Default for BotOperations {
@@ -57,12 +67,62 @@ impl Default for BotOperations {
             flip_pause_seconds: 43200.0,
             mcp_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             mcp_port: 8892,
+            raid_redirect_uri: "https://deutsche-deadlock-community.de/callback/twitch".into(),
+            clip_raid_redirect_uri: String::new(),
+            legacy_proxy_base_url: None,
+            legacy_greeter_base_url: "http://127.0.0.1:8779".into(),
+            chat_review_log_directory: "logs".into(),
+            service_warning_log_directory: "logs".into(),
+            yt_dlp_binary: None,
+            outreach_yt_dlp_binary: None,
+            vod_export_remote_base: "gdrive:Deadlock/Twitch-VODs".into(),
         }
     }
 }
 
 impl BotOperations {
     pub fn validate(&self) -> Result<(), FileError> {
+        use crate::global::public_url;
+        public_url(&self.raid_redirect_uri, "bot.raid_redirect_uri", false)?;
+        if !self.clip_raid_redirect_uri.is_empty() {
+            public_url(
+                &self.clip_raid_redirect_uri,
+                "bot.clip_raid_redirect_uri",
+                false,
+            )?;
+        }
+        if let Some(url) = &self.legacy_proxy_base_url {
+            public_url(url, "bot.legacy_proxy_base_url", false)?;
+        }
+        public_url(
+            &self.legacy_greeter_base_url,
+            "bot.legacy_greeter_base_url",
+            false,
+        )?;
+        for (path, field) in [
+            (
+                Some(&self.chat_review_log_directory),
+                "bot.chat_review_log_directory",
+            ),
+            (
+                Some(&self.service_warning_log_directory),
+                "bot.service_warning_log_directory",
+            ),
+            (self.yt_dlp_binary.as_ref(), "bot.yt_dlp_binary"),
+            (self.outreach_yt_dlp_binary.as_ref(), "bot.outreach_yt_dlp_binary"),
+        ] {
+            if let Some(path) = path {
+                let value = path.to_str().ok_or_else(|| FileError::invalid(field))?;
+                if value.trim().is_empty() || value.chars().any(char::is_control) {
+                    return Err(FileError::invalid(field));
+                }
+            }
+        }
+        if self.vod_export_remote_base.trim().is_empty()
+            || self.vod_export_remote_base.chars().any(char::is_control)
+        {
+            return Err(FileError::invalid("bot.vod_export_remote_base"));
+        }
         if !self.mcp_host.is_loopback() {
             return Err(FileError::invalid("bot.mcp_host"));
         }

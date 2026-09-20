@@ -534,3 +534,19 @@ fn discord_verbraucher_behalten_getrennte_guild_defaults_und_leere_guard_listen(
         1_289_721_245_281_292_288
     );
 }
+
+#[test]
+fn bot_pfade_und_unterschiedliche_redirect_defaults_bleiben_explizit() {
+    let snapshot = parse(VALID).unwrap();
+    let bot = &snapshot.settings().bot;
+    assert_eq!(bot.raid_redirect_uri, "https://deutsche-deadlock-community.de/callback/twitch");
+    assert!(bot.clip_raid_redirect_uri.is_empty());
+    assert!(bot.legacy_proxy_base_url.is_none());
+    assert_eq!(bot.legacy_greeter_base_url, "http://127.0.0.1:8779");
+    assert_eq!(snapshot.resolve(&bot.chat_review_log_directory).unwrap(), Path::new("/srv/twitch/config/logs"));
+    assert_eq!(snapshot.resolve(&snapshot.settings().knowledge.directory).unwrap(), Path::new("/srv/twitch/config/rust/knowledge"));
+    let changed = parse(&format!("{VALID}\n[bot]\nyt_dlp_binary = '../bin/yt-dlp'\nclip_raid_redirect_uri = 'https://example.org/callback'\n")).unwrap();
+    assert_eq!(changed.resolve(changed.settings().bot.yt_dlp_binary.as_ref().unwrap()).unwrap(), Path::new("/srv/twitch/bin/yt-dlp"));
+    assert!(parse(&format!("{VALID}\n[bot]\nservice_warning_log_directory = ''\n")).is_err());
+    assert!(parse(&format!("{VALID}\n[bot]\nlegacy_proxy_base_url = 'http://name:password@localhost/'\n")).is_err());
+}
