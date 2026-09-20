@@ -471,15 +471,14 @@ pub fn build_partner_setup_service(
                 Arc::new(NoopChatGreeter) as Arc<dyn ChatGreeterPort>
             }),
     };
-    let bot_user_id = std::env::var("TWITCH_BOT_USER_ID")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    if bot_user_id.is_none() {
-        tracing::warn!(
-            "TWITCH_BOT_USER_ID nicht gesetzt — OAuth-Followups laufen ohne Moderator-Setup/Begrüßung"
-        );
-    }
+    let config = match tb_config::runtime::settings() {
+        Ok(config) => config,
+        Err(_) => {
+            tracing::error!("OAuth-Followups benötigen die geladene Betriebskonfiguration");
+            return None;
+        }
+    };
+    let bot_user_id = Some(config.twitch.bot_user_id.clone());
     Some(Arc::new(
         PartnerSetupService::new(
             pool.clone(),

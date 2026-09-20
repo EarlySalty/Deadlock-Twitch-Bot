@@ -313,12 +313,8 @@ pub struct AnalyticsDaysQuery {
 ///
 /// `pub`, damit jede zweite Oberfläche (MCP-Connector) dieselbe Antwort bekommt
 /// wie `GET /streamers` und nicht ihren eigenen Default mitbringt.
-pub fn target_game_name() -> String {
-    std::env::var("TWITCH_TARGET_GAME_NAME")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "Deadlock".to_string())
+pub fn target_game_name() -> Result<String, tb_config::file::FileError> {
+    Ok(tb_config::runtime::settings()?.twitch.target_game.trim().to_string())
 }
 
 /// `GET /internal/twitch/v1/streamers`
@@ -330,7 +326,7 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    let target_game = target_game_name();
+    let target_game = target_game_name().map_err(|_| ApiError::internal())?;
     let streamers = db::list_streamers(&pool, &target_game).await.map_err(|e| {
         tracing::error!("list_streamers DB-Fehler: {e}");
         ApiError::internal()

@@ -632,6 +632,7 @@ pub struct ChatRuntimePorts {
     pub clip_port: Option<Arc<dyn ClipPort>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
+    pub invite_channel_id: u64,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
@@ -652,6 +653,7 @@ pub async fn build_runtime(
         clip_port,
         bot_ban_handler,
         invite_relay,
+        invite_channel_id,
         review_relay,
         member_relay,
         scam_notifier,
@@ -737,7 +739,7 @@ pub async fn build_runtime(
     let invite_resolver = Arc::new(DbInviteResolver {
         pool: pool.clone(),
         relay: invite_relay,
-        invite_channel_id: invite_channel_id_from_env(),
+        invite_channel_id: Some(invite_channel_id),
     });
     if let Some(relay) = review_relay.clone() {
         let pool = pool.clone();
@@ -991,13 +993,6 @@ pub async fn build_runtime(
         scout_crew_guard,
         supervisor,
     }
-}
-
-fn invite_channel_id_from_env() -> Option<u64> {
-    std::env::var("TWITCH_NOTIFY_CHANNEL_ID")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|&value| value > 0)
 }
 
 impl ChatRuntime {

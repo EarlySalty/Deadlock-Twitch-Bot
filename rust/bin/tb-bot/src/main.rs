@@ -645,7 +645,7 @@ async fn main() {
     // EventSub-Ingress: Inbox-Worker + Dispatcher. Mit Webhook-Config + Helix
     // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
     // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).
-    let target_game = config.twitch.target_game.clone();
+    let target_game = config.twitch.target_game.trim().to_string();
     let guard = GuardStore::new(pool.clone());
     // P2.57: `mut`, weil der inbound Bot-Timeout-Guard erst nach dem
     // ChatRuntime-Aufbau injiziert wird (s. `with_bot_timeout_guard` unten).
@@ -1354,6 +1354,8 @@ async fn main() {
                     clip_port,
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
+                    invite_channel_id: config.twitch.notify_channel_id.parse()
+                        .expect("notify_channel_id wurde beim Konfigurationsstart geprüft"),
                     review_relay: BrokerRelay::new(&settings.broker).ok(),
                     member_relay: BrokerRelay::new(&settings.broker).ok(),
                     scam_notifier,

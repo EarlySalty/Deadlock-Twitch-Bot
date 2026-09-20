@@ -608,7 +608,8 @@ fn token_zustand(row: &streamers_crud::StreamerListRow) -> &'static str {
 }
 
 async fn tool_list_partners(st: &Arc<McpState>, args: &Value) -> Result<Value, String> {
-    let target_game = tb_internal_api::handlers::streamers::target_game_name();
+    let target_game = tb_internal_api::handlers::streamers::target_game_name()
+        .map_err(|_| "Die Betriebskonfiguration ist nicht geladen.".to_string())?;
     let rows = streamers_crud::list_streamers(&st.pool, &target_game)
         .await
         .map_err(|error| format!("Partner-Liste nicht ladbar: {error}"))?;

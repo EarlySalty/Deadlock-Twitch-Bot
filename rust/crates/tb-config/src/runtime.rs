@@ -22,6 +22,14 @@ pub fn active() -> Option<&'static BotConfigSnapshot> {
     ACTIVE.get()
 }
 
+/// Fachverbraucher dürfen keine zweite Betriebsquelle oder Ersatzkonfiguration
+/// aufbauen. Fehlender Dienststart wird als Fehler weitergereicht.
+pub fn settings() -> Result<&'static crate::global::BotConfig, FileError> {
+    active()
+        .map(BotConfigSnapshot::settings)
+        .ok_or_else(|| FileError::new(ErrorKind::FileUnreadable))
+}
+
 pub fn start(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
 ) -> Result<(&'static BotConfigSnapshot, Vec<std::ffi::OsString>), FileError> {
