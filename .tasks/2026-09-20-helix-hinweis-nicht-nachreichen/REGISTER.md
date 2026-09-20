@@ -12,13 +12,15 @@ Fundstellen in AUFTRAG.md), kein eigener Vorcheck-Thread.
 | Rolle | Thread-ID | Modell | Worktree | Branch | Status |
 |---|---|---|---|---|---|
 | Intent | 65d5c809 | grok-4.6 | keiner | keiner | aktiv |
-| Worker A | 86e36c05 | glm-5.3-flash | /home/nathanael/.worktrees/tb-helix-hinweis-stale | fix/helix-hinweis-nicht-nachreichen | gestartet |
+| Worker A | 86e36c05 | glm-5.3-flash | /home/nathanael/.worktrees/tb-helix-hinweis-stale | fix/helix-hinweis-nicht-nachreichen | fertig |
+| Review R1 | e7a59d44 | grok-4.6 | /home/nathanael/.worktrees/tb-helix-hinweis-stale | fix/helix-hinweis-nicht-nachreichen | gestoppt, nicht wieder aufnehmen |
 
 ## Thread-Register (T3)
 
 | Paket | Thread-ID | Modell | Status | Worktree | letzte Meldung |
 |---|---|---|---|---|---|
-| A | 86e36c05 | glm-5.3-flash | gestartet | /home/nathanael/.worktrees/tb-helix-hinweis-stale | 18:57 commit dfba3d06 gepusht, Thread noch running auf Fertigmeldung |
+| A | 86e36c05 | glm-5.3-flash | fertig | /home/nathanael/.worktrees/tb-helix-hinweis-stale | 18:58 Fertigmeldung, dfba3d06 + e3b4cbc9 gepusht |
+| Review R1 | e7a59d44 | grok-4.6 | gestoppt, nicht wieder aufnehmen | /home/nathanael/.worktrees/tb-helix-hinweis-stale | Stopp 19:14, Orchestrator nimmt Review |
 
 Status-Werte: geplant, gestartet, fertig, gestoppt, gebumpt. Gestoppte oder
 gestorbene Threads bleiben drin und werden nicht wieder aufgenommen.
