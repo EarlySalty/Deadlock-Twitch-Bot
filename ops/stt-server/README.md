@@ -1,91 +1,98 @@
-# Lokale Transkription (Ersatz für die OpenAI-Whisper-API)
+# Lokale Transkription in Rust
 
-`stt_server.py` hält ein Whisper-Modell im Speicher und spricht
-`POST /v1/audio/transcriptions` in genau der Form, die
-`rust/crates/tb-engagement/src/transcribe.rs` schon erwartet. Der Rust-Pfad
-ändert sich dadurch nur an der Basis-URL — Multipart-Aufbau, `verbose_json`,
-`text` und `duration` bleiben gleich.
+Der lokale STT-Dienst ist ein Rust-Binary: `rust/bin/tb-stt-server`. Er hält
+Whisper dauerhaft im Speicher und spricht weiterhin die bestehende
+OpenAI-kompatible Schnittstelle:
+
+- `GET /health`
+- `POST /v1/audio/transcriptions`
+- Multipart-Felder `file`, `model`, `language`, `response_format`
+- `verbose_json` mit `text`, `duration`, `language`, `model` und
+  Segment-Zeitstempeln
+
+Damit bleibt `rust/crates/tb-engagement/src/transcribe.rs` unverändert auf
+`http://127.0.0.1:8791/v1/audio/transcriptions`.
+
+## Warum Rust / whisper.cpp
+
+Der frühere Sidecar bestand aus Python, FastAPI, Uvicorn, NumPy,
+`faster-whisper` und CTranslate2. Der neue Dienst nutzt `whisper-rs` als
+Rust-Bindung an whisper.cpp. Damit entfallen Python-Interpreter, Python-Webstack
+und das separate venv im Produktionspfad.
+
+Standardmodell ist `large-v3-turbo-q5_0` (ca. 574 MB). Es ist deutlich kleiner
+als das unquantisierte Turbo-Modell und passt zum CPU-only Host. Zusätzlich wird
+Silero VAD v6.2.0 geladen. Beide Dateien werden beim ersten Start einmalig nach
+`~/.cache/deadlock-stt/` geladen und vor Aktivierung per SHA-256 geprüft.
+
+## Build
+
+```bash
+cd rust
+cargo test --locked -j2 -p tb-stt-server
+cargo build --locked --release -j2 -p tb-stt-server
+```
 
 ## Betrieb
 
-```
-STT_PORT=8791 .../stt-tools/bin/python ops/stt-server/stt_server.py
-curl -s http://127.0.0.1:8791/health
-```
+Die User-Unit liegt versioniert unter:
 
-Als systemd-User-Unit läuft er über `deadlock-stt-server.service` (venv
-`~/stt-tools`, Modell wird beim Start einmal geladen):
+`ops/stt-server/deadlock-stt-server.service`
 
-```
-systemctl --user status deadlock-stt-server
-```
+Installation/Aktualisierung:
 
-**Verdrahtung: keine nötig.** `OpenAiTranscriber::from_env()` zeigt per Default
-auf `http://127.0.0.1:8791/v1/audio/transcriptions`, also hierher. Ein
-`OPENAI_API_KEY` in der Umgebung ändert daran nichts, und ohne Key geht ein
-Platzhalter raus, den dieser Dienst ohnehin ignoriert. Stream-Audio verlässt die
-Maschine damit nie versehentlich. Wer OpenAI will, setzt
-`ENGAGEMENT_STT_BASE_URL` explizit auf deren Endpunkt.
-
-Der Dienst hat **keine Authentifizierung** und gehört deshalb ausschliesslich
-an `127.0.0.1`. Der Rust-Aufrufer schickt weiterhin einen `Authorization`-Header,
-der hier ignoriert wird.
-
-## Modellwahl — gemessen, nicht geraten
-
-Gemessen auf diesem Host (EPYC 9334, 16 Kerne zugeteilt, keine GPU, AVX-512),
-`int8`, deutsches Sprachmaterial:
-
-| Modell | Fenster | Median | RTF |
-|---|---|---|---|
-| tiny | 20 s | 1,34 s | 0,066 |
-| small | 20 s | 6,06 s | 0,318 |
-| **large-v3-turbo** | **20 s** | **3,97 s** | **0,200** |
-| large-v3-turbo | 5 s | 3,05 s | 0,609 |
-
-`large-v3-turbo` ist bei 20-Sekunden-Fenstern **schneller als `small`** und
-dabei deutlich genauer — turbo hat nur vier Decoder-Schichten. Bessere Qualität
-kostet hier also nichts. `tiny` scheitert schon an Eigennamen und ist für
-Deadlock-Vokabular unbrauchbar.
-
-### Threads: 8, nicht 16
-
-| Threads | 20 s | 10 s | 5 s |
-|---|---|---|---|
-| 16 | 3,87 s | 3,18 s | 2,91 s |
-| **8** | **3,10 s** | **2,84 s** | **2,72 s** |
-| 4 | 4,35 s | — | — |
-
-Mehr Threads machen es langsamer — der Synchronisationsaufwand überwiegt. Acht
-Threads sind zugleich das, was neben Bot und Postgres vertretbar ist.
-
-### Warum kurze Fenster teuer sind
-
-Whisper füttert seinen Encoder **immer** mit einem 30-Sekunden-Fenster, egal wie
-kurz das Audio ist. Ein Aufruf kostet dadurch rund 2,8 s Grundgebühr, fast
-unabhängig von der Fensterlänge (5 s → 2,72 s, 20 s → 3,10 s). Für den Durchsatz
-gilt deshalb:
-
-```
-RTF = Kosten pro Aufruf ÷ Schrittweite
+```bash
+mkdir -p ~/.config/systemd/user
+cp ops/stt-server/deadlock-stt-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now deadlock-stt-server.service
+curl -fsS http://127.0.0.1:8791/health
 ```
 
-Häufigere Aufrufe kosten linear mehr. Eine Auswertung im Sekundentakt läge bei
-RTF ~2,9 und ist auf dieser Maschine nicht machbar.
+Der Dienst hat keine Authentifizierung und bindet deshalb standardmäßig nur an
+`127.0.0.1`.
 
-## Auf echtem Twitch-Audio verifiziert
+## Konfiguration
 
-Kette `streamlink --twitch-low-latency` → `ffmpeg` → turbo, gemessen an einem
-laufenden Stream: **3,37 s für 20 s Audio (RTF 0,17)**, deckt sich mit dem
-Benchmark. Über HTTP gegen diesen Dienst: 3,29 s — kein messbarer Aufschlag
-durch Multipart.
+| Variable | Default | Bedeutung |
+|---|---|---|
+| `STT_HOST` | `127.0.0.1` | Bind-Adresse |
+| `STT_PORT` | `8791` | HTTP-Port |
+| `STT_THREADS` | `8` | Whisper CPU-Threads |
+| `STT_MODEL` | `ggml-large-v3-turbo-q5_0` | Modellname in Health/API |
+| `STT_MODEL_PATH` | `~/.cache/deadlock-stt/ggml-large-v3-turbo-q5_0.bin` | lokaler Modellpfad |
+| `STT_MODEL_URL` | offizielles whisper.cpp HF-Modell | Downloadquelle |
+| `STT_MODEL_SHA256` | gepinnter Hash | Integritätsprüfung |
+| `STT_VAD_MODEL_PATH` | `~/.cache/deadlock-stt/ggml-silero-v6.2.0.bin` | lokaler VAD-Pfad |
+| `STT_LANGUAGE` | leer | leer = automatische Spracherkennung |
+| `STT_NO_SPEECH_MAX` | `0.6` | Halluzinationsfilter |
+| `STT_AVG_LOGPROB_MIN` | `-1.0` | Halluzinationsfilter |
 
-## Negativbefunde
+`model` und `language` aus dem HTTP-Request werden wie beim bisherigen
+Python-Dienst aus Kompatibilitätsgründen akzeptiert. Die lokale Modellwahl kommt
+aus der Serverkonfiguration; ohne `STT_LANGUAGE` wird die Sprache automatisch
+erkannt.
 
-- **Pauschales Normalisieren schadet.** Bei einem sehr leisen Kanal (RMS 0,008)
-  hob eine 12-fache Verstärkung den Rauschteppich mit an; das Modell begann zu
-  halluzinieren („Ölbac", „Dö-dö-döbä") statt besser zu erkennen.
-- **Stille Fenster erzeugen keinen Datensatz.** Der VAD verwirft reine
-  Spielsound- oder Musikpassagen, bevor das Modell startet. Das ist gewollt und
-  senkt den realen RTF unter die hier gemessenen Werte, die durchgehende Rede
-  unterstellen.
+## Verhalten gegenüber dem alten Dienst
+
+Beibehalten:
+
+- Port 8791 und Pfade
+- OpenAI-kompatibles Multipart
+- 25-MiB Uploadgrenze
+- 16-kHz/16-bit/Mono-PCM
+- Beam Search mit Breite 5
+- VAD
+- automatische Spracherkennung
+- `condition_on_previous_text=false`-Äquivalent via `no_context`
+- Segment-Zeitstempel
+- No-Speech-/Logprob-Filter
+- ein dauerhaft geladenes Modell
+
+Geändert:
+
+- kein Python-Prozess/venv mehr
+- whisper.cpp statt CTranslate2/faster-whisper
+- q5_0-quantisiertes large-v3-turbo als ressourcenschonender Default
+- Inferenz wird absichtlich auf eine Anfrage gleichzeitig begrenzt, weil jeder
+  Lauf intern bereits acht CPU-Threads nutzt
