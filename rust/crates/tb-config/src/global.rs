@@ -127,6 +127,7 @@ impl InternalApi {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Dashboard {
+    pub options: crate::dashboard_options::DashboardOptions,
     pub host: IpAddr,
     pub port: u16,
     pub run_database_migrations: bool,
@@ -134,6 +135,7 @@ pub struct Dashboard {
 impl Default for Dashboard {
     fn default() -> Self {
         Self {
+            options: crate::dashboard_options::DashboardOptions::default(),
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 8769,
             run_database_migrations: true,
@@ -296,7 +298,7 @@ impl Schema for BotConfig {
             "database.connect_timeout_seconds",
         )?;
         if let Some(url) = &self.internal_api.client_base_url {
-            public_url(url, "internal_api.client_base_url", false)?;
+            crate::dashboard_options::validate_url(url, "internal_api.client_base_url")?;
         }
         if !self.internal_api.host.is_loopback() {
             return Err(FileError::invalid("internal_api.host"));
@@ -340,6 +342,7 @@ impl Schema for BotConfig {
         if listeners.contains(&mcp) || mcp == eventsub {
             return Err(FileError::invalid("bot.mcp_port"));
         }
+        self.dashboard.options.validate()?;
         if (self.stt.host == self.internal_api.host && self.stt.port == self.internal_api.port)
             || (self.stt.host == self.dashboard.host && self.stt.port == self.dashboard.port)
         {
