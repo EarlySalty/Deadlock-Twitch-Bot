@@ -28,3 +28,17 @@ Die 24 neuen Tests prüfen insbesondere echte Kindprozesse mit widersprüchliche
 ### Noch nicht nachgewiesen
 
 Die Produktionswerte sind noch nicht vollständig übernommen. Der Kernlader ist noch nicht an Bot, Dashboard, Coaching oder STT angeschlossen. Die breite Verbraucher-Migration, die vollständige Schlüssel-/Prioritätsmatrix, der ENV-Regressionsvertrag, der Modell-Resolver, dessen fachliche Proben und Cache-Policy sowie die Gesamtabnahme stehen aus. Kein Main-Merge, kein Deploy, kein Live-Beweis.
+
+## Übernahme im Integrationsworktree am 20.09.2026
+
+Eigenanteil des ursprünglichen Worktrees auf `feat/twitch-toml-rollout-20260920` übernommen; Original-Worktree bleibt unverändert. Der alte Teilcommit ist als `131641bd` übernommen, STT-WIP und dessen Tests wurden kopiert. Keine produktive Konfiguration erfunden oder installiert.
+
+Ergänzt: unveränderlicher Prozess-Snapshot in `runtime.rs` und begrenzter Dateieditor-Unterbau in `editor.rs`. Dieser nimmt nur die drei bereits im Kernschema enthaltenen DB-Betriebswerte an, validiert erneut das gesamte Schema, sperrt konkurrierende Schreiber, prüft den erwarteten Fingerabdruck, lehnt Git-Checkouts ab und speichert mit atomarem Rename und Datei-/Verzeichnis-fsync. Besitzer, Gruppe und Modus bleiben erhalten. Die aktive Momentaufnahme wird durch Speichern nicht geändert. Noch keine HTTP-Route und noch kein Dienstanschluss; dies ist ausdrücklich kein fertiger Runtime-Rollout.
+
+Nachweise dieses Teilstands:
+
+- `cargo test -p tb-config -j 2 --target-dir /home/nathanael/.cache/twitch-toml-rollout-target`: 43 Tests bestanden, Exit 0.
+- `cargo clippy -p tb-config --all-targets -j 2 --target-dir /home/nathanael/.cache/twitch-toml-rollout-target -- -D warnings`: Exit 0.
+- STT-Tests mit produktiv vorhandenem Interpreter `/home/nathanael/stt-tools/bin/python -B -m unittest discover -s ops/stt-server/tests -v`: 7 Tests bestanden. Keine Modelle heruntergeladen und keine echte Transkription gestartet. Der erste Versuch mit System-Python scheiterte an dessen fehlendem FastAPI; der STT-Interpreter enthält die benötigten Pakete.
+
+Live-Abfrage des bestehenden Dashboards: `/twitch/api/admin/config/overview` und `/twitch/api/admin/system/health` liefern 200, enthalten aber keinen wirksamen globalen Betriebs-Snapshot. Poolgröße, Erwerbs-/Verbindungszeitbudget und Logging-Overrides sind daraus nicht rekonstruierbar. `KLASSIFIKATION.md` trennt das vorhandene reine Quellinventar in 98 direkte Betriebsleser, 49 Credential-Leser, 80 noch aufzulösende dynamische Leser, 6 Test-DSNs, 2 OS-Pfade und einen historischen Token-Dateipfad. Keine Prozessumgebung und keine ENV-Dateiinhalte gelesen.

@@ -3,8 +3,11 @@
 //! Der Loader nimmt eine Quelle `Fn(&str) -> Option<String>` entgegen, damit er
 //! ohne Prozess-Env testbar ist. `from_env()` nutzt `std::env::var`.
 
+pub mod editor;
 pub mod file;
 pub mod global;
+pub mod runtime;
+pub mod stt;
 
 pub use global::{BotConfig, BotConfigSnapshot};
 

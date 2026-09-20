@@ -1,0 +1,23 @@
+//! Die beim Dienststart geprüfte Momentaufnahme; niemals die gespeicherte Datei
+//! als bereits aktive Konfiguration ausgeben.
+
+use crate::{
+    file::{ErrorKind, FileError},
+    BotConfigSnapshot,
+};
+use std::sync::OnceLock;
+
+static ACTIVE: OnceLock<BotConfigSnapshot> = OnceLock::new();
+
+pub fn install(snapshot: BotConfigSnapshot) -> Result<&'static BotConfigSnapshot, FileError> {
+    ACTIVE
+        .set(snapshot)
+        .map_err(|_| FileError::new(ErrorKind::RestartRequired))?;
+    ACTIVE
+        .get()
+        .ok_or_else(|| FileError::new(ErrorKind::FileUnreadable))
+}
+
+pub fn active() -> Option<&'static BotConfigSnapshot> {
+    ACTIVE.get()
+}
