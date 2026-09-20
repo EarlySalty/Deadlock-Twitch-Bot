@@ -13,6 +13,7 @@ import ipaddress
 import math
 import re
 import time
+import unicodedata
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +46,7 @@ class Settings:
         try:
             local_model = (
                 model_path.is_absolute()
-                and not any(ord(char) < 32 or ord(char) == 127 for char in self.model)
+                and not any(unicodedata.category(char) == "Cc" for char in self.model)
                 and model_path.is_dir()
             )
         except (OSError, ValueError):

@@ -198,4 +198,29 @@ fn starter_uebergibt_echte_gepruefte_argumente_statt_environment() {
         let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap();
         assert_eq!(Path::new(&model[1]), root.join("models/local"));
     }
+    let mut long_model = root.join("Lokale Modelle ä");
+    for _ in 0..7 {
+        long_model.push("modell".repeat(13));
+    }
+    std::fs::create_dir_all(&long_model).unwrap();
+    assert!(long_model.to_str().unwrap().len() > 512);
+    std::fs::write(
+        root.join("bot.toml"),
+        document.replace("local/model", long_model.to_str().unwrap()),
+    )
+    .unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_tb-stt-launcher"))
+        .env_clear()
+        .current_dir("/")
+        .arg("--config")
+        .arg(root.join("bot.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Lokaler langer Modellpfad muss Rust und Python durchlaufen"
+    );
+    let args: Vec<String> = serde_json::from_slice(&output.stdout).unwrap();
+    let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap();
+    assert_eq!(Path::new(&model[1]), long_model);
 }

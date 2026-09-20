@@ -105,13 +105,21 @@ impl SttConfig {
             3_600,
             "stt.extraction_timeout_seconds",
         )?;
-        if self.model.is_empty()
-            || self.model.len() > 512
-            || !self
-                .model
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(&b))
-        {
+        // Explizite lokale Pfade sind keine Hub-Bezeichner. Ihre Existenz
+        // prüft der Launcher nach Auflösung gegen die Konfigurationsdatei.
+        let local_model = std::path::Path::new(&self.model).is_absolute()
+            || self.model.starts_with("./")
+            || self.model.starts_with("../");
+        let valid_model = if local_model {
+            self.model.len() <= 4096 && !self.model.chars().any(char::is_control)
+        } else {
+            self.model.len() <= 512
+                && self
+                    .model
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(&b))
+        };
+        if self.model.is_empty() || !valid_model {
             return Err(FileError::invalid("stt.model"));
         }
         if self.language.as_ref().is_some_and(|language| {
