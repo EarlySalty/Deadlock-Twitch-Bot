@@ -496,3 +496,41 @@ fn bot_listener_kollisionen_und_raid_zeitgrenzen_vor_dem_start_abweisen() {
     assert!(!snapshot.settings().bot.chat_enabled);
     assert!(!snapshot.settings().bot.smalltalk_loop_live_send);
 }
+
+#[test]
+fn discord_verbraucher_behalten_getrennte_guild_defaults_und_leere_guard_listen() {
+    let defaults = parse(VALID).unwrap();
+    assert_eq!(
+        defaults.settings().discord.oauth_followup.guild_id,
+        1_289_721_245_281_292_288
+    );
+    assert_eq!(defaults.settings().discord.token_lifecycle.guild_id, None);
+    let blocked = parse(&format!(
+        "{VALID}\n[discord.raid_oauth]\nallowed_guild_ids=[]\n"
+    ))
+    .unwrap();
+    assert_eq!(
+        blocked.settings().discord.raid_oauth.allowed_guild_ids,
+        Some(vec![])
+    );
+    assert_eq!(
+        blocked.settings().discord.raid_oauth.allowed_channel_ids,
+        None
+    );
+    assert!(parse(&format!(
+        "{VALID}\n[discord.raid_oauth]\nallowed_guild_ids=[-1]\n"
+    ))
+    .is_err());
+    let override_ = parse(&format!(
+        "{VALID}\n[discord.token_lifecycle]\nguild_id=42\n"
+    ))
+    .unwrap();
+    assert_eq!(
+        override_.settings().discord.token_lifecycle.guild_id,
+        Some(42)
+    );
+    assert_eq!(
+        override_.settings().discord.oauth_followup.guild_id,
+        1_289_721_245_281_292_288
+    );
+}

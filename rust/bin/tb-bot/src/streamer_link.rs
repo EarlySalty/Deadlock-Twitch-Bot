@@ -28,21 +28,6 @@ static AFFIXES: &[&str] = &[
     "real", "the", "its", "im", "iam", "gg",
 ];
 
-fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_bool(name: &str, default: bool) -> bool {
-    match std::env::var(name).as_deref() {
-        Ok("1") | Ok("true") | Ok("yes") | Ok("on") => true,
-        Ok("0") | Ok("false") | Ok("no") | Ok("off") => false,
-        _ => default,
-    }
-}
-
 // ── Konfigurationsstruct ──────────────────────────────────────────────────────
 
 pub struct StreamerLinkConfig {
@@ -54,19 +39,15 @@ pub struct StreamerLinkConfig {
 }
 
 impl StreamerLinkConfig {
-    pub fn from_env() -> Self {
-        let state_path = std::env::var("STREAMER_LINK_STATE_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                PathBuf::from("/home/naniadm/Documents/Deadlock-Bots/data/streamer_link_state.json")
-            });
-        Self {
-            notify_channel_id: env_u64("STREAMER_LINK_NOTIFY_CHANNEL_ID", 1374364800817303632),
-            streamer_role_id: env_u64("STREAMER_ROLE_ID", 1313624729466441769),
-            guild_id: env_u64("MAIN_GUILD_ID", 1289721245281292288),
-            state_path,
-            enabled: env_bool("STREAMER_LINK_ENABLED", true),
-        }
+    pub fn from_config(snapshot: &tb_config::BotConfigSnapshot) -> Result<Self, tb_config::file::FileError> {
+        let config = &snapshot.settings().discord.streamer_link;
+        Ok(Self {
+            notify_channel_id: config.notify_channel_id,
+            streamer_role_id: config.streamer_role_id,
+            guild_id: config.guild_id,
+            state_path: snapshot.resolve(&config.state_path)?,
+            enabled: config.enabled,
+        })
     }
 }
 

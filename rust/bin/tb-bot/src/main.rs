@@ -608,7 +608,7 @@ async fn main() {
         .filter(|v| !v.is_empty());
     let callback_url = Some(config.twitch.eventsub_callback_url.clone());
     let bot_ban_handler =
-        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker);
+        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker, &config.discord.token_lifecycle);
     let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
@@ -847,6 +847,7 @@ async fn main() {
                     raid_redirect_uri.clone(),
                     partner_setup,
                     Some(Arc::clone(&chat_subscription_reconcile)),
+                    &config.discord.raid_oauth,
                 )
                 .with_requirements_relay(followup_relay);
                 raid_oauth_port = Some(Arc::new(raid_oauth_impl));
@@ -1806,6 +1807,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        &config.discord.token_lifecycle,
         bot_ban_status_probe.clone(),
     );
 
@@ -1817,12 +1819,14 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        config.discord.shadow_review_channel_id,
     );
 
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
     if let Ok(sl_relay) = BrokerRelay::new(&settings.broker) {
-        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_env());
+        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_config(snapshot)
+            .expect("Streamer-Link-Pfad wurde beim Konfigurationsstart geprüft"));
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
@@ -1905,7 +1909,7 @@ async fn main() {
     // Frischer Relay aus der Broker-Config; ohne Relay loggt der Port nur einen
     // Hinweis (best-effort, wie Python `sync_streamer_role`).
     let discord_role: Option<Arc<dyn tb_internal_api::DiscordRolePort>> = Some(Arc::new(
-        oauth_followups::BrokerDiscordDirectory::from_env(BrokerRelay::new(&settings.broker).ok()),
+        oauth_followups::BrokerDiscordDirectory::from_config(BrokerRelay::new(&settings.broker).ok(), &config.discord.oauth_followup),
     )
         as Arc<dyn tb_internal_api::DiscordRolePort>);
     // Bot-Token-Bridge (F3): Owner-Chat-Action sendet über den live rotierten
@@ -1955,6 +1959,7 @@ async fn main() {
         &supervisor,
         pool.clone(),
         &settings.broker,
+        &config.discord.token_lifecycle,
         moderator_remover.map(|r| r as Arc<dyn tb_raid::DeadlockPauseUnmodPort>),
         bot_ban_status_probe.clone(),
     );

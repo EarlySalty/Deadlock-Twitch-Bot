@@ -35,5 +35,7 @@ pub fn start(
 ) -> Result<(&'static BotConfigSnapshot, Vec<std::ffi::OsString>), FileError> {
     let arguments = crate::file::ConfigArguments::parse(arguments)?;
     let snapshot = BotConfigSnapshot::load(&arguments.path)?;
+    // Quellrelative Betriebspfade prüfen, bevor ein Dienst Clients/Jobs startet.
+    snapshot.resolve(&snapshot.settings().discord.streamer_link.state_path)?;
     Ok((install(snapshot)?, arguments.remaining))
 }

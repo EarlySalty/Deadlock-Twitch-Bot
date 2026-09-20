@@ -23,25 +23,6 @@ use tb_raid::partner_setup::{
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
-/// Discord-Streamer-Rolle (Python `_DEFAULT_STREAMER_ROLE_ID`,
-/// `bot/discord_role_sync.py:14`; Env `STREAMER_ROLE_ID` überschreibt).
-const DEFAULT_STREAMER_ROLE_ID: u64 = 1313624729466441769;
-
-/// Community-Guild, in der die Streamer-Rolle hängt (wie
-/// `streamer_link.rs`; Env `STREAMER_GUILD_ID`/`MAIN_GUILD_ID` überschreibt).
-///
-/// Ohne Default war die Guild in Prod unbestimmt: der Fallback über die
-/// Broker-Mitgliederliste liefert kein `guild_id`, also gab es keinen
-/// Kandidaten und der Rollen-Entzug wurde übersprungen (2026-08-03).
-const DEFAULT_STREAMER_GUILD_ID: u64 = 1289721245281292288;
-
-fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&v| v > 0)
-}
-
 // ---------------------------------------------------------------------------
 // Discord via Master-Broker
 // ---------------------------------------------------------------------------
@@ -57,14 +38,8 @@ pub struct BrokerDiscordDirectory {
 }
 
 impl BrokerDiscordDirectory {
-    pub fn from_env(relay: Option<BrokerRelay>) -> Self {
-        Self {
-            relay,
-            guild_id: env_u64("STREAMER_GUILD_ID")
-                .or_else(|| env_u64("MAIN_GUILD_ID"))
-                .or(Some(DEFAULT_STREAMER_GUILD_ID)),
-            role_id: env_u64("STREAMER_ROLE_ID").unwrap_or(DEFAULT_STREAMER_ROLE_ID),
-        }
+    pub fn from_config(relay: Option<BrokerRelay>, config: &tb_config::discord::OAuthFollowup) -> Self {
+        Self { relay, guild_id: Some(config.guild_id), role_id: config.streamer_role_id }
     }
 
     /// Rollen-Entzug mit Ausgang. Meldet, ob die Rolle wirklich weg ist —
@@ -482,7 +457,7 @@ pub fn build_partner_setup_service(
     Some(Arc::new(
         PartnerSetupService::new(
             pool.clone(),
-            Arc::new(BrokerDiscordDirectory::from_env(relay)),
+            Arc::new(BrokerDiscordDirectory::from_config(relay, &config.discord.oauth_followup)),
             Arc::new(HelixModeratorInstaller::new(helix)),
             greeter,
             bot_user_id,
@@ -500,8 +475,8 @@ mod tests {
     /// `guild_id` liefert. Ohne Guild gibt es keinen Kandidaten — die
     /// Konfiguration muss deshalb immer einen tragen.
     #[test]
-    fn from_env_hat_immer_eine_guild() {
-        let directory = BrokerDiscordDirectory::from_env(None);
+    fn from_config_hat_immer_eine_guild() {
+        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
         assert!(
             directory.guild_id.is_some(),
             "ohne Guild-Kandidat wird jeder Rollen-Entzug stumm übersprungen"
@@ -511,7 +486,7 @@ mod tests {
     /// Ohne Relay ist der Entzug nicht „erledigt", sondern übersprungen.
     #[tokio::test]
     async fn ohne_relay_wird_der_entzug_als_uebersprungen_gemeldet() {
-        let directory = BrokerDiscordDirectory::from_env(None);
+        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
         let outcome = directory
             .revoke_streamer_role_detailed("12345", "test")
             .await;
@@ -527,7 +502,7 @@ mod tests {
     /// Ausgang — der Handler darf nicht an einer zweiten Wahrheit hängen.
     #[tokio::test]
     async fn trait_weg_liefert_denselben_ausgang() {
-        let directory = BrokerDiscordDirectory::from_env(None);
+        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
         let via_trait =
             tb_internal_api::DiscordRolePort::revoke_streamer_role(&directory, "12345", "test")
                 .await;

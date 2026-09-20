@@ -23,6 +23,8 @@ pub struct BotConfig {
     #[serde(default)]
     pub bot: crate::operations::BotOperations,
     #[serde(default)]
+    pub discord: crate::discord::DiscordOperations,
+    #[serde(default)]
     pub database: Database,
     #[serde(default)]
     pub internal_api: InternalApi,
@@ -289,6 +291,7 @@ impl Schema for BotConfig {
         public_url(&self.broker.base_url, "broker.base_url", true)?;
         self.stt.validate()?;
         self.bot.validate()?;
+        self.discord.validate()?;
         let eventsub = (
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             self.bot.eventsub_receiver_port,

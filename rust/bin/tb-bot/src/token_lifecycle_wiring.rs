@@ -45,7 +45,6 @@ const ALERT_COLOR: i64 = 0xE7_4C_3C;
 
 /// Streamer-Guild/Rolle (gleiche Defaults wie [`crate::oauth_followups`] /
 /// `streamer_link`): Env `STREAMER_GUILD_ID`/`MAIN_GUILD_ID` und `STREAMER_ROLE_ID`.
-const DEFAULT_STREAMER_ROLE_ID: u64 = 1313624729466441769;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TokenLifecycleSweepPolicy {
@@ -60,13 +59,6 @@ fn token_lifecycle_sweep_policy(discord_enabled: bool) -> TokenLifecycleSweepPol
     }
 }
 
-fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&v| v > 0)
-}
-
 /// Broker-gestützte Umsetzung des Discord-Reaktions-Ports. Alle Methoden sind
 /// best-effort: Fehler werden geloggt, nie propagiert (Python-Parität).
 pub(crate) struct BrokerTokenLifecycleNotifier {
@@ -76,20 +68,8 @@ pub(crate) struct BrokerTokenLifecycleNotifier {
 }
 
 impl BrokerTokenLifecycleNotifier {
-    fn from_env(relay: BrokerRelay) -> Self {
-        Self::from_optional_env(Some(relay))
-    }
-
-    fn disabled() -> Self {
-        Self::from_optional_env(None)
-    }
-
-    fn from_optional_env(relay: Option<BrokerRelay>) -> Self {
-        Self {
-            relay,
-            guild_id: env_u64("STREAMER_GUILD_ID").or_else(|| env_u64("MAIN_GUILD_ID")),
-            role_id: env_u64("STREAMER_ROLE_ID").unwrap_or(DEFAULT_STREAMER_ROLE_ID),
-        }
+    fn from_config(relay: Option<BrokerRelay>, config: &tb_config::discord::TokenLifecycle) -> Self {
+        Self { relay, guild_id: config.guild_id, role_id: config.streamer_role_id }
     }
 }
 
@@ -197,14 +177,15 @@ impl BotBannedChannelHandler for BrokerBotBanLifecycleHandler {
 pub(crate) fn build_bot_ban_handler(
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
+    options: &tb_config::discord::TokenLifecycle,
 ) -> Arc<dyn BotBannedChannelHandler> {
     let notifier = match BrokerRelay::new(broker) {
-        Ok(relay) => BrokerTokenLifecycleNotifier::from_env(relay),
+        Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options),
         Err(error) => {
             tracing::warn!(
                 "Bot-Ban-Lifecycle: BrokerRelay nicht initialisierbar, Recovery-DM deaktiviert: {error}"
             );
-            BrokerTokenLifecycleNotifier::disabled()
+            BrokerTokenLifecycleNotifier::from_config(None, options)
         }
     };
     Arc::new(BrokerBotBanLifecycleHandler {
@@ -219,15 +200,16 @@ pub fn spawn_token_lifecycle_schedulers(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
+    options: &tb_config::discord::TokenLifecycle,
     bot_ban_status_probe: Option<Arc<dyn BotBanStatusProbe>>,
 ) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
-        Ok(relay) => (BrokerTokenLifecycleNotifier::from_env(relay), true),
+        Ok(relay) => (BrokerTokenLifecycleNotifier::from_config(Some(relay), options), true),
         Err(e) => {
             tracing::warn!(
                 "Token-Lifecycle-Scheduler ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {e}"
             );
-            (BrokerTokenLifecycleNotifier::disabled(), false)
+            (BrokerTokenLifecycleNotifier::from_config(None, options), false)
         }
     };
     let mut reactor = TokenLifecycleReactor::new(pool, notifier);
@@ -338,6 +320,7 @@ pub(crate) fn spawn_deadlock_pause_scheduler(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &tb_config::BrokerConfig,
+    options: &tb_config::discord::TokenLifecycle,
     unmod: Option<Arc<dyn tb_raid::DeadlockPauseUnmodPort>>,
     remod: Option<Arc<dyn BotBanStatusProbe>>,
 ) -> Option<SharedDeadlockPauseReactor> {
@@ -348,12 +331,12 @@ pub(crate) fn spawn_deadlock_pause_scheduler(
         return None;
     };
     let notifier = match BrokerRelay::new(broker) {
-        Ok(relay) => BrokerTokenLifecycleNotifier::from_env(relay),
+        Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options),
         Err(error) => {
             tracing::warn!(
                 "Deadlock-Pause-Sweep ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {error}"
             );
-            BrokerTokenLifecycleNotifier::disabled()
+            BrokerTokenLifecycleNotifier::from_config(None, options)
         }
     };
     let reactor = Arc::new(tb_raid::DeadlockPauseReactor::new(
