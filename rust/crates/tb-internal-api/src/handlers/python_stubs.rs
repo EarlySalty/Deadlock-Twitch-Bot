@@ -157,6 +157,14 @@ pub async fn eventsub_requeue_handler(
     State(pool): State<PgPool>,
     body: Option<Json<RequeueBody>>,
 ) -> impl IntoResponse {
+    let retry = tb_config::runtime::settings().ok().map(|cfg| &cfg.database.retry);
+    requeue_with_retry(State(pool), body, retry).await
+}
+
+async fn requeue_with_retry(
+    State(pool): State<PgPool>, body: Option<Json<RequeueBody>>,
+    retry: Option<&tb_config::reliability::TransactionRetry>,
+) -> impl IntoResponse {
     let work_id = body
         .and_then(|b| b.work_id.clone())
         .unwrap_or_default()
@@ -171,12 +179,11 @@ pub async fn eventsub_requeue_handler(
             })),
         );
     }
-    let config = match tb_config::runtime::settings() {
-        Ok(config) => config,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "configuration_unavailable"}))),
+    let Some(retry) = retry else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "configuration_unavailable"})));
     };
     match ProcessingInboxStore::new(pool)
-        .with_retry_config(&config.database.retry)
+        .with_retry_config(retry)
         .requeue_dead_letter(&work_id, Utc::now().timestamp_millis() as f64 / 1000.0)
         .await
     {
@@ -227,25 +234,13 @@ pub struct ChatActionBody {
 /// (P2.119, Defense-in-Depth auf der internen Route zusätzlich zur Token-Auth).
 const OWNER_DISCORD_ID_HEADER: &str = "X-Dashboard-Owner-Discord-Id";
 
-/// Freigeschalteter Discord-Owner (Python `_DASHBOARD_OWNER_DISCORD_ID`,
-/// live.py:63). Über `TWITCH_DASHBOARD_OWNER_DISCORD_ID` überschreibbar.
-const DEFAULT_OWNER_DISCORD_ID: &str = "662995601738170389";
-
-fn owner_discord_id() -> String {
-    std::env::var("TWITCH_DASHBOARD_OWNER_DISCORD_ID")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_OWNER_DISCORD_ID.to_string())
-}
-
 /// Owner-Gate (P2.119): Wenn der Caller eine Discord-Owner-ID mitschickt, muss
 /// sie der freigeschalteten Owner-ID entsprechen. Fehlt der Header, bleibt es
 /// beim Token-/Loopback-Gate (Python-Parität: die interne Route hatte nie einen
 /// Owner-Zwang, der vorgelagerte Dashboard-Pfad schon — dieser Header erlaubt
 /// es, die Owner-Identität für Defense-in-Depth durchzureichen).
 /// `Ok(())` = erlaubt; `Err(())` = abgelehnt (Caller hat bereits AUDIT geloggt).
-fn enforce_owner_gate(headers: &HeaderMap) -> Result<(), ()> {
+fn enforce_owner_gate(headers: &HeaderMap, owner_id: Option<&str>) -> Result<(), ()> {
     let claimed = headers
         .get(OWNER_DISCORD_ID_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -257,7 +252,7 @@ fn enforce_owner_gate(headers: &HeaderMap) -> Result<(), ()> {
         return Ok(());
     };
 
-    if claimed == owner_discord_id() {
+    if owner_id == Some(claimed.as_str()) {
         Ok(())
     } else {
         tracing::warn!(
@@ -283,6 +278,15 @@ pub async fn chat_action_handler(
     Extension(ChatActionExt(port)): Extension<ChatActionExt>,
     body: Option<Json<ChatActionBody>>,
 ) -> impl IntoResponse {
+    let owner = tb_config::runtime::settings().ok().map(|cfg| cfg.discord.internal.owner_id.as_str());
+    chat_action_with_owner(auth, headers, Path(login), Extension(ChatActionExt(port)), body, owner).await
+}
+
+async fn chat_action_with_owner(
+    auth: AuthLevel, headers: HeaderMap, Path(login): Path<String>,
+    Extension(ChatActionExt(port)): Extension<ChatActionExt>,
+    body: Option<Json<ChatActionBody>>, owner: Option<&str>,
+) -> impl IntoResponse {
     if !auth.is_privileged() {
         return (
             StatusCode::UNAUTHORIZED,
@@ -290,7 +294,7 @@ pub async fn chat_action_handler(
         );
     }
 
-    if enforce_owner_gate(&headers).is_err() {
+    if enforce_owner_gate(&headers, owner).is_err() {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -481,7 +485,8 @@ mod eventsub_requeue_tests {
                 work_id: Some(work_id.to_string()),
             })
         });
-        let resp = eventsub_requeue_handler(State(pool), body)
+        let retry = tb_config::reliability::TransactionRetry::default();
+        let resp = requeue_with_retry(State(pool), body, Some(&retry))
             .await
             .into_response();
         let status = resp.status();
@@ -606,12 +611,13 @@ mod chat_action_tests {
         headers: HeaderMap,
     ) -> (StatusCode, serde_json::Value) {
         let json_body = body.map(|v| Json(serde_json::from_value(v).unwrap()));
-        let resp = chat_action_handler(
+        let resp = chat_action_with_owner(
             auth,
             headers,
             Path(login.to_string()),
             Extension(ChatActionExt(port)),
             json_body,
+            Some("662995601738170389"),
         )
         .await
         .into_response();
@@ -664,7 +670,7 @@ mod chat_action_tests {
             "nani",
             Some(serde_json::json!({"message": "x"})),
             AuthLevel::Admin,
-            owner_header(DEFAULT_OWNER_DISCORD_ID),
+            owner_header("662995601738170389"),
         )
         .await;
         assert_eq!(status, StatusCode::OK);

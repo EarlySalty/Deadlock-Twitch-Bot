@@ -74,9 +74,6 @@ use crate::task_supervisor::TaskSupervisor;
 /// Channel-Join alle 30 Minuten, connection.py).
 const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
-/// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
-const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
-
 fn knowledge_dir() -> Result<PathBuf, String> {
     let snapshot = tb_config::runtime::active()
         .ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
@@ -622,6 +619,7 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool, enabled: bo
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
+    pub discord_chat: tb_config::discord::DiscordChat,
     pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     pub clip_port: Option<Arc<dyn ClipPort>>,
@@ -647,6 +645,7 @@ pub async fn build_runtime(
     supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
+        discord_chat,
         subscription_status,
         manual_raid,
         clip_port,
@@ -743,6 +742,7 @@ pub async fn build_runtime(
         pool: pool.clone(),
         relay: invite_relay,
         invite_channel_id: Some(invite_channel_id),
+        fallback: discord_chat.promo_invite.clone(),
     });
     if let Some(relay) = review_relay.clone() {
         let pool = pool.clone();
@@ -800,7 +800,7 @@ pub async fn build_runtime(
             pool: pool.clone(),
         }),
         Arc::clone(&discord_link),
-        Arc::new(DbInvitePort { pool: pool.clone() }),
+        Arc::new(DbInvitePort { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
     )
@@ -841,7 +841,9 @@ pub async fn build_runtime(
     let account_age: Arc<dyn AccountAgePort> = Arc::new(HelixAccountAge {
         api: Arc::clone(&api),
     });
-    let alerter = Arc::new(ModAlerter::new(http.clone()));
+    let alerter = Arc::new(ModAlerter::with_endpoint_and_channel_id(
+        http.clone(), "http://localhost:8899/changelog", discord_chat.moderation_alert_channel_id,
+    ));
     let scout_crew_guard = Arc::new(CrewGuard::new(
         true,
         Arc::clone(&alerter),
@@ -876,7 +878,7 @@ pub async fn build_runtime(
         )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+            Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
@@ -887,7 +889,7 @@ pub async fn build_runtime(
         lfg_pitch: Arc::new({
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
-                Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+                Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
                 Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
                     None, None, None, None,
                 ))),
@@ -2393,6 +2395,7 @@ impl DiscordLinkPort for DbDiscordLink {
 /// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
 struct DbInviteUrlWithFallback {
     pool: PgPool,
+    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2409,17 +2412,14 @@ impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
         Ok(row
             .map(|(url,)| url)
             .filter(|url| !url.trim().is_empty())
-            .or_else(|| {
-                std::env::var(PROMO_DISCORD_INVITE_ENV)
-                    .ok()
-                    .filter(|url| !url.trim().is_empty())
-            }))
+            .or_else(|| self.fallback.clone()))
     }
 }
 
 /// !invite — Antwortzeile unabhängig von Streamstatus und Kategorie.
 struct DbInvitePort {
     pool: PgPool,
+    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2440,11 +2440,7 @@ impl InvitePort for DbInvitePort {
         let invite_url = row
             .map(|(url,)| url)
             .filter(|u| !u.trim().is_empty())
-            .or_else(|| {
-                std::env::var(PROMO_DISCORD_INVITE_ENV)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-            });
+            .or_else(|| self.fallback.clone());
         let Some(invite_url) = invite_url else {
             return Ok(None);
         };
@@ -2507,6 +2503,7 @@ impl PartnerChannelCheck for DbPartnerCheck {
 /// Promo-Invite: streamer-spezifisch → Broker-Erstellung → globaler Fallback.
 struct DbInviteResolver {
     pool: PgPool,
+    fallback: Option<String>,
     relay: Option<BrokerRelay>,
     invite_channel_id: Option<u64>,
 }
@@ -2532,7 +2529,7 @@ impl InviteResolver for DbInviteResolver {
             return (url, true);
         }
         (
-            promo_invite_fallback(std::env::var(PROMO_DISCORD_INVITE_ENV).ok().as_deref()),
+            promo_invite_fallback(self.fallback.as_deref()),
             false,
         )
     }
@@ -3943,6 +3940,7 @@ mod db_tests {
             pool: pool.clone(),
             relay: None,
             invite_channel_id: None,
+            fallback: None,
         };
         let logins = resolver.partners_without_invite().await.unwrap();
         assert_eq!(logins, vec!["fresh".to_string()]);
@@ -3981,7 +3979,7 @@ mod invite_offline_tests {
             .execute(&pool)
             .await
             .unwrap();
-        let port = DbInvitePort { pool: pool.clone() };
+        let port = DbInvitePort { pool: pool.clone(), fallback: None };
         for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
             sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
                 .bind(live)

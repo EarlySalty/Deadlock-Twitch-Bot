@@ -7,6 +7,9 @@ use std::path::PathBuf;
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BotOperations {
+    pub runtime_role: String,
+    pub runtime_enforce: bool,
+    pub legacy_internal_api_port: Option<u16>,
     pub run_database_migrations: bool,
     pub highlight_clipper_enabled: bool,
     pub monitoring_poll_enabled: bool,
@@ -44,6 +47,9 @@ pub struct BotOperations {
 impl Default for BotOperations {
     fn default() -> Self {
         Self {
+            runtime_role: String::new(),
+            runtime_enforce: true,
+            legacy_internal_api_port: None,
             run_database_migrations: true,
             highlight_clipper_enabled: false,
             monitoring_poll_enabled: false,
@@ -83,6 +89,12 @@ impl Default for BotOperations {
 impl BotOperations {
     pub fn validate(&self) -> Result<(), FileError> {
         use crate::global::public_url;
+        if self.runtime_role.len() > 64 || self.runtime_role.chars().any(char::is_control) {
+            return Err(FileError::invalid("bot.runtime_role"));
+        }
+        if self.legacy_internal_api_port.is_some_and(|port| port == 0 || port == 8766) {
+            return Err(FileError::invalid("bot.legacy_internal_api_port"));
+        }
         public_url(&self.raid_redirect_uri, "bot.raid_redirect_uri", false)?;
         if !self.clip_raid_redirect_uri.is_empty() {
             public_url(

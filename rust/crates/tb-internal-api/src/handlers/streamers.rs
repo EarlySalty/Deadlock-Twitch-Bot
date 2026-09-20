@@ -1220,18 +1220,14 @@ async fn archive_handler_inner(
 /// discord-flag/profile tragen weder guild/channel/role im Body → bei gesetzter
 /// Allowlist schlägt die Prüfung via None ∉ Allowlist als 403 durch (deny-by-default,
 /// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
-fn enforce_discord_action_scope() -> Result<(), ApiError> {
-    use super::telemetry_routes::{
-        enforce_scope_allowlist, parse_allowlist_ids, ENV_ALLOWED_CHANNEL_IDS,
-        ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
-    };
-    for (env, key) in [
-        (ENV_ALLOWED_GUILD_IDS, "guild_id"),
-        (ENV_ALLOWED_CHANNEL_IDS, "channel_id"),
-        (ENV_ALLOWED_ROLE_IDS, "role_id"),
+fn enforce_discord_action_scope(scope: &tb_config::discord::RaidOAuth) -> Result<(), ApiError> {
+    use super::telemetry_routes::{enforce_scope_allowlist, configured_allowlist};
+    for (ids, key) in [
+        (&scope.allowed_guild_ids, "guild_id"),
+        (&scope.allowed_channel_ids, "channel_id"),
+        (&scope.allowed_role_ids, "role_id"),
     ] {
-        enforce_scope_allowlist(None, &parse_allowlist_ids(env), key)
-            .map_err(|_| ApiError::forbidden())?;
+        enforce_scope_allowlist(None, &configured_allowlist(ids), key).map_err(|_| ApiError::forbidden())?;
     }
     Ok(())
 }
@@ -1244,6 +1240,7 @@ fn enforce_discord_action_scope() -> Result<(), ApiError> {
 /// Fehlendes Feld → 400 (Python: "is_on_discord is required")
 pub async fn discord_flag_handler(
     auth: AuthLevel,
+    Extension(scope): Extension<Option<tb_config::discord::RaidOAuth>>,
     State(pool): State<PgPool>,
     Extension(idem): Extension<IdempotencyState>,
     headers: HeaderMap,
@@ -1254,8 +1251,9 @@ pub async fn discord_flag_handler(
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
+    let Some(scope) = scope else { return ApiError::internal().into_response(); };
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
-        discord_flag_handler_inner(&pool, &raw_login, &payload)
+        discord_flag_handler_inner(&pool, &raw_login, &payload, &scope)
     })
     .await
 }
@@ -1264,13 +1262,14 @@ async fn discord_flag_handler_inner(
     pool: &PgPool,
     raw_login: &str,
     payload: &serde_json::Value,
+    scope: &tb_config::discord::RaidOAuth,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    enforce_discord_action_scope()?;
+    enforce_discord_action_scope(scope)?;
 
     let body: DiscordFlagRequest = serde_json::from_value(payload.clone())
         .map_err(|_| ApiError::bad_request("invalid request body"))?;
@@ -1331,6 +1330,7 @@ async fn active_partner_exists(pool: &PgPool, login: &str) -> Result<bool, sqlx:
 #[allow(clippy::too_many_arguments)]
 pub async fn discord_profile_handler(
     auth: AuthLevel,
+    Extension(scope): Extension<Option<tb_config::discord::RaidOAuth>>,
     State(pool): State<PgPool>,
     Extension(helix): Extension<Arc<Option<HelixClient>>>,
     Extension(role_ext): Extension<DiscordRoleExt>,
@@ -1343,6 +1343,7 @@ pub async fn discord_profile_handler(
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
+    let Some(scope) = scope else { return ApiError::internal().into_response(); };
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
         discord_profile_handler_inner(
             &pool,
@@ -1350,6 +1351,7 @@ pub async fn discord_profile_handler(
             &role_ext,
             &raw_login,
             &payload,
+            &scope,
         )
     })
     .await
@@ -1361,13 +1363,14 @@ async fn discord_profile_handler_inner(
     role_ext: &DiscordRoleExt,
     raw_login: &str,
     payload: &serde_json::Value,
+    scope: &tb_config::discord::RaidOAuth,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    enforce_discord_action_scope()?;
+    enforce_discord_action_scope(scope)?;
 
     let body: DiscordProfileRequest = serde_json::from_value(payload.clone())
         .map_err(|_| ApiError::bad_request("invalid request body"))?;
@@ -1889,6 +1892,7 @@ mod tests {
                 get(session_detail_handler),
             )
             .with_state(pool)
+            .layer(Extension(Some(tb_config::discord::RaidOAuth::default())))
             .layer(Extension(helix))
             .layer(Extension(DiscordRoleExt(role)))
             .layer(Extension(ModeratorRemovalExt(removal)))

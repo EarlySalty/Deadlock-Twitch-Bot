@@ -58,3 +58,11 @@ Quellbasis `ca398cc9` (zusätzlich gemeinsames Schema aus A `e937f659`, hier `89
 - `TB_SCOUT_ENABLED`: false; Scout bekommt den Schalter explizit vom Botstart. Keine Aktivierung durch die Migration.
 - Typisierte ungültige Eingaben werden vor Start abgelehnt, statt alte ungültige ENV-Strings pro Aufruf zu parsen und auf Defaults/Clamps zu fallen. Gültige Betriebswerte und Grenzen bleiben gleich.
 - Pool-Editor ändert gezielt nur seine drei erlaubten Felder, lässt neu hinzugekommene Retrywerte unverändert; eigener Erhaltungstest.
+
+## B5: Dienstrollen und Discord-Schreibpfade
+
+- Botrolle aus `TWITCH_RUNTIME_ROLE`/`TWITCH_SPLIT_RUNTIME_ROLE`, Enforcement aus gleichnamigen `_ENFORCE`-Alternativen: `bot.runtime_role` (leer), `bot.runtime_enforce` (true). Bot und Dashboard besitzen getrennte dienstbezogene Werte. Härtung prüft Botrolle/Port nun vor --check-config-Erfolg, DB und Hintergrundjobs. Bisheriger Legacy-Portoverride ist `bot.legacy_internal_api_port`; reservierter Master-Port bleibt unzulässig. Kein UI-Schalter hierfür.
+- `TWITCH_ALERT_CHANNEL_ID`: `discord.chat.moderation_alert_channel_id`, Default1374364800817303632. Der produktive ModAlerter bekommt den Wert explizit; Test-/Bibliothekskonstruktoren bleiben reine Defaults.
+- `PROMO_DISCORD_INVITE`: optional `discord.chat.promo_invite`. Bestehende unterschiedliche Fallbacks bleiben erhalten: Invite-Question/!invite ohne gesetzten Wert kein globaler Fallback; Promo-Resolver und interner Chat-Command behalten ihren bisherigen festen Invite. Streamer-spezifische DB-Einträge haben weiter Vorrang.
+- `TWITCH_DASHBOARD_OWNER_DISCORD_ID`: eigene `discord.internal.owner_id`, Default662995601738170389. Nicht mit A-Dashboard-Adminowner (`Option`, andere Aliasquellen) zusammengeführt. Fehlende Config erlaubt keine identifizierte Owner-Aktion; fehlender Ownerheader bleibt beim bisherigen Token-/Loopback-Gate.
+- Dieselben `TWITCH_INTERNAL_API_ALLOWED_*`-Altquellen für RaidOAuth, LinkClick und Streamer-Discord-Aktionen konsumieren eine Policy (`discord.raid_oauth.allowed_*`). None bleibt Guard aus, leere Liste bleibt deny-all. Auth-/Idempotenzablauf erhalten. Tests übergeben Scope/Owner/Retry/Notify explizit statt prozessweite ENV zu mutieren.

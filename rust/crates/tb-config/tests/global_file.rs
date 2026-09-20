@@ -571,3 +571,18 @@ fn retry_und_monitoring_grenzen_werden_vor_laufzeit_geprüft() {
         "[monitoring]\nobservability_retention_days=-1",
     ] { assert!(parse(&format!("{VALID}\n{table}")).is_err(), "{table}"); }
 }
+
+#[test]
+fn bot_rolle_und_discord_chat_defaults_bleiben_getrennt() {
+    let snapshot = parse(VALID).unwrap();
+    let cfg = snapshot.settings();
+    assert!(cfg.bot.runtime_role.is_empty());
+    assert!(cfg.bot.runtime_enforce);
+    assert!(cfg.bot.legacy_internal_api_port.is_none());
+    assert_eq!(cfg.discord.internal.owner_id, "662995601738170389");
+    assert_eq!(cfg.discord.chat.moderation_alert_channel_id, 1374364800817303632);
+    assert!(cfg.discord.chat.promo_invite.is_none());
+    assert!(cfg.dashboard.options.admin_owner_user_id.is_none());
+    assert!(parse(&format!("{VALID}\n[bot]\nlegacy_internal_api_port=8766")).is_err());
+    assert!(parse(&format!("{VALID}\n[discord.chat]\nmoderation_alert_channel_id=0")).is_err());
+}

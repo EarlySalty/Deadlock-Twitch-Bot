@@ -443,6 +443,14 @@ async fn main() {
             eprintln!("{error}");
             std::process::exit(2);
         });
+    let config = snapshot.settings();
+    let runtime_role = tb_internal_api::enforce_internal_api_runtime(
+        Some(&config.bot.runtime_role), config.internal_api.port,
+        config.bot.runtime_enforce, config.bot.legacy_internal_api_port,
+    ).unwrap_or_else(|error| {
+        eprintln!("Internal-API Runtime-Härtung verletzt: {error}");
+        std::process::exit(2);
+    });
     if remaining.len() == 1 && remaining[0] == "--check-config" {
         println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
         return;
@@ -451,7 +459,6 @@ async fn main() {
         eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
         std::process::exit(2);
     }
-    let config = snapshot.settings();
     tracing_subscriber::fmt()
         .with_max_level(config.logging.level.tracing_level())
         .init();
@@ -1213,6 +1220,7 @@ async fn main() {
                 handle,
                 pool.clone(),
                 chat_wiring::ChatRuntimePorts {
+                    discord_chat: config.discord.chat.clone(),
                     subscription_status: chat_wiring::build_subscription_status(
                         helix.as_ref().clone().map(Arc::new),
                         follower_streamer_token_provider.clone(),
@@ -1999,20 +2007,7 @@ async fn main() {
         legacy_proxy,
     );
 
-    // Block 10: Split-Deployment-Härtung vor dem Bind. `role = None` liest die
-    // Runtime-Rolle aus der Umgebung (kombiniertes Deployment: tb-bot fährt die
-    // interne API selbst). Bei Fehlkonfiguration sauberer Abbruch (Log + exit),
-    // kein Panic im Prod-Pfad. Härtung ist via TWITCH_RUNTIME_ENFORCE=0
-    // abschaltbar (Python-Parität).
-    match tb_internal_api::enforce_internal_api_runtime(None, port) {
-        Ok(role) => {
-            tracing::info!(runtime_role = %role, port, "Internal-API Runtime-Härtung bestanden");
-        }
-        Err(e) => {
-            tracing::error!("Internal-API Runtime-Härtung verletzt: {e}");
-            std::process::exit(1);
-        }
-    }
+    tracing::info!(%runtime_role, port, "Internal-API Runtime-Härtung vor Dienststart bestanden");
 
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = bind_internal_listener_with_retry(addr)

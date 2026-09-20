@@ -13,11 +13,29 @@ const STREAMER_ROLE: u64 = 1_313_624_729_466_441_769;
 #[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiscordOperations {
+    pub chat: DiscordChat,
+    pub internal: DiscordInternal,
     pub streamer_link: StreamerLink,
     pub oauth_followup: OAuthFollowup,
     pub token_lifecycle: TokenLifecycle,
     pub raid_oauth: RaidOAuth,
     pub shadow_review_channel_id: Option<i64>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscordChat {
+    pub moderation_alert_channel_id: u64,
+    pub promo_invite: Option<String>,
+}
+impl Default for DiscordChat {
+    fn default() -> Self { Self { moderation_alert_channel_id: 1374364800817303632, promo_invite: None } }
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscordInternal { pub owner_id: String }
+impl Default for DiscordInternal {
+    fn default() -> Self { Self { owner_id: "662995601738170389".into() } }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -94,6 +112,9 @@ impl Default for RaidOAuth {
 
 impl DiscordOperations {
     pub fn validate(&self) -> Result<(), FileError> {
+        crate::global::positive_id(&self.internal.owner_id, "discord.internal.owner_id")?;
+        range(self.chat.moderation_alert_channel_id, 1, u64::MAX, "discord.chat.moderation_alert_channel_id")?;
+        if let Some(url) = &self.chat.promo_invite { public_url(url, "discord.chat.promo_invite", false)?; }
         for (id, field) in [
             (
                 self.streamer_link.notify_channel_id,
