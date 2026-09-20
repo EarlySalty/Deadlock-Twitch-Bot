@@ -1,0 +1,29 @@
+name: "STT Rust Lockfile"
+
+on:
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/stt-rust-lockfile.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lock:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libopenblas-dev clang
+      - name: Generate Cargo.lock
+        run: cd rust && cargo generate-lockfile
+      - name: Upload Cargo.lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: stt-cargo-lock
+          path: rust/Cargo.lock
