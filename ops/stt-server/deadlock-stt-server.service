@@ -18,7 +18,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.cache/deadlock-stt
+CacheDirectory=deadlock-stt
+CacheDirectoryMode=0755
 
 [Install]
 WantedBy=default.target
