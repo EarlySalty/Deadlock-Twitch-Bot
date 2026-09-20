@@ -5,7 +5,6 @@ mod html;
 mod tests;
 
 use super::community::matching::{schedule, Session};
-use super::internal_home::AvatarCache;
 use crate::auth::{level::DashboardAuthLevel, streamer_scope::resolve_settings_target};
 use axum::{
     extract::{OriginalUri, Path, Query, State},
@@ -18,7 +17,13 @@ use chrono_tz::Europe::Berlin;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{types::Json as SqlJson, PgPool};
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::{Duration as StdDuration, Instant},
+};
+use tb_transport_twitch::{HelixClient, HelixConfig};
+use tokio::sync::Mutex;
 
 // Visibility deliberately does not use an auth/session or profile cache. A revoked
 // channel must disappear on the next request, including calendar and directory.
@@ -54,10 +59,16 @@ pub struct Content {
     pub headline: String,
     pub about: String,
     pub avatar_url: String,
+    pub banner_url: String,
     pub accent: Accent,
     pub socials: Vec<Social>,
     pub featured: Vec<String>,
+    pub main_heroes: Vec<String>,
+    pub rank: String,
+    pub playstyles: Vec<String>,
+    pub preferred_times: Vec<String>,
     pub show_history: bool,
+    pub sync_twitch_schedule: bool,
     pub events: Vec<Event>,
 }
 impl Default for Content {
@@ -66,10 +77,16 @@ impl Default for Content {
             headline: String::new(),
             about: String::new(),
             avatar_url: String::new(),
+            banner_url: String::new(),
             accent: Accent::Gold,
             socials: vec![],
             featured: vec![],
+            main_heroes: vec![],
+            rank: String::new(),
+            playstyles: vec![],
+            preferred_times: vec![],
             show_history: true,
+            sync_twitch_schedule: true,
             events: vec![],
         }
     }
@@ -85,6 +102,7 @@ pub struct Update {
 #[serde(deny_unknown_fields)]
 pub struct OwnerParams {
     pub streamer: Option<String>,
+    pub refresh_twitch: Option<bool>,
 }
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,6 +125,220 @@ struct Record {
 struct DirectoryEntry {
     login: String,
     headline: String,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct TwitchLiveProfile {
+    pub title: String,
+    pub game_name: String,
+    pub thumbnail_url: String,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct TwitchClipProfile {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub thumbnail_url: String,
+    pub view_count: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TwitchScheduleProfile {
+    pub id: String,
+    pub title: String,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub is_recurring: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct TwitchProfileSnapshot {
+    pub available: bool,
+    pub display_name: String,
+    pub description: String,
+    pub profile_image_url: String,
+    pub banner_url: String,
+    pub live: Option<TwitchLiveProfile>,
+    pub clips: Vec<TwitchClipProfile>,
+    pub schedule: Vec<TwitchScheduleProfile>,
+}
+
+#[derive(Clone)]
+pub struct TwitchProfileCache {
+    helix: HelixClient,
+    ttl: StdDuration,
+    entries: Arc<Mutex<HashMap<String, CachedTwitchProfile>>>,
+}
+
+#[derive(Clone)]
+struct CachedTwitchProfile {
+    value: TwitchProfileSnapshot,
+    expires_at: Instant,
+}
+
+impl TwitchProfileCache {
+    const TTL: StdDuration = StdDuration::from_secs(60);
+
+    pub fn from_env() -> Option<Self> {
+        let client_id = std::env::var("TWITCH_CLIENT_ID")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let client_id_present = client_id.is_some();
+        let client_secret_present = client_secret.is_some();
+        let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
+            tracing::warn!(
+                client_id_present,
+                client_secret_present,
+                "Partnerprofil Twitch Cache deaktiviert: Client Zugangsdaten fehlen"
+            );
+            return None;
+        };
+        match HelixClient::new(HelixConfig::new(client_id, client_secret)) {
+            Ok(helix) => Some(Self {
+                helix,
+                ttl: Self::TTL,
+                entries: Arc::new(Mutex::new(HashMap::new())),
+            }),
+            Err(error) => {
+                tracing::warn!(%error, "Partnerprofil Twitch Cache konnte nicht erstellt werden");
+                None
+            }
+        }
+    }
+
+    pub async fn snapshot(
+        &self,
+        twitch_user_id: &str,
+        login: &str,
+        now: DateTime<Utc>,
+        force_refresh: bool,
+    ) -> TwitchProfileSnapshot {
+        let key = twitch_user_id.trim().to_string();
+        if key.is_empty() {
+            return TwitchProfileSnapshot::default();
+        }
+        if !force_refresh {
+            if let Some(cached) = self.entries.lock().await.get(&key) {
+                if cached.expires_at > Instant::now() {
+                    return cached.value.clone();
+                }
+            }
+        }
+
+        let user_ids = vec![key.clone()];
+        let user_id_refs = [key.as_str()];
+        let clips_since = now - Duration::days(30);
+        let schedule_until = now + Duration::days(30);
+        let (users_result, streams_result, schedule_result, clips_result) = tokio::join!(
+            self.helix.get_users_by_id(&user_id_refs),
+            self.helix.get_streams_by_user_ids(&user_ids, None),
+            self.helix.get_channel_stream_schedule(&key, now, 50),
+            self.helix
+                .get_clips_by_broadcaster_range(&key, clips_since, now, 3),
+        );
+
+        let mut snapshot = TwitchProfileSnapshot::default();
+        match users_result {
+            Ok(mut users) => {
+                if let Some(user) = users.remove(&key) {
+                    snapshot.available = true;
+                    snapshot.display_name = user.display_name;
+                    snapshot.description = user.description.trim().to_string();
+                    snapshot.profile_image_url = user
+                        .profile_image_url
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    snapshot.banner_url =
+                        user.offline_image_url.unwrap_or_default().trim().to_string();
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, twitch_login = %login, "Twitch Profildaten nicht abrufbar");
+            }
+        }
+
+        match streams_result {
+            Ok(streams) => {
+                if let Some(stream) = streams.into_iter().find(|stream| stream.user_id == key) {
+                    snapshot.live = Some(TwitchLiveProfile {
+                        title: stream.title,
+                        game_name: stream.game_name,
+                        thumbnail_url: stream
+                            .thumbnail_url
+                            .replace("{width}", "960")
+                            .replace("{height}", "540"),
+                    });
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, twitch_login = %login, "Twitch Livebild nicht abrufbar");
+            }
+        }
+
+        match schedule_result {
+            Ok(segments) => {
+                snapshot.schedule = segments
+                    .into_iter()
+                    .filter_map(|segment| {
+                        let starts_at = DateTime::parse_from_rfc3339(&segment.start_time)
+                            .ok()?
+                            .with_timezone(&Utc);
+                        let ends_at = DateTime::parse_from_rfc3339(&segment.end_time)
+                            .ok()?
+                            .with_timezone(&Utc);
+                        (ends_at > now && starts_at < schedule_until && ends_at > starts_at).then_some(
+                            TwitchScheduleProfile {
+                                id: segment.id,
+                                title: segment.title.trim().to_string(),
+                                starts_at,
+                                ends_at,
+                                is_recurring: segment.is_recurring,
+                            },
+                        )
+                    })
+                    .collect();
+                snapshot.schedule.sort_by_key(|segment| segment.starts_at);
+            }
+            Err(error) => {
+                tracing::warn!(%error, twitch_login = %login, "Twitch Streamplan nicht abrufbar");
+            }
+        }
+
+        match clips_result {
+            Ok(clips) => {
+                snapshot.clips = clips
+                    .into_iter()
+                    .filter(|clip| !clip.url.trim().is_empty())
+                    .map(|clip| TwitchClipProfile {
+                        id: clip.id,
+                        title: clip.title.trim().to_string(),
+                        url: clip.url.trim().to_string(),
+                        thumbnail_url: clip.thumbnail_url.trim().to_string(),
+                        view_count: clip.view_count.max(0),
+                    })
+                    .collect();
+            }
+            Err(error) => {
+                tracing::warn!(%error, twitch_login = %login, "Twitch Clips nicht abrufbar");
+            }
+        }
+
+        self.entries.lock().await.insert(
+            key,
+            CachedTwitchProfile {
+                value: snapshot.clone(),
+                expires_at: Instant::now() + self.ttl,
+            },
+        );
+        snapshot
+    }
 }
 
 fn no_store(mut response: Response) -> Response {
@@ -171,6 +403,33 @@ fn text(value: &mut String, max: usize) -> bool {
             .chars()
             .any(|c| c.is_control() && c != '\n' && c != '\t')
 }
+fn safe_twitch_image(raw: &str) -> bool {
+    raw.is_empty()
+        || (raw.len() <= 2048
+            && safe_url(raw)
+            && url::Url::parse(raw)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_string))
+                .as_deref()
+                == Some("static-cdn.jtvnw.net"))
+}
+const PLAYSTYLE_KEYS: &[&str] = &[
+    "competitive",
+    "tryhard",
+    "chill",
+    "community",
+    "educational",
+    "variety",
+];
+const PREFERRED_TIME_KEYS: &[&str] = &[
+    "weekday_day",
+    "weekday_evening",
+    "weekday_late",
+    "weekend_day",
+    "weekend_evening",
+    "spontaneous",
+];
+
 fn validate(update: &mut Update) -> Result<(), &'static str> {
     if update.revision < 0 || update.revision == i64::MAX {
         return Err("Ungültiger Profilstand.");
@@ -179,20 +438,44 @@ fn validate(update: &mut Update) -> Result<(), &'static str> {
     if !text(&mut p.headline, 120) || !text(&mut p.about, 4000) {
         return Err("Überschrift: höchstens 120 Zeichen. Über mich: höchstens 4000 Zeichen.");
     }
-    if p.socials.len() > 12 || p.featured.len() > 6 || p.events.len() > 200 {
-        return Err("Höchstens 12 Links, 6 Partnerempfehlungen und 200 Termine speichern.");
+    if p.socials.len() > 12
+        || p.featured.len() > 6
+        || p.main_heroes.len() > 3
+        || p.playstyles.len() > 6
+        || p.preferred_times.len() > 6
+        || p.events.len() > 200
+    {
+        return Err("Zu viele Profilangaben. Bitte Auswahl und Termine reduzieren.");
     }
     p.avatar_url = p.avatar_url.trim().into();
-    if p.avatar_url.len() > 2048
-        || (!p.avatar_url.is_empty()
-            && (!safe_url(&p.avatar_url)
-                || url::Url::parse(&p.avatar_url)
-                    .ok()
-                    .and_then(|u| u.host_str().map(str::to_string))
-                    .as_deref()
-                    != Some("static-cdn.jtvnw.net")))
-    {
-        return Err("Für das Profilbild bitte eine HTTPS-Bildadresse von static-cdn.jtvnw.net verwenden oder das Feld leeren.");
+    p.banner_url = p.banner_url.trim().into();
+    if !safe_twitch_image(&p.avatar_url) || !safe_twitch_image(&p.banner_url) {
+        return Err("Profilbild und Banner müssen gültige Twitch Bildadressen sein.");
+    }
+    if !text(&mut p.rank, 40) {
+        return Err("Der Rang darf höchstens 40 Zeichen haben.");
+    }
+    let mut heroes = HashSet::new();
+    for hero in &mut p.main_heroes {
+        if !text(hero, 40) || hero.is_empty() || !heroes.insert(hero.to_lowercase()) {
+            return Err("Bitte höchstens drei unterschiedliche Helden auswählen.");
+        }
+    }
+    let mut playstyles = HashSet::new();
+    for playstyle in &mut p.playstyles {
+        *playstyle = playstyle.trim().to_ascii_lowercase();
+        if !PLAYSTYLE_KEYS.contains(&playstyle.as_str()) || !playstyles.insert(playstyle.clone()) {
+            return Err("Ungültiger Spielstil im Profil.");
+        }
+    }
+    let mut preferred_times = HashSet::new();
+    for preferred_time in &mut p.preferred_times {
+        *preferred_time = preferred_time.trim().to_ascii_lowercase();
+        if !PREFERRED_TIME_KEYS.contains(&preferred_time.as_str())
+            || !preferred_times.insert(preferred_time.clone())
+        {
+            return Err("Ungültige bevorzugte Streamzeit im Profil.");
+        }
     }
     for social in &mut p.socials {
         social.url = social.url.trim().into();
@@ -274,20 +557,56 @@ fn owner(auth: &DashboardAuthLevel, params: &OwnerParams) -> Result<(String, Str
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "Ungültiger Twitch-Kanal."))?;
     Ok((login, id))
 }
-fn owner_response(record: Record) -> Response {
-    no_store(Json(json!({"login": record.login, "public_path": format!("/streamer/{}", record.login), "active": record.active, "published": record.published, "revision": record.revision, "profile": record.content.0})).into_response())
+fn owner_response(record: Record, twitch: Option<TwitchProfileSnapshot>) -> Response {
+    no_store(Json(json!({
+        "login": record.login,
+        "public_path": format!("/streamer/{}", record.login),
+        "active": record.active,
+        "published": record.published,
+        "revision": record.revision,
+        "profile": record.content.0,
+        "twitch": twitch,
+    })).into_response())
 }
+
+async fn twitch_snapshot(
+    cache: Option<Extension<TwitchProfileCache>>,
+    record: &Record,
+    now: DateTime<Utc>,
+    force_refresh: bool,
+) -> TwitchProfileSnapshot {
+    let Some(Extension(cache)) = cache else {
+        return TwitchProfileSnapshot::default();
+    };
+    tokio::time::timeout(
+        StdDuration::from_secs(4),
+        cache.snapshot(&record.twitch_user_id, &record.login, now, force_refresh),
+    )
+    .await
+    .unwrap_or_default()
+}
+
 pub async fn get_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<OwnerParams>,
+    cache: Option<Extension<TwitchProfileCache>>,
 ) -> Response {
     let (login, id) = match owner(&auth, &params) {
         Ok(v) => v,
         Err(r) => return no_store(r),
     };
     match load(&pool, &login).await {
-        Ok(Some(record)) if id.is_empty() || record.twitch_user_id == id => owner_response(record),
+        Ok(Some(record)) if id.is_empty() || record.twitch_user_id == id => {
+            let twitch = twitch_snapshot(
+                cache,
+                &record,
+                Utc::now(),
+                params.refresh_twitch.unwrap_or(false),
+            )
+            .await;
+            owner_response(record, Some(twitch))
+        }
         Ok(_) => error(
             StatusCode::NOT_FOUND,
             "Kein Partnerprofil für diesen Kanal gefunden.",
@@ -299,6 +618,7 @@ pub async fn put_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<OwnerParams>,
+    cache: Option<Extension<TwitchProfileCache>>,
     Json(mut update): Json<Update>,
 ) -> Response {
     let (login, id) = match owner(&auth, &params) {
@@ -351,12 +671,16 @@ pub async fn put_handler(
     .fetch_optional(&pool)
     .await;
     match revision {
-        Ok(Some(revision)) => owner_response(Record {
-            revision,
-            published: update.published,
-            content: SqlJson(update.profile),
-            ..record
-        }),
+        Ok(Some(revision)) => {
+            let saved = Record {
+                revision,
+                published: update.published,
+                content: SqlJson(update.profile),
+                ..record
+            };
+            let twitch = twitch_snapshot(cache, &saved, Utc::now(), false).await;
+            owner_response(saved, Some(twitch))
+        },
         Ok(None) => error(
             StatusCode::CONFLICT,
             "Der Profil- oder Partnerstatus wurde geändert. Bitte neu laden.",
@@ -432,7 +756,7 @@ pub async fn streamer_handler(
     State(pool): State<PgPool>,
     Path(path): Path<String>,
     OriginalUri(uri): OriginalUri,
-    avatar_cache: Option<Extension<AvatarCache>>,
+    profile_cache: Option<Extension<TwitchProfileCache>>,
 ) -> Response {
     let handle = path.strip_suffix('/').unwrap_or(&path);
     if profile_login(handle).is_some() || handle.starts_with('@') {
@@ -440,11 +764,11 @@ pub async fn streamer_handler(
             Ok(Query(params)) => params,
             Err(err) => return no_store(err.into_response()),
         };
-        return page_handler_with_avatar(
+        return page_handler_with_twitch(
             State(pool),
             Path(handle.to_string()),
             Query(params),
-            avatar_cache,
+            profile_cache,
         )
         .await;
     }
@@ -456,13 +780,13 @@ pub async fn page_handler(
     path: Path<String>,
     query: Query<PageParams>,
 ) -> Response {
-    page_handler_with_avatar(state, path, query, None).await
+    page_handler_with_twitch(state, path, query, None).await
 }
-async fn page_handler_with_avatar(
+async fn page_handler_with_twitch(
     State(pool): State<PgPool>,
     Path(handle): Path<String>,
     Query(params): Query<PageParams>,
-    avatar_cache: Option<Extension<AvatarCache>>,
+    profile_cache: Option<Extension<TwitchProfileCache>>,
 ) -> Response {
     let Some(login) = profile_login(&handle) else {
         return html::missing(StatusCode::NOT_FOUND);
@@ -476,16 +800,7 @@ async fn page_handler_with_avatar(
         }
     };
     let now = Utc::now();
-    let twitch_avatar = match avatar_cache {
-        Some(Extension(cache)) => tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            cache.profile_image_url(&record.login),
-        )
-        .await
-        .ok()
-        .flatten(),
-        None => None,
-    };
+    let twitch = twitch_snapshot(profile_cache, &record, now, false).await;
     let Some((month, start, end)) = month_range(params.month.as_deref(), now) else {
         return html::missing(StatusCode::BAD_REQUEST);
     };
@@ -526,7 +841,7 @@ async fn page_handler_with_avatar(
     let observed = schedule(&recent, recent_start, now);
     html::page(
         &record,
-        twitch_avatar.as_deref(),
+        &twitch,
         &observed,
         &monthly,
         &entries,

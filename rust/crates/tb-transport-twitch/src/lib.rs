@@ -7,6 +7,7 @@ pub mod clips;
 pub mod eventsub;
 pub mod moderation;
 pub mod raid;
+pub mod schedule;
 pub mod streams;
 pub mod token;
 pub mod user_token;
@@ -20,6 +21,7 @@ pub use client::{ClipInfo, HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use clips::HelixClip;
 pub use eventsub::{CreateOutcome, EventSubCreateError, EventSubSubscription};
 pub use moderation::{AddModeratorOutcome, RemoveModeratorOutcome};
+pub use schedule::HelixScheduleSegment;
 pub use streams::{
     AdSchedule, BroadcasterSubscriptions, CommercialOutcome, FollowersTotalFetch, HelixChannelInfo,
     HelixStream, SnoozeOutcome, Subscription,
