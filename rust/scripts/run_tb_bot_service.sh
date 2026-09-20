@@ -4,6 +4,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OPERATING_CONFIG='/var/lib/deadlock-twitch/config/bot.toml'
+# Vor Infisical und Hintergrundarbeit prüfen. Fehlende Datei ist ein echter
+# Rollout-Blocker; keine stillen Defaults und keine Übernahme aus ENV.
+"$ROOT_DIR/rust/target/release/tb-bot" --config "$OPERATING_CONFIG" --check-config >/dev/null
 SYSTEMD_CREDENTIAL_DIR='/run/credentials/deadlock-twitch-bot-rust.service'
 if [[ -r "$SYSTEMD_CREDENTIAL_DIR/infisical-token" ]]; then
   CREDENTIALS_DIRECTORY="$SYSTEMD_CREDENTIAL_DIR"
@@ -152,4 +156,4 @@ export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-account
 export RUST_LOG="${RUST_LOG:-info}"
 # Bot-Token-Write-Back (ADR 0005): INFISICAL_WRITE_TOKEN wurde oben gesetzt.
 
-exec "$ROOT_DIR/rust/target/release/tb-bot"
+exec "$ROOT_DIR/rust/target/release/tb-bot" --config "$OPERATING_CONFIG" "$@"

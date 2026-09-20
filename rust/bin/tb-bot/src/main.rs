@@ -194,25 +194,6 @@ fn optional_env_u16(name: &str, default: u16) -> u16 {
     }
 }
 
-fn optional_env_i64(name: &str, default: i64) -> i64 {
-    match std::env::var(name) {
-        Ok(value) if value.trim().is_empty() => default,
-        Ok(value) => match value.trim().parse::<i64>() {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                tracing::warn!(
-                    setting = name,
-                    value = %value,
-                    default,
-                    "Ungültiger optionaler Integer-Env-Wert; Default wird verwendet"
-                );
-                default
-            }
-        },
-        Err(_) => default,
-    }
-}
-
 fn optional_env_u64_with_fallback(primary: &str, fallback: &str, default: u64) -> u64 {
     for name in [primary, fallback] {
         match std::env::var(name) {
@@ -312,7 +293,6 @@ async fn bind_internal_listener_with_retry(
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tb_config::Settings;
 use tb_crypto::FieldCipher;
 use tb_internal_api::build_internal_router;
 use tb_monitoring::poller::{ChannelInfoSource, PollHooks, StreamSource};
@@ -582,39 +562,32 @@ impl PollHooks for SubscriptionPollHooks {
     }
 }
 
-/// Sprachfilter fürs Kategorie-Sampling/Scout. Python hartkodiert
-/// `TWITCH_LANGUAGE="de de-de de-at de-ch"` (core/constants.py); hier ist ein
-/// Env-Override via `TWITCH_LANGUAGE_FILTERS` erlaubt, aber leer/ungesetzt fällt
-/// auf den deutschen Default zurück — **nicht** auf „alle Sprachen", sonst landet
-/// das Kategorie-Sample sprachgemischt in den Stats (Port-Bug bis 13.6.).
-fn language_filters_from_env() -> Vec<String> {
-    let parsed: Vec<String> = std::env::var("TWITCH_LANGUAGE_FILTERS")
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-    if parsed.is_empty() {
-        ["de", "de-de", "de-at", "de-ch"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        parsed
-    }
-}
-
 #[tokio::main]
 async fn main() {
     if print_build_revision() {
         return;
     }
-    tracing_subscriber::fmt::init();
+    let (snapshot, remaining) = tb_config::runtime::start(std::env::args_os().skip(1))
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(2);
+        });
+    if remaining.len() == 1 && remaining[0] == "--check-config" {
+        println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
+        return;
+    }
+    if !remaining.is_empty() {
+        eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
+        std::process::exit(2);
+    }
+    let config = snapshot.settings();
+    tracing_subscriber::fmt()
+        .with_max_level(config.logging.level.tracing_level())
+        .init();
+    tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_BOT_CONFIG_V1");
     let supervisor = task_supervisor::TaskSupervisor::start();
 
-    let settings = Settings::from_env().unwrap_or_else(|e| {
+    let settings = snapshot.runtime_settings(&|key| std::env::var(key).ok()).unwrap_or_else(|e| {
         tracing::error!("Konfigurationsfehler: {e}");
         std::process::exit(1);
     });
@@ -643,7 +616,7 @@ async fn main() {
     chat_typen_wiring::spawn(&supervisor, pool.clone());
     crew_archive::start(&supervisor, pool.clone(), &settings.broker);
 
-    let port: u16 = optional_env_u16("PORT", 8776);
+    let port = config.internal_api.port;
 
     // HelixClient aus Env bauen — optional, Bot startet auch ohne Helix
     let helix: Arc<Option<HelixClient>> = {
@@ -672,8 +645,7 @@ async fn main() {
     // EventSub-Ingress: Inbox-Worker + Dispatcher. Mit Webhook-Config + Helix
     // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
     // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).
-    let target_game =
-        std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
+    let target_game = config.twitch.target_game.clone();
     let guard = GuardStore::new(pool.clone());
     // P2.57: `mut`, weil der inbound Bot-Timeout-Guard erst nach dem
     // ChatRuntime-Aufbau injiziert wird (s. `with_bot_timeout_guard` unten).
@@ -764,10 +736,7 @@ async fn main() {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let callback_url = std::env::var("TWITCH_EVENTSUB_CALLBACK_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    let callback_url = Some(config.twitch.eventsub_callback_url.clone());
     let bot_ban_handler =
         token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker);
     let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
@@ -1809,7 +1778,10 @@ async fn main() {
     let _poll_stop = if poll_enabled {
         match helix.as_ref().clone() {
             Some(helix_client) => {
-                let notify_channel_id: i64 = optional_env_i64("TWITCH_NOTIFY_CHANNEL_ID", 0);
+                let notify_channel_id: i64 = config.twitch.notify_channel_id.parse().unwrap_or_else(|_| {
+                    tracing::error!("Geprüfte Discord-Ziel-ID konnte nicht übernommen werden.");
+                    std::process::exit(2);
+                });
                 let sink: Arc<dyn AnnouncementSink> = if notify_channel_id > 0 {
                     match BrokerRelay::new(&settings.broker) {
                         Ok(relay) => {
@@ -1879,7 +1851,7 @@ async fn main() {
                     }),
                     None => Arc::new(tb_monitoring::NoopPollHooks),
                 };
-                let language_filters: Vec<String> = language_filters_from_env();
+                let language_filters = config.twitch.language_filters.clone();
                 let source: Arc<dyn StreamSource> = Arc::new(HelixStreamSource {
                     helix: helix_client,
                 });
@@ -1932,9 +1904,8 @@ async fn main() {
     // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.
     // Deaktiviert bis TB_SCOUT_ENABLED=1 gesetzt ist.
     if let Some(ref h) = *helix {
-        let scout_game =
-            std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
-        let scout_lang_filters: Vec<String> = language_filters_from_env();
+        let scout_game = config.twitch.target_game.clone();
+        let scout_lang_filters = config.twitch.language_filters.clone();
         let scout_chat_adapter = scout_crew_guard.as_ref().map_or_else(
             || scout_chat::ScoutChatAdapter::storage_only(pool.clone(), &supervisor),
             |crew_guard| {
@@ -2041,7 +2012,7 @@ async fn main() {
 
     irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone(), irc_lurker_tracker);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::new(config.internal_api.host, port);
     let token = settings.internal_api.token.clone();
     let legacy_proxy = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
         .ok()

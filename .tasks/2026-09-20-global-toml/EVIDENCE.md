@@ -42,3 +42,14 @@ Nachweise dieses Teilstands:
 - STT-Tests mit produktiv vorhandenem Interpreter `/home/nathanael/stt-tools/bin/python -B -m unittest discover -s ops/stt-server/tests -v`: 7 Tests bestanden. Keine Modelle heruntergeladen und keine echte Transkription gestartet. Der erste Versuch mit System-Python scheiterte an dessen fehlendem FastAPI; der STT-Interpreter enthält die benötigten Pakete.
 
 Live-Abfrage des bestehenden Dashboards: `/twitch/api/admin/config/overview` und `/twitch/api/admin/system/health` liefern 200, enthalten aber keinen wirksamen globalen Betriebs-Snapshot. Poolgröße, Erwerbs-/Verbindungszeitbudget und Logging-Overrides sind daraus nicht rekonstruierbar. `KLASSIFIKATION.md` trennt das vorhandene reine Quellinventar in 98 direkte Betriebsleser, 49 Credential-Leser, 80 noch aufzulösende dynamische Leser, 6 Test-DSNs, 2 OS-Pfade und einen historischen Token-Dateipfad. Keine Prozessumgebung und keine ENV-Dateiinhalte gelesen.
+
+## Kernanschluss und Adminseite
+
+Bot und Dashboard sind im Integrationskandidaten an den Kern-Snapshot angeschlossen. Eine begrenzte Adminseite und API bearbeiten die drei DB-Betriebswerte. Der aktive Bot-Fingerprint stammt aus dessen Health-API. Die übrigen Verbraucher und produktiven Werte bleiben offen; vollständige Grenzen in `RUNTIME-REST.md`.
+
+- `cargo check -p tb-bot -p tb-dashboard -j 2 --target-dir /home/nathanael/.cache/twitch-toml-rollout-target`: Exit 0. Erste Prüfung meldete zwei durch den Umbau ungenutzte Helfer; entfernt beziehungsweise auf Tests begrenzt, zweite Prüfung ohne Warnungen erfolgreich.
+- `npm ci --ignore-scripts --no-audit --no-fund`, danach `npm run build` im eigenen `bot/admin_dashboard`: erfolgreich. TypeScript und Vite-Bundle vollständig gebaut. Vorbestehender Vite-Hinweis zu `__dirname` in der Buildkonfiguration bleibt.
+- `npm test` im Admin-Frontend: 10 Tests bestanden.
+- `bash -n` für beide Rust-Dienstwrapper und `git diff --check`: erfolgreich.
+- Neue API-Tests prüfen Admin-Abweisung ohne Dateizugriff und Zurückweisen fremder Felder einschließlich Modelländerungen; deren tatsächlicher Testlauf wird gesondert nachgetragen.
+- Browser-Sichtprüfung nicht möglich: laut Hauptsession kein verbundener Browser. Kein Screenshot oder tatsächliches Durchklicken behauptet.

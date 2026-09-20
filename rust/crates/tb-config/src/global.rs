@@ -146,6 +146,16 @@ pub enum LogLevel {
     Trace,
 }
 impl LogLevel {
+    pub fn tracing_level(self) -> tracing::Level {
+        match self {
+            Self::Error => tracing::Level::ERROR,
+            Self::Warn => tracing::Level::WARN,
+            Self::Info => tracing::Level::INFO,
+            Self::Debug => tracing::Level::DEBUG,
+            Self::Trace => tracing::Level::TRACE,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Error => "error",

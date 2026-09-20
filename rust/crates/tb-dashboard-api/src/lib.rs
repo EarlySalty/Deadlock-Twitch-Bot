@@ -1036,6 +1036,11 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
         )
+        .route(
+            "/twitch/api/admin/config/operating",
+            get(handlers::admin_operating_config::get_handler)
+                .post(handlers::admin_operating_config::save_handler),
+        )
         .route("/twitch/api/admin/audit-log", get(admin_audit_log::handler))
         .route(
             "/twitch/api/admin/affiliates/stats",

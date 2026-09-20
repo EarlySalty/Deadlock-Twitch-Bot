@@ -21,3 +21,11 @@ pub fn install(snapshot: BotConfigSnapshot) -> Result<&'static BotConfigSnapshot
 pub fn active() -> Option<&'static BotConfigSnapshot> {
     ACTIVE.get()
 }
+
+pub fn start(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Result<(&'static BotConfigSnapshot, Vec<std::ffi::OsString>), FileError> {
+    let arguments = crate::file::ConfigArguments::parse(arguments)?;
+    let snapshot = BotConfigSnapshot::load(&arguments.path)?;
+    Ok((install(snapshot)?, arguments.remaining))
+}

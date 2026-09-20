@@ -64,6 +64,7 @@ const navigationGroups: NavigationGroup[] = [
       { label: 'DB Query', to: '/operations/query', icon: Terminal },
       { label: 'Error Logs', to: '/operations/errors', icon: AlertTriangle },
       { label: 'Bot Control', to: '/operations/bot', icon: Power },
+      { label: 'Betriebseinstellungen', to: '/config/operating', icon: Database },
     ],
   },
   {

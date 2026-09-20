@@ -3413,6 +3413,7 @@ dependencies = [
  "sqlx",
  "tb-analytics",
  "tb-chat",
+ "tb-config",
  "tb-domain",
  "tb-error",
  "tb-http-core",
