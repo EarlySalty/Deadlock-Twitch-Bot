@@ -35,5 +35,7 @@ jobs:
             echo "Cargo.lock already current"
           else
             git commit -m "build(stt): lock native whisper dependencies"
+            git fetch origin ${{ github.event.pull_request.head.ref }}
+            git rebase origin/${{ github.event.pull_request.head.ref }}
             git push origin HEAD:${{ github.event.pull_request.head.ref }}
           fi
