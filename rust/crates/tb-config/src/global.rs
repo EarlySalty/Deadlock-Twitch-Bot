@@ -289,6 +289,22 @@ impl Schema for BotConfig {
         public_url(&self.broker.base_url, "broker.base_url", true)?;
         self.stt.validate()?;
         self.bot.validate()?;
+        let eventsub = (
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            self.bot.eventsub_receiver_port,
+        );
+        let mcp = (self.bot.mcp_host, self.bot.mcp_port);
+        let listeners = [
+            (self.internal_api.host, self.internal_api.port),
+            (self.dashboard.host, self.dashboard.port),
+            (self.stt.host, self.stt.port),
+        ];
+        if listeners.contains(&eventsub) {
+            return Err(FileError::invalid("bot.eventsub_receiver_port"));
+        }
+        if listeners.contains(&mcp) || mcp == eventsub {
+            return Err(FileError::invalid("bot.mcp_port"));
+        }
         if (self.stt.host == self.internal_api.host && self.stt.port == self.internal_api.port)
             || (self.stt.host == self.dashboard.host && self.stt.port == self.dashboard.port)
         {

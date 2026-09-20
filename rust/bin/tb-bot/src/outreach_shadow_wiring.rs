@@ -78,11 +78,11 @@ struct OutreachConfig {
 }
 
 impl OutreachConfig {
-    fn from_env() -> Self {
-        let raw = std::env::var("OUTREACH_SHADOW_ENABLED").ok();
-        Self::from_value(raw.as_deref())
+    fn from_config(config: &tb_config::operations::BotOperations) -> Self {
+        Self { enabled: config.outreach_shadow_enabled }
     }
 
+    #[cfg(test)]
     fn from_value(value: Option<&str>) -> Self {
         Self {
             enabled: value.is_some_and(|value| {
@@ -191,9 +191,10 @@ pub fn start(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &BrokerConfig,
+    operating: &tb_config::operations::BotOperations,
 ) -> OutreachShadowRuntime {
     let store = OutreachShadowStore::new(pool);
-    let config = OutreachConfig::from_env();
+    let config = OutreachConfig::from_config(operating);
 
     // Die Aufbewahrungsfrist gilt unabhängig vom Kill-Switch: was einmal
     // gepostet wurde, muss auch nach dem Abschalten wieder verschwinden.

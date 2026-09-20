@@ -481,7 +481,7 @@ async fn main() {
     }
 
     let outreach_shadow =
-        outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker);
+        outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker, &config.bot);
     chat_typen_wiring::spawn(&supervisor, pool.clone());
     crew_archive::start(&supervisor, pool.clone(), &settings.broker);
 
@@ -525,13 +525,14 @@ async fn main() {
     // Quelle (P1.7) braucht den Bot-Token mit `moderator:read:followers`, und die
     // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
-    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone()).await;
+    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone(), config.bot.chat_enabled).await;
     let smalltalk_loop = smalltalk_loop_wiring::start(
         &supervisor,
         pool.clone(),
         &settings.broker,
         helix.as_ref().clone(),
         chat_api_handle.as_ref().map(|handle| handle.bot_token_manager()),
+        &config.bot,
     );
     // Bot-User-ID früh sichern: `chat_api_handle` wird weiter unten beim
     // Pipeline-Aufbau konsumiert, der Trenn-Endpoint der internen API braucht
@@ -726,7 +727,7 @@ async fn main() {
     if let (Some(client), Some(manager)) = (helix.as_ref().clone(), chatters_bot_token_manager.clone()) {
         supervisor.spawn("category_public_followers", crate::category_followers::run(pool.clone(), client, manager));
     }
-    let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone());
+    let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone(), config.bot.irc_lurker_enabled);
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
         chat_api_handle.as_ref().map(|h| {
             let probe = irc_lurker_tracker.as_ref().map(|tracker| {
@@ -1006,6 +1007,7 @@ async fn main() {
                 followers.clone(),
                 pipeline,
                 &target_game,
+                std::time::Duration::from_secs(config.bot.auto_raid_offline_grace_seconds),
             ));
 
             // Orphan-Sweeper: promotet channel.chat.notification ohne
@@ -1125,6 +1127,7 @@ async fn main() {
                     helix_client.clone(),
                 )),
                 chat_api_handle.as_ref().map(|h| h.api()),
+                &config.bot,
             ));
             let arrival = RaidArrivalCoordinator::new(
                 pool.clone(),
@@ -1223,6 +1226,9 @@ async fn main() {
                     clip_port,
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
+                    golive_tips_enabled: config.bot.golive_tips_enabled,
+                    chat_persist_all_games: config.bot.chat_persist_all_games,
+                    lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
                     invite_channel_id: config.twitch.notify_channel_id.parse()
                         .expect("notify_channel_id wurde beim Konfigurationsstart geprüft"),
                     review_relay: BrokerRelay::new(&settings.broker).ok(),

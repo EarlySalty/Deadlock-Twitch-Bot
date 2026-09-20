@@ -29,7 +29,9 @@
 //! ist ein Produktivdienst, ein belegter Debug-Port darf ihn nicht kosten.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
+#[cfg(test)]
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,8 +52,6 @@ use tb_analytics::{raid_blacklist, streamers_crud};
 use tb_internal_api::{disconnect_bot_handler_inner, DiscordRoleExt, ModeratorRemovalExt};
 use tb_raid::token_lifecycle::{BotBanStatus, BotBanStatusProbe};
 
-const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 8892;
 const PROTOCOL_FALLBACK: &str = "2025-03-26";
 const SUPPORTED_PROTOCOLS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 /// Obergrenze für `list_partners`, damit eine vergessene Filterangabe nicht das
@@ -107,30 +107,12 @@ fn normalize_auth_token(token: String) -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// Bind-Adresse aus der Umgebung. `Err` beschreibt, warum nicht gebunden wird —
+/// Bind-Adresse aus der geprüften Betriebskonfiguration. `Err` beschreibt, warum nicht gebunden wird —
 /// eine nicht-Loopback-Adresse ist ein Fehler, kein Grund für einen offenen Port.
 fn bind_addr() -> Result<SocketAddr, String> {
-    let host = std::env::var("TB_MCP_HOST")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_HOST.to_string());
-    let port = match std::env::var("TB_MCP_PORT") {
-        Ok(raw) if !raw.trim().is_empty() => raw
-            .trim()
-            .parse::<u16>()
-            .map_err(|_| format!("TB_MCP_PORT ist keine Portnummer: {raw}"))?,
-        _ => DEFAULT_PORT,
-    };
-    let ip: IpAddr = host
-        .parse()
-        .map_err(|_| format!("TB_MCP_HOST ist keine IP-Adresse: {host}"))?;
-    if !ip.is_loopback() {
-        return Err(format!(
-            "TB_MCP_HOST muss eine Loopback-Adresse sein, war: {host}"
-        ));
-    }
-    Ok(SocketAddr::new(ip, port))
+    let config = tb_config::runtime::settings()
+        .map_err(|_| "Die Betriebskonfiguration ist nicht geladen.".to_string())?;
+    Ok(SocketAddr::new(config.bot.mcp_host, config.bot.mcp_port))
 }
 
 /// Startet den Connector als überwachten Task.

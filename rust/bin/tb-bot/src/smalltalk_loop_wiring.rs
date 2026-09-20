@@ -114,13 +114,8 @@ struct SmalltalkConfig {
 }
 
 impl SmalltalkConfig {
-    fn from_env() -> Self {
-        let enabled = std::env::var("SMALLTALK_LOOP_ENABLED").ok();
-        let live_send = std::env::var("SMALLTALK_LOOP_LIVE_SEND").ok();
-        Self {
-            enabled: flag(enabled.as_deref()),
-            live_send: flag(live_send.as_deref()),
-        }
+    fn from_config(config: &tb_config::operations::BotOperations) -> Self {
+        Self { enabled: config.smalltalk_loop_enabled, live_send: config.smalltalk_loop_live_send }
     }
 
     #[cfg(test)]
@@ -132,6 +127,7 @@ impl SmalltalkConfig {
     }
 }
 
+#[cfg(test)]
 fn flag(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
@@ -281,8 +277,9 @@ pub fn start(
     broker: &BrokerConfig,
     helix: Option<tb_transport_twitch::HelixClient>,
     follower_token: Option<Arc<tb_chat::token::BotTokenManager>>,
+    operating: &tb_config::operations::BotOperations,
 ) -> SmalltalkLoopRuntime {
-    let config = SmalltalkConfig::from_env();
+    let config = SmalltalkConfig::from_config(operating);
     let store = SmalltalkLoopStore::new(pool.clone()).with_live_send(config.live_send);
     let copy = DiscordCopy::configured();
     let discord: Option<Arc<dyn DiscordBackend>> = match BrokerRelay::new(broker) {

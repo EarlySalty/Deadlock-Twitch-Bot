@@ -470,3 +470,29 @@ fn bot_betriebsschalter_aktivieren_nichts_neues_und_migration_bleibt_je_dienst()
         assert!(parse(&format!("{VALID}\n[bot]\n{field}\n")).is_err());
     }
 }
+
+#[test]
+fn bot_listener_kollisionen_und_raid_zeitgrenzen_vor_dem_start_abweisen() {
+    for fields in [
+        "mcp_host='0.0.0.0'",
+        "mcp_port=0",
+        "mcp_port=18776",
+        "eventsub_receiver_port=18769",
+        "mcp_port=8786",
+        "auto_unraid_window_seconds=nan",
+        "flip_pause_seconds=-1.0",
+    ] {
+        assert!(
+            parse(&format!("{VALID}\n[bot]\n{fields}\n")).is_err(),
+            "{fields}"
+        );
+    }
+    let snapshot = parse(&format!(
+        "{VALID}\n[bot]\nauto_unraid_window_seconds=0.0\nflip_repeat_window_seconds=12.5\n"
+    ))
+    .unwrap();
+    assert_eq!(snapshot.settings().bot.auto_unraid_window_seconds, 0.0);
+    assert_eq!(snapshot.settings().bot.flip_repeat_window_seconds, 12.5);
+    assert!(!snapshot.settings().bot.chat_enabled);
+    assert!(!snapshot.settings().bot.smalltalk_loop_live_send);
+}

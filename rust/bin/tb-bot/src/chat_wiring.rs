@@ -45,7 +45,7 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
+    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
     ChatPipelineParts, ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper,
     GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
     LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster,
@@ -538,13 +538,10 @@ pub struct ChatRuntime {
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
 /// `None` = Chat bleibt aus (Python bedient weiter).
-pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<ChatApiHandle> {
-    let enabled = std::env::var("TB_CHAT_ENABLED")
-        .map(|v| v.trim() == "1")
-        .unwrap_or(false);
+pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool, enabled: bool) -> Option<ChatApiHandle> {
     if !enabled {
         tracing::info!(
-            "TB_CHAT_ENABLED nicht gesetzt — nativer Chat bleibt aus (Python-Chat aktiv)"
+            "Nativer Chat laut Betriebskonfiguration deaktiviert"
         );
         return None;
     }
@@ -633,6 +630,9 @@ pub struct ChatRuntimePorts {
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
     pub invite_channel_id: u64,
+    pub golive_tips_enabled: bool,
+    pub chat_persist_all_games: bool,
+    pub lfg_pitch_enabled: bool,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
@@ -654,6 +654,9 @@ pub async fn build_runtime(
         bot_ban_handler,
         invite_relay,
         invite_channel_id,
+        golive_tips_enabled,
+        chat_persist_all_games,
+        lfg_pitch_enabled,
         review_relay,
         member_relay,
         scam_notifier,
@@ -856,7 +859,7 @@ pub async fn build_runtime(
         api: Arc::clone(&api),
         pool: pool.clone(),
         classifier: Arc::new(ChannelClassifier::new(pool.clone())),
-        tracker: Arc::new(ChatterTracker::new(pool.clone())),
+        tracker: Arc::new(ChatterTracker::with_persist_all_games(pool.clone(), chat_persist_all_games)),
         global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
         scam_pitch: Arc::new(ScamPitchDetector::new(
             Arc::clone(&api),
@@ -891,7 +894,7 @@ pub async fn build_runtime(
                 Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
                     None, None, None, None,
                 ))),
-                lfg_pitch_enabled_from_env(),
+                lfg_pitch_enabled,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
@@ -967,6 +970,7 @@ pub async fn build_runtime(
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
         hooks: Arc::new(ChatHooks {
+            golive_tips_enabled,
             inner: inner_hooks,
             pipeline,
             api: Arc::clone(&api),
@@ -1431,6 +1435,7 @@ pub fn build_lurker_reward_checker(
 }
 
 struct ChatHooks {
+    golive_tips_enabled: bool,
     inner: Arc<dyn EventSubHooks>,
     pipeline: Arc<ChatPipeline>,
     /// Go-Live-Tipp-Hook: nutzt denselben dekorierten Chat-Sendepfad wie die
@@ -1563,8 +1568,8 @@ impl ChatHooks {
         // Go-Live-Tipps sind temporär global deaktiviert (GH #565): Die Tipp-Texte
         // sind inhaltlich zu schwach ("das wusste ich schon") und werden überarbeitet.
         // Bis dahin bleibt nur der Versand gesperrt — Auswahl-/Gate-/Persistenz-Logik
-        // darunter ist unverändert. Reaktivierung ohne Rebuild via TB_GOLIVE_TIPS_ENABLED=1.
-        if std::env::var("TB_GOLIVE_TIPS_ENABLED").as_deref() != Ok("1") {
+        // darunter ist unverändert. Freigabe über bot.golive_tips_enabled in TOML.
+        if !self.golive_tips_enabled {
             return;
         }
 
