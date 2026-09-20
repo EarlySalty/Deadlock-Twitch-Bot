@@ -1,0 +1,25 @@
+[Unit]
+Description=Deadlock local Rust STT server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/Deadlock-Twitch-Bot/rust
+ExecStart=%h/Documents/Deadlock-Twitch-Bot/rust/target/release/tb-stt-server
+Restart=on-failure
+RestartSec=3
+Environment=STT_HOST=127.0.0.1
+Environment=STT_PORT=8791
+Environment=STT_THREADS=8
+
+# The service is deliberately local-only; callers are the Rust Twitch services
+# on the same host. Models are downloaded once into ~/.cache/deadlock-stt.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.cache/deadlock-stt
+
+[Install]
+WantedBy=default.target
