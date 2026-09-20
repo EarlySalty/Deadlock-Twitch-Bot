@@ -1068,6 +1068,14 @@ fn helix_aus_umgebung() -> Option<HelixClient> {
     HelixClient::new(HelixConfig::new(id, secret)).ok()
 }
 
+fn helix_ausfall_text() -> String {
+    format!(
+        "Coaching-Audit: Twitch-Abfrage scheitert dauerhaft (seit mindestens \
+{MAX_STILLE_VERSUCHE} Anläufen). Laufende Aufnahmen laufen weiter, neue Sendungen werden \
+nicht erkannt."
+    )
+}
+
 /// Prueft im Takt, wer sendet, und haelt je sendendem Kanal eine eigene
 /// Aufnahmeschleife am Laufen.
 ///
@@ -1146,11 +1154,7 @@ async fn aufnahme_schleife(
                 // Ohne Live-Abfrage nimmt der Dienst nichts auf. Das sieht
                 // hinterher aus wie ein sauberer Tag, ist aber ein Ausfall.
                 if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
-                    let text = format!(
-                        "Coaching-Audit: Twitch-Abfrage scheitert dauerhaft (seit mindestens \
-{MAX_STILLE_VERSUCHE} Anlaeufen). Laufende Aufnahmen laufen weiter, neue Sendungen werden \
-nicht erkannt."
-                    );
+                    let text = helix_ausfall_text();
                     let (schluessel, text) =
                         match offener_hinweis(&konfiguration, "helix-ausfall").await {
                             Some(offen) => offen,
@@ -3274,6 +3278,16 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
         {
             if let Err(fehler) = tokio::fs::remove_file(&pfad).await {
                 tracing::warn!(%fehler, "Veraltete Startmeldung nicht entfernbar");
+            }
+            continue;
+        }
+        if pfad
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s == "helix-ausfall.json")
+        {
+            if let Err(fehler) = tokio::fs::remove_file(&pfad).await {
+                tracing::warn!(%fehler, "Veralteten Helix-Ausfall nicht entfernbar");
             }
             continue;
         }
@@ -5647,6 +5661,24 @@ mod tests {
         assert!(pfad.exists());
         // Kein Broker konfiguriert oder kontaktiert: alte Starts verlassen
         // die Warteschlange vor jedem möglichen Versand.
+        offene_hinweise_senden(&konfiguration).await;
+        assert!(!pfad.exists());
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ein_alter_helix_ausfall_wird_nicht_verspaetet_nachgereicht() {
+        let wurzel = test_ordner("helix-veraltet");
+        let konfiguration = test_konfiguration(&wurzel);
+        hinweis_aufheben(
+            &konfiguration,
+            "helix-ausfall",
+            "vorfall-helix-ausfall",
+            &helix_ausfall_text(),
+        )
+        .await;
+        let pfad = hinweis_ordner(&konfiguration).join("helix-ausfall.json");
+        assert!(pfad.exists());
         offene_hinweise_senden(&konfiguration).await;
         assert!(!pfad.exists());
         tokio::fs::remove_dir_all(wurzel).await.unwrap();
