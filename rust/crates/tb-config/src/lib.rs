@@ -8,6 +8,7 @@ pub mod file;
 pub mod global;
 pub mod operations;
 pub mod runtime;
+pub mod shared_options;
 pub mod stt;
 
 pub use global::{BotConfig, BotConfigSnapshot};
