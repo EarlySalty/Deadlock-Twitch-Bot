@@ -387,7 +387,7 @@ async fn main() {
 
     // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
     // mit kaputtem oder halb migriertem Schema darf das Dashboard nicht starten.
-    if optional_env_bool("TB_DB_MIGRATE", true) {
+    if config.dashboard.run_database_migrations {
         match tb_db::run_migrations(&pool).await {
             Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
             Err(e) => {
@@ -396,7 +396,7 @@ async fn main() {
             }
         }
     } else {
-        tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
+        tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
 
     // Startzeit-Timestamp so früh wie möglich setzen

@@ -21,6 +21,8 @@ pub struct BotConfig {
     pub schema_version: u32,
     pub twitch: Twitch,
     #[serde(default)]
+    pub bot: crate::operations::BotOperations,
+    #[serde(default)]
     pub database: Database,
     #[serde(default)]
     pub internal_api: InternalApi,
@@ -100,12 +102,14 @@ impl Default for InternalApi {
 pub struct Dashboard {
     pub host: IpAddr,
     pub port: u16,
+    pub run_database_migrations: bool,
 }
 impl Default for Dashboard {
     fn default() -> Self {
         Self {
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 8769,
+            run_database_migrations: true,
         }
     }
 }
@@ -284,6 +288,7 @@ impl Schema for BotConfig {
         }
         public_url(&self.broker.base_url, "broker.base_url", true)?;
         self.stt.validate()?;
+        self.bot.validate()?;
         if (self.stt.host == self.internal_api.host && self.stt.port == self.internal_api.port)
             || (self.stt.host == self.dashboard.host && self.stt.port == self.dashboard.port)
         {

@@ -448,3 +448,25 @@ fn config_argument_explizit_eindeutig_absolut_und_fachargumente_bleiben_erhalten
         ErrorKind::ConfigArgumentDuplicate
     );
 }
+
+#[test]
+fn bot_betriebsschalter_aktivieren_nichts_neues_und_migration_bleibt_je_dienst() {
+    let default = parse(VALID).unwrap();
+    let bot = &default.settings().bot;
+    assert!(bot.run_database_migrations);
+    assert!(
+        !bot.highlight_clipper_enabled && !bot.monitoring_poll_enabled && !bot.clip_fetcher_enabled
+    );
+    let configured = parse(&format!("{VALID}\n[bot]\nrun_database_migrations=false\nmonitoring_poll_enabled=true\neventsub_receiver_port=19876\n")).unwrap();
+    assert!(!configured.settings().bot.run_database_migrations);
+    assert!(configured.settings().dashboard.run_database_migrations);
+    assert!(configured.settings().bot.monitoring_poll_enabled);
+    for field in [
+        "eventsub_receiver_port=0",
+        "scam_guard_discord_channel_id=0",
+        "monitoring_poll_enabled='1'",
+        "live_ping_guild_id=0",
+    ] {
+        assert!(parse(&format!("{VALID}\n[bot]\n{field}\n")).is_err());
+    }
+}

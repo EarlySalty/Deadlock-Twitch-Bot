@@ -6,6 +6,7 @@
 pub mod editor;
 pub mod file;
 pub mod global;
+pub mod operations;
 pub mod runtime;
 pub mod stt;
 
