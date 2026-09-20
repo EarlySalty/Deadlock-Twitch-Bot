@@ -74,6 +74,21 @@ test('Twitch avatar is automatic and save action is not a sticky bottom bar', ()
   const page = readFileSync(new URL('../src/pages/PartnerProfile.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /sticky bottom-/);
 });
+test('fresh Twitch profile avatar wins over the older dashboard avatar', () => {
+  const staleAvatar = 'https://static-cdn.jtvnw.net/jtv_user_pictures/alice-old-avatar.png';
+  const html = renderToStaticMarkup(<ProfileEditor initial={initial} twitchAvatarUrl={staleAvatar} onReload={() => {}} />);
+  assert.ok(html.includes(initial.twitch!.profile_image_url));
+  assert.ok(!html.includes(staleAvatar));
+});
+test('dashboard and saved avatars remain fallbacks when Twitch has no image', () => {
+  const dashboardAvatar = 'https://static-cdn.jtvnw.net/jtv_user_pictures/alice-dashboard-avatar.png';
+  const savedAvatar = 'https://static-cdn.jtvnw.net/jtv_user_pictures/alice-saved-avatar.png';
+  const withoutImage = { ...initial, twitch: { ...initial.twitch!, profile_image_url: '' }, profile: { ...initial.profile, avatar_url: savedAvatar } };
+  const dashboardHtml = renderToStaticMarkup(<ProfileEditor initial={withoutImage} twitchAvatarUrl={dashboardAvatar} onReload={() => {}} />);
+  assert.ok(dashboardHtml.includes(dashboardAvatar));
+  const savedHtml = renderToStaticMarkup(<ProfileEditor initial={withoutImage} onReload={() => {}} />);
+  assert.ok(savedHtml.includes(savedAvatar));
+});
 test('Twitch automation and Deadlock profile controls are visible', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={initial} onReload={() => {}} />);
   const api = readFileSync(new URL('../src/api/partnerProfile.ts', import.meta.url), 'utf8');

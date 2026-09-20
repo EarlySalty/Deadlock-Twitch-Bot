@@ -149,7 +149,7 @@ export function ProfileEditor({
   const twitch = data.twitch;
   const calendar = monthDays(month);
   const locked = saving || importing || !data.active;
-  const effectiveAvatar = twitchAvatarUrl?.trim() || twitch?.profile_image_url?.trim() || profile.avatar_url.trim();
+  const effectiveAvatar = twitch?.profile_image_url?.trim() || twitchAvatarUrl?.trim() || profile.avatar_url.trim();
   const completionChecks = [
     Boolean(profile.headline.trim()),
     Boolean(profile.about.trim() || twitch?.description?.trim()),
