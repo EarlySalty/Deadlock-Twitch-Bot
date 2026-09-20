@@ -407,6 +407,7 @@ fn transcribe(
         raw_count += 1;
         let text = segment
             .to_str_lossy()
+            .map_err(|e| ApiError::Internal(format!("Whisper-Segmenttext: {e}")))?
             .trim()
             .to_owned();
         if text.is_empty() {
