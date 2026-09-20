@@ -42,7 +42,8 @@ Die User-Unit liegt versioniert unter:
 Installation/Aktualisierung:
 
 ```bash
-mkdir -p ~/.config/systemd/user
+mkdir -p ~/.local/bin ~/.config/systemd/user
+install -m 0755 rust/target/release/tb-stt-server ~/.local/bin/tb-stt-server
 cp ops/stt-server/deadlock-stt-server.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now deadlock-stt-server.service
