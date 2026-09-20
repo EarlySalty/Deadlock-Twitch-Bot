@@ -42,16 +42,6 @@ const DISCORD_REF_CODE: &str = "DE-Deadlock-Discord";
 /// Fallback-Label, identisch zu `TWITCH_BUTTON_LABEL` in `bot/core/constants.py`.
 const TWITCH_BUTTON_LABEL: &str = "Auf Twitch ansehen";
 
-/// Env-Variable für den Discord-Benachrichtigungskanal.
-const ENV_NOTIFY_CHANNEL_ID: &str = "TWITCH_NOTIFY_CHANNEL_ID";
-
-/// Env-Variable für die Guild-ID-Allowlist (Parität zu `_allowed_guild_ids`).
-pub(crate) const ENV_ALLOWED_GUILD_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS";
-/// Env-Variable für die Channel-ID-Allowlist (Parität zu `_allowed_channel_ids`).
-pub(crate) const ENV_ALLOWED_CHANNEL_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS";
-/// Env-Variable für die Role-ID-Allowlist (Parität zu `_allowed_role_ids`).
-pub(crate) const ENV_ALLOWED_ROLE_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS";
-
 // ── Hilfs-Typen ───────────────────────────────────────────────────────────────
 
 /// Normalisiertes Announcement-Item.
@@ -192,26 +182,8 @@ fn normalize_tracking_token(
     Ok(Some(text))
 }
 
-/// Parst eine kommagetrennte Liste positiver Integer-IDs aus einer Env-Variable.
-/// Parität zu `parse_allowlist_ids` in `bot/internal_api/policy.py`.
-/// Gibt `None` zurück wenn die Env-Variable nicht gesetzt ist (= kein Filter).
-pub(crate) fn parse_allowlist_ids(env_name: &str) -> Option<std::collections::HashSet<i64>> {
-    let raw = std::env::var(env_name).ok()?;
-    let raw = raw.trim().to_string();
-    // Env-Variable gesetzt (auch wenn leer) → fail-closed deny-all
-    let mut allowed = std::collections::HashSet::new();
-    for token in raw.replace(';', ",").split(',') {
-        let item = token.trim();
-        if item.is_empty() {
-            continue;
-        }
-        if let Ok(v) = item.parse::<i64>() {
-            if v > 0 {
-                allowed.insert(v);
-            }
-        }
-    }
-    Some(allowed)
+pub(crate) fn configured_allowlist(ids: &Option<Vec<i64>>) -> Option<std::collections::HashSet<i64>> {
+    ids.as_ref().map(|values| values.iter().copied().collect())
 }
 
 /// Prüft ob ein Integer-Wert in einer optionalen Allowlist enthalten ist.
@@ -260,14 +232,17 @@ pub async fn live_active_announcements_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() { return Err(ApiError::unauthorized()); }
+    let cfg = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
+    let channel_id = cfg.twitch.notify_channel_id.parse().map_err(|_| ApiError::internal())?;
+    live_announcements_with_channel(auth, State(pool), channel_id).await
+}
+
+async fn live_announcements_with_channel(auth: AuthLevel, State(pool): State<PgPool>, channel_id: i64) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    // channel_id kommt aus dem Request-Kontext in Python (_notify_channel_id).
-    // Im Rust-Kern wird channel_id aus der Env gelesen.
-    let channel_id_raw = std::env::var(ENV_NOTIFY_CHANNEL_ID).unwrap_or_default();
-    let channel_id: i64 = channel_id_raw.trim().parse().unwrap_or(0);
     if channel_id <= 0 {
         // Kein channel_id konfiguriert → leere Liste (Parität: Python gibt [] zurück)
         return Ok(Json(serde_json::json!([])));
@@ -336,6 +311,16 @@ pub async fn live_link_click_handler(
     Extension(idem): Extension<IdempotencyState>,
     Json(raw_payload): Json<Value>,
 ) -> Result<Response, ApiError> {
+    if !auth.is_privileged() { return Err(ApiError::unauthorized()); }
+    let cfg = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
+    link_click_with_config(auth, headers, OriginalUri(uri), State(pool), Extension(idem), Json(raw_payload), &cfg.discord.raid_oauth).await
+}
+
+async fn link_click_with_config(
+    auth: AuthLevel, headers: HeaderMap, OriginalUri(uri): OriginalUri,
+    State(pool): State<PgPool>, Extension(idem): Extension<IdempotencyState>,
+    Json(raw_payload): Json<Value>, scope: &tb_config::discord::RaidOAuth,
+) -> Result<Response, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
@@ -360,10 +345,10 @@ pub async fn live_link_click_handler(
     {
         Prepared::Immediate(resp) => Ok(resp),
         Prepared::Skip => {
-            let result = process_link_click(&pool, body).await?;
+            let result = process_link_click(&pool, body, scope).await?;
             Ok(Json(result).into_response())
         }
-        Prepared::Owner(slot) => match process_link_click(&pool, body).await {
+        Prepared::Owner(slot) => match process_link_click(&pool, body, scope).await {
             Ok(result) => {
                 // Python: owner_cacheable erst NACH erfolgreichem Write.
                 slot.complete(200, &result, true);
@@ -381,7 +366,7 @@ pub async fn live_link_click_handler(
 
 /// Geschäftslogik von `POST /live/link-click` — Validierung, Scope-Guard,
 /// INSERT. Gibt den Erfolgs-Body `{"ok": true}` zurück.
-async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Value, ApiError> {
+async fn process_link_click(pool: &PgPool, body: LinkClickRequest, scope: &tb_config::discord::RaidOAuth) -> Result<Value, ApiError> {
     // ── Validation (Parität zu telemetry.py + policy.py) ─────────────────────
 
     let streamer_login = normalize_twitch_login(body.streamer_login.as_deref().unwrap_or(""))
@@ -427,9 +412,9 @@ async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Val
 
     // ── Discord-Action-Scope-Prüfung (Parität zu _enforce_discord_action_scope) ──
 
-    let allowed_guilds = parse_allowlist_ids(ENV_ALLOWED_GUILD_IDS);
-    let allowed_channels = parse_allowlist_ids(ENV_ALLOWED_CHANNEL_IDS);
-    let allowed_roles = parse_allowlist_ids(ENV_ALLOWED_ROLE_IDS);
+    let allowed_guilds = configured_allowlist(&scope.allowed_guild_ids);
+    let allowed_channels = configured_allowlist(&scope.allowed_channel_ids);
+    let allowed_roles = configured_allowlist(&scope.allowed_role_ids);
 
     enforce_scope_allowlist(guild_id_opt, &allowed_guilds, "guild_id")
         .map_err(|_| ApiError::forbidden())?;
@@ -581,16 +566,8 @@ mod tests {
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
-    use std::sync::Mutex;
     use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
-
-    /// Serialisiert alle Tests, die prozessglobale Env-Variablen
-    /// (`TWITCH_NOTIFY_CHANNEL_ID`, `ENV_ALLOWED_*`) per `set_var`/`remove_var`
-    /// anfassen. Ohne diesen Lock racen parallele Tests um dieselbe Var
-    /// (Test A entfernt, Test B setzt gleichzeitig) → nicht-deterministisch.
-    /// Konvention wie in `tb-llm` (`keys.rs`/`ledger.rs`).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
@@ -681,19 +658,31 @@ mod tests {
         pool
     }
 
+    #[derive(Clone, Default)]
+    struct TestPolicy { channel_id: i64, scope: tb_config::discord::RaidOAuth }
+    async fn test_announcements(auth: AuthLevel, state: State<PgPool>, Extension(policy): Extension<TestPolicy>) -> Result<impl IntoResponse, ApiError> {
+        live_announcements_with_channel(auth, state, policy.channel_id).await
+    }
+    async fn test_link_click(auth: AuthLevel, headers: HeaderMap, uri: OriginalUri, state: State<PgPool>, idem: Extension<IdempotencyState>, Extension(policy): Extension<TestPolicy>, body: Json<Value>) -> Result<Response, ApiError> {
+        link_click_with_config(auth, headers, uri, state, idem, body, &policy.scope).await
+    }
     fn make_router(pool: PgPool, token: &str) -> Router {
+        make_router_with_policy(pool, token, TestPolicy::default())
+    }
+    fn make_router_with_policy(pool: PgPool, token: &str, policy: TestPolicy) -> Router {
         let base = INTERNAL_API_BASE_PATH;
         Router::new()
             .route(
                 &format!("{base}/live/active-announcements"),
-                get(live_active_announcements_handler),
+                get(test_announcements),
             )
             .route(
                 &format!("{base}/live/link-click"),
-                post(live_link_click_handler),
+                post(test_link_click),
             )
             .with_state(pool)
             .layer(Extension(IdempotencyState::new()))
+            .layer(Extension(policy))
             .layer(Extension(ExpectedToken(token.to_string())))
             .layer(middleware::from_fn_with_state(
                 token.to_string(),
@@ -764,13 +753,11 @@ mod tests {
 
     #[tokio::test]
     async fn live_active_announcements_ohne_channel_id_leer() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let app = make_router(make_pool(&dsn, "test_h_ann_nochid").await, "secret");
         let base = INTERNAL_API_BASE_PATH;
 
         // TWITCH_NOTIFY_CHANNEL_ID nicht gesetzt → leere Liste
-        std::env::remove_var("TWITCH_NOTIFY_CHANNEL_ID");
 
         let resp = app
             .oneshot(req(
@@ -791,13 +778,11 @@ mod tests {
 
     #[tokio::test]
     async fn live_active_announcements_liefert_status_mit_standard_button_label() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_ann_standard_label").await;
-        let app = make_router(pool.clone(), "secret");
+        let app = make_router_with_policy(pool.clone(), "secret", TestPolicy { channel_id: 123456789, ..Default::default() });
         let base = INTERNAL_API_BASE_PATH;
 
-        std::env::set_var("TWITCH_NOTIFY_CHANNEL_ID", "123456789");
 
         sqlx::query(
             "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_discord_message_id, last_tracking_token) VALUES ($1,$2,$3,$4)"
@@ -824,22 +809,17 @@ mod tests {
         assert_eq!(arr[0]["button_label"], "Auf Twitch ansehen");
         assert_eq!(arr[0]["channel_id"], 123456789_i64);
 
-        std::env::remove_var("TWITCH_NOTIFY_CHANNEL_ID");
     }
 
     // ── Live Link Click ───────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn link_click_valide_daten_200() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let app = make_router(make_pool(&dsn, "test_h_lc_200").await, "secret");
         let base = INTERNAL_API_BASE_PATH;
 
         // Allowlists deaktivieren (kein Env gesetzt)
-        std::env::remove_var(ENV_ALLOWED_GUILD_IDS);
-        std::env::remove_var(ENV_ALLOWED_CHANNEL_IDS);
-        std::env::remove_var(ENV_ALLOWED_ROLE_IDS);
 
         let body = r#"{
             "streamer_login": "dragscope",
@@ -924,14 +904,11 @@ mod tests {
 
     #[tokio::test]
     async fn link_click_guild_id_ausserhalb_allowlist_403() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
-        let app = make_router(make_pool(&dsn, "test_h_lc_403").await, "secret");
+        let app = make_router_with_policy(make_pool(&dsn, "test_h_lc_403").await, "secret", TestPolicy { scope: tb_config::discord::RaidOAuth { allowed_guild_ids: Some(vec![999]), ..Default::default() }, ..Default::default() });
         let base = INTERNAL_API_BASE_PATH;
 
         // Allowlist: nur guild 999, aber Request sendet 111
-        std::env::set_var(ENV_ALLOWED_GUILD_IDS, "999");
-        std::env::remove_var(ENV_ALLOWED_CHANNEL_IDS);
 
         let body = r#"{
             "streamer_login": "dragscope",
@@ -955,19 +932,15 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-        std::env::remove_var(ENV_ALLOWED_GUILD_IDS);
     }
 
     #[tokio::test]
     async fn link_click_ref_code_ist_konstant() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_lc_refcode").await;
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
 
-        std::env::remove_var(ENV_ALLOWED_GUILD_IDS);
-        std::env::remove_var(ENV_ALLOWED_CHANNEL_IDS);
 
         let body = r#"{
             "streamer_login": "streamer_x",
@@ -1005,15 +978,11 @@ mod tests {
 
     #[tokio::test]
     async fn link_click_idempotenz_replay() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_lc_idem").await;
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
 
-        std::env::remove_var(ENV_ALLOWED_GUILD_IDS);
-        std::env::remove_var(ENV_ALLOWED_CHANNEL_IDS);
-        std::env::remove_var(ENV_ALLOWED_ROLE_IDS);
 
         let body = r#"{
             "streamer_login": "idem_streamer",

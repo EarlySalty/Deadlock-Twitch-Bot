@@ -16,9 +16,9 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 const TRACK_STAGGER: Duration = Duration::from_millis(600);
 const MAX_TRACKED_CHANNELS: usize = 250;
 
-pub fn build_irc_lurker(pool: PgPool) -> Option<Arc<IrcLurkerTracker>> {
-    if std::env::var("TB_IRC_LURKER_ENABLED").as_deref() != Ok("1") {
-        tracing::info!("IRC-Lurker (anon Presence) deaktiviert (TB_IRC_LURKER_ENABLED!=1)");
+pub fn build_irc_lurker(pool: PgPool, enabled: bool) -> Option<Arc<IrcLurkerTracker>> {
+    if !enabled {
+        tracing::info!("IRC-Lurker laut Betriebskonfiguration deaktiviert");
         return None;
     }
 

@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "net", "signal", "sync"] }
+tb-config = { path = "../../crates/tb-config" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 whisper-rs = "0.16"

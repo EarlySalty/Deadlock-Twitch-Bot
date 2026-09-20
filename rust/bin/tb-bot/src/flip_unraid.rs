@@ -4,10 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 use tb_chat::ChatApi;
-use tb_raid::flip_unraid::{
-    pending_within_flip_window, FlipOutcome, FlipRepeatTracker, FLIP_PAUSE_DEFAULT_SECS,
-    FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS,
-};
+use tb_raid::flip_unraid::{pending_within_flip_window, FlipOutcome, FlipRepeatTracker};
+#[cfg(test)]
+use tb_raid::flip_unraid::{FLIP_PAUSE_DEFAULT_SECS, FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS};
 use tb_raid::pending_raids::PendingRaidStore;
 use tb_raid::token_provider::TokenProvider;
 use tb_raid::ManualRaidSuppression;
@@ -18,14 +17,6 @@ fn unix_now() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .unwrap_or(default)
 }
 
 const PAUSE_NOTICES: [&str; 4] = [
@@ -104,6 +95,7 @@ impl FlipUnraidHandler {
         suppression: Arc<Mutex<ManualRaidSuppression>>,
         canceller: Arc<dyn SourceRaidCanceller>,
         chat: Option<Arc<dyn ChatApi>>,
+        config: &tb_config::operations::BotOperations,
     ) -> Self {
         Self {
             pending,
@@ -112,12 +104,9 @@ impl FlipUnraidHandler {
             chat,
             tracker: Mutex::new(FlipRepeatTracker::new()),
             notice_rotation: AtomicUsize::new(0),
-            window_secs: env_f64("TB_AUTO_UNRAID_WINDOW_SECS", FLIP_WINDOW_DEFAULT_SECS),
-            repeat_window_secs: env_f64(
-                "TB_FLIP_REPEAT_WINDOW_SECS",
-                FLIP_REPEAT_WINDOW_DEFAULT_SECS,
-            ),
-            pause_secs: env_f64("TB_FLIP_PAUSE_SECS", FLIP_PAUSE_DEFAULT_SECS),
+            window_secs: config.auto_unraid_window_seconds,
+            repeat_window_secs: config.flip_repeat_window_seconds,
+            pause_secs: config.flip_pause_seconds,
         }
     }
 

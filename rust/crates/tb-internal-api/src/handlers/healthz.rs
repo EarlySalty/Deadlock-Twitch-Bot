@@ -31,6 +31,7 @@ pub struct HealthzResponse {
     pub service: &'static str,
     pub analytics_db_fingerprint: Option<String>,
     pub analytics_db: DbIdentity,
+    pub config_fingerprint: Option<String>,
 }
 
 /// Identitäts-Fingerprint kompatibel zu `bot/storage/pg.py`
@@ -113,6 +114,7 @@ pub async fn healthz_handler(auth: AuthLevel) -> Result<impl IntoResponse, ApiEr
         service: "twitch-internal-api",
         analytics_db_fingerprint: identity.fingerprint.clone(),
         analytics_db: identity,
+        config_fingerprint: tb_config::runtime::active().map(|config| config.fingerprint().to_string()),
     }))
 }
 
@@ -171,6 +173,7 @@ mod tests {
             service: "twitch-internal-api",
             analytics_db_fingerprint: identity.fingerprint.clone(),
             analytics_db: identity,
+            config_fingerprint: None,
         })
         .unwrap();
         let db = &json["analyticsDb"];

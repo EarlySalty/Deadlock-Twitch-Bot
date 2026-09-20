@@ -17,13 +17,13 @@ use axum::{
 use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tb_config::{file::ConfigArguments, BotConfigSnapshot};
 use tokio::{fs, io::AsyncWriteExt, sync::Semaphore};
 use tracing::{info, warn};
 use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
 
-const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 const DEFAULT_MODEL_NAME: &str = "ggml-large-v3-turbo-q5_0";
 const DEFAULT_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 const DEFAULT_MODEL_URL: &str =
@@ -49,59 +49,41 @@ struct Config {
     forced_language: Option<String>,
     no_speech_max: f32,
     avg_logprob_min: f32,
+    max_upload_bytes: usize,
+    config_fingerprint: String,
 }
 
 impl Config {
-    fn from_env() -> Result<Self, String> {
-        let cache = env::var_os("STT_CACHE_DIR")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/deadlock-stt")))
+    fn from_snapshot(snapshot: &BotConfigSnapshot) -> Result<Self, String> {
+        let settings = &snapshot.settings().stt;
+        if settings.model != DEFAULT_MODEL_NAME {
+            return Err(format!(
+                "Das Rust-STT unterstützt aktuell nur das Modell {DEFAULT_MODEL_NAME}."
+            ));
+        }
+        let cache = env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".cache/deadlock-stt"))
             .unwrap_or_else(|| PathBuf::from("/tmp/deadlock-stt"));
+        let max_upload_bytes = usize::try_from(settings.max_upload_bytes)
+            .map_err(|_| "stt.max_upload_bytes ist auf diesem System zu groß.".to_owned())?;
 
         Ok(Self {
-            host: env_string("STT_HOST", "127.0.0.1"),
-            port: env_parse("STT_PORT", 8791_u16)?,
-            threads: env_parse("STT_THREADS", 8_i32)?,
-            model_name: env_string("STT_MODEL", DEFAULT_MODEL_NAME),
-            model_path: env::var_os("STT_MODEL_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| cache.join(DEFAULT_MODEL_FILE)),
-            model_url: env_string("STT_MODEL_URL", DEFAULT_MODEL_URL),
-            model_sha256: env_string("STT_MODEL_SHA256", DEFAULT_MODEL_SHA256),
-            vad_path: env::var_os("STT_VAD_MODEL_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| cache.join(DEFAULT_VAD_FILE)),
-            vad_url: env_string("STT_VAD_MODEL_URL", DEFAULT_VAD_URL),
-            vad_sha256: env_string("STT_VAD_MODEL_SHA256", DEFAULT_VAD_SHA256),
-            forced_language: env::var("STT_LANGUAGE")
-                .ok()
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty()),
-            no_speech_max: env_parse("STT_NO_SPEECH_MAX", 0.6_f32)?,
-            avg_logprob_min: env_parse("STT_AVG_LOGPROB_MIN", -1.0_f32)?,
+            host: settings.host.to_string(),
+            port: settings.port,
+            threads: i32::from(settings.threads),
+            model_name: settings.model.clone(),
+            model_path: cache.join(DEFAULT_MODEL_FILE),
+            model_url: DEFAULT_MODEL_URL.to_owned(),
+            model_sha256: DEFAULT_MODEL_SHA256.to_owned(),
+            vad_path: cache.join(DEFAULT_VAD_FILE),
+            vad_url: DEFAULT_VAD_URL.to_owned(),
+            vad_sha256: DEFAULT_VAD_SHA256.to_owned(),
+            forced_language: settings.language.clone(),
+            no_speech_max: settings.no_speech_max as f32,
+            avg_logprob_min: settings.avg_logprob_min as f32,
+            max_upload_bytes,
+            config_fingerprint: snapshot.fingerprint().to_owned(),
         })
-    }
-}
-
-fn env_string(name: &str, default: &str) -> String {
-    env::var(name)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| default.to_owned())
-}
-
-fn env_parse<T>(name: &str, default: T) -> Result<T, String>
-where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
-{
-    match env::var(name) {
-        Ok(raw) if !raw.trim().is_empty() => raw
-            .trim()
-            .parse::<T>()
-            .map_err(|e| format!("{name} ist ungueltig: {e}")),
-        _ => Ok(default),
     }
 }
 
@@ -122,6 +104,7 @@ struct HealthResponse {
     model: String,
     threads: i32,
     backend: &'static str,
+    config_fingerprint: String,
 }
 
 #[derive(Serialize)]
@@ -170,14 +153,21 @@ impl IntoResponse for ApiError {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    let arguments = ConfigArguments::parse(env::args_os().skip(1))
+        .map_err(|error| error.to_string())?;
+    if !arguments.remaining.is_empty() {
+        return Err("Der STT-Start akzeptiert ausschließlich --config mit absolutem Dateipfad.".into());
+    }
+    let snapshot = BotConfigSnapshot::load(&arguments.path).map_err(|error| error.to_string())?;
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=warn".into()),
-        )
+        .with_max_level(snapshot.settings().logging.level.tracing_level())
         .init();
 
-    let config = Config::from_env()?;
+    let config = Config::from_snapshot(&snapshot)?;
+    info!(
+        config_fingerprint = %config.config_fingerprint,
+        "TWITCH_STT_CONFIG_V1"
+    );
 
     ensure_model(
         &config.model_path,
@@ -218,7 +208,7 @@ async fn main() -> Result<(), String> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/audio/transcriptions", post(transcriptions))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 512 * 1024))
+        .layer(DefaultBodyLimit::max(config.max_upload_bytes + 512 * 1024))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
@@ -263,6 +253,7 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         model: state.config.model_name.clone(),
         threads: state.config.threads,
         backend: "whisper.cpp/whisper-rs",
+        config_fingerprint: state.config.config_fingerprint.clone(),
     })
 }
 
@@ -285,7 +276,7 @@ async fn transcriptions(
                     .bytes()
                     .await
                     .map_err(|e| ApiError::BadRequest(format!("Audio nicht lesbar: {e}")))?;
-                if bytes.is_empty() || bytes.len() > MAX_UPLOAD_BYTES {
+                if bytes.is_empty() || bytes.len() > state.config.max_upload_bytes {
                     return Err(ApiError::BadRequest(
                         "leeres oder zu grosses Audio".to_owned(),
                     ));
@@ -582,9 +573,12 @@ mod tests {
 
     #[test]
     fn defaults_keep_loopback_and_existing_port() {
-        env::remove_var("STT_HOST");
-        env::remove_var("STT_PORT");
-        let cfg = Config::from_env().unwrap();
+        let snapshot = BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id=\"1\"\nnotify_channel_id=\"2\"\neventsub_callback_url=\"https://example.invalid/callback\"\n",
+            Path::new("/test/config/bot.toml"),
+        )
+        .unwrap();
+        let cfg = Config::from_snapshot(&snapshot).unwrap();
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8791);
     }

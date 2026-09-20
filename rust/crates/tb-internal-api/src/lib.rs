@@ -341,6 +341,7 @@ pub fn build_internal_router(
         )
         .fallback(handlers::legacy_proxy::legacy_fallback_handler)
         .with_state(pool)
+        .layer(Extension(tb_config::runtime::settings().ok().map(|cfg| cfg.discord.raid_oauth.clone())))
         .layer(Extension(helix))
         .layer(Extension(EventSubDispatcherExt(dispatcher)))
         .layer(Extension(handlers::raid::ManualRaidExt(manual_raid)))

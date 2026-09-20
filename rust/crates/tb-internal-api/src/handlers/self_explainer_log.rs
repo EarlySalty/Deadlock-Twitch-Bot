@@ -24,9 +24,7 @@
 //! Token-Fallback-Kette (sync mit Python `_master_broker_token`):
 //! `MASTER_BROKER_TOKEN` → `MAIN_BOT_INTERNAL_TOKEN` → `TWITCH_INTERNAL_API_TOKEN`.
 //!
-//! Broker-URL-Auflösung (sync mit Python `_master_broker_base_url`):
-//! `MASTER_BROKER_BASE_URL` hat Vorrang; sonst `http://<MASTER_BROKER_HOST>:<MASTER_BROKER_PORT>`
-//! mit Defaults `127.0.0.1:8770`.
+//! Broker-Ziel aus der zentralen TOML-Momentaufnahme (`broker.base_url`).
 
 use axum::{response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
@@ -87,22 +85,9 @@ fn broker_token() -> Option<String> {
     None
 }
 
-/// Broker-Basis-URL aus Env. Parität zu Python `_master_broker_base_url`:
-/// `MASTER_BROKER_BASE_URL` hat Vorrang; sonst `http://<HOST>:<PORT>` mit
-/// Defaults `127.0.0.1` / `8770`.
-fn broker_base_url() -> String {
-    let explicit = std::env::var("MASTER_BROKER_BASE_URL").unwrap_or_default();
-    let explicit = explicit.trim();
-    if !explicit.is_empty() {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    let host = std::env::var("MASTER_BROKER_HOST").unwrap_or_default();
-    let host = host.trim();
-    let host = if host.is_empty() { "127.0.0.1" } else { host };
-    let port = std::env::var("MASTER_BROKER_PORT").unwrap_or_default();
-    let port = port.trim();
-    let port = if port.is_empty() { "8770" } else { port };
-    format!("http://{host}:{port}")
+/// Broker-Ziel aus derselben geprüften Momentaufnahme wie die Bot-Laufzeit.
+fn broker_base_url() -> Result<String, tb_config::file::FileError> {
+    Ok(tb_config::runtime::settings()?.broker.base_url.trim_end_matches('/').to_string())
 }
 
 /// Kanonischer Idempotency-Key aus dem Broker-Payload.
@@ -298,7 +283,11 @@ pub async fn handler(
     });
 
     let idempotency = idempotency_key(&payload);
-    let url = format!("{}{BROKER_DISCORD_PATH}", broker_base_url());
+    let base = match broker_base_url() {
+        Ok(base) => base,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    let url = format!("{base}{BROKER_DISCORD_PATH}");
 
     let client = reqwest::Client::builder()
         .timeout(BROKER_REQUEST_TIMEOUT)
@@ -533,7 +522,7 @@ mod tests {
     }
 
     // ── Einheitentests für Hilfsfunktionen ─────────────────────────────────────
-    // Env-Var-abhängige Tests (broker_token, broker_base_url) werden hier nicht
+    // Credential-ENV-abhängige Tests (broker_token) werden hier nicht
     // geschrieben — std::env::set_var ist in parallelen Tests unsicher (Rust 1.80
     // deprecated unsafe set_var). Die Fallback-Logik ist stattdessen in den
     // Integrationstests via tatsächlicher Env-Konfiguration abgedeckt.

@@ -201,6 +201,7 @@ pub fn build_chatters_fetcher(helix: Option<HelixClient>) -> Option<Arc<dyn Chat
 /// Token-Plumbing und wird immer gestartet. Fehler werden geloggt; beide Loops
 /// laufen weiter.
 pub fn spawn_chatters_schedulers(
+    retention_days: i64,
     supervisor: &TaskSupervisor,
     pool: PgPool,
     auth: Option<Arc<dyn BotChatterAuth>>,
@@ -209,7 +210,7 @@ pub fn spawn_chatters_schedulers(
     provisioner: Option<Arc<dyn ModeratorProvisioner>>,
 ) {
     spawn_collect_loop(supervisor, pool.clone(), auth, streamer_tokens, fetcher, provisioner);
-    spawn_retention_loop(supervisor, pool);
+    spawn_retention_loop(supervisor, pool, retention_days);
 }
 
 fn spawn_collect_loop(
@@ -297,7 +298,7 @@ fn spawn_collect_loop(
     });
 }
 
-fn spawn_retention_loop(supervisor: &TaskSupervisor, pool: PgPool) {
+fn spawn_retention_loop(supervisor: &TaskSupervisor, pool: PgPool, retention_days: i64) {
     supervisor.spawn("raid_and_observability_retention", async move {
         let mut tick = tokio::time::interval(RETENTION_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -313,10 +314,10 @@ fn spawn_retention_loop(supervisor: &TaskSupervisor, pool: PgPool) {
                 ),
                 Err(error) => tracing::error!(%error, "raid_retention: Lauf fehlgeschlagen"),
             }
-            match tb_monitoring::cleanup_observability_events(&pool).await {
+            match tb_monitoring::cleanup_observability_events(&pool, retention_days).await {
                 Ok(deleted) if deleted > 0 => tracing::info!(
                     deleted,
-                    retention_days = tb_monitoring::observability_retention_days(),
+                    retention_days,
                     "observability_retention: alte Events entfernt"
                 ),
                 Ok(_) => {}

@@ -30,16 +30,6 @@ fn unix_now() -> f64 {
 /// einen manuellen Raid, kann das `channel.moderate`-Event mit dem echten Ziel
 /// knapp nach `stream.offline` eintreffen. Ohne diese Pause gewinnt der
 /// Auto-Raid das Rennen und schickt einen zweiten Raid hinterher.
-const OFFLINE_GRACE_DEFAULT_SECS: u64 = 5;
-
-fn offline_grace() -> std::time::Duration {
-    let secs = std::env::var("TB_AUTO_RAID_OFFLINE_GRACE_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(OFFLINE_GRACE_DEFAULT_SECS);
-    std::time::Duration::from_secs(secs)
-}
-
 /// Restzeit bis das Grace-Fenster seit dem Offline-Trigger voll ist. Die
 /// Vorarbeit (Helix-Abfragen, Partner-Auswahl) zählt mit — meist bleibt nichts
 /// zu warten. Negative/kaputte Zeitstempel ergeben das volle Fenster.
@@ -236,6 +226,7 @@ impl ManualRaidResponse {
 }
 
 pub struct OfflineRaidHandler {
+    offline_grace: std::time::Duration,
     suppression: Arc<Mutex<ManualRaidSuppression>>,
     eligibility: OfflineEligibilityStore,
     live_state: LiveStateStore,
@@ -261,8 +252,10 @@ impl OfflineRaidHandler {
         followers: Arc<dyn FollowerCountSource>,
         pipeline: AutoRaidPipeline,
         target_game: &str,
+        offline_grace: std::time::Duration,
     ) -> Self {
         Self {
+            offline_grace,
             suppression,
             eligibility,
             live_state,
@@ -387,7 +380,7 @@ impl OfflineRaidHandler {
         // Letzte Prüfung direkt vor dem Raid: hat der Streamer zwischenzeitlich
         // selbst geraidet, wäre unser Raid ein zweiter — Twitch nimmt den auch
         // nach Stream-Ende noch an und schickt die Zuschauerreste woanders hin.
-        let remaining = remaining_grace(offline_trigger_ts, unix_now(), offline_grace());
+        let remaining = remaining_grace(offline_trigger_ts, unix_now(), self.offline_grace);
         if manual_raid_won_the_race(&self.suppression, broadcaster_id, remaining).await {
             tracing::info!(
                 streamer = streamer_label,
@@ -679,10 +672,9 @@ mod grace_tests {
     }
 
     #[test]
-    fn grace_kommt_aus_der_env_mit_default() {
-        // Default ohne Env; der gesetzte Wert wird in einem eigenen Prozess
-        // getestet — hier zählt nur, dass der Default stimmt.
-        assert_eq!(OFFLINE_GRACE_DEFAULT_SECS, 5);
+    fn grace_behält_bisherigen_konfigurationsstandard() {
+        // Historischer Standard bleibt in der typisierten Betriebskonfiguration erhalten.
+        assert_eq!(tb_config::operations::BotOperations::default().auto_raid_offline_grace_seconds, 5);
     }
 }
 

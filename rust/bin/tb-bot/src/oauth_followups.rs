@@ -23,25 +23,6 @@ use tb_raid::partner_setup::{
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
 
-/// Discord-Streamer-Rolle (Python `_DEFAULT_STREAMER_ROLE_ID`,
-/// `bot/discord_role_sync.py:14`; Env `STREAMER_ROLE_ID` überschreibt).
-const DEFAULT_STREAMER_ROLE_ID: u64 = 1313624729466441769;
-
-/// Community-Guild, in der die Streamer-Rolle hängt (wie
-/// `streamer_link.rs`; Env `STREAMER_GUILD_ID`/`MAIN_GUILD_ID` überschreibt).
-///
-/// Ohne Default war die Guild in Prod unbestimmt: der Fallback über die
-/// Broker-Mitgliederliste liefert kein `guild_id`, also gab es keinen
-/// Kandidaten und der Rollen-Entzug wurde übersprungen (2026-08-03).
-const DEFAULT_STREAMER_GUILD_ID: u64 = 1289721245281292288;
-
-fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&v| v > 0)
-}
-
 // ---------------------------------------------------------------------------
 // Discord via Master-Broker
 // ---------------------------------------------------------------------------
@@ -57,14 +38,8 @@ pub struct BrokerDiscordDirectory {
 }
 
 impl BrokerDiscordDirectory {
-    pub fn from_env(relay: Option<BrokerRelay>) -> Self {
-        Self {
-            relay,
-            guild_id: env_u64("STREAMER_GUILD_ID")
-                .or_else(|| env_u64("MAIN_GUILD_ID"))
-                .or(Some(DEFAULT_STREAMER_GUILD_ID)),
-            role_id: env_u64("STREAMER_ROLE_ID").unwrap_or(DEFAULT_STREAMER_ROLE_ID),
-        }
+    pub fn from_config(relay: Option<BrokerRelay>, config: &tb_config::discord::OAuthFollowup) -> Self {
+        Self { relay, guild_id: Some(config.guild_id), role_id: config.streamer_role_id }
     }
 
     /// Rollen-Entzug mit Ausgang. Meldet, ob die Rolle wirklich weg ist —
@@ -321,16 +296,12 @@ impl LegacyChatGreeter {
     /// `base_url` = `TB_INTERNAL_API_LEGACY_FALLBACK_URL` (Python-Seitenport
     /// 8779), `token` = `TWITCH_INTERNAL_API_TOKEN` (gleicher Token wie die
     /// interne API selbst).
-    pub fn from_env() -> Option<Self> {
+    pub fn from_runtime() -> Option<Self> {
         let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())?;
-        let base_url = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
-            .ok()
-            .map(|v| v.trim().trim_end_matches('/').to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "http://127.0.0.1:8779".to_string());
+        let base_url = tb_config::runtime::settings().ok()?.bot.legacy_greeter_base_url.trim_end_matches('/').to_string();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -461,7 +432,7 @@ pub fn build_partner_setup_service(
     // Chat (TB_CHAT_ENABLED=0) bleibt der Legacy-Weg über Python 8779.
     let greeter: Arc<dyn ChatGreeterPort> = match native_chat {
         Some(api) => Arc::new(NativeChatGreeter::new(api)),
-        None => LegacyChatGreeter::from_env()
+        None => LegacyChatGreeter::from_runtime()
             .map(|g| Arc::new(g) as Arc<dyn ChatGreeterPort>)
             .unwrap_or_else(|| {
                 tracing::warn!(
@@ -471,19 +442,18 @@ pub fn build_partner_setup_service(
                 Arc::new(NoopChatGreeter) as Arc<dyn ChatGreeterPort>
             }),
     };
-    let bot_user_id = std::env::var("TWITCH_BOT_USER_ID")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    if bot_user_id.is_none() {
-        tracing::warn!(
-            "TWITCH_BOT_USER_ID nicht gesetzt — OAuth-Followups laufen ohne Moderator-Setup/Begrüßung"
-        );
-    }
+    let config = match tb_config::runtime::settings() {
+        Ok(config) => config,
+        Err(_) => {
+            tracing::error!("OAuth-Followups benötigen die geladene Betriebskonfiguration");
+            return None;
+        }
+    };
+    let bot_user_id = Some(config.twitch.bot_user_id.clone());
     Some(Arc::new(
         PartnerSetupService::new(
             pool.clone(),
-            Arc::new(BrokerDiscordDirectory::from_env(relay)),
+            Arc::new(BrokerDiscordDirectory::from_config(relay, &config.discord.oauth_followup)),
             Arc::new(HelixModeratorInstaller::new(helix)),
             greeter,
             bot_user_id,
@@ -501,8 +471,8 @@ mod tests {
     /// `guild_id` liefert. Ohne Guild gibt es keinen Kandidaten — die
     /// Konfiguration muss deshalb immer einen tragen.
     #[test]
-    fn from_env_hat_immer_eine_guild() {
-        let directory = BrokerDiscordDirectory::from_env(None);
+    fn from_config_hat_immer_eine_guild() {
+        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
         assert!(
             directory.guild_id.is_some(),
             "ohne Guild-Kandidat wird jeder Rollen-Entzug stumm übersprungen"
@@ -512,7 +482,7 @@ mod tests {
     /// Ohne Relay ist der Entzug nicht „erledigt", sondern übersprungen.
     #[tokio::test]
     async fn ohne_relay_wird_der_entzug_als_uebersprungen_gemeldet() {
-        let directory = BrokerDiscordDirectory::from_env(None);
+        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
         let outcome = directory
             .revoke_streamer_role_detailed("12345", "test")
             .await;
@@ -528,7 +498,7 @@ mod tests {
     /// Ausgang — der Handler darf nicht an einer zweiten Wahrheit hängen.
     #[tokio::test]
     async fn trait_weg_liefert_denselben_ausgang() {
-        let directory = BrokerDiscordDirectory::from_env(None);
+        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
         let via_trait =
             tb_internal_api::DiscordRolePort::revoke_streamer_role(&directory, "12345", "test")
                 .await;
