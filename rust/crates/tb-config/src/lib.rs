@@ -3,6 +3,11 @@
 //! Der Loader nimmt eine Quelle `Fn(&str) -> Option<String>` entgegen, damit er
 //! ohne Prozess-Env testbar ist. `from_env()` nutzt `std::env::var`.
 
+pub mod file;
+pub mod global;
+
+pub use global::{BotConfig, BotConfigSnapshot};
+
 use std::time::Duration;
 
 use tb_error::ConfigError;
@@ -94,7 +99,7 @@ fn parse_f64_or_min(get: &Get, name: &str, default: f64, min: f64) -> f64 {
 }
 
 /// PostgreSQL/TimescaleDB-Verbindung. Defaults wie der Python-Pool.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DbConfig {
     pub dsn: String,
     pub pool_max: u32,
@@ -124,7 +129,7 @@ impl DbConfig {
 }
 
 /// Interne API (Loopback, Port 8776). Token ist Pflicht (fail-closed).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InternalApiConfig {
     pub token: String,
     pub host: String,
@@ -142,7 +147,7 @@ impl InternalApiConfig {
 }
 
 /// Master-Broker (Discord-Bridge, Loopback, Port 8770). Token-Fallback auf das interne API-Token.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BrokerConfig {
     pub base_url: String,
     pub token: String,
@@ -173,6 +178,23 @@ pub struct Settings {
     pub db: DbConfig,
     pub internal_api: InternalApiConfig,
     pub broker: BrokerConfig,
+}
+
+// Auch alte Aufrufer dürfen Zugangsdaten nicht über abgeleitetes Debug ausgeben.
+impl std::fmt::Debug for DbConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DbConfig([geschützt])")
+    }
+}
+impl std::fmt::Debug for InternalApiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InternalApiConfig([geschützt])")
+    }
+}
+impl std::fmt::Debug for BrokerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BrokerConfig([geschützt])")
+    }
 }
 
 impl Settings {
