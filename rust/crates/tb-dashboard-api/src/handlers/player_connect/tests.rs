@@ -56,6 +56,12 @@ async fn fixture() -> (
     .execute(&db.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../migrations/20260920170000_twitch_player_multi_steam.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let state = DashboardAuthState::new(
         db.pool.clone(),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),

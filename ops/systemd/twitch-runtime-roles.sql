@@ -232,6 +232,11 @@ BEGIN
             ON public.twitch_player_steam_links TO twitchbot;
         GRANT SELECT, INSERT, UPDATE ON public.twitch_player_steam_links TO twitchdash;
     END IF;
+    IF to_regclass('public.twitch_player_steam_accounts') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_player_steam_accounts FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, DELETE ON public.twitch_player_steam_accounts TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.twitch_player_steam_accounts TO twitchdash;
+    END IF;
     IF to_regclass('public.twitch_steam_openid_nonces') IS NOT NULL THEN
         REVOKE ALL ON public.twitch_steam_openid_nonces FROM twitchbot, twitchdash, twitchlegacy;
         GRANT SELECT, INSERT, DELETE ON public.twitch_steam_openid_nonces TO twitchdash;

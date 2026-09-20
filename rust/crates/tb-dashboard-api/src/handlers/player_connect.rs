@@ -28,6 +28,8 @@ pub fn router() -> Router {
         .route("/twitch/connect/twitch", get(twitch_login))
         .route("/twitch/connect/steam", post(steam_start))
         .route("/twitch/connect/steam/callback", get(steam_callback))
+        .route("/twitch/connect/primary", post(set_primary))
+        .route("/twitch/connect/remove", post(remove_account))
         .route("/twitch/connect/unlink", post(unlink))
 }
 
@@ -133,6 +135,14 @@ async fn session(
 pub struct ConnectForm {
     csrf_token: String,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountForm {
+    csrf_token: String,
+    steam_id64: i64,
+}
+
 fn normalized_origin(value: &str) -> Option<String> {
     let url = url::Url::parse(value).ok()?;
     (matches!(url.scheme(), "https" | "http")
@@ -198,24 +208,36 @@ pub async fn page(state: Option<Extension<DashboardAuthState>>, headers: HeaderM
             Ok(link) => link,
             Err(_) => return unavailable(),
         };
+        let steam_accounts =
+            match player_links::accounts(state.pool(), &session.twitch_user_id).await {
+                Ok(accounts) => accounts,
+                Err(_) => return unavailable(),
+            };
         let who = escape(&session.twitch_login);
         let csrf = escape(&session.csrf_token);
         let steam_id = link.as_ref().and_then(|link| link.steam_id64);
         let lookup_enabled = link.as_ref().is_some_and(|link| link.lookup_enabled);
         let ready = lookup_enabled && steam_id.is_some();
         let stage = if ready { 3 } else { 2 };
+        let account_list = steam_accounts.iter().map(|account| {
+            let primary = if account.is_primary { "<strong>Standardkonto</strong>" } else { "" };
+            let primary_action = if account.is_primary { String::new() } else {
+                format!("<form method=post action=/twitch/connect/primary><input type=hidden name=csrf_token value=\"{csrf}\"><input type=hidden name=steam_id64 value=\"{}\"><button class=secondary type=submit>Als Standard</button></form>", account.steam_id64)
+            };
+            format!("<div class=status-box><p><code>{}</code> {primary}</p><div class=actions>{primary_action}<form method=post action=/twitch/connect/remove><input type=hidden name=csrf_token value=\"{csrf}\"><input type=hidden name=steam_id64 value=\"{}\"><button class=secondary type=submit>Entfernen</button></form></div></div>", account.steam_id64, account.steam_id64)
+        }).collect::<String>();
         let status = match link.as_ref() {
             Some(link) if !link.lookup_enabled => "<div class=\"status-box notice\"><strong>Verknüpfung pausiert</strong><p>Deine bisherige Steam-Zuordnung ist deaktiviert. Verbinde Steam erneut, um die automatische Rang-Zuordnung wieder einzuschalten.</p></div>".to_string(),
             Some(link) if link.steam_id64.is_some() => format!(
-                "<div class=\"status-box success\"><strong>Alles verbunden</strong><p>Steam-ID: {}</p><div class=success-code><span>Im Chat</span><code>!rank @{who}</code></div></div>",
-                link.steam_id64.unwrap_or_default()
+                "<div class=\"status-box success\"><strong>{} Steam-Konto/Konten verbunden</strong><p>Das Standardkonto wird für normale Rangabfragen verwendet.</p><div class=success-code><span>Im Chat</span><code>!rank me</code></div></div>{account_list}",
+                steam_accounts.len()
             ),
             _ => "<p class=supporting>Dein Twitch-Konto ist bestätigt. Jetzt fehlt nur noch dein Steam-Konto.</p>".to_string(),
         };
-        let button = if !lookup_enabled && steam_id.is_some() {
-            "Steam erneut verbinden"
+        let button = if !lookup_enabled {
+            "Steam wieder verbinden"
         } else if steam_id.is_some() {
-            "Steam-Konto wechseln"
+            "Weiteres Steam-Konto verbinden"
         } else {
             "Mit Steam verbinden"
         };
@@ -226,13 +248,13 @@ pub async fn page(state: Option<Extension<DashboardAuthState>>, headers: HeaderM
         };
         let side = if ready {
             format!(
-                "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank @{who}</code> schreiben.</span></li><li><span class=check>✓</span><span>Der Bot ordnet deinen bestätigten Deadlock-Account automatisch zu.</span></li><li><span class=check>✓</span><span>Du kannst Steam jederzeit wechseln oder die Verbindung entfernen.</span></li></ul></aside>"
+                "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank me</code> schreiben.</span></li><li><span class=check>✓</span><span>Du kannst mehrere Steam-Konten verbinden und eines als Standard wählen.</span></li><li><span class=check>✓</span><span>Einzelne Konten oder die komplette Verknüpfung lassen sich jederzeit entfernen.</span></li></ul></aside>"
             )
         } else {
             "<aside class=side-card><h3>Was passiert jetzt?</h3><ul class=side-list><li><span class=check>✓</span><span>Der Login öffnet direkt Steam.</span></li><li><span class=check>✓</span><span>Wir bekommen nur deine bestätigte öffentliche Steam-ID.</span></li><li><span class=check>✓</span><span>Passwort und Inventarberechtigungen sehen wir nicht.</span></li></ul></aside>".to_string()
         };
         format!(
-            "{}<div class=panel><div class=panel-grid><div class=panel-main><div class=account-chip><span class=account-avatar aria-hidden=true>T</span><span>@{who}</span></div><div class=eyebrow>{}</div><h2>{headline}</h2>{status}<p>Damit darf der Bot deinen verfügbaren Deadlock-Rang dem bestätigten Twitch-Namen zuordnen und auf <code>!rank @{who}</code> öffentlich im Chat anzeigen.</p><form method=post action=/twitch/connect/steam><input type=hidden name=csrf_token value=\"{csrf}\"><button type=submit>{button}</button></form><p class=muted>Der Steam-Login garantiert keine Rangdaten; sie müssen in der Deadlock API verfügbar sein.</p><div class=actions><a href=/twitch/connect/twitch>Anderes Twitch-Konto verwenden</a><form method=post action=/twitch/connect/unlink><input type=hidden name=csrf_token value=\"{csrf}\"><button class=secondary type=submit>Verknüpfung entfernen</button></form></div></div>{side}</div></div>",
+            "{}<div class=panel><div class=panel-grid><div class=panel-main><div class=account-chip><span class=account-avatar aria-hidden=true>T</span><span>@{who}</span></div><div class=eyebrow>{}</div><h2>{headline}</h2>{status}<p>Damit darf der Bot deinen verfügbaren Deadlock-Rang deinem Twitch-Konto zuordnen. Mit <code>!rank me</code> fragst du im Chat dein Standardkonto ab.</p><form method=post action=/twitch/connect/steam><input type=hidden name=csrf_token value=\"{csrf}\"><button type=submit>{button}</button></form><p class=muted>Jeder weitere Steam-Login ergänzt ein Konto und macht es zunächst zum Standard. Der Steam-Login garantiert keine Rangdaten; sie müssen in der Deadlock API verfügbar sein.</p><div class=actions><a href=/twitch/connect/twitch>Anderes Twitch-Konto verwenden</a><form method=post action=/twitch/connect/unlink><input type=hidden name=csrf_token value=\"{csrf}\"><button class=secondary type=submit>Alle Steam-Verknüpfungen entfernen</button></form></div></div>{side}</div></div>",
             stepper(stage),
             if ready { "VERBUNDEN" } else { "SCHRITT 2 VON 3" }
         )
@@ -432,6 +454,83 @@ pub async fn steam_callback(
     match player_links::complete(state.pool(), &session.twitch_user_id, flow.revision, steam_id64, &nonce).await {
         Ok(true) => secure_response(Redirect::to(CONNECT_PATH).into_response()),
         Ok(false) => error(StatusCode::CONFLICT, "Die Zuordnung wurde zwischenzeitlich geändert oder diese Steam-Antwort bereits verwendet. Bitte erneut starten."),
+        Err(_) => unavailable(),
+    }
+}
+
+pub async fn set_primary(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<OAuthLoginConfig>>,
+    headers: HeaderMap,
+    Form(form): Form<AccountForm>,
+) -> Response {
+    let (Some(Extension(state)), Some(Extension(config))) = (state, config) else {
+        return unavailable();
+    };
+    let (_, session) = match session(&state, &headers).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return error(
+                StatusCode::UNAUTHORIZED,
+                "Bitte zuerst mit Twitch anmelden.",
+            )
+        }
+        Err(_) => return unavailable(),
+    };
+    let csrf_form = ConnectForm {
+        csrf_token: form.csrf_token.clone(),
+    };
+    if !valid_form(&headers, &config, &session, &csrf_form) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Die Bestätigung ist ungültig. Bitte die Seite neu öffnen.",
+        );
+    }
+    match player_links::set_primary(state.pool(), &session.twitch_user_id, form.steam_id64).await {
+        Ok(true) => secure_response(Redirect::to(CONNECT_PATH).into_response()),
+        Ok(false) => error(
+            StatusCode::NOT_FOUND,
+            "Dieses Steam-Konto gehört nicht zu deiner Verknüpfung.",
+        ),
+        Err(_) => unavailable(),
+    }
+}
+
+pub async fn remove_account(
+    state: Option<Extension<DashboardAuthState>>,
+    config: Option<Extension<OAuthLoginConfig>>,
+    headers: HeaderMap,
+    Form(form): Form<AccountForm>,
+) -> Response {
+    let (Some(Extension(state)), Some(Extension(config))) = (state, config) else {
+        return unavailable();
+    };
+    let (_, session) = match session(&state, &headers).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return error(
+                StatusCode::UNAUTHORIZED,
+                "Bitte zuerst mit Twitch anmelden.",
+            )
+        }
+        Err(_) => return unavailable(),
+    };
+    let csrf_form = ConnectForm {
+        csrf_token: form.csrf_token.clone(),
+    };
+    if !valid_form(&headers, &config, &session, &csrf_form) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Die Bestätigung ist ungültig. Bitte die Seite neu öffnen.",
+        );
+    }
+    match player_links::remove_account(state.pool(), &session.twitch_user_id, form.steam_id64).await
+    {
+        Ok(true) => secure_response(Redirect::to(CONNECT_PATH).into_response()),
+        Ok(false) => error(
+            StatusCode::NOT_FOUND,
+            "Dieses Steam-Konto gehört nicht zu deiner Verknüpfung.",
+        ),
         Err(_) => unavailable(),
     }
 }
