@@ -42,6 +42,7 @@ RuntimeDirectoryMode=0700
 BindPaths=/var/lib/deadlock-twitch-bot/data:/opt/deadlock/twitch/current/data
 BindPaths=/var/log/deadlock-twitch-bot:/opt/deadlock/twitch/current/logs
 BindPaths=/var/lib/deadlock-twitch-media/clips:/opt/deadlock/twitch/current/data/clips
+ReadOnlyPaths=/var/lib/deadlock-twitch/config
 
 NoNewPrivileges=yes
 PrivateTmp=yes
