@@ -521,7 +521,7 @@ async fn main() {
     // P2.57: `mut`, weil der inbound Bot-Timeout-Guard erst nach dem
     // ChatRuntime-Aufbau injiziert wird (s. `with_bot_timeout_guard` unten).
     let mut telemetry = TelemetryStore::new(pool.clone());
-    let live_state = LiveStateStore::new(pool.clone());
+    let live_state = LiveStateStore::new(pool.clone()).with_retry_config(&config.database.retry);
     // Welle B Phase 1: Bot-Token booten + ChatApi bauen (TB_CHAT_ENABLED=1).
     // Früh gezogen (vor Follower-Source + Hooks-Komposition): die Follower-Total-
     // Quelle (P1.7) braucht den Bot-Token mit `moderator:read:followers`, und die
@@ -625,7 +625,8 @@ async fn main() {
                     },
                     CapacitySnapshotStore::new(pool.clone()),
                 )
-                .with_bot_ban_handler(bot_ban_handler.clone());
+                .with_bot_ban_handler(bot_ban_handler.clone())
+                .with_capacity_config(&config.monitoring);
                 // P1.2: Mod-Provisioner für die 403-Selbstheilung im Chat-/Sub-Pfad
                 // (Python `_ensure_bot_is_mod`). Braucht den Streamer-Token-Resolver
                 // (cipher-gated) + die Bot-User-ID aus dem gebooteten Chat-Handle.
@@ -1295,7 +1296,7 @@ async fn main() {
         Arc::new(tb_monitoring::epoch_clock),
     ));
     let inbox = InboxRuntime::new(
-        tb_monitoring::ProcessingInboxStore::new(pool.clone()),
+        tb_monitoring::ProcessingInboxStore::new(pool.clone()).with_retry_config(&config.database.retry),
         handler,
     )
     .start();
@@ -1789,7 +1790,7 @@ async fn main() {
         .with_session_tracker(scout_tracker)
         // Anonymer Read-only-Chat-Harvester für die Scout-Roster-Kanäle.
         .with_chat_sink(std::sync::Arc::new(scout_chat_adapter));
-        if let Some(run) = scout_task.run_if_enabled() {
+        if let Some(run) = scout_task.run_if_enabled(config.monitoring.scout_enabled) {
             supervisor.spawn("monitoring_scout", run);
         }
     }
@@ -1869,6 +1870,7 @@ async fn main() {
             _ => None,
         };
         chatters_wiring::spawn_chatters_schedulers(
+            config.monitoring.observability_retention_days,
             &supervisor,
             pool.clone(),
             chatters_auth,

@@ -171,7 +171,12 @@ pub async fn eventsub_requeue_handler(
             })),
         );
     }
+    let config = match tb_config::runtime::settings() {
+        Ok(config) => config,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "configuration_unavailable"}))),
+    };
     match ProcessingInboxStore::new(pool)
+        .with_retry_config(&config.database.retry)
         .requeue_dead_letter(&work_id, Utc::now().timestamp_millis() as f64 / 1000.0)
         .await
     {

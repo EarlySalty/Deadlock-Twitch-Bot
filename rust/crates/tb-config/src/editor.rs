@@ -114,11 +114,9 @@ pub fn save(
         return Err(EditError::Conflict);
     }
     let mut candidate = current.settings().clone();
-    candidate.database = Database {
-        pool_max: options.pool_max,
-        acquire_timeout_ms: options.acquire_timeout_ms,
-        connect_timeout_seconds: options.connect_timeout_seconds,
-    };
+    candidate.database.pool_max = options.pool_max;
+    candidate.database.acquire_timeout_ms = options.acquire_timeout_ms;
+    candidate.database.connect_timeout_seconds = options.connect_timeout_seconds;
     use crate::file::Schema;
     candidate.validate()?;
     let mut document = original

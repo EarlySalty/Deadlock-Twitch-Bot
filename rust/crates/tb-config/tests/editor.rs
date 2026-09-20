@@ -140,3 +140,16 @@ fn dateirechte_und_gruppe_bleiben_erhalten_symlinks_abgewiesen() {
         Err(EditError::UnsafeLocation)
     ));
 }
+
+#[test]
+fn pool_editor_erhält_getrennte_retry_optionen() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.path(), format!("{CONFIG}\n[database.retry]\nattempts=7\nbase_delay_seconds=0.2\nmax_delay_seconds=0.9\n")).unwrap();
+    let original = load_saved(&fixture.path()).unwrap();
+    let mut options = OperatingOptions::from(&original.snapshot.settings().database);
+    options.pool_max = 21;
+    let saved = save(&fixture.path(), &original.revision, &options).unwrap();
+    assert_eq!(saved.snapshot.settings().database.retry.attempts, 7);
+    assert_eq!(saved.snapshot.settings().database.retry.base_delay_seconds, 0.2);
+    assert_eq!(saved.snapshot.settings().database.retry.max_delay_seconds, 0.9);
+}

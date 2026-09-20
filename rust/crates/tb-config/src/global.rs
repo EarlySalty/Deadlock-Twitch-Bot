@@ -25,6 +25,8 @@ pub struct BotConfig {
     #[serde(default)]
     pub discord: crate::discord::DiscordOperations,
     #[serde(default)]
+    pub monitoring: crate::reliability::MonitoringOptions,
+    #[serde(default)]
     pub database: Database,
     #[serde(default)]
     pub internal_api: InternalApi,
@@ -73,6 +75,7 @@ fn default_languages() -> Vec<String> {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Database {
+    pub retry: crate::reliability::TransactionRetry,
     pub pool_max: u32,
     /// Millisekunden, einschließlich der bisher erlaubten Bruchteile einer Sekunde.
     pub acquire_timeout_ms: u64,
@@ -81,6 +84,7 @@ pub struct Database {
 impl Default for Database {
     fn default() -> Self {
         Self {
+            retry: crate::reliability::TransactionRetry::default(),
             pool_max: 10,
             acquire_timeout_ms: 5_000,
             connect_timeout_seconds: 5,
@@ -318,6 +322,8 @@ impl Schema for BotConfig {
         self.media.validate()?;
         self.bot.validate()?;
         self.discord.validate()?;
+        self.monitoring.validate()?;
+        self.database.retry.validate()?;
         let eventsub = (
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             self.bot.eventsub_receiver_port,

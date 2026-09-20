@@ -3477,6 +3477,7 @@ dependencies = [
  "sqlx",
  "tb-analytics",
  "tb-chat",
+ "tb-config",
  "tb-transport-twitch",
  "tempfile",
  "thiserror 2.0.20",

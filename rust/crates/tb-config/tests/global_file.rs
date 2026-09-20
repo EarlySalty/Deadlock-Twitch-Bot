@@ -550,3 +550,24 @@ fn bot_pfade_und_unterschiedliche_redirect_defaults_bleiben_explizit() {
     assert!(parse(&format!("{VALID}\n[bot]\nservice_warning_log_directory = ''\n")).is_err());
     assert!(parse(&format!("{VALID}\n[bot]\nlegacy_proxy_base_url = 'http://name:password@localhost/'\n")).is_err());
 }
+
+#[test]
+fn retry_und_monitoring_grenzen_werden_vor_laufzeit_geprüft() {
+    let snapshot = parse(VALID).unwrap();
+    let cfg = snapshot.settings();
+    assert_eq!(cfg.database.retry.attempts, 3);
+    assert_eq!(cfg.database.retry.base_delay_seconds, 0.1);
+    assert_eq!(cfg.database.retry.max_delay_seconds, 0.75);
+    assert!(!cfg.monitoring.scout_enabled);
+    assert_eq!(cfg.monitoring.capacity_sample_seconds, 300);
+    assert_eq!(cfg.monitoring.capacity_retention_days, 45);
+    assert_eq!(cfg.monitoring.observability_retention_days, 45);
+    for table in [
+        "[database.retry]\nattempts=0",
+        "[database.retry]\nbase_delay_seconds=nan",
+        "[database.retry]\nmax_delay_seconds=1e100",
+        "[monitoring]\ncapacity_sample_seconds=29",
+        "[monitoring]\ncapacity_retention_days=366",
+        "[monitoring]\nobservability_retention_days=-1",
+    ] { assert!(parse(&format!("{VALID}\n{table}")).is_err(), "{table}"); }
+}

@@ -8,6 +8,7 @@ pub mod editor;
 pub mod file;
 pub mod global;
 pub mod operations;
+pub mod reliability;
 pub mod runtime;
 pub mod shared_options;
 pub mod stt;

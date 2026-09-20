@@ -49,3 +49,12 @@ Quellbasis `ca398cc9` (zusätzlich gemeinsames Schema aus A `e937f659`, hier `89
 - `YT_DLP_PATH`: `bot.yt_dlp_binary`; ohne Wert bestehende ausführbare CWD/Home/Binary-Suche unverändert. HOME bleibt reine OS-Quelle, keine Konfigurationsquelle. Outreach hatte zusätzlich `YTDLP_BIN` vor diesem Fallback: eigenes `outreach_yt_dlp_binary` erhält dessen Vorrang. Explizite Dateipfade werden quellrelativ vor Dienststart geprüft.
 - `VOD_EXPORT_REMOTE_BASE`: `bot.vod_export_remote_base`, bisheriger `DEFAULT_REMOTE_BASE` bleibt `gdrive:Deadlock/Twitch-VODs`. Keine Remote-Erstellung oder Datenverschiebung.
 - Globale Pfadauflösung wird vor Snapshot-Installation geprüft. Credentials dieses Pakets bleiben für den späteren Infisical-Quellenabschluss sichtbar klassifiziert; kein ENV/Secretinhalt wurde gelesen.
+
+## B4: Wiederholungen und Monitoring
+
+- `TWITCH_ANALYTICS_TX_RETRY_ATTEMPTS/BASE_DELAY_SECONDS/MAX_DELAY_SECONDS`: identische Altdefaults beider Rust-Policies (3, 0.10, 0.75), eine gemeinsame `database.retry`. Processing-Inbox und LiveState bekommen sie explizit am Botstart; die schreibende interne Requeue-Route übernimmt denselben Snapshot. Reine Debug-Lesewege brauchen keine Retry-Policy. Bibliotheks-/Testkonstruktoren behalten explizite Defaults, ohne ENV zu lesen. Der bisher ungenutzte `tb-db`-Getter ist durch einen typisierten Konverter ersetzt.
+- `TWITCH_EVENTSUB_CAPACITY_SAMPLE_SECONDS`: 300, Grenzen 30–3600; `TWITCH_EVENTSUB_CAPACITY_RETENTION_DAYS`: 45, Grenzen 7–365. SubscriptionManager bekommt beide beim produktiven Aufbau.
+- `TWITCH_OBSERVABILITY_RETENTION_DAYS`: eigener Wert, 45, Grenzen 7–365; einmal an den Retention-Scheduler übergeben. Keine implizite Gleichsetzung mit Capacity-Retention.
+- `TB_SCOUT_ENABLED`: false; Scout bekommt den Schalter explizit vom Botstart. Keine Aktivierung durch die Migration.
+- Typisierte ungültige Eingaben werden vor Start abgelehnt, statt alte ungültige ENV-Strings pro Aufruf zu parsen und auf Defaults/Clamps zu fallen. Gültige Betriebswerte und Grenzen bleiben gleich.
+- Pool-Editor ändert gezielt nur seine drei erlaubten Felder, lässt neu hinzugekommene Retrywerte unverändert; eigener Erhaltungstest.

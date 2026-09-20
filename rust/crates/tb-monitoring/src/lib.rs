@@ -72,7 +72,7 @@ pub use live_state::{
 };
 pub use observability_retention::{
     cleanup_observability_events, cleanup_observability_events_before,
-    observability_retention_days, OBSERVABILITY_RETENTION_DEFAULT_DAYS,
+    OBSERVABILITY_RETENTION_DEFAULT_DAYS,
 };
 pub use poller::{
     AnnouncementSink, NoopAnnouncementSink, NoopPollHooks, PollConfig, PollEngine, PollHooks,
