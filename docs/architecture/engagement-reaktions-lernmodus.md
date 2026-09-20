@@ -138,7 +138,7 @@ Stream-Audio an einen Fremdanbieter, auch nicht versehentlich, nur weil ein
 
 Der Dienst hat keine Authentifizierung und bindet deshalb ausschließlich ans
 Loopback. Er läuft als User-Unit `deadlock-stt-server.service`
-(venv `~/stt-tools`, Port 8791, 8 Threads); Gesundheitscheck:
+(Rust-Binary `tb-stt-server`, Port 8791, 8 Threads); Gesundheitscheck:
 `curl -s http://127.0.0.1:8791/health`. Läuft er nicht, schlägt die
 Transkription fehl und der Zeitstrahl bekommt für diese Minuten keine
 Stream-Zeilen — er weicht bewusst nicht nach außen aus.

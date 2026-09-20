@@ -1,0 +1,22 @@
+[package]
+name = "tb-stt-server"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "tb-stt-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { workspace = true, features = ["multipart"] }
+futures-util.workspace = true
+hex.workspace = true
+hound = "3.5"
+reqwest = { workspace = true, features = ["stream"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "net", "signal", "sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+whisper-rs = "0.16"
