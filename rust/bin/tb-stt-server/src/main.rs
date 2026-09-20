@@ -28,7 +28,7 @@ const DEFAULT_MODEL_NAME: &str = "ggml-large-v3-turbo-q5_0";
 const DEFAULT_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 const DEFAULT_MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
-const DEFAULT_MODEL_SHA256: &str = "e050f7970618a659205450ad97eb95a18d69c9ee";
+const DEFAULT_MODEL_SHA256: &str = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
 const DEFAULT_VAD_FILE: &str = "ggml-silero-v6.2.0.bin";
 const DEFAULT_VAD_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
@@ -117,11 +117,11 @@ struct AppState {
 }
 
 #[derive(Serialize)]
-struct HealthResponse<'a> {
-    status: &'a str,
-    model: &'a str,
+struct HealthResponse {
+    status: &'static str,
+    model: String,
     threads: i32,
-    backend: &'a str,
+    backend: &'static str,
 }
 
 #[derive(Serialize)]
@@ -257,10 +257,10 @@ async fn shutdown_signal() {
     }
 }
 
-async fn health(State(state): State<AppState>) -> Json<HealthResponse<'static>> {
+async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        model: Box::leak(state.config.model_name.clone().into_boxed_str()),
+        model: state.config.model_name.clone(),
         threads: state.config.threads,
         backend: "whisper.cpp/whisper-rs",
     })
