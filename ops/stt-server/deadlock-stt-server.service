@@ -5,8 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Documents/Deadlock-Twitch-Bot/rust
-ExecStart=%h/Documents/Deadlock-Twitch-Bot/rust/target/release/tb-stt-server
+ExecStart=%h/.local/bin/tb-stt-server
 Restart=on-failure
 RestartSec=3
 Environment=STT_HOST=127.0.0.1
