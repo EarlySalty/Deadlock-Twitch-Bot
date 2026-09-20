@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 const fields: Array<{ key: keyof OperatingOptions; label: string; hint: string; min: number; max: number }> = [
   { key: 'pool_max', label: 'Verbindungen je Dienst', hint: 'Maximale gleichzeitige Datenbankverbindungen für Bot und Dashboard.', min: 1, max: 1000 },
   { key: 'acquire_timeout_ms', label: 'Warten auf eine freie Verbindung (Millisekunden)', hint: 'Gesamtbudget für das Warten auf eine Datenbankverbindung.', min: 100, max: 300000 },
-  { key: 'connect_timeout_seconds', label: 'Verbindungsaufbau (Sekunden)', hint: 'Bei neuen Verbindungen gilt der kleinere Wert aus diesem Limit und dem Wartebudget.', min: 1, max: 300 },
+  { key: 'connect_timeout_seconds', label: 'Verbindungsaufbau (Sekunden)', hint: 'Für das Warten auf eine Verbindung gilt der kleinere Wert aus beiden Zeitlimits.', min: 1, max: 300 },
 ];
 
 export function OperatingConfigPage() {

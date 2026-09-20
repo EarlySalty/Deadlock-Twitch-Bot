@@ -38,11 +38,24 @@ class Settings:
             local = ipaddress.ip_address(self.host).is_loopback
         except ValueError:
             local = False
+        model_path = Path(self.model)
+        # Der Launcher löst lokale Modelle gegen die Config-Datei auf. Deren
+        # Verzeichnis darf Leerzeichen/Umlaute enthalten und länger sein als
+        # ein Hub-Bezeichner. Existierende absolute Pfade getrennt validieren.
+        try:
+            local_model = (
+                model_path.is_absolute()
+                and not any(ord(char) < 32 or ord(char) == 127 for char in self.model)
+                and model_path.is_dir()
+            )
+        except (OSError, ValueError):
+            local_model = False
         valid = (
             local
             and 1 <= self.port <= 65535
             and 1 <= self.threads <= 64
-            and bool(re.fullmatch(r"[A-Za-z0-9/_.-]{1,512}", self.model))
+            and (local_model or (not model_path.is_absolute()
+                                and bool(re.fullmatch(r"[A-Za-z0-9/_.-]{1,512}", self.model))))
             and (not self.language or bool(re.fullmatch(r"[a-z-]{1,16}", self.language)))
             and math.isfinite(self.no_speech_max)
             and 0 <= self.no_speech_max <= 1

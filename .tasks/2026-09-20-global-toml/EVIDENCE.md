@@ -61,3 +61,5 @@ Bot und Dashboard sind im Integrationskandidaten an den Kern-Snapshot angeschlos
 - Admin-Frontend: TypeScript/Vite-Build erfolgreich.
 - Visuelle Browserabnahme weiterhin offen: kein Browser verbindbar.
 - Nach den Folgekorrekturen: `cargo check -p tb-bot -p tb-dashboard` erfolgreich.
+
+Gate f8245c59 blockierte zu Recht die Python-Validierung aufgelöster lokaler Modellpfade. Folgefix unterscheidet vorhandene absolute Modellverzeichnisse von Hub-Bezeichnern. Rust-Unterprozesstest läuft jetzt aus einem Verzeichnis mit Leerzeichen/Umlaut gegen den echten Python-Argumentparser (6 STT-Rusttests grün). Python-Suite: 8 Tests grün, einschließlich lokalem Pfad mit mehr als 512 Zeichen und fehlendem Verzeichnis. Bestehende Framework-Deprecation-Warnungen unverändert.

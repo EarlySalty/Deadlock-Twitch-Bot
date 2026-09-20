@@ -120,7 +120,7 @@ fn starter_uebergibt_echte_gepruefte_argumente_statt_environment() {
     );
     static NUMBER: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
-        "tb-stt-launch-{}-{}",
+        "tb-stt-launch ä {}-{}",
         std::process::id(),
         NUMBER.fetch_add(1, Ordering::Relaxed)
     ));
@@ -132,9 +132,13 @@ fn starter_uebergibt_echte_gepruefte_argumente_statt_environment() {
         }
     }
     let _cleanup = Cleanup(root.clone());
+    let server_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../ops/stt-server")
+        .canonicalize()
+        .unwrap();
     std::fs::write(
         root.join("child.py"),
-        "import json, sys\nprint(json.dumps(sys.argv[1:]))\n",
+        format!("import json, sys\nsys.path.insert(0, {})\nfrom stt_server import parse_arguments\nparse_arguments()\nprint(json.dumps(sys.argv[1:]))\n", serde_json::to_string(server_directory.to_str().unwrap()).unwrap()),
     )
     .unwrap();
     let document = format!("{BASE}\n[stt]\nport=19091\nthreads=3\nmodel='local/model'\nno_speech_max=0.4\navg_logprob_min=-0.8\nmax_upload_bytes=1048576\n[stt.launch]\npython_binary='/usr/bin/python3'\nserver_script='child.py'\ncache_directory='models'\n");

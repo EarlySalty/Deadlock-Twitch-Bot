@@ -4,6 +4,7 @@ import importlib.util
 import io
 from pathlib import Path
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
@@ -53,6 +54,15 @@ class FakeModel:
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_resolved_local_model_paths_keep_spaces_unicode_and_long_parents(self):
+        with tempfile.TemporaryDirectory(prefix="stt geprüft ") as directory:
+            model = Path(directory).joinpath(*(["modelle" * 12] * 7))
+            model.mkdir(parents=True)
+            self.assertGreater(len(str(model)), 512)
+            settings(model=str(model)).validate()
+            with self.assertRaises(ValueError):
+                settings(model=str(model / "missing")).validate()
+
     def test_invalid_values_fail_before_model_factory(self):
         for changes in (
             {"host": "0.0.0.0"}, {"port": 0}, {"threads": 65},
