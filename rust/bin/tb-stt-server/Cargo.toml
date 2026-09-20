@@ -19,4 +19,4 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "net", "signal", "sync"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-whisper-rs = { version = "0.16", features = ["openblas"] }
+whisper-rs = "0.16"
