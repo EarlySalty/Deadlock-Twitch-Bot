@@ -24,6 +24,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libopenblas-dev clang
       - name: Generate Cargo.lock
         run: cd rust && cargo generate-lockfile
+      - name: Test Rust STT server
+        run: cd rust && cargo test --locked -j2 -p tb-stt-server
       - name: Commit Cargo.lock
         run: |
           git config user.name "github-actions[bot]"
