@@ -21,6 +21,7 @@ tracing  = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { version = "0.8.23", default-features = false, features = ["parse", "display"] }
+toml_edit = { version = "0.22.27", default-features = false, features = ["parse", "display"] }
 url = { workspace = true }
 libc = "0.2"
 sha2 = { workspace = true }

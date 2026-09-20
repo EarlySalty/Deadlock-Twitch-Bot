@@ -68,6 +68,10 @@ struct Scanner<'a> {
 }
 
 impl Scanner<'_> {
+    fn reader_name(name: &str) -> bool {
+        matches!(name, "var" | "var_os" | "vars" | "vars_os")
+    }
+
     fn import(&mut self, tree: &syn::UseTree, prefix: &str) {
         match tree {
             syn::UseTree::Path(path) => {
@@ -79,20 +83,22 @@ impl Scanner<'_> {
                 }
             }
             syn::UseTree::Name(name) => {
-                if prefix.ends_with("env::") {
+                if prefix == "std::env::" && Self::reader_name(&name.ident.to_string()) {
                     self.aliases.insert(name.ident.to_string());
                 }
             }
             syn::UseTree::Rename(rename) => {
-                if prefix.ends_with("env::") {
+                if prefix == "std::env::" && Self::reader_name(&rename.ident.to_string()) {
                     self.aliases.insert(rename.rename.to_string());
                 }
-                if prefix == "std::" && rename.ident == "env" {
+                if (prefix == "std::" && rename.ident == "env")
+                    || (prefix == "std::env::" && rename.ident == "self")
+                {
                     self.env_modules.insert(rename.rename.to_string());
                 }
             }
             syn::UseTree::Glob(_) => {
-                if prefix.ends_with("env::") {
+                if prefix == "std::env::" {
                     self.aliases
                         .extend(["var", "var_os", "vars", "vars_os"].map(str::to_string));
                 }
@@ -146,11 +152,14 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 .map(|s| s.ident.to_string())
                 .collect();
             let name = names.last().map(String::as_str).unwrap_or("");
-            let env =
-                names.iter().any(|s| self.env_modules.contains(s)) || self.aliases.contains(name);
-            let read = matches!(name, "var" | "var_os" | "vars" | "vars_os")
-                || self.aliases.contains(name);
-            if env && read {
+            let direct = names.len() == 3
+                && names[0] == "std"
+                && names[1] == "env"
+                && Self::reader_name(name);
+            let module =
+                names.len() == 2 && self.env_modules.contains(&names[0]) && Self::reader_name(name);
+            let alias = names.len() == 1 && self.aliases.contains(name);
+            if direct || module || alias {
                 let key = expression.args.first().and_then(|argument| match argument {
                     syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(value),
@@ -296,5 +305,41 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nur_leser_importieren_keine_dateisystemfunktionen_oder_schreiber() {
+        let source = syn::parse_file(r#"
+            use std::env::{var, var_os as read_os, vars as read_all, vars_os,
+                current_dir, current_exe as executable, set_var as write, remove_var};
+            use std::env as process_env;
+            use std::env::{self as another_env};
+            use other::env::{current_dir as unrelated};
+            fn run() {
+                var("ONE"); read_os("TWO"); read_all(); vars_os();
+                process_env::var("THREE"); another_env::var("FOUR"); std::env::var("FIVE");
+                current_dir(); executable(); write("NOT_A_READ", "fixture"); remove_var("NOT_A_READ");
+                unrelated(); other::var("NOT_A_READ");
+            }
+        "#).unwrap();
+        let mut report = Report::default();
+        let mut scanner = Scanner {
+            file: "fixture.rs".into(),
+            function: String::new(),
+            aliases: BTreeSet::new(),
+            env_modules: BTreeSet::from(["env".into()]),
+            report: &mut report,
+        };
+        scanner.visit_file(&source);
+        assert_eq!(report.readers.len(), 7);
+        assert!(report
+            .readers
+            .iter()
+            .all(|reader| reader.key.as_deref() != Some("NOT_A_READ")));
     }
 }

@@ -175,4 +175,23 @@ fn starter_uebergibt_echte_gepruefte_argumente_statt_environment() {
         std::fs::read_to_string(root.join("bot.toml")).unwrap(),
         document
     );
+    std::fs::create_dir_all(root.join("models/local")).unwrap();
+    std::fs::write(
+        root.join("bot.toml"),
+        document.replace("local/model", "./models/local"),
+    )
+    .unwrap();
+    for cwd in [Path::new("/"), root.as_path()] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_tb-stt-launcher"))
+            .env_clear()
+            .current_dir(cwd)
+            .arg("--config")
+            .arg(root.join("bot.toml"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let args: Vec<String> = serde_json::from_slice(&output.stdout).unwrap();
+        let model = args.windows(2).find(|pair| pair[0] == "--model").unwrap();
+        assert_eq!(Path::new(&model[1]), root.join("models/local"));
+    }
 }

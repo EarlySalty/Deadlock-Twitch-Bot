@@ -6,7 +6,7 @@ use axum::{body::Bytes, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tb_config::{
-    editor::{EditError, OperatingOptions},
+    editor::{load_saved, EditError, OperatingOptions, SavedConfig},
     BotConfigSnapshot,
 };
 use tb_http_core::ApiError;
@@ -14,7 +14,7 @@ use tb_http_core::ApiError;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditRequest {
-    expected_fingerprint: String,
+    expected_revision: String,
     options: OperatingOptions,
     #[serde(default, rename = "csrf_token")]
     _csrf_token: Option<String>,
@@ -71,18 +71,19 @@ async fn bot_fingerprint(active: &BotConfigSnapshot) -> Option<String> {
     Some(fingerprint.to_string())
 }
 
-async fn response(saved: BotConfigSnapshot) -> Result<Json<Value>, ApiError> {
+async fn response(saved: SavedConfig) -> Result<axum::response::Response, ApiError> {
     let active = active()?;
     let bot = bot_fingerprint(active).await;
-    Ok(Json(json!({
-        "saved_fingerprint": saved.fingerprint(),
-        "options": OperatingOptions::from(&saved.settings().database),
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(json!({
+        "saved_revision": saved.revision,
+        "saved_fingerprint": saved.snapshot.fingerprint(),
+        "options": OperatingOptions::from(&saved.snapshot.settings().database),
         "services": [
-            { "name": "Dashboard", "active_fingerprint": active.fingerprint(), "restart_required": active.fingerprint() != saved.fingerprint() },
-            { "name": "Twitch-Bot", "active_fingerprint": bot, "restart_required": bot.as_deref().map(|value| value != saved.fingerprint()) },
+            { "name": "Dashboard", "active_fingerprint": active.fingerprint(), "restart_required": active.fingerprint() != saved.snapshot.fingerprint() },
+            { "name": "Twitch-Bot", "active_fingerprint": bot, "restart_required": bot.as_deref().map(|value| value != saved.snapshot.fingerprint()) },
         ],
         "activation": "restart_required",
-    })))
+    }))).into_response())
 }
 
 pub async fn get_handler(auth: DashboardAuthLevel) -> Result<impl IntoResponse, ApiError> {
@@ -90,7 +91,7 @@ pub async fn get_handler(auth: DashboardAuthLevel) -> Result<impl IntoResponse, 
         return Err(error);
     }
     let source = active()?.source().to_path_buf();
-    let saved = tokio::task::spawn_blocking(move || BotConfigSnapshot::load(&source))
+    let saved = tokio::task::spawn_blocking(move || load_saved(&source))
         .await
         .map_err(|_| ApiError::internal())?
         .map_err(|_| {
@@ -117,9 +118,9 @@ pub async fn save_handler(
             "Die Betriebsoptionen sind ungültig; Eingabewerte werden nicht ausgegeben.",
         )
     })?;
-    if request.expected_fingerprint.len() != 64
+    if request.expected_revision.len() != 64
         || !request
-            .expected_fingerprint
+            .expected_revision
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
@@ -128,7 +129,7 @@ pub async fn save_handler(
         ));
     }
     let source = active()?.source().to_path_buf();
-    let saved = tokio::task::spawn_blocking(move || tb_config::editor::save(&source, &request.expected_fingerprint, &request.options))
+    let saved = tokio::task::spawn_blocking(move || tb_config::editor::save(&source, &request.expected_revision, &request.options))
         .await.map_err(|_| ApiError::internal())?
         .map_err(|error| match error {
             EditError::Conflict => failure(StatusCode::CONFLICT, "Die Konfiguration wurde inzwischen geändert. Bitte neu laden und Änderungen erneut prüfen."),
@@ -164,7 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn fremde_felder_und_modellwechsel_abgewiesen() {
-        let payload = json!({ "expected_fingerprint": "a".repeat(64), "options": { "pool_max": 10, "acquire_timeout_ms": 5000, "connect_timeout_seconds": 5, "model": "unapproved" } });
+        let payload = json!({ "expected_revision": "a".repeat(64), "options": { "pool_max": 10, "acquire_timeout_ms": 5000, "connect_timeout_seconds": 5, "model": "unapproved" } });
         assert_eq!(
             save_handler(
                 DashboardAuthLevel::admin(),

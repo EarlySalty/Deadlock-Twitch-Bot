@@ -148,6 +148,12 @@ impl<T> fmt::Debug for Snapshot<T> {
 
 impl<T: Schema> Snapshot<T> {
     pub fn load(path: &Path) -> Result<Self, FileError> {
+        Self::load_document(path).map(|(snapshot, _)| snapshot)
+    }
+
+    /// Snapshot und Originaltext stammen aus demselben begrenzten Lesevorgang.
+    /// Der Text ist nur für kommentarerhaltende Editoren, nie für Status-APIs.
+    pub fn load_document(path: &Path) -> Result<(Self, String), FileError> {
         if !path.is_absolute() {
             return Err(FileError::new(ErrorKind::AbsolutePathRequired));
         }
@@ -187,7 +193,7 @@ impl<T: Schema> Snapshot<T> {
         let source = path
             .canonicalize()
             .map_err(|_| FileError::new(ErrorKind::FileUnreadable))?;
-        Self::parse(input, &source)
+        Self::parse(input, &source).map(|snapshot| (snapshot, input.to_string()))
     }
 
     /// Auch Importwerkzeuge und Tests benutzen denselben Prüfschritt.

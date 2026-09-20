@@ -53,3 +53,11 @@ Bot und Dashboard sind im Integrationskandidaten an den Kern-Snapshot angeschlos
 - `bash -n` für beide Rust-Dienstwrapper und `git diff --check`: erfolgreich.
 - Neue API-Tests prüfen Admin-Abweisung ohne Dateizugriff und Zurückweisen fremder Felder einschließlich Modelländerungen; deren tatsächlicher Testlauf wird gesondert nachgetragen.
 - Browser-Sichtprüfung nicht möglich: laut Hauptsession kein verbundener Browser. Kein Screenshot oder tatsächliches Durchklicken behauptet.
+
+## Review-Nacharbeit
+
+- `cargo test -p tb-config --features inventory`: 45 Tests erfolgreich; einschließlich Kommentar-CAS und realem STT-Unterprozess aus zwei Arbeitsverzeichnissen.
+- Admin-API: zwei Auth-/Schema-Tests erfolgreich.
+- Admin-Frontend: TypeScript/Vite-Build erfolgreich.
+- Visuelle Browserabnahme weiterhin offen: kein Browser verbindbar.
+- Nach den Folgekorrekturen: `cargo check -p tb-bot -p tb-dashboard` erfolgreich.

@@ -125,6 +125,7 @@ export interface OperatingOptions {
 
 export interface OperatingConfig {
   saved_fingerprint: string;
+  saved_revision: string;
   options: OperatingOptions;
   services: Array<{
     name: string;
@@ -135,9 +136,9 @@ export interface OperatingConfig {
 }
 
 export const fetchOperatingConfig = () => admin<OperatingConfig>('/config/operating');
-export const saveOperatingConfig = (expected_fingerprint: string, options: OperatingOptions) =>
-  postAdminJson<OperatingConfig, { expected_fingerprint: string; options: OperatingOptions }>(
-    '/config/operating', { expected_fingerprint, options },
+export const saveOperatingConfig = (expected_revision: string, options: OperatingOptions) =>
+  postAdminJson<OperatingConfig, { expected_revision: string; options: OperatingOptions }>(
+    '/config/operating', { expected_revision, options },
   );
 
 export function buildRaidAuthUrl(login: string): string {

@@ -41,15 +41,35 @@ fn command(snapshot: &BotConfigSnapshot) -> Result<Command, &'static str> {
     if !script.is_file() {
         return Err("Das konfigurierte STT-Skript ist keine vorhandene reguläre Datei.");
     }
+    let model_path = snapshot
+        .resolve(Path::new(&config.model))
+        .map_err(|_| "Der STT-Modellpfad ist ungültig.")?;
+    let explicitly_local = Path::new(&config.model).is_absolute()
+        || config.model.starts_with("./")
+        || config.model.starts_with("../");
+    if explicitly_local && !model_path.is_dir() {
+        return Err("Das konfigurierte lokale STT-Modellverzeichnis fehlt.");
+    }
+    let model = if explicitly_local || model_path.is_dir() {
+        model_path.into_os_string()
+    } else {
+        config.model.clone().into()
+    };
     let mut command = Command::new(python);
     command
+        .current_dir(
+            snapshot
+                .source()
+                .parent()
+                .ok_or("Der Konfigurationspfad ist ungültig.")?,
+        )
         .arg(script)
         .arg("--host")
         .arg(config.host.to_string())
         .arg("--port")
         .arg(config.port.to_string())
         .arg("--model")
-        .arg(&config.model)
+        .arg(model)
         .arg("--threads")
         .arg(config.threads.to_string())
         .arg("--language")

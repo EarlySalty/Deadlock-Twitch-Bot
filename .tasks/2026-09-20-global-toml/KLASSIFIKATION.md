@@ -1,17 +1,17 @@
-# Twitch: erste Klassifikation der direkten Quellzugriffe
+# Twitch: Klassifikation der direkten Quellzugriffe
 
-Quelle: reines Quellinventar des Originalkandidaten, keine Betriebsdateien oder Umgebungswerte. Ausgangsinventar 20.09.2026 02:57 Uhr. Dieses Dokument ersetzt keine Werteübernahme. Öffentlich verwendete Client-IDs verbleiben beim bestehenden Infisical-Credential-Paar, um die Auth-Grenze nicht aufzuteilen.
+Quelle: aktueller Integrationsstand nach Core-Anschluss, 20.09.2026. Nur Rust-Quellen, keine Betriebsdateien oder Umgebungswerte. Scanner berücksichtigt ausschließlich var/var_os/vars/vars_os und erkannte Aliasse; Dateisystemfunktionen und ENV-Schreiber zählen nicht als Leser. Keine abschließende Vollmigrationszählung: dynamische Aufrufer sowie Makros brauchen fachliche Zuordnung. Öffentlich verwendete Client-IDs verbleiben beim bestehenden Infisical-Credential-Paar.
 
 ## Zählung
 
-- Betriebswert: in typisierte TOML migrieren: 98
-- Infisical-Zugangsdaten/-Identität: 49
+- Betriebswert: in typisierte TOML migrieren: 94
+- Infisical-Zugangsdaten/-Identität: 50
 - Dynamischer Leser: Aufrufer einzeln auflösen: 80
 - Test-DSN, außerhalb Produktivkonfiguration: 6
 - OS-Pfad, auf expliziten Startpfad umstellen: 2
 - Historischer Secret-Dateipfad: Infisical-Grenze prüfen: 1
 
-Die dynamischen Leser sind ausdrücklich noch nicht abschließend zugeordnet. 534 Schlüsselvorkommen im alten Inventar sind Kandidaten einschließlich Test-/Statuskonstanten; sie dürfen nicht pauschal als 534 Betriebseinstellungen migriert werden.
+Gesamt: 233 direkte Leser. 529 Schlüsselvorkommen sind reine Kandidaten einschließlich Test-/Statuskonstanten. Alte Zahlen 236/534 bezeichnen den früheren Scanner und dürfen nicht als Restumfang verwendet werden.
 
 ## Direkte Leser
 
@@ -41,25 +41,21 @@ Die dynamischen Leser sind ausdrücklich noch nicht abschließend zugeordnet. 53
 | bin/tb-bot/src/main.rs:162 | HOME | OS-Pfad, auf expliziten Startpfad umstellen |
 | bin/tb-bot/src/main.rs:163 | YT_DLP_PATH | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-bot/src/main.rs:179 | optional_env_u16 | Dynamischer Leser: Aufrufer einzeln auflösen |
-| bin/tb-bot/src/main.rs:198 | optional_env_i64 | Dynamischer Leser: Aufrufer einzeln auflösen |
-| bin/tb-bot/src/main.rs:218 | optional_env_u64_with_fallback | Dynamischer Leser: Aufrufer einzeln auflösen |
-| bin/tb-bot/src/main.rs:239 | optional_env_positive_i64 | Dynamischer Leser: Aufrufer einzeln auflösen |
-| bin/tb-bot/src/main.rs:591 | TWITCH_LANGUAGE_FILTERS | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:650 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
-| bin/tb-bot/src/main.rs:651 | TWITCH_CLIENT_SECRET | Infisical-Zugangsdaten/-Identität |
-| bin/tb-bot/src/main.rs:676 | TWITCH_TARGET_GAME_NAME | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:763 | TWITCH_WEBHOOK_SECRET | Infisical-Zugangsdaten/-Identität |
-| bin/tb-bot/src/main.rs:767 | TWITCH_EVENTSUB_CALLBACK_URL | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:940 | VOD_EXPORT_REMOTE_BASE | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:968 | TWITCH_RAID_REDIRECT_URI | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:975 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
-| bin/tb-bot/src/main.rs:1473 | TWITCH_WEBHOOK_SECRET | Infisical-Zugangsdaten/-Identität |
-| bin/tb-bot/src/main.rs:1853 | TWITCH_ALERT_MENTION | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:1854 | TWITCH_DISCORD_REF_CODE | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:1936 | TWITCH_TARGET_GAME_NAME | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:2046 | TB_INTERNAL_API_LEGACY_FALLBACK_URL | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:2231 | TWITCH_RAID_REDIRECT_URI | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-bot/src/main.rs:2313 | TWITCH_RAID_REDIRECT_URI | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:199 | optional_env_u64_with_fallback | Dynamischer Leser: Aufrufer einzeln auflösen |
+| bin/tb-bot/src/main.rs:220 | optional_env_positive_i64 | Dynamischer Leser: Aufrufer einzeln auflösen |
+| bin/tb-bot/src/main.rs:590 | main | Dynamischer Leser: Aufrufer einzeln auflösen |
+| bin/tb-bot/src/main.rs:623 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
+| bin/tb-bot/src/main.rs:624 | TWITCH_CLIENT_SECRET | Infisical-Zugangsdaten/-Identität |
+| bin/tb-bot/src/main.rs:735 | TWITCH_WEBHOOK_SECRET | Infisical-Zugangsdaten/-Identität |
+| bin/tb-bot/src/main.rs:909 | VOD_EXPORT_REMOTE_BASE | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:937 | TWITCH_RAID_REDIRECT_URI | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:944 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
+| bin/tb-bot/src/main.rs:1442 | TWITCH_WEBHOOK_SECRET | Infisical-Zugangsdaten/-Identität |
+| bin/tb-bot/src/main.rs:1825 | TWITCH_ALERT_MENTION | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:1826 | TWITCH_DISCORD_REF_CODE | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:2017 | TB_INTERNAL_API_LEGACY_FALLBACK_URL | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:2202 | TWITCH_RAID_REDIRECT_URI | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-bot/src/main.rs:2284 | TWITCH_RAID_REDIRECT_URI | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-bot/src/mcp.rs:113 | TB_MCP_HOST | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-bot/src/mcp.rs:118 | TB_MCP_PORT | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-bot/src/oauth_followups.rs:39 | env_u64 | Dynamischer Leser: Aufrufer einzeln auflösen |
@@ -84,14 +80,14 @@ Die dynamischen Leser sind ausdrücklich noch nicht abschließend zugeordnet. 53
 | bin/tb-bot/src/streamer_link.rs:58 | STREAMER_LINK_STATE_PATH | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-bot/src/token_lifecycle_wiring.rs:64 | env_u64 | Dynamischer Leser: Aufrufer einzeln auflösen |
 | bin/tb-dashboard/src/main.rs:37 | optional_env_bool | Dynamischer Leser: Aufrufer einzeln auflösen |
-| bin/tb-dashboard/src/main.rs:60 | optional_env_u16 | Dynamischer Leser: Aufrufer einzeln auflösen |
-| bin/tb-dashboard/src/main.rs:85 | TWITCH_RUNTIME_ENFORCE | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-dashboard/src/main.rs:108 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
-| bin/tb-dashboard/src/main.rs:109 | TWITCH_CLIENT_SECRET | Infisical-Zugangsdaten/-Identität |
-| bin/tb-dashboard/src/main.rs:141 | TWITCH_RUNTIME_ROLE | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-dashboard/src/main.rs:145 | TWITCH_SPLIT_RUNTIME_ROLE | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-dashboard/src/main.rs:255 | TWITCH_RUNTIME_PID_LOCK_DIR | Betriebswert: in typisierte TOML migrieren |
-| bin/tb-dashboard/src/main.rs:437 | TB_DASHBOARD_LEGACY_FALLBACK_URL | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-dashboard/src/main.rs:60 | TWITCH_RUNTIME_ENFORCE | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-dashboard/src/main.rs:83 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
+| bin/tb-dashboard/src/main.rs:84 | TWITCH_CLIENT_SECRET | Infisical-Zugangsdaten/-Identität |
+| bin/tb-dashboard/src/main.rs:116 | TWITCH_RUNTIME_ROLE | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-dashboard/src/main.rs:120 | TWITCH_SPLIT_RUNTIME_ROLE | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-dashboard/src/main.rs:230 | TWITCH_RUNTIME_PID_LOCK_DIR | Betriebswert: in typisierte TOML migrieren |
+| bin/tb-dashboard/src/main.rs:378 | main | Dynamischer Leser: Aufrufer einzeln auflösen |
+| bin/tb-dashboard/src/main.rs:436 | TB_DASHBOARD_LEGACY_FALLBACK_URL | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-stream-audit/src/main.rs:1032 | ENGAGEMENT_STT_BASE_URL | Betriebswert: in typisierte TOML migrieren |
 | bin/tb-stream-audit/src/main.rs:1040 | remote_stt_erlaubt | Dynamischer Leser: Aufrufer einzeln auflösen |
 | bin/tb-stream-audit/src/main.rs:1062 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
@@ -118,7 +114,7 @@ Die dynamischen Leser sind ausdrücklich noch nicht abschließend zugeordnet. 53
 | crates/tb-chat/src/token.rs:88 | TWITCH_BOT_TOKEN | Infisical-Zugangsdaten/-Identität |
 | crates/tb-chat/src/token.rs:89 | TWITCH_BOT_REFRESH_TOKEN | Infisical-Zugangsdaten/-Identität |
 | crates/tb-chat/src/token.rs:90 | TWITCH_BOT_TOKEN_FILE | Historischer Secret-Dateipfad: Infisical-Grenze prüfen |
-| crates/tb-config/src/lib.rs:203 | from_env | Dynamischer Leser: Aufrufer einzeln auflösen |
+| crates/tb-config/src/lib.rs:206 | from_env | Dynamischer Leser: Aufrufer einzeln auflösen |
 | crates/tb-crypto/src/field.rs:28 | DB_MASTER_KEY_V1 | Infisical-Zugangsdaten/-Identität |
 | crates/tb-dashboard-api/src/ai_state.rs:26 | DDC_PENTEST_DISABLE_RATE_LIMITS | Betriebswert: in typisierte TOML migrieren |
 | crates/tb-dashboard-api/src/auth/discord_admin_login.rs:328 | TB_DASHBOARD_COOKIE_INSECURE | Betriebswert: in typisierte TOML migrieren |
@@ -128,6 +124,7 @@ Die dynamischen Leser sind ausdrücklich noch nicht abschließend zugeordnet. 53
 | crates/tb-dashboard-api/src/handlers/admin_chat_action.rs:311 | nonempty_env | Dynamischer Leser: Aufrufer einzeln auflösen |
 | crates/tb-dashboard-api/src/handlers/admin_legacy_streamers.rs:348 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
 | crates/tb-dashboard-api/src/handlers/admin_legacy_streamers.rs:351 | TWITCH_CLIENT_SECRET | Infisical-Zugangsdaten/-Identität |
+| crates/tb-dashboard-api/src/handlers/admin_operating_config.rs:39 | TWITCH_INTERNAL_API_TOKEN | Infisical-Zugangsdaten/-Identität |
 | crates/tb-dashboard-api/src/handlers/admin_partner_signup_block.rs:133 | TWITCH_CLIENT_ID | Infisical-Zugangsdaten/-Identität |
 | crates/tb-dashboard-api/src/handlers/admin_partner_signup_block.rs:136 | TWITCH_CLIENT_SECRET | Infisical-Zugangsdaten/-Identität |
 | crates/tb-dashboard-api/src/handlers/admin_spa.rs:157 | ADMIN_DASHBOARD_DIST_PATH | Betriebswert: in typisierte TOML migrieren |
@@ -209,7 +206,7 @@ Die dynamischen Leser sind ausdrücklich noch nicht abschließend zugeordnet. 53
 | crates/tb-engagement/src/stream_transcripts.rs:55 | ENGAGEMENT_TRANSCRIPT_QUALITY | Betriebswert: in typisierte TOML migrieren |
 | crates/tb-engagement/src/transcribe.rs:392 | nonempty_env | Dynamischer Leser: Aufrufer einzeln auflösen |
 | crates/tb-internal-api/src/handlers/chat_command.rs:95 | get_invite_url | Dynamischer Leser: Aufrufer einzeln auflösen |
-| crates/tb-internal-api/src/handlers/healthz.rs:108 | TWITCH_ANALYTICS_DSN | Infisical-Zugangsdaten/-Identität |
+| crates/tb-internal-api/src/handlers/healthz.rs:109 | TWITCH_ANALYTICS_DSN | Infisical-Zugangsdaten/-Identität |
 | crates/tb-internal-api/src/handlers/python_stubs.rs:230 | TWITCH_DASHBOARD_OWNER_DISCORD_ID | Betriebswert: in typisierte TOML migrieren |
 | crates/tb-internal-api/src/handlers/self_explainer_log.rs:81 | broker_token | Dynamischer Leser: Aufrufer einzeln auflösen |
 | crates/tb-internal-api/src/handlers/self_explainer_log.rs:94 | MASTER_BROKER_BASE_URL | Betriebswert: in typisierte TOML migrieren |

@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use tb_config::{
-    editor::{save, EditError, OperatingOptions},
+    editor::{load_saved, save, EditError, OperatingOptions},
     BotConfigSnapshot,
 };
 
@@ -35,27 +35,28 @@ impl Drop for Fixture {
 #[test]
 fn speichern_aendert_nur_erlaubte_werte_und_nicht_aktive_momentaufnahme() {
     let fixture = Fixture::new();
-    let active = BotConfigSnapshot::load(&fixture.path()).unwrap();
+    let original = load_saved(&fixture.path()).unwrap();
+    let active = &original.snapshot;
     let options = OperatingOptions {
         pool_max: 19,
         acquire_timeout_ms: 2100,
         connect_timeout_seconds: 7,
     };
-    let saved = save(&fixture.path(), active.fingerprint(), &options).unwrap();
-    assert_eq!(saved.settings().database.pool_max, 19);
+    let saved = save(&fixture.path(), &original.revision, &options).unwrap();
+    assert_eq!(saved.snapshot.settings().database.pool_max, 19);
     assert_eq!(active.settings().database.pool_max, 10);
     assert_eq!(
-        saved.settings().twitch.bot_user_id,
+        saved.snapshot.settings().twitch.bot_user_id,
         active.settings().twitch.bot_user_id
     );
     assert_eq!(
-        saved.fingerprint(),
+        saved.snapshot.fingerprint(),
         BotConfigSnapshot::load(&fixture.path())
             .unwrap()
             .fingerprint()
     );
     assert!(matches!(
-        save(&fixture.path(), active.fingerprint(), &options),
+        save(&fixture.path(), &original.revision, &options),
         Err(EditError::Conflict)
     ));
 }
@@ -63,27 +64,57 @@ fn speichern_aendert_nur_erlaubte_werte_und_nicht_aktive_momentaufnahme() {
 #[test]
 fn ungueltiger_wert_laesst_datei_unveraendert() {
     let fixture = Fixture::new();
-    let original = BotConfigSnapshot::load(&fixture.path()).unwrap();
+    let original = load_saved(&fixture.path()).unwrap();
     let options = OperatingOptions {
         pool_max: 0,
         acquire_timeout_ms: 2100,
         connect_timeout_seconds: 7,
     };
     assert!(matches!(
-        save(&fixture.path(), original.fingerprint(), &options),
+        save(&fixture.path(), &original.revision, &options),
         Err(EditError::Invalid(_))
     ));
     assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), CONFIG);
 }
 
 #[test]
+fn kommentare_bleiben_erhalten_und_kommentaraenderungen_verhindern_ueberschreiben() {
+    let fixture = Fixture::new();
+    let document = format!("# Betreiberhinweis\n{CONFIG}\n[database]\npool_max = 10 # Reserve\n");
+    std::fs::write(fixture.path(), &document).unwrap();
+    let original = load_saved(&fixture.path()).unwrap();
+    let options = OperatingOptions {
+        pool_max: 11,
+        acquire_timeout_ms: 5000,
+        connect_timeout_seconds: 5,
+    };
+    let changed_comment = document.replace("Betreiberhinweis", "Neuer Betreiberhinweis");
+    std::fs::write(fixture.path(), &changed_comment).unwrap();
+    let new = load_saved(&fixture.path()).unwrap();
+    assert_eq!(new.snapshot.fingerprint(), original.snapshot.fingerprint());
+    assert_ne!(new.revision, original.revision);
+    assert!(matches!(
+        save(&fixture.path(), &original.revision, &options),
+        Err(EditError::Conflict)
+    ));
+    assert_eq!(
+        std::fs::read_to_string(fixture.path()).unwrap(),
+        changed_comment
+    );
+    save(&fixture.path(), &new.revision, &options).unwrap();
+    let saved = std::fs::read_to_string(fixture.path()).unwrap();
+    assert!(saved.contains("# Neuer Betreiberhinweis"));
+    assert!(saved.contains("pool_max = 11 # Reserve"));
+}
+
+#[test]
 fn git_checkout_ist_keine_betriebsablage() {
     let fixture = Fixture::new();
     std::fs::write(fixture.0.join(".git"), "gitdir: fixture").unwrap();
-    let original = BotConfigSnapshot::load(&fixture.path()).unwrap();
-    let options = OperatingOptions::from(&original.settings().database);
+    let original = load_saved(&fixture.path()).unwrap();
+    let options = OperatingOptions::from(&original.snapshot.settings().database);
     assert!(matches!(
-        save(&fixture.path(), original.fingerprint(), &options),
+        save(&fixture.path(), &original.revision, &options),
         Err(EditError::UnsafeLocation)
     ));
 }
@@ -95,9 +126,9 @@ fn dateirechte_und_gruppe_bleiben_erhalten_symlinks_abgewiesen() {
     let fixture = Fixture::new();
     std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o640)).unwrap();
     let before = std::fs::metadata(fixture.path()).unwrap();
-    let original = BotConfigSnapshot::load(&fixture.path()).unwrap();
-    let options = OperatingOptions::from(&original.settings().database);
-    save(&fixture.path(), original.fingerprint(), &options).unwrap();
+    let original = load_saved(&fixture.path()).unwrap();
+    let options = OperatingOptions::from(&original.snapshot.settings().database);
+    save(&fixture.path(), &original.revision, &options).unwrap();
     let after = std::fs::metadata(fixture.path()).unwrap();
     assert_eq!(after.permissions().mode(), before.permissions().mode());
     assert_eq!(after.gid(), before.gid());
@@ -105,7 +136,7 @@ fn dateirechte_und_gruppe_bleiben_erhalten_symlinks_abgewiesen() {
     let link = fixture.0.join("link.toml");
     symlink(fixture.path(), &link).unwrap();
     assert!(matches!(
-        save(&link, original.fingerprint(), &options),
+        save(&link, &original.revision, &options),
         Err(EditError::UnsafeLocation)
     ));
 }

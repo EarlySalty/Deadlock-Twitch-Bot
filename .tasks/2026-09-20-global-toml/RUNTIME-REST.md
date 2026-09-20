@@ -23,7 +23,7 @@ Der Dateieditor erwartet ein persistentes Verzeichnis außerhalb Git, das dem Da
 ## Vor Merge/Deploy noch erforderlich
 
 1. Die wirksamen Nicht-Secret-Werte sicher rekonstruieren und abgleichen. Die abgefragten vorhandenen APIs liefern keinen globalen Runtime-Snapshot. Selbst die Kernwerte `database.pool_max`, `database.acquire_timeout_ms`, `database.connect_timeout_seconds` und `logging.level` sind bei möglichen Overrides bisher nicht belegt. Quell-Defaults sind kein Beweis des Live-Stands. Keine Prozess-Environments oder ENV-Dateien lesen, auch nicht gefiltert.
-2. `KLASSIFIKATION.md` weiter auflösen: insbesondere 80 dynamische Hilfsleser mit ihren tatsächlichen Aufrufern. Die Ursprungsliste mit 98 direkten Betriebslesern ist vor dem Kernanschluss erfasst und dient als Arbeitsmatrix, nicht als aktueller Restzähler.
+2. `KLASSIFIKATION.md` weiter auflösen: insbesondere 80 dynamische Hilfsleser mit ihren tatsächlichen Aufrufern. Der korrigierte Scanner erfasst aktuell 94 direkte Betriebsleser; dies ist ohne fachliche Auflösung dynamischer Leser keine vollständige Restzählung.
 3. Fachverbraucher migrieren: Chat-/Raid-/Scout-/Monitoring-Schalter; OAuth-/öffentliche Redirect-/Cookie-/Adminwerte; Engagement-/Transkript-/Last-/Retry-/Retention-Regeln; Social-/VOD-/Coaching-/Archivpfade; Billing-/SMTP-Betriebsparameter. Credential-Leser bleiben getrennt. Modell-/Providerpolitik nicht erweitern oder wechseln.
 4. `rust/scripts/run_tb_bot_service.sh` und `run_tb_dashboard_service.sh` enthalten für diese noch offenen Fachverbraucher weiterhin alte Runtime-Quellen und Exporte. Diese Quellen erst nach fachlicher Verbraucher-Migration vollständig entfernen. Das ist derzeit ein echter offener Auftragsteil, kein behaupteter vollständiger ENV-Ausstieg.
 5. Coaching, Category-Collector und STT an ihre tatsächlich belegten Werte und Startpfade anschließen. Der übernommene STT-Launcher und Python-Kandidat sind getestet, aber nicht produktiv installiert. Keine automatische Aktivierung externer Transkriptverarbeitung.
@@ -32,3 +32,11 @@ Der Dateieditor erwartet ein persistentes Verzeichnis außerhalb Git, das dem Da
 8. Erst danach koordinierter Release-Build, Migrationen/Deployment, beide Systemdienste neu starten und Fingerprints, Funktionen, Readiness und Heartbeats live messen. Worktree/Branch erst nach tatsächlichem Abschluss bereinigen.
 
 Keine produktive Änderung, kein Modellwechsel und keine Community-Nachricht durchgeführt.
+
+## Review-Nacharbeit
+
+Der Editor trennt nun die Byte-Revision der gespeicherten Datei (Konflikterkennung einschließlich Kommentaränderungen) vom semantischen Laufzeit-Fingerprint. Nur die drei DB-Felder werden unter Erhalt bestehender Kommentare geschrieben. Statusantworten sind `Cache-Control: no-store`. Die UI erklärt das kleinere wirksame Verbindungszeitlimit.
+
+BotControl bietet im bestehenden Admin-Frontend keinen Dienst-Neustart; seine Mutation betrifft Promo-Einstellungen. Daher kein irreführender Neustartlink und kein neuer systemctl-Endpunkt: Die Seite weist weiterhin auf den erforderlichen Neustart beider Dienste hin. Live-Aktivierung bleibt beim koordinierten Deploy.
+
+Lokale STT-Modellverzeichnisse beziehen sich auf die Konfigurationsdatei, unabhängig vom Aufruf-CWD. Explizite lokale Pfade müssen vorhanden sein, bestehende Hub-Bezeichner bleiben unverändert.

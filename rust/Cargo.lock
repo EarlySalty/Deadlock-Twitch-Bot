@@ -3220,6 +3220,7 @@ dependencies = [
  "syn 2.0.117",
  "tb-error",
  "toml",
+ "toml_edit",
  "tracing",
  "url",
 ]
