@@ -111,7 +111,7 @@ pub(super) fn page(
                 .unwrap_or_default()
         )
     } else {
-        "<span class=\"badge\">DDC-Partner</span>".into()
+        "<span class=\"badge\">Partner</span>".into()
     };
     let mut body = format!(
         r##"<a class="back" href="/streamer#partner">← Partnernetzwerk</a><section class="hero"><div class="hero-avatar">{image}</div><div class="hero-copy"><div class="hero-status">{live}<span class="network-mark">Deutsche Deadlock Community</span></div><p class="eyebrow">Streamerprofil · @{login}</p><h1>{}</h1><p class="hero-lead">Hier lernst du mich, meinen Stream und mein Umfeld kennen. Im Kalender siehst du geplante Termine und meine erfassten Livezeiten.</p><div class="hero-actions"><a class="button" href="https://www.twitch.tv/{login}" rel="noopener noreferrer" target="_blank">Auf Twitch vorbeischauen ↗</a><a class="button secondary" href="#kalender">Streamplan ansehen</a></div></div></section><nav class="socials" aria-label="Social-Links">"##,
@@ -300,7 +300,7 @@ pub(super) fn page(
     response(
         StatusCode::OK,
         document(
-            &format!("@{} · DDC-Partner", record.login),
+            &format!("@{} · Deutsche Deadlock Community", record.login),
             headline,
             Some(&format!(
                 "https://deutsche-deadlock-community.de/streamer/{}",
