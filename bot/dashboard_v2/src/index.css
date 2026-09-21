@@ -20,6 +20,24 @@
   --color-bg: #0d0d0d;
   --color-background: #121212;
   --color-card: #161616;
+  --color-ui-root: rgb(9 9 11);
+  --color-ui-panel: rgb(17 17 19);
+  --color-ui-deep: rgb(15 15 18);
+  --color-ui-elevated: rgb(24 24 27);
+  --color-ui-text: rgb(244 244 245);
+  --color-ui-text-soft: rgb(212 212 216);
+  --color-ui-muted: rgb(161 161 170);
+  --color-ui-faint: rgb(113 113 122);
+  --color-ui-accent: rgb(165 180 252);
+  --color-ui-accent-strong: rgb(129 140 248);
+  --color-ui-accent-ink: rgb(199 210 254);
+  --color-ui-success: rgb(110 231 183);
+  --color-ui-success-soft: rgb(167 243 208);
+  --color-ui-warning: rgb(252 211 77);
+  --color-ui-danger: rgb(252 165 165);
+  --color-ui-danger-soft: rgb(254 202 202);
+  --color-ui-violet: rgb(196 181 253);
+  --color-ui-violet-soft: rgb(221 214 254);
   --color-card-hover: rgb(30, 30, 30);
   --color-primary: #C5A059;
   --color-primary-hover: #E6C78F;
@@ -57,8 +75,8 @@
   --color-border-strong: rgba(239, 212, 157, 0.38);
   --color-border-hover: rgba(239, 212, 157, 0.34);
   --color-popover: #161616;
-  --font-sans: "Manrope", "Segoe UI", sans-serif;
-  --font-display: "Sora", "Manrope", sans-serif;
+  --font-sans: "Inter", "Geist", "Manrope", "Segoe UI", sans-serif;
+  --font-display: "Inter", "Geist", "Sora", "Manrope", sans-serif;
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
      Werte, faellt auf die Display-Font zurueck bis der CDN-Font geladen ist. */
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;

@@ -54,10 +54,10 @@ test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
 });
 
 test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Slot', () => {
-  assert.match(SHELL, /internal-home-vibe/);
-  assert.doesNotMatch(SHELL, /mx-auto/);
-  assert.doesNotMatch(SHELL, /max-w-/);
-  assert.match(SHELL, /lg:grid-cols-\[220px_minmax\(0,1fr\)\]/);
+  assert.match(SHELL, /bg-ui-root/);
+  assert.match(SHELL, /mx-auto/);
+  assert.match(SHELL, /max-w-\[1680px\]/);
+  assert.match(SHELL, /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
 });
@@ -146,15 +146,10 @@ test('App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf', () => {
   assert.doesNotMatch(APP, /AuthBadge/);
 });
 
-test('die Sidebar-Karte richtet ihre Oberkante buendig mit den Inhaltskarten aus', () => {
-  assert.doesNotMatch(
-    SIDEBAR,
-    /lg:top-4/,
-    'Die Sticky-Sidebar darf keinen 16px-Versatz gegen die Inhaltskarten tragen',
-  );
+test('die Sidebar bleibt beim Scrollen mit ruhigem Abstand am Viewport', () => {
   assert.match(
     SIDEBAR,
-    /lg:sticky lg:top-0/,
-    'Die Sticky-Sidebar muss ihre Oberkante per lg:top-0 auf die Inhaltskarten setzen',
+    /lg:sticky lg:top-5/,
+    'Die Sticky-Sidebar soll beim Scrollen 20px Abstand zum Viewport halten',
   );
 });

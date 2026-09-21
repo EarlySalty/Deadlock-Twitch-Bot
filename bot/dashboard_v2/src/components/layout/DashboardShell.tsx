@@ -16,10 +16,10 @@ export function DashboardShell({
 }) {
   const withSidebar = !demoMode && showSidebar;
   return (
-    <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-      <div className="relative">
+    <div className="relative min-h-screen bg-ui-root text-ui-text">
+      <div className="relative mx-auto max-w-[1680px] px-3 py-4 md:px-5 md:py-5 lg:px-6">
         {withSidebar ? (
-          <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-5">
             <DashboardSidebar activeRoute={activeRoute} />
             <main className="min-w-0 space-y-4 md:space-y-5">{children}</main>
           </div>

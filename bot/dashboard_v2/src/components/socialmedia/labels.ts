@@ -132,14 +132,14 @@ export function kategorieLabel(categoryKey: string, displayName: string): string
   return KATEGORIE_LABELS[categoryKey] ?? displayName;
 }
 
-/** Die vier Bereiche der Seite, in der Reihenfolge des Clip-Weges. */
-export type SocialMediaView = 'konten' | 'plan' | 'pool' | 'veroeffentlicht';
+/** Die vier Arbeitsbereiche der Social-Media-Verwaltung. */
+export type SocialMediaView = 'pool' | 'plan' | 'layout' | 'konten';
 
 export const SOCIAL_MEDIA_TABS: Array<{ id: SocialMediaView; label: string }> = [
-  { id: 'pool', label: 'Clip-Pool' },
-  { id: 'plan', label: 'Zeitplan' },
-  { id: 'veroeffentlicht', label: 'Veröffentlicht' },
-  { id: 'konten', label: 'Konten' },
+  { id: 'pool', label: 'Pipeline' },
+  { id: 'plan', label: 'Auto-Pilot' },
+  { id: 'layout', label: 'Layout' },
+  { id: 'konten', label: 'Konten & Einstellungen' },
 ];
 
 /** Markennamen, deshalb ohne Uebersetzung. */

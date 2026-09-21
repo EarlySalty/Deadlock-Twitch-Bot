@@ -110,11 +110,11 @@ export function SocialMediaAdminDashboard() {
 
   const AuthBadge = () => {
     const base =
-      'flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold tracking-wide backdrop-blur-md';
+      'inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs font-medium backdrop-blur-sm';
     if (loadingAuth) return null;
     if (isDemoMode) {
       return (
-        <div className={`${base} bg-warning/10 border-warning/30 text-warning`}>
+        <div className={`${base} text-ui-warning`}>
           <Sparkles className="w-4 h-4" />
           <span>{t('Demo-Daten')}</span>
         </div>
@@ -122,7 +122,7 @@ export function SocialMediaAdminDashboard() {
     }
     if (authError || !authStatus?.authenticated) {
       return (
-        <div className={`${base} bg-error/10 border-error/30 text-error`}>
+        <div className={`${base} text-ui-danger-soft`}>
           <ShieldAlert className="w-4 h-4" />
           <span>{t('Nicht authentifiziert')}</span>
         </div>
@@ -130,7 +130,7 @@ export function SocialMediaAdminDashboard() {
     }
     if (authStatus.isLocalhost) {
       return (
-        <div className={`${base} bg-success/10 border-success/30 text-success`}>
+        <div className={`${base} text-ui-success-soft`}>
           <Wifi className="w-4 h-4" />
           <span>{t('Localhost (Admin)')}</span>
         </div>
@@ -138,14 +138,14 @@ export function SocialMediaAdminDashboard() {
     }
     if (authStatus.isAdmin) {
       return (
-        <div className={`${base} bg-primary/10 border-primary/30 text-primary`}>
+        <div className={`${base} text-ui-accent-ink`}>
           <ShieldCheck className="w-4 h-4" />
           <span>{t('Admin')}</span>
         </div>
       );
     }
     return (
-      <div className={`${base} bg-accent/10 border-accent/30 text-accent`}>
+      <div className={`${base} text-ui-text-soft`}>
         <Shield className="w-4 h-4" />
         <span>{t('Partner')}</span>
       </div>
@@ -154,15 +154,15 @@ export function SocialMediaAdminDashboard() {
 
   return (
     <>
-      <div className="panel-card rounded-2xl p-5 md:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-              {isAdminView ? t('Alle Kanäle') : t('Dein Kanal')}
-            </div>
-            <h1 className="display-font text-2xl font-extrabold text-white">{t('Social Media')}</h1>
+      <div className="rounded-2xl border border-white/[0.08] bg-ui-panel p-3 md:px-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-ui-faint">{t('Arbeitsbereich')}</p>
+            <p className="mt-0.5 truncate text-sm font-medium text-ui-text-soft">
+              {isAdminView ? t('Kanal auswählen und verwalten') : t('Dein Kanal')}
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {isAdminView && streamer && (
               <button
                 type="button"
@@ -175,10 +175,10 @@ export function SocialMediaAdminDashboard() {
                     ? t('Freigabe für diesen Streamer entziehen')
                     : t('Diesen Streamer für das eigene Social-Media-Dashboard freischalten')
                 }
-                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
                   selectedGranted
-                    ? 'border-success/40 bg-success/10 text-success hover:bg-success/20'
-                    : 'border-border bg-background/80 text-text-secondary hover:text-white'
+                    ? 'border-ui-success/20 bg-ui-success/10 text-ui-success-soft hover:bg-ui-success/15'
+                    : 'border-white/[0.08] bg-white/[0.04] text-ui-text-soft hover:bg-white/[0.08] hover:text-white'
                 }`}
               >
                 {selectedGranted ? t(ZUGRIFF_LABELS.granted) : t(ZUGRIFF_LABELS.grant)}
@@ -192,9 +192,9 @@ export function SocialMediaAdminDashboard() {
                   setStreamer(event.target.value);
                 }}
                 disabled={loadingStreamers}
-                className="rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
+                className="min-w-44 rounded-lg border border-white/[0.08] bg-ui-elevated px-3 py-2 text-sm font-medium text-ui-text outline-none transition-colors focus:border-ui-accent-strong/40"
               >
-                <option value="">{t('— Streamer wählen —')}</option>
+                <option value="">{t('Streamer wählen')}</option>
                 {streamers.map((channel) => (
                   <option key={channel.login} value={channel.login.toLowerCase()}>
                     {channel.login}

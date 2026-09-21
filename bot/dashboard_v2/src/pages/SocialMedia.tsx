@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
   AlertCircle,
   BarChart3,
   CheckCircle2,
-  Clock,
   Archive,
   Film,
-  HardDrive,
   Loader2,
   ShieldAlert,
   Sparkles,
@@ -18,8 +16,6 @@ import {
   Calendar,
   Gamepad2,
   ExternalLink,
-  Pencil,
-  PlayCircle,
   Wand2,
   SlidersHorizontal,
   Languages,
@@ -27,8 +23,10 @@ import {
   CalendarClock,
   XCircle,
   Clapperboard,
+  Crop,
+  MoreHorizontal,
+  X,
 } from 'lucide-react';
-import { KpiCard } from '@/components/cards/KpiCard';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
@@ -73,7 +71,6 @@ import {
 } from '@/api/socialMedia';
 import {
   APPROVAL_MODE_TEXTE,
-  APPROVAL_STATE_LABELS,
   FELD_FEHLER,
   fehlerText,
   kategorieLabel,
@@ -83,7 +80,6 @@ import {
   STATUS_FILTER_IDS,
   STATUS_LABELS,
   STATUS_META,
-  TONE_BADGE,
   type SocialMediaView,
 } from '@/components/socialmedia/labels';
 import {
@@ -161,7 +157,7 @@ type EditMode = 'layout' | 'enrichment';
 const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: string }>> = {
   pool: Layers3,
   plan: Calendar,
-  veroeffentlicht: BarChart3,
+  layout: Crop,
   konten: SlidersHorizontal,
 };
 
@@ -171,6 +167,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   const [statusFilter, setStatusFilter] = useState<ClipStatus | 'all'>('pending');
   const [editingClip, setEditingClip] = useState<{ id: number; mode: EditMode } | null>(null);
   const [activeView, setActiveView] = useState<SocialMediaView>('pool');
+  const [showAnalytics, setShowAnalytics] = useState(false);
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
     queryKey: ['social-media', 'streamer-layout', streamer],
@@ -198,15 +195,31 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     },
   });
 
+  const queueSummaryQuery = useQuery({
+    queryKey: ['social-media', 'clips', streamer, 'queue-summary'],
+    queryFn: () =>
+      fetchClips({
+        status: 'all',
+        streamer: streamer || undefined,
+        page: 1,
+        page_size: 100,
+      }),
+    enabled: !!streamer,
+    staleTime: 30 * 1000,
+    retry: (failureCount, err) => {
+      if (err instanceof SocialMediaForbiddenError) return false;
+      return failureCount < 2;
+    },
+  });
+
   // Vorschauclips fuer den Layout-Editor. Bewusst eine eigene Abfrage ohne den
   // Statusfilter der Liste: steht der Filter auf "Veroeffentlicht" und ist dort
   // nichts drin, haette der Editor sonst kein Bild.
   const vorschauClipsQuery = useQuery({
     queryKey: ['social-media', 'vorschau-clips', streamer],
     queryFn: () => fetchClips({ status: 'all', streamer: streamer || undefined, page: 1, page_size: 12 }),
-    // Nur im Clip-Pool: auf den anderen Reitern gibt es keinen Layout-Editor,
-    // der die Bilder braucht.
-    enabled: !!streamer && activeView === 'pool',
+    // Vorschauclips werden nur im fokussierten Layout-Bereich gebraucht.
+    enabled: !!streamer && activeView === 'layout',
     staleTime: 5 * 60 * 1000,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -392,30 +405,43 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   });
 
   const stats = useMemo(() => {
-    const list = clipsQuery.data?.items ?? [];
-    const total = clipsQuery.data?.total ?? list.length;
-    const publishedToday = list.filter((c) => {
-      if (c.status !== 'published_all') return false;
-      const created = new Date(c.created_at);
-      const now = new Date();
-      return (
-        created.getUTCFullYear() === now.getUTCFullYear() &&
-        created.getUTCMonth() === now.getUTCMonth() &&
-        created.getUTCDate() === now.getUTCDate()
-      );
-    }).length;
-    const nextRetention = list
-      .map((c) => (c.retention_until ? new Date(c.retention_until).getTime() : null))
-      .filter((v): v is number => v !== null)
-      .sort((a, b) => a - b)[0];
-    const manualUploads = list.filter((c) => c.source_kind === 'manual_upload').length;
+    const list = queueSummaryQuery.data?.items ?? [];
+    const awaitingApproval = list.filter(
+      (clip) =>
+        clip.status === 'awaiting_approval' ||
+        clip.approval?.state === 'awaiting_approval',
+    ).length;
+    const scheduled = list.filter((clip) =>
+      Object.values(clip.scheduled_at ?? {}).some(Boolean),
+    ).length;
+    const failed = list.filter(
+      (clip) => clip.status === 'failed' || clip.status === 'published_partial',
+    ).length;
     return {
-      total,
-      publishedToday,
-      nextRetention: nextRetention ? new Date(nextRetention).toISOString() : null,
-      manualUploads,
+      total: queueSummaryQuery.data?.total ?? list.length,
+      awaitingApproval,
+      scheduled,
+      failed,
     };
-  }, [clipsQuery.data]);
+  }, [queueSummaryQuery.data]);
+
+  const editorClip = useMemo(
+    () =>
+      editingClip
+        ? (queueSummaryQuery.data?.items ?? clipsQuery.data?.items ?? []).find(
+            (clip) => clip.clip_db_id === editingClip.id,
+          ) ?? null
+        : null,
+    [editingClip, queueSummaryQuery.data, clipsQuery.data],
+  );
+
+  const defaultApprovalPlatforms = useMemo(
+    () =>
+      (postingPlanQuery.data?.platforms ?? [])
+        .filter((entry) => entry.auto_post && entry.posts_per_week > 0)
+        .map((entry) => entry.platform),
+    [postingPlanQuery.data],
+  );
 
   if (isForbidden) {
     return (
@@ -444,79 +470,124 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   }
 
   return (
-    <div className="space-y-6">
-      <SocialHero streamer={streamer} isDefaultLayout={layoutQuery.data?.is_default ?? false} />
+    <div className="space-y-5">
+      <SocialHero
+        streamer={streamer}
+        isDefaultLayout={layoutQuery.data?.is_default ?? false}
+        onOpenAnalytics={() => setShowAnalytics(true)}
+      />
 
-      <div className="inline-flex flex-wrap rounded-2xl border border-border bg-bg/60 p-1.5 gap-1.5">
-        {SOCIAL_MEDIA_TABS.map(({ id, label }) => {
-          const Icon = TAB_ICONS[id];
-          const active = activeView === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setActiveView(id)}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
-                active
-                  ? 'bg-gradient-to-r from-primary to-accent text-on-gold shadow-[0_6px_24px_-10px_rgba(197,160,89,0.55)]'
-                  : 'text-text-secondary hover:text-white'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {t(label)}
-            </button>
-          );
-        })}
+      <div className="overflow-x-auto rounded-2xl border border-white/[0.08] bg-ui-panel p-1">
+        <div className="flex min-w-max items-center gap-1">
+          {SOCIAL_MEDIA_TABS.map(({ id, label }) => {
+            const Icon = TAB_ICONS[id];
+            const active = activeView === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveView(id)}
+                aria-current={active ? 'page' : undefined}
+                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${
+                  active
+                    ? 'bg-white/[0.08] text-white shadow-sm'
+                    : 'text-ui-muted hover:bg-white/[0.04] hover:text-ui-text'
+                }`}
+              >
+                <Icon className={`h-4 w-4 ${active ? 'text-ui-accent' : 'text-ui-faint'}`} />
+                {t(label)}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {activeView === 'veroeffentlicht' ? (
-        <AnalyticsTab streamer={streamer} isAdmin={isAdmin} />
-      ) : activeView === 'plan' ? (
-        <div className="space-y-6">
+      {activeView === 'plan' ? (
+        <div className="space-y-4">
           <VorratsHinweis
             pool={postingPlanQuery.data?.pool ?? null}
             onClipsHolen={() => clipsHolenMutation.mutate()}
             isHolend={clipsHolenMutation.isPending}
           />
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <ApprovalModeCard
-              plan={postingPlanQuery.data ?? null}
-              isLoading={postingPlanQuery.isLoading}
-              ladeFehler={postingPlanQuery.error}
-              isSaving={approvalModeMutation.isPending}
-              error={approvalModeMutation.error}
-              onChange={(mode) => approvalModeMutation.mutate({ approval_mode: mode })}
-              onSubtitlesChange={(enabled) =>
-                approvalModeMutation.mutate({ subtitles_enabled: enabled })
-              }
-            />
-            <CategoryCard
-              plan={postingPlanQuery.data ?? null}
-              isLoading={postingPlanQuery.isLoading}
-              ladeFehler={postingPlanQuery.error}
-              isSaving={categoryMutation.isPending}
-              error={categoryMutation.error}
-              onChange={(categoryKey, autoPost) =>
-                categoryMutation.mutate({ categoryKey, autoPost })
-              }
-            />
-            <div className="xl:col-span-2">
-              <PostingScheduleCard
+          <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="space-y-4">
+              <ApprovalModeCard
                 plan={postingPlanQuery.data ?? null}
                 isLoading={postingPlanQuery.isLoading}
                 ladeFehler={postingPlanQuery.error}
-                isSaving={platformScheduleMutation.isPending}
-                error={platformScheduleMutation.error}
-                onChange={(platform, payload) =>
-                  platformScheduleMutation.mutate({ platform, payload })
+                isSaving={approvalModeMutation.isPending}
+                error={approvalModeMutation.error}
+                onChange={(mode) => approvalModeMutation.mutate({ approval_mode: mode })}
+                onSubtitlesChange={(enabled) =>
+                  approvalModeMutation.mutate({ subtitles_enabled: enabled })
                 }
-                isZeitzoneSaving={approvalModeMutation.isPending}
-                zeitzoneError={approvalModeMutation.error}
-                onTimezoneChange={(timezone) => approvalModeMutation.mutate({ timezone })}
+              />
+              <CategoryCard
+                plan={postingPlanQuery.data ?? null}
+                isLoading={postingPlanQuery.isLoading}
+                ladeFehler={postingPlanQuery.error}
+                isSaving={categoryMutation.isPending}
+                error={categoryMutation.error}
+                onChange={(categoryKey, autoPost) =>
+                  categoryMutation.mutate({ categoryKey, autoPost })
+                }
               />
             </div>
+            <PostingScheduleCard
+              plan={postingPlanQuery.data ?? null}
+              isLoading={postingPlanQuery.isLoading}
+              ladeFehler={postingPlanQuery.error}
+              isSaving={platformScheduleMutation.isPending}
+              error={platformScheduleMutation.error}
+              onChange={(platform, payload) =>
+                platformScheduleMutation.mutate({ platform, payload })
+              }
+              isZeitzoneSaving={approvalModeMutation.isPending}
+              zeitzoneError={approvalModeMutation.error}
+              onTimezoneChange={(timezone) => approvalModeMutation.mutate({ timezone })}
+            />
           </div>
         </div>
+      ) : activeView === 'layout' ? (
+        <section className="rounded-2xl border border-white/[0.08] bg-ui-panel p-4 md:p-6">
+          <div className="mb-5 flex flex-col gap-2 border-b border-white/[0.08] pb-5 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-ui-accent">{t('Template & Layout')}</p>
+              <h2 className="mt-1 text-xl font-semibold text-white">{t('9:16 Layout-Editor')}</h2>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-ui-muted">
+                {t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}
+              </p>
+            </div>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-ui-text-soft">
+              {layoutQuery.data?.is_default ? t('Repo-Default aktiv') : t('Streamer-Layout aktiv')}
+            </span>
+          </div>
+
+          {layoutQuery.isLoading ? (
+            <div className="grid min-h-72 place-items-center">
+              <Loader2 className="h-6 w-6 animate-spin text-ui-accent" />
+            </div>
+          ) : (
+            <LayoutEditor
+              initialLayout={layoutForEditor}
+              isSaving={saveLayoutMutation.isPending}
+              onSave={(layout) => saveLayoutMutation.mutate(layout)}
+              saveLabel={t('Layout für {streamer} speichern', { streamer })}
+              vorschauClips={vorschauClips}
+              geltungHinweis={t('Dieser Ausschnitt wird für neue Clips dieses Kanals verwendet.')}
+            />
+          )}
+          {saveLayoutMutation.isError && (
+            <div className="mt-3 text-sm text-ui-danger">
+              {t('Speichern fehlgeschlagen: {message}', {
+                message: fehlerText(saveLayoutMutation.error, t) ?? '',
+              })}
+            </div>
+          )}
+          {saveLayoutMutation.isSuccess && (
+            <div className="mt-3 text-sm text-ui-success">{t('Layout gespeichert.')}</div>
+          )}
+        </section>
       ) : activeView === 'konten' ? (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <PlatformConnectionsCard
@@ -541,106 +612,92 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
         </div>
       ) : (
         <>
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <SocialMetric
+              label={t('Wartet auf Freigabe')}
+              value={stats.awaitingApproval}
+              detail={t('{count} Clips im Pool', { count: stats.total })}
+              tone="indigo"
+            />
+            <SocialMetric
+              label={t('Puffer')}
+              value={
+                postingPlanQuery.data?.pool.reicht_fuer_tage == null
+                  ? t('Manuell')
+                  : t('{days} Tage', { days: postingPlanQuery.data.pool.reicht_fuer_tage })
+              }
+              detail={t('{count} Posts pro Woche', {
+                count: postingPlanQuery.data?.pool.posts_pro_woche ?? 0,
+              })}
+              tone={
+                postingPlanQuery.data?.pool.warnung ? 'warning' : 'success'
+              }
+            />
+            <SocialMetric
+              label={t('Geplante Clips')}
+              value={stats.scheduled}
+              detail={t('mit mindestens einem Termin')}
+              tone="neutral"
+            />
+            <SocialMetric
+              label={t('Fehler')}
+              value={stats.failed}
+              detail={stats.failed === 0 ? t('Keine offenen Fehler') : t('Bitte prüfen')}
+              tone={stats.failed === 0 ? 'neutral' : 'danger'}
+            />
+          </div>
+
           <VorratsHinweis
             pool={postingPlanQuery.data?.pool ?? null}
             onClipsHolen={() => clipsHolenMutation.mutate()}
             isHolend={clipsHolenMutation.isPending}
           />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <KpiCard
-              title={t('Clips im Pool')}
-              value={stats.total}
-              icon={Film}
-              color="purple"
-              subValue={
-                statusFilter === 'all'
-                  ? t('alle Stati')
-                  : t(STATUS_LABELS[statusFilter]?.label ?? '')
-              }
-            />
-            <KpiCard
-              title={t('Heute veröffentlicht')}
-              value={stats.publishedToday}
-              icon={CheckCircle2}
-              color="green"
-              subValue={t('über alle Plattformen')}
-            />
-            <KpiCard
-              title={t('Manuelle Uploads')}
-              value={stats.manualUploads}
-              icon={HardDrive}
-              color="yellow"
-              subValue={t('MP4-Drops aus dem Editor')}
-            />
-            <KpiCard
-              title={t('Nächste Retention')}
-              value={formatRetention(stats.nextRetention, t)}
-              icon={Clock}
-              color="blue"
-              subValue={t('14-Tage-Lifecycle')}
-            />
-          </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
-            <div className="space-y-4">
-              {layoutQuery.isLoading ? (
-                <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
-                  <Loader2 className="w-6 h-6 text-orange animate-spin" />
-                </div>
-              ) : (
-                <LayoutEditor
-                  initialLayout={layoutForEditor}
-                  isSaving={saveLayoutMutation.isPending}
-                  onSave={(layout) => saveLayoutMutation.mutate(layout)}
-                  saveLabel={t('Default für {streamer} speichern', { streamer })}
-                  vorschauClips={vorschauClips}
-                  geltungHinweis={t('Der Ausschnitt gilt danach für alle Clips dieses Kanals.')}
-                />
-              )}
-              {saveLayoutMutation.isError && (
-                <div className="text-xs text-danger px-3">
-                  {t('Speichern fehlgeschlagen: {message}', {
-                    message: fehlerText(saveLayoutMutation.error, t) ?? '',
-                  })}
-                </div>
-              )}
-              {saveLayoutMutation.isSuccess && (
-                <div className="text-xs text-success px-3">{t('Layout gespeichert.')}</div>
-              )}
+          <details className="group rounded-2xl border border-white/[0.08] bg-ui-panel">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-ui-text-soft hover:text-white">
+              <span className="inline-flex items-center gap-2">
+                <Upload className="h-4 w-4 text-ui-faint" />
+                {t('Manuellen MP4-Clip hochladen')}
+              </span>
+              <span className="text-xs text-ui-faint group-open:hidden">{t('Öffnen')}</span>
+              <span className="hidden text-xs text-ui-faint group-open:inline">{t('Schließen')}</span>
+            </summary>
+            <div className="border-t border-white/[0.08] p-4">
+              <UploadCard
+                onUpload={(file) => uploadMutation.mutate(file)}
+                isUploading={uploadMutation.isPending}
+                uploadError={uploadMutation.error as Error | null}
+                uploadSuccess={uploadMutation.isSuccess}
+              />
             </div>
+          </details>
 
-            <UploadCard
-              streamer={streamer}
-              onUpload={(file) => uploadMutation.mutate(file)}
-              isUploading={uploadMutation.isPending}
-              uploadError={uploadMutation.error as Error | null}
-              uploadSuccess={uploadMutation.isSuccess}
-            />
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <h3 className="text-lg font-bold text-white inline-flex items-center gap-2">
-                <Layers3 className="w-5 h-5 text-orange" /> {t('Pipeline')}
-              </h3>
+          <div className="space-y-3">
+            <div className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-ui-panel p-3 md:flex-row md:items-center">
+              <div className="flex items-center gap-2 px-1">
+                <Layers3 className="h-4 w-4 text-ui-accent" />
+                <h3 className="text-sm font-semibold text-white">{t('Clip-Queue')}</h3>
+              </div>
               <StatusFilter value={statusFilter} onChange={setStatusFilter} />
-              <button
-                type="button"
-                onClick={() => clipsHolenMutation.mutate()}
-                disabled={clipsHolenMutation.isPending || !streamer}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-accent/35 bg-accent/12 px-3 py-1.5 text-xs font-bold text-accent hover:bg-accent/20 disabled:opacity-50"
-              >
-                {clipsHolenMutation.isPending ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <DownloadCloud className="w-3.5 h-3.5" />
-                )}
-                {t('Clips jetzt holen')}
-              </button>
-              <div className="ml-auto text-xs text-text-secondary">
-                {clipsQuery.isFetching
-                  ? t('Aktualisiere…')
-                  : t('{count} Treffer', { count: clipsQuery.data?.items.length ?? 0 })}
+              <div className="flex items-center gap-3 md:ml-auto">
+                <span className="text-xs text-ui-faint">
+                  {clipsQuery.isFetching
+                    ? t('Aktualisiere…')
+                    : t('{count} Treffer', { count: clipsQuery.data?.items.length ?? 0 })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => clipsHolenMutation.mutate()}
+                  disabled={clipsHolenMutation.isPending || !streamer}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs font-medium text-ui-text-soft transition-colors hover:bg-white/[0.08] disabled:opacity-50"
+                >
+                  {clipsHolenMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <DownloadCloud className="h-3.5 w-3.5" />
+                  )}
+                  {t('Clips holen')}
+                </button>
               </div>
             </div>
 
@@ -670,28 +727,19 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="space-y-3">
                 {(clipsQuery.data?.items ?? []).map((clip) => {
-                  const editingMode =
-                    editingClip && editingClip.id === clip.clip_db_id ? editingClip.mode : null;
                   return (
                     <ClipCard
                       key={clip.clip_db_id}
                       clip={clip}
                       timezone={postingPlanQuery.data?.timezone ?? 'Europe/Berlin'}
-                      editingMode={editingMode}
+                      defaultPlatforms={defaultApprovalPlatforms}
                       onOpenEditor={(mode) => setEditingClip({ id: clip.clip_db_id, mode })}
-                      onCloseEditor={() => setEditingClip(null)}
                       onDiscard={() => {
                         if (window.confirm(t('Clip "{title}" verwerfen?', { title: clip.title }))) {
                           discardMutation.mutate(clip.clip_db_id);
                         }
-                      }}
-                      onSaveOverride={(layout) => {
-                        overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout });
-                      }}
-                      onResetOverride={() => {
-                        overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout: null });
                       }}
                       onApprovalDecision={(decision, platforms) => {
                         approvalMutation.mutate({
@@ -744,65 +792,229 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
           </div>
         </>
       )}
+
+      {editingClip && editorClip && (
+        <ClipEditorDialog
+          clip={editorClip}
+          mode={editingClip.mode}
+          isSaving={overrideMutation.isPending}
+          onClose={() => setEditingClip(null)}
+          onSaveLayout={(layout) =>
+            overrideMutation.mutate(
+              { clipDbId: editorClip.clip_db_id, layout },
+              { onSuccess: () => setEditingClip(null) },
+            )
+          }
+          onResetLayout={() =>
+            overrideMutation.mutate(
+              { clipDbId: editorClip.clip_db_id, layout: null },
+              { onSuccess: () => setEditingClip(null) },
+            )
+          }
+        />
+      )}
+
+      {showAnalytics && (
+        <WorkspaceDialog
+          eyebrow={t('Performance')}
+          title={t('Auswertung')}
+          onClose={() => setShowAnalytics(false)}
+        >
+          <AnalyticsTab streamer={streamer} isAdmin={isAdmin} />
+        </WorkspaceDialog>
+      )}
     </div>
   );
 }
 
-function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefaultLayout: boolean }) {
+function SocialHero({
+  streamer,
+  isDefaultLayout,
+  onOpenAnalytics,
+}: {
+  streamer: string;
+  isDefaultLayout: boolean;
+  onOpenAnalytics: () => void;
+}) {
   const t = useT();
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="panel-card rounded-2xl p-6 md:p-8 relative overflow-hidden"
+      className="rounded-2xl border border-white/[0.08] bg-ui-panel px-5 py-5 md:px-6"
     >
-      <div className="absolute -top-20 -right-20 h-72 w-72 rounded-full bg-orange/15 blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-24 -left-12 h-72 w-72 rounded-full bg-accent/12 blur-3xl pointer-events-none" />
-      <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-5">
-        <div>
-          <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-bold text-orange/90 px-2.5 py-1 rounded-full bg-orange/12 border border-orange/30">
-            <Sparkles className="w-3.5 h-3.5" /> {t('Clips automatisch posten')}
-          </div>
-          <h1 className="display-font font-extrabold text-white mt-3 text-3xl md:text-4xl tracking-tight">
-            {t('Social Media für')}{' '}
-            <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              {streamer}
+      <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-ui-accent-strong/20 bg-ui-accent-strong/10 px-2.5 py-1 text-xs font-medium text-ui-accent-ink">
+              <Sparkles className="h-3.5 w-3.5" />
+              {t('Social Studio')}
             </span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-ui-muted">
+              {isDefaultLayout ? t('Repo-Default') : t('Eigenes Layout')}
+            </span>
+          </div>
+          <h1 className="truncate text-2xl font-semibold tracking-tight text-white md:text-3xl">
+            {streamer}
           </h1>
-          <p className="text-text-secondary mt-2 max-w-2xl text-sm md:text-base">
-            {t(
-              'Twitch-Clips werden automatisch eingesammelt, vertikal aufbereitet und für YT Shorts / TikTok / Reels vorbereitet. Layouts pro Streamer als Default, pro Clip override-bar, 14-Tage-Retention.',
-            )}
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-ui-muted">
+            {t('Clips prüfen, Auto-Pilot steuern, Layout festlegen und Plattformen verwalten.')}
           </p>
         </div>
-        <div className="flex flex-wrap gap-3 text-xs">
-          <HeroBadge tone="orange" icon={Film}>
-            {isDefaultLayout ? t('Layout: Repo-Default aktiv') : t('Layout: Streamer-Default')}
-          </HeroBadge>
-          <HeroBadge tone="accent" icon={Calendar}>
-            {t('Phase 3 · Analytics + LLM-Reports')}
-          </HeroBadge>
-        </div>
+        <button
+          type="button"
+          onClick={onOpenAnalytics}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-ui-text-soft transition-colors hover:bg-white/[0.08]"
+        >
+          <BarChart3 className="h-4 w-4 text-ui-muted" />
+          {t('Auswertung öffnen')}
+        </button>
       </div>
-    </motion.div>
+    </motion.section>
   );
 }
 
-function HeroBadge({
+function SocialMetric({
+  label,
+  value,
+  detail,
   tone,
-  icon: Icon,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  tone: 'indigo' | 'success' | 'warning' | 'danger' | 'neutral';
+}) {
+  const toneClass = {
+    indigo: 'text-ui-accent',
+    success: 'text-ui-success',
+    warning: 'text-ui-warning',
+    danger: 'text-ui-danger',
+    neutral: 'text-ui-text',
+  }[tone];
+
+  return (
+    <div className="rounded-xl border border-white/[0.08] bg-ui-panel px-4 py-3.5">
+      <p className="text-xs font-medium text-ui-faint">{label}</p>
+      <p className={`mt-1 text-xl font-semibold tracking-tight ${toneClass}`}>{value}</p>
+      <p className="mt-1 text-xs text-ui-faint">{detail}</p>
+    </div>
+  );
+}
+
+function WorkspaceDialog({
+  eyebrow,
+  title,
+  onClose,
   children,
 }: {
-  tone: 'orange' | 'accent';
-  icon: React.ComponentType<{ className?: string }>;
+  eyebrow: string;
+  title: string;
+  onClose: () => void;
   children: React.ReactNode;
 }) {
-  const cls = tone === 'orange' ? 'bg-orange/12 text-orange border-orange/30' : 'bg-accent/12 text-accent border-accent/35';
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onClose]);
+
   return (
-    <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border font-semibold ${cls}`}>
-      <Icon className="w-3.5 h-3.5" />
-      {children}
+    <div
+      className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/75 p-3 backdrop-blur-sm md:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <div className="my-auto w-full max-w-6xl overflow-hidden rounded-2xl border border-white/[0.1] bg-ui-deep shadow-2xl shadow-black/50">
+        <div className="flex items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-ui-accent">{eyebrow}</p>
+            <h2 className="mt-0.5 truncate text-lg font-semibold text-white">{title}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Schließen"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.04] text-ui-muted transition-colors hover:bg-white/[0.08] hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-[calc(100vh-8rem)] overflow-y-auto p-4 md:p-6">{children}</div>
+      </div>
     </div>
+  );
+}
+
+function ClipEditorDialog({
+  clip,
+  mode,
+  isSaving,
+  onClose,
+  onSaveLayout,
+  onResetLayout,
+}: {
+  clip: SocialClipMitPosting;
+  mode: EditMode;
+  isSaving: boolean;
+  onClose: () => void;
+  onSaveLayout: (layout: LayoutPayload) => void;
+  onResetLayout: () => void;
+}) {
+  const t = useT();
+  return (
+    <WorkspaceDialog
+      eyebrow={mode === 'layout' ? t('Clip-Layout') : t('Metadaten')}
+      title={clip.title}
+      onClose={onClose}
+    >
+      {mode === 'layout' ? (
+        <div className="space-y-4">
+          <LayoutEditor
+            initialLayout={clip.effective_layout}
+            isSaving={isSaving}
+            saveLabel={t('Override speichern')}
+            resetLabel={t('Schließen')}
+            geltungHinweis={t('Diese Anpassung gilt für diesen Clip.')}
+            vorschauClips={
+              clip.thumbnail_url
+                ? [{ id: String(clip.clip_db_id), titel: clip.title, bildUrl: clip.thumbnail_url }]
+                : []
+            }
+            onSave={onSaveLayout}
+            onReset={onClose}
+          />
+          {clip.layout_override && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(t('Override entfernen und Streamer-Default verwenden?'))) {
+                    onResetLayout();
+                  }
+                }}
+                className="rounded-lg px-3 py-2 text-sm font-medium text-ui-muted transition-colors hover:bg-white/[0.05] hover:text-white"
+              >
+                {t('Override entfernen')}
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <EnrichmentPanel clipDbId={clip.clip_db_id} onClose={onClose} />
+      )}
+    </WorkspaceDialog>
   );
 }
 
@@ -815,7 +1027,7 @@ function StatusFilter({
 }) {
   const t = useT();
   return (
-    <div className="inline-flex flex-wrap rounded-xl border border-border bg-bg/60 p-1 gap-1">
+    <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-black/20 p-1">
       {STATUS_FILTER_IDS.map((id) => {
         const active = id === value;
         return (
@@ -823,10 +1035,10 @@ function StatusFilter({
             key={id}
             type="button"
             onClick={() => onChange(id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+            className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
               active
-                ? 'bg-gradient-to-r from-primary to-accent text-on-gold shadow-[0_4px_18px_-6px_rgba(197,160,89,0.55)]'
-                : 'text-text-secondary hover:text-white'
+                ? 'bg-white/[0.09] text-white'
+                : 'text-ui-faint hover:bg-white/[0.04] hover:text-ui-text-soft'
             }`}
           >
             {t(statusFilterLabel(id))}
@@ -838,7 +1050,6 @@ function StatusFilter({
 }
 
 interface UploadCardProps {
-  streamer: string;
   onUpload: (file: File) => void;
   isUploading: boolean;
   /** Kommt als Fehlercode aus dem API-Modul und wird hier erst uebersetzt. */
@@ -846,7 +1057,7 @@ interface UploadCardProps {
   uploadSuccess: boolean;
 }
 
-function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSuccess }: UploadCardProps) {
+function UploadCard({ onUpload, isUploading, uploadError, uploadSuccess }: UploadCardProps) {
   const t = useT();
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -869,14 +1080,7 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
   };
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
-      <div className="flex items-center gap-2">
-        <Upload className="w-4 h-4 text-accent" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          {t('MP4 hochladen')}
-        </h3>
-      </div>
-
+    <div className="space-y-3">
       <div
         onDragEnter={(e) => {
           e.preventDefault();
@@ -892,10 +1096,10 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
         }}
         onDrop={handleDrop}
         onClick={() => inputRef.current?.click()}
-        className={`relative cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition ${
+        className={`relative cursor-pointer rounded-xl border border-dashed p-6 text-center transition-colors ${
           dragActive
-            ? 'border-accent bg-accent/10'
-            : 'border-border hover:border-accent/50 hover:bg-bg/40'
+            ? 'border-ui-accent-strong/50 bg-ui-accent-strong/10'
+            : 'border-white/[0.12] bg-black/10 hover:border-white/[0.2] hover:bg-white/[0.03]'
         }`}
       >
         <input
@@ -905,15 +1109,13 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />
-        <Film className="w-8 h-8 text-accent mx-auto mb-2" />
-        <p className="text-sm font-bold text-white">{t('MP4 hier ablegen')}</p>
-        <p className="text-xs text-text-secondary mt-1">
+        <Film className="mx-auto mb-2 h-7 w-7 text-ui-faint" />
+        <p className="text-sm font-medium text-ui-text">{t('MP4 hier ablegen')}</p>
+        <p className="mt-1 text-xs text-ui-faint">
           {t('oder klicken zum Auswählen · max 200 MB')}
         </p>
-        <p className="text-[11px] text-text-secondary mt-3 leading-relaxed">
-          {t('Datei wird unter')}{' '}
-          <code className="font-mono text-orange">data/clips/uploads/{streamer}/</code>{' '}
-          {t('abgelegt und automatisch das Streamer-Default-Layout angewendet.')}
+        <p className="mt-3 text-xs leading-5 text-ui-faint">
+          {t('Das aktuelle Standard-Layout wird automatisch angewendet.')}
         </p>
       </div>
 
@@ -977,13 +1179,11 @@ function ApprovalModeCard({
     plan?.approval_mode ?? (istStandUnbekannt(ladeFehler) ? null : 'manual');
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
+    <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-ui-panel p-4">
       <div className="flex items-center gap-2">
-        <ShieldAlert className="w-4 h-4 text-primary" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          {t('Freigabe')}
-        </h3>
-        {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
+        <ShieldAlert className="h-4 w-4 text-ui-accent" />
+        <h3 className="text-sm font-semibold text-white">{t('Freigabe')}</h3>
+        {isSaving && <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />}
       </div>
 
       <LadeFehlerHinweis fehler={ladeFehler} />
@@ -999,29 +1199,27 @@ function ApprovalModeCard({
               type="button"
               disabled={gesperrt}
               onClick={() => onChange(mode)}
-              className={`w-full text-left rounded-xl border px-4 py-3 disabled:opacity-60 ${
+              className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-60 ${
                 active
-                  ? 'border-primary/60 bg-primary/10'
-                  : 'border-border bg-bg/40 hover:border-border-hover'
+                  ? 'border-ui-accent-strong/30 bg-ui-accent-strong/10'
+                  : 'border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.05]'
               }`}
               style={{ transitionProperty: 'border-color, background-color' }}
             >
-              <div
-                className={`text-sm font-semibold ${active ? 'text-primary' : 'text-white'}`}
-              >
+              <div className={`text-sm font-medium ${active ? 'text-ui-accent-ink' : 'text-ui-text'}`}>
                 {t(texte.label)}
               </div>
-              <div className="text-xs text-text-secondary mt-0.5">{t(texte.hinweis)}</div>
+              <div className="mt-0.5 text-xs leading-5 text-ui-faint">{t(texte.hinweis)}</div>
             </button>
           );
         })}
       </div>
 
-      <div className="rounded-xl border border-border bg-bg/40 px-4 py-3">
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5">
         <label className="flex items-center justify-between gap-3">
           <span>
-            <span className="block text-sm font-semibold text-white">{t('Untertitel einbrennen')}</span>
-            <span className="block text-xs text-text-secondary mt-0.5">
+            <span className="block text-sm font-medium text-ui-text">{t('Untertitel einbrennen')}</span>
+            <span className="mt-0.5 block text-xs leading-5 text-ui-faint">
               {t('Brennt gesprochene Wörter als Untertitel ins Hochformat-Video.')}
             </span>
           </span>
@@ -1201,26 +1399,24 @@ function PostingScheduleCard({
   };
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
+    <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-ui-panel p-4">
       <div className="flex items-center gap-2">
-        <Calendar className="w-4 h-4 text-primary" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          {t('Zeitplan')}
-        </h3>
+        <Calendar className="h-4 w-4 text-ui-accent" />
+        <h3 className="text-sm font-semibold text-white">{t('Zeitplan')}</h3>
         {(isSaving || isZeitzoneSaving) && (
-          <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />
+          <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />
         )}
       </div>
 
       <LadeFehlerHinweis fehler={ladeFehler} />
 
       <label className="block">
-        <span className="text-xs text-text-secondary">{t('Zeitzone des Kanals')}</span>
+        <span className="text-xs font-medium text-ui-faint">{t('Zeitzone des Kanals')}</span>
         <select
           value={zeitzone}
           disabled={zeitzoneGesperrt}
           onChange={(event) => onTimezoneChange(event.target.value)}
-          className="mt-1 w-full rounded-lg border border-border bg-background/80 px-3 py-2 text-sm text-white disabled:opacity-60"
+          className="mt-1 w-full rounded-lg border border-white/[0.08] bg-ui-elevated px-3 py-2 text-sm text-ui-text outline-none transition-colors focus:border-ui-accent-strong/35 disabled:opacity-60"
         >
           {zonen.map((zone) => (
             <option key={zone} value={zone}>
@@ -1229,7 +1425,7 @@ function PostingScheduleCard({
           ))}
         </select>
       </label>
-      <p className="text-sm text-text-secondary">
+      <p className="text-sm text-ui-muted">
         {t('Zeiten gelten in {tz}.', { tz: zeitzone })}
       </p>
       {zeitzoneError ? (
@@ -1252,10 +1448,10 @@ function PostingScheduleCard({
           return (
             <div
               key={eintrag.platform}
-              className="rounded-xl border border-border bg-bg/40 px-4 py-3 space-y-3"
+              className="space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3"
             >
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-semibold text-white">
+                <span className="text-sm font-medium text-ui-text">
                   {PLATFORM_LABELS[eintrag.platform] ?? eintrag.platform}
                 </span>
                 <button
@@ -1265,10 +1461,10 @@ function PostingScheduleCard({
                   aria-label={t('Automatisch posten')}
                   disabled={gesperrt}
                   onClick={() => onChange(eintrag.platform, { auto_post: !eintrag.auto_post })}
-                  className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border disabled:opacity-60 ${
+                  className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border transition-colors disabled:opacity-60 ${
                     eintrag.auto_post
-                      ? 'border-primary/60 bg-primary/30'
-                      : 'border-border bg-bg/60'
+                      ? 'border-ui-accent-strong/30 bg-ui-accent-strong/35'
+                      : 'border-white/[0.08] bg-white/[0.05]'
                   }`}
                   style={{ transitionProperty: 'border-color, background-color' }}
                 >
@@ -1283,13 +1479,13 @@ function PostingScheduleCard({
 
               <div className={`space-y-3 ${gedaempft}`}>
                 {!eintrag.auto_post && (
-                  <p className="text-xs text-text-secondary">
+                  <p className="text-xs text-ui-faint">
                     {t('Gilt, sobald Auto-Posting an ist.')}
                   </p>
                 )}
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block">
-                    <span className="text-xs text-text-secondary">{t('Posts pro Woche')}</span>
+                    <span className="text-xs text-ui-faint">{t('Posts pro Woche')}</span>
                     <input
                       type="number"
                       min={0}
@@ -1323,7 +1519,7 @@ function PostingScheduleCard({
                     )}
                   </label>
                   <label className="block">
-                    <span className="text-xs text-text-secondary">{t('Höchstens pro Tag')}</span>
+                    <span className="text-xs text-ui-faint">{t('Höchstens pro Tag')}</span>
                     <input
                       type="number"
                       min={0}
@@ -1357,7 +1553,7 @@ function PostingScheduleCard({
                   </label>
                 </div>
                 <label className="block">
-                  <span className="text-xs text-text-secondary">
+                  <span className="text-xs text-ui-faint">
                     {t('Uhrzeiten, mit Komma getrennt')}
                   </span>
                   <input
@@ -1394,7 +1590,7 @@ function PostingScheduleCard({
               </div>
 
               {termin && eintrag.auto_post && (
-                <div className="text-xs text-text-secondary">
+                <div className="text-xs text-ui-muted">
                   {t('Nächster Post: {termin}', { termin })}
                 </div>
               )}
@@ -1431,13 +1627,11 @@ function CategoryCard({
   const gesperrt = istGesperrt({ isLoading, isSaving, ladeFehler });
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
+    <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-ui-panel p-4">
       <div className="flex items-center gap-2">
-        <Gamepad2 className="w-4 h-4 text-primary" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
-          {t('Kategorien')}
-        </h3>
-        {isSaving && <Loader2 className="w-4 h-4 text-primary animate-spin ml-auto" />}
+        <Gamepad2 className="h-4 w-4 text-ui-accent" />
+        <h3 className="text-sm font-semibold text-white">{t('Kategorien')}</h3>
+        {isSaving && <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />}
       </div>
 
       <LadeFehlerHinweis fehler={ladeFehler} />
@@ -1446,13 +1640,13 @@ function CategoryCard({
         {(plan?.categories ?? []).map((kategorie) => (
           <label
             key={kategorie.category_key}
-            className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3"
+            className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5"
           >
             <span>
-              <span className="block text-sm font-semibold text-white">
+              <span className="block text-sm font-medium text-ui-text">
                 {t(kategorieLabel(kategorie.category_key, kategorie.display_name))}
               </span>
-              <span className="block text-xs text-text-secondary mt-0.5">
+              <span className="mt-0.5 block text-xs leading-5 text-ui-faint">
                 {kategorie.enrichment_enabled
                   ? t('Mit Titel- und Hashtag-Vorschlägen.')
                   : t('Ohne Vorschläge, Clip geht so raus.')}
@@ -1592,13 +1786,13 @@ function PlatformConnectionsCard({
   const rueckmeldung = leseOauthRueckmeldung();
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
+    <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-ui-panel p-4">
       <div className="flex items-center gap-2">
-        <ExternalLink className="w-4 h-4 text-orange" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+        <ExternalLink className="h-4 w-4 text-ui-accent" />
+        <h3 className="text-sm font-semibold text-white">
           {t('Verbindungen')} · {streamer}
         </h3>
-        {isLoading && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
+        {isLoading && <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />}
       </div>
 
       {rueckmeldung?.art === 'ok' && (
@@ -1659,10 +1853,10 @@ function PlatformConnectionsCard({
           return (
             <div
               key={platform}
-              className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3"
+              className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5"
             >
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-white">
+                <div className="text-sm font-medium text-ui-text">
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
                 <div className={`text-xs truncate ${tonKlasse}`}>{zeile}</div>
@@ -1691,14 +1885,14 @@ function PlatformConnectionsCard({
                         });
                     if (window.confirm(frage)) onDisconnect(platform);
                   }}
-                  className="rounded-xl border border-border px-3 py-1.5 text-sm font-semibold text-text-secondary hover:text-white disabled:opacity-40"
+                  className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-sm font-medium text-ui-muted transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-40"
                 >
                   {t('Trennen')}
                 </button>
               ) : (
                 <a
                   href={oauthStartUrl(platform, streamer)}
-                  className="rounded-xl border border-orange bg-orange/15 px-3 py-1.5 text-sm font-semibold text-white shrink-0"
+                  className="shrink-0 rounded-lg border border-ui-accent-strong/25 bg-ui-accent-strong/12 px-3 py-1.5 text-sm font-medium text-ui-accent-ink transition-colors hover:bg-ui-accent-strong/18"
                 >
                   {abgelaufen ? t('Neu verbinden') : t('Verbinden')}
                 </a>
@@ -1746,19 +1940,19 @@ function VodArchiveCard({
   };
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
+    <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-ui-panel p-4">
       <div className="flex items-center gap-2">
-        <Archive className="w-4 h-4 text-orange" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+        <Archive className="h-4 w-4 text-ui-accent" />
+        <h3 className="text-sm font-semibold text-white">
           {t('VOD-Archiv')} · {settings?.streamer_login ?? streamer}
         </h3>
-        {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
+        {isSaving && <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />}
       </div>
 
       <LadeFehlerHinweis fehler={ladeFehler} />
 
-      <label className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3">
-        <span className="text-sm font-semibold text-white">{t('Automatisch sichern')}</span>
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5">
+        <span className="text-sm font-medium text-ui-text">{t('Automatisch sichern')}</span>
         <input
           type="checkbox"
           checked={enabled}
@@ -1785,11 +1979,11 @@ function VodArchiveCard({
               type="button"
               disabled={gesperrt || settings?.privacy_forced}
               onClick={() => onChange({ enabled, privacy: option })}
-              className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
                 privacy === option
-                  ? 'border-orange text-white bg-orange/15'
-                  : 'border-border text-text-secondary hover:text-white'
-              } disabled:opacity-40 disabled:hover:text-text-secondary`}
+                  ? 'border-ui-accent-strong/30 bg-ui-accent-strong/12 text-ui-accent-ink'
+                  : 'border-white/[0.08] bg-white/[0.02] text-ui-muted hover:bg-white/[0.06] hover:text-white'
+              } disabled:opacity-40`}
             >
               {labels[option]}
             </button>
@@ -1812,12 +2006,12 @@ function LanguageCard() {
   const { language, setLanguage, t } = useLanguage();
 
   return (
-    <div className="panel-card rounded-2xl p-5 space-y-4">
+    <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-ui-panel p-4">
       <div className="flex items-center gap-2">
-        <Languages className="w-4 h-4 text-orange" />
-        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">{t('Sprache')}</h3>
+        <Languages className="h-4 w-4 text-ui-accent" />
+        <h3 className="text-sm font-semibold text-white">{t('Sprache')}</h3>
       </div>
-      <p className="text-sm text-text-secondary">
+      <p className="text-sm leading-6 text-ui-muted">
         {t(
           'Gilt für dieses Dashboard in diesem Browser. Nicht übersetzte Stellen bleiben auf Deutsch.',
         )}
@@ -1830,10 +2024,10 @@ function LanguageCard() {
             lang={option}
             aria-pressed={language === option}
             onClick={() => setLanguage(option)}
-            className={`rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+            className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
               language === option
-                ? 'border-orange text-white bg-orange/15'
-                : 'border-border text-text-secondary hover:text-white'
+                ? 'border-ui-accent-strong/30 bg-ui-accent-strong/12 text-ui-accent-ink'
+                : 'border-white/[0.08] bg-white/[0.02] text-ui-muted hover:bg-white/[0.06] hover:text-white'
             }`}
           >
             {LANGUAGE_LABELS[option]}
@@ -1848,22 +2042,15 @@ interface ClipCardProps {
   clip: SocialClipMitPosting;
   /** Zeitzone des Kanals, damit geplante Termine nicht in UTC dastehen. */
   timezone: string;
-  editingMode: EditMode | null;
+  /** Vorauswahl aus dem Auto-Pilot, falls am Clip noch keine Zielplattformen stehen. */
+  defaultPlatforms: SocialPlatform[];
   onOpenEditor: (mode: EditMode) => void;
-  onCloseEditor: () => void;
   onDiscard: () => void;
-  onSaveOverride: (layout: LayoutPayload) => void;
-  onResetOverride: () => void;
   onApprovalDecision: (decision: 'approve' | 'skip' | 'edit', platforms: SocialPlatform[]) => void;
   approvalPending: boolean;
   onCancelScheduled: () => void;
   cancelPending: boolean;
   cancelResult: { cancelled: number; already_running: number } | null;
-  /**
-   * Plattformen, die die letzte Freigabe an diesem Clip ausgelassen hat, weil
-   * dort die Kadenz auf null steht. Ohne diese Zeile quittiert die Oberflaeche
-   * eine Freigabe, die auf der gewaehlten Plattform nie stattfindet.
-   */
   nichtEingeplant: SocialPlatform[];
   /** Fehler der letzten Aktion an genau diesem Clip. */
   fehler: unknown;
@@ -1872,12 +2059,9 @@ interface ClipCardProps {
 function ClipCard({
   clip,
   timezone,
-  editingMode,
+  defaultPlatforms,
   onOpenEditor,
-  onCloseEditor,
   onDiscard,
-  onSaveOverride,
-  onResetOverride,
   onApprovalDecision,
   approvalPending,
   onCancelScheduled,
@@ -1889,31 +2073,45 @@ function ClipCard({
   const { t, locale } = useLanguage();
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
   const sourceLabel = clip.source_kind === 'manual_upload' ? t('Upload') : t('Twitch');
-  const enrichmentTopHashtags = clip.enrichment_summary?.top_hashtags ?? [];
   const enrichmentStatus = clip.enrichment_status;
+  const enrichmentTopHashtags = clip.enrichment_summary?.top_hashtags ?? [];
 
-  // Fehlgeschlagene Uploads ohne Grund sind nicht zu gebrauchen: der Grund je
-  // Plattform steht am Clip und gehoert auf die Karte.
   const uploadFehler = PLATTFORMEN.map((platform) => ({
     platform,
     text: clip.upload_errors?.[platform] ?? null,
-  })).filter((eintrag): eintrag is { platform: SocialPlatform; text: string } => !!eintrag.text);
+  })).filter((entry): entry is { platform: SocialPlatform; text: string } => !!entry.text);
   const zeigeUploadFehler =
     uploadFehler.length > 0 && (clip.status === 'failed' || clip.status === 'published_partial');
 
   const termine = PLATTFORMEN.map((platform) => ({
     platform,
     zeit: clip.scheduled_at?.[platform] ?? null,
-  })).filter((eintrag): eintrag is { platform: SocialPlatform; zeit: string } => !!eintrag.zeit);
-  // Veto-Fenster: solange ein Termin in der Zukunft steht, laesst sich der Post
-  // noch stoppen.
+  })).filter((entry): entry is { platform: SocialPlatform; zeit: string } => !!entry.zeit);
   const stoppbar = clip.status === 'approved' && termine.length > 0;
   const fehlerZeile = fehlerText(fehler, t);
-  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(
-    clip.approval?.approved_platforms ?? [],
-  );
-  // Twitch raeumt Clip-Thumbnails irgendwann weg; eine 404-URL darf die Kachel
-  // nicht mit Alt-Text fluten, sondern faellt auf das Ersatzbild zurueck.
+  const canDecide =
+    clip.status === 'awaiting_approval' || clip.approval?.state === 'awaiting_approval';
+
+  const startPlatforms =
+    clip.approval?.approved_platforms && clip.approval.approved_platforms.length > 0
+      ? clip.approval.approved_platforms
+      : defaultPlatforms;
+  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(startPlatforms);
+
+  useEffect(() => {
+    const stored = clip.approval?.approved_platforms ?? [];
+    setSelectedPlatforms(stored.length > 0 ? stored : defaultPlatforms);
+  }, [clip.approval?.approved_platforms, clip.clip_db_id, defaultPlatforms]);
+
+  const togglePlatform = (platform: SocialPlatform, checked: boolean) => {
+    setSelectedPlatforms((current) => {
+      const next = new Set(current);
+      if (checked) next.add(platform);
+      else next.delete(platform);
+      return Array.from(next) as SocialPlatform[];
+    });
+  };
+
   const [vorschauFehlt, setVorschauFehlt] = useState(false);
   useEffect(() => {
     setVorschauFehlt(false);
@@ -1926,14 +2124,14 @@ function ClipCard({
   const previewLaeuft = previewStatus === 'pending' || previewStatus === 'rendering';
   const previewBereit = previewStatus === 'ready';
 
-  const stopPreviewPolling = () => {
+  const stopPreviewPolling = useCallback(() => {
     if (pollRef.current !== null) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
     }
-  };
+  }, []);
 
-  const beginnePolling = () => {
+  const beginnePolling = useCallback(() => {
     stopPreviewPolling();
     pollRef.current = window.setInterval(() => {
       getPreviewStatus(clip.clip_db_id)
@@ -1953,18 +2151,18 @@ function ClipCard({
           stopPreviewPolling();
         });
     }, 3000);
-  };
+  }, [clip.clip_db_id, stopPreviewPolling]);
 
-  useEffect(() => stopPreviewPolling, []);
+  useEffect(() => stopPreviewPolling, [stopPreviewPolling]);
 
   useEffect(() => {
     stopPreviewPolling();
     setPreviewStatus(null);
     setPreviewError(null);
-    let abgebrochen = false;
+    let cancelled = false;
     getPreviewStatus(clip.clip_db_id)
       .then((state) => {
-        if (abgebrochen) return;
+        if (cancelled) return;
         setPreviewStatus(state.status);
         if (state.status === 'pending' || state.status === 'rendering') {
           beginnePolling();
@@ -1974,404 +2172,318 @@ function ClipCard({
       })
       .catch(() => {});
     return () => {
-      abgebrochen = true;
+      cancelled = true;
     };
-  }, [clip.clip_db_id]);
+  }, [beginnePolling, clip.clip_db_id, stopPreviewPolling]);
 
   const starteVorschau = () => {
     setPreviewError(null);
     setPreviewStatus('pending');
     requestPreview(clip.clip_db_id)
-      .then((res) => {
-        setPreviewStatus(res.status ?? 'pending');
+      .then((response) => {
+        setPreviewStatus(response.status ?? 'pending');
         beginnePolling();
       })
-      .catch((err) => {
+      .catch((error) => {
         setPreviewStatus('error');
-        setPreviewError(err instanceof Error ? err.message : null);
+        setPreviewError(error instanceof Error ? error.message : null);
       });
   };
 
-  useEffect(() => {
-    setSelectedPlatforms(clip.approval?.approved_platforms ?? []);
-  }, [clip.approval?.approved_platforms, clip.clip_db_id]);
-
-  const togglePlatform = (platform: SocialPlatform, checked: boolean) => {
-    setSelectedPlatforms((current) => {
-      const next = new Set(current);
-      if (checked) next.add(platform);
-      else next.delete(platform);
-      return Array.from(next) as SocialPlatform[];
-    });
-  };
+  const statusClass = {
+    orange: 'border-ui-accent-strong/20 bg-ui-accent-strong/10 text-ui-accent-ink',
+    messing: 'border-ui-violet/20 bg-ui-violet/10 text-ui-violet-soft',
+    success: 'border-ui-success/20 bg-ui-success/10 text-ui-success-soft',
+    warning: 'border-ui-warning/20 bg-ui-warning/10 text-ui-warning',
+    danger: 'border-ui-danger/20 bg-ui-danger/10 text-ui-danger-soft',
+    muted: 'border-white/[0.08] bg-white/[0.04] text-ui-muted',
+  }[status.tone];
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
+    <motion.article
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      className="panel-card card-glow group rounded-2xl overflow-hidden flex flex-col"
+      className="group relative rounded-2xl border border-white/[0.08] bg-ui-panel p-3 transition-colors hover:border-white/[0.14]"
     >
-      <div className="relative aspect-video overflow-hidden bg-[radial-gradient(120%_120%_at_50%_0%,rgba(255,255,255,0.06),transparent_60%)] bg-black/50">
-        {previewBereit ? (
-          <video
-            key={clip.clip_db_id}
-            controls
-            src={previewFileUrl(clip.clip_db_id)}
-            className="w-full h-full object-contain bg-black"
-          />
-        ) : (
-          <>
-            {vorschauSichtbar ? (
-          <img
-            src={clip.thumbnail_url ?? ''}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            onError={() => setVorschauFehlt(true)}
-            className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
-          />
-        ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-text-secondary">
-            <Film className="w-8 h-8 opacity-40" />
-            <span className="text-[10px] uppercase tracking-[0.16em] opacity-60">
-              {t('Keine Vorschau')}
-            </span>
-          </div>
-        )}
-
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-black/0 to-black/75" />
-
-        {clip.clip_url && (
-          <a
-            href={clip.clip_url}
-            target="_blank"
-            rel="noreferrer"
-            title={t('Original ansehen')}
-            className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-visible:opacity-100"
-          >
-            <span className="grid h-12 w-12 place-items-center rounded-full border border-white/25 bg-black/55 backdrop-blur-sm">
-              <PlayCircle className="w-7 h-7 text-white" />
-            </span>
-          </a>
-        )}
-
-        <div className="pointer-events-none absolute top-2 left-2 flex items-center gap-1.5">
-          <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border backdrop-blur-sm ${TONE_BADGE[status.tone]}`}>
-            {t(status.label)}
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border border-white/15 bg-black/50 text-white/90 backdrop-blur-sm">
-            {sourceLabel}
-          </span>
-        </div>
-
-        <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-end justify-between gap-2">
-          <span className="inline-flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-white backdrop-blur-sm">
-            {formatClipDauer(clip.duration_seconds)}
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded bg-black/55 px-1.5 py-0.5 font-mono text-[10px] text-white/85 backdrop-blur-sm">
-            <Clock className="w-3 h-3" /> {formatRetention(clip.retention_until, t)}
-          </span>
-        </div>
-
-            {previewLaeuft && (
-              <div className="absolute inset-0 grid place-items-center bg-black/55 backdrop-blur-sm">
-                <div className="flex flex-col items-center gap-2 text-white">
-                  <Loader2 className="w-7 h-7 animate-spin text-orange" />
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em]">
-                    {t('Vorschau wird gerendert…')}
-                  </span>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      <div className="p-4 flex flex-col gap-3 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={starteVorschau}
-            disabled={previewLaeuft}
-            className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-orange/30 bg-orange/10 text-orange hover:bg-orange/20 transition disabled:opacity-50"
-          >
-            {previewLaeuft ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Clapperboard className="w-3.5 h-3.5" />
-            )}
-            {previewBereit
-              ? t('Vorschau neu rendern')
-              : previewLaeuft
-              ? t('Rendert…')
-              : t('Vorschau rendern')}
-          </button>
-          {previewLaeuft && (
-            <span className="text-xs text-text-secondary">
-              {t('Das kann ein paar Minuten dauern.')}
-            </span>
+      <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)_auto] md:items-center">
+        <div className="relative aspect-video overflow-hidden rounded-xl bg-black">
+          {previewBereit ? (
+            <video
+              key={clip.clip_db_id}
+              controls
+              src={previewFileUrl(clip.clip_db_id)}
+              className="h-full w-full object-contain"
+            />
+          ) : vorschauSichtbar ? (
+            <img
+              src={clip.thumbnail_url ?? ''}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              onError={() => setVorschauFehlt(true)}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-ui-faint">
+              <Film className="h-7 w-7" />
+            </div>
           )}
-          {previewStatus === 'error' && (
-            <span className="text-xs text-danger">
-              {previewError ? previewError : t('Vorschau konnte nicht gerendert werden.')}
-            </span>
-          )}
-        </div>
-        <div className="space-y-1">
-          <h4 className="font-bold text-white line-clamp-2">{clip.title}</h4>
-          <p className="text-xs text-text-secondary">
-            {clip.streamer_login} ·{' '}
-            {t('{views} Views', { views: (clip.view_count ?? 0).toLocaleString(locale) })}
-          </p>
-          {clip.layout_override && (
-            <p className="text-[11px] text-orange inline-flex items-center gap-1">
-              <Pencil className="w-3 h-3" /> {t('Override aktiv')}
-            </p>
-          )}
-        </div>
 
-        {enrichmentTopHashtags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {enrichmentTopHashtags.slice(0, 4).map((tag) => (
-              <span
-                key={tag}
-                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-accent/10 text-accent border border-accent/30"
-              >
-                #{tag}
+          {!previewBereit && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/80 via-black/20 to-transparent px-2.5 pb-2 pt-8">
+              <span className="rounded bg-black/60 px-1.5 py-0.5 font-mono text-[11px] font-medium text-white">
+                {formatClipDauer(clip.duration_seconds)}
               </span>
-            ))}
-          </div>
-        )}
+              <span className="rounded bg-black/60 px-1.5 py-0.5 text-[11px] text-ui-text-soft">
+                {formatRetention(clip.retention_until, t)}
+              </span>
+            </div>
+          )}
 
-        {zeigeUploadFehler && (
-          <div className="flex items-start gap-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg p-2.5">
-            <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            <div className="space-y-1 min-w-0">
+          {previewLaeuft && (
+            <div className="absolute inset-0 grid place-items-center bg-black/65 backdrop-blur-sm">
+              <div className="flex items-center gap-2 text-xs font-medium text-white">
+                <Loader2 className="h-4 w-4 animate-spin text-ui-accent" />
+                {t('Vorschau wird gerendert…')}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass}`}>
+              {t(status.label)}
+            </span>
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-ui-faint">
+              {sourceLabel}
+            </span>
+            {clip.layout_override && (
+              <span className="rounded-full border border-ui-violet/20 bg-ui-violet/10 px-2.5 py-1 text-xs font-medium text-ui-violet-soft">
+                {t('Eigenes Layout')}
+              </span>
+            )}
+          </div>
+
+          <div>
+            <h4 className="line-clamp-2 text-base font-semibold leading-6 text-white">{clip.title}</h4>
+            <p className="mt-1 text-sm text-ui-faint">
+              {clip.streamer_login} · {t('{views} Views', { views: (clip.view_count ?? 0).toLocaleString(locale) })}
+              {enrichmentStatus && enrichmentStatus !== 'done'
+                ? ` · ${t(STATUS_META[enrichmentStatus]?.label ?? enrichmentStatus)}`
+                : ''}
+            </p>
+          </div>
+
+          {termine.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {termine.slice(0, 3).map(({ platform, zeit }) => (
+                <span
+                  key={platform}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.04] px-2 py-1 text-xs text-ui-muted"
+                >
+                  <CalendarClock className="h-3 w-3" />
+                  {PLATFORM_LABELS[platform] ?? platform}: {formatTerminInZone(zeit, locale, timezone)}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {enrichmentTopHashtags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {enrichmentTopHashtags.slice(0, 3).map((tag) => (
+                <span key={tag} className="text-xs text-ui-faint">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {zeigeUploadFehler && (
+            <div className="rounded-lg border border-ui-danger/20 bg-ui-danger/10 px-3 py-2 text-xs text-ui-danger-soft">
               {uploadFehler.map(({ platform, text }) => (
-                <div key={platform} className="break-words">
-                  <span className="font-bold">{PLATFORM_LABELS[platform] ?? platform}:</span>{' '}
-                  {text}
+                <div key={platform}>
+                  <span className="font-medium">{PLATFORM_LABELS[platform] ?? platform}:</span> {text}
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        {termine.length > 0 && (
-          <div className="rounded-lg border border-border bg-bg/30 p-2.5 space-y-1">
-            <div className="text-[11px] uppercase tracking-[0.14em] font-bold text-text-secondary inline-flex items-center gap-1.5">
-              <CalendarClock className="w-3 h-3" /> {t('Eingeplant')}
-            </div>
-            {termine.map(({ platform, zeit }) => (
-              <div key={platform} className="text-xs text-text-secondary">
-                {PLATFORM_LABELS[platform] ?? platform}:{' '}
-                <span className="text-white">{formatTerminInZone(zeit, locale, timezone)}</span>
-              </div>
-            ))}
-            {stoppbar && (
+          {previewStatus === 'error' && (
+            <p className="text-xs text-ui-danger">
+              {previewError ?? t('Vorschau konnte nicht gerendert werden.')}
+            </p>
+          )}
+
+          {cancelResult && (
+            <p className="text-xs text-ui-faint">
+              {cancelResult.already_running > 0
+                ? t('Gestoppt, aber {count} Plattform war schon durch.', {
+                    count: cancelResult.already_running,
+                  })
+                : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}
+            </p>
+          )}
+
+          {nichtEingeplant.length > 0 && (
+            <p className="text-xs text-ui-warning">
+              {t('Auf {platforms} passiert nichts, dort steht die Kadenz auf null.', {
+                platforms: nichtEingeplant
+                  .map((platform) => PLATFORM_LABELS[platform] ?? platform)
+                  .join(', '),
+              })}
+            </p>
+          )}
+
+          {fehlerZeile && <p className="text-xs text-ui-danger">{fehlerZeile}</p>}
+        </div>
+
+        <div className="flex items-center gap-2 md:flex-col md:items-stretch">
+          {canDecide ? (
+            <>
               <button
                 type="button"
-                onClick={onCancelScheduled}
-                disabled={cancelPending}
-                className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/12 px-2.5 py-1.5 text-xs font-bold text-danger hover:bg-danger/20 disabled:opacity-50"
+                onClick={() => onApprovalDecision('approve', selectedPlatforms)}
+                disabled={approvalPending || selectedPlatforms.length === 0}
+                title={
+                  selectedPlatforms.length === 0
+                    ? t('Wähle zuerst mindestens eine Zielplattform.')
+                    : undefined
+                }
+                className="inline-flex min-w-28 flex-1 items-center justify-center gap-1.5 rounded-lg bg-ui-success px-3 py-2 text-sm font-semibold text-ui-root transition-colors hover:bg-ui-success-soft disabled:cursor-not-allowed disabled:opacity-40 md:flex-none"
               >
-                {cancelPending ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {approvalPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <XCircle className="w-3.5 h-3.5" />
+                  <CheckCircle2 className="h-4 w-4" />
                 )}
-                {t('Doch nicht posten')}
+                {t('Freigeben')}
               </button>
-            )}
-          </div>
-        )}
-
-        <div className="rounded-xl border border-border bg-bg/30 p-3 space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.14em] font-bold text-orange">
-                {t('Approval')}
-              </p>
-              <p className="text-xs text-text-secondary">
-                {clip.approval?.state
-                  ? t('Status: {state}', {
-                      state: t(APPROVAL_STATE_LABELS[clip.approval.state] ?? clip.approval.state),
-                    })
-                  : t('Wird nach abgeschlossenem Enrichment per DM freigegeben.')}
-              </p>
-            </div>
-            {approvalPending && <Loader2 className="w-4 h-4 text-orange animate-spin" />}
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {([
-              ['youtube', 'YT'],
-              ['tiktok', 'TT'],
-              ['instagram', 'IG'],
-            ] as const).map(([platform, label]) => (
-              <label
-                key={platform}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-bg/40 px-2 py-2 text-xs font-semibold text-white"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedPlatforms.includes(platform)}
-                  onChange={(event) => togglePlatform(platform, event.target.checked)}
-                  className="h-3.5 w-3.5 accent-orange"
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => onApprovalDecision('approve', selectedPlatforms)}
-              disabled={approvalPending}
-              className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-success/15 text-success border border-success/30 hover:bg-success/20 disabled:opacity-50"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" /> {t('Posten')}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                onApprovalDecision('edit', selectedPlatforms);
-                onOpenEditor('enrichment');
-              }}
-              disabled={approvalPending}
-              className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-warning/15 text-warning border border-warning/30 hover:bg-warning/20 disabled:opacity-50"
-            >
-              <Pencil className="w-3.5 h-3.5" /> {t('Bearbeiten')}
-            </button>
-            <button
-              type="button"
-              onClick={() => onApprovalDecision('skip', selectedPlatforms)}
-              disabled={approvalPending}
-              className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-danger/12 text-danger border border-danger/30 hover:bg-danger/20 disabled:opacity-50"
-            >
-              <Trash2 className="w-3.5 h-3.5" /> {t('Skip')}
-            </button>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 mt-auto pt-2">
-          {clip.clip_url && (
-            <a
-              href={clip.clip_url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-white"
-            >
-              <ExternalLink className="w-3.5 h-3.5" /> {t('Original')}
-            </a>
-          )}
-          <button
-            type="button"
-            onClick={onDiscard}
-            disabled={clip.status === 'discarded' || !!clip.discarded_at}
-            className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold text-danger hover:text-danger px-2 py-1.5 rounded-lg hover:bg-danger/10 transition disabled:opacity-30"
-          >
-            <Trash2 className="w-3.5 h-3.5" /> {t('Verwerfen')}
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenEditor('enrichment')}
-            className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition ${
-              editingMode === 'enrichment'
-                ? 'bg-accent/25 text-accent border-accent/50'
-                : 'bg-accent/10 text-accent border-accent/30 hover:bg-accent/20'
-            }`}
-          >
-            <Wand2 className="w-3.5 h-3.5" /> {t('Metadaten')}
-            {enrichmentStatus && enrichmentStatus !== 'done' && (
-              <span className="text-[9px] uppercase tracking-[0.14em] opacity-80">
-                · {t(STATUS_META[enrichmentStatus]?.label ?? enrichmentStatus)}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenEditor('layout')}
-            className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition ${
-              editingMode === 'layout'
-                ? 'bg-orange/25 text-orange border-orange/50'
-                : 'bg-orange/15 text-orange border-orange/30 hover:bg-orange/25'
-            }`}
-          >
-            <Pencil className="w-3.5 h-3.5" /> {t('Layout')}
-          </button>
-        </div>
-
-        {/* Steht ausserhalb der Terminliste: nach dem Stoppen verschwinden die
-            Termine, die Rueckmeldung soll trotzdem stehen bleiben. */}
-        {cancelResult && (
-          <div className="text-xs text-text-secondary border-t border-border pt-2">
-            {cancelResult.already_running > 0
-              ? t('Gestoppt, aber {count} Plattform war schon durch.', {
-                  count: cancelResult.already_running,
-                })
-              : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}
-          </div>
-        )}
-
-        {/* Eine Freigabe auf eine Plattform mit Kadenz null wird sauber
-            quittiert, aber dort passiert nichts. Ohne diese Zeile merkt das
-            niemand. */}
-        {nichtEingeplant.length > 0 && (
-          <div className="text-xs text-orange border-t border-orange/20 pt-2">
-            {t('Auf {platforms} passiert nichts, dort steht die Kadenz auf null.', {
-              platforms: nichtEingeplant.map((plattform) => PLATFORM_LABELS[plattform] ?? plattform).join(', '),
-            })}
-          </div>
-        )}
-
-        {fehlerZeile && (
-          <div className="text-xs text-danger border-t border-danger/20 pt-2">{fehlerZeile}</div>
-        )}
-      </div>
-
-      {editingMode === 'layout' && (
-        <div className="border-t border-border p-4 bg-bg/30">
-          <LayoutEditor
-            initialLayout={clip.effective_layout}
-            saveLabel={t('Override speichern')}
-            resetLabel={t('Schließen')}
-            geltungHinweis={t('Gilt nur für diesen Clip.')}
-            /* In der Karte ist die Vorschau genau dieser Clip, nichts zum Waehlen. */
-            vorschauClips={
-              clip.thumbnail_url
-                ? [{ id: String(clip.clip_db_id), titel: clip.title, bildUrl: clip.thumbnail_url }]
-                : []
-            }
-            onSave={(layout) => {
-              onSaveOverride(layout);
-              onCloseEditor();
-            }}
-            onReset={onCloseEditor}
-          />
-          {clip.layout_override && (
-            <div className="mt-3 flex justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  if (window.confirm(t('Override entfernen und Streamer-Default verwenden?'))) {
-                    onResetOverride();
-                    onCloseEditor();
-                  }
-                }}
-                className="text-xs text-text-secondary hover:text-white"
+                onClick={() => onApprovalDecision('skip', selectedPlatforms)}
+                disabled={approvalPending}
+                className="inline-flex min-w-28 flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm font-medium text-ui-text-soft transition-colors hover:bg-ui-danger/10 hover:text-ui-danger-soft disabled:opacity-40 md:flex-none"
               >
-                {t('Override entfernen → Streamer-Default')}
+                <Archive className="h-4 w-4" />
+                {t('Ablehnen')}
               </button>
-            </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onDiscard}
+              disabled={clip.status === 'discarded' || !!clip.discarded_at}
+              className="inline-flex min-w-28 flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm font-medium text-ui-text-soft transition-colors hover:bg-white/[0.07] disabled:opacity-40 md:flex-none"
+            >
+              <Archive className="h-4 w-4" />
+              {t('Archivieren')}
+            </button>
           )}
-        </div>
-      )}
 
-      {editingMode === 'enrichment' && (
-        <div className="border-t border-border p-4 bg-bg/30">
-          <EnrichmentPanel clipDbId={clip.clip_db_id} onClose={onCloseEditor} />
+          <details className="relative flex-none">
+            <summary
+              aria-label={t('Weitere Aktionen')}
+              className="grid h-10 w-10 cursor-pointer list-none place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-ui-muted transition-colors hover:bg-white/[0.07] hover:text-white md:w-full"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </summary>
+            <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-white/[0.1] bg-ui-elevated p-2 shadow-2xl shadow-black/50">
+              {canDecide && (
+                <div className="mb-2 border-b border-white/[0.08] px-2 pb-2">
+                  <p className="mb-2 text-xs font-medium text-ui-faint">{t('Zielplattformen')}</p>
+                  <div className="flex gap-2">
+                    {PLATTFORMEN.map((platform) => (
+                      <label
+                        key={platform}
+                        className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-1.5 text-xs font-medium text-ui-text-soft"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedPlatforms.includes(platform)}
+                          onChange={(event) => togglePlatform(platform, event.target.checked)}
+                          className="h-3.5 w-3.5 accent-ui-accent-strong"
+                        />
+                        {PLATFORM_LABELS[platform]?.slice(0, 2) ?? platform}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => onOpenEditor('enrichment')}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-ui-text-soft hover:bg-white/[0.06]"
+              >
+                <Wand2 className="h-4 w-4 text-ui-faint" />
+                {t('Metadaten bearbeiten')}
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenEditor('layout')}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-ui-text-soft hover:bg-white/[0.06]"
+              >
+                <Crop className="h-4 w-4 text-ui-faint" />
+                {t('Layout anpassen')}
+              </button>
+              <button
+                type="button"
+                onClick={starteVorschau}
+                disabled={previewLaeuft}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-ui-text-soft hover:bg-white/[0.06] disabled:opacity-40"
+              >
+                {previewLaeuft ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-ui-faint" />
+                ) : (
+                  <Clapperboard className="h-4 w-4 text-ui-faint" />
+                )}
+                {previewBereit ? t('Vorschau neu rendern') : t('Vorschau rendern')}
+              </button>
+
+              {stoppbar && (
+                <button
+                  type="button"
+                  onClick={onCancelScheduled}
+                  disabled={cancelPending}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-ui-warning hover:bg-ui-warning/10 disabled:opacity-40"
+                >
+                  {cancelPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <XCircle className="h-4 w-4" />
+                  )}
+                  {t('Geplanten Post stoppen')}
+                </button>
+              )}
+
+              {clip.clip_url && (
+                <a
+                  href={clip.clip_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-ui-text-soft hover:bg-white/[0.06]"
+                >
+                  <ExternalLink className="h-4 w-4 text-ui-faint" />
+                  {t('Original ansehen')}
+                </a>
+              )}
+
+              {!canDecide && (
+                <button
+                  type="button"
+                  onClick={onDiscard}
+                  disabled={clip.status === 'discarded' || !!clip.discarded_at}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-ui-danger-soft hover:bg-ui-danger/10 disabled:opacity-40"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {t('Clip verwerfen')}
+                </button>
+              )}
+            </div>
+          </details>
         </div>
-      )}
-    </motion.div>
+      </div>
+    </motion.article>
   );
 }

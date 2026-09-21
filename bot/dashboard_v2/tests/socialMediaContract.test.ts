@@ -147,7 +147,6 @@ const BEWUSST_GETEILT: Record<string, string> = {
   Fehler: 'Clip-Status und Enrichment-Status meinen beide "fehlgeschlagen".',
   'Clip freigegeben': 'Clip-Status und Approval-Zustand meinen dieselbe Entscheidung.',
   Übersprungen: 'Clip-Status und Approval-Zustand meinen dasselbe Ueberspringen.',
-  Veröffentlicht: 'Der Reiter zeigt genau die Clips mit diesem Status.',
 };
 
 test('kein deutscher Text traegt in zwei Tabellen zwei Bedeutungen', () => {
@@ -189,7 +188,9 @@ const RUST_ROUTEN = path.join(REPO, 'rust/crates/tb-dashboard-api/src/lib.rs');
 
 /** `:clip_db_id` und `${clipDbId}` sind derselbe Platzhalter. */
 function normalisiere(pfad: string): string {
-  return pfad.replace(/:[A-Za-z_][A-Za-z0-9_]*/g, ':p');
+  return pfad
+    .replace(/\{[A-Za-z_][A-Za-z0-9_]*\}/g, ':p')
+    .replace(/:[A-Za-z_][A-Za-z0-9_]*/g, ':p');
 }
 
 /**
