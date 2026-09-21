@@ -96,6 +96,10 @@ export function PostingPlanDraft({
     setBusy(true);
     setMessage(null);
     setFailed(false);
+    // Feste Ausgangsbasis: Nur Felder, die der Entwurf gegenüber dieser Basis
+    // ändert, werden geschrieben. Antworten zwischenzeitlicher fremder
+    // Änderungen dürfen keine Rückschreibung unveränderter Felder auslösen.
+    const base = plan;
     let latest = plan;
     let completed = 0;
     const accept = (next: PostingPlan) => {
@@ -103,11 +107,26 @@ export function PostingPlanDraft({
       completed += 1;
       onSaved(next);
     };
-    try {
-      // Erst die einzelnen Ziele, danach den Modus aktivieren. Jeder Aufruf
-      // enthält die betroffene Einstellung statt eines fremden Kanalzustands.
+    // Moduswechsel, der die Automatik einschränkt, wird zuerst wirksam;
+    // Vollautomatik bleibt dagegen der letzte Schritt nach allen Zielen.
+    const beschraenkung = (mode: PostingPlan['approval_mode']) =>
+      mode === 'manual' ? 2 : mode === 'veto_window' ? 1 : 0;
+    const modusZuerst =
+      beschraenkung(effective.approval_mode) > beschraenkung(base.approval_mode);
+    const schreibeEinstellungen = async () => {
+      const settings: Parameters<typeof savePostingPlanSettings>[1] = {};
+      if (effective.approval_mode !== base.approval_mode)
+        settings.approval_mode = effective.approval_mode;
+      if (effective.timezone !== base.timezone) settings.timezone = effective.timezone;
+      if (effective.subtitles_enabled !== base.subtitles_enabled)
+        settings.subtitles_enabled = effective.subtitles_enabled;
+      if (Object.keys(settings).length) accept(await savePostingPlanSettings(streamer, settings));
+    };
+    const schreibeZiele = async () => {
+      // Erst die einzelnen Ziele. Jeder Aufruf enthält die betroffene
+      // Einstellung statt eines fremden Kanalzustands.
       for (const target of effective.platforms) {
-        const current = latest.platforms.find((p) => p.platform === target.platform);
+        const current = base.platforms.find((p) => p.platform === target.platform);
         if (!current) continue;
         const payload: Partial<typeof target> = {};
         if (target.auto_post !== current.auto_post) payload.auto_post = target.auto_post;
@@ -122,19 +141,17 @@ export function PostingPlanDraft({
       }
       for (const target of effective.categories) {
         if (
-          latest.categories.find((c) => c.category_key === target.category_key)?.auto_post !==
+          base.categories.find((c) => c.category_key === target.category_key)?.auto_post !==
           target.auto_post
         ) {
           accept(await saveCategoryAutoPost(streamer, target.category_key, target.auto_post));
         }
       }
-      const settings: Parameters<typeof savePostingPlanSettings>[1] = {};
-      if (effective.approval_mode !== latest.approval_mode)
-        settings.approval_mode = effective.approval_mode;
-      if (effective.timezone !== latest.timezone) settings.timezone = effective.timezone;
-      if (effective.subtitles_enabled !== latest.subtitles_enabled)
-        settings.subtitles_enabled = effective.subtitles_enabled;
-      if (Object.keys(settings).length) accept(await savePostingPlanSettings(streamer, settings));
+    };
+    try {
+      if (modusZuerst) await schreibeEinstellungen();
+      await schreibeZiele();
+      if (!modusZuerst) await schreibeEinstellungen();
       setDraft(null);
       setBaseline(null);
       setInputDirty(false);

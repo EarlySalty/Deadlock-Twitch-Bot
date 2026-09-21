@@ -98,6 +98,7 @@ test(
     const requests = [];
     const errors = [];
     let failTarget = '';
+    let fremdAenderung = null;
     let failQueue = false;
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url, 'http://localhost');
@@ -179,6 +180,10 @@ test(
               input,
             );
           else Object.assign(plan, input);
+          if (fremdAenderung) {
+            fremdAenderung();
+            fremdAenderung = null;
+          }
         }
         return json(plan);
       }
@@ -368,6 +373,48 @@ test(
       assert.equal(writes.length, count);
       await page.getByRole('button', { name: 'Verwerfen', exact: true }).click();
     });
+    await t.test('Fremdänderung zwischen Laden und Speichern wird nicht zurückgeschrieben', async () => {
+      await page.getByLabel('Höchstens pro Tag', { exact: true }).nth(1).fill('2');
+      fremdAenderung = () => {
+        plans.earlysalty.platforms[0].max_posts_per_day = 3;
+      };
+      const vor = writes.length;
+      await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+      await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+      const zielSchreibungen = writes
+        .slice(vor)
+        .filter((w) => /\/settings\/posting-plan\/platform\//.test(w.p))
+        .map((w) => w.p.split('/').at(-1));
+      assert.deepEqual(zielSchreibungen, ['tiktok']);
+      assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 3);
+      assert.equal(plans.earlysalty.platforms[1].max_posts_per_day, 2);
+    });
+    await t.test(
+      'Abschalten der Vollautomatik wird vor den Zielen wirksam und übersteht Teilfehler',
+      async () => {
+        plans.earlysalty.approval_mode = 'full_auto';
+        await page.reload();
+        await tab('Auto-Pilot & Zeitplan').click();
+        await page.getByRole('button', { name: /Vollautomatik/ }).waitFor();
+        await page.getByRole('button', { name: /Nur nach Freigabe/ }).click();
+        await page.getByLabel('Höchstens pro Tag', { exact: true }).nth(0).fill('4');
+        failTarget = '/platform/youtube';
+        const vor = writes.length;
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText(/Teilweise gespeichert/).waitFor();
+        const neu = writes.slice(vor);
+        const einstellungen = neu.findIndex((w) => w.p.endsWith('/settings/posting-plan'));
+        const ziel = neu.findIndex((w) => w.p.endsWith('/platform/youtube'));
+        assert.ok(einstellungen !== -1 && ziel !== -1 && einstellungen < ziel);
+        assert.equal(neu[einstellungen].input.approval_mode, 'manual');
+        assert.equal(plans.earlysalty.approval_mode, 'manual');
+        failTarget = '';
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+        assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 4);
+        assert.equal(plans.earlysalty.approval_mode, 'manual');
+      },
+    );
     await t.test('Template-Auswahl lässt sich ohne zusätzliche Änderung speichern', async () => {
       await tab('Templates & Layouts').click();
       await page.getByRole('button', { name: 'Gameplay mit Hintergrund Layout anpassen' }).click();
