@@ -337,7 +337,6 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
     },
   });
 
@@ -2413,7 +2412,7 @@ function ClipCard({
                 onClick={() => onApprovalDecision('approve', selectedPlatforms)}
               >
                 <CheckCircle2 className="h-4 w-4" />
-                {t('Freigeben')}
+                {t('Clip freigeben')}
               </button>
               <button
                 type="button"

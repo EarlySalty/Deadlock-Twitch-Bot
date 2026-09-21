@@ -299,7 +299,7 @@ test(
       await page.getByRole('searchbox').fill('Bebop überlebt');
       await page
         .locator('.studio-clip')
-        .getByRole('button', { name: 'Freigeben', exact: true })
+        .getByRole('button', { name: 'Clip freigeben', exact: true })
         .click();
       await page.waitForFunction(
         () => !document.querySelector('.studio-clip button.studio-primary'),
@@ -367,6 +367,16 @@ test(
       await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
       assert.equal(writes.length, count);
       await page.getByRole('button', { name: 'Verwerfen', exact: true }).click();
+    });
+    await t.test('Template-Auswahl lässt sich ohne zusätzliche Änderung speichern', async () => {
+      await tab('Templates & Layouts').click();
+      await page.getByRole('button', { name: 'Gameplay mit Hintergrund Layout anpassen' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Layout für earlysalty speichern', exact: true }).click();
+      await page.getByRole('dialog').waitFor({ state: 'detached' });
+      const payload = writes.findLast(write => write.p.endsWith('/streamer-layout')).input;
+      assert.equal(payload.layout.mode, 'blur_pad');
+      assert.equal(payload.layout.cam_enabled, false);
+      await tab('Auto-Pilot & Zeitplan').click();
     });
     await t.test(
       'Kanalwechsel verwirft nach Bestätigung alten Entwurf und Editorzustand',

@@ -135,6 +135,7 @@ const EN: Record<string, string> = {
     'Give this streamer access to their own social media dashboard',
   Freigegeben: 'Access granted',
   Freigeben: 'Grant access',
+  'Clip freigeben': 'Approve clip',
   '— Streamer wählen —': '— Select streamer —',
   '← Partner Dashboard': '← Partner dashboard',
   'Zugriff wird geprüft…': 'Checking access…',
