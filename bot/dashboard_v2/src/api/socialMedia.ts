@@ -165,14 +165,14 @@ export interface ClipListResponseMitPosting extends Omit<ClipListResponse, 'item
   items: SocialClipMitPosting[];
 }
 
-export async function fetchClips(params: ClipListParams = {}): Promise<ClipListResponseMitPosting> {
+export async function fetchClips(params: ClipListParams = {}, signal?: AbortSignal): Promise<ClipListResponseMitPosting> {
   const qs = buildQuery({
     status: params.status && params.status !== 'all' ? params.status : undefined,
     streamer: params.streamer,
     page: params.page,
     page_size: params.page_size,
   });
-  return fetchJson<ClipListResponseMitPosting>(`${ADMIN_PREFIX}/clips${qs}`);
+  return fetchJson<ClipListResponseMitPosting>(`${ADMIN_PREFIX}/clips${qs}`, { signal });
 }
 
 export async function fetchClip(clipDbId: number): Promise<SocialClip> {

@@ -501,6 +501,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
 
 interface LayoutEditorProps {
   initialLayout?: LayoutPayload;
+  baselineLayout?: LayoutPayload;
   isSaving?: boolean;
   onSave: (layout: LayoutPayload) => void;
   onReset?: () => void;
@@ -530,6 +531,7 @@ function normalizeLayout(payload: LayoutPayload): LayoutPayload {
 
 export function LayoutEditor({
   initialLayout,
+  baselineLayout,
   isSaving,
   onSave,
   onReset,
@@ -539,8 +541,8 @@ export function LayoutEditor({
   geltungHinweis,
 }: LayoutEditorProps) {
   const t = useT();
-  const base = useMemo(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT), [initialLayout]);
-  const [layout, setLayout] = useState<LayoutPayload>(base);
+  const base = useMemo(() => normalizeLayout(baselineLayout ?? initialLayout ?? DEFAULT_LAYOUT), [baselineLayout, initialLayout]);
+  const [layout, setLayout] = useState<LayoutPayload>(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT));
   const camEnabled = layout.cam_enabled;
   const mode = layout.mode;
   const blurPad = mode === 'blur_pad';
@@ -560,18 +562,19 @@ export function LayoutEditor({
 
   // Die grosse Variante liegt nicht bei jedem Clip. Ein stiller Vorablauf klaert
   // das, bevor der Rahmen sie anzeigt; faellt sie aus, bleibt das kleine Bild.
+  const selectedImage = gewaehlterClip?.bildUrl;
   useEffect(() => {
     setGrossFehlt(false);
-    if (!gewaehlterClip) return;
-    const gross = grossesStandbild(gewaehlterClip.bildUrl);
-    if (gross === gewaehlterClip.bildUrl) return;
+    if (!selectedImage) return;
+    const gross = grossesStandbild(selectedImage);
+    if (gross === selectedImage) return;
     const probe = new Image();
     probe.onerror = () => setGrossFehlt(true);
     probe.src = gross;
     return () => {
       probe.onerror = null;
     };
-  }, [gewaehlterClip?.id, gewaehlterClip?.bildUrl]);
+  }, [selectedImage]);
 
   const bildUrl = gewaehlterClip
     ? grossFehlt
@@ -633,7 +636,7 @@ export function LayoutEditor({
               type="button"
               onClick={() => setMode('pip')}
               className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'pip' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+                mode === 'pip' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -644,7 +647,7 @@ export function LayoutEditor({
               type="button"
               onClick={() => setMode('stacked')}
               className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'stacked' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+                mode === 'stacked' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -655,7 +658,7 @@ export function LayoutEditor({
               type="button"
               onClick={() => setMode('blur_pad')}
               className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'blur_pad' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+                mode === 'blur_pad' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -819,7 +822,7 @@ export function LayoutEditor({
             type="button"
             disabled={!isDirty || isSaving}
             onClick={() => onSave(layout)}
-            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-on-gold shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Save className="w-3.5 h-3.5" />
             {isSaving ? t('Speichert…') : (saveLabel ?? t('Als Standard speichern'))}

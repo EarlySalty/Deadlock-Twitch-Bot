@@ -137,8 +137,8 @@ export type SocialMediaView = 'pool' | 'plan' | 'layout' | 'konten';
 
 export const SOCIAL_MEDIA_TABS: Array<{ id: SocialMediaView; label: string }> = [
   { id: 'pool', label: 'Pipeline' },
-  { id: 'plan', label: 'Auto-Pilot' },
-  { id: 'layout', label: 'Layout' },
+  { id: 'plan', label: 'Auto-Pilot & Zeitplan' },
+  { id: 'layout', label: 'Templates & Layouts' },
   { id: 'konten', label: 'Konten & Einstellungen' },
 ];
 

@@ -94,6 +94,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const queryClient = useQueryClient();
   const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [studioMenuOpen, setStudioMenuOpen] = useState(false);
   const shownAvatar = avatarFailed ? null : avatarUrl;
 
   const mainNavItems: SidebarNavItem[] = [
@@ -146,8 +147,12 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   ];
 
   return (
-    <Rise as="aside" className="self-start rounded-2xl border border-white/[0.08] bg-ui-panel p-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] lg:sticky lg:top-5">
-      <div className="space-y-4">
+    <Rise as="aside" className={activeRoute === 'social' ? 'studio-navigation' : 'self-start rounded-2xl border border-white/[0.08] bg-ui-panel p-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] lg:sticky lg:top-5'}>
+      {activeRoute === 'social' && <div className="flex items-center justify-between gap-3">
+        <a className="studio-brand" href="/twitch/verwaltung"><img src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`} alt="" /><span>Deutsche Deadlock<strong>Community</strong></span></a>
+        <button type="button" className="studio-button mb-6 lg:hidden" aria-expanded={studioMenuOpen} aria-controls="studio-navigation-links" onClick={() => setStudioMenuOpen(open => !open)}>Menü</button>
+      </div>}
+      <div id={activeRoute === 'social' ? 'studio-navigation-links' : undefined} className={`space-y-4 ${activeRoute === 'social' && !studioMenuOpen ? 'hidden lg:block' : ''}`}>
         <div className="flex items-center gap-3">
           {shownAvatar ? (
             <img

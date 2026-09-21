@@ -65,6 +65,8 @@ function lies(relativ: string): string {
 /** Dateien, deren Texte ein englischsprachiger Nutzer zu sehen bekommt. */
 const OBERFLAECHE = [
   'src/pages/SocialMedia.tsx',
+  'src/components/socialmedia/PostingPlanDraft.tsx',
+  'src/components/socialmedia/WorkspaceDialog.tsx',
   'src/pages/SocialMediaAdmin.tsx',
   'src/components/socialmedia/AnalyticsTab.tsx',
   'src/components/socialmedia/EnrichmentPanel.tsx',

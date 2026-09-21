@@ -154,7 +154,7 @@ export function SocialMediaAdminDashboard() {
 
   return (
     <>
-      <div className="rounded-2xl border border-white/[0.08] bg-ui-panel p-3 md:px-4">
+      <div className="border-b border-border py-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="text-xs font-medium text-ui-faint">{t('Arbeitsbereich')}</p>
@@ -186,8 +186,10 @@ export function SocialMediaAdminDashboard() {
             )}
             {isAdminView && (
               <select
+                aria-label={t('Streamer wählen')}
                 value={streamer}
                 onChange={(event) => {
+                  if (document.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
                   hasAutoSetStreamer.current = true;
                   setStreamer(event.target.value);
                 }}
@@ -217,13 +219,13 @@ export function SocialMediaAdminDashboard() {
           <TrialBanner />
 
           {isAdminView ? (
-            <SocialMedia streamer={streamer} isAdmin />
+            <SocialMedia key={streamer} streamer={streamer} isAdmin />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
               {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
-            <SocialMedia streamer={access.streamer ?? streamer} isAdmin={false} />
+            <SocialMedia key={access.streamer ?? streamer} streamer={access.streamer ?? streamer} isAdmin={false} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />
