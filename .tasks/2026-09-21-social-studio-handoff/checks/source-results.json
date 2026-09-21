@@ -1,0 +1,13 @@
+{
+  "verified_sources": 28,
+  "byte_identical_generated_artifacts": [
+    "preview.html",
+    "dist/tailwind.css"
+  ],
+  "original_chat_zip_sha256": "d57b0f9d5c514213e903d8a8af6d627bf882e4d75eab659feb43b7ef76001973",
+  "transferred_source_archive_sha256": "30bcd53938c2bf02f3020c433c01dc292b5754eeb3166fa0f3ab45753320e4a0",
+  "checked_text_files": 41,
+  "forbidden_files": 0,
+  "credential_pattern_findings": 0,
+  "scope": "Source provenance and a scoped publication check, not a comprehensive security audit or product integration test"
+}
