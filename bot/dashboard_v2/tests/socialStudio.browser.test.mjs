@@ -51,7 +51,7 @@ if (!brandFontDir)
   );
 
 const dist = path.resolve(import.meta.dirname, '../../analytics/dashboard_v2/dist');
-const evidence = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-21-social-studio');
+const evidence = path.resolve(process.env.STUDIO_EVIDENCE_DIR ?? path.join(import.meta.dirname, '../../../.tasks/2026-09-21-social-studio'));
 const layout = {
   version: 1,
   source: { width: 1920, height: 1080 },
@@ -325,6 +325,71 @@ test(
     await page.goto(base + '/social-media-admin?streamer=earlysalty');
     await page.locator('.studio-clip').first().waitFor();
     const tab = (name) => page.getByRole('tab', { name, exact: true });
+    await t.test('Home, Uplink und Social Media haben identische Desktop-Abmessungen', async () => {
+      const references = [];
+      try {
+        for (const route of ['/twitch/dashboard', '/twitch/uplink']) {
+          const reference = await browser.newPage({ reducedMotion: 'reduce' });
+          await reference.route('**/*', (request) =>
+            request.request().url().startsWith(base) ? request.continue() : request.abort(),
+          );
+          references.push(reference);
+          await reference.goto(base + route);
+          await reference.locator('main').waitFor();
+          await reference.locator('main').evaluate((main) => {
+            if (!main.parentElement.querySelector(':scope > aside')) throw new Error('Sidebar fehlt');
+          });
+        }
+        const geometry = (target) => target.locator('main').evaluate((main) => {
+          const sidebar = main.parentElement.querySelector(':scope > aside');
+          const frame = main.parentElement.parentElement;
+          const rect = (element) => {
+            const box = element.getBoundingClientRect();
+            return { x: box.x, y: box.y, width: box.width };
+          };
+          return { frame: rect(frame), main: rect(main), sidebar: rect(sidebar) };
+        });
+        const measured = [];
+        for (const width of [1024, 1280, 1440, 1920, 2560]) {
+          for (const target of [page, ...references]) {
+            await target.setViewportSize({ width, height: 1080 });
+            await target.evaluate(() => document.fonts.ready);
+          }
+          const expected = await geometry(references[0]);
+          assert.equal(expected.sidebar.width, 240, `Sidebar @ ${width}`);
+          assert.equal(expected.frame.width, Math.min(width, 1680), `Rahmen @ ${width}`);
+          for (const target of [page, references[1]]) {
+            const actual = await geometry(target);
+            assert.deepEqual(actual, expected, `${new URL(target.url()).pathname} @ ${width}`);
+          }
+          measured.push({ viewport: width, ...expected });
+          assert.equal(await page.getByRole('button', { name: 'Menü', exact: true }).isVisible(), false);
+        }
+        await fs.mkdir(evidence, { recursive: true });
+        await fs.writeFile(path.join(evidence, 'shell-geometry.json'), JSON.stringify(measured, null, 2));
+      } finally {
+        for (const reference of references) await reference.close();
+        await page.setViewportSize({ width: 1440, height: 1080 });
+      }
+    });
+    await t.test('Kennzahlen und Vorrat haben Abstand, Ansichtswechsel ist sichtbar', async () => {
+      const gap = await page.locator('.studio-metrics').evaluate((metrics) =>
+        metrics.nextElementSibling.getBoundingClientRect().top - metrics.getBoundingClientRect().bottom,
+      );
+      assert.ok(gap >= 16, `Abstand zwischen Kennzahlen und Vorrat: ${gap}px`);
+      const list = page.getByRole('button', { name: 'Listenansicht', exact: true });
+      const grid = page.getByRole('button', { name: 'Kartenansicht', exact: true });
+      const background = (button) => button.evaluate((element) => getComputedStyle(element).backgroundColor);
+      const active = await background(list);
+      assert.notEqual(active, await background(grid));
+      await grid.click();
+      await page.mouse.move(0, 0);
+      assert.equal(await grid.getAttribute('aria-pressed'), 'true');
+      assert.equal(await background(grid), active);
+      assert.notEqual(await background(list), active);
+      await list.click();
+      await page.mouse.move(0, 0);
+    });
     await t.test(
       'vollständige Kennzahlen, keine Vorschau-Requests beim Laden und echtes Logo',
       async () => {
@@ -509,10 +574,10 @@ test(
       },
     );
     await t.test(
-      'Bereiche bleiben bei 320, 390, 768 und 1440 Pixel ohne Seitenüberlauf',
+      'Bereiche, Karten und Menüs bleiben von 320 bis 2560 Pixel bedienbar',
       async () => {
         await fs.mkdir(evidence, { recursive: true });
-        for (const width of [320, 390, 768, 1440]) {
+        for (const width of [320, 390, 768, 1024, 1280, 1440, 1920, 2560]) {
           await page.setViewportSize({ width, height: 1080 });
           for (const name of [
             'Pipeline',
@@ -529,6 +594,39 @@ test(
             assert.ok(size.doc <= size.width, `${name} @ ${width}: ${JSON.stringify(size)}`);
           }
           await tab('Pipeline').click();
+          if (width < 1024) {
+            const toggle = page.getByRole('button', { name: 'Menü', exact: true });
+            assert.equal(await toggle.isVisible(), true);
+            assert.equal(await page.locator('#studio-navigation-links').isVisible(), false);
+            await toggle.click();
+            assert.equal(await page.locator('#studio-navigation-links').isVisible(), true);
+            await toggle.click();
+          }
+          for (const mode of ['Kartenansicht', 'Listenansicht']) {
+            await page.getByRole('button', { name: mode, exact: true }).click();
+            const card = page.locator('.studio-clip').first();
+            await card.getByLabel('Weitere Aktionen', { exact: true }).click();
+            const popup = card.locator('.studio-menu');
+            const box = await popup.boundingBox();
+            assert.ok(box.x >= 0 && box.x + box.width <= width, `Menü ${mode} @ ${width}: ${JSON.stringify(box)}`);
+            const lastAction = popup.getByRole('button').last();
+            await lastAction.scrollIntoViewIfNeeded();
+            assert.ok(await lastAction.evaluate((element) => {
+              const r = element.getBoundingClientRect();
+              return element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+            }), `Menü wird von Folgekarten verdeckt: ${mode} @ ${width}`);
+            await page.keyboard.press('Escape');
+            assert.equal(await popup.isVisible(), false);
+            const contained = await card.evaluate((element) => {
+              const bounds = element.getBoundingClientRect();
+              return [...element.querySelectorAll('h3, .studio-clip-actions, .studio-clip-actions > button, .studio-clip-actions summary')].every((child) => {
+                const r = child.getBoundingClientRect();
+                return r.x >= bounds.x && r.right <= bounds.right && child.scrollWidth <= child.clientWidth + 1;
+              });
+            });
+            assert.ok(contained, `Karteninhalt abgeschnitten: ${mode} @ ${width}`);
+          }
+          await page.evaluate(() => window.scrollTo(0, 0));
           await page.screenshot({ path: path.join(evidence, `studio-${width}.png`) });
         }
         await tab('Auto-Pilot & Zeitplan').click();

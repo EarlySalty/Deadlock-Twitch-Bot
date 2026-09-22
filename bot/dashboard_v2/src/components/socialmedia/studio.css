@@ -13,8 +13,7 @@
   font-weight: 400 800;
   font-display: swap;
 }
-.social-studio,
-.studio-shell {
+.social-studio {
   --color-ui-root: var(--color-bg);
   --color-ui-panel: var(--color-card);
   --color-ui-deep: var(--color-background);
@@ -38,24 +37,7 @@
   font-family: var(--font-sans);
   color-scheme: dark;
 }
-.studio-shell {
-  min-height: 100dvh;
-  background: var(--color-bg);
-}
-.studio-shell-grid {
-  max-width: 1920px;
-  margin-inline: auto;
-}
-.studio-shell-main {
-  min-width: 0;
-  padding: 16px;
-}
-.studio-navigation {
-  min-width: 0;
-  background: var(--color-background);
-  border-bottom: 1px solid var(--color-border);
-  padding: 16px;
-}
+/* Außenrahmen, Sidebar-Breite und Abstände kommen ausschließlich aus DashboardShell. */
 .studio-brand {
   display: flex;
   align-items: center;
@@ -68,6 +50,7 @@
 .studio-brand img {
   width: 40px;
   height: 40px;
+  flex-shrink: 0;
   object-fit: contain;
 }
 .studio-brand strong {
@@ -132,7 +115,19 @@
 }
 .studio-icon-button {
   width: 40px;
+  flex-shrink: 0;
   padding: 8px;
+}
+.studio-icon-button[aria-pressed='true'] {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+/* Studio-Regeln liegen außerhalb der Tailwind-Layer. Deshalb die responsive
+   Sichtbarkeit hier statt mit einem wirkungslosen lg:hidden festlegen. */
+.studio-menu-toggle {
+  flex-shrink: 0;
+  margin-bottom: 24px;
 }
 .studio-primary {
   background: var(--gradient-dash);
@@ -216,6 +211,8 @@
   min-width: 0;
 }
 .studio-clip {
+  container: studio-clip / inline-size;
+  min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 14px;
@@ -244,8 +241,17 @@
 }
 .studio-clip-actions {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
   align-items: center;
+}
+.studio-clip-actions > details {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.studio-clip-actions > .studio-primary {
+  flex: 1;
 }
 .studio-status {
   display: inline-flex;
@@ -399,28 +405,37 @@
   background: var(--color-on-gold);
 }
 @media (min-width: 768px) {
-  .studio-clip-row {
-    grid-template-columns: 196px minmax(0, 1fr) auto;
-  }
   .studio-metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 @media (min-width: 1024px) {
-  .studio-shell-grid {
-    display: grid;
-    grid-template-columns: 216px minmax(0, 1fr);
+  .studio-menu-toggle {
+    display: none;
   }
-  .studio-navigation {
-    height: 100dvh;
-    position: sticky;
-    top: 0;
-    overflow-y: auto;
-    border-bottom: 0;
-    border-right: 1px solid var(--color-border);
+}
+/* Entscheidend ist die verfügbare Kartenbreite, nicht die Fensterbreite:
+   neben der Sidebar und in der Kartenansicht bleibt der Text lesbar. */
+@container studio-clip (min-width: 640px) {
+  .studio-clip-row {
+    grid-template-columns: 160px minmax(0, 1fr);
   }
-  .studio-shell-main {
-    padding: 0 40px 32px;
+  .studio-clip-media {
+    grid-row: 1 / 3;
+  }
+  .studio-clip-actions {
+    grid-column: 2;
+  }
+}
+@container studio-clip (min-width: 900px) {
+  .studio-clip-row {
+    grid-template-columns: 196px minmax(0, 1fr) auto;
+  }
+  .studio-clip-media {
+    grid-row: auto;
+  }
+  .studio-clip-actions {
+    grid-column: auto;
   }
 }
 .studio-queue-grid {
@@ -438,9 +453,6 @@
   margin-top: auto;
 }
 @media (max-width: 767px) {
-  .studio-clip-actions > .studio-primary {
-    flex: 1;
-  }
   .studio-tabs {
     gap: 12px;
   }
@@ -455,8 +467,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .social-studio *,
-  .studio-shell * {
+  .social-studio * {
     animation: none !important;
     transition: none !important;
   }

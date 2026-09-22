@@ -659,7 +659,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             <LanguageCard />
           </div>
         ) : (
-          <>
+          <div className="space-y-4">
             <div className="studio-metrics">
               <SocialMetric
                 label={t('Wartet auf Freigabe')}
@@ -702,7 +702,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
             />
 
             <div className="space-y-3">
-              <div className="studio-toolbar mt-6">
+              <div className="studio-toolbar">
                 <StatusFilter
                   value={statusFilter}
                   onChange={(next) => {
@@ -909,7 +909,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 <span>{t('MP4 hinzufügen')} →</span>
               </button>
             </div>
-          </>
+          </div>
         )}
       </section>
       {showUpload && (
@@ -1018,7 +1018,7 @@ function SocialHero({
           {streamer} · {t('Aus guten Momenten werden deine nächsten Posts.')}
         </p>
       </div>
-      <div className="flex gap-2">
+      <div className="flex max-w-full flex-wrap gap-2">
         <button type="button" onClick={onOpenAnalytics} className="studio-button">
           <BarChart3 className="h-4 w-4" />
           {t('Auswertung')}

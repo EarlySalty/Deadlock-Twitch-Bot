@@ -62,6 +62,14 @@ test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Sl
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
 });
 
+test('Social Media verwendet denselben Rahmen, Studio-CSS darf keine zweite Shell bauen', () => {
+  const studio = read('components/socialmedia/studio.css');
+  assert.doesNotMatch(SHELL, /studio-shell/, 'Social Media darf die gemeinsame Shell nicht umgehen');
+  assert.doesNotMatch(studio, /\.studio-shell(?:[-\s.{,])/, 'Keine konkurrierenden Shell-Abmessungen');
+  assert.doesNotMatch(studio, /grid-template-columns:\s*216px|max-width:\s*1920px/);
+  assert.doesNotMatch(SIDEBAR, /className=\{activeRoute === 'social' \?/, 'Die Sidebar-Geometrie gilt für alle Routen');
+});
+
 test('der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto', () => {
   assert.match(HOOK, /const isAuthenticated = authStatus\?\.authenticated === true;/);
   assert.match(HOOK, /const isLocalhostAdmin = Boolean\(authStatus\?\.isLocalhost\);/);
