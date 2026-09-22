@@ -337,6 +337,13 @@ async fn process_channel(
                 plan_fit,
             };
             let decision = decide(&input);
+            if decision.reason == "pulled_forward" {
+                tracing::debug!(
+                    mode = "admgr-proactive-twitch-v1",
+                    plan_fit,
+                    "Werbemanager: geplante Twitch-Werbung wird aktiv in ein gutes Fenster gezogen"
+                );
+            }
             hint_for_send = ad_hint(
                 &input,
                 &decision,

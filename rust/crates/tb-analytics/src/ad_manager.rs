@@ -631,23 +631,41 @@ fn is_overdue(input: &DecisionInput) -> bool {
         .unwrap_or(false)
 }
 
-fn cooldown_allows(input: &DecisionInput) -> bool {
+fn twitch_cooldown_allows(input: &DecisionInput) -> bool {
     let now = input.now;
     let Some(last) = input.last_ad_at else {
         return true;
     };
     let retry = i64::from(input.retry_after_seconds.max(1));
-    let min_interval = Duration::minutes(i64::from(input.settings.min_interval_minutes));
-    now >= last + Duration::seconds(retry) && now >= last + min_interval
+    now >= last + Duration::seconds(retry)
 }
 
-fn should_pull_forward(input: &DecisionInput) -> bool {
+fn pull_forward_window_open(input: &DecisionInput) -> bool {
     let in_window = input
         .steam_match_state
         .as_ref()
-        .map(|state| state.in_deadlock && !state.in_match)
+        .map(|state| state.in_deadlock)
         .unwrap_or(false);
     if !in_window {
+        return false;
+    }
+    if let Some(ended) = input.match_ended_at {
+        let since = input.now.signed_duration_since(ended);
+        if since >= Duration::zero() && since < Duration::minutes(POST_MATCH_WAIT_MIN) {
+            return false;
+        }
+        if since >= Duration::minutes(POST_MATCH_WAIT_MIN)
+            && since < Duration::minutes(POST_MATCH_WAIT_MIN + 1)
+            && input.recent_chat_messages > 0
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn should_pull_forward(input: &DecisionInput) -> bool {
+    if !pull_forward_window_open(input) {
         return false;
     }
     let now = input.now;
@@ -657,7 +675,8 @@ fn should_pull_forward(input: &DecisionInput) -> bool {
     let lead = i64::from(input.settings.action_lead_seconds);
     let beyond_lead = next_ad > now + Duration::seconds(lead);
     let in_reach = next_ad <= now + Duration::minutes(PULL_FORWARD_HORIZON_MIN);
-    beyond_lead && in_reach && cooldown_allows(input)
+    let match_risk = input.plan_fit != "good";
+    beyond_lead && (in_reach || match_risk) && twitch_cooldown_allows(input)
 }
 
 pub fn decide(input: &DecisionInput) -> Decision {
@@ -727,7 +746,16 @@ pub fn decide(input: &DecisionInput) -> Decision {
                     postpone(reason, detail)
                 }
             }
-            None => none("in_queue"),
+            None if pull_forward_window_open(input) && twitch_cooldown_allows(input) => {
+                Decision {
+                    action: DecisionAction::Commercial {
+                        duration_seconds: input.pull_forward_seconds,
+                    },
+                    reason: "pulled_forward",
+                    detail: input.next_ad_at.map(|at| at.to_rfc3339()),
+                }
+            }
+            None => none("twitch_plan_active"),
         };
     }
 
