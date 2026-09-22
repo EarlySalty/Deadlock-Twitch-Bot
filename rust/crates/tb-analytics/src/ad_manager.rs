@@ -608,13 +608,7 @@ fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> 
         }
     }
     if input.steam_match_state.as_ref().is_some_and(|s| s.in_match) {
-        let started_over_a_minute = input
-            .match_started_at
-            .map(|started| now >= started + Duration::minutes(1))
-            .unwrap_or(true);
-        if started_over_a_minute {
-            return Some(("in_match", None));
-        }
+        return Some(("in_match", None));
     }
     None
 }
@@ -644,7 +638,7 @@ fn pull_forward_window_open(input: &DecisionInput) -> bool {
     let in_window = input
         .steam_match_state
         .as_ref()
-        .map(|state| state.in_deadlock)
+        .map(|state| state.in_deadlock && !state.in_match)
         .unwrap_or(false);
     if !in_window {
         return false;
@@ -787,12 +781,6 @@ pub fn decide(input: &DecisionInput) -> Decision {
 
     if let Some((reason, detail)) = lock {
         return postpone(reason, detail);
-    }
-
-    if let Some(state) = input.steam_match_state.as_ref() {
-        if state.in_match {
-            return commercial("match_start_window");
-        }
     }
 
     if let Some(ended) = input.match_ended_at {
