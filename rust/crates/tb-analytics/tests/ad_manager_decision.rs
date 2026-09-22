@@ -271,6 +271,7 @@ fn twitch_plan_ist_budgetquelle_und_wird_vorgezogen() {
 
     // Offenes Queue-Fenster: geplante Werbung vorziehen.
     value.steam_match_state = Some(steam_state(false, true));
+    value.last_ad_at = Some(value.now - Duration::minutes(10));
     let decision = decide(&value);
     assert_eq!(decision.reason, "pulled_forward");
     assert_eq!(
@@ -280,12 +281,70 @@ fn twitch_plan_ist_budgetquelle_und_wird_vorgezogen() {
         }
     );
 
+    value.last_ad_at = Some(value.now - Duration::minutes(7));
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+    assert_eq!(decide(&value).action, DecisionAction::None);
+
     // Sperre und anstehende Werbung: per Pause verschieben.
     let mut value = base(Strategy::Smart);
     value.next_ad_at = Some(value.now + Duration::seconds(30));
     value.last_raid_at = Some(value.now - Duration::minutes(3));
     assert_eq!(decide(&value).reason, "twitch_ad_moved");
     assert_eq!(decide(&value).action, DecisionAction::Snooze);
+}
+
+#[test]
+fn twitch_plan_nutzt_matchrisiko_proaktiv() {
+    let mut value = base(Strategy::Smart);
+    value.next_ad_at = Some(value.now + Duration::minutes(25));
+    value.last_ad_at = Some(value.now - Duration::minutes(10));
+    value.steam_match_state = Some(steam_state(false, true));
+    value.plan_fit = "tight";
+
+    let decision = decide(&value);
+    assert_eq!(decision.reason, "pulled_forward");
+    assert!(matches!(decision.action, DecisionAction::Commercial { .. }));
+
+    value.steam_match_state = Some(steam_state(true, true));
+    value.match_started_at = Some(value.now - Duration::seconds(30));
+    assert_eq!(decide(&value).reason, "pulled_forward");
+    assert!(matches!(
+        decide(&value).action,
+        DecisionAction::Commercial { .. }
+    ));
+
+    value.match_started_at = Some(value.now - Duration::minutes(2));
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+    assert_eq!(decide(&value).action, DecisionAction::None);
+}
+
+#[test]
+fn twitch_plan_respektiert_matchende_vor_dem_vorziehen() {
+    let mut value = base(Strategy::Smart);
+    value.next_ad_at = Some(value.now + Duration::minutes(25));
+    value.last_ad_at = Some(value.now - Duration::minutes(10));
+    value.steam_match_state = Some(steam_state(false, true));
+    value.plan_fit = "tight";
+    value.match_ended_at = Some(value.now - Duration::seconds(30));
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+
+    value.match_ended_at = Some(value.now - Duration::seconds(90));
+    value.recent_chat_messages = 2;
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+
+    value.recent_chat_messages = 0;
+    assert_eq!(decide(&value).reason, "pulled_forward");
+}
+
+#[test]
+fn imminente_twitch_werbung_wird_im_queuefenster_selbst_gestartet() {
+    let mut value = base(Strategy::Smart);
+    value.next_ad_at = Some(value.now + Duration::seconds(30));
+    value.last_ad_at = Some(value.now - Duration::minutes(10));
+    value.steam_match_state = Some(steam_state(false, true));
+    let decision = decide(&value);
+    assert_eq!(decision.reason, "pulled_forward");
+    assert_eq!(decision.action, DecisionAction::Commercial { duration_seconds: 90 });
 }
 
 #[test]
