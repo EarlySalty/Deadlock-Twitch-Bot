@@ -157,6 +157,12 @@ async fn target_stats_fixture(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260920170000_twitch_player_multi_steam.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::raw_sql("CREATE TABLE streamer_plans(twitch_user_id TEXT PRIMARY KEY, stat_command_settings JSONB NOT NULL DEFAULT '{}');
         CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
         INSERT INTO streamer_plans VALUES ('bc123', '{}'), ('other-id', '{\"wins\":false,\"rank\":false}');")
@@ -234,6 +240,41 @@ async fn target_rank_dispatch_uses_target_discord_id_and_keeps_reply_in_original
     );
     assert_eq!(api.sent.lock().await[0].0, "bc123");
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn target_rank_me_uses_chatter_identity_not_broadcaster() {
+    use wiremock::{
+        matchers::{path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let database = crate::test_postgres::TestPostgres::start().await;
+    target_stats_fixture(&database.pool).await;
+    sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('u999','303'),('bc123','202')")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let server = MockServer::start().await;
+    Mock::given(path("/rank"))
+        .and(query_param("discord_id", "303"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "linked":true, "verified":true, "is_steam_friend":true, "rank_name":"Phantom", "subrank":2
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let api = MockApi::new();
+    let mut engine = make_engine_with_pool(database.pool.clone(), api.clone());
+    engine.rank_lookup = crate::rank_lookup::RankLookup::with_urls(
+        &format!("{}/v1", server.uri()),
+        &format!("{}/rank", server.uri()),
+    );
+    assert!(engine.handle(&make_event("!rank me", false, false)).await);
+    assert_eq!(
+        api.last_message().await.unwrap(),
+        "@testuser Rang von TestUser: Phantom 2"
+    );
+    assert!(api.lookup_calls.lock().await.is_empty());
 }
 
 #[tokio::test]

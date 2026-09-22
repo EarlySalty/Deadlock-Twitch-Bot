@@ -22,7 +22,7 @@ Sobald dein Steam-Account verknüpft ist, kennt der Bot diese Befehle im Chat:
 - `!mmr` (auch `!climb`) — aktueller Rang plus Trend der letzten Tage.
 - `!live` — ob du gerade in einem laufenden Deadlock-Match bist (inkl. Hero und Spielminute).
 
-Alle diese Befehle akzeptieren optional `@username`: etwa `!rank @username` oder `!winrate @username`. Ohne Ziel sind die Daten des Streamers gemeint. `!watchtime @username` zeigt dagegen die erfasste Zuschauerzeit dieser Person im aktuellen Twitch-Kanal; ohne Ziel die eigene Zeit.
+Alle diese Befehle akzeptieren optional `@username`: etwa `!rank @username` oder `!winrate @username`. Ohne Ziel sind die Daten des Streamers gemeint. Bei `!rank me` wird ausdrücklich der Absender im Chat verwendet. `!watchtime @username` zeigt die erfasste Zuschauerzeit dieser Person im aktuellen Twitch-Kanal; ohne Ziel die eigene Zeit.
 
 ### Was brauche ich, damit die Statistiken funktionieren?
 
@@ -62,7 +62,7 @@ Für eine frei anpassbare OBS-Leinwand wählst du „Freie OBS-Leinwand". Stell 
 
 ### Twitch und Steam direkt verbinden
 
-Mit `!connect` bekommst du den Link zu unserer Kontoseite. Dort bestätigst du zuerst dein Twitch-Konto und meldest dich anschließend bei Steam an. Kein Discord-Konto und keine Streamer-Partnerschaft sind erforderlich. Die direkte, bestätigte Zuordnung wird für `!rank @deinname` verwendet, unabhängig von unterschiedlichen Twitch- und Steam-Namen. Der Rang kommt dabei aus der Deadlock API, sofern öffentliche Rangdaten vorhanden sind. Der Login selbst garantiert keine Rangdaten und erzeugt keine Steam-Bot-Freundschaft.
+Mit `!connect` bekommst du den Link zu unserer Kontoseite. Dort bestätigst du zuerst dein Twitch-Konto und kannst anschließend mehrere Steam-Konten verbinden. Eines davon ist das Standardkonto; auf der Kontoseite kannst du den Standard wechseln oder einzelne Konten entfernen. Kein Discord-Konto und keine Streamer-Partnerschaft sind erforderlich. Die direkte, bestätigte Zuordnung wird für `!rank me` und `!rank @deinname` verwendet, unabhängig von unterschiedlichen Twitch- und Steam-Namen. Der Rang kommt dabei aus der Deadlock API, sofern öffentliche Rangdaten vorhanden sind. Der Login selbst garantiert keine Rangdaten und erzeugt keine Steam-Bot-Freundschaft.
 
 `!unconnect` (auch `!disconnect`) entfernt nur deine eigene direkte Steam-Zuordnung. Die Steam-ID wird aus dieser Zuordnung gelöscht; deine Twitch-ID bleibt mit einem Abschaltvermerk gespeichert, damit Discord- und Namens-Fallback sie nicht automatisch wieder ersetzen. Ein bereits begonnener Steam-Login kann diese Trennung nicht rückgängig machen. Mit einem neu gestarteten `!connect` kannst du wieder verbinden. Auf der Kontoseite gibt es dieselbe Funktion als „Verknüpfung entfernen“. Bestehende Discord-/Steam-Verbindungen werden nicht gelöscht.
 

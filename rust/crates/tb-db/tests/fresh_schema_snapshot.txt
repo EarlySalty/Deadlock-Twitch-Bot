@@ -1392,6 +1392,11 @@ twitch_partners|technical_pause_reason|text|YES|
 twitch_partners|twitch_login|text|NO|
 twitch_partners|twitch_user_id|text|NO|
 twitch_partners|verified|boolean|NO|false
+twitch_player_steam_accounts|is_primary|boolean|NO|false
+twitch_player_steam_accounts|linked_at|timestamp with time zone|NO|now()
+twitch_player_steam_accounts|steam_id64|bigint|NO|
+twitch_player_steam_accounts|twitch_user_id|text|NO|
+twitch_player_steam_accounts|updated_at|timestamp with time zone|NO|now()
 twitch_player_steam_links|lookup_enabled|boolean|NO|true
 twitch_player_steam_links|revision|bigint|NO|0
 twitch_player_steam_links|steam_id64|bigint|YES|

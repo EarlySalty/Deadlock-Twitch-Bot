@@ -56,6 +56,12 @@ async fn fixture() -> (
     .execute(&db.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../migrations/20260920170000_twitch_player_multi_steam.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let state = DashboardAuthState::new(
         db.pool.clone(),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
@@ -420,6 +426,67 @@ async fn player_connect_steam_verified_roundtrip_and_replay_rejection() {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+#[tokio::test]
+async fn player_connect_can_switch_and_remove_individual_steam_accounts() {
+    let (_db, state, created) = fixture().await;
+    let first = player_links::prepare(state.pool(), "111").await.unwrap();
+    assert!(player_links::complete(
+        state.pool(),
+        "111",
+        first,
+        player_links::STEAM64_BASE + 42,
+        "multi-nonce-1",
+    )
+    .await
+    .unwrap());
+    let second = player_links::prepare(state.pool(), "111").await.unwrap();
+    assert!(player_links::complete(
+        state.pool(),
+        "111",
+        second,
+        player_links::STEAM64_BASE + 84,
+        "multi-nonce-2",
+    )
+    .await
+    .unwrap());
+
+    let response = set_primary(
+        Some(Extension(state.clone())),
+        Some(Extension(config())),
+        headers(&created),
+        Form(AccountForm {
+            csrf_token: created.csrf_token.clone(),
+            steam_id64: player_links::STEAM64_BASE + 42,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        player_links::load(state.pool(), "111")
+            .await
+            .unwrap()
+            .unwrap()
+            .account_id(),
+        Some(42)
+    );
+
+    let response = remove_account(
+        Some(Extension(state.clone())),
+        Some(Extension(config())),
+        headers(&created),
+        Form(AccountForm {
+            csrf_token: created.csrf_token.clone(),
+            steam_id64: player_links::STEAM64_BASE + 42,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let accounts = player_links::accounts(state.pool(), "111").await.unwrap();
+    assert_eq!(accounts.len(), 1);
+    assert!(accounts[0].is_primary);
+    assert_eq!(accounts[0].steam_id64, player_links::STEAM64_BASE + 84);
+}
+
 #[tokio::test]
 async fn player_connect_steam_rejects_cross_browser_and_failed_verification() {
     let (_db, state, created) = fixture().await;
