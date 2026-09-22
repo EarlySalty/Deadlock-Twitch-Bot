@@ -357,7 +357,7 @@ test(
         assert.ok(await page.evaluate(() => document.fonts.check('14px "Studio Manrope"')));
       },
     );
-    await t.test('gemeinsamer Rahmen: 1680px, 240px Navigation und gleiche Abstände', async () => {
+    await t.test('gemeinsamer Rahmen: volle Breite, 240px Navigation und gleiche Abstände', async () => {
       for (const width of [1024, 1280, 1440, 1920, 2560]) {
         await page.setViewportSize({ width, height: 1080 });
         const geometry = await page.evaluate(() => {
@@ -365,11 +365,11 @@ test(
           const sidebar = document.querySelector('aside').getBoundingClientRect();
           return { mainX: main.x, mainWidth: main.width, sidebarX: sidebar.x, sidebarWidth: sidebar.width, top: sidebar.y };
         });
-        const left = Math.max(0, (width - 1680) / 2) + 24;
+        const left = 24;
         assert.equal(geometry.sidebarWidth, 240, JSON.stringify({ width, geometry }));
         assert.equal(geometry.sidebarX, left);
         assert.equal(geometry.mainX, left + 240 + 20);
-        assert.equal(geometry.mainWidth, Math.min(width, 1680) - 48 - 240 - 20);
+        assert.equal(geometry.mainWidth, width - 48 - 240 - 20);
         assert.equal(geometry.top, 20);
         assert.equal(await page.getByRole('button', { name: 'Menü', exact: true }).count(), 0);
       }

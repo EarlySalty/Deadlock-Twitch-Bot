@@ -53,10 +53,9 @@ test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
   }
 });
 
-test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Slot', () => {
+test('die Shell trägt Hintergrund, volle Breite, Sidebar-Spalte und den Main-Slot', () => {
   assert.match(SHELL, /bg-ui-root/);
-  assert.match(SHELL, /mx-auto/);
-  assert.match(SHELL, /max-w-\[1680px\]/);
+  assert.doesNotMatch(SHELL, /max-w-\[/);
   assert.match(SHELL, /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
@@ -65,13 +64,14 @@ test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Sl
 test('Social Media nutzt dieselbe Shell und Navigation wie Home und Uplink', () => {
   assert.doesNotMatch(SHELL, /activeRoute\s*===\s*['"]social['"]/);
   assert.doesNotMatch(SHELL, /studio-shell|social-studio/);
-  assert.doesNotMatch(SIDEBAR, /studio-navigation|studioMenuOpen|studio-brand/);
+  assert.match(SIDEBAR, /studio-navigation/);
+  assert.doesNotMatch(SIDEBAR, /studioMenuOpen|studio-shell|studio-brand/);
   assert.equal((SHELL.match(/<DashboardSidebar /g) ?? []).length, 1);
 });
 
 test('Studio-CSS bleibt im Inhalt und definiert keinen zweiten Dashboard-Rahmen', () => {
   const studio = read('components/socialmedia/studio.css');
-  assert.doesNotMatch(studio, /\.studio-shell|\.studio-navigation/);
+  assert.doesNotMatch(studio, /\.studio-shell/);
   assert.match(read('pages/SocialMediaAdmin.tsx'), /className="social-studio space-y-6"/);
 });
 

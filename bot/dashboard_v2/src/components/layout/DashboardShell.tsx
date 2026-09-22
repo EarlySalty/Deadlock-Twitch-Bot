@@ -17,7 +17,7 @@ export function DashboardShell({
   const withSidebar = !demoMode && showSidebar;
   return (
     <div className="relative min-h-screen bg-ui-root text-ui-text">
-      <div className="relative mx-auto max-w-[1680px] px-3 py-4 md:px-5 md:py-5 lg:px-6">
+      <div className="relative px-3 py-4 md:px-5 md:py-5 lg:px-6">
         {withSidebar ? (
           <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-5">
             <DashboardSidebar activeRoute={activeRoute} />

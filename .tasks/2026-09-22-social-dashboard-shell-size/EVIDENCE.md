@@ -19,3 +19,20 @@ Browser: gebautes Produktionsbundle gegen isolierte API-Fixtures, keine Produkti
 ## Integration / Live
 
 Noch nicht integriert oder deployed. Review-Gate und Live-Nachweis getrennt vom Implementierungsstand führen.
+
+## Ergänzung 2026-09-22, abends: Volle Breite und Gold-Navigation (Nutzer-Entscheid)
+
+Der Nutzer wollte die Breite von vor dem Redesign zurueck (REQ-07: volle Breite)
+und die farbliche Navigation behalten. Die 1680px-Kappe aus dem Vormittags-Fix
+kam erst mit dem Redesign (29dd9c2d) und ist entfernt; die Sidebar erhaelt auf
+der Social-Route den Studio-Farblayer (Gold-Aktivzustand, Inset-Balken), Flaeche
+und Geometrie bleiben mit Home/Uplink identisch.
+
+Geaendert: DashboardShell.tsx (Kappe raus), DashboardSidebar.tsx
+(studio-navigation-Klasse), studio.css (Farblayer), dashboardShell.test.ts und
+socialStudio.browser.test.mjs (Guard auf volle Breite, Geometrie ohne Kappe).
+
+Pruefungen: tsc+vite Exit 0, 44/44 fokussierte Unit-Tests, 20/20 Browser-Tests
+gegen Produktionsbundle mit isolierten API-Fixtures (playwright-core, System-
+Chrome), ESLint Exit 0. Messwerte und Screenshots in diesem Ordner, Stand
+21:32; 1920px: Sidebar x=24/240px, Main x=284/Breite 1612px.
