@@ -478,18 +478,3 @@
     transition: none !important;
   }
 }
-
-/*
- * Studio-Farblayer für die gemeinsame Sidebar auf der Social-Route:
- * Gold-Aktivzustand wie im Studio, ohne eigene Fläche oder Struktur.
- * Die Markenzeile bleibt im Workspace-Kopf.
- */
-.studio-navigation a[aria-current='page'] {
-  color: var(--color-primary);
-  background: var(--color-primary-soft);
-  box-shadow: inset 2px 0 var(--color-primary);
-  border-color: transparent;
-}
-.studio-navigation .sidebar-avatar-glow {
-  box-shadow: none;
-}

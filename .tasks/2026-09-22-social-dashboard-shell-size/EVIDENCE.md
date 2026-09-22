@@ -36,3 +36,11 @@ Pruefungen: tsc+vite Exit 0, 44/44 Unit-Tests in vier Shell- und Studio-Testdate
 gegen Produktionsbundle mit isolierten API-Fixtures (playwright-core, System-
 Chrome), ESLint Exit 0. Messwerte und Screenshots in diesem Ordner, Stand
 21:32; 1920px: Sidebar x=24/240px, Main x=284/Breite 1612px.
+
+## Ergänzung 2026-09-23: Marken-Farben der Sidebar global zurück
+
+Der Nutzer wollte das Redesign auf die Social-Media-Seite selbst begrenzt. Die gemeinsame Sidebar und der Shell-Hintergrund sind auf den Stand vor 29dd9c2d zurückgesetzt: panel-card mit card-glow, Gold-Aktivzustand mit Inset-Balken, gradient-accent-Avatar, Plan-Badge in Gold, Großbuchstaben-Gruppentitel. Der studio-navigation-Sonderfall aus f3ec187d ist entfernt; die Shell trägt wieder internal-home-vibe statt der ui-root-Fläche. Volle Breite und 240px-Spalte bleiben wie im Shell-Fix.
+
+Dabei entdeckte Falle: panel-card setzt ungeschichtet position:relative und überstimmt damit das geschichtete lg:sticky; lg:top-5 wirkte dann als relative Verschiebung und schob die Sidebar 20px nach unten. Sticky liegt jetzt auf dem Rise-Element, die Karte auf dem inneren Div, gemessen wieder bei top=20.
+
+Prüfungen: tsc+vite Exit 0, 51/51 fokussierte Unit-Tests, ESLint Exit 0, 21/21 Browser-Tests gegen das Produktionsbundle. Der Gold-Test prüft den Aktivzustand jetzt auf jeder Route gegen eine bg-primary/10-Referenzmessung, shell-geometry.json und Studio-Screenshots sind neu.

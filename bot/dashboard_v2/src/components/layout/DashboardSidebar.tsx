@@ -57,17 +57,17 @@ function SidebarLink({
   active?: boolean;
 }) {
   const activeClasses =
-    'border border-white/[0.08] bg-white/[0.08] text-white';
+    'border border-primary/25 bg-primary/10 text-primary lg:rounded-l-none lg:border-y-0 lg:border-r-0 lg:border-t-0 lg:border-l-2 lg:border-primary lg:pl-2.5';
   const inactiveClasses =
-    'border border-transparent text-ui-muted hover:bg-white/[0.05] hover:text-white';
+    'border border-transparent text-text-secondary hover:bg-white/5 hover:text-white';
 
   return (
     <a
       href={href}
       aria-current={active ? 'page' : undefined}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium no-underline transition-colors whitespace-nowrap lg:whitespace-normal ${active ? activeClasses : inactiveClasses}`}
+      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap lg:whitespace-normal ${active ? activeClasses : inactiveClasses}`}
     >
-      <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-ui-accent' : 'text-ui-faint'}`} />
+      <Icon className="h-4 w-4 shrink-0" />
       <span className="min-w-0 lg:break-words">{label}</span>
     </a>
   );
@@ -146,8 +146,8 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   ];
 
   return (
-    <Rise as="aside" className={`min-w-0 self-start rounded-2xl border border-white/[0.08] bg-ui-panel p-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] lg:sticky lg:top-5${activeRoute === 'social' ? ' studio-navigation' : ''}`}>
-      <div className="space-y-4">
+    <Rise as="aside" className="min-w-0 self-start lg:sticky lg:top-5">
+      <div className="panel-card card-glow space-y-4 rounded-2xl p-4">
         <div className="flex items-center gap-3">
           {shownAvatar ? (
             <img
@@ -157,7 +157,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
               className="sidebar-avatar-glow h-10 w-10 shrink-0 rounded-full border border-border object-cover"
             />
           ) : profileReady ? (
-            <div className="sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ui-accent-strong/15 text-sm font-semibold text-ui-accent-ink">
+            <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold">
               {displayName?.[0]?.toUpperCase() ?? '?'}
             </div>
           ) : (
@@ -168,16 +168,16 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
           )}
           <div data-tour-id="tour-plan" className="min-w-0">
             <div className="truncate text-sm font-semibold text-white">{displayName}</div>
-            <div className="mt-1 inline-flex max-w-full items-center rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-xs font-medium text-ui-faint">
+            <div className="mt-1 inline-flex max-w-full items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
               {planName}
             </div>
           </div>
         </div>
 
-        <div className="border-t border-white/[0.08]" />
+        <div className="border-t border-border" />
 
         <div className="space-y-2">
-          <div className="px-2 text-xs font-medium text-ui-faint">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
             Main
           </div>
           <nav
@@ -198,7 +198,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
         </div>
 
         <div className="space-y-2">
-          <div className="px-2 text-xs font-medium text-ui-faint">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
             Tools
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
@@ -217,9 +217,9 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
 
         {adminEligible ? (
           <>
-            <div className="border-t border-white/[0.08]" />
+            <div className="border-t border-border" />
             <div className="space-y-2">
-              <div className="px-2 text-xs font-medium text-ui-faint">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
                 Admin
               </div>
               <button
@@ -266,9 +266,9 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
           </>
         ) : null}
 
-        <div className="border-t border-white/[0.08]" />
+        <div className="border-t border-border" />
         <div data-tour-id="tour-help" className="space-y-2">
-          <div className="px-2 text-xs font-medium text-ui-faint">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
             Hilfe
           </div>
           <a

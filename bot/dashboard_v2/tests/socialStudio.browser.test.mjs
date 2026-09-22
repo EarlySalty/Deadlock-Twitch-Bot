@@ -636,20 +636,26 @@ test(
         await page.locator('.studio-clip').first().waitFor();
       }
     });
-    await t.test('Aktiver Sidebar-Punkt traegt Studio-Gold nur auf der Social-Route', async () => {
+    await t.test('Aktiver Sidebar-Punkt traegt das Marken-Gold auf jeder Route', async () => {
       const activeBackground = () =>
         page.locator('aside a[aria-current="page"]').evaluate((node) => getComputedStyle(node).backgroundColor);
+      const goldTint = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.className = 'bg-primary/10';
+        probe.style.display = 'none';
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      });
       await page.goto(base + '/social-media-admin?streamer=earlysalty');
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const social = await activeBackground();
-      assert.ok(
-        social.includes('197, 160, 89'),
-        'Gold-Aktivzustand erwartet, erhalten: ' + social,
-      );
+      assert.equal(social, goldTint, 'Gold-Aktivzustand erwartet, erhalten: ' + social);
       await page.goto(base + '/twitch/dashboard?streamer=earlysalty');
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const home = await activeBackground();
-      assert.notEqual(home, social, 'Home darf den Studio-Gold-Zustand nicht uebernehmen');
+      assert.equal(home, goldTint, 'Home traegt denselben Gold-Aktivzustand: ' + home);
       await page.goto(base + '/social-media-admin?streamer=earlysalty');
       await page.locator('.studio-clip').first().waitFor();
     });
