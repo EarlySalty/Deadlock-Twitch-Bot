@@ -28,6 +28,26 @@ function editablePlan(plan: PostingPlan): string {
   });
 }
 
+/** Alle schreibbaren Felder flach mit stabilem Schlüssel; Listen werden als
+ * JSON verglichen. Basis für die feldweise Konfliktprüfung. */
+function planeFelder(plan: PostingPlan): Record<string, string | number | boolean> {
+  const felder: Record<string, string | number | boolean> = {
+    approval_mode: plan.approval_mode,
+    timezone: plan.timezone,
+    subtitles_enabled: plan.subtitles_enabled,
+  };
+  for (const ziel of plan.platforms) {
+    felder[`platform.${ziel.platform}.auto_post`] = ziel.auto_post;
+    felder[`platform.${ziel.platform}.posts_per_week`] = ziel.posts_per_week;
+    felder[`platform.${ziel.platform}.max_posts_per_day`] = ziel.max_posts_per_day;
+    felder[`platform.${ziel.platform}.post_times`] = JSON.stringify(ziel.post_times);
+  }
+  for (const kategorie of plan.categories) {
+    felder[`category.${kategorie.category_key}.auto_post`] = kategorie.auto_post;
+  }
+  return felder;
+}
+
 /** Der bestehende Vertrag besitzt mehrere Schreibendpunkte. Fortschritte werden
  * einzeln bestätigt; bei Teilfehlern bleiben Entwurf und Serverstand getrennt. */
 export function PostingPlanDraft({
@@ -62,8 +82,23 @@ export function PostingPlanDraft({
   const effective = draft ?? plan;
   const dirty =
     inputDirty || Boolean(draft && baseline && editablePlan(draft) !== editablePlan(baseline));
+  // Konflikt nur, wenn der Fremde ein Feld verändert hat, das auch der
+  // Entwurf ändert und dabei weder Basis- noch Entwurfswert steht. Fremde
+  // Änderungen an unberührten Feldern blockieren den Retry nicht.
+  const basisFelder = draft && baseline ? planeFelder(baseline) : null;
+  const entwurfFelder = draft ? planeFelder(draft) : null;
+  const serverFelder = plan ? planeFelder(plan) : null;
   const conflict = Boolean(
-    !busy && dirty && plan && baseline && editablePlan(plan) !== editablePlan(baseline),
+    !busy &&
+      basisFelder &&
+      entwurfFelder &&
+      serverFelder &&
+      Object.keys(entwurfFelder).some(
+        (feld) =>
+          entwurfFelder[feld] !== basisFelder[feld] &&
+          serverFelder[feld] !== basisFelder[feld] &&
+          serverFelder[feld] !== entwurfFelder[feld],
+      ),
   );
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
