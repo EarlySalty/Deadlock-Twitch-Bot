@@ -1,14 +1,16 @@
 name: "Rust SQLx Check"
 
+# Auf PRs durch Required PR CI aufgerufen, damit jeder relevante Fehler
+# tatsächlich im finalen Required PR Gate landet.
 on:
-  pull_request:
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-sqlx-check.yml"
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   uplink-auth-tests:
@@ -21,33 +23,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-
       - name: Install PostgreSQL 16 host programs
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends postgresql-16
           /usr/lib/postgresql/16/bin/initdb --version
           /usr/lib/postgresql/16/bin/postgres --version
-
       - name: Cargo cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "rust"
-
-      # Diese Tests starten eigene begrenzte PostgreSQL-Prozesse auf privaten
-      # Unixsockets. Sie verwenden weder den Schema-Service noch dessen ENV.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Bestehende Tests starten isolierte PostgreSQL-Prozesse auf Unixsockets.
       - name: Auth transactions and callback races
         run: |
           cargo test --locked -j2 -p tb-raid --test auth_writer --test oauth_grant_consistency --test token_refresher --test background_token_refresh
           cargo test --locked -j2 -p tb-transport-twitch --lib user_token
           cargo test --locked -j2 -p tb-bot raid_oauth_impl::callback_tests
           cargo test --locked -j2 -p tb-internal-api handlers::raid_oauth::tests --lib
-
       - name: Titelbefehl und Dashboard-Schalter
         run: |
           cargo test --locked -j2 -p tb-chat title_command_toggle --lib
@@ -55,7 +54,6 @@ jobs:
           cargo test --locked -j2 -p tb-chat statistik_schalter --lib
           cargo test --locked -j2 -p tb-chat stat_commands --lib
           cargo test --locked -j2 -p tb-dashboard-api stat_command_settings --lib
-
       - name: Broker, Uplink disconnect and normal startup
         run: |
           cargo test --locked -j2 -p tb-dashboard-api handlers::platform_token::tests --lib
@@ -65,7 +63,6 @@ jobs:
           cargo check --locked -j2 -p tb-dashboard -p tb-bot
           cargo test --locked -j2 -p tb-dashboard-api handlers::auth_login::tests::callback_ --lib
           cargo run --locked -j2 -p tb-dashboard-api --example uplink_start_probe
-
       - name: Einrichtung, private Rückmeldungen und verifizierte Identitäten
         run: |
           cargo test --locked -j2 -p tb-db embedded_migration_versions_are_unique --lib
@@ -78,32 +75,36 @@ jobs:
   offline-build:
     name: "offline-build"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-
       - name: Build workspace from SQLx cache
-        run: cd rust && SQLX_OFFLINE=true cargo build --workspace --locked
+        working-directory: rust
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo build --workspace --locked
 
   schema-gate:
     name: "schema-gate"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     services:
       postgres:
         image: timescale/timescaledb:latest-pg16
         env:
           POSTGRES_USER: postgres
-          # Ephemerer CI-Service: passwortlos (trust) statt Wegwerf-Passwort —
-          # kein Secret im Repo, kein false-positive im Secret-Scan.
+          # Ausschließlich der wegwerfbare GitHub-Runner, keine Produktions-DB.
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: twitchbot_sqlx
         ports:
-          - "5432:5432"
+          - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U postgres -d twitchbot_sqlx"
           --health-interval 10s
@@ -111,22 +112,33 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+      TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+      TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-
+      - name: Install host PostgreSQL for isolated contract tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-16
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
-
       - name: Apply migrations
         run: cargo sqlx migrate run --source rust/migrations
-
       - name: Check SQLx offline cache
+        working-directory: rust
         env:
           SQLX_OFFLINE: "false"
-        run: cd rust && cargo sqlx prepare --workspace --check -- --workspace
+        run: cargo sqlx prepare --workspace --check -- --workspace
+      - name: Workspace library and binary tests
+        working-directory: rust
+        run: cargo test --workspace --lib --bins --locked -- --test-threads=2
+      - name: Fresh database and migration contracts (DSNs are mandatory above)
+        working-directory: rust
+        run: cargo test --locked -p tb-db --test fresh_migrations_schema --test hermetic -- --test-threads=1
