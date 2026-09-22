@@ -32,7 +32,7 @@ Geaendert: DashboardShell.tsx (Kappe raus), DashboardSidebar.tsx
 (studio-navigation-Klasse), studio.css (Farblayer), dashboardShell.test.ts und
 socialStudio.browser.test.mjs (Guard auf volle Breite, Geometrie ohne Kappe).
 
-Pruefungen: tsc+vite Exit 0, 44/44 fokussierte Unit-Tests, 20/20 Browser-Tests
+Pruefungen: tsc+vite Exit 0, 44/44 Unit-Tests in vier Shell- und Studio-Testdateien (dashboardShell, socialStudioRedesign, socialMediaContract, socialMediaLayout), 20/20 Browser-Tests
 gegen Produktionsbundle mit isolierten API-Fixtures (playwright-core, System-
 Chrome), ESLint Exit 0. Messwerte und Screenshots in diesem Ordner, Stand
 21:32; 1920px: Sidebar x=24/240px, Main x=284/Breite 1612px.

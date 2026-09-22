@@ -61,7 +61,7 @@ test('die Shell trägt Hintergrund, volle Breite, Sidebar-Spalte und den Main-Sl
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
 });
 
-test('Social Media nutzt dieselbe Shell und Navigation wie Home und Uplink', () => {
+test('Social Media nutzt dieselbe Shell wie Home und Uplink; die Sidebar trägt nur den Studio-Farblayer', () => {
   assert.doesNotMatch(SHELL, /activeRoute\s*===\s*['"]social['"]/);
   assert.doesNotMatch(SHELL, /studio-shell|social-studio/);
   assert.match(SIDEBAR, /studio-navigation/);
