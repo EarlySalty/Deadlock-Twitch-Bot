@@ -13,7 +13,7 @@ path = "src/bin/tb-config-inventory.rs"
 required-features = ["inventory"]
 
 [dependencies]
-syn = { version = "2", features = ["full", "visit"], optional = true }
+syn = { version = "3", features = ["full", "visit"], optional = true }
 proc-macro2 = { version = "1", features = ["span-locations"], optional = true }
 quote = { version = "1", optional = true }
 tb-error = { workspace = true }
