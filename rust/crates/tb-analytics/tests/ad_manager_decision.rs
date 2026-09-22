@@ -319,6 +319,9 @@ fn imminente_twitch_werbung_wird_im_match_sofort_verschoben() {
     value.next_ad_at = Some(value.now + Duration::seconds(30));
     value.steam_match_state = Some(steam_state(true, true));
     value.match_started_at = Some(value.now - Duration::seconds(5));
+    value.stream_started_at = Some(value.now - Duration::minutes(5));
+    value.last_first_chatter_at = Some(value.now - Duration::minutes(1));
+    value.plan_fit = "unprotectable";
     value.snooze_count = 1;
 
     assert_eq!(decide(&value).reason, "twitch_ad_moved");
