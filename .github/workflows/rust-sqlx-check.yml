@@ -41,6 +41,9 @@ jobs:
 
       # Diese Tests starten eigene begrenzte PostgreSQL-Prozesse auf privaten
       # Unixsockets. Sie verwenden weder den Schema-Service noch dessen ENV.
+      - name: Werbemanager Match Sperre
+        run: cargo test --locked -j2 -p tb-analytics --test ad_manager_decision
+
       - name: Auth transactions and callback races
         run: |
           cargo test --locked -j2 -p tb-raid --test auth_writer --test oauth_grant_consistency --test token_refresher --test background_token_refresh
@@ -55,9 +58,6 @@ jobs:
           cargo test --locked -j2 -p tb-chat statistik_schalter --lib
           cargo test --locked -j2 -p tb-chat stat_commands --lib
           cargo test --locked -j2 -p tb-dashboard-api stat_command_settings --lib
-
-      - name: Werbemanager Match Sperre
-        run: cargo test --locked -j2 -p tb-analytics --test ad_manager_decision
 
       - name: Broker, Uplink disconnect and normal startup
         run: |
