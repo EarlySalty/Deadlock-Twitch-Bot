@@ -146,7 +146,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   ];
 
   return (
-    <Rise as="aside" className="min-w-0 self-start rounded-2xl border border-white/[0.08] bg-ui-panel p-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] lg:sticky lg:top-5">
+    <Rise as="aside" className={`min-w-0 self-start rounded-2xl border border-white/[0.08] bg-ui-panel p-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] lg:sticky lg:top-5${activeRoute === 'social' ? ' studio-navigation' : ''}`}>
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           {shownAvatar ? (
