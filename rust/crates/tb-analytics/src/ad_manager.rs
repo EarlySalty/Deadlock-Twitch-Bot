@@ -591,6 +591,9 @@ fn chat_is_quiet(input: &DecisionInput) -> bool {
 
 fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> {
     let now = input.now;
+    if input.steam_match_state.as_ref().is_some_and(|s| s.in_match) {
+        return Some(("in_match", None));
+    }
     match input.stream_started_at {
         Some(start)
             if now
@@ -606,9 +609,6 @@ fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> 
         if now >= at && now.signed_duration_since(at) < Duration::minutes(FIRST_CHATTER_LOCK_MIN) {
             return Some(("recent_first_chatter", input.last_first_chatter.clone()));
         }
-    }
-    if input.steam_match_state.as_ref().is_some_and(|s| s.in_match) {
-        return Some(("in_match", None));
     }
     None
 }
