@@ -883,7 +883,8 @@ pub fn ad_hint(
         if matches!(
             decision.action,
             DecisionAction::Snooze | DecisionAction::Commercial { .. }
-        ) {
+        ) || decision.reason == "in_match"
+        {
             return None;
         }
         return Some(AdHint {
