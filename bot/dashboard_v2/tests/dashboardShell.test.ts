@@ -62,6 +62,19 @@ test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Sl
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
 });
 
+test('Social Media nutzt dieselbe Shell und Navigation wie Home und Uplink', () => {
+  assert.doesNotMatch(SHELL, /activeRoute\s*===\s*['"]social['"]/);
+  assert.doesNotMatch(SHELL, /studio-shell|social-studio/);
+  assert.doesNotMatch(SIDEBAR, /studio-navigation|studioMenuOpen|studio-brand/);
+  assert.equal((SHELL.match(/<DashboardSidebar /g) ?? []).length, 1);
+});
+
+test('Studio-CSS bleibt im Inhalt und definiert keinen zweiten Dashboard-Rahmen', () => {
+  const studio = read('components/socialmedia/studio.css');
+  assert.doesNotMatch(studio, /\.studio-shell|\.studio-navigation/);
+  assert.match(read('pages/SocialMediaAdmin.tsx'), /className="social-studio space-y-6"/);
+});
+
 test('der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto', () => {
   assert.match(HOOK, /const isAuthenticated = authStatus\?\.authenticated === true;/);
   assert.match(HOOK, /const isLocalhostAdmin = Boolean\(authStatus\?\.isLocalhost\);/);

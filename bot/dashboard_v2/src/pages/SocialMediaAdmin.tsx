@@ -153,14 +153,20 @@ export function SocialMediaAdminDashboard() {
   };
 
   return (
-    <>
-      <div className="border-b border-border py-4">
+    <div className="social-studio space-y-6">
+      <div className="border-b border-border pb-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-ui-faint">{t('Arbeitsbereich')}</p>
-            <p className="mt-0.5 truncate text-sm font-medium text-ui-text-soft">
-              {isAdminView ? t('Kanal auswählen und verwalten') : t('Dein Kanal')}
-            </p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
+            <a className="studio-brand" href="/twitch/verwaltung">
+              <img src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`} alt="" />
+              <span>Deutsche Deadlock<strong>Community</strong></span>
+            </a>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-ui-faint">{t('Arbeitsbereich')}</p>
+              <p className="mt-0.5 text-sm font-medium text-ui-text-soft">
+                {isAdminView ? t('Kanal auswählen und verwalten') : t('Dein Kanal')}
+              </p>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {isAdminView && streamer && (
@@ -244,6 +250,6 @@ export function SocialMediaAdminDashboard() {
         {!loadingStreamers && streamers.length === 0 && authStatus?.isAdmin && (
           <div className="mt-4 text-xs text-text-secondary">{t('Keine Streamer gefunden.')}</div>
         )}
-    </>
+    </div>
   );
 }

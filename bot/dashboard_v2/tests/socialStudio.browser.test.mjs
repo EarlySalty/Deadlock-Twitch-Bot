@@ -51,7 +51,7 @@ if (!brandFontDir)
   );
 
 const dist = path.resolve(import.meta.dirname, '../../analytics/dashboard_v2/dist');
-const evidence = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-21-social-studio');
+const evidence = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-22-social-dashboard-shell-size/browser');
 const layout = {
   version: 1,
   source: { width: 1920, height: 1080 },
@@ -270,6 +270,23 @@ test(
           hashtags_instagram: [],
           transcript_segments: [],
         });
+      if (p === '/twitch/api/v2/internal-home') return json({
+        profile: { twitch_login: streamer, twitch_user_id: '42', display_name: streamer },
+        status: { authenticated: true, streamer_bound: true, period_days: 30,
+          oauth: { connected: true, status: 'connected', granted_scopes: [], missing_scopes: [] },
+          discord: { connected: true }, raid_status: { state: 'active' },
+          partner: { status: 'active' }, access: { landing: true, analytics: true } },
+        kpis: { streams_count: 0, avg_viewers: 0, follower_delta: 0, bot_bans_keyword_count: 0 },
+        recent_streams: [], last_stream_summary: null, health_score: null,
+        week_comparison: null, live_status: null, bot_impact: { events: [], summary: {} },
+        bot_activity: { events: [] }, links: {}, changelog: { entries: [] },
+      });
+      if (p === '/twitch/api/v2/uplink/me') return json({
+        enabled: false, waitlisted: false, ingest_key: '', service_status: 'ready',
+        live_status: 'aus', session: null, reconnect_wait_s: 0, reconnect_wait_max_s: 300,
+        verbindungen: [],
+      });
+      if (p.startsWith('/twitch/api/v2/uplink/')) return json([]);
       if (p.includes('/api/')) return json({ items: [], total: 0 });
       try {
         let file;
@@ -340,6 +357,40 @@ test(
         assert.ok(await page.evaluate(() => document.fonts.check('14px "Studio Manrope"')));
       },
     );
+    await t.test('gemeinsamer Rahmen: 1680px, 240px Navigation und gleiche Abstände', async () => {
+      for (const width of [1024, 1280, 1440, 1920, 2560]) {
+        await page.setViewportSize({ width, height: 1080 });
+        const geometry = await page.evaluate(() => {
+          const main = document.querySelector('main').getBoundingClientRect();
+          const sidebar = document.querySelector('aside').getBoundingClientRect();
+          return { mainX: main.x, mainWidth: main.width, sidebarX: sidebar.x, sidebarWidth: sidebar.width, top: sidebar.y };
+        });
+        const left = Math.max(0, (width - 1680) / 2) + 24;
+        assert.equal(geometry.sidebarWidth, 240, JSON.stringify({ width, geometry }));
+        assert.equal(geometry.sidebarX, left);
+        assert.equal(geometry.mainX, left + 240 + 20);
+        assert.equal(geometry.mainWidth, Math.min(width, 1680) - 48 - 240 - 20);
+        assert.equal(geometry.top, 20);
+        assert.equal(await page.getByRole('button', { name: 'Menü', exact: true }).count(), 0);
+      }
+      await page.setViewportSize({ width: 1440, height: 1080 });
+    });
+    await t.test('Listen- und Kartenansicht zeigen die aktive Auswahl sichtbar an', async () => {
+      const list = page.getByRole('button', { name: 'Listenansicht', exact: true });
+      const grid = page.getByRole('button', { name: 'Kartenansicht', exact: true });
+      const background = (button) => button.evaluate((node) => getComputedStyle(node).backgroundColor);
+      assert.notEqual(await background(list), await background(grid));
+      await grid.click();
+      assert.equal(await grid.getAttribute('aria-pressed'), 'true');
+      assert.notEqual(await background(list), await background(grid));
+      await list.click();
+    });
+    await t.test('Kennzahlen und Vorratshinweis kleben nicht aneinander', async () => {
+      const gap = await page.locator('.studio-metrics').evaluate((node) =>
+        node.nextElementSibling.getBoundingClientRect().top - node.getBoundingClientRect().bottom,
+      );
+      assert.ok(gap >= 12, 'Abstand: ' + gap);
+    });
     await t.test('Suche erreicht Seite 2 und Freigabe sendet Plattformen', async () => {
       await page.getByRole('searchbox').fill('Letzte Seite');
       assert.equal(await page.locator('.studio-clip').count(), 1);
@@ -509,10 +560,10 @@ test(
       },
     );
     await t.test(
-      'Bereiche bleiben bei 320, 390, 768 und 1440 Pixel ohne Seitenüberlauf',
+      'Alle Bereiche bleiben von 320 bis 2560 Pixel ohne Seitenüberlauf',
       async () => {
         await fs.mkdir(evidence, { recursive: true });
-        for (const width of [320, 390, 768, 1440]) {
+        for (const width of [320, 390, 768, 1024, 1280, 1440, 1920, 2560]) {
           await page.setViewportSize({ width, height: 1080 });
           for (const name of [
             'Pipeline',
@@ -535,6 +586,82 @@ test(
         await page.screenshot({ path: path.join(evidence, 'studio-autopilot.png') });
       },
     );
+    await t.test('Karten und Aktionsmenüs passen auch neben die gemeinsame Sidebar', async () => {
+      await tab('Pipeline').click();
+      for (const width of [320, 390, 768, 1024, 1280, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const view of ['Listenansicht', 'Kartenansicht']) {
+          await page.getByRole('button', { name: view, exact: true }).click();
+          const card = page.locator('.studio-clip').first();
+          const bounds = await card.boundingBox();
+          const actions = await card.locator('.studio-clip-actions').boundingBox();
+          assert.ok(actions.x >= bounds.x && actions.x + actions.width <= bounds.x + bounds.width + 1);
+          await card.getByLabel('Weitere Aktionen').click();
+          const menuBounds = await card.locator('.studio-menu').boundingBox();
+          assert.ok(menuBounds.x >= 0 && menuBounds.x + menuBounds.width <= width + 1, view + ' @ ' + width);
+          await page.keyboard.press('Escape');
+          assert.ok(await card.locator('summary').evaluate(node => node === document.activeElement));
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+          assert.equal(overflow, 0, view + ' @ ' + width);
+        }
+      }
+      await page.getByRole('button', { name: 'Listenansicht', exact: true }).click();
+    });
+    await t.test('Home, Uplink und Social Media behalten identische Rahmengeometrie und Sidebar-Stile', async () => {
+      const measurements = [];
+      try {
+        for (const width of [390, 1024, 1440, 1920]) {
+          await page.setViewportSize({ width, height: 1080 });
+          let reference;
+          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty']) {
+            await page.goto(base + route);
+            await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            const geometry = await page.evaluate(() => {
+              const sidebar = document.querySelector('aside');
+              const main = document.querySelector('main').getBoundingClientRect();
+              const box = sidebar.getBoundingClientRect();
+              const style = getComputedStyle(sidebar);
+              return { x: box.x, y: box.y, width: box.width, mainX: main.x, mainWidth: main.width,
+                font: style.fontFamily, padding: style.padding, background: style.backgroundColor, borderRadius: style.borderRadius };
+            });
+            measurements.push({ viewportWidth: width, route, ...geometry });
+            if (!reference) reference = geometry;
+            else assert.deepEqual(geometry, reference, route + ' @ ' + width);
+          }
+        }
+      } finally {
+        await fs.writeFile(path.join(evidence, 'shell-geometry.json'), JSON.stringify(measurements, null, 2));
+        await page.goto(base + '/social-media-admin?streamer=earlysalty');
+        await page.locator('.studio-clip').first().waitFor();
+      }
+    });
+    await t.test('Lange Clip-Titel lassen mobile Dialoge und Schließen erreichbar', async () => {
+      const previousTitle = clips.earlysalty[0].title;
+      clips.earlysalty[0].title = 'SehrLangerClipTitel'.repeat(30);
+      try {
+        for (const width of [320, 390]) {
+          await page.setViewportSize({ width, height: 600 });
+          await page.reload();
+          const card = page.locator('.studio-clip').first();
+          await card.waitFor();
+          await card.getByLabel('Weitere Aktionen').click();
+          await page.getByRole('button', { name: 'Layout anpassen', exact: true }).click();
+          const dialog = page.getByRole('dialog');
+          await dialog.waitFor();
+          const bounds = await dialog.boundingBox();
+          const content = await dialog.locator('.studio-dialog-content').boundingBox();
+          assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
+          assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 600);
+          assert.ok(content.height > 0 && content.y + content.height <= bounds.y + bounds.height);
+          await dialog.locator('header').getByRole('button', { name: 'Schließen', exact: true }).click();
+          await dialog.waitFor({ state: 'detached' });
+        }
+      } finally {
+        clips.earlysalty[0].title = previousTitle;
+        await page.setViewportSize({ width: 1440, height: 1080 });
+      }
+    });
     await t.test('Fehlgeschlagene Pipeline wird nicht als leerer Bestand angezeigt', async () => {
       failQueue = true;
       await page.reload();
