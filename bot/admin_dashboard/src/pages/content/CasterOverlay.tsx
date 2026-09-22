@@ -350,7 +350,7 @@ export default function CasterOverlayPage() {
           <section className="panel-card space-y-4 rounded-2xl p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold text-white">Layout & Live-Vorschau</h2>
+                <h2 className="text-lg font-semibold text-white">Layout &amp; Live-Vorschau</h2>
                 <p className="mt-1 text-sm text-white/60">Die OBS-Adresse bleibt für alle Layouts identisch.</p>
               </div>
               <span className={`rounded-full px-3 py-1 text-sm ${dirty ? 'bg-amber-400/15 text-amber-200' : 'bg-emerald-400/15 text-emerald-200'}`}>
@@ -427,7 +427,7 @@ export default function CasterOverlayPage() {
 
           <section className="panel-card space-y-4 rounded-2xl p-5">
             <div>
-              <h2 className="text-lg font-semibold text-white">Teams & Player</h2>
+              <h2 className="text-lg font-semibold text-white">Teams &amp; Player</h2>
               <p className="mt-1 text-sm text-white/60">
                 Teamnamen und aktive Spieler kommen aus der Turnierverwaltung; Steam-IDs werden über die vorhandenen verknüpften Steam-Konten ergänzt. Bench-Spieler werden im Admin angezeigt, aber nicht als aktives Line-up ins Overlay übernommen.
               </p>
@@ -492,7 +492,7 @@ export default function CasterOverlayPage() {
 
           <section className="panel-card space-y-4 rounded-2xl p-5">
             <div>
-              <h2 className="text-lg font-semibold text-white">Caster & Kamera-Zuordnung</h2>
+              <h2 className="text-lg font-semibold text-white">Caster &amp; Kamera-Zuordnung</h2>
               <p className="mt-1 text-sm text-white/60">
                 Ein verknüpftes Twitch-Konto setzt Anzeigename und Handle als Default. Die Werte bleiben danach überschreibbar.
               </p>

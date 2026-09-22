@@ -230,7 +230,7 @@ fi
 
 say ""
 if [ "$FAILED" -ne 0 ]; then
-  say "Push gestoppt: Secrets oder RustSec. Remote-GitHub bleibt wöchentlich."
+  say "Push gestoppt: Eine blockierende lokale Prüfung ist fehlgeschlagen. Der Required PR Gate bleibt zusätzlich maßgeblich."
   exit 1
 fi
 if [ "$WARNED" -ne 0 ]; then

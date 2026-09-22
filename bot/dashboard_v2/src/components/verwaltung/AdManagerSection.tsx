@@ -655,7 +655,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       <div className="mt-5">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-lg font-bold text-white">Strategie</h3>
-          <p className="text-xs text-text-secondary">Empfohlen: Match schützen & Queue nutzen</p>
+          <p className="text-xs text-text-secondary">Empfohlen: Match schützen &amp; Queue nutzen</p>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           {STRATEGIES.map((strategy) => {
@@ -823,7 +823,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </p>
         {smartFieldsDisabled ? (
           <p className="mt-1.5 text-[11px] text-text-secondary">
-            Abstand, Startschutz und Chat-Ruhe gelten nur für „Match schützen & Queue nutzen“.
+            Abstand, Startschutz und Chat-Ruhe gelten nur für „Match schützen &amp; Queue nutzen“.
           </p>
         ) : null}
       </details>

@@ -103,16 +103,28 @@ jobs:
             --config p/github-actions \
             --config p/javascript \
             --config p/python \
-            --metrics=off --disable-version-check \
+            --metrics=off --disable-version-check --jobs 2 --timeout 60 \
             --severity ERROR --error --strict \
             --sarif --output semgrep-pr.sarif
+      - name: Rust SAST (WARNING and ERROR findings block)
+        if: ${{ !cancelled() }}
+        # The Rust pack currently has no ERROR-level native Rust rules.
+        # WARNING covers disabled TLS verification and insecure hashes;
+        # INFO-only inventories of CLI arguments/tempdirs are not vulnerabilities.
+        run: |
+          semgrep scan --config p/rust --include '*.rs' \
+            --metrics=off --disable-version-check --jobs 2 --timeout 60 \
+            --severity WARNING --severity ERROR --error --strict \
+            --sarif --output semgrep-rust-pr.sarif
       - name: Preserve SAST evidence
         if: always()
         continue-on-error: true # Reporting only; the scanner above remains blocking.
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep-pr-report
-          path: semgrep-pr.sarif
+          path: |
+            semgrep-pr.sarif
+            semgrep-rust-pr.sarif
           if-no-files-found: warn
           retention-days: 14
 
@@ -154,12 +166,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install actionlint
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
-        with:
-          tool: actionlint@1.7.12
+      - name: Install checksum-pinned actionlint 1.7.12
+        # Dieser Go-Validator wird von install-action nicht unterstützt.
+        # Vollständig gepinntes offizielles Release, kein curl-pipe-shell.
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint.tar.gz"
+          printf '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  %s\n' "$RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/actionlint.tar.gz" --directory "$RUNNER_TEMP" actionlint
       - name: Validate workflow syntax, expressions and shell
-        run: actionlint
+        run: '"$RUNNER_TEMP/actionlint"'
       - name: zizmor (fail on HIGH findings without Code Scanning dependency)
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:

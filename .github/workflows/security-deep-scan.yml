@@ -169,13 +169,19 @@ jobs:
     if: always()
     steps:
       - name: Create summary
+        env:
+          TRIVY_RESULT: ${{ needs.trivy-scan.result }}
+          SCORECARD_RESULT: ${{ needs.security-scorecard.result }}
+          OSV_RESULT: ${{ needs.osv-scan.result }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          ZIZMOR_RESULT: ${{ needs.zizmor.result }}
         run: |
           {
             echo "# Security Analysis Summary"
             echo ""
-            echo "- Trivy: ${{ needs.trivy-scan.result }}"
-            echo "- OSSF Scorecard: ${{ needs.security-scorecard.result }}"
-            echo "- OSV Scanner: ${{ needs.osv-scan.result }}"
-            echo "- Semgrep: ${{ needs.semgrep.result }}"
-            echo "- zizmor: ${{ needs.zizmor.result }}"
+            echo "- Trivy: $TRIVY_RESULT"
+            echo "- OSSF Scorecard: $SCORECARD_RESULT"
+            echo "- OSV Scanner: $OSV_RESULT"
+            echo "- Semgrep: $SEMGREP_RESULT"
+            echo "- zizmor: $ZIZMOR_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"

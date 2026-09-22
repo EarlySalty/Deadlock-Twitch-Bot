@@ -342,7 +342,7 @@ export function StreamerDetailPage() {
 
       <section className="grid gap-5 xl:grid-cols-2">
         <article className="panel-card rounded-[1.8rem] p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Verifizierung & Lifecycle</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Verifizierung &amp; Lifecycle</p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <label className="text-sm text-text-secondary">
               Verifizierungsmodus
@@ -486,7 +486,7 @@ export function StreamerDetailPage() {
 
       <section className="grid gap-5 xl:grid-cols-2">
         <article className="panel-card rounded-[1.8rem] p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Raid OAuth & Scopes</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Raid OAuth &amp; Scopes</p>
           <div className="mt-4 flex flex-wrap gap-2">
             <StatusBadge status={oauthStatus} />
             {oauthNeedsReauth ? <StatusBadge status="reauth-needed" /> : null}
