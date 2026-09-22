@@ -23,16 +23,15 @@
   --color-ui-text-soft: var(--color-text-primary);
   --color-ui-muted: var(--color-text-secondary);
   --color-ui-faint: var(--color-text-secondary);
-  --color-ui-accent: var(--color-primary);
+  /* Stark bleibt im Studio auf Antik-Gold gepinnt; global zeigt die starke
+     Variante auf das hellere Messing. Akzent, Tinte und Violett deckt das
+     globale Theme inzwischen identisch ab. */
   --color-ui-accent-strong: var(--color-primary);
-  --color-ui-accent-ink: var(--color-accent-hover);
   --color-ui-success: var(--color-success);
   --color-ui-success-soft: var(--color-success);
   --color-ui-warning: var(--color-warning);
   --color-ui-danger: var(--color-danger);
   --color-ui-danger-soft: var(--color-danger);
-  --color-ui-violet: var(--color-accent);
-  --color-ui-violet-soft: var(--color-accent-hover);
   --font-sans: 'Studio Manrope', 'Manrope', 'Inter', 'Segoe UI', sans-serif;
   --font-display: 'Studio Sora', 'Sora', 'Manrope', 'Inter', sans-serif;
   color: var(--color-text-primary);

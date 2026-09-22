@@ -103,3 +103,31 @@ test('Abbruch stoppt weitere Seitenabfragen', async () => {
     ),
   );
 });
+
+test('Pagination-Verschiebung: neuer Clip zwischen zwei Abrufen bricht die Ansicht nicht ab', async () => {
+  // 101 Clips, Seitengroesse 100. Zwischen Seite 1 und 2 kommt Clip 0 dazu:
+  // alles rueckt um eine Position, Seite 2 liefert c100 erneut plus c101.
+  const bestand = Array.from({ length: 101 }, (_, i) => clip(i + 1));
+  const calls: number[] = [];
+  const data = await loadQueueSnapshot(async (page) => {
+    calls.push(page);
+    if (page === 1) return { items: bestand.slice(0, 100), total: 101, page, page_size: 100 };
+    return { items: [clip(100), clip(101)], total: 102, page, page_size: 100 };
+  });
+  assert.deepEqual(calls, [1, 2]);
+  assert.equal(data.items.length, 101);
+  assert.equal(data.total, 102);
+});
+
+test('volle Seite ohne Fortschritt startet die Bestandsabfrage neu statt abzubrechen', async () => {
+  const calls: number[] = [];
+  const data = await loadQueueSnapshot(async (page) => {
+    calls.push(page);
+    if (page === 1 && calls.length < 3)
+      return { items: [clip(1), clip(2)], total: 4, page, page_size: 2 };
+    if (page === 2) return { items: [clip(1), clip(2)], total: 4, page, page_size: 2 };
+    return { items: [clip(3), clip(4)], total: 4, page, page_size: 2 };
+  });
+  assert.deepEqual(calls, [1, 2, 1]);
+  assert.equal(data.items.length, 4);
+});

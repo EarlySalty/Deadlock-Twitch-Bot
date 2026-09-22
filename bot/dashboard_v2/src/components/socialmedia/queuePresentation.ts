@@ -56,27 +56,37 @@ export function filterQueue(
   );
 }
 
-/** Vollständiger, kanalgebundener Bestand. Ein Abbruch oder eine verschobene
- * Pagination liefert einen Fehler statt irreführend kleiner Kennzahlen. */
+/** Vollständiger, kanalgebundener Bestand. Kommt zwischen zwei Seitenabrufen
+ * ein Clip dazu, verschieben sich die Offset-Seiten: Überlappungen und ein
+ * gewachsenes total werden über Dedup nach clip_db_id toleriert, statt die
+ * Ansicht abzubrechen. Abgebrochen wird erst, wenn eine Seite leer bleibt,
+ * eine volle Seite keinen einzigen neuen Clip bringt (auch nach einem
+ * Neuanlauf ab Seite 1) oder der 200-Seiten-Rahmen gesprengt wird. */
 export async function loadQueueSnapshot(
   loadPage: (page: number) => Promise<ClipListResponseMitPosting>,
   signal?: AbortSignal,
 ): Promise<ClipListResponseMitPosting> {
   const items = new Map<number, SocialClipMitPosting>();
   let total = 0;
+  let restarts = 0;
   for (let page = 1; page <= 200; page += 1) {
     signal?.throwIfAborted();
     const result = await loadPage(page);
     signal?.throwIfAborted();
-    if (page === 1) total = result.total;
-    if (!Number.isSafeInteger(total) || total < 0 || result.total !== total)
-      throw new Error('queue_changed');
+    total = Math.max(total, result.total);
     const previous = items.size;
     for (const clip of result.items) items.set(clip.clip_db_id, clip);
-    if (items.size === total)
+    if (items.size >= total)
       return { items: [...items.values()], total, page: 1, page_size: total };
-    if (items.size === previous || items.size > total || result.items.length < result.page_size)
-      throw new Error('queue_changed');
+    if (result.items.length === 0) throw new Error('queue_changed');
+    if (result.items.length < result.page_size)
+      return { items: [...items.values()], total, page: 1, page_size: total };
+    if (items.size > previous) continue;
+    // Volle Seite ohne Fortschritt: die Offset-Seiten sind am Bestand
+    // vorbeigerutscht. Ein Neuanlauf ab Seite 1 verankert sie neu.
+    if (restarts >= 1) throw new Error('queue_changed');
+    restarts += 1;
+    page = 0;
   }
   throw new Error('queue_too_large');
 }

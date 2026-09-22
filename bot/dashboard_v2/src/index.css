@@ -28,16 +28,19 @@
   --color-ui-text-soft: rgb(212 212 216);
   --color-ui-muted: rgb(161 161 170);
   --color-ui-faint: rgb(113 113 122);
-  --color-ui-accent: rgb(165 180 252);
-  --color-ui-accent-strong: rgb(129 140 248);
-  --color-ui-accent-ink: rgb(199 210 254);
+  /* ui-Akzent auf den Markenmetallen: die gemeinsame Seitenleiste nutzt
+     text-ui-accent/bg-ui-accent-strong auf allen Routen, Indigo bliebe ausserhalb
+     des Studios ein Markenbruch. */
+  --color-ui-accent: var(--color-primary);
+  --color-ui-accent-strong: var(--color-accent-hover);
+  --color-ui-accent-ink: var(--color-accent-hover);
   --color-ui-success: rgb(110 231 183);
   --color-ui-success-soft: rgb(167 243 208);
   --color-ui-warning: rgb(252 211 77);
   --color-ui-danger: rgb(252 165 165);
   --color-ui-danger-soft: rgb(254 202 202);
-  --color-ui-violet: rgb(196 181 253);
-  --color-ui-violet-soft: rgb(221 214 254);
+  --color-ui-violet: var(--color-accent);
+  --color-ui-violet-soft: var(--color-accent-hover);
   --color-card-hover: rgb(30, 30, 30);
   --color-primary: #C5A059;
   --color-primary-hover: #E6C78F;

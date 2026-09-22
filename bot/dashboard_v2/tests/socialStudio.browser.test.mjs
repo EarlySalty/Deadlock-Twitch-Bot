@@ -1,9 +1,54 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import test from 'node:test';
 const { chromium } = await import(process.env.STUDIO_PLAYWRIGHT_MODULE ?? 'playwright-core');
+
+function firstExisting(options) {
+  return options.filter(Boolean).find((option) => existsSync(option));
+}
+
+/** Neueste Chromium-Binaerdatei aus dem Playwright-Cache, falls installiert. */
+function findPlaywrightChromium() {
+  const cache = path.join(process.env.HOME ?? '', '.cache', 'ms-playwright');
+  try {
+    const versions = readdirSync(cache)
+      .filter((entry) => entry.startsWith('chromium-'))
+      .sort()
+      .reverse();
+    for (const version of versions)
+      for (const binary of ['chrome-linux64/chrome', 'chrome-linux/chrome']) {
+        const candidate = path.join(cache, version, binary);
+        if (existsSync(candidate)) return candidate;
+      }
+  } catch {
+    // Cache fehlt oder ist unlesbar: die Pruefung unten meldet das klar.
+  }
+  return undefined;
+}
+
+const chromiumPath = firstExisting([
+  process.env.CHROMIUM_PATH,
+  process.env.STUDIO_BROWSER,
+  findPlaywrightChromium(),
+]);
+if (!chromiumPath)
+  throw new Error(
+    'Kein Chromium gefunden: CHROMIUM_PATH auf die Chrome-Binaerdatei setzen oder Playwright-Browser installieren (npx playwright install chromium).',
+  );
+
+// dl-brand-Fonts: ENV, Schwester-Repo des Checkouts, Heimat-Verzeichnis.
+const brandFontDir = firstExisting([
+  process.env.BRAND_FONTS_DIR,
+  path.resolve(import.meta.dirname, '../../../../Website/dl-brand/fonts'),
+  path.join(process.env.HOME ?? '', 'repos/Website/dl-brand/fonts'),
+]);
+if (!brandFontDir)
+  throw new Error(
+    'dl-brand-Fonts nicht gefunden: BRAND_FONTS_DIR auf das dl-brand/fonts-Verzeichnis setzen.',
+  );
 
 const dist = path.resolve(import.meta.dirname, '../../analytics/dashboard_v2/dist');
 const evidence = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-21-social-studio');
@@ -228,8 +273,7 @@ test(
       if (p.includes('/api/')) return json({ items: [], total: 0 });
       try {
         let file;
-        if (p.startsWith('/brand/fonts/'))
-          file = '/home/nathanael/repos/Website/dl-brand/fonts/' + path.basename(p);
+        if (p.startsWith('/brand/fonts/')) file = path.join(brandFontDir, path.basename(p));
         else if (p.startsWith('/twitch/dashboard-v2/'))
           file = path.join(dist, p.slice('/twitch/dashboard-v2/'.length));
         else file = path.join(dist, 'index.html');
@@ -254,9 +298,7 @@ test(
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
     const browser = await chromium.launch({
-      executablePath:
-        process.env.STUDIO_BROWSER ??
-        '/home/nathanael/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome',
+      executablePath: chromiumPath,
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
     });
