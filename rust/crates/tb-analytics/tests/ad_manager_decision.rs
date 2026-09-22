@@ -514,6 +514,20 @@ fn kein_hinweis_wenn_der_bot_die_twitch_werbung_verschiebt() {
 }
 
 #[test]
+fn kein_hinweis_wenn_twitch_werbung_im_match_nicht_verschiebbar_ist() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = Some(now() + Duration::seconds(30));
+    input.steam_match_state = Some(steam_state(true, true));
+    input.match_started_at = Some(now() - Duration::seconds(5));
+    input.snooze_count = 0;
+
+    let decision = decide(&input);
+    assert_eq!(decision.reason, "in_match");
+    assert_eq!(decision.action, DecisionAction::Postpone);
+    assert_eq!(ad_hint(&input, &decision, Some(90), HINT_WINDOW_SECS), None);
+}
+
+#[test]
 fn kein_hinweis_wenn_die_werbung_noch_zu_weit_weg_ist() {
     let mut input = base(Strategy::Smart);
     input.next_ad_at = None;
