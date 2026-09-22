@@ -390,6 +390,32 @@ test(
       assert.equal(plans.earlysalty.platforms[1].max_posts_per_day, 2);
     });
     await t.test(
+      'Retry nach fehlgeschlagenem Schreiben lässt fremde Felder unberührt',
+      async () => {
+        await page.getByLabel('Posts pro Woche', { exact: true }).nth(1).fill('6');
+        // Fremder Akteur ändert ein Feld, das der Entwurf nicht berührt, bevor
+        // der Fehlerpfad neu liest.
+        plans.earlysalty.platforms[0].max_posts_per_day = 7;
+        failTarget = '/platform/tiktok';
+        const vor = writes.length;
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText(/Speichern fehlgeschlagen/).waitFor();
+        failTarget = '';
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+        const zielSchreibungen = writes
+          .slice(vor)
+          .filter((w) => /\/settings\/posting-plan\/platform\//.test(w.p))
+          .map((w) => w.p.split('/').at(-1));
+        assert.deepEqual(zielSchreibungen, ['tiktok', 'tiktok']);
+        assert.deepEqual(writes.findLast((w) => w.p.endsWith('/platform/tiktok')).input, {
+          posts_per_week: 6,
+        });
+        assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 7);
+        assert.equal(plans.earlysalty.platforms[1].posts_per_week, 6);
+      },
+    );
+    await t.test(
       'Abschalten der Vollautomatik wird vor den Zielen wirksam und übersteht Teilfehler',
       async () => {
         plans.earlysalty.approval_mode = 'full_auto';

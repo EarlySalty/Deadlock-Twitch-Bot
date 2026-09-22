@@ -131,14 +131,13 @@ export function PostingPlanDraft({
     setBusy(true);
     setMessage(null);
     setFailed(false);
-    // Feste Ausgangsbasis: Nur Felder, die der Entwurf gegenüber dieser Basis
-    // ändert, werden geschrieben. Antworten zwischenzeitlicher fremder
-    // Änderungen dürfen keine Rückschreibung unveränderter Felder auslösen.
-    const base = plan;
-    let latest = plan;
+    // Feste Ausgangsbasis dieses Entwurfszyklus: Nur Felder, die der Entwurf
+    // gegenüber dieser Basis ändert, werden geschrieben. Die Basis übersteht
+    // den Neustart im Fehlerpfad, damit ein Retry fremde Änderungen an
+    // unberührten Feldern nicht mit dem alten Entwurf überschreibt.
+    const base = draft && baseline ? baseline : plan;
     let completed = 0;
     const accept = (next: PostingPlan) => {
-      latest = next;
       completed += 1;
       onSaved(next);
     };
@@ -195,13 +194,15 @@ export function PostingPlanDraft({
     } catch (error) {
       // Nach einem Netzabbruch kann die letzte Änderung trotzdem gespeichert
       // sein. Neu lesen, aber den gewünschten Entwurf nicht überschreiben.
+      // Die Basis des Zyklus bleibt dabei stehen: Der Retry difft weiter
+      // gegen sie, fremde Änderungen an unberührten Feldern fließen nicht
+      // in den erneuten Schreibaufruf. Berührt der Fremde ein Entwurfsfeld,
+      // greift stattdessen der Konflikt-Pfad.
       try {
-        latest = await fetchPostingPlan(streamer);
-        onSaved(latest);
+        onSaved(await fetchPostingPlan(streamer));
       } catch {
         setNeedsRefresh(true);
       }
-      setBaseline(latest);
       setDraft(effective);
       setFailed(true);
       setMessage(
@@ -219,7 +220,6 @@ export function PostingPlanDraft({
     try {
       const current = await fetchPostingPlan(streamer);
       onSaved(current);
-      setBaseline(current);
       setNeedsRefresh(false);
       setMessage(null);
     } catch {
