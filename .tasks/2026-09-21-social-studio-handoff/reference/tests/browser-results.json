@@ -1,0 +1,20 @@
+{
+  "passed": 13,
+  "checks": [
+    "Desktop: 3 review cards, no horizontal overflow",
+    "Compiled brand: neutral black, gold actions with dark text, authentic sidebar logo",
+    "Approval moves one clip into scheduled; only after save",
+    "Search and empty-state handling",
+    "Card-grid and list views",
+    "Dialog contains focus; Escape returns focus to trigger",
+    "Failed approval retains the clip and displays a local error",
+    "Autopilot: invalid numbers blocked, valid edits saved",
+    "Failed schedule save retains draft; reset restores last successful state",
+    "Tabs: arrows, Home and End",
+    "Focused layout demo opens, saves local settings and restores them",
+    "All four areas fit 390px and 320px without document overflow",
+    "No JavaScript errors, API calls or network requests in the standalone preview"
+  ],
+  "target": "preview.html only",
+  "font_rendering": "standalone preview uses the system fallback; product stylesheet references existing self-hosted Manrope and Sora"
+}
