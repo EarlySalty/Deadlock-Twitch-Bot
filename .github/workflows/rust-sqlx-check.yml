@@ -56,6 +56,9 @@ jobs:
           cargo test --locked -j2 -p tb-chat stat_commands --lib
           cargo test --locked -j2 -p tb-dashboard-api stat_command_settings --lib
 
+      - name: Werbemanager Match Sperre
+        run: cargo test --locked -j2 -p tb-analytics --test ad_manager_decision
+
       - name: Broker, Uplink disconnect and normal startup
         run: |
           cargo test --locked -j2 -p tb-dashboard-api handlers::platform_token::tests --lib
