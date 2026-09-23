@@ -125,7 +125,7 @@ Moderations-Aktionen per Chat fuer Partner-Streamer:
 | `/twitch/datenschutz` | Datenschutzerklärung | admin/legal_mixin.py |
 | `/twitch/agb` | AGB / ToS | admin/legal_mixin.py |
 
-`/twitch/impressum` und `/twitch/agb` werden über ein Human-Gate vor Bots und KI-Crawlern geschützt. `/twitch/datenschutz` ist ohne Gate öffentlich und indexierbar, damit Nutzer und OAuth-Prüfungen die Angaben direkt lesen können.
+`/twitch/impressum` und `/twitch/agb` werden über ein Human-Gate vor Bots und KI-Crawlern geschützt. `/twitch/datenschutz` ist ohne Gate öffentlich erreichbar, damit Nutzer und OAuth-Prüfungen die Angaben direkt lesen können, trägt für Suchmaschinen aber `noindex`.
 
 Für den produktiven Betrieb sind drei Secrets nötig:
 - `TWITCH_LEGAL_TURNSTILE_SITE_KEY`

@@ -9,8 +9,8 @@
 //!   (HMAC-signiertes Cookie `twitch_legal_gate`, TTL 600 s)
 //! - User-Agent-Blockliste gegen AI-/Suchmaschinen-Crawler auf den
 //!   gegateten Seiten
-//! - `/twitch/datenschutz` und `/twitch/sicherheit` sind öffentlich und
-//!   indexierbar, damit Datenschutzangaben und Sicherheitskonzept prüfbar sind
+//! - `/twitch/datenschutz` ist öffentlich erreichbar, aber `noindex`;
+//!   `/twitch/sicherheit` bleibt öffentlich und indexierbar
 //! - Default-Inhalte im Code; Overrides aus `legal_pages.json`
 //!   (Pfad via `TB_LEGAL_PAGES_PATH`, Default wie Python:
 //!   `data/admin_dashboard/legal_pages.json` relativ zum Repo-Root/CWD)
@@ -1322,7 +1322,7 @@ pub async fn impressum_handler(headers: HeaderMap) -> Response {
     )
 }
 
-/// GET /twitch/datenschutz — öffentlich und indexierbar für Nutzer und OAuth-Prüfung.
+/// GET /twitch/datenschutz — öffentlich für Nutzer und OAuth-Prüfung, aber nicht indexierbar.
 pub async fn datenschutz_handler() -> Response {
     let Some(document) = load_legal_page_document("datenschutz") else {
         return StatusCode::NOT_FOUND.into_response();
@@ -1336,11 +1336,14 @@ pub async fn datenschutz_handler() -> Response {
             ("/twitch/agb", "AGB"),
             ("/twitch/sicherheit", "Sicherheit"),
         ],
-        false,
+        true,
     );
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE.as_str(), "text/html; charset=utf-8"),
+            ("X-Robots-Tag", X_ROBOTS_TAG),
+        ],
         page,
     )
         .into_response()
@@ -1565,16 +1568,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn datenschutz_ist_oeffentlich_indexierbar_und_google_transparent() {
+    async fn datenschutz_ist_oeffentlich_google_transparent_aber_noindex() {
         let response = datenschutz_handler().await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(response.headers().get("X-Robots-Tag").is_none());
+        assert_eq!(
+            response.headers().get("X-Robots-Tag").unwrap(),
+            X_ROBOTS_TAG
+        );
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(!html.contains("noindex"));
+        assert!(html.contains("<meta name='robots' content='noindex, nofollow'>"));
         assert!(html.contains("Google API Services und YouTube"));
         assert!(html.contains("youtube.upload"));
         assert!(html.contains("youtube.readonly"));

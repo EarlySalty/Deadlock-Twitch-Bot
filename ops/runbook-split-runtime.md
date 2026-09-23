@@ -83,7 +83,7 @@ powershell -NoProfile -ExecutionPolicy $ExecutionPolicy -File C:/nssm/restart-bo
 
 ## Legal Access Gate
 
-Die Legal-Seiten `/twitch/impressum` und `/twitch/agb` laufen über ein Human-Gate mit Cloudflare Turnstile. `/twitch/datenschutz` bleibt für Nutzer und OAuth-Prüfungen ohne Gate öffentlich und indexierbar.
+Die Legal-Seiten `/twitch/impressum` und `/twitch/agb` laufen über ein Human-Gate mit Cloudflare Turnstile. `/twitch/datenschutz` bleibt für Nutzer und OAuth-Prüfungen ohne Gate öffentlich erreichbar und trägt für Suchmaschinen `noindex`.
 
 Pfadfluss für Impressum und AGB:
 
@@ -91,7 +91,7 @@ Pfadfluss für Impressum und AGB:
 - Redirect nach `GET /twitch/legal/access?next=...`
 - Formular-Submit nach `POST /twitch/legal/verify`
 
-`GET /twitch/datenschutz` antwortet direkt mit `200 OK` und ohne `noindex`.
+`GET /twitch/datenschutz` antwortet direkt mit `200 OK` und mit `X-Robots-Tag: noindex`.
 
 Der Dashboard-Service auf `127.0.0.1:8765` muss diese Pfade registriert haben, und Caddy muss sie öffentlich explizit durchlassen.
 
