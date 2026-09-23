@@ -483,7 +483,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
         id="studio-panel"
         role="tabpanel"
         aria-labelledby={`studio-tab-${activeView}`}
-        className="min-w-0"
+        className={activeView === 'pool' ? 'studio-pipeline min-w-0 space-y-4' : 'min-w-0'}
       >
         {activeView === 'plan' ? (
           <PostingPlanDraft

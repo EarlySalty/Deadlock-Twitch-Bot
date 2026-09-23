@@ -1,0 +1,39 @@
+/* Values from the existing Twitch dashboard, not a second palette.
+ * Source: bot/dashboard_v2/src/index.css and bot/shared-theme/typography.css.
+ */
+@theme static {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-bg: #0d0d0d;
+  --color-background: #121212;
+  --color-card: #161616;
+  --color-card-hover: rgb(30, 30, 30);
+  --color-primary: #C5A059;
+  --color-primary-hover: #E6C78F;
+  --color-accent: #D6B676;
+  --color-accent-hover: #E8CFA0;
+  --color-text-primary: #f2eee6;
+  --color-text-secondary: #9d968a;
+  --color-on-gold: #241A12;
+  --color-success: #43B581;
+  --color-warning: #E8A33D;
+  --color-danger: #FF5A3C;
+  --color-info: #00D9FF;
+  --color-border: rgba(239, 212, 157, 0.24);
+  --color-border-soft: rgba(239, 212, 157, 0.14);
+  --color-border-strong: rgba(239, 212, 157, 0.38);
+  --font-sans: "Manrope", "Segoe UI", sans-serif;
+  --font-display: "Sora", "Manrope", sans-serif;
+  --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
+  --text-xs--letter-spacing: 0.012em;
+  --text-sm--letter-spacing: 0.006em;
+  --text-base--letter-spacing: 0em;
+  --text-lg--letter-spacing: -0.006em;
+  --text-xl--letter-spacing: -0.011em;
+  --text-2xl--letter-spacing: -0.016em;
+  --text-3xl--letter-spacing: -0.021em;
+  --text-4xl--letter-spacing: -0.026em;
+}

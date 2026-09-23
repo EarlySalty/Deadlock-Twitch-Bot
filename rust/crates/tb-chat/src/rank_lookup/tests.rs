@@ -292,6 +292,12 @@ async fn database() -> crate::test_postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20260920170000_twitch_player_multi_steam.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql("CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
         CREATE SCHEMA core;
         CREATE TABLE core.steam_links(discord_id BIGINT, steam_id TEXT, verified BOOLEAN, primary_account BOOLEAN, linked_at TIMESTAMPTZ);

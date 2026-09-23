@@ -1,0 +1,13 @@
+**/node_modules/
+**/__pycache__/
+!reference/dist/
+!reference/dist/tailwind.css
+!reference-manifest.json
+!reference/package.json
+!reference/package-lock.json
+!reference/tests/browser-results.json
+!reference/tests/syntax-results.json
+!checks/package.json
+!checks/package-lock.json
+!checks/browser-results.json
+!checks/source-results.json

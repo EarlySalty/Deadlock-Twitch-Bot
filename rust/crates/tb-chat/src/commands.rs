@@ -814,8 +814,17 @@ impl CommandEngine {
     }
 
     async fn stat_target(&self, event: &ChatMessageEvent, args: &str) -> Option<crate::command_target::CommandTarget> {
+        let is_rank = event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank");
+        let rank_me = is_rank && args.trim().eq_ignore_ascii_case("me");
         match crate::command_target::resolve(
-            self.api.as_ref(), event, args, crate::command_target::DefaultTarget::Broadcaster,
+            self.api.as_ref(),
+            event,
+            if rank_me { "" } else { args },
+            if rank_me {
+                crate::command_target::DefaultTarget::Chatter
+            } else {
+                crate::command_target::DefaultTarget::Broadcaster
+            },
         ).await {
             Ok(target) => {
                 match crate::player_links::load(&self.pool, &target.user_id).await {
@@ -2725,6 +2734,7 @@ mod tests {
 
     async fn apply_ddl(pool: &PgPool) {
     sqlx::raw_sql(include_str!("../../../migrations/20260918100000_twitch_player_steam_links.sql")).execute(pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../../../migrations/20260920170000_twitch_player_multi_steam.sql")).execute(pool).await.unwrap();
         for ddl in [
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, is_live INTEGER, last_game TEXT)",
             // twitch_streamers_partner_state — prod-treu: is_partner_active INTEGER

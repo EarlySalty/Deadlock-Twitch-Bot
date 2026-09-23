@@ -59,7 +59,7 @@ pub fn catalog() -> &'static [CommandInfo] {
             name: "!rank",
             aliases: &[],
             group: Stats,
-            summary: "Deadlock-Rang des Streamers oder !rank @user; alternativ !rank steam:<ID>.",
+            summary: "Deadlock-Rang: !rank me für dich, !rank @user für andere; alternativ !rank steam:<ID>.",
         },
         CommandInfo {
             name: "!wins",

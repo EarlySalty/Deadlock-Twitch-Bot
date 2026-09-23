@@ -15,17 +15,9 @@ export function DashboardShell({
   children: ReactNode;
 }) {
   const withSidebar = !demoMode && showSidebar;
-  if (activeRoute === 'social') return (
-    <div className="studio-shell social-studio">
-      <div className={withSidebar ? 'studio-shell-grid' : ''}>
-        {withSidebar && <DashboardSidebar activeRoute={activeRoute} />}
-        <main className="studio-shell-main space-y-6">{children}</main>
-      </div>
-    </div>
-  );
   return (
-    <div className="relative min-h-screen bg-ui-root text-ui-text">
-      <div className="relative mx-auto max-w-[1680px] px-3 py-4 md:px-5 md:py-5 lg:px-6">
+    <div className="internal-home-vibe relative min-h-screen">
+      <div className="relative px-3 py-4 md:px-5 md:py-5 lg:px-6">
         {withSidebar ? (
           <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-5">
             <DashboardSidebar activeRoute={activeRoute} />

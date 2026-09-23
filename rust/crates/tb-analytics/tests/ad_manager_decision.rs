@@ -184,23 +184,21 @@ fn startschutz_raid_und_erstchatter_sperren() {
 }
 
 #[test]
-fn match_fenster_und_match_sperre() {
-    // Erste Minute eines Matches ist ein Werbefenster.
+fn match_sperrt_ab_dem_ersten_erkannten_tick() {
     let mut value = base(Strategy::Smart);
     value.steam_match_state = Some(steam_state(true, true));
     value.match_started_at = Some(value.now - Duration::seconds(30));
-    assert_eq!(decide(&value).reason, "match_start_window");
-    assert!(matches!(
-        decide(&value).action,
-        DecisionAction::Commercial { .. }
-    ));
+    assert_eq!(decide(&value).reason, "in_match");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
 
-    // Ab Minute 1 sperrt das Match.
+    value.match_started_at = None;
+    assert_eq!(decide(&value).reason, "in_match");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
+
     value.match_started_at = Some(value.now - Duration::minutes(2));
     assert_eq!(decide(&value).reason, "in_match");
     assert_eq!(decide(&value).action, DecisionAction::Postpone);
 
-    // Queue oder Menü ist das Werbefenster.
     let mut value = base(Strategy::Smart);
     value.steam_match_state = Some(steam_state(false, true));
     assert_eq!(decide(&value).reason, "in_queue");
@@ -294,7 +292,7 @@ fn twitch_plan_ist_budgetquelle_und_wird_vorgezogen() {
 }
 
 #[test]
-fn twitch_plan_nutzt_matchrisiko_proaktiv() {
+fn twitch_plan_nutzt_matchrisiko_nur_ausserhalb_des_matches() {
     let mut value = base(Strategy::Smart);
     value.next_ad_at = Some(value.now + Duration::minutes(25));
     value.last_ad_at = Some(value.now - Duration::minutes(10));
@@ -307,15 +305,31 @@ fn twitch_plan_nutzt_matchrisiko_proaktiv() {
 
     value.steam_match_state = Some(steam_state(true, true));
     value.match_started_at = Some(value.now - Duration::seconds(30));
-    assert_eq!(decide(&value).reason, "pulled_forward");
-    assert!(matches!(
-        decide(&value).action,
-        DecisionAction::Commercial { .. }
-    ));
-
-    value.match_started_at = Some(value.now - Duration::minutes(2));
     assert_eq!(decide(&value).reason, "twitch_plan_active");
     assert_eq!(decide(&value).action, DecisionAction::None);
+
+    value.match_started_at = None;
+    assert_eq!(decide(&value).reason, "twitch_plan_active");
+    assert_eq!(decide(&value).action, DecisionAction::None);
+}
+
+#[test]
+fn imminente_twitch_werbung_wird_im_match_sofort_verschoben() {
+    let mut value = base(Strategy::Smart);
+    value.next_ad_at = Some(value.now + Duration::seconds(30));
+    value.steam_match_state = Some(steam_state(true, true));
+    value.match_started_at = Some(value.now - Duration::seconds(5));
+    value.stream_started_at = Some(value.now - Duration::minutes(5));
+    value.last_first_chatter_at = Some(value.now - Duration::minutes(1));
+    value.plan_fit = "unprotectable";
+    value.snooze_count = 1;
+
+    assert_eq!(decide(&value).reason, "twitch_ad_moved");
+    assert_eq!(decide(&value).action, DecisionAction::Snooze);
+
+    value.snooze_count = 0;
+    assert_eq!(decide(&value).reason, "in_match");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
 }
 
 #[test]
@@ -499,6 +513,20 @@ fn kein_hinweis_wenn_der_bot_die_twitch_werbung_verschiebt() {
     input.snooze_count = 2;
     let decision = decide(&input);
     assert_eq!(decision.action, DecisionAction::Snooze);
+    assert_eq!(ad_hint(&input, &decision, Some(90), HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn kein_hinweis_wenn_twitch_werbung_im_match_nicht_verschiebbar_ist() {
+    let mut input = base(Strategy::Smart);
+    input.next_ad_at = Some(now() + Duration::seconds(30));
+    input.steam_match_state = Some(steam_state(true, true));
+    input.match_started_at = Some(now() - Duration::seconds(5));
+    input.snooze_count = 0;
+
+    let decision = decide(&input);
+    assert_eq!(decision.reason, "in_match");
+    assert_eq!(decision.action, DecisionAction::Postpone);
     assert_eq!(ad_hint(&input, &decision, Some(90), HINT_WINDOW_SECS), None);
 }
 

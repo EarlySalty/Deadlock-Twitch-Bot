@@ -40,7 +40,10 @@ jobs:
         with:
           workspaces: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Bestehende Tests starten isolierte PostgreSQL-Prozesse auf Unixsockets.
+      # Diese Tests starten eigene begrenzte PostgreSQL-Prozesse auf privaten
+      # Unixsockets. Sie verwenden weder den Schema-Service noch dessen ENV.
+      - name: Werbemanager Match Sperre
+        run: cargo test --locked -j2 -p tb-analytics --test ad_manager_decision
       - name: Auth transactions and callback races
         run: |
           cargo test --locked -j2 -p tb-raid --test auth_writer --test oauth_grant_consistency --test token_refresher --test background_token_refresh
