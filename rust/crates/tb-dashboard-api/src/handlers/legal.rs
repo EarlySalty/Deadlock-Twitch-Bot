@@ -5,12 +5,12 @@
 //! für den Live-Diff gegen den Python-Dashboard-Prozess (8765).
 //!
 //! Bestandteile:
-//! - Human-Gate via Cloudflare Turnstile vor Impressum/Datenschutz/AGB
+//! - Human-Gate via Cloudflare Turnstile vor Impressum und AGB
 //!   (HMAC-signiertes Cookie `twitch_legal_gate`, TTL 600 s)
 //! - User-Agent-Blockliste gegen AI-/Suchmaschinen-Crawler auf den
 //!   gegateten Seiten
-//! - `/twitch/sicherheit` ist bewusst UNgegated und indexierbar
-//!   (öffentliches Sicherheitskonzept)
+//! - `/twitch/datenschutz` und `/twitch/sicherheit` sind öffentlich und
+//!   indexierbar, damit Datenschutzangaben und Sicherheitskonzept prüfbar sind
 //! - Default-Inhalte im Code; Overrides aus `legal_pages.json`
 //!   (Pfad via `TB_LEGAL_PAGES_PATH`, Default wie Python:
 //!   `data/admin_dashboard/legal_pages.json` relativ zum Repo-Root/CWD)
@@ -46,8 +46,7 @@ const LEGAL_GATE_CSRF_TTL_SECONDS: u64 = 600;
 const LEGAL_GATE_TURNSTILE_ACTION: &str = "legal_access";
 const X_ROBOTS_TAG: &str = "noindex, nofollow, noarchive, nosnippet, noimageindex";
 
-const LEGAL_GATE_ALLOWED_PATHS: [&str; 3] =
-    ["/twitch/impressum", "/twitch/datenschutz", "/twitch/agb"];
+const LEGAL_GATE_ALLOWED_PATHS: [&str; 2] = ["/twitch/impressum", "/twitch/agb"];
 
 const BLOCKED_LEGAL_PAGE_USER_AGENT_TOKENS: [&str; 20] = [
     "gptbot",
@@ -234,71 +233,8 @@ const DEFAULT_BODY_AGB: &str = concat!(
     "bleibt die Wirksamkeit der übrigen Bestimmungen unberührt.</p>"
 );
 
-const DEFAULT_BODY_DATENSCHUTZ: &str = concat!(
-    "<p class='sub'>Stand: Mai 2026</p>",
-    "<h2>Verantwortlicher</h2>",
-    "<p>Nathanael Golla<br>Binger Straße 5, 55263 Wackernheim<br>",
-    "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a></p>",
-    "<h2>Zwecke und Rechtsgrundlagen</h2>",
-    "<p>Wir verarbeiten personenbezogene Daten, um Login, Abo-Verwaltung, Zahlungsabwicklung, ",
-    "Dashboard-Funktionen, Support und den sicheren Betrieb des Dienstes bereitzustellen. ",
-    "Rechtsgrundlagen sind insbesondere Art. 6 Abs. 1 lit. b DSGVO (Vertragserfüllung), ",
-    "Art. 6 Abs. 1 lit. c DSGVO (gesetzliche Pflichten) und Art. 6 Abs. 1 lit. f DSGVO ",
-    "(berechtigte Interessen an Sicherheit, Fehleranalyse und Missbrauchsschutz).</p>",
-    "<h2>Verarbeitete Daten</h2>",
-    "<p>Je nach Nutzung können insbesondere folgende Daten verarbeitet werden:</p>",
-    "<ul>",
-    "<li>Twitch-Daten: Twitch-Name, Twitch-ID, OAuth-Status und von Twitch ",
-    "bereitgestellte Profildaten.</li>",
-    "<li>Discord-Daten: Discord-ID, Anzeigename und Rollenstatus, soweit für Community- ",
-    "oder Admin-Funktionen erforderlich.</li>",
-    "<li>Abonnement- und Rechnungsdaten: Plan, Status, Buchungszeitpunkt, ",
-    "Rechnungsreferenzen und steuerlich relevante Angaben.</li>",
-    "<li>Nutzungs- und Analysedaten: Stream-Statistiken, Viewer-Verläufe, Chat- und ",
-    "Dashboard-Metriken, soweit sie für gebuchte Funktionen benötigt werden.</li>",
-    "<li>Technische Daten: IP-Adresse, User-Agent, Zeitstempel, Logdaten, ",
-    "Sicherheitsereignisse und Session-Cookies.</li>",
-    "</ul>",
-    "<h2>Empfänger und Dienstleister</h2>",
-    "<p>Zahlungen werden über Stripe Payments Europe Ltd. abgewickelt. Stripe verarbeitet ",
-    "Zahlungsdaten nach eigener Datenschutzrichtlinie: ",
-    "<a href='https://stripe.com/de/privacy' target='_blank' ",
-    "rel='noopener noreferrer'>stripe.com/de/privacy</a>.</p>",
-    "<p>Für Login- und Plattformfunktionen werden Daten mit Twitch, Discord und den jeweils ",
-    "angebundenen Plattformen ausgetauscht, soweit dies technisch oder vertraglich ",
-    "notwendig ist. Für den Schutz der Legal-Seiten kann Cloudflare Turnstile eingesetzt ",
-    "werden, um automatisierte Zugriffe zu erkennen.</p>",
-    "<h2>Cookies</h2>",
-    "<p>Diese Website verwendet technisch notwendige Cookies, insbesondere für Login-Sessions, ",
-    "Abo-Verwaltung und das Legal-Access-Gate. Es werden keine Marketing-Cookies eingesetzt. ",
-    "Eine Einwilligung ist für unbedingt erforderliche Cookies gemäß § 25 Abs. 2 Nr. 2 TDDDG ",
-    "nicht erforderlich. Stripe kann während des Bezahlvorgangs Cookies auf eigenen ",
-    "Domains setzen.</p>",
-    "<h2>Speicherdauer</h2>",
-    "<p>Daten werden nur so lange gespeichert, wie sie für die genannten Zwecke ",
-    "erforderlich sind. Abonnement- und Nutzungsdaten werden grundsätzlich für die Dauer ",
-    "des Vertrags gespeichert. ",
-    "Rechnungs- und Buchungsdaten können aufgrund gesetzlicher Aufbewahrungspflichten bis zu ",
-    "10 Jahre gespeichert werden. Sicherheits- und Serverlogs werden regelmäßig gelöscht, ",
-    "sofern keine längere Aufbewahrung zur Aufklärung von Missbrauch oder Störungen ",
-    "erforderlich ist.</p>",
-    "<h2>Deine Rechte (Art. 15-22 DSGVO)</h2>",
-    "<ul>",
-    "<li>Auskunft über gespeicherte Daten (Art. 15)</li>",
-    "<li>Berichtigung unrichtiger Daten (Art. 16)</li>",
-    "<li>Löschung deiner Daten (Art. 17)</li>",
-    "<li>Einschränkung der Verarbeitung (Art. 18)</li>",
-    "<li>Datenübertragbarkeit (Art. 20)</li>",
-    "<li>Widerspruch gegen die Verarbeitung (Art. 21)</li>",
-    "</ul>",
-    "<p>Zur Wahrnehmung dieser Rechte wende dich an: ",
-    "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a></p>",
-    "<h2>Beschwerderecht</h2>",
-    "<p>Du hast das Recht, dich bei der zuständigen Datenschutz-Aufsichtsbehörde ",
-    "zu beschweren. Zuständig ist der <em>Landesbeauftragte für den Datenschutz ",
-    "und die Informationsfreiheit Rheinland-Pfalz (LfDI)</em>, ",
-    "Hintere Bleiche 34, 55116 Mainz.</p>"
-);
+const DEFAULT_BODY_DATENSCHUTZ: &str =
+    include_str!("../../templates/legal_default_datenschutz.html");
 
 const DEFAULT_BODY_SICHERHEIT: &str = concat!(
     "<p class='sub'>Stand: Juni 2026</p>",
@@ -1256,12 +1192,11 @@ async fn verify_turnstile_token(
 // Handler
 // ---------------------------------------------------------------------------
 
-/// GET /robots.txt — Legal-Seiten für Crawler sperren (Sicherheitskonzept bleibt frei).
+/// GET /robots.txt — gegatete Legal-Seiten sperren, Datenschutz bleibt prüfbar.
 pub async fn robots_txt_handler() -> Response {
     let robots = concat!(
         "User-agent: *\n",
         "Disallow: /twitch/impressum\n",
-        "Disallow: /twitch/datenschutz\n",
         "Disallow: /twitch/agb\n",
     );
     (
@@ -1387,19 +1322,28 @@ pub async fn impressum_handler(headers: HeaderMap) -> Response {
     )
 }
 
-/// GET /twitch/datenschutz — DSGVO Art. 13/14 hinter dem Legal-Human-Gate.
-pub async fn datenschutz_handler(headers: HeaderMap) -> Response {
-    gated_legal_page_response(
-        &headers,
-        "/twitch/datenschutz",
-        "datenschutz",
+/// GET /twitch/datenschutz — öffentlich und indexierbar für Nutzer und OAuth-Prüfung.
+pub async fn datenschutz_handler() -> Response {
+    let Some(document) = load_legal_page_document("datenschutz") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let page = render_legal_page(
+        &document.title,
+        &document.body,
         &[
             ("/twitch/abbo", "Pläne"),
             ("/twitch/impressum", "Impressum"),
             ("/twitch/agb", "AGB"),
             ("/twitch/sicherheit", "Sicherheit"),
         ],
+        false,
+    );
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        page,
     )
+        .into_response()
 }
 
 /// GET /twitch/agb — AGB hinter dem Legal-Human-Gate.
@@ -1610,10 +1554,44 @@ mod tests {
     fn next_pfad_wird_auf_allowlist_normalisiert() {
         assert_eq!(normalize_gate_next_path(Some("/twitch/agb")), "/twitch/agb");
         assert_eq!(
+            normalize_gate_next_path(Some("/twitch/datenschutz")),
+            "/twitch/impressum"
+        );
+        assert_eq!(
             normalize_gate_next_path(Some("https://evil.example/")),
             "/twitch/impressum"
         );
         assert_eq!(normalize_gate_next_path(None), "/twitch/impressum");
+    }
+
+    #[tokio::test]
+    async fn datenschutz_ist_oeffentlich_indexierbar_und_google_transparent() {
+        let response = datenschutz_handler().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("X-Robots-Tag").is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!html.contains("noindex"));
+        assert!(html.contains("Google API Services und YouTube"));
+        assert!(html.contains("youtube.upload"));
+        assert!(html.contains("youtube.readonly"));
+        assert!(html.contains("youtube.force-ssl"));
+        assert!(html.contains("Google API Services User Data Policy"));
+    }
+
+    #[tokio::test]
+    async fn robots_txt_blockiert_datenschutz_nicht() {
+        let response = robots_txt_handler().await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let robots = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!robots.contains("Disallow: /twitch/datenschutz"));
+        assert!(robots.contains("Disallow: /twitch/impressum"));
+        assert!(robots.contains("Disallow: /twitch/agb"));
     }
 
     #[test]

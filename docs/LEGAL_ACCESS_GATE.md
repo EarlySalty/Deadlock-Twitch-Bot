@@ -11,10 +11,9 @@ Diese Doku beschreibt die öffentliche Absicherung der Legal-Seiten unter:
 Das Human-Gate schützt aktuell:
 
 - `/twitch/impressum`
-- `/twitch/datenschutz`
 - `/twitch/agb`
 
-Ziel ist: Die verpflichtenden Legal-Seiten bleiben für Menschen öffentlich erreichbar, werden aber gegen KI-Crawler und andere Bots abgesichert.
+Die Datenschutzerklärung unter `/twitch/datenschutz` ist öffentlich und indexierbar. Damit können Nutzer sowie Plattformprüfungen wie Google OAuth die Angaben zu Datenzugriff, Nutzung, Speicherung und Weitergabe ohne Human-Gate lesen.
 
 ## Architektur
 
@@ -27,7 +26,7 @@ Der Dashboard-Service selbst läuft lokal auf `127.0.0.1:8765` und liefert die L
 
 ## Request-Flow
 
-1. `GET /twitch/impressum`, `GET /twitch/datenschutz` oder `GET /twitch/agb`
+1. `GET /twitch/impressum` oder `GET /twitch/agb`
 2. Ohne gültigen Gate-Cookie folgt ein Redirect auf `/twitch/legal/access?next=...`
 3. Auf `/twitch/legal/access` wird die Turnstile-Seite gerendert
 4. Das Formular sendet an `POST /twitch/legal/verify`
@@ -173,6 +172,7 @@ Erwartung:
 ```powershell
 curl.exe -i "https://deutsche-deadlock-community.de/twitch/legal/access?next=/twitch/impressum"
 curl.exe -i "https://deutsche-deadlock-community.de/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/datenschutz"
 curl.exe -i "https://deutsche-deadlock-community.de/twitch/agb"
 ```
 
@@ -180,6 +180,7 @@ Erwartung:
 
 - `/twitch/legal/access?...` -> `200 OK`
 - `/twitch/impressum` -> `302 Found` nach `/twitch/legal/access?...`
+- `/twitch/datenschutz` -> `200 OK` ohne Gate und ohne `noindex`
 - `/twitch/agb` -> `302 Found` nach `/twitch/legal/access?...`
 
 ## Cache- und Neustart-Hinweise
