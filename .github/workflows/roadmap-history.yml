@@ -39,10 +39,10 @@ jobs:
         run: node --test tools/roadmap-history/model.test.mjs tools/roadmap-history/family.test.mjs
       - name: Generate from the pinned real main history
         run: python3 tools/generate_roadmap.py --ref origin/main
-      - name: Install the isolated browser test runtime
+      - name: Install the integrity-locked browser test runtime
         run: |
-          npm install --prefix .roadmap-test-runtime --no-audit --no-fund --ignore-scripts playwright@1.58.2
-          .roadmap-test-runtime/node_modules/.bin/playwright install --with-deps chromium
+          npm ci --prefix bot/dashboard_v2 --no-audit --no-fund --ignore-scripts
+          bot/dashboard_v2/node_modules/.bin/playwright-core install --with-deps chromium
       - name: Test desktop, mobile, direct links and real graph geometry
         run: node tools/roadmap-history/browser.test.mjs
       - name: Preserve real browser screenshots and evidence report

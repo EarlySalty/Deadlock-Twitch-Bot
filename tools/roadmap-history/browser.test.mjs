@@ -4,8 +4,10 @@ import {readFile, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
-const require = createRequire(new URL('../../.roadmap-test-runtime/package.json', import.meta.url));
-const {chromium} = require('playwright');
+// Reuse the reviewed lockfile, including npm integrity hashes, rather than
+// resolving a separate untracked Playwright dependency tree at CI runtime.
+const require = createRequire(new URL('../../bot/dashboard_v2/package.json', import.meta.url));
+const {chromium} = require('playwright-core');
 const root = resolve(new URL('../..', import.meta.url).pathname);
 const output = resolve(root, 'dist/roadmap-history');
 const html = await readFile(resolve(output, 'index.html'), 'utf8');
