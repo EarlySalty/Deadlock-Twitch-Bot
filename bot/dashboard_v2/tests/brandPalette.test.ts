@@ -70,6 +70,34 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
+// Diese fünf Optionen sind Twitch-Ankündigungsdaten, keine Dashboard-Chrome.
+// Nur eine vollständige swatch-Datenzeile im jeweiligen Editor darf die
+// bestehenden Plattformfarben enthalten; Klassen, andere Farben und Dateien
+// bleiben auch dann verboten, wenn sie zufällig denselben Hex-Wert verwenden.
+const ANNOUNCEMENT_SWATCHES: Record<string, Record<string, string>> = {
+  '/pages/content/Announcements.tsx': {
+    primary: '#b8b8b8', blue: '#47adff', green: '#00d69b', orange: '#ffb31a', purple: '#c299ff',
+  },
+  '/pages/content/CommunityAnnouncements.tsx': {
+    primary: '#d4af37', blue: '#3b82f6', green: '#22c55e', orange: '#f97316', purple: '#a970ff',
+  },
+};
+
+function isAnnouncementSwatch(file: string, line: string, hex: string): boolean {
+  const match = line.match(/^\s*\{ value: '(primary|blue|green|orange|purple)', label: '[^']+', swatch: '(#[0-9a-f]{6})' \},\s*$/);
+  if (!match || match[2] !== hex) return false;
+  return Object.entries(ANNOUNCEMENT_SWATCHES).some(([path, colors]) =>
+    file.endsWith(path) && colors[match[1]] === hex);
+}
+
+test('Plattform-Swatches erlauben weder neue Farben noch Marken-Chrome-Ausnahmen', () => {
+  const file = '/pages/content/Announcements.tsx';
+  assert.ok(isAnnouncementSwatch(file, "  { value: 'purple', label: 'Lila', swatch: '#c299ff' },", '#c299ff'));
+  assert.ok(!isAnnouncementSwatch(file, "  { value: 'purple', label: 'Lila', swatch: '#abcdef' },", '#abcdef'));
+  assert.ok(!isAnnouncementSwatch(file, '<button className="bg-[#c299ff]">', '#c299ff'));
+  assert.ok(!isAnnouncementSwatch('/pages/Other.tsx', "  { value: 'purple', label: 'Lila', swatch: '#c299ff' },", '#c299ff'));
+});
+
 test('kein Hex-Wert ausserhalb der Industrial-Gold-Palette', () => {
   const strays: string[] = [];
   for (const app of APPS) {
@@ -77,8 +105,11 @@ test('kein Hex-Wert ausserhalb der Industrial-Gold-Palette', () => {
       const src = readFileSync(file, 'utf8');
       // OBS-Presets und Szenenvorschau dürfen frei gewählte Farben nutzen. Die Dashboard-Shell bleibt an die Marke gebunden.
       const overlayPresets = file.endsWith('/components/verwaltung/OverlayBuilderSection.tsx') ? new Set(['#101114','#d6b56c','#0d0f14','#f4f7fb','#765321','#a78bfa','#f5f3ef','#161020','#17191f','#67d8f3','#101922','#f3faff','#bca1ff','#181322','#f8f3ff','#090a0d','#d8dce1']) : new Set<string>();
-      for (const hex of src.match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
-        if (!ALLOWED_HEX.has(hex.toLowerCase()) && !overlayPresets.has(hex.toLowerCase())) strays.push(`${file}: ${hex}`);
+      for (const line of src.split('\n')) {
+        for (const hex of line.match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
+          if (!ALLOWED_HEX.has(hex.toLowerCase()) && !overlayPresets.has(hex.toLowerCase())
+            && !isAnnouncementSwatch(file, line, hex)) strays.push(`${file}: ${hex}`);
+        }
       }
     }
   }

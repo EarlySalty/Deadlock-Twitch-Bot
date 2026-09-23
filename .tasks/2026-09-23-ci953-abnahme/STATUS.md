@@ -31,6 +31,16 @@ https://github.com/EarlySalty/Deadlock-Brain/pull/9#issuecomment-5799482619
 
 Lokal wurden alle fünf Originalmigrationen mit Prüfsummenprüfung auf eine eigens angelegte Wegwerf-Timescale/PostgreSQL-16-Datenbank angewendet. Das private Original wurde dabei nur gelesen, nicht geändert oder in dieses Repository kopiert. Dieser lokale Nachweis ersetzt noch keinen secrets-freien GitHub-Lauf.
 
+## Dashboard-Nachweis
+
+Alle acht ESLint-Fehler sind behoben: nicht-visuelle YouTube-/Sprach-Helfer sind von React-Komponenten getrennt, die Heartbeat-Uhr wird außerhalb des Renderns aktualisiert, die Kontrollzeichenprüfung behält ihre ursprüngliche Zeichenmenge und die Visual-Fixture initialisiert die Uhr lazy. Keine ESLint-Regel wurde deaktiviert.
+
+Fremdfarben in Dashboard-Chrome wurden durch vorhandene Theme-Tokens ersetzt; goldene Primärbuttons bekommen dunklen Text. Twitch-Ankündigungs-Swatches sind dagegen Plattformdaten: die Markenprüfung erlaubt ausschließlich die bestehenden vollständigen Datenzeilen in den beiden zuständigen Editoren. Eine neue Gegenprobe lehnt andere Werte, dieselbe Farbe in einer UI-Klasse und andere Dateien ab. Die OBS-Hilfe dokumentiert die bereits implementierte Hardware-Analyse mit Maximalbitrate und Uploadbudget; ihre bisherigen Negativassertionen bleiben erhalten und neue Vertragsassertionen kommen hinzu.
+
+Lokal bestanden: Dashboard ESLint (0 Fehler, 7 bestehende Warnungen), 9 Kalender-Tests, 394 weitere Dashboard-Tests und TypeScript/Vite-Build; Admin 10 Tests und Build; Website 48 Tests und Build. Alle genannten Tests ohne Skip. Website-Renderwarnungen, Vite-Chunkgröße und Build-time-Font-Auflösung sind weiterhin nicht blockierende Hinweise, nicht als behoben ausgegeben.
+
+Die SQLx-Onlineprüfung kompiliert nach echter Schema-Provisionierung. Fehlende Cache-Einträge wurden mit `cargo sqlx prepare --workspace -- --workspace` aus dieser Datenbank regeneriert; der anschließende identische Online-`--check` bestand. Das ersetzt noch nicht den blockierten öffentlichen Schema-Export.
+
 ## Noch laufende Abnahme
 
 Weitere Clippy-Befunde, Rustfmt-Bestand, Dashboard-Markenprüfung, SQLx-Onlineprüfung, vollständige Workspace-/DB-/Integrationstests sowie PR-Deep-Scans und kontrollierte Scanner-Gegenproben werden separat protokolliert. Keine dieser offenen Prüfungen ist durch die obigen Einzelnachweise als bestanden erklärt.

@@ -76,7 +76,7 @@ export function PromoTimers() {
             <button type="button" className="admin-button admin-button-secondary disabled:opacity-50" disabled={!draft || mutation.isPending} onClick={() => { setDraft(null); setNotice(null); }}>Verwerfen</button>
             {draft && <span className="text-sm text-text-secondary">Ungespeicherte Änderungen</span>}
           </div>
-          {notice && <p role={notice.error ? 'alert' : 'status'} className={`mt-4 text-sm ${notice.error ? 'text-red-300' : 'text-green-300'}`}>{notice.text}</p>}
+          {notice && <p role={notice.error ? 'alert' : 'status'} className={`mt-4 text-sm ${notice.error ? 'text-danger' : 'text-success'}`}>{notice.text}</p>}
         </form>
       )}
     </Section>

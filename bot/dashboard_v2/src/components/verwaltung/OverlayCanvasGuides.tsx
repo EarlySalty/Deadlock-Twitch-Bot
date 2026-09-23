@@ -22,15 +22,15 @@ export function OverlayCanvasGuides({ source, canvasWidth, canvasHeight, scale }
   ];
   return (
     <svg data-testid="overlay-measurements" aria-hidden="true" className="pointer-events-none absolute inset-0 z-20" width="100%" height="100%">
-      <line data-guide="center-x" x1={w / 2} x2={w / 2} y1={0} y2={h} stroke={centeredX ? '#4ade80' : '#d6b56c'} strokeOpacity={centeredX ? 1 : 0.45} strokeDasharray="4 4" />
-      <line data-guide="center-y" x1={0} x2={w} y1={h / 2} y2={h / 2} stroke={centeredY ? '#4ade80' : '#d6b56c'} strokeOpacity={centeredY ? 1 : 0.45} strokeDasharray="4 4" />
+      <line data-guide="center-x" x1={w / 2} x2={w / 2} y1={0} y2={h} stroke={centeredX ? 'var(--color-success)' : 'var(--color-primary)'} strokeOpacity={centeredX ? 1 : 0.45} strokeDasharray="4 4" />
+      <line data-guide="center-y" x1={0} x2={w} y1={h / 2} y2={h / 2} stroke={centeredY ? 'var(--color-success)' : 'var(--color-primary)'} strokeOpacity={centeredY ? 1 : 0.45} strokeDasharray="4 4" />
       {distances.map(({ x1, y1, x2, y2, value }, index) => (
         <g key={index} data-distance={['left', 'right', 'top', 'bottom'][index]}>
-          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ef7474" />
-          <text x={Math.max(24, Math.min(w - 24, (x1 + x2) / 2))} y={Math.max(13, Math.min(h - 4, (y1 + y2) / 2 - 4))} textAnchor="middle" fill="#fff" stroke="#090a0d" strokeWidth={3} paintOrder="stroke" fontSize={11} fontFamily="monospace">{Math.round(value)} px</text>
+          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--color-danger)" />
+          <text x={Math.max(24, Math.min(w - 24, (x1 + x2) / 2))} y={Math.max(13, Math.min(h - 4, (y1 + y2) / 2 - 4))} textAnchor="middle" fill="#fff" stroke="var(--color-background)" strokeWidth={3} paintOrder="stroke" fontSize={11} fontFamily="monospace">{Math.round(value)} px</text>
         </g>
       ))}
-      <text x={Math.max(45, Math.min(w - 45, cx))} y={Math.max(14, Math.min(h - 5, y * scale + 15))} textAnchor="middle" fill="#d6b56c" stroke="#090a0d" strokeWidth={3} paintOrder="stroke" fontSize={11} fontFamily="monospace">{width} × {height}</text>
+      <text x={Math.max(45, Math.min(w - 45, cx))} y={Math.max(14, Math.min(h - 5, y * scale + 15))} textAnchor="middle" fill="var(--color-primary)" stroke="var(--color-background)" strokeWidth={3} paintOrder="stroke" fontSize={11} fontFamily="monospace">{width} × {height}</text>
     </svg>
   );
 }

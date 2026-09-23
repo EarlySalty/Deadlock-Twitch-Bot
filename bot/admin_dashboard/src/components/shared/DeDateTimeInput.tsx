@@ -85,7 +85,7 @@ export function DeDateTimeInput({ id, value, onChange }: DeDateTimeInputProps) {
         }}
       />
       {invalid ? (
-        <span className="text-xs text-red-400">Bitte im Format TT.MM.JJJJ HH:MM eingeben.</span>
+        <span className="text-xs text-danger">Bitte im Format TT.MM.JJJJ HH:MM eingeben.</span>
       ) : null}
     </div>
   );

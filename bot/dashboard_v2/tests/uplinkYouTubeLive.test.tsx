@@ -9,15 +9,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import {
   UplinkYouTubeLive,
-  entwurfAus,
-  naechsterEntwurf,
-  speichernErlaubt,
   type UplinkYouTubeLiveProps,
   type YouTubeLiveEntwurf,
   type YouTubeLiveEinstellungen,
   type YouTubeLiveStatus,
   type YouTubeLiveZustand,
 } from '../src/components/uplink/UplinkYouTubeLive';
+import { entwurfAus, naechsterEntwurf, speichernErlaubt } from '../src/components/uplink/youtubeLiveState';
 
 const QUELLE = readFileSync(
   join(import.meta.dirname, '../src/components/uplink/UplinkYouTubeLive.tsx'),

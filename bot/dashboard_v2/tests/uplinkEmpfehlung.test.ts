@@ -50,6 +50,9 @@ test('OBS-Hilfe trennt Uploadbudget und geprüfte Plattformausgabe', () => {
   for (const content of [page, help]) {
     assert.match(content, /CBR/);
     assert.match(content, /AV1/);
+    assert.match(content, /Encoder-Analyse/);
+    assert.match(content, /Maximalbitrate/);
+    assert.match(content, /Uploadbudget/);
     assert.doesNotMatch(content, /obsBitrateEmpfehlung|VBR|SRT-Adresse|Streamschlüssel leer lassen/);
   }
 });

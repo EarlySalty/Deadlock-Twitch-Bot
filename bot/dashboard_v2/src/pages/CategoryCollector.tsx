@@ -1,26 +1,28 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { languageName } from '../categoryCollector';
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, Languages, Radio, Users } from 'lucide-react';
 
-const GOLD = '#D6A84B';
-const AMBER = '#D87538';
-const COPPER = '#B76B50';
+const GOLD = 'var(--color-primary)';
+const AMBER = 'var(--color-warning)';
+const COPPER = 'var(--color-danger)';
 interface LanguageRow { language: string; streams: number | null; channels: number | null; airtime_hours: number | null; avg_viewers: number | null; viewer_hours: number | null; messages: number }
 interface ChannelRow { language: string; user_id: string; login: string; airtime_hours: number; avg_viewers: number; viewer_hours: number; rank: number }
 interface TrendRow { at: string; streams: number; viewers: number; polls: number; peak_streams: number; peak_viewers: number }
 interface Status { desired_channels?: number; confirmed_channels?: number; connected_shards?: number; discovery_state?: string; received_messages?: number; stored_this_process?: number; queue_drops?: number; storage_drops?: number; invalid_events?: number; raw_bytes?: number; retention_days?: number; retention_pressure?: boolean; raw_paused?: boolean; oldest_raw_message?: string; last_discovery?: string; media_enabled?: boolean }
 export interface CategoryReport { days: number; generated_at: string; heartbeat_at: string | null; first_snapshot: string | null; last_snapshot: string | null; total_polls: number; languages: LanguageRow[]; top_channels: ChannelRow[]; trend: TrendRow[]; hourly: { language: string; hour: number; messages: number }[]; status: Status | null }
 const number = (value: number | null | undefined, digits = 0) => value == null ? '—' : new Intl.NumberFormat('de-DE', { maximumFractionDigits: digits }).format(value);
-export const languageName = (code: string) => {
-  if (code === 'und') return 'Unbekannt / nicht sicher erkannt';
-  try { return new Intl.DisplayNames(['de'], { type: 'language' }).of(code) ?? code; } catch { return code; }
-};
 const dateTime = (date: string | null | undefined) => date ? new Date(date).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' }) : 'Noch keine Messung';
-const tooltipStyle = { background: '#19130E', border: '1px solid #6F5130', borderRadius: 12, color: '#F5ECE1' };
+const tooltipStyle = { background: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: 12, color: 'var(--color-text-primary)' };
 
 export function CategoryCollector() {
   const [days, setDays] = useState(7);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(timer);
+  }, []);
   const [language, setLanguage] = useState('all');
   const query = useQuery<CategoryReport>({
     queryKey: ['category-collector', days],
@@ -49,7 +51,7 @@ export function CategoryCollector() {
     return rows;
   }, [data]);
   const hourly = useMemo(() => Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, messages: data?.hourly.filter(row => row.hour === hour && (language === 'all' || row.language === language)).reduce((sum, row) => sum + row.messages, 0) ?? 0 })), [data, language]);
-  const stale = !data?.heartbeat_at || Date.now() - new Date(data.heartbeat_at).getTime() > 120_000;
+  const stale = !data?.heartbeat_at || now - new Date(data.heartbeat_at).getTime() > 120_000;
   const status = data?.status;
   const cards = [
     { icon: Radio, title: 'Entdeckte Live-Kanäle', value: stale ? '—' : number(status?.desired_channels), detail: 'Letzter erfolgreicher Kategorieabruf' },
@@ -77,8 +79,8 @@ export function CategoryCollector() {
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(card => <article key={card.title} className="panel-card rounded-2xl p-5"><card.icon className="mb-4 h-5 w-5 text-primary" /><h2 className="text-sm text-text-secondary">{card.title}</h2><p className="mt-2 text-3xl font-bold text-white">{card.value}</p><p className="mt-2 text-xs text-text-secondary">{card.detail}</p></article>)}</section>
       {!data.total_polls ? <section className="panel-card rounded-2xl p-8 text-text-secondary">Noch keine vollständige Kategoriemessung vorhanden. Es werden keine historischen Daten vorgetäuscht.</section> : <>
         <section className="panel-card rounded-2xl p-5 md:p-6"><h2 className="text-xl font-semibold text-white">Aktivität nach Sprache</h2><p className="mt-2 text-sm text-text-secondary">Streams und Zuschauerwerte folgen der eingestellten Stream-Sprache. Chat-Nachrichten folgen der erkannten Nachrichtensprache. Beide können abweichen; kurze oder unsichere Texte bleiben unbekannt.</p><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-primary/20 text-text-secondary"><tr>{['Sprache', 'Streams', 'Kanäle', 'Sendestunden', 'Ø Zuschauer pro Stream', 'Chat-Nachrichten'].map(label => <th key={label} scope="col" className="whitespace-nowrap px-3 py-3">{label}</th>)}</tr></thead><tbody>{data.languages.map(row => <tr key={row.language} className="border-b border-white/5 text-white"><th scope="row" className="px-3 py-4 font-medium">{languageName(row.language)} <span className="text-text-secondary">({row.language})</span></th><td className="px-3 py-4">{number(row.streams)}</td><td className="px-3 py-4">{number(row.channels)}</td><td className="px-3 py-4">{number(row.airtime_hours, 1)}</td><td className="px-3 py-4">{number(row.avg_viewers, 1)}</td><td className="px-3 py-4">{number(row.messages)}</td></tr>)}</tbody></table></div></section>
-        <section className="panel-card rounded-2xl p-5 md:p-6"><h2 className="text-xl font-semibold text-white">Kategorie-Trend</h2><p className="mt-2 text-sm text-text-secondary">Stundenmittel der erfolgreichen Messungen; Zeitachse UTC. Zuschauer und Streams haben getrennte Skalen.</p><div className="mt-6 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={chart}><CartesianGrid stroke="#5E44302D" /><XAxis dataKey="label" minTickGap={55} tick={{ fill: '#BCA995', fontSize: 11 }} /><YAxis yAxisId="streams" tick={{ fill: GOLD }} /><YAxis yAxisId="viewers" orientation="right" tick={{ fill: AMBER }} /><Tooltip contentStyle={tooltipStyle} /><Legend /><Line yAxisId="streams" type="linear" dataKey="streams" name="Gleichzeitige Streams" stroke={GOLD} dot={chart.length < 3} connectNulls={false} /><Line yAxisId="viewers" type="linear" dataKey="viewers" name="Gleichzeitige Zuschauer" stroke={AMBER} dot={chart.length < 3} connectNulls={false} /></LineChart></ResponsiveContainer></div></section>
-        <section className="panel-card rounded-2xl p-5 md:p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-semibold text-white">Chat nach Sprache und Tageszeit</h2><p className="mt-2 text-sm text-text-secondary">Nachrichten je UTC-Stunde, summiert über den gewählten Zeitraum. Kein regionales Tageszeitprofil.</p></div><select aria-label="Sprache" value={language} onChange={event => setLanguage(event.target.value)} className="rounded-xl border border-primary/30 bg-bg px-4 py-3 text-white"><option value="all">Alle Sprachen</option>{data.languages.map(row => <option key={row.language} value={row.language}>{languageName(row.language)}</option>)}</select></div><div className="mt-6 h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={hourly}><XAxis dataKey="hour" minTickGap={25} tick={{ fill: '#BCA995', fontSize: 11 }} /><YAxis tick={{ fill: '#BCA995' }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="messages" name="Nachrichten" fill={COPPER} radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></section>
+        <section className="panel-card rounded-2xl p-5 md:p-6"><h2 className="text-xl font-semibold text-white">Kategorie-Trend</h2><p className="mt-2 text-sm text-text-secondary">Stundenmittel der erfolgreichen Messungen; Zeitachse UTC. Zuschauer und Streams haben getrennte Skalen.</p><div className="mt-6 h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={chart}><CartesianGrid stroke="var(--color-border)" /><XAxis dataKey="label" minTickGap={55} tick={{ fill: 'var(--color-text-secondary)', fontSize: 11 }} /><YAxis yAxisId="streams" tick={{ fill: GOLD }} /><YAxis yAxisId="viewers" orientation="right" tick={{ fill: AMBER }} /><Tooltip contentStyle={tooltipStyle} /><Legend /><Line yAxisId="streams" type="linear" dataKey="streams" name="Gleichzeitige Streams" stroke={GOLD} dot={chart.length < 3} connectNulls={false} /><Line yAxisId="viewers" type="linear" dataKey="viewers" name="Gleichzeitige Zuschauer" stroke={AMBER} dot={chart.length < 3} connectNulls={false} /></LineChart></ResponsiveContainer></div></section>
+        <section className="panel-card rounded-2xl p-5 md:p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-semibold text-white">Chat nach Sprache und Tageszeit</h2><p className="mt-2 text-sm text-text-secondary">Nachrichten je UTC-Stunde, summiert über den gewählten Zeitraum. Kein regionales Tageszeitprofil.</p></div><select aria-label="Sprache" value={language} onChange={event => setLanguage(event.target.value)} className="rounded-xl border border-primary/30 bg-bg px-4 py-3 text-white"><option value="all">Alle Sprachen</option>{data.languages.map(row => <option key={row.language} value={row.language}>{languageName(row.language)}</option>)}</select></div><div className="mt-6 h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={hourly}><XAxis dataKey="hour" minTickGap={25} tick={{ fill: 'var(--color-text-secondary)', fontSize: 11 }} /><YAxis tick={{ fill: 'var(--color-text-secondary)' }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="messages" name="Nachrichten" fill={COPPER} radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></section>
         <section className="panel-card rounded-2xl p-5 md:p-6"><h2 className="text-xl font-semibold text-white">Top-Kanäle je Stream-Sprache</h2><p className="mt-2 text-sm text-text-secondary">Bis zu zehn Kanäle pro Sprache, sortiert nach beobachteten Zuschauerstunden: Sendezeit × Zuschauerzahl. Keine Bewertung einzelner Personen.</p><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-primary/20 text-text-secondary"><tr>{['Sprache', 'Kanal', 'Sendestunden', 'Ø Zuschauer', 'Zuschauerstunden'].map(label => <th key={label} scope="col" className="px-3 py-3">{label}</th>)}</tr></thead><tbody>{data.top_channels.filter(row => language === 'all' || row.language === language).map(row => <tr key={`${row.language}-${row.user_id}`} className="border-b border-white/5 text-white"><td className="px-3 py-3">{languageName(row.language)}</td><th scope="row" className="px-3 py-3 font-medium">{row.login}</th><td className="px-3 py-3">{number(row.airtime_hours, 1)}</td><td className="px-3 py-3">{number(row.avg_viewers, 1)}</td><td className="px-3 py-3">{number(row.viewer_hours, 1)}</td></tr>)}</tbody></table></div></section>
       </>}
     </>}
