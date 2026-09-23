@@ -34,8 +34,9 @@ async fn main() {
     }
     let pool = match PgPoolOptions::new().max_connections(4).connect(&dsn).await {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("DB-Verbindung fehlgeschlagen: {e}");
+        Err(_) => {
+            // Connection errors may include credentials from a malformed DSN.
+            eprintln!("DB-Verbindung fehlgeschlagen. Zugang und Erreichbarkeit prüfen.");
             std::process::exit(1);
         }
     };
@@ -43,7 +44,7 @@ async fn main() {
     let vp = VideoProcessor::default();
     let downloader = Arc::new(YtDlpDownloader::new("yt-dlp"));
 
-    println!("Rendere Clips fuer das ausgewaehlte Konto ...");
+    println!("Rendere Clips für das ausgewählte Konto ...");
     let result = render_all_for_user(
         &pool,
         &vp,

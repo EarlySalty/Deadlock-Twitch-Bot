@@ -233,7 +233,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         graph_json(resp, "Instagram auth check").await
     }
 
@@ -254,7 +254,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = match graph_json(resp, "Instagram publishing limit").await {
             Ok(v) => v,
             // Kontingent- und Token-Fehler zählen, alles andere darf den Upload
@@ -308,7 +308,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = graph_json(resp, "Instagram create container").await?;
         data["id"]
             .as_str()
@@ -342,7 +342,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = graph_json(resp, "Instagram create container").await?;
         let id = data["id"]
             .as_str()
@@ -383,7 +383,7 @@ impl InstagramUploader {
             .body(bytes)
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         graph_json(resp, "Instagram resumable upload").await?;
         Ok(())
     }
@@ -400,7 +400,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         graph_json(resp, "Instagram container status").await
     }
 
@@ -450,7 +450,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = graph_json(resp, "Instagram publish").await?;
         data["id"]
             .as_str()
@@ -545,6 +545,7 @@ impl PlatformUploader for InstagramUploader {
         media_id: &str,
         bucket: &str,
     ) -> Result<AnalyticsSnapshot, UploadError> {
+        self.validate_api_endpoint()?;
         let media_resp = self
             .http
             .get(format!("{}/{}", self.api_base, media_id))
@@ -554,7 +555,7 @@ impl PlatformUploader for InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let media = graph_json(media_resp, "Instagram analytics").await?;
 
         // Insights sind best-effort, aber nicht mehr still: ein Fehlschlag wird
@@ -570,7 +571,7 @@ impl PlatformUploader for InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let insights = match read_graph_json(insights_resp).await {
             Ok(v) => v,
             Err(f) if f.code == Some(190) => return Err(UploadError::NotAuthenticated),
@@ -660,6 +661,20 @@ mod tests {
             .is_err());
         assert!(uploader.container_status("123").await.is_err());
         assert!(uploader.publish_container("123").await.is_err());
+        assert!(uploader.fetch_video_analytics("123", "day").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn security_transport_errors_never_echo_the_access_token_url() {
+        let mut uploader = InstagramUploader::new("synthetic-sensitive-value", BIZ)
+            .with_api_base("http://127.0.0.1:1");
+        // HTTPS-only rejects before networking, producing a real reqwest URL
+        // error for the same credential-bearing request as the upload path.
+        uploader.http = reqwest::Client::builder().https_only(true).build().unwrap();
+        let error = uploader.verify_token().await.unwrap_err();
+        let diagnostic = format!("{error:?}");
+        assert!(!diagnostic.contains("synthetic-sensitive-value"));
+        assert!(!diagnostic.contains("access_token="));
     }
 
     #[tokio::test]

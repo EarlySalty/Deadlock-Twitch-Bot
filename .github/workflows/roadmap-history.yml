@@ -8,6 +8,9 @@ on:
       - tools/generate_roadmap.py
       - tools/roadmap-history/**
       - .github/workflows/roadmap-history.yml
+      # The browser runtime is integrity-locked by this existing manifest pair.
+      - bot/dashboard_v2/package.json
+      - bot/dashboard_v2/package-lock.json
   workflow_dispatch:
 
 permissions:
