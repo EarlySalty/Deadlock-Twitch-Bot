@@ -591,6 +591,9 @@ fn chat_is_quiet(input: &DecisionInput) -> bool {
 
 fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> {
     let now = input.now;
+    if input.steam_match_state.as_ref().is_some_and(|s| s.in_match) {
+        return Some(("in_match", None));
+    }
     match input.stream_started_at {
         Some(start)
             if now
@@ -605,15 +608,6 @@ fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> 
     if let Some(at) = input.last_first_chatter_at {
         if now >= at && now.signed_duration_since(at) < Duration::minutes(FIRST_CHATTER_LOCK_MIN) {
             return Some(("recent_first_chatter", input.last_first_chatter.clone()));
-        }
-    }
-    if input.steam_match_state.as_ref().is_some_and(|s| s.in_match) {
-        let started_over_a_minute = input
-            .match_started_at
-            .map(|started| now >= started + Duration::minutes(1))
-            .unwrap_or(true);
-        if started_over_a_minute {
-            return Some(("in_match", None));
         }
     }
     None
@@ -644,7 +638,7 @@ fn pull_forward_window_open(input: &DecisionInput) -> bool {
     let in_window = input
         .steam_match_state
         .as_ref()
-        .map(|state| state.in_deadlock)
+        .map(|state| state.in_deadlock && !state.in_match)
         .unwrap_or(false);
     if !in_window {
         return false;
@@ -789,12 +783,6 @@ pub fn decide(input: &DecisionInput) -> Decision {
         return postpone(reason, detail);
     }
 
-    if let Some(state) = input.steam_match_state.as_ref() {
-        if state.in_match {
-            return commercial("match_start_window");
-        }
-    }
-
     if let Some(ended) = input.match_ended_at {
         let since = now.signed_duration_since(ended);
         if since >= Duration::zero() && since < Duration::minutes(POST_MATCH_WAIT_MIN) {
@@ -895,7 +883,8 @@ pub fn ad_hint(
         if matches!(
             decision.action,
             DecisionAction::Snooze | DecisionAction::Commercial { .. }
-        ) {
+        ) || decision.reason == "in_match"
+        {
             return None;
         }
         return Some(AdHint {
