@@ -13,7 +13,7 @@ Das Human-Gate schützt aktuell:
 - `/twitch/impressum`
 - `/twitch/agb`
 
-Die Datenschutzerklärung unter `/twitch/datenschutz` ist öffentlich und indexierbar. Damit können Nutzer sowie Plattformprüfungen wie Google OAuth die Angaben zu Datenzugriff, Nutzung, Speicherung und Weitergabe ohne Human-Gate lesen.
+Die Datenschutzerklärung unter `/twitch/datenschutz` ist öffentlich erreichbar, damit Nutzer sowie Plattformprüfungen wie Google OAuth die Angaben zu Datenzugriff, Nutzung, Speicherung und Weitergabe ohne Human-Gate lesen können. Für Suchmaschinen trägt die Seite `noindex`.
 
 ## Architektur
 
@@ -180,7 +180,7 @@ Erwartung:
 
 - `/twitch/legal/access?...` -> `200 OK`
 - `/twitch/impressum` -> `302 Found` nach `/twitch/legal/access?...`
-- `/twitch/datenschutz` -> `200 OK` ohne Gate und ohne `noindex`
+- `/twitch/datenschutz` -> `200 OK` ohne Gate, mit `X-Robots-Tag: noindex`
 - `/twitch/agb` -> `302 Found` nach `/twitch/legal/access?...`
 
 ## Cache- und Neustart-Hinweise
