@@ -195,15 +195,29 @@ impl InstagramUploader {
         self
     }
 
-    fn validate_api_endpoint(&self) -> Result<(), UploadError> {
-        let url = crate::http_security::endpoint(&self.api_base)
+    fn api_endpoint(&self, segments: &[&str]) -> Result<reqwest::Url, UploadError> {
+        let mut url = crate::http_security::endpoint(&self.api_base)
             .map_err(|detail| UploadError::Request(detail.into()))?;
         if url.query().is_some() {
             return Err(UploadError::Request(
                 "API base must not contain a query".into(),
             ));
         }
-        Ok(())
+        if segments
+            .iter()
+            .any(|segment| matches!(*segment, "" | "." | ".."))
+        {
+            return Err(UploadError::Request(
+                "Invalid Graph API path segment".into(),
+            ));
+        }
+        // Encode account/container identifiers as individual path segments. The
+        // validated origin is retained, including for identifiers containing '/'.
+        url.path_segments_mut()
+            .map_err(|_| UploadError::Request("Invalid Graph API base path".into()))?
+            .pop_if_empty()
+            .extend(segments.iter().copied());
+        Ok(url)
     }
 
     fn validate_upload_endpoint(&self, raw: &str) -> Result<reqwest::Url, UploadError> {
@@ -223,10 +237,9 @@ impl InstagramUploader {
     /// Container-Call, damit ein abgelaufenes Token nicht erst nach dem
     /// Datei-Upload auffällt.
     pub async fn verify_token(&self) -> Result<Value, UploadError> {
-        self.validate_api_endpoint()?;
         let resp = self
             .http
-            .get(format!("{}/me", self.api_base))
+            .get(self.api_endpoint(&["me"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", "user_id,username"),
@@ -241,13 +254,9 @@ impl InstagramUploader {
     /// erschöpft ist. `QuotaExceeded` heißt "auf morgen verschieben", nicht
     /// "kaputt".
     pub async fn check_publishing_limit(&self) -> Result<(), UploadError> {
-        self.validate_api_endpoint()?;
         let resp = self
             .http
-            .get(format!(
-                "{}/{}/content_publishing_limit",
-                self.api_base, self.business_account_id
-            ))
+            .get(self.api_endpoint(&[&self.business_account_id, "content_publishing_limit"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", "config,quota_usage"),
@@ -289,13 +298,9 @@ impl InstagramUploader {
         caption: &str,
         share_to_feed: bool,
     ) -> Result<String, UploadError> {
-        self.validate_api_endpoint()?;
         let resp = self
             .http
-            .post(format!(
-                "{}/{}/media",
-                self.api_base, self.business_account_id
-            ))
+            .post(self.api_endpoint(&[&self.business_account_id, "media"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("media_type", "REELS"),
@@ -323,13 +328,9 @@ impl InstagramUploader {
         caption: &str,
         share_to_feed: bool,
     ) -> Result<(String, String), UploadError> {
-        self.validate_api_endpoint()?;
         let resp = self
             .http
-            .post(format!(
-                "{}/{}/media",
-                self.api_base, self.business_account_id
-            ))
+            .post(self.api_endpoint(&[&self.business_account_id, "media"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("media_type", "REELS"),
@@ -390,10 +391,9 @@ impl InstagramUploader {
 
     /// Fragt den Container-Status ab (`status_code` plus Klartext in `status`).
     pub async fn container_status(&self, container_id: &str) -> Result<Value, UploadError> {
-        self.validate_api_endpoint()?;
         let resp = self
             .http
-            .get(format!("{}/{}", self.api_base, container_id))
+            .get(self.api_endpoint(&[container_id])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", "status_code,status"),
@@ -437,13 +437,9 @@ impl InstagramUploader {
 
     /// Veröffentlicht den Container und liefert die Media-ID.
     pub async fn publish_container(&self, container_id: &str) -> Result<String, UploadError> {
-        self.validate_api_endpoint()?;
         let resp = self
             .http
-            .post(format!(
-                "{}/{}/media_publish",
-                self.api_base, self.business_account_id
-            ))
+            .post(self.api_endpoint(&[&self.business_account_id, "media_publish"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("creation_id", container_id),
@@ -545,10 +541,9 @@ impl PlatformUploader for InstagramUploader {
         media_id: &str,
         bucket: &str,
     ) -> Result<AnalyticsSnapshot, UploadError> {
-        self.validate_api_endpoint()?;
         let media_resp = self
             .http
-            .get(format!("{}/{}", self.api_base, media_id))
+            .get(self.api_endpoint(&[media_id])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", MEDIA_FIELDS),
@@ -564,7 +559,7 @@ impl PlatformUploader for InstagramUploader {
         // Historie mit Nullen, die man nicht von echten Nullen unterscheidet.
         let insights_resp = self
             .http
-            .get(format!("{}/{}/insights", self.api_base, media_id))
+            .get(self.api_endpoint(&[media_id, "insights"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("metric", INSIGHT_METRICS),
@@ -627,6 +622,27 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const BIZ: &str = "17841400000";
+
+    #[test]
+    fn security_graph_identifiers_cannot_change_origin_or_query() {
+        let uploader = InstagramUploader::new("synthetic", BIZ);
+        let base = reqwest::Url::parse(DEFAULT_API_BASE).unwrap();
+        for identifier in [
+            "a/b?extra=value#fragment",
+            "https://example.test/x",
+            "//example.test/x",
+        ] {
+            let endpoint = uploader.api_endpoint(&[identifier, "media"]).unwrap();
+            assert_eq!(endpoint.origin(), base.origin());
+            assert!(endpoint.query().is_none());
+            assert!(endpoint.fragment().is_none());
+            assert!(endpoint.path().contains("%2F"));
+            assert!(endpoint.path().ends_with("/media"));
+        }
+        for identifier in ["", ".", ".."] {
+            assert!(uploader.api_endpoint(&[identifier]).is_err());
+        }
+    }
 
     #[test]
     fn security_upload_destination_must_match_the_configured_origin() {
