@@ -5,7 +5,10 @@
 //! - Keyword-Blocklist gegen Schreib-/DDL-/COPY-Befehle.
 //! - Ausführung in einer READ-ONLY-Transaktion (Schreibversuche scheitern
 //!   serverseitig, selbst falls die Lexer-Prüfung umgangen würde).
-//! - Höchstens 200 Zeilen werden zurückgegeben (`LIMIT`-Klammerung).
+//! - Ein NO-SCROLL-Cursor ruft höchstens 200 Zeilen aus PostgreSQL ab.
+//! - SQL-Eingaben sind auf 16 KiB begrenzt; Statements auf 5 s, Locks auf 1 s.
+//! Die Konsole führt absichtlich SQL von authentifizierten Admins aus. Die
+//! Keyword-Prüfung ist keine SQL-Sandbox; PostgreSQL erzwingt READ ONLY.
 //!
 //! Python-Vorbild: `bot/analytics/api_admin.py::_api_admin_system_query`
 //! + `_run_admin_readonly_query`.
@@ -50,6 +53,12 @@ fn normalize_upper(sql: &str) -> String {
 /// Prüft das SQL gegen die SELECT-only- und Keyword-Blocklist-Regeln.
 /// `Ok(())` wenn erlaubt, sonst `Err((status, message))`.
 pub fn validate_sql(sql: &str) -> Result<(), (StatusCode, String)> {
+    if sql.len() > 16 * 1024 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "sql parameter exceeds 16 KiB".into(),
+        ));
+    }
     let trimmed = sql.trim();
     if trimmed.is_empty() {
         return Err((
@@ -58,7 +67,12 @@ pub fn validate_sql(sql: &str) -> Result<(), (StatusCode, String)> {
         ));
     }
     let upper = normalize_upper(trimmed);
-    if !upper.starts_with("SELECT") {
+    if !upper.starts_with("SELECT")
+        || upper
+            .as_bytes()
+            .get(6)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+    {
         return Err((
             StatusCode::BAD_REQUEST,
             "only SELECT statements allowed".to_string(),
@@ -141,7 +155,29 @@ async fn run_readonly(
         .await
         .map_err(|e| e.to_string())?;
 
-    let rows = sqlx::query(sql)
+    sqlx::query("SET LOCAL statement_timeout = '5s'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("SET LOCAL lock_timeout = '1s'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Prepared extended-protocol statements reject stacked SQL. A non-held,
+    // forward-only cursor bounds the fetch itself, instead of collecting every
+    // row and truncating afterward. No untrusted SQL enters the FETCH command.
+    sqlx::query(&format!(
+        "DECLARE tb_admin_readonly NO SCROLL CURSOR FOR {sql}"
+    ))
+    .persistent(false)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    // A cursor can expose different column shapes on each request. Do not cache
+    // the prepared FETCH statement across unrelated admin queries.
+    let rows = sqlx::query(&format!("FETCH FORWARD {MAX_ROWS} FROM tb_admin_readonly"))
+        .persistent(false)
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -228,6 +264,57 @@ mod tests {
         assert!(validate_sql("SELECT created_at FROM t").is_ok());
         // "updated" enthält "UPDATE" als Teilwort → erlaubt (kein ganzes Wort).
         assert!(validate_sql("SELECT updated_flag FROM t").is_ok());
+    }
+
+    #[test]
+    fn security_query_rejects_oversized_sql_and_select_prefixes() {
+        assert!(validate_sql(&format!("SELECT '{}'", "x".repeat(16 * 1024))).is_err());
+        assert!(validate_sql("SELECTED value").is_err());
+        assert!(validate_sql("SELECT_value").is_err());
+        assert!(validate_sql("SELECT(1)").is_ok());
+    }
+
+    #[tokio::test]
+    async fn security_query_fetches_only_the_first_200_rows() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            run_readonly(&db.pool, "SELECT i, pg_sleep(CASE WHEN i > 200 THEN 10 ELSE 0 END) FROM generate_series(1, 201) AS i"),
+        ).await.expect("The 201st row must never be evaluated").unwrap();
+        assert_eq!(result.1.len(), 200);
+        assert_eq!(result.1[199][0].as_deref(), Some("200"));
+    }
+
+    #[tokio::test]
+    async fn security_query_times_out_and_keeps_the_pool_usable() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            run_readonly(&db.pool, "SELECT pg_sleep(10)"),
+        )
+        .await
+        .expect("PostgreSQL must enforce the query deadline");
+        assert!(result.is_err());
+        let (_, rows) = run_readonly(&db.pool, "SELECT 1").await.unwrap();
+        assert_eq!(rows[0][0].as_deref(), Some("1"));
+    }
+
+    #[tokio::test]
+    async fn security_query_cannot_write_or_stack_statements() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        assert!(run_readonly(&db.pool, "SELECT 1 INTO forbidden")
+            .await
+            .is_err());
+        assert!(
+            run_readonly(&db.pool, "SELECT 1; COMMIT; CREATE TABLE forbidden(n INT)")
+                .await
+                .is_err()
+        );
+        let exists: Option<String> = sqlx::query_scalar("SELECT to_regclass('forbidden')::text")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert!(exists.is_none());
     }
 
     async fn pool(schema: &str) -> Option<PgPool> {
