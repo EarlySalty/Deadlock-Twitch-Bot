@@ -65,7 +65,7 @@ where
 }
 
 /// Wie [`lookup`], aber loggt das Ergebnis inklusive Pfadangabe und gibt bei
-/// einem DB-Fehler `Err(())` zurück. Aufrufer behandeln `Err` als "Signup
+/// einem DB-Fehler den ursprünglichen `sqlx::Error` zurück. Aufrufer behandeln `Err` als "Signup
 /// abbrechen" (fail-closed): ein nicht beantwortbarer Nachschlag darf keinen
 /// gesperrten Streamer durchlassen.
 pub async fn lookup_or_fail_closed<'e, E>(
@@ -73,7 +73,7 @@ pub async fn lookup_or_fail_closed<'e, E>(
     twitch_user_id: Option<&str>,
     twitch_login: &str,
     pfad: &str,
-) -> Result<Option<SignupBlock>, ()>
+) -> Result<Option<SignupBlock>, sqlx::Error>
 where
     E: PgExecutor<'e>,
 {
@@ -105,7 +105,7 @@ where
                 %pfad,
                 "Signup-Block-Nachschlag fehlgeschlagen, Signup wird abgebrochen (fail-closed)"
             );
-            Err(())
+            Err(error)
         }
     }
 }

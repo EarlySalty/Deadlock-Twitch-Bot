@@ -740,7 +740,7 @@ pub async fn promote_streamer_to_partner(
             });
         }
         Ok(None) => {}
-        Err(()) => return Err(PartnerSetupError::SignupBlockLookupFailed),
+        Err(_) => return Err(PartnerSetupError::SignupBlockLookupFailed),
     }
 
     let source_row = load_streamer_source_row(tx, &normalized_user_id, &normalized_login).await?;
