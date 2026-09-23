@@ -299,11 +299,7 @@ async fn database() -> crate::test_postgres::TestPostgres {
     .await
     .unwrap();
     sqlx::raw_sql("CREATE TABLE twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
-        CREATE SCHEMA core;
-        CREATE TABLE core.steam_links(discord_id BIGINT, steam_id TEXT, verified BOOLEAN, primary_account BOOLEAN, linked_at TIMESTAMPTZ);
-        INSERT INTO twitch_streamer_identities VALUES ('target', '101');
-        INSERT INTO core.steam_links VALUES (101, '76561197960278073', TRUE, TRUE, NOW()),
-            (101, '76561197960266715', TRUE, FALSE, NOW());")
+        INSERT INTO twitch_streamer_identities VALUES ('target', '101');")
         .execute(&db.pool).await.unwrap();
     db
 }
@@ -337,20 +333,16 @@ async fn verified_primary_gc_rank_wins_without_any_public_request() {
 }
 
 #[tokio::test]
-async fn missing_friend_missing_rank_and_gc_outage_use_known_primary_steam_id() {
+async fn missing_friend_and_missing_rank_fall_back_to_the_primary_steam_id() {
     let db = database().await;
-    for response in [
-        ResponseTemplate::new(200)
-            .set_body_json(json!({"linked":true,"verified":true,"is_steam_friend":false})),
-        ResponseTemplate::new(200).set_body_json(
-            json!({"linked":true,"verified":true,"is_steam_friend":true,"rank_name":null}),
-        ),
-        ResponseTemplate::new(503),
-    ] {
+    for is_steam_friend in [false, true] {
         let server = MockServer::start().await;
         Mock::given(path("/rank"))
             .and(query_param("discord_id", "101"))
-            .respond_with(response)
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "linked":true,"verified":true,"is_steam_friend":is_steam_friend,
+                "steam_id":"76561197960278073"
+            })))
             .mount(&server)
             .await;
         public_rank(&server, 12345, 1).await;
@@ -371,13 +363,12 @@ async fn missing_friend_missing_rank_and_gc_outage_use_known_primary_steam_id() 
 #[tokio::test]
 async fn unverified_primary_is_not_replaced_by_verified_secondary_or_similar_name() {
     let db = database().await;
-    sqlx::query("UPDATE core.steam_links SET verified=FALSE WHERE primary_account=TRUE")
-        .execute(&db.pool)
-        .await
-        .unwrap();
     let server = MockServer::start().await;
     Mock::given(path("/rank"))
-        .respond_with(ResponseTemplate::new(503))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "linked":true,"verified":false,"is_steam_friend":false,
+            "steam_id":"76561197960278073"
+        })))
         .expect(1)
         .mount(&server)
         .await;
@@ -402,12 +393,8 @@ async fn missing_identity_database_is_not_treated_as_no_link() {
 }
 
 #[tokio::test]
-async fn missing_steam_database_is_not_treated_as_no_link() {
+async fn rank_outage_is_not_treated_as_no_link() {
     let db = database().await;
-    sqlx::query("DROP TABLE core.steam_links")
-        .execute(&db.pool)
-        .await
-        .unwrap();
     let server = MockServer::start().await;
     Mock::given(path("/rank"))
         .respond_with(ResponseTemplate::new(503))
@@ -420,7 +407,12 @@ async fn missing_steam_database_is_not_treated_as_no_link() {
             .await,
         UNAVAILABLE
     );
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(!server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .any(|r| r.url.path().contains("steam-search")));
 }
 
 #[test]
