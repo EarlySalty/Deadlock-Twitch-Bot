@@ -2858,6 +2858,7 @@ mod callback_tests {
                 last_link_checked_at        TEXT,
                 next_link_check_at          TEXT,
                 manual_partner_opt_out      INTEGER DEFAULT 0,
+                raid_admin_enabled          BOOLEAN NOT NULL DEFAULT TRUE,
                 raid_bot_enabled            INTEGER DEFAULT 0,
                 silent_ban                  INTEGER DEFAULT 0,
                 silent_raid                 INTEGER DEFAULT 0,
