@@ -159,7 +159,12 @@ impl CredentialManager {
                         username: creds.platform_username.clone(),
                         user_id: creds.platform_user_id.clone(),
                         expires_at: creds.expires_at.clone(),
-                        expired: token_expired(creds.expires_at.as_deref(), now_ts()),
+                        // Dashboard-Status und Refresh-Fenster sind zwei verschiedene Dinge:
+                        // YouTube stellt Access-Tokens typischerweise fuer ~1h aus. Die
+                        // Refresh-Logik darf sie innerhalb dieses Fensters proaktiv erneuern,
+                        // aber direkt nach einem erfolgreichen OAuth-Callback als
+                        // "abgelaufen" zu markieren ist falsch.
+                        expired: token_actually_expired(creds.expires_at.as_deref(), now_ts()),
                         scopes: creds.scopes.clone(),
                         uses_global_fallback,
                     }
@@ -203,6 +208,21 @@ fn token_expired(expires_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -
     }
 }
 
+/// Tatsächlicher Ablauf für die UI. Anders als [`token_expired`] enthält diese
+/// Prüfung bewusst kein 1h-Refresh-Fenster: ein frisch ausgestelltes
+/// YouTube-Token mit rund 3600 Sekunden Laufzeit ist gültig und darf im
+/// Dashboard nicht unmittelbar wieder als abgelaufen erscheinen.
+fn token_actually_expired(expires_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Some(raw) = expires_at.map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let normalized = raw.replace('Z', "+00:00");
+    match chrono::DateTime::parse_from_rfc3339(&normalized) {
+        Ok(exp) => exp.with_timezone(&chrono::Utc) <= now,
+        Err(_) => true,
+    }
+}
+
 /// Verhindert CRLF-Log-Forging (Python `_sanitize_log_value`).
 fn sanitize(value: &str) -> String {
     value.replace('\r', "\\r").replace('\n', "\\n")
@@ -225,12 +245,12 @@ mod tests {
         assert!(token_expired(None, now)); // fehlend
         assert!(token_expired(Some("   "), now)); // leer
         assert!(token_expired(Some("kaputt"), now)); // unparsebar
-                                                     // In 30min → < 1h → abgelaufen.
+                                                     // In 30min → < 1h → Refresh nötig.
         assert!(token_expired(
             Some(&(now + Duration::minutes(30)).to_rfc3339()),
             now
         ));
-        // In 2h → frisch.
+        // In 2h → kein Refresh nötig.
         assert!(!token_expired(
             Some(&(now + Duration::hours(2)).to_rfc3339()),
             now
@@ -240,6 +260,22 @@ mod tests {
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
         assert!(!token_expired(Some(&z), now));
+    }
+
+    #[test]
+    fn platform_status_nennt_frisches_einstunden_token_nicht_abgelaufen() {
+        let now = chrono::Utc::now();
+        // Direkt nach dem OAuth-Callback sind von Googles ~3600 Sekunden
+        // Laufzeit bereits ein paar Sekunden verstrichen. Das Token ist damit
+        // im proaktiven Refresh-Fenster, aber weiterhin ganz normal gültig.
+        let frisch = (now + Duration::minutes(59)).to_rfc3339();
+        assert!(!token_actually_expired(Some(&frisch), now));
+        assert!(token_expired(Some(&frisch), now));
+
+        let vorbei = (now - Duration::seconds(1)).to_rfc3339();
+        assert!(token_actually_expired(Some(&vorbei), now));
+        assert!(token_actually_expired(None, now));
+        assert!(token_actually_expired(Some("kaputt"), now));
     }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
