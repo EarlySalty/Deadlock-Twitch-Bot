@@ -1062,7 +1062,7 @@ mod tests {
         for value in [0, 49, 50] {
             fetch.total = Some(value);
             assert_eq!(
-                preflight_evidence(&target, &[stream.clone()], &fetch),
+                preflight_evidence(&target, std::slice::from_ref(&stream), &fetch),
                 (Some(value as i32), true, None)
             );
         }
@@ -1074,7 +1074,7 @@ mod tests {
         ] {
             fetch.total = value;
             assert_eq!(
-                preflight_evidence(&target, &[stream.clone()], &fetch).0,
+                preflight_evidence(&target, std::slice::from_ref(&stream), &fetch).0,
                 None,
                 "one viewer must never stand in for a follower count"
             );
@@ -1083,7 +1083,7 @@ mod tests {
         for status in [None, Some(401), Some(403), Some(429), Some(500)] {
             fetch.http_status = status;
             assert_eq!(
-                preflight_evidence(&target, &[stream.clone()], &fetch).0,
+                preflight_evidence(&target, std::slice::from_ref(&stream), &fetch).0,
                 None
             );
         }
@@ -1095,7 +1095,7 @@ mod tests {
     #[test]
     fn preflight_verlangt_genau_den_angefragten_live_deadlock_kanal() {
         let (target, stream, fetch) = preflight_fixture();
-        assert!(preflight_evidence(&target, &[stream.clone()], &fetch).1);
+        assert!(preflight_evidence(&target, std::slice::from_ref(&stream), &fetch).1);
         assert!(!preflight_evidence(&target, &[], &fetch).1);
         assert!(!preflight_evidence(&target, &[stream.clone(), stream.clone()], &fetch).1);
         let mut invalid = stream.clone();

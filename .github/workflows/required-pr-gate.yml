@@ -28,12 +28,21 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Test fail-closed aggregation
+      - name: Install pinned CI helper toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+      - name: Test fail-closed aggregation and schema guards
         run: |
-          rustfmt --edition 2021 --check .github/ci/pr_gate.rs
-          rustc --edition=2021 -D warnings --test .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate-tests"
+          rustfmt +1.98.0 --edition 2021 --check .github/ci/*.rs
+          rustc +1.98.0 --edition=2021 -D warnings --test .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate-tests"
           "$RUNNER_TEMP/pr-gate-tests"
-          rustc --edition=2021 -D warnings .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate"
+          rustc +1.98.0 --edition=2021 -D warnings --test .github/ci/brain_schema.rs -o "$RUNNER_TEMP/brain-schema-tests"
+          "$RUNNER_TEMP/brain-schema-tests"
+          jq --version
+          rustc +1.98.0 --edition=2021 -D warnings --test .github/ci/report_gate.rs -o "$RUNNER_TEMP/report-gate-tests"
+          "$RUNNER_TEMP/report-gate-tests"
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate"
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/negative_controls.rs -o "$RUNNER_TEMP/negative-controls"
+          "$RUNNER_TEMP/negative-controls" gate "$RUNNER_TEMP/pr-gate"
       - name: Detect changes without API file-list truncation
         id: scope
         env:
@@ -185,9 +194,15 @@ jobs:
           advanced-security: false
           annotations: true
 
+  deep:
+    uses: ./.github/workflows/security-pr-deep.yml
+    permissions:
+      contents: read
+      actions: read
+
   required-pr-gate:
     name: Required PR Gate
-    needs: [scope, manifest, rust-security, rust-sqlx, frontend, secrets, sast, trivy, actions]
+    needs: [scope, manifest, rust-security, rust-sqlx, frontend, secrets, sast, trivy, actions, deep]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -195,6 +210,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install pinned gate toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
       - name: Require success or an explicitly irrelevant scope
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
@@ -203,12 +220,13 @@ jobs:
           SAST_RESULT: ${{ needs.sast.result }}
           TRIVY_RESULT: ${{ needs.trivy.result }}
           ACTIONS_RESULT: ${{ needs.actions.result }}
+          DEEP_RESULT: ${{ needs.deep.result }}
           RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
           FRONTEND_REQUIRED: ${{ needs.scope.outputs.frontend }}
           RUST_SECURITY_RESULT: ${{ needs.rust-security.result }}
           RUST_SQLX_RESULT: ${{ needs.rust-sqlx.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
         run: |
-          rustc --edition=2021 -D warnings .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate"
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate"
           "$RUNNER_TEMP/pr-gate" gate
           echo 'All relevant deterministic checks succeeded.' >> "$GITHUB_STEP_SUMMARY"

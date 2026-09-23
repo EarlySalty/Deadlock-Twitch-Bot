@@ -25,10 +25,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust stable
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
       - name: Install PostgreSQL 16 host programs
         run: |
           sudo apt-get update
@@ -84,10 +84,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust stable
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
       - name: Build workspace from SQLx cache
         working-directory: rust
         env:
@@ -100,7 +100,7 @@ jobs:
     timeout-minutes: 60
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg16
+        image: timescale/timescaledb:2.17.2-pg16@sha256:4e459e217f00cbb09920c34d245501e63427e6767a495de57ce76823ff280f12
         env:
           POSTGRES_USER: postgres
           # Ausschließlich der wegwerfbare GitHub-Runner, keine Produktions-DB.
@@ -122,10 +122,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust stable
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
       - name: Install host PostgreSQL for isolated contract tests
         run: |
           sudo apt-get update
@@ -134,14 +134,69 @@ jobs:
         run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
       - name: Apply migrations
         run: cargo sqlx migrate run --source rust/migrations
-      - name: Check SQLx offline cache
+      - name: Provision the pinned canonical Brain schema
+        run: |
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/brain_schema.rs -o "$RUNNER_TEMP/brain-schema"
+          "$RUNNER_TEMP/brain-schema" rust/Cargo.lock "$RUNNER_TEMP"
+      - name: Check SQLx offline cache against both real schemas
         working-directory: rust
         env:
           SQLX_OFFLINE: "false"
         run: cargo sqlx prepare --workspace --check -- --workspace
-      - name: Workspace library and binary tests
+
+  workspace-tests:
+    name: "Workspace, integration and fresh database contracts"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: timescale/timescaledb:2.17.2-pg16@sha256:4e459e217f00cbb09920c34d245501e63427e6767a495de57ce76823ff280f12
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: twitchbot_sqlx
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d twitchbot_sqlx"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+      TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+      TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust and isolated PostgreSQL programs
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+          sudo -n apt-get update
+          sudo -n apt-get install --yes --no-install-recommends postgresql-16
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install pinned migration CLI
+        run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
+      - name: Require the disposable database and apply Twitch migrations
+        id: database
+        run: |
+          test -n "$DATABASE_URL"
+          test -n "$TB_TEST_DATABASE_URL"
+          test -n "$TEST_DATABASE_URL"
+          psql --no-psqlrc --set=ON_ERROR_STOP=1 "$DATABASE_URL" --command 'SELECT 1' > /dev/null
+          cargo sqlx migrate run --source rust/migrations
+      # Independent of the Brain online-cache job: its failure must not hide
+      # the application suite. --no-fail-fast still exercises later targets.
+      - name: Workspace libraries, binaries, examples and integration tests
         working-directory: rust
-        run: cargo test --workspace --lib --bins --locked -- --test-threads=2
-      - name: Fresh database and migration contracts (DSNs are mandatory above)
+        run: cargo test --workspace --all-targets --no-fail-fast --locked -j2 -- --test-threads=1
+      - name: Fresh database and migration contracts
+        if: ${{ !cancelled() && steps.database.outcome == 'success' }}
         working-directory: rust
-        run: cargo test --locked -p tb-db --test fresh_migrations_schema --test hermetic -- --test-threads=1
+        run: cargo test --locked -j2 -p tb-db --test fresh_migrations_schema --test hermetic -- --test-threads=1

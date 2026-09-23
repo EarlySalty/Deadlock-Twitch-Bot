@@ -58,6 +58,7 @@ fn aggregate(mut get: impl FnMut(&str) -> String) -> Result<(), String> {
         "SAST_RESULT",
         "TRIVY_RESULT",
         "ACTIONS_RESULT",
+        "DEEP_RESULT",
     ] {
         if !acceptable(true, &get(key)) {
             return Err(format!("{key} did not succeed"));
@@ -155,6 +156,7 @@ mod tests {
             "SAST_RESULT",
             "TRIVY_RESULT",
             "ACTIONS_RESULT",
+            "DEEP_RESULT",
             "RUST_SECURITY_RESULT",
             "RUST_SQLX_RESULT",
             "FRONTEND_RESULT",

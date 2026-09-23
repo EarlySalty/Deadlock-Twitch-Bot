@@ -18,6 +18,9 @@ mod category_followers;
 mod chatters_wiring;
 mod confirm_resolver;
 mod crew_archive;
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
 mod flip_unraid;

@@ -32,7 +32,7 @@ fn success(value: impl Serialize) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response()
 }
 
-async fn brain_pool() -> Result<PgPool, Response> {
+async fn brain_pool() -> Result<PgPool, Box<Response>> {
     // A dedicated read-only DSN is preferred. Existing installations can use
     // the central DSN already supplied by their approved secret bootstrap.
     // Neither its value nor database errors are sent to the browser/logged.
@@ -50,7 +50,7 @@ async fn brain_pool() -> Result<PgPool, Response> {
         PgPoolOptions::new().max_connections(3).acquire_timeout(Duration::from_secs(8))
             .idle_timeout(Duration::from_secs(60)).connect_with(options).await
             .map_err(|_| error(StatusCode::SERVICE_UNAVAILABLE, "brain_unavailable", "Die Brain-Datenbank ist derzeit nicht erreichbar oder der Zugriff ist nicht freigegeben."))
-    }).await.cloned()
+    }).await.cloned().map_err(Box::new)
 }
 
 fn reasoner_error(err: ReasonerError) -> Response {
@@ -71,7 +71,7 @@ pub async fn catalog_handler(auth: DashboardAuthLevel) -> Response {
     }
     let pool = match brain_pool().await {
         Ok(pool) => pool,
-        Err(err) => return err,
+        Err(err) => return *err,
     };
     match lab::catalog(&pool).await {
         Ok(catalog) => success(catalog),
@@ -92,7 +92,7 @@ pub async fn build_handler(auth: DashboardAuthLevel, Json(input): Json<LabReques
     }
     let pool = match brain_pool().await {
         Ok(pool) => pool,
-        Err(err) => return err,
+        Err(err) => return *err,
     };
     match tokio::time::timeout(Duration::from_secs(150), lab::build(pool, input)).await {
         Ok(Ok(report)) => success(report),

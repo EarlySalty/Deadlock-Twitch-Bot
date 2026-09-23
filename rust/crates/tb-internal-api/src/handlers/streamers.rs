@@ -1243,8 +1243,7 @@ pub async fn discord_flag_handler(
     Extension(scope): Extension<Option<tb_config::discord::RaidOAuth>>,
     State(pool): State<PgPool>,
     Extension(idem): Extension<IdempotencyState>,
-    headers: HeaderMap,
-    OriginalUri(uri): OriginalUri,
+    (headers, OriginalUri(uri)): (HeaderMap, OriginalUri),
     Path(raw_login): Path<String>,
     Json(payload): Json<serde_json::Value>,
 ) -> Response {

@@ -290,7 +290,7 @@ async fn maintenance(
     loop {
         timer.tick().await;
         category::flush_rollups(&pool, 2000).await?;
-        if iteration % 20 == 0 {
+        if iteration.is_multiple_of(20) {
             sqlx::query("SELECT category_prepare_partitions()")
                 .execute(&pool)
                 .await?;

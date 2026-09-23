@@ -247,9 +247,7 @@ pub async fn page(state: Option<Extension<DashboardAuthState>>, headers: HeaderM
             "Jetzt Steam verbinden."
         };
         let side = if ready {
-            format!(
-                "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank me</code> schreiben.</span></li><li><span class=check>✓</span><span>Du kannst mehrere Steam-Konten verbinden und eines als Standard wählen.</span></li><li><span class=check>✓</span><span>Einzelne Konten oder die komplette Verknüpfung lassen sich jederzeit entfernen.</span></li></ul></aside>"
-            )
+            "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank me</code> schreiben.</span></li><li><span class=check>✓</span><span>Du kannst mehrere Steam-Konten verbinden und eines als Standard wählen.</span></li><li><span class=check>✓</span><span>Einzelne Konten oder die komplette Verknüpfung lassen sich jederzeit entfernen.</span></li></ul></aside>".to_string()
         } else {
             "<aside class=side-card><h3>Was passiert jetzt?</h3><ul class=side-list><li><span class=check>✓</span><span>Der Login öffnet direkt Steam.</span></li><li><span class=check>✓</span><span>Wir bekommen nur deine bestätigte öffentliche Steam-ID.</span></li><li><span class=check>✓</span><span>Passwort und Inventarberechtigungen sehen wir nicht.</span></li></ul></aside>".to_string()
         };

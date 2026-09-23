@@ -153,7 +153,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self(
-            WebSocketUpgrade::from_request_parts(parts, state).await.ok(),
+            WebSocketUpgrade::from_request_parts(parts, state)
+                .await
+                .ok(),
         ))
     }
 }
@@ -231,7 +233,7 @@ async fn kanal_kennung(
     pool: &PgPool,
     auth: &DashboardAuthLevel,
     login: &str,
-) -> Result<String, Response> {
+) -> Result<String, Box<Response>> {
     if let DashboardAuthLevel::Partner {
         twitch_login,
         twitch_user_id,
@@ -261,11 +263,11 @@ async fn kanal_kennung(
     .flatten();
 
     gefunden.ok_or_else(|| {
-        fehler(
+        Box::new(fehler(
             StatusCode::NOT_FOUND,
             "kanal_unbekannt",
             "Zu diesem Kanal ist keine Twitch-Kennung hinterlegt.",
-        )
+        ))
     })
 }
 
@@ -464,7 +466,7 @@ pub async fn obs_ws_handler(
     };
     let channel_id = match kanal_kennung(&pool, &auth, &login).await {
         Ok(kennung) => kennung,
-        Err(antwort) => return antwort,
+        Err(antwort) => return *antwort,
     };
     let Some(upgrade) = upgrade else {
         return fehler(
@@ -1028,8 +1030,12 @@ mod tests {
 
     #[test]
     fn nur_der_ping_gilt_als_client_rahmen() {
-        assert!(ist_ping(&Message::Text(r#"{"typ":"ping"}"#.to_string().into())));
-        assert!(!ist_ping(&Message::Text(r#"{"typ":"chat"}"#.to_string().into())));
+        assert!(ist_ping(&Message::Text(
+            r#"{"typ":"ping"}"#.to_string().into()
+        )));
+        assert!(!ist_ping(&Message::Text(
+            r#"{"typ":"chat"}"#.to_string().into()
+        )));
         assert!(!ist_ping(&Message::Text("kein json".to_string().into())));
         assert!(!ist_ping(&Message::Binary(vec![1, 2, 3].into())));
         assert!(!ist_ping(&Message::Pong(Vec::new().into())));

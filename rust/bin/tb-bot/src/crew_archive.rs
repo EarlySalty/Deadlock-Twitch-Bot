@@ -117,8 +117,7 @@ async fn cleanup_once(pool: &PgPool, discord: &dyn DiscordBackend) -> Result<(),
 }
 
 #[cfg(test)]
-#[path = "../../../test-support/postgres.rs"]
-mod postgres;
+use crate::test_postgres as postgres;
 
 #[cfg(test)]
 mod tests {

@@ -28,7 +28,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install rustfmt
-        run: rustup toolchain install stable --profile minimal --component rustfmt
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
       - name: Check workspace formatting
         working-directory: rust
         run: cargo fmt --all --check
@@ -42,10 +42,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust stable
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal --component clippy
+          rustup default 1.98.0
       - name: Cargo cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -84,10 +84,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust stable
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
       - name: Install cargo-deny
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
