@@ -87,3 +87,9 @@ Lokale Nachweise auf diesem Stand:
 Der workspace-weite Formatter-Check ist weiterhin kein belastbarer Gate-Nachweis, weil er bereits vorhandene Formatabweichungen außerhalb dieses Security-Diffs meldet. Diese fremden Stellen wurden bewusst nicht umformatiert. Die funktionalen Tests oben liefen davon getrennt erfolgreich.
 
 PR #957 bleibt gemäß PR-first-Testbetrieb offen. Kein Merge nach `main`, kein Auto-Merge, kein Deploy und kein Dienst-Neustart in dieser Fortsetzung. Der vollständige finale Head-SHA und die GitHub-Run-URLs werden nach dem Push zusätzlich direkt am PR dokumentiert.
+
+### Zusätzlich geschlossener Dependabot-Fund
+
+Beim Push meldete GitHub außerhalb von Code Scanning den offenen Dependabot-Alert #122 für `@humanfs/node` im Dashboard-Lockfile. ESLint 10.9.1 erlaubt `@humanfs/node ^0.16.6`; deshalb wurde nur die transitive Familie von 0.16.7 auf die gepatchte 0.16.8 aktualisiert. Getesteter Code-SHA: `70a7e6a21282493ad4576098dcf27a946cfefc58`.
+
+Nachweise: `npm run build` erfolgreich; `npm audit --package-lock-only` meldet 0 bekannte Vulnerabilities. Der vollständige Dashboard-Testlauf hat 389 von 393 Tests bestanden. Die vier roten Tests sowie die aktuellen ESLint-Fehler liegen ausschließlich in Dateien, die gegenüber `origin/main` unverändert sind; sie sind damit bestehender Baseline-Zustand und nicht durch den Lockfile-Patch verursacht. Diese fremden Stellen wurden nicht mit repariert.
