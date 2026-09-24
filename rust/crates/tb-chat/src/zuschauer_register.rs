@@ -595,6 +595,113 @@ impl ZuschauerRegister {
     }
 }
 
+pub async fn unauffaellig(pool: &PgPool, id: &str) -> Result<bool, sqlx::Error> {
+    if id.trim().is_empty() {
+        return Ok(false);
+    }
+    let current = sqlx::query_as::<_, (bool, bool, bool)>(
+        "SELECT unauffaellig_seit IS NOT NULL, vertrauen_widerrufen_am IS NOT NULL, \
+         COALESCE(historie_geprueft_am > NOW() - INTERVAL '1 day', FALSE) \
+         FROM twitch_zuschauer_register WHERE twitch_user_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some((clean, revoked, fresh)) = current {
+        if revoked {
+            return Ok(false);
+        }
+        if clean || fresh {
+            return Ok(clean);
+        }
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
+        VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
+        .bind(id).execute(&mut *tx).await?;
+    let (clean, revoked, fresh) = sqlx::query_as::<_, (bool, bool, bool)>(
+        "SELECT unauffaellig_seit IS NOT NULL, vertrauen_widerrufen_am IS NOT NULL, \
+         COALESCE(historie_geprueft_am > NOW() - INTERVAL '1 day', FALSE) \
+         FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if revoked || clean || fresh {
+        tx.commit().await?;
+        return Ok(clean && !revoked);
+    }
+    let linked: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1) \
+         OR EXISTS (SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id = $1 \
+            AND NULLIF(discord_user_id, '') IS NOT NULL AND is_on_discord = 1)",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let qualified: bool = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT session_id) >= 3 AND COALESCE(SUM(messages), 0) >= 20 \
+         AND COUNT(DISTINCT (first_message_at::timestamptz AT TIME ZONE 'UTC')::date) >= 3 \
+         AND COALESCE(MAX(first_message_at::timestamptz) - MIN(first_message_at::timestamptz) >= INTERVAL '7 days', FALSE) \
+         FROM twitch_session_chatters WHERE chatter_id = $1 AND messages > 0",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE twitch_zuschauer_register SET historie_geprueft_am = NOW(), \
+        unauffaellig_seit = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE twitch_user_id = $1",
+    )
+    .bind(id)
+    .bind(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
+}
+
+pub(crate) async fn reserviere_radar_meldung(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    if id.trim().is_empty() {
+        return Ok(None);
+    }
+    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
+        VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
+        .bind(id).execute(&mut **tx).await?;
+    let (last, previous, repetitions) =
+        sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i64)>(
+            "SELECT radar_meldung_am, radar_vorherige_meldung_am, radar_wiederholungen \
+         FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?;
+    let now = Utc::now();
+    if last.is_some_and(|at| now - at < chrono::Duration::days(1))
+        || previous.is_some_and(|at| now - at < chrono::Duration::days(7))
+    {
+        sqlx::query(
+            "UPDATE twitch_zuschauer_register SET radar_wiederholungen = \
+            LEAST(radar_wiederholungen, 9223372036854775806) + 1 WHERE twitch_user_id = $1",
+        )
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+        return Ok(None);
+    }
+    sqlx::query(
+        "UPDATE twitch_zuschauer_register SET radar_vorherige_meldung_am = radar_meldung_am, \
+        radar_meldung_am = $2, radar_wiederholungen = 0 WHERE twitch_user_id = $1",
+    )
+    .bind(id)
+    .bind(now)
+    .execute(&mut **tx)
+    .await?;
+    Ok(Some(repetitions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,111 +845,4 @@ mod tests {
         );
         assert!(p >= GATE_MAX_P, "HIGH soll das Gate ablehnen, war {p}");
     }
-}
-
-pub async fn unauffaellig(pool: &PgPool, id: &str) -> Result<bool, sqlx::Error> {
-    if id.trim().is_empty() {
-        return Ok(false);
-    }
-    let current = sqlx::query_as::<_, (bool, bool, bool)>(
-        "SELECT unauffaellig_seit IS NOT NULL, vertrauen_widerrufen_am IS NOT NULL, \
-         COALESCE(historie_geprueft_am > NOW() - INTERVAL '1 day', FALSE) \
-         FROM twitch_zuschauer_register WHERE twitch_user_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    if let Some((clean, revoked, fresh)) = current {
-        if revoked {
-            return Ok(false);
-        }
-        if clean || fresh {
-            return Ok(clean);
-        }
-    }
-    let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
-        VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
-        .bind(id).execute(&mut *tx).await?;
-    let (clean, revoked, fresh) = sqlx::query_as::<_, (bool, bool, bool)>(
-        "SELECT unauffaellig_seit IS NOT NULL, vertrauen_widerrufen_am IS NOT NULL, \
-         COALESCE(historie_geprueft_am > NOW() - INTERVAL '1 day', FALSE) \
-         FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if revoked || clean || fresh {
-        tx.commit().await?;
-        return Ok(clean && !revoked);
-    }
-    let linked: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1) \
-         OR EXISTS (SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id = $1 \
-            AND NULLIF(discord_user_id, '') IS NOT NULL AND is_on_discord = 1)",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let qualified: bool = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT session_id) >= 3 AND COALESCE(SUM(messages), 0) >= 20 \
-         AND COUNT(DISTINCT (first_message_at::timestamptz AT TIME ZONE 'UTC')::date) >= 3 \
-         AND COALESCE(MAX(first_message_at::timestamptz) - MIN(first_message_at::timestamptz) >= INTERVAL '7 days', FALSE) \
-         FROM twitch_session_chatters WHERE chatter_id = $1 AND messages > 0",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE twitch_zuschauer_register SET historie_geprueft_am = NOW(), \
-        unauffaellig_seit = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE twitch_user_id = $1",
-    )
-    .bind(id)
-    .bind(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(qualified || linked || crate::safe_list::is_safe(Some(id), ""))
-}
-
-pub(crate) async fn reserviere_radar_meldung(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    id: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    if id.trim().is_empty() {
-        return Ok(None);
-    }
-    sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, community_probability, computed_at) \
-        VALUES ($1, 0.2, 'epoch') ON CONFLICT DO NOTHING")
-        .bind(id).execute(&mut **tx).await?;
-    let (last, previous, repetitions) =
-        sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i64)>(
-            "SELECT radar_meldung_am, radar_vorherige_meldung_am, radar_wiederholungen \
-         FROM twitch_zuschauer_register WHERE twitch_user_id = $1 FOR UPDATE",
-        )
-        .bind(id)
-        .fetch_one(&mut **tx)
-        .await?;
-    let now = Utc::now();
-    if last.is_some_and(|at| now - at < chrono::Duration::days(1))
-        || previous.is_some_and(|at| now - at < chrono::Duration::days(7))
-    {
-        sqlx::query(
-            "UPDATE twitch_zuschauer_register SET radar_wiederholungen = \
-            LEAST(radar_wiederholungen, 9223372036854775806) + 1 WHERE twitch_user_id = $1",
-        )
-        .bind(id)
-        .execute(&mut **tx)
-        .await?;
-        return Ok(None);
-    }
-    sqlx::query(
-        "UPDATE twitch_zuschauer_register SET radar_vorherige_meldung_am = radar_meldung_am, \
-        radar_meldung_am = $2, radar_wiederholungen = 0 WHERE twitch_user_id = $1",
-    )
-    .bind(id)
-    .bind(now)
-    .execute(&mut **tx)
-    .await?;
-    Ok(Some(repetitions))
 }

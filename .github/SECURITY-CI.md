@@ -1,5 +1,13 @@
 # Deterministische PR-Prüfungen
 
+## Aktuelle Fortsetzung vom 24. September 2026
+
+Die fortlaufenden Nachweise stehen in [der Task-Akte](../.tasks/2026-09-23-ci953-abnahme/FORTSETZUNG-20260924.md). Auf dem bereits gepushten Frontend-Commit `da6f48844ae2efbd8f6e40ad0978bb6635ef1ee7` besteht OSV einschließlich seiner Gegenproben erstmals im [GitHub-Lauf 35944559078](https://github.com/EarlySalty/Deadlock-Twitch-Bot/actions/runs/35944559078). Die drei HTML-/URL-Prüfbefunde sind dort beseitigt; der lokale Chromium-Dateizugriff bleibt in diesem Commit der einzige JavaScript-CodeQL-Befund.
+
+Die übernommenen weiteren Rust-Korrekturen wurden lokal durch vollständiges Clippy unter 1.98.0 und 46 gezielte Laufzeittests geprüft. Die drei Frontends bestehen nach frischem `npm ci` mit insgesamt 463 Tests, Builds und Audit. Der unveränderte Browsernachweis bestand im zweiten Lauf; seine erste Zeitüberschreitung bleibt dokumentiert. 18 Gate-, vier Schema- und elf SARIF-Tests sowie zwei positive und 78 negative Gate-Prozessproben bestehen. Keine dieser Aussagen ersetzt die ausstehende vollständige GitHub-Abnahme des daraus entstehenden Commits.
+
+Der öffentliche Brain-Export liegt nun in Brain-PR #10 am Commit `72d1ae10d32d40d7d37e58777f7182cf528e105b` unter `schema/vendor/dl-central-db/`. Die drei benötigten Basisdateien wurden anonym geladen und bytegenau gegen die bisherigen SHA-256-Werte geprüft. Die Integration in den Twitch-Verbraucher ist noch offen. `cargo +1.98.0 fmt --all --check` meldet aktuell 258 Dateien, nicht mehr die historische Zahl 264. Der globale Gate bleibt unverändert blockierend. Die Coding-Anmeldung, die offenen Schema-/Workspace-Nachweise und die nicht erklärte Browser-Instabilität sind in der Task-Akte abgegrenzt. Kein Merge, Deploy oder Abbau bestehender Schutzregeln.
+
 ## Stand und Geltungsbereich
 
 Fortsetzung vom 23. September 2026 im bestehenden PR #953, Branch `ci/deterministic-pr-gate-20260922`, auf dem überprüften Zwischenstand `7a490b415020525bc88d77bd907bc334376c1697`. Die ursprüngliche Basis vom 22. September bleibt im historischen Nachweis unten dokumentiert. Dieser Umbau ist ein Validierungs-PR, keine Freigabe des bestehenden Produktcodes. Format-, Lint- und Testfehler bleiben blockierend. PR-Testbetrieb bedeutet: kein Merge, kein direkter Push auf main, kein Produktiv-Deploy und kein Dienst-Neustart.

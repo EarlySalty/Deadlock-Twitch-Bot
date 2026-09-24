@@ -219,12 +219,6 @@ impl OutreachReviewClient {
         Ok(Self { endpoint })
     }
 
-    /// Modell des aufgeloesten Endpunkts (fuer Tests).
-    #[cfg(test)]
-    pub(crate) fn endpoint_model(&self) -> &str {
-        &self.endpoint.model
-    }
-
     pub async fn decide(
         &self,
         input: &OutreachModelInput,

@@ -142,7 +142,7 @@ jobs:
         working-directory: rust
         env:
           SQLX_OFFLINE: "false"
-        run: cargo sqlx prepare --workspace --check -- --workspace
+        run: cargo sqlx prepare --workspace --check --no-dotenv -- --workspace --all-targets --locked
 
   workspace-tests:
     name: "Workspace, integration and fresh database contracts"
