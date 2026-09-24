@@ -2,6 +2,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Outlet } from 'react-router';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { sidebarStorageKey } from '@/components/layout/sidebarState';
 import { TopBar } from '@/components/layout/TopBar';
 import { useRequireAdminAuth, toAuthErrorMessage } from '@/hooks/useAuth';
 
@@ -34,9 +35,21 @@ export function AdminShell() {
     );
   }
 
+  const sidebarUserKey =
+    authQuery.data?.user?.userId ||
+    authQuery.data?.user?.login ||
+    authQuery.data?.user?.username ||
+    authQuery.data?.user?.displayName ||
+    (authQuery.data?.isLocalhost ? 'localhost-admin' : 'admin');
+
   return (
     <div className="admin-shell flex">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((current) => !current)} />
+      <Sidebar
+        key={sidebarUserKey}
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((current) => !current)}
+        storageKey={sidebarStorageKey(sidebarUserKey)}
+      />
       <div className="min-h-screen min-w-0 flex-1 px-4 py-4 md:px-6">
         <TopBar auth={authQuery.data} />
         <main className="mx-auto mt-4 max-w-[1600px]">
