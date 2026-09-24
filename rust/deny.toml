@@ -1,0 +1,24 @@
+# PR-Policy für cargo deny check advisories bans sources.
+[advisories]
+ignore = [
+  # Gleiche eng begrenzte Ausnahme wie in .cargo/audit.toml:
+  # sqlx-mysql zieht rsa ein, gebaut wird ausschließlich SQLx/PostgreSQL.
+  # Kein MySQL-Feature aktivieren, ohne diese Ausnahme erneut zu prüfen.
+  # Wiedervorlage: 2026-12-22; kein pauschales Ignorieren neuer Advisories.
+  "RUSTSEC-2023-0071",
+]
+
+[bans]
+# Parallele transitive Major-Versionen sind eine Wartungswarnung, keine CVE.
+multiple-versions = "warn"
+# Bestehende Workspace-/Git-Pfadverweise haben keine Registry-Versionsangabe.
+# Das ist hier eine Wartungswarnung (cargo-deny-Default), keine CVE-Ausnahme.
+# Cargo.lock und die blockierende Sources-Policy sichern externe Auflösung ab.
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "rev"
+# Bereits im Cargo.lock vorhanden, mit vollem Commit-SHA gepinnt.
+allow-git = ["https://github.com/EarlySalty/Deadlock-Brain.git"]

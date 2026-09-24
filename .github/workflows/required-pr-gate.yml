@@ -1,0 +1,232 @@
+name: Required PR CI
+
+# No workflow-level paths filter: even docs-only PRs receive the final check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: required-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    name: Scope and gate regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned CI helper toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+      - name: Test fail-closed aggregation and schema guards
+        run: |
+          rustfmt +1.98.0 --edition 2021 --check .github/ci/*.rs
+          rustc +1.98.0 --edition=2021 -D warnings --test .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate-tests"
+          "$RUNNER_TEMP/pr-gate-tests"
+          rustc +1.98.0 --edition=2021 -D warnings --test .github/ci/brain_schema.rs -o "$RUNNER_TEMP/brain-schema-tests"
+          "$RUNNER_TEMP/brain-schema-tests"
+          jq --version
+          rustc +1.98.0 --edition=2021 -D warnings --test .github/ci/report_gate.rs -o "$RUNNER_TEMP/report-gate-tests"
+          "$RUNNER_TEMP/report-gate-tests"
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate"
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/negative_controls.rs -o "$RUNNER_TEMP/negative-controls"
+          "$RUNNER_TEMP/negative-controls" gate "$RUNNER_TEMP/pr-gate"
+      - name: Detect changes without API file-list truncation
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            printf '.github/workflows/required-pr-gate.yml\0' > "$RUNNER_TEMP/changed-paths"
+          else
+            test -n "$BASE_SHA"
+            # --no-renames includes BOTH paths of moves across component boundaries.
+            git diff --no-renames --name-only -z "$BASE_SHA" HEAD -- > "$RUNNER_TEMP/changed-paths"
+          fi
+          "$RUNNER_TEMP/pr-gate" scope < "$RUNNER_TEMP/changed-paths" >> "$GITHUB_OUTPUT"
+
+  manifest:
+    uses: ./.github/workflows/manifest-scope.yml
+
+  rust-security:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    uses: ./.github/workflows/rust-security.yml
+
+  rust-sqlx:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    uses: ./.github/workflows/rust-sqlx-check.yml
+
+  frontend:
+    needs: scope
+    if: needs.scope.outputs.frontend == 'true'
+    uses: ./.github/workflows/lint-and-typecheck.yml
+
+  secrets:
+    name: PR secret detection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Gitleaks (blocking, including PR commit history)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+  sast:
+    name: PR SAST
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install existing Semgrep version
+        run: pipx install semgrep==1.176.1
+      - name: Semgrep OSS (ERROR findings and scan errors block)
+        run: |
+          semgrep scan \
+            --config p/rust \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --config p/github-actions \
+            --config p/javascript \
+            --config p/python \
+            --metrics=off --disable-version-check --jobs 2 --timeout 60 \
+            --severity ERROR --error --strict \
+            --sarif --output semgrep-pr.sarif
+      - name: Rust SAST (WARNING and ERROR findings block)
+        if: ${{ !cancelled() }}
+        # The Rust pack currently has no ERROR-level native Rust rules.
+        # WARNING covers disabled TLS verification and insecure hashes;
+        # INFO-only inventories of CLI arguments/tempdirs are not vulnerabilities.
+        run: |
+          semgrep scan --config p/rust --include '*.rs' \
+            --metrics=off --disable-version-check --jobs 2 --timeout 60 \
+            --severity WARNING --severity ERROR --error --strict \
+            --sarif --output semgrep-rust-pr.sarif
+      - name: Preserve SAST evidence
+        if: always()
+        continue-on-error: true # Reporting only; the scanner above remains blocking.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: semgrep-pr-report
+          path: |
+            semgrep-pr.sarif
+            semgrep-rust-pr.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+  trivy:
+    name: PR HIGH and CRITICAL vulnerabilities
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trivy dependencies and secrets (blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          skip-dirs: node_modules,.venv,venv,dist,build,target
+          format: sarif
+          output: trivy-pr.sarif
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore.yaml
+          exit-code: "1"
+      - name: Preserve vulnerability evidence
+        if: always()
+        continue-on-error: true # Reporting only; no scanner error is suppressed.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-pr-report
+          path: trivy-pr.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+  actions:
+    name: PR Actions syntax and security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned actionlint 1.7.12
+        # Dieser Go-Validator wird von install-action nicht unterstützt.
+        # Vollständig gepinntes offizielles Release, kein curl-pipe-shell.
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint.tar.gz"
+          printf '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  %s\n' "$RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/actionlint.tar.gz" --directory "$RUNNER_TEMP" actionlint
+      - name: Validate workflow syntax, expressions and shell
+        run: '"$RUNNER_TEMP/actionlint"'
+      - name: zizmor (fail on HIGH findings without Code Scanning dependency)
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: v1.30.0
+          min-severity: high
+          advanced-security: false
+          annotations: true
+
+  deep:
+    uses: ./.github/workflows/security-pr-deep.yml
+    permissions:
+      contents: read
+      actions: read
+
+  required-pr-gate:
+    name: Required PR Gate
+    needs: [scope, manifest, rust-security, rust-sqlx, frontend, secrets, sast, trivy, actions, deep]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned gate toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Require success or an explicitly irrelevant scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          MANIFEST_RESULT: ${{ needs.manifest.result }}
+          SECRETS_RESULT: ${{ needs.secrets.result }}
+          SAST_RESULT: ${{ needs.sast.result }}
+          TRIVY_RESULT: ${{ needs.trivy.result }}
+          ACTIONS_RESULT: ${{ needs.actions.result }}
+          DEEP_RESULT: ${{ needs.deep.result }}
+          RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
+          FRONTEND_REQUIRED: ${{ needs.scope.outputs.frontend }}
+          RUST_SECURITY_RESULT: ${{ needs.rust-security.result }}
+          RUST_SQLX_RESULT: ${{ needs.rust-sqlx.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          rustc +1.98.0 --edition=2021 -D warnings .github/ci/pr_gate.rs -o "$RUNNER_TEMP/pr-gate"
+          "$RUNNER_TEMP/pr-gate" gate
+          echo 'All relevant deterministic checks succeeded.' >> "$GITHUB_STEP_SUMMARY"

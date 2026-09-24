@@ -1,6 +1,6 @@
 name: "Deep Security Scan"
 
-# Wöchentlich statt bei jedem Push, damit das Actions-Budget reicht.
+# Der breite Wochenlauf ergänzt den separaten Required PR Gate.
 on:
   schedule:
     - cron: "17 4 * * 1"
@@ -17,31 +17,31 @@ jobs:
   trivy-scan:
     name: Trivy filesystem
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Trivy filesystem scan (strict)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-fs.sarif'
-          severity: 'HIGH,CRITICAL'
-          trivyignores: '.trivyignore.yaml'
-          exit-code: 1
-
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore.yaml
+          exit-code: "1"
       - name: Upload Trivy SARIF
-        continue-on-error: true
+        continue-on-error: true # Reporting only.
         uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         if: always() && hashFiles('trivy-fs.sarif') != ''
         with:
-          sarif_file: 'trivy-fs.sarif'
-          category: 'trivy-filesystem'
-
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
       - name: Upload Trivy artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -54,6 +54,7 @@ jobs:
   security-scorecard:
     name: OSSF Security Scorecard
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.event_name != 'pull_request'
     permissions:
       security-events: write
@@ -64,22 +65,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - name: Run Scorecard
         uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: scorecard-results.sarif
           results_format: sarif
           publish_results: true
-
       - name: Upload Scorecard SARIF
-        continue-on-error: true
+        continue-on-error: true # Reporting only.
         uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         if: always() && hashFiles('scorecard-results.sarif') != ''
         with:
           sarif_file: scorecard-results.sarif
           category: scorecard
-
       - name: Upload Scorecard artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -102,17 +100,17 @@ jobs:
   semgrep:
     name: Semgrep
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
-
       - name: Install Semgrep
         run: pipx install semgrep==1.176.1
-
       - name: Run Semgrep
         run: |
           semgrep scan \
@@ -127,15 +125,13 @@ jobs:
             --error \
             --sarif \
             --output semgrep.sarif
-
       - name: Upload Semgrep SARIF
-        continue-on-error: true
+        continue-on-error: true # Reporting only.
         uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         if: always() && hashFiles('semgrep.sarif') != ''
         with:
           sarif_file: semgrep.sarif
           category: semgrep
-
       - name: Upload Semgrep artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -148,13 +144,16 @@ jobs:
   zizmor:
     name: zizmor
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
+      # Historische Code-Scanning-Berichte; der separate PR-Lauf ist blockierend.
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:
@@ -166,14 +165,23 @@ jobs:
     name: Summary
     needs: [trivy-scan, security-scorecard, osv-scan, semgrep, zizmor]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: always()
     steps:
       - name: Create summary
+        env:
+          TRIVY_RESULT: ${{ needs.trivy-scan.result }}
+          SCORECARD_RESULT: ${{ needs.security-scorecard.result }}
+          OSV_RESULT: ${{ needs.osv-scan.result }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          ZIZMOR_RESULT: ${{ needs.zizmor.result }}
         run: |
-          echo "# Security Analysis Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Trivy: ${{ needs.trivy-scan.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- OSSF Scorecard: ${{ needs.security-scorecard.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- OSV Scanner: ${{ needs.osv-scan.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Semgrep: ${{ needs.semgrep.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- zizmor: ${{ needs.zizmor.result }}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "# Security Analysis Summary"
+            echo ""
+            echo "- Trivy: $TRIVY_RESULT"
+            echo "- OSSF Scorecard: $SCORECARD_RESULT"
+            echo "- OSV Scanner: $OSV_RESULT"
+            echo "- Semgrep: $SEMGREP_RESULT"
+            echo "- zizmor: $ZIZMOR_RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"

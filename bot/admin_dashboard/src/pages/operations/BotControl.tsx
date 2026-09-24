@@ -280,7 +280,7 @@ export default function BotControlPage() {
               <article className="rounded-[1.4rem] border border-white/10 bg-white/[0.03] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">Hinweis</p>
                 <p className="mt-3 text-sm leading-6 text-text-secondary">
-                  Editor folgt in Schritt 5 (Content & Comms).
+                  Editor folgt in Schritt 5 (Content &amp; Comms).
                 </p>
               </article>
             </div>
@@ -290,7 +290,7 @@ export default function BotControlPage() {
             <div className="flex items-start gap-3">
               <TriangleAlert className="mt-0.5 h-5 w-5 text-warning" />
               <div>
-                <p className="text-sm font-semibold text-white">Editor folgt in Schritt 5 (Content & Comms)</p>
+                <p className="text-sm font-semibold text-white">Editor folgt in Schritt 5 (Content &amp; Comms)</p>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">
                   Über `fetchConfigOverview()` ist aktuell kein belastbarer Default-Snapshot für Live-Announcements verfügbar.
                 </p>

@@ -165,7 +165,7 @@ export function GermanDatePicker({ value, onChange }: { value: string; onChange:
         </button>
       </div>
       {open ? (
-        <div className="absolute z-20 mt-2 w-72 rounded-xl border border-white/15 bg-[#211c19] p-3 shadow-2xl">
+        <div className="absolute z-20 mt-2 w-72 rounded-xl border border-white/15 bg-card p-3 shadow-2xl">
           <div className="flex items-center justify-between">
             <button type="button" className="rounded-lg p-1 text-text-secondary hover:bg-white/10 hover:text-white" aria-label="Vorheriger Monat" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><ChevronLeft className="h-4 w-4" /></button>
             <span className="text-sm font-semibold text-white">{MONTHS[month.getMonth()]} {month.getFullYear()}</span>
@@ -179,7 +179,9 @@ export function GermanDatePicker({ value, onChange }: { value: string; onChange:
               <button
                 key={toIso(day)}
                 type="button"
-                className={`rounded-lg py-1.5 ${value === toIso(day) ? 'bg-primary font-semibold text-black' : 'text-white hover:bg-white/10'}`}
+                className={`rounded-lg py-1.5 ${value === toIso(day)
+                  ? 'bg-primary font-semibold text-black'
+                  : 'text-white hover:bg-white/10'}`}
                 onClick={() => { commitDate(day); setOpen(false); }}
               >
                 {day.getDate()}

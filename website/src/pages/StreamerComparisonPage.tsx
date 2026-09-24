@@ -600,7 +600,7 @@ export function StreamerComparisonPage() {
                 <section id="methodik" className="scroll-mt-24 pt-16 md:pt-24">
                   <div className="grid gap-8 lg:grid-cols-[0.75fr_1.25fr]">
                     <div>
-                      <div className="flex items-center gap-2 text-primary"><ShieldCheck size={19} /><span className="text-xs font-bold uppercase tracking-[0.18em]">Methodik & Datenqualität</span></div>
+                      <div className="flex items-center gap-2 text-primary"><ShieldCheck size={19} /><span className="text-xs font-bold uppercase tracking-[0.18em]">Methodik &amp; Datenqualität</span></div>
                       <h2 className="mt-4 font-display text-3xl font-bold">Die Regeln stehen neben den Zahlen.</h2>
                       <p className="mt-4 text-sm leading-7 text-text-secondary">Keine Geheimformel und kein Umsatz-Ranking. Jede Kennzahl lässt sich aus öffentlichen Stream-Verläufen und bestätigten Netzwerk-Raids erklären.</p>
                     </div>

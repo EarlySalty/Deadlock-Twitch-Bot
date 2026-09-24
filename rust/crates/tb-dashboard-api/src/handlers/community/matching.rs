@@ -229,7 +229,7 @@ mod tests {
     }
     #[test] fn duplicates_and_future_sessions_do_not_boost_history() {
         let s=session("2026-09-10T18:00:00Z","2026-09-10T20:00:00Z");
-        let single=schedule(&[s.clone()],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
+        let single=schedule(std::slice::from_ref(&s),at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
         let duplicate=schedule(&[s.clone(),s,session("2026-09-20T18:00:00Z","2026-09-20T20:00:00Z")],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
         assert_eq!(single.slots,duplicate.slots); assert_eq!(duplicate.sessions,1);
         assert_eq!(observed_overlap_minutes(&single,&duplicate),120);

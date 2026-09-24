@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { assertNoScriptElements } from './htmlAssertions';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PlanProvider } from '../src/context/PlanContext';
 import { berlinInput, fromBerlinInput, monthDays } from '../src/utils/partnerProfile';
@@ -49,7 +50,7 @@ test('empty draft is private, escaped, and has an actionable calendar', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={initial} onReload={() => {}} />);
   assert.match(html, /Noch nicht veröffentlicht/);
   assert.doesNotMatch(html, /href="\/streamer\/alice"/);
-  assert.doesNotMatch(html, /<script>/);
+  assertNoScriptElements(html);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /Grüße &amp; Spaß/);
   assert.match(html, /Termin am .* eintragen/);

@@ -52,16 +52,13 @@ pub fn normalize_tag(tag: &str) -> Option<String> {
 }
 
 pub fn matching_tag(tags: &[String], blocked: &[TagBlockEntry]) -> Option<String> {
-    let clean: Vec<String> = tags
-        .iter()
-        .filter_map(|tag| normalize_tag(tag))
-        .collect();
+    let clean: Vec<String> = tags.iter().filter_map(|tag| normalize_tag(tag)).collect();
     if clean.is_empty() {
         return None;
     }
     blocked
         .iter()
-        .find(|entry| clean.iter().any(|tag| *tag == entry.tag))
+        .find(|entry| clean.contains(&entry.tag))
         .map(|entry| entry.tag.clone())
 }
 
@@ -79,27 +76,32 @@ async fn list_primary_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx:
 
 async fn list_fallback_entries(pool: &PgPool) -> Result<Vec<TagBlockEntry>, sqlx::Error> {
     let pattern = format!("{FALLBACK_KEY_PREFIX}%");
-    let rows: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as(
-            r#"
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        r#"
             SELECT setting_key, setting_value, updated_by, updated_at::timestamptz
               FROM twitch_global_settings
              WHERE setting_key LIKE $1
             "#,
-        )
-        .bind(pattern)
-        .fetch_all(pool)
-        .await?;
+    )
+    .bind(pattern)
+    .fetch_all(pool)
+    .await?;
 
     Ok(rows
         .into_iter()
         .filter_map(|(key, value, updated_by, added_at)| {
             let tag = key.strip_prefix(FALLBACK_KEY_PREFIX)?.to_string();
-            let rule = serde_json::from_str::<FallbackRule>(&value).unwrap_or_else(|_| FallbackRule {
-                display_tag: tag.clone(),
-                reason: "tag_block".to_string(),
-                public_message: None,
-            });
+            let rule =
+                serde_json::from_str::<FallbackRule>(&value).unwrap_or_else(|_| FallbackRule {
+                    display_tag: tag.clone(),
+                    reason: "tag_block".to_string(),
+                    public_message: None,
+                });
             Some(TagBlockEntry {
                 tag,
                 display_tag: rule.display_tag,
@@ -207,10 +209,11 @@ pub async fn add(
 
     let outcome = match primary {
         Ok(inserted) => {
-            if let Err(error) = sqlx::query("DELETE FROM twitch_global_settings WHERE setting_key = $1")
-                .bind(fallback_key(&tag_key))
-                .execute(pool)
-                .await
+            if let Err(error) =
+                sqlx::query("DELETE FROM twitch_global_settings WHERE setting_key = $1")
+                    .bind(fallback_key(&tag_key))
+                    .execute(pool)
+                    .await
             {
                 tracing::warn!(%error, tag = %tag_key, "Fallback-Tag-Regel konnte nach Primär-Write nicht bereinigt werden");
             }
@@ -218,7 +221,15 @@ pub async fn add(
         }
         Err(error) if tag_table_unavailable(&error) => {
             tracing::warn!(%error, tag = %tag_key, "Tag-Regel-Tabelle nicht verfügbar; speichere im Global-Settings-Fallback");
-            add_fallback(pool, &tag_key, display_tag, reason, public_message, added_by).await?
+            add_fallback(
+                pool,
+                &tag_key,
+                display_tag,
+                reason,
+                public_message,
+                added_by,
+            )
+            .await?
         }
         Err(error) => return Err(error),
     };
@@ -232,15 +243,16 @@ pub async fn remove(pool: &PgPool, tag: &str) -> Result<TagRemoveOutcome, sqlx::
         return Ok(TagRemoveOutcome::default());
     };
 
-    let primary_removed = match sqlx::query("DELETE FROM twitch_partner_signup_tag_blocks WHERE tag = $1")
-        .bind(&tag)
-        .execute(pool)
-        .await
-    {
-        Ok(result) => result.rows_affected() > 0,
-        Err(error) if tag_table_unavailable(&error) => false,
-        Err(error) => return Err(error),
-    };
+    let primary_removed =
+        match sqlx::query("DELETE FROM twitch_partner_signup_tag_blocks WHERE tag = $1")
+            .bind(&tag)
+            .execute(pool)
+            .await
+        {
+            Ok(result) => result.rows_affected() > 0,
+            Err(error) if tag_table_unavailable(&error) => false,
+            Err(error) => return Err(error),
+        };
     let fallback_removed = sqlx::query("DELETE FROM twitch_global_settings WHERE setting_key = $1")
         .bind(fallback_key(&tag))
         .execute(pool)
@@ -320,7 +332,7 @@ async fn is_active_partner<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    Ok(sqlx::query_scalar(
+    sqlx::query_scalar(
         r#"
         SELECT EXISTS (
             SELECT 1 FROM twitch_partners
@@ -332,7 +344,7 @@ where
     .bind(twitch_user_id)
     .bind(twitch_login.trim().to_lowercase())
     .fetch_one(executor)
-    .await?)
+    .await
 }
 
 fn parse_session_tags(raw: &str) -> Vec<String> {
@@ -401,9 +413,7 @@ async fn backfill_tags(pool: &PgPool, tags: &[String]) -> Result<u64, sqlx::Erro
         }
         let user_id = user_id.trim();
         let user_id = (!user_id.is_empty()).then(|| user_id.to_string());
-        let anchor = user_id
-            .clone()
-            .unwrap_or_else(|| format!("login:{login}"));
+        let anchor = user_id.clone().unwrap_or_else(|| format!("login:{login}"));
         let entry = channels
             .entry(anchor)
             .or_insert_with(|| (user_id, login.clone(), Vec::new()));
@@ -638,10 +648,7 @@ mod tests {
             matching_tag(&["GERMAN".to_string(), "Competitive".to_string()], &blocked),
             Some("german".to_string())
         );
-        assert_eq!(
-            matching_tag(&["Competitive".to_string()], &blocked),
-            None
-        );
+        assert_eq!(matching_tag(&["Competitive".to_string()], &blocked), None);
         assert_eq!(matching_tag(&[], &blocked), None);
         assert_eq!(matching_tag(&["German".to_string()], &[]), None);
     }
@@ -737,9 +744,16 @@ mod tests {
         add(&pool, "German", "tag_block", None, "discord:1")
             .await
             .unwrap();
-        partner_signup_block::add(&pool, "42", "beispiel", "tag_block:german", None, "tag_block")
-            .await
-            .unwrap();
+        partner_signup_block::add(
+            &pool,
+            "42",
+            "beispiel",
+            "tag_block:german",
+            None,
+            "tag_block",
+        )
+        .await
+        .unwrap();
 
         let outcome = remove(&pool, "GERMAN").await.unwrap();
         assert!(outcome.removed);
@@ -925,9 +939,14 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, None, "aktiver Partner bleibt Partner");
 
-        let outcome = enforce(&pool, "fremde_id", "aktiverpartner", &["Deutsch".to_string()])
-            .await
-            .unwrap();
+        let outcome = enforce(
+            &pool,
+            "fremde_id",
+            "aktiverpartner",
+            &["Deutsch".to_string()],
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome, None, "Treffer per Login greift genauso");
 
         let denylist: i64 =
@@ -1063,7 +1082,10 @@ mod tests {
         .unwrap();
 
         let written = sweep(&pool).await.unwrap();
-        assert_eq!(written, 2, "zwei Nicht-Partner-Kanäle, Partner übersprungen");
+        assert_eq!(
+            written, 2,
+            "zwei Nicht-Partner-Kanäle, Partner übersprungen"
+        );
 
         let leer = sweep(&pool).await.unwrap();
         assert_eq!(leer, 0);
@@ -1081,9 +1103,6 @@ mod tests {
             vec!["Fun".to_string(), "Deutsch".to_string()]
         );
         assert_eq!(parse_session_tags("  "), Vec::<String>::new());
-        assert_eq!(
-            parse_session_tags("Deutsch"),
-            vec!["Deutsch".to_string()]
-        );
+        assert_eq!(parse_session_tags("Deutsch"), vec!["Deutsch".to_string()]);
     }
 }

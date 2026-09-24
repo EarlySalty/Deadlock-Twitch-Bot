@@ -1,12 +1,8 @@
 name: "Manifest-Scope"
 
-# Eigener Workflow statt eines Jobs in der Frontend-CI: der Check braucht kein
-# Node und keine npm-Installation und darf deshalb bei jedem PR laufen, waehrend
-# die Frontend-Matrix aus Budgetgruenden nur woechentlich faehrt. Sonst faellt
-# Drift zwischen dependabot.yml und den echten Projekten erst bis zu sieben Tage
-# spaeter auf.
+# PRs rufen diesen Workflow über Required PR CI auf; kein doppelter PR-Lauf.
 on:
-  pull_request:
+  workflow_call:
   push:
     branches:
       - main
@@ -23,18 +19,16 @@ jobs:
   manifest-scope:
     name: "Scope-Abgleich (keine toten Projekte)"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-
-      # Faengt Drift zwischen dependabot.yml, Frontend-CI-Matrix und den echten
-      # package.json ab, damit keine verwaisten Manifeste mehr Alerts erzeugen.
-      - name: Scope pruefen
+      - name: Scope prüfen
         run: python scripts/check_manifest_scope.py
-
       - name: Tests des Scope-Checks
         run: python -m unittest discover -s tests -p 'test_check_manifest_scope.py' -v

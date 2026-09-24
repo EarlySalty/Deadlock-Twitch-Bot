@@ -1,7 +1,8 @@
 name: "Frontend CI"
 
-# Woechentlich statt bei jedem Push, damit das Actions-Budget reicht.
+# Wiederverwendet im Required PR Gate; der Wochenlauf bleibt erhalten.
 on:
+  workflow_call:
   schedule:
     - cron: "51 4 * * 1"
   workflow_dispatch:
@@ -13,6 +14,7 @@ jobs:
   frontend-ci:
     name: "Frontend CI (${{ matrix.project.name }})"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -25,36 +27,39 @@ jobs:
             path: bot/dashboard_v2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: ${{ matrix.project.path }}/package-lock.json
-
       - name: Install dependencies
         working-directory: ${{ matrix.project.path }}
         run: npm ci
-
       - name: Run optional lint script
         working-directory: ${{ matrix.project.path }}
         run: |
           if node -e "const pkg=JSON.parse(require('fs').readFileSync('package.json','utf8')); process.exit(pkg.scripts && pkg.scripts.lint ? 0 : 1)"; then
             npm run lint
           else
-            echo "No lint script defined for ${{ matrix.project.name }}."
+            echo 'No lint script defined for this project.'
           fi
-
       - name: Run optional test script
         working-directory: ${{ matrix.project.path }}
+        env:
+          CI: "true"
         run: |
           if node -e "const pkg=JSON.parse(require('fs').readFileSync('package.json','utf8')); process.exit(pkg.scripts && pkg.scripts.test ? 0 : 1)"; then
             npm test
           else
-            echo "No test script defined for ${{ matrix.project.name }}."
+            echo 'No test script defined for this project.'
           fi
-
-      - name: Build frontend project
+      # Alle drei vorhandenen build-Scripts enthalten bereits tsc -b.
+      - name: Typecheck and build frontend project
         working-directory: ${{ matrix.project.path }}
         run: npm run build
+      - name: Block HIGH and CRITICAL npm advisories
+        working-directory: ${{ matrix.project.path }}
+        run: npm audit --audit-level=high

@@ -1,12 +1,9 @@
 name: "Rust Security"
 
-# CodeQL deckt Rust hier nicht ab: der Extraktor loest nur 42 Prozent der
-# Aufrufziele auf (siehe codeql.yml). Clippy, cargo-audit und cargo-deny sind
-# die wirksamen Pruefungen fuer den Rust-Teil.
-# Woechentlich statt bei jedem Push, damit das Actions-Budget reicht. Neue
-# RustSec-Advisories tauchen ohne eigenen Commit auf, deshalb ueberhaupt ein
-# fester Termin und nicht nur ein Trigger am Code.
+# Rust-CodeQL ist hier kein verlässlicher Ersatz für Clippy und RustSec.
+# Derselbe Workflow läuft auf relevanten PRs und weiterhin wöchentlich.
 on:
+  workflow_call:
   schedule:
     - cron: "38 5 * * 1"
   workflow_dispatch:
@@ -18,24 +15,42 @@ concurrency:
   group: rust-security-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CARGO_BUILD_JOBS: "2"
+
 jobs:
+  fmt:
+    name: "Rust formatting"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install rustfmt
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+      - name: Check workspace formatting
+        working-directory: rust
+        run: cargo fmt --all --check
+
   clippy:
     name: "clippy (deny warnings)"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust stable
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
-
+          rustup toolchain install 1.98.0 --profile minimal --component clippy
+          rustup default 1.98.0
       - name: Cargo cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "rust"
-
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run clippy
         working-directory: rust
         env:
@@ -45,18 +60,17 @@ jobs:
   audit:
     name: "cargo-audit (RustSec)"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install cargo-audit
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
-          tool: cargo-audit
-
-      # Bewusst als eigener Schritt statt ueber rustsec/audit-check: die Action
-      # ruft cargo-audit aus dem Repo-Wurzelverzeichnis auf und liest damit
-      # rust/.cargo/audit.toml nicht. Hier laeuft derselbe Befehl wie lokal.
+          tool: cargo-audit@0.22.2
+      # Dieses Arbeitsverzeichnis ist nötig, damit .cargo/audit.toml greift.
       - name: Run cargo-audit
         working-directory: rust
         run: cargo audit
@@ -64,20 +78,20 @@ jobs:
   deny:
     name: "cargo-deny (advisories bans sources)"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust stable
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust 1.98.0
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
       - name: Install cargo-deny
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
-          tool: cargo-deny
-
+          tool: cargo-deny@0.20.2
       - name: Run cargo-deny
         working-directory: rust
         run: cargo deny check advisories bans sources

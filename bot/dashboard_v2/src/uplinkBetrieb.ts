@@ -101,7 +101,7 @@ export function obsZugang(me: {
   if (me.service_status !== 'ready') return null;
   const server = me.public_ingest_url ?? me.ingest_url;
   const key = me.ingest_key;
-  if (!server || !key || !key.trim() || /[\u0000-\u0020\u007f]/.test(key)) return null;
+  if (!server || !key || !key.trim() || Array.from(key).some(char => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) return null;
   try {
     const url = new URL(server);
     if (url.protocol !== 'rtmps:' || !url.hostname || url.username || url.password

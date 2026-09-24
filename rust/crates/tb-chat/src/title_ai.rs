@@ -430,19 +430,28 @@ pub fn derive_style_summary(title_history: &[PromptHistoryItem]) -> String {
     )
 }
 
+/// Expliziter Stil und aus bisherigen Titeln erkannte Emoji-Nutzung.
+pub struct PromptStyle<'a> {
+    pub preference: &'a str,
+    pub emoji_ratio: f64,
+}
+
 /// Personalisierter Prompt des Dashboard-Moduls. Die explizite Nutzerpräferenz
 /// steht über der automatisch erkannten Stil-DNA; Community-Titel dienen nur
 /// als Inspirationsquelle und dürfen nicht wörtlich kopiert werden.
 pub fn build_personalized_title_prompt_with_feedback(
     keywords: &str,
-    style_preference: &str,
+    style: PromptStyle<'_>,
     feedback: &[PromptFeedbackItem],
     title_history: &[PromptHistoryItem],
     knowledge_titles: &[PromptKnowledgeItem],
     rank_display: Option<&str>,
-    emoji_ratio: f64,
     live_state: Option<&PromptLiveState>,
 ) -> String {
+    let PromptStyle {
+        preference: style_preference,
+        emoji_ratio,
+    } = style;
     let emoji_rule = if emoji_ratio >= 0.3 {
         "Maximal einen Emoji verwenden – und nur wenn er natürlich zum erkannten Eigenstil passt."
     } else {
@@ -592,12 +601,14 @@ pub fn build_personalized_title_prompt(
 ) -> String {
     build_personalized_title_prompt_with_feedback(
         keywords,
-        style_preference,
+        PromptStyle {
+            preference: style_preference,
+            emoji_ratio,
+        },
         &[],
         title_history,
         knowledge_titles,
         rank_display,
-        emoji_ratio,
         live_state,
     )
 }
@@ -737,12 +748,14 @@ pub async fn generate_title_personalized_with(
     let ratio = emoji_ratio(&titles);
     let prompt = build_personalized_title_prompt_with_feedback(
         keywords,
-        style_preference,
+        PromptStyle {
+            preference: style_preference,
+            emoji_ratio: ratio,
+        },
         feedback,
         title_history,
         knowledge_titles,
         rank_display,
-        ratio,
         live_state,
     );
     // Kreativer als der alte konservative Generator, aber mit wenig Output:
@@ -1268,12 +1281,14 @@ mod tests {
         }];
         let p = build_personalized_title_prompt_with_feedback(
             "duo",
-            "trocken, keine Emojis",
+            PromptStyle {
+                preference: "trocken, keine Emojis",
+                emoji_ratio: 0.0,
+            },
             &feedback,
             &[],
             &[],
             None,
-            0.0,
             None,
         );
         assert!(p.contains("HUMAN-FEEDBACK"));

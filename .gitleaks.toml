@@ -42,6 +42,36 @@ paths = [
   '''website/src/components/sections/Security\.tsx''',
 ]
 
+# Neue Ausnahmen gelten nur bei gleichzeitig passendem Pfad UND exaktem
+# Fixture-Wert. Ein neuer Schlüssel in derselben Datei bleibt ein Fund.
+# Wiedervorlage: 2026-12-22 oder bei Änderung der jeweiligen Fixture.
+[[allowlists]]
+description = "Sechs feste UUIDs im ActionInput-Validierungstest, keine Authentifizierungsschlüssel."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^rust/crates/tb-dashboard-api/src/handlers/ad_manager\.rs$''']
+regexTarget = "line"
+regexes = ['''^\s*idempotency_key: "018f0f65-7c2e-7df1-9f64-4a8f5b71123[4-9]"\.into\(\),\s*$''']
+
+[[allowlists]]
+description = "WebSocket-Testnonce: base64 von 'the sample nonce', nur im Test einer abgewiesenen Cookie-Anfrage."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^rust/crates/tb-dashboard-api/src/obs/ws\.rs$''']
+regexTarget = "secret"
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
+
+[[allowlists]]
+description = "Zwei bestehende Demo-Chiffrate der Security-Animation, aus sections/Security.tsx in partner-clean kopiert; kein entschlüsselnder Schlüssel und kein OAuth-Token."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^website/src/components/partner-clean/Security\.tsx$''']
+regexTarget = "secret"
+regexes = [
+  '''^01027631cc1a318fc855cd096f414d4eb9140a1efaabbe7033619b7376eb2ade6399c5600e0bde49e5a9a314708da992a6e6c430146335861b9766631c795c9379b40f03da76d94ee642ec$''',
+  '''^010276315877678bb2ed322b62caed1893dda920643dafb46c11418b47095a2276fa41c0b95787b2fba008224c4d32173bfd6631bbca88554ed73a66aea84ff9de382af161cde3f65398480e$''',
+]
+
 [[rules]]
 id = "deadlock-discord-bot-token"
 description = "Potential Discord bot token assignment"

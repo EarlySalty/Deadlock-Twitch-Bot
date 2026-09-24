@@ -1330,7 +1330,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 return Ok(failure(403, block.public_title(), block.public_body_html()));
             }
             Ok(None) => {}
-            Err(()) => return Ok(generic_failure()),
+            Err(_) => return Ok(generic_failure()),
         }
 
         // 8. Erst-Auth erkennen — entscheidet das Followup-Routing in
@@ -2786,6 +2786,10 @@ mod callback_tests {
     const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
 
     async fn make_pool(base: &PgPool) -> PgPool {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_env_filter("tb_bot=debug,tb_raid=debug")
+            .try_init();
         let pool = base.clone();
         sqlx::raw_sql(include_str!(
             "../../../migrations/20260908220000_uplink_target_generations.sql"
@@ -2956,6 +2960,15 @@ mod callback_tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        // AuthWriter muss auch im Callback-Fixture den dauerhaft gespeicherten
+        // Admin-Wunsch beachten. Dieselbe Migration wie beim echten Schema,
+        // keine nur fuer den Test erfundene Spalte oder Typabweichung.
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260913153000_admin_raid_wunsch.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 

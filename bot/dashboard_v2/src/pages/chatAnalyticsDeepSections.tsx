@@ -318,7 +318,7 @@ export function StimmungTopicsSection({ data, windowStart }: { data: ChatContent
 
       <div className="mb-6 flex items-center gap-3">
         <Smile className="h-6 w-6 text-success" />
-        <h2 className="text-xl font-bold text-white">Stimmung & Topics</h2>
+        <h2 className="text-xl font-bold text-white">Stimmung &amp; Topics</h2>
         <span className={`text-sm font-bold ${sentimentColor}`}>
           {data.overallSentiment.label} {trendArrow}
         </span>

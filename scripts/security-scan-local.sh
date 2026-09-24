@@ -135,21 +135,11 @@ if need gitleaks; then
   else
     printf 'title = "local"\n[extend]\nuseDefault = true\n' > "$gitleaks_cfg"
   fi
-  cat >> "$gitleaks_cfg" <<'EOF'
-
-[[allowlists]]
-description = "Testfixtures und Demo-Chiffrate, keine echten Secrets."
-paths = [
-  '''src/auth\.rs''',
-  '''src/transcode/encoder\.rs''',
-  '''rust/crates/tb-dashboard-api/src/handlers/ad_manager\.rs''',
-  '''rust/crates/tb-dashboard-api/src/obs/ws\.rs''',
-  '''website/src/components/partner-clean/Security\.tsx''',
-]
-targetRules = ["generic-api-key"]
-EOF
-  gitleaks_args=(detect --source "$SCAN_DIR" --no-git --no-banner --redact --exit-code 1 --config "$gitleaks_cfg")
-  if gitleaks "${gitleaks_args[@]}"; then
+  # Keine zusätzlichen dateiweiten Ausnahmen: ausschließlich die geprüfte
+  # Repo-Konfiguration verwenden. Relative Scanpfade erhalten die engen
+  # Pfad-UND-Wert-Ausnahmen auch beim Scan des git-archive-Snapshots.
+  gitleaks_args=(detect --source . --no-git --no-banner --redact --exit-code 1 --config "$gitleaks_cfg")
+  if (cd "$SCAN_DIR" && gitleaks "${gitleaks_args[@]}"); then
     pass "gitleaks"
   else
     block "gitleaks"
@@ -201,11 +191,9 @@ if need trivy; then
   if [ -n "$TRIVY_IGNORE" ]; then
     trivy_args+=(--ignorefile "$TRIVY_IGNORE")
   fi
-  if [ "$STRICT" -eq 1 ]; then
-    trivy_args+=(--exit-code 1)
-  else
-    trivy_args+=(--exit-code 0)
-  fi
+  # Auch im schnellen lokalen Modus den echten Scanner-Exitcode auswerten.
+  # Nur soft_fail entscheidet dort ausdrücklich zwischen Hinweis und Blockade.
+  trivy_args+=(--exit-code 1)
   if trivy "${trivy_args[@]}" "$SCAN_DIR"; then
     pass "trivy"
   else
@@ -242,7 +230,7 @@ fi
 
 say ""
 if [ "$FAILED" -ne 0 ]; then
-  say "Push gestoppt: Secrets oder RustSec. Remote-GitHub bleibt wöchentlich."
+  say "Push gestoppt: Eine blockierende lokale Prüfung ist fehlgeschlagen. Der Required PR Gate bleibt zusätzlich maßgeblich."
   exit 1
 fi
 if [ "$WARNED" -ne 0 ]; then

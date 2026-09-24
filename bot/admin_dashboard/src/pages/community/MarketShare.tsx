@@ -262,7 +262,7 @@ export default function MarketSharePage() {
       <article className="panel-card rounded-[1.8rem] p-6">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">
-            Viewer-Verteilung & Marktanteil
+            Viewer-Verteilung &amp; Marktanteil
           </p>
           {scope === 'all' && rangeIncludesLegacyData ? (
             <p className="text-xs text-warning">

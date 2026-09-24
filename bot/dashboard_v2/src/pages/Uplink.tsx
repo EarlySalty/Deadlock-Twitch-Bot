@@ -305,7 +305,7 @@ function obsAusgabe() {
     { feld: 'Videoencoder', wert: 'Hardwareencoder passend zu deinem System',
       warum: 'Nutze die Analyse direkt darüber. Software-AV1 über AOM/SVT wird für den Live-Uplink nicht automatisch empfohlen.' },
     { feld: 'Ratensteuerung', wert: 'Aus der Encoder-Analyse übernehmen',
-      warum: 'AMD und NVIDIA benennen und unterstützen unterschiedliche Verfahren. Uplink zeigt nur die zum erkannten Hardwareweg passende Empfehlung.' },
+      warum: 'Übernimm die Encoder-Analyse: AMD nutzt je nach Angebot HQCBR oder CBR, variable Verfahren brauchen eine gesetzte Maximalbitrate. Plane Audio und Reserve in dein Uploadbudget ein; die Plattformausgabe wird getrennt geprüft.' },
     { feld: 'Auflösung und Bildrate', wert: 'Dein gewünschtes Quellprofil',
       warum: 'Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.' },
     { feld: 'Keyframe-Intervall', wert: '2 s',

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { assertNoScriptElements } from './htmlAssertions';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PlanProvider } from '../src/context/PlanContext';
 Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: new URL('https://example.test/analyse'), __TWITCH_DASHBOARD_RUNTIME__: {} } });
@@ -45,10 +46,20 @@ test('full, stale or unauthorized lobbies have no join action', () => {
   assert.match(staleHtml, /Aktualisierung erforderlich/);
   assert.doesNotMatch(staleHtml, /href=/);
 });
+test('HTML assertion rejects script elements without rejecting escaped text', () => {
+  for (const html of [
+    '<script>bad()</script>',
+    '<ScRiPt data-test="fixture">bad()</sCrIpT>',
+    '<script\n data-test="fixture">bad()</script>',
+    '<svg><script>bad()</script></svg>',
+    '<template><script>bad()</script></template>',
+  ]) assert.throws(() => assertNoScriptElements(html), assert.AssertionError);
+  assert.doesNotThrow(() => assertNoScriptElements('&lt;script&gt;bad()&lt;/script&gt;'));
+});
 test('lobby name is escaped and capacities are clearly voice, not game slots', () => {
   const html = renderToStaticMarkup(<LobbyCard lobby={lobby} fresh profile={profile} />);
   assert.match(html, /4 VC-Plätze frei/);
-  assert.doesNotMatch(html, /<script>/);
+  assertNoScriptElements(html);
   assert.match(html, /&lt;script&gt;/);
 });
 test('known rank and mode conflicts are visible, unknown data earns no points', () => {
