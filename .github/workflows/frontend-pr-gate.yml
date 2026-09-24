@@ -1,0 +1,132 @@
+name: "Frontend PR Gate"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "bot/admin_dashboard/**"
+      - "bot/dashboard_v2/**"
+      - ".github/ci/node-test-regression.mjs"
+      - ".github/workflows/frontend-pr-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-pr-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: "Frontend PR Gate (${{ matrix.project.name }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - name: website
+            path: website
+          - name: admin_dashboard
+            path: bot/admin_dashboard
+          - name: dashboard_v2
+            path: bot/dashboard_v2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ matrix.project.path }}/package-lock.json
+
+      - name: Install head dependencies
+        working-directory: ${{ matrix.project.path }}
+        run: npm ci
+
+      - name: Lint changed JavaScript and TypeScript files
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROJECT_PATH: ${{ matrix.project.path }}
+        run: |
+          mapfile -t changed < <(
+            git diff --name-only "$BASE_SHA" HEAD -- "$PROJECT_PATH" |
+              grep -E '\.(cjs|mjs|js|jsx|ts|tsx)$' || true
+          )
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "No changed lintable files in $PROJECT_PATH."
+            exit 0
+          fi
+          relative=()
+          for file in "${changed[@]}"; do
+            relative+=("${file#"$PROJECT_PATH/"}")
+          done
+          cd "$PROJECT_PATH"
+          npx eslint "${relative[@]}"
+
+      - name: Build changed head
+        working-directory: ${{ matrix.project.path }}
+        run: npm run build
+
+      - name: Run head tests
+        id: head_tests
+        working-directory: ${{ matrix.project.path }}
+        shell: bash
+        run: |
+          set +e
+          npm test > "$RUNNER_TEMP/head-tests.log" 2>&1
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -eq 0 ]; then
+            cat "$RUNNER_TEMP/head-tests.log"
+          else
+            tail -200 "$RUNNER_TEMP/head-tests.log"
+          fi
+
+      - name: Run main baseline only when head tests fail
+        if: steps.head_tests.outputs.status != '0' && github.event_name == 'pull_request'
+        id: base_tests
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROJECT_PATH: ${{ matrix.project.path }}
+        shell: bash
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base-tree" "$BASE_SHA"
+          cd "$RUNNER_TEMP/base-tree/$PROJECT_PATH"
+          npm ci
+          set +e
+          npm test > "$RUNNER_TEMP/base-tests.log" 2>&1
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          tail -200 "$RUNNER_TEMP/base-tests.log"
+
+      - name: Reject new test failures
+        if: steps.head_tests.outputs.status != '0' && github.event_name == 'pull_request'
+        run: >
+          node .github/ci/node-test-regression.mjs
+          "$RUNNER_TEMP/base-tests.log"
+          "$RUNNER_TEMP/head-tests.log"
+          "${{ steps.base_tests.outputs.status }}"
+          "${{ steps.head_tests.outputs.status }}"
+
+      - name: Require green tests outside pull requests
+        if: steps.head_tests.outputs.status != '0' && github.event_name != 'pull_request'
+        run: exit 1
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-test-evidence-${{ matrix.project.name }}
+          path: |
+            ${{ runner.temp }}/head-tests.log
+            ${{ runner.temp }}/base-tests.log
+          if-no-files-found: ignore
+          retention-days: 14
