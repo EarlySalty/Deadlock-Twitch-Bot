@@ -2,9 +2,7 @@ name: "Rust SQLx Check"
 
 on:
   pull_request:
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-sqlx-check.yml"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
