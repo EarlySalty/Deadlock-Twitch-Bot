@@ -83,3 +83,6 @@ LIVEBEWEIS[DV-1]: nicht ausgeführt: PR-first-Testbetrieb
   ohne Cache-Eintrag. Ursache beider: `prepare --check` erfasst alle Targets,
   das Write-Modus-Flag `-- --workspace` nur Nicht-Test-Ziele — der Cache muss
   daher per `--all-targets` erzeugt werden. Behoben in dd98827a-Folgecommit.
+- Dritter CI-Lauf (2b043a2d): alle vier Checks von #958 grün (Uplink-Job
+  12m25s, schema-gate 3m40s, offline-build 4m17s, GitGuardian und Scope).
+  Run 35971689984 vom 24. September 2026.
