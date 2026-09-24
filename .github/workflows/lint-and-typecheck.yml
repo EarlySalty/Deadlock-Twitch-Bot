@@ -1,14 +1,8 @@
 name: "Frontend CI"
 
-# Frontend changes must build on the pull request that changes them. The weekly
-# run remains as a broad regression pass.
+# Weekly broad regression pass. Pull requests use frontend-pr-gate.yml, which
+# compares known baseline failures with the changed head.
 on:
-  pull_request:
-    paths:
-      - "website/**"
-      - "bot/admin_dashboard/**"
-      - "bot/dashboard_v2/**"
-      - ".github/workflows/lint-and-typecheck.yml"
   schedule:
     - cron: "51 4 * * 1"
   workflow_dispatch:
@@ -46,7 +40,6 @@ jobs:
 
       - name: Run optional lint script
         working-directory: ${{ matrix.project.path }}
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: |
           if node -e "const pkg=JSON.parse(require('fs').readFileSync('package.json','utf8')); process.exit(pkg.scripts && pkg.scripts.lint ? 0 : 1)"; then
             npm run lint
