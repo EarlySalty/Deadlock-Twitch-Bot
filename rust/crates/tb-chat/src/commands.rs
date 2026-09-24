@@ -836,7 +836,7 @@ impl CommandEngine {
                         && !event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank") => {
                         // Never show another Discord-linked Steam account after a direct account switch.
                         let same_legacy = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                            Ok(Some(discord_id)) => matches!(crate::rank_lookup::linked_account(&self.pool, &discord_id).await,
+                            Ok(Some(discord_id)) => matches!(self.rank_lookup.linked_account(&discord_id).await,
                                 Ok(Some((id, true))) if Some(id) == link.account_id()),
                             _ => false,
                         };

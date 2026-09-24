@@ -215,6 +215,16 @@ impl RankLookup {
         }
     }
 
+    /// Zentrale Discord-Steam-Verknüpfung laut Steam-Bot:
+    /// `Some((Deadlock-Account-ID, verified))`, `None` ohne Verknüpfung.
+    pub(crate) async fn linked_account(
+        &self,
+        discord_id: &str,
+    ) -> Result<Option<(u32, bool)>, stats::StatsError> {
+        let info = stats::fetch_rank_at(&self.steam_rank_url, discord_id, false).await?;
+        central_link(&info)
+    }
+
     async fn legacy_reply(&self, pool: &PgPool, target: &CommandTarget, explicit: bool) -> String {
         let discord_id = match stats::resolve_discord_id(pool, &target.user_id).await {
             Ok(id) => id,
@@ -244,8 +254,12 @@ impl RankLookup {
             }
         }
         // Never search for a different person when a real link exists, or when
-        // a database failure prevents proving whether a link exists.
-        match linked_account(pool, &discord_id).await {
+        // a lookup failure prevents proving whether a link exists.
+        let link_check = match primary.as_ref() {
+            Ok(info) => central_link(info),
+            Err(_) => Err(stats::StatsError),
+        };
+        match link_check {
             Ok(Some((id, true))) => self.account_reply(id, &target.name, false).await,
             Ok(Some((_, false))) => format!(
                 "{} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt.",
@@ -363,28 +377,25 @@ fn chat_label(value: &str) -> String {
         .join(" ")
 }
 
-pub(crate) async fn linked_account(
-    pool: &PgPool,
-    discord_id: &str,
-) -> Result<Option<(u32, bool)>, stats::StatsError> {
-    let discord_id = discord_id.parse::<i64>().map_err(|_| stats::StatsError)?;
-    let row: Option<(String, bool)> = sqlx::query_as(
-        "SELECT steam_id, verified FROM core.steam_links WHERE discord_id = $1
-         ORDER BY primary_account DESC, verified DESC, linked_at DESC NULLS LAST, steam_id ASC LIMIT 1"
-    ).bind(discord_id).fetch_optional(pool).await.map_err(|error| {
-        tracing::warn!(%error, "Rank-Fallback: Steam-Verknüpfung nicht abrufbar");
-        stats::StatsError
-    })?;
-    row.map(|(steam_id, verified)| {
-        let steam64 = steam_id.parse::<u64>().map_err(|_| stats::StatsError)?;
-        let id = steam64
-            .checked_sub(STEAM64_BASE)
-            .and_then(|id| u32::try_from(id).ok())
-            .filter(|id| *id > 0)
-            .ok_or(stats::StatsError)?;
-        Ok((id, verified))
-    })
-    .transpose()
+/// Zentrale Discord-Steam-Verknüpfung aus der `/rank`-Antwort des Steam-Bots:
+/// `Some((Deadlock-Account-ID, verified))`, `None` ohne Verknüpfung. Fehler,
+/// wenn die Verknüpfung nicht bewiesen werden kann.
+fn central_link(info: &stats::RankInfo) -> Result<Option<(u32, bool)>, stats::StatsError> {
+    if !info.linked {
+        return Ok(None);
+    }
+    let steam64 = info
+        .steam_id
+        .as_deref()
+        .ok_or(stats::StatsError)?
+        .parse::<u64>()
+        .map_err(|_| stats::StatsError)?;
+    let id = steam64
+        .checked_sub(STEAM64_BASE)
+        .and_then(|id| u32::try_from(id).ok())
+        .filter(|id| *id > 0)
+        .ok_or(stats::StatsError)?;
+    Ok(Some((id, info.verified)))
 }
 
 #[derive(Debug, Deserialize)]
