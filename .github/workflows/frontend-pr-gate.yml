@@ -3,12 +3,6 @@ name: "Frontend PR Gate"
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "website/**"
-      - "bot/admin_dashboard/**"
-      - "bot/dashboard_v2/**"
-      - ".github/ci/node-test-regression.mjs"
-      - ".github/workflows/frontend-pr-gate.yml"
   workflow_dispatch:
 
 permissions:
