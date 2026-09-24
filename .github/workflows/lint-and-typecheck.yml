@@ -1,6 +1,7 @@
 name: "Frontend CI"
 
-# Woechentlich statt bei jedem Push, damit das Actions-Budget reicht.
+# Weekly broad regression pass. Pull requests use frontend-pr-gate.yml, which
+# compares known baseline failures with the changed head.
 on:
   schedule:
     - cron: "51 4 * * 1"
