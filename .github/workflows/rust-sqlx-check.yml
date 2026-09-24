@@ -126,8 +126,16 @@ jobs:
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
 
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends postgresql-client
+
       - name: Apply migrations
         run: cargo sqlx migrate run --source rust/migrations
+
+      # Die gepinnten dbrain-Crates aus Deadlock-Brain prüfen ihre Makros gegen
+      # das Schema `brain`, das rust/migrations nicht anlegt (Doku siehe Datei).
+      - name: Apply brain schema fixture
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f rust/schema-gate/brain-schema.sql
 
       - name: Check SQLx offline cache
         env:
