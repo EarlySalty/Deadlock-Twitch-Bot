@@ -29,6 +29,6 @@ Insgesamt 83 ausgewählte Tests bestanden, keine Behauptung einer vollständigen
 
 Steam-Producer: EarlySalty/Deadlock-Steam-Bot PR #69, Branch `fix/player-live-by-steamid-20260924`. Sein `/internal/player-live`-Vertrag muss vor Auslieferung dieses Verbrauchers vorhanden sein. Der Verbraucher bleibt bis dahin konservativ gesperrt statt Daten zu erfinden.
 
-GitHub-Actions werden nach Erstellung des eigenen PRs geprüft. Bereits beim Producer startet GitHub wegen Abrechnung/Ausgabenlimit keine Runner. Ein unabhängiger Fremdreview ist nicht belegt; der angefragte Claude-Worker konnte sich nicht anmelden. Keine echten Ads, keine Community-Testnachricht und kein Live-Deploy. Der aktuelle PR-first-Testbetrieb untersagt Merge, main-Push, Auto-Merge, Neustart und vorzeitiges Cleanup.
+PR #958 ist offen. Der neuere GitHub-Run hat den Offline-Build und Manifest-Scope bestanden, aber das Schema-Gate und sechs OAuth-Callback-Tests nicht. Die wiederholten Steam- und Discord-Läufe wurden wegen GitHub-Abrechnung/Ausgabenlimit nicht gestartet. Ein unabhängiger Fremdreview bleibt durch die abgelaufene Claude-Anmeldung blockiert. Die aktuelle Nachprüfung einschließlich 167 erneut bestandener ausgewählter Tests über Twitch, Brain und Discord steht in CI-NACHPRUEFUNG.md. Keine echten Ads, keine Community-Testnachricht und kein Live-Deploy. Der aktuelle PR-first-Testbetrieb untersagt Merge, main-Push, Auto-Merge, Neustart und vorzeitiges Cleanup.
 
 MERGEPROTOKOLL[MS-1]: kein Merge: PR-first-Testbetrieb
