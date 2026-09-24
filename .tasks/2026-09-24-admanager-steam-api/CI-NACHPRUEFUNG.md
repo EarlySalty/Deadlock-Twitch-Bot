@@ -63,10 +63,12 @@ LIVEBEWEIS[DV-1]: nicht ausgeführt: PR-first-Testbetrieb
 ## Nachtrag 2026-09-24 (CI-Fix-Session)
 
 - Schema-Gate: brain-Schema-Fixture `rust/schema-gate/brain-schema.sql` plus
-  Workflow-Schritt in `rust-sqlx-check.yml`; `.sqlx`-Cache gegen den
-  Workspace-Stand neu erzeugt (39 veraltete Einträge entfernt). Lokal geprüft
-  gegen Wegwerf-DB mit Twitch-Migrationen + Fixture: Online-Workspace-Check
-  bestanden, Offline-Check von tb-bot bestanden.
+  Workflow-Schritt in `rust-sqlx-check.yml`. `.sqlx`-Cache final per
+  `cargo sqlx prepare --workspace -- --all-targets` (online, Wegwerf-DB mit
+  Twitch-Migrationen + Fixture) neu erzeugt: 17 fehlende Queries ergänzt,
+  Bestand sonst unverändert. Prüfung: `prepare --workspace --check` bestanden
+  (Hinweis auf test-target-Queries ist erwartbar), Offline-Build und
+  Offline-Testkompilierung (tb-chat Titelbefehl) bestanden.
 - Uplink/OAuth-Job: Ursache der sechs 500er war die fehlende Spalte
   `twitch_partners.raid_admin_enabled` im callback_tests-Fixture (Prod-
   Migration 20260913153000). Fixture ergänzt; 14/14 Callback-Tests lokal grün,
@@ -75,3 +77,9 @@ LIVEBEWEIS[DV-1]: nicht ausgeführt: PR-first-Testbetrieb
 - Details: `.tasks/2026-09-24-werbemanager-ci-fix/AUFTRAG.md`.
 - Unverändert blockiert: GitHub-Actions-Billing für Steam #69 und Bots #451;
   unabhängiges Review steht noch aus.
+- Zweiter CI-Lauf (dd98827a): Schema-Gate kompiliert mit Fixture sauber,
+  scheiterte nur noch am Cache-Vergleich; Uplink-Job lief bis zum Schritt
+  „Titelbefehl und Dashboard-Schalter" durch und scheiterte an Offline-Queries
+  ohne Cache-Eintrag. Ursache beider: `prepare --check` erfasst alle Targets,
+  das Write-Modus-Flag `-- --workspace` nur Nicht-Test-Ziele — der Cache muss
+  daher per `--all-targets` erzeugt werden. Behoben in dd98827a-Folgecommit.
