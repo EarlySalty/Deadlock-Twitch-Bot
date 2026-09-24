@@ -15,9 +15,9 @@ function ProfileChips({ profile }: { profile: CommunityProfile }) {
   const hasRank = Boolean(profile.rank_name);
   const hasMode = Boolean(profile.mode);
   if (!hasRank && !hasMode) return null;
-  return <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
-    {hasRank && <span className="rounded-lg border border-neutral-800 bg-neutral-900/80 px-2.5 py-1.5 text-neutral-200" title={profile.rank_updated_at ? `Steam-Rang vom ${new Date(profile.rank_updated_at * 1000).toLocaleDateString('de-DE')}` : 'Bestätigter Steam-Rang'}>{rankLabel(profile)}</span>}
-    {hasMode && <span className="rounded-lg border border-neutral-800 bg-neutral-900/80 px-2.5 py-1.5 text-neutral-200" title={modeSource(profile)}>{modeLabel(profile.mode)}</span>}
+  return <div className="flex flex-wrap items-center gap-2 text-xs text-ui-muted">
+    {hasRank && <span className="rounded-lg border border-border bg-ui-deep px-2.5 py-1.5 text-ui-text-soft" title={profile.rank_updated_at ? `Steam-Rang vom ${new Date(profile.rank_updated_at * 1000).toLocaleDateString('de-DE')}` : 'Bestätigter Steam-Rang'}>{rankLabel(profile)}</span>}
+    {hasMode && <span className="rounded-lg border border-border bg-ui-deep px-2.5 py-1.5 text-ui-text-soft" title={modeSource(profile)}>{modeLabel(profile.mode)}</span>}
     {hasMode && profile.mode_source && <span>{profile.mode_source === 'steam_history' ? 'aus Spielhistorie' : 'Titelhinweis'}</span>}
   </div>;
 }
@@ -65,19 +65,19 @@ export function ScheduleMap({ own, other, ownLogin, otherLogin }: { own: Communi
     return segments;
   };
   const segmentClass = (kind: 'both' | 'own' | 'other' | 'empty') => ({
-    both: 'bg-emerald-400/80 ring-1 ring-inset ring-emerald-300/40',
-    own: 'bg-cyan-400/40',
-    other: 'bg-violet-400/45',
-    empty: 'bg-neutral-800/55',
+    both: 'bg-success/80 ring-1 ring-inset ring-success/40',
+    own: 'bg-teal/40',
+    other: 'bg-accent/45',
+    empty: 'bg-ui-elevated/55',
   })[kind];
 
   return <div>
     <div className="overflow-x-auto pb-2" tabIndex={0} role="region" aria-label="Historische Streamzeiten, Montag bis Sonntag, Zeit in Berlin">
       <div className="min-w-[570px] space-y-2">
-        <div className="ml-10 flex justify-between pr-1 text-[10px] text-neutral-500" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+        <div className="ml-10 flex justify-between pr-1 text-[10px] text-ui-faint" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
         {WEEKDAYS.map((day, weekday) => <div key={day} className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-2">
-          <span className="text-xs text-neutral-400">{day}</span>
-          <div className="flex h-7 items-center gap-px overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950/70 p-1">
+          <span className="text-xs text-ui-muted">{day}</span>
+          <div className="flex h-7 items-center gap-px overflow-hidden rounded-lg border border-border bg-bg/70 p-1">
             {segmentsForDay(weekday).map(segment => {
               const slots = Math.max(1, segment.end - segment.start);
               const ownPct = Math.round(segment.ownTotal / slots * 100);
@@ -91,44 +91,44 @@ export function ScheduleMap({ own, other, ownLogin, otherLogin }: { own: Communi
         </div>)}
       </div>
     </div>
-    <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-neutral-400">
-      <span className="inline-flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-emerald-400/80" />Gemeinsame Zeitfenster</span>
-      <span className="inline-flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-cyan-400/40" />{ownLogin}</span>
-      {otherLogin && <span className="inline-flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-violet-400/45" />{otherLogin}</span>}
+    <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-ui-muted">
+      <span className="inline-flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-success/80" />Gemeinsame Zeitfenster</span>
+      <span className="inline-flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-teal/40" />{ownLogin}</span>
+      {otherLogin && <span className="inline-flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-accent/45" />{otherLogin}</span>}
     </div>
-    <p className="mt-3 text-xs leading-relaxed text-neutral-400">Europe/Berlin · zusammenhängende Balken aus 30 Minuten Fenstern · neuere Streams zählen stärker. Beobachtete Gewohnheiten sind keine zugesagten Termine.</p>
+    <p className="mt-3 text-xs leading-relaxed text-ui-muted">Europe/Berlin · zusammenhängende Balken aus 30 Minuten Fenstern · neuere Streams zählen stärker. Beobachtete Gewohnheiten sind keine zugesagten Termine.</p>
   </div>;
 }
 
 export function RecommendationCard({ person, selected, onSelect }: { person: CommunityRecommendation; selected: boolean; onSelect: () => void }) {
   const href = twitchLink(person.login);
-  return <article className={`rounded-2xl border bg-[#121214] p-4 sm:p-5 ${selected ? 'border-cyan-400/45 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]' : 'border-neutral-800'}`}>
+  return <article className={`rounded-2xl border bg-background p-4 sm:p-5 ${selected ? 'border-teal/45 card-glow-accent' : 'border-border'}`}>
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="break-all font-semibold text-white">{person.login}</h3>
-          {person.live_state === 'live' && <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-300"><Radio className="h-3 w-3" />Live</span>}
+          {person.live_state === 'live' && <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-danger"><Radio className="h-3 w-3" />Live</span>}
         </div>
-        <p className="mt-1 text-xs text-neutral-400">{person.schedule.sessions} ausgewertete Streams</p>
+        <p className="mt-1 text-xs text-ui-muted">{person.schedule.sessions} ausgewertete Streams</p>
       </div>
       {person.score !== null && <div className="shrink-0 text-right" title="Signalpunkte, keine Erfolgswahrscheinlichkeit.">
-        <span className={`text-2xl font-semibold tabular-nums ${person.compatible ? 'text-emerald-300' : 'text-neutral-300'}`}>{person.score}</span>
-        <div className="text-[10px] text-neutral-500">Signalpunkte / 100</div>
+        <span className={`text-2xl font-semibold tabular-nums ${person.compatible ? 'text-success' : 'text-ui-text-soft'}`}>{person.score}</span>
+        <div className="text-[10px] text-ui-faint">Signalpunkte / 100</div>
       </div>}
     </div>
 
     <div className="mt-4 flex flex-wrap gap-2">
-      {person.shared_games.length > 0 && <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1.5 text-xs font-medium text-emerald-300"><CheckCircle2 className="h-3.5 w-3.5" />Gemeinsames Spiel</span>}
-      {person.current_game && <span className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1.5 text-xs text-cyan-200"><Gamepad2 className="h-3.5 w-3.5" />{person.current_game}</span>}
-      {person.both_live_same_game && <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/20 bg-violet-400/10 px-2.5 py-1.5 text-xs text-violet-200"><Radio className="h-3.5 w-3.5" />Gleiches Spiel live</span>}
+      {person.shared_games.length > 0 && <span className="inline-flex items-center gap-1.5 rounded-lg border border-success/20 bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success"><CheckCircle2 className="h-3.5 w-3.5" />Gemeinsames Spiel</span>}
+      {person.current_game && <span className="inline-flex items-center gap-1.5 rounded-lg border border-teal/20 bg-teal/10 px-2.5 py-1.5 text-xs text-teal-hover"><Gamepad2 className="h-3.5 w-3.5" />{person.current_game}</span>}
+      {person.both_live_same_game && <span className="inline-flex items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/10 px-2.5 py-1.5 text-xs text-accent"><Radio className="h-3.5 w-3.5" />Gleiches Spiel live</span>}
     </div>
 
     <div className="mt-3"><ProfileChips profile={person.profile} /></div>
-    {person.shared_windows.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{person.shared_windows.slice(0, 3).map(window => <span key={`${window.weekday}-${window.start_minute}`} className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-300"><Clock3 className="h-3 w-3 text-cyan-300" />{windowLabel(window)}</span>)}</div>}
+    {person.shared_windows.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{person.shared_windows.slice(0, 3).map(window => <span key={`${window.weekday}-${window.start_minute}`} className="inline-flex items-center gap-1.5 rounded-lg bg-ui-deep px-2.5 py-1.5 text-xs text-ui-text-soft"><Clock3 className="h-3 w-3 text-teal" />{windowLabel(window)}</span>)}</div>}
 
-    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-neutral-800 pt-3">
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
       <button type="button" aria-pressed={selected} className={mutedActionClass} onClick={onSelect}><CalendarDays className="h-4 w-4" />Zeiten vergleichen</button>
-      {href && <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-cyan-300 hover:text-cyan-200">Stream öffnen<ArrowUpRight className="h-4 w-4" /></a>}
+      {href && <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-teal hover:text-teal-hover">Stream öffnen<ArrowUpRight className="h-4 w-4" /></a>}
     </div>
   </article>;
 }
@@ -138,7 +138,7 @@ export function LobbyCard({ lobby, fresh, profile }: { lobby: CommunityLobby; fr
   const fit = lobbyFit(lobby, profile);
   const capacity = lobby.user_limit ?? Math.max(6, lobby.member_count);
   const ratio = Math.min(100, lobby.member_count / capacity * 100);
-  return <article className="rounded-2xl border border-neutral-800 bg-[#18181b] p-4">
+  return <article className="rounded-2xl border border-border bg-card p-4">
     <div className="flex items-start justify-between gap-2"><h3 className="break-words font-semibold text-white">{lobby.name}</h3>
       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${fresh ? 'bg-primary/10 text-primary' : 'bg-white/5 text-text-secondary'}`}>{fresh ? 'Voice aktiv' : 'Stand veraltet'}</span>
     </div>
@@ -175,56 +175,56 @@ export function CommunityView({ data, now, refreshing = false, refreshFailed = f
     <StreamerMeeting />
     {refreshFailed && <p role="alert" className="rounded-xl border border-warning/20 bg-warning/5 p-3 text-sm text-warning">Aktualisierung fehlgeschlagen. Historische Vorschläge bleiben sichtbar; die Lobby-Einstiege sind vorsichtshalber deaktiviert.</p>}
 
-    <section className="rounded-2xl border border-neutral-800 bg-[#121214] p-5 sm:p-6" aria-labelledby="community-times">
+    <section className="rounded-2xl border border-border bg-background p-5 sm:p-6" aria-labelledby="community-times">
       <div className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
         <div>
-          <h2 id="community-times" className="flex items-center gap-2 text-lg font-semibold text-white"><CalendarDays className="h-5 w-5 text-cyan-300" />Wann überschneiden sich eure Streams?</h2>
-          <p className="mt-1 text-sm text-neutral-400">{data.days} Tage · {data.own_schedule.sessions} abgeschlossene Streams von {data.streamer}</p>
+          <h2 id="community-times" className="flex items-center gap-2 text-lg font-semibold text-white"><CalendarDays className="h-5 w-5 text-teal" />Wann überschneiden sich eure Streams?</h2>
+          <p className="mt-1 text-sm text-ui-muted">{data.days} Tage · {data.own_schedule.sessions} abgeschlossene Streams von {data.streamer}</p>
         </div>
         {candidate && <div className="flex flex-wrap items-end gap-3 lg:justify-end">
-          <label className="flex flex-col gap-1 text-xs text-neutral-400">Vergleichen mit
-            <select aria-label="Vergleichen mit" value={candidate.login} onChange={event => setSelected(event.target.value)} className="max-w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-white">
+          <label className="flex flex-col gap-1 text-xs text-ui-muted">Vergleichen mit
+            <select aria-label="Vergleichen mit" value={candidate.login} onChange={event => setSelected(event.target.value)} className="max-w-full rounded-xl border border-border bg-bg px-3 py-2 text-sm text-white">
               {data.recommendations.map(person => <option key={person.login} value={person.login}>{person.login}</option>)}
             </select>
           </label>
-          <div className="min-w-[190px] rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.08] px-4 py-3" aria-label="Tatsächlich gleichzeitig gestreamte Stunden">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300/80">Tatsächlich gleichzeitig</p>
+          <div className="min-w-[190px] rounded-2xl border border-success/20 bg-success/10 px-4 py-3" aria-label="Tatsächlich gleichzeitig gestreamte Stunden">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-success/80">Tatsächlich gleichzeitig</p>
             <p className="mt-1 text-2xl font-semibold tabular-nums text-white">{overlapHours.toLocaleString('de-DE', { maximumFractionDigits: 1 })} Std.</p>
-            <p className="mt-0.5 text-[11px] text-neutral-400">im betrachteten Zeitraum</p>
+            <p className="mt-0.5 text-[11px] text-ui-muted">im betrachteten Zeitraum</p>
           </div>
         </div>}
       </div>
       <ScheduleMap own={data.own_schedule} other={candidate?.schedule} ownLogin={data.streamer} otherLogin={candidate?.login} />
-      {candidate && <p className="mt-3 text-xs text-neutral-500">Gleichzeitige Streamzeit bedeutet nicht automatisch, dass ihr gemeinsam in einem Match wart.</p>}
+      {candidate && <p className="mt-3 text-xs text-ui-faint">Gleichzeitige Streamzeit bedeutet nicht automatisch, dass ihr gemeinsam in einem Match wart.</p>}
     </section>
 
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.8fr)]">
-      <section className="min-w-0 rounded-2xl border border-neutral-800 bg-[#121214] p-5 sm:p-6" aria-labelledby="community-streamers">
-        <div className="flex items-center gap-2"><Users className="h-5 w-5 text-cyan-300" /><h2 id="community-streamers" className="text-lg font-semibold text-white">Wer passt zu dir?</h2></div>
-        <p className="mt-1 text-sm text-neutral-400">Passende Zeiten zuerst. Bekannte Ränge und Modi verfeinern die Auswahl.</p>
-        <div className="mt-4 flex flex-wrap gap-4 text-xs text-neutral-400">
+      <section className="min-w-0 rounded-2xl border border-border bg-background p-5 sm:p-6" aria-labelledby="community-streamers">
+        <div className="flex items-center gap-2"><Users className="h-5 w-5 text-teal" /><h2 id="community-streamers" className="text-lg font-semibold text-white">Wer passt zu dir?</h2></div>
+        <p className="mt-1 text-sm text-ui-muted">Passende Zeiten zuerst. Bekannte Ränge und Modi verfeinern die Auswahl.</p>
+        <div className="mt-4 flex flex-wrap gap-4 text-xs text-ui-muted">
           <label className="flex items-center gap-2"><input type="checkbox" checked={onlyLive} onChange={e => setOnlyLive(e.target.checked)} />Jetzt live</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={onlyCompatible} onChange={e => setOnlyCompatible(e.target.checked)} />Ohne bekannte Rang oder Moduskonflikte</label>
         </div>
         <div className="mt-5 grid gap-4 md:grid-cols-2">{(showAll ? visible : visible.slice(0, 6)).map(person => <RecommendationCard key={person.login} person={person} selected={candidate?.login === person.login} onSelect={() => setSelected(person.login)} />)}</div>
-        {visible.length === 0 && <div className="mt-5 rounded-xl border border-dashed border-neutral-800 p-6 text-sm text-neutral-400">{data.recommendations.length ? 'Für diese Filter gibt es gerade keine Vorschläge.' : 'Noch keine anderen aktiven Partner mit passenden Daten vorhanden. Der Streamer-VC bleibt euer Treffpunkt.'}</div>}
+        {visible.length === 0 && <div className="mt-5 rounded-xl border border-dashed border-border p-6 text-sm text-ui-muted">{data.recommendations.length ? 'Für diese Filter gibt es gerade keine Vorschläge.' : 'Noch keine anderen aktiven Partner mit passenden Daten vorhanden. Der Streamer-VC bleibt euer Treffpunkt.'}</div>}
         {visible.length > 6 && <button type="button" className={`${mutedActionClass} mt-4 w-full`} onClick={() => setShowAll(!showAll)}>{showAll ? 'Weniger anzeigen' : `Alle ${visible.length} Vorschläge ansehen`}</button>}
-        <p className="mt-4 text-[11px] leading-relaxed text-neutral-500">{data.evaluated_count} von {data.candidate_count} anderen aktiven Partnern näher betrachtet. Bei großen Netzwerken werden bis zu 16 Kandidaten nach Zeitüberschneidung vorausgewählt. Signalpunkte sind keine Wahrscheinlichkeit und keine Zusage.</p>
+        <p className="mt-4 text-[11px] leading-relaxed text-ui-faint">{data.evaluated_count} von {data.candidate_count} anderen aktiven Partnern näher betrachtet. Bei großen Netzwerken werden bis zu 16 Kandidaten nach Zeitüberschneidung vorausgewählt. Signalpunkte sind keine Wahrscheinlichkeit und keine Zusage.</p>
       </section>
 
-      <section className="min-w-0 rounded-2xl border border-neutral-800 bg-[#121214] p-5 sm:p-6 xl:sticky xl:top-24" aria-labelledby="community-lobbies">
-        <div className="flex items-center justify-between gap-3"><h2 id="community-lobbies" className="flex items-center gap-2 text-lg font-semibold text-white"><Gamepad2 className="h-5 w-5 text-violet-300" />Jetzt im Discord</h2>
-          <button type="button" aria-label="Community-Daten aktualisieren" title="Aktualisieren" disabled={refreshing} onClick={onRefresh} className="rounded-lg p-2 text-neutral-400 hover:text-white disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /></button></div>
-        <p className="mt-1 text-sm text-neutral-400">Aktive Sprachkanäle, auf die dein Discord-Konto zugreifen darf.</p>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-400"><label className="flex items-center gap-2"><input type="checkbox" checked={onlyFree} onChange={e => setOnlyFree(e.target.checked)} />Nur mit VC-Platz</label><span>{fresh ? 'Frisch geprüft' : 'Keine Live-Bestätigung'}</span></div>
-        {message && <div role="status" className="mt-4 rounded-xl border border-warning/20 bg-warning/5 p-4 text-sm text-neutral-400"><p>{message}</p>{data.discord.status === 'link_required' && <a href="/twitch/verwaltung" className="mt-3 inline-block text-primary">Discord-Verbindung verwalten →</a>}{data.discord.status === 'membership_unconfirmed' && <a href={COMMUNITY_INVITE} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-primary">Community-Discord öffnen →</a>}</div>}
+      <section className="min-w-0 rounded-2xl border border-border bg-background p-5 sm:p-6 xl:sticky xl:top-24" aria-labelledby="community-lobbies">
+        <div className="flex items-center justify-between gap-3"><h2 id="community-lobbies" className="flex items-center gap-2 text-lg font-semibold text-white"><Gamepad2 className="h-5 w-5 text-accent" />Jetzt im Discord</h2>
+          <button type="button" aria-label="Community-Daten aktualisieren" title="Aktualisieren" disabled={refreshing} onClick={onRefresh} className="rounded-lg p-2 text-ui-muted hover:text-white disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /></button></div>
+        <p className="mt-1 text-sm text-ui-muted">Aktive Sprachkanäle, auf die dein Discord-Konto zugreifen darf.</p>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-ui-muted"><label className="flex items-center gap-2"><input type="checkbox" checked={onlyFree} onChange={e => setOnlyFree(e.target.checked)} />Nur mit VC-Platz</label><span>{fresh ? 'Frisch geprüft' : 'Keine Live-Bestätigung'}</span></div>
+        {message && <div role="status" className="mt-4 rounded-xl border border-warning/20 bg-warning/5 p-4 text-sm text-ui-muted"><p>{message}</p>{data.discord.status === 'link_required' && <a href="/twitch/verwaltung" className="mt-3 inline-block text-primary">Discord-Verbindung verwalten →</a>}{data.discord.status === 'membership_unconfirmed' && <a href={COMMUNITY_INVITE} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-primary">Community-Discord öffnen →</a>}</div>}
         <div className="mt-4 space-y-3">{lobbies.map(lobby => <LobbyCard key={lobby.channel_id} lobby={lobby} fresh={fresh} profile={data.own_profile} />)}</div>
-        {fresh && lobbies.length === 0 && <p className="mt-4 rounded-xl border border-dashed border-neutral-800 p-5 text-sm text-neutral-400">{data.discord.lobbies.length ? 'Die sichtbaren Sprachkanäle sind gerade voll. Deaktiviere den Filter, um sie zu sehen.' : 'Gerade keine belegte, für dich sichtbare Community-Lobby gefunden.'}</p>}
-        <p className="mt-4 text-[11px] leading-relaxed text-neutral-500">Ein freier VC-Platz ist kein garantierter Ingame-Platz. Der Klick öffnet Discord; Beitritt und Rechte prüft Discord erneut. Keine automatische Verschiebung, kein Audio im Browser. Aktualisierung alle 30 Sekunden.</p>
+        {fresh && lobbies.length === 0 && <p className="mt-4 rounded-xl border border-dashed border-border p-5 text-sm text-ui-muted">{data.discord.lobbies.length ? 'Die sichtbaren Sprachkanäle sind gerade voll. Deaktiviere den Filter, um sie zu sehen.' : 'Gerade keine belegte, für dich sichtbare Community-Lobby gefunden.'}</p>}
+        <p className="mt-4 text-[11px] leading-relaxed text-ui-faint">Ein freier VC-Platz ist kein garantierter Ingame-Platz. Der Klick öffnet Discord; Beitritt und Rechte prüft Discord erneut. Keine automatische Verschiebung, kein Audio im Browser. Aktualisierung alle 30 Sekunden.</p>
       </section>
     </div>
 
-    <details className="rounded-2xl border border-neutral-800 bg-[#121214] p-5 text-sm text-neutral-400"><summary className="cursor-pointer font-medium text-white">Wie entstehen die Vorschläge?</summary><div className="mt-3 space-y-2 leading-relaxed"><p>Abgeschlossene Streams liefern halbstündige Wochenprofile in Berliner Zeit. Tatsächlich gleichzeitig gestreamte Minuten werden separat aus den Session-Zeiten berechnet. Für eine Wertung sind mindestens drei Sessions je Person nötig.</p><p>Bis zu 65 Punkte kommen aus den Zeiten, 15 aus gemeinsamen Spielen, 15 aus bestätigten, höchstens 14 Tage alten Steam-Rängen und 5 aus passenden Modi. Ein Titelhinweis gibt höchstens 2 Moduspunkte. Unbekannte Werte bleiben unbekannt.</p><p>Spielhistorie berücksichtigt explizite Modi aus den letzten 14 Tagen. Ein einzelnes Spiel genügt nicht: mindestens drei passende Spiele und ein überwiegender Modus sind nötig. Aktuelle Titel sind Absichtshinweise, keine verifizierten Match-Daten.</p><p>Ein größerer Rangunterschied oder unterschiedliche Modi werden in der Auswahl berücksichtigt. Zeiten, Spielweise und freie Plätze solltet ihr kurz miteinander absprechen.</p></div></details>
+    <details className="rounded-2xl border border-border bg-background p-5 text-sm text-ui-muted"><summary className="cursor-pointer font-medium text-white">Wie entstehen die Vorschläge?</summary><div className="mt-3 space-y-2 leading-relaxed"><p>Abgeschlossene Streams liefern halbstündige Wochenprofile in Berliner Zeit. Tatsächlich gleichzeitig gestreamte Minuten werden separat aus den Session-Zeiten berechnet. Für eine Wertung sind mindestens drei Sessions je Person nötig.</p><p>Bis zu 65 Punkte kommen aus den Zeiten, 15 aus gemeinsamen Spielen, 15 aus bestätigten, höchstens 14 Tage alten Steam-Rängen und 5 aus passenden Modi. Ein Titelhinweis gibt höchstens 2 Moduspunkte. Unbekannte Werte bleiben unbekannt.</p><p>Spielhistorie berücksichtigt explizite Modi aus den letzten 14 Tagen. Ein einzelnes Spiel genügt nicht: mindestens drei passende Spiele und ein überwiegender Modus sind nötig. Aktuelle Titel sind Absichtshinweise, keine verifizierten Match-Daten.</p><p>Ein größerer Rangunterschied oder unterschiedliche Modi werden in der Auswahl berücksichtigt. Zeiten, Spielweise und freie Plätze solltet ihr kurz miteinander absprechen.</p></div></details>
   </div>;
 }
 
