@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { parseFragment } from "parse5";
 
 /*
  * Jede Unterseite braucht einen Vite-Entry — sonst wird sie nie gebaut.
@@ -80,11 +81,48 @@ test("die Empfangsseite /twitch/faq wird gebaut (Caddy serviert dist/faq)", () =
   );
 });
 
+function beaconScripts(html) {
+  const pending = [parseFragment(html)];
+  const sources = [];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node.tagName === "script") {
+      const source = node.attrs.find((attribute) => attribute.name === "src")?.value;
+      if (source) {
+        const url = new URL(source, "https://website.example");
+        if (url.hostname === "static.cloudflareinsights.com"
+          || url.hostname.endsWith(".cloudflareinsights.com")
+          || url.pathname.split("/").at(-1) === "beacon.min.js") sources.push(source);
+      }
+    }
+    pending.push(...(node.childNodes ?? []));
+    if (node.content) pending.push(node.content);
+  }
+  return sources;
+}
+
+test("Beacon-Prüfung erkennt echte Skriptquellen statt Kommentare oder Teilzeichenfolgen", () => {
+  for (const html of [
+    '<script src="https://static.cloudflareinsights.com/anything.js"></script>',
+    '<SCRIPT SRC="//STATIC.CLOUDFLAREINSIGHTS.COM/anything.js"></SCRIPT>',
+    '<script src="https:&#47;&#47;static.cloudflareinsights.com/anything.js"></script>',
+    '<script src="/assets/beacon.min.js?version=1"></script>',
+    '<template><script src="/beacon.min.js"></script></template>',
+  ]) assert.equal(beaconScripts(html).length, 1);
+  for (const html of [
+    '<script src="/assets/main.js"></script>',
+    '<!-- <script src="/beacon.min.js"></script> -->',
+    '<p>static.cloudflareinsights.com</p>',
+    '<script src="/main.js?note=static.cloudflareinsights.com"></script>',
+    '<script src="https://static.cloudflareinsights.com.example/main.js"></script>',
+  ]) assert.deepEqual(beaconScripts(html), []);
+});
+
 test("keine Streamer-Seite bindet den manuellen Cloudflare-Beacon ein", () => {
   const htmlFiles = ["index.html", ...pageDirsWithHtml().map((dir) => `${dir}/index.html`)];
   const offenders = htmlFiles.filter((rel) => {
     const html = readFileSync(join(websiteRoot, rel), "utf8");
-    return html.includes("static.cloudflareinsights.com") || html.includes("beacon.min.js");
+    return beaconScripts(html).length > 0;
   });
   assert.deepEqual(
     offenders,
