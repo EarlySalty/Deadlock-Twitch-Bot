@@ -1,4 +1,4 @@
-status: aktiv
+status: erledigt (CI-Teil); Merge/Deploy offen (Review + Billing)
 Datum: 2026-09-24
 
 # Register: Werbemanager-CI-Fix
@@ -11,8 +11,8 @@ Claude-OAuth abgelaufen); der Fix läuft daher in dieser Session, Stufe mittel.
 | Rolle | Thread/Modell | Worktree/Branch | Status |
 |---|---|---|---|
 | Intent+Orchestrator (diese Session) | t3-code Thread | `.worktrees/tb-admanager-steam-api-20260924` (fix/admanager-steam-api-20260924) | aktiv |
-| Implementierung | dieselbe Session (Abweichung s. o.) | dito | Umsetzung läuft |
-| Unabhängiges Review | offen — erst nach CI-Grün ansetzen | — | offen |
+| Implementierung | dieselbe Session (Abweichung s. o.) | dito | erledigt: dd98827a + 2b043a2d, CI grün |
+| Unabhängiges Review | offen — T3-Rollen laut Vorregister kontingentgesperrt | — | offen |
 
 ## Bezüge
 
