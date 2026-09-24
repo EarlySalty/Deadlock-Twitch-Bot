@@ -139,13 +139,15 @@ test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Ste
   assert.match(adManagerSectionSource, /Empfohlen/);
   assert.match(adManagerSectionSource, /Im Match: Werbung verschieben/);
   assert.match(adManagerSectionSource, /Queue oder Menü: Werbung starten/);
-  assert.match(adManagerSectionSource, /Ohne Steam: ruhige Chat-Phase nutzen/);
+  assert.match(adManagerSectionSource, /Ohne frischen Steam-Status: keine eigene Werbung/);
+  assert.match(adManagerSectionSource, /Matchstatus nicht verfügbar/);
+  assert.doesNotMatch(adManagerSectionSource, /Ohne Steam: ruhige Chat-Phase nutzen/);
   assert.doesNotMatch(adManagerSectionSource, /Werbung möglichst verschieben/);
   assert.doesNotMatch(adManagerSectionSource, />Intelligent steuern</);
   assert.match(
     adManagerSectionSource,
-    /vorerst die Chat-Ruhe/,
-    'der Fallback bei veraltetem Status muss benannt sein',
+    /Eigene Werbestarts warten auf einen frischen Matchstatus/,
+    'ein veralteter Status muss als Sperre für eigene Werbestarts benannt sein',
   );
 });
 

@@ -228,16 +228,15 @@ async fn process_channel(
                 .quiet_messages(session, now, channel.settings.quiet_window_minutes)
                 .await?;
             let recent = store.quiet_messages(session, now, 1).await?;
-            // Steam-Match-Status ist optional: ohne frische Presence entscheidet
-            // der Entscheider unverändert nach Chat-Ruhe.
+            // Missing presence is unknown, not a safe advertising window.
             let steam_match_state =
-                match store.steam_match_summary(&channel.twitch_login, now).await {
+                match store.steam_match_summary(&channel.twitch_user_id, now).await {
                     Ok(summary) => summary.state,
                     Err(error) => {
                         tracing::debug!(
                             %error,
                             login = %channel.twitch_login,
-                            "Werbemanager: Steam-Match-Status nicht lesbar; Fallback auf Chat-Ruhe"
+                            "Werbemanager: Steam-Match-Status nicht lesbar; automatische Werbestarts bleiben gesperrt"
                         );
                         None
                     }
@@ -857,7 +856,7 @@ mod tests {
         );
         assert!(
             between.contains("None"),
-            "Ohne Status läuft der Chat-Ruhe-Fallback"
+            "Ohne Status erhält der Entscheider ein unbekanntes und damit gesperrtes Werbefenster"
         );
     }
 }
