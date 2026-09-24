@@ -10,7 +10,7 @@ Die Hinweise zu Streamer-Rechten beziehen sich auf Verschieben und Zugriffssperr
 
 ## Daten und Matching
 
-- Nur aktive Partner, ohne Archivierung, Entpartnerung oder vorhandenen manuellen Opt-out. Keine Selbstvorschläge. Partner können nur ihr eigenes Matching abfragen; Admins dürfen einen anderen Partner betrachten, erhalten aber weiterhin nur die Discord-Rechte ihres **eigenen** Accounts.
+- Nur aktive Partner, ohne Archivierung, Entpartnerung, technischen Pausengrund oder vorhandenen manuellen Opt-out. Keine Selbstvorschläge. Partner können nur ihr eigenes Matching abfragen; Admins dürfen einen anderen Partner betrachten, erhalten aber weiterhin nur die Discord-Rechte ihres **eigenen** Accounts.
 - Zeitraum 7–90 Tage; maximal 180 abgeschlossene Sessions je Kanal, maximal 500 Partner. Offene, zukünftige oder mehr als 48 Stunden lange Sessions werden nicht als abgeschlossene Historie verwendet. Doppelte/überlappende Intervalle erhöhen die Häufigkeit nicht.
 - 336 halbstündige Wochen-Slots in `Europe/Berlin`, mit tatsächlicher Zeitumrechnung einschließlich Sommerzeit. Neuere Streams zählen mit 21 Tagen Halbwertszeit stärker. Eine separate Intervallberechnung liefert die tatsächlich gleichzeitig gestreamten Minuten, nicht vermeintlich gemeinsam gespielte Matches.
 - Mindestens drei unterschiedliche Sessions je Person für einen Score. Zeitprofil: bis 65 Punkte; gemeinsame Spiele: 15; ähnliche bestätigte Steam-Ränge: bis 15; gleicher erkannter Modus: 5 aus Spielhistorie, bei Titelhinweisen höchstens 2. Punkte sind **keine Wahrscheinlichkeit**. Fehlende Angaben ergeben keine Bonuspunkte.
@@ -41,7 +41,7 @@ Der Twitch-Server ruft intern `POST /internal/master/v1/discord/community-lobbie
 
 Verwendete bestehende Konfiguration: `STEAM_BOT_RANK_URL` (Standard localhost:8783/rank); `MASTER_BROKER_BASE_URL` oder `MASTER_BROKER_HOST`/`MASTER_BROKER_PORT` (Standard localhost:8770); internes Token aus `MASTER_BROKER_TOKEN`, `MAIN_BOT_INTERNAL_TOKEN` oder `TWITCH_INTERNAL_API_TOKEN`. Keine Werte oder Zugangsdaten im Frontend.
 
-HTTP-Timeout 2,2 Sekunden je Quelle, höchstens vier gleichzeitige Profilanreicherungen, absolut sechs Sekunden Anreicherungsbudget. Erfolgreiche Steam-Profile fünf Minuten Cache, unvollständige eine Minute; begrenzter Single-Flight-Cache pro Identität. Unfertige Anreicherungen werden abgebrochen, nicht im Hintergrund fortgesetzt. Datenbankabfragen sind ebenfalls zeitlich begrenzt. Demo-/Preview-Modus startet keine persönlichen Live-Abfragen.
+HTTP-Timeout 2,2 Sekunden je Quelle, höchstens vier gleichzeitige Profilanreicherungen, absolut sechs Sekunden Anreicherungsbudget. Die Community-Abfrage liest Rang und Match-Verlauf ausschließlich aus bereits vorhandenen Steam-Caches und löst dabei keine Live-Rangheilung oder GC-Match-History aus. Erfolgreiche Steam-Profile fünf Minuten Cache, unvollständige eine Minute; begrenzter Single-Flight-Cache pro Identität. Unfertige Anreicherungen werden abgebrochen, nicht im Hintergrund fortgesetzt. Datenbankabfragen sind ebenfalls zeitlich begrenzt. Demo-/Preview-Modus startet keine persönlichen Live-Abfragen.
 
 ## Repositoryübergreifender Rollout
 

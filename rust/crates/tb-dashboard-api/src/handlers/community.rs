@@ -94,14 +94,12 @@ fn apply_title(mut profile: PlayerProfile, member: &Member, sessions: &[Session]
 async fn load_members(pool: &PgPool) -> Result<Vec<Member>,sqlx::Error> {
     sqlx::query_as::<_,Member>(r#"
         SELECT p.twitch_user_id, lower(p.twitch_login) AS login,
-               NULLIF(trim(i.discord_user_id),'') AS discord_id,
+               NULLIF(trim(p.discord_user_id),'') AS discord_id,
                COALESCE(l.is_live,0)::int AS is_live, l.last_seen_at,
                l.last_game, left(l.last_title,500) AS last_title
-        FROM twitch_partners p
-        LEFT JOIN twitch_streamer_identities i ON i.twitch_user_id=p.twitch_user_id
+        FROM twitch_partners_all_state p
         LEFT JOIN twitch_live_state l ON l.twitch_user_id=p.twitch_user_id
-        WHERE p.status='active' AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
-          AND COALESCE(p.manual_partner_opt_out,0)=0
+        WHERE p.is_partner_active=1
         ORDER BY lower(p.twitch_login) LIMIT 500
     "#).fetch_all(pool).await
 }
