@@ -322,6 +322,49 @@ svg.icon-duotone {
 }
 
 /* Internal Home */
+@keyframes stream-metrics-mesh {
+  0%,
+  100% {
+    transform: translate3d(-2%, -2%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(3%, 2%, 0) scale(1.04);
+  }
+}
+
+.stream-metrics-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.stream-metrics-panel::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at 24% 30%,
+      color-mix(in srgb, var(--color-primary) 7%, transparent),
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at 78% 70%,
+      color-mix(in srgb, var(--color-accent) 6%, transparent),
+      transparent 30%
+    );
+  filter: blur(30px);
+  opacity: 0.72;
+  animation: stream-metrics-mesh 16s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-metrics-panel::before {
+    animation: none;
+  }
+}
+
 @keyframes internal-home-fade-in {
   from {
     opacity: 0;

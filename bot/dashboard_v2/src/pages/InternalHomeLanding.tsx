@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type PointerEvent } from 'react';
 import { Rise } from '../motion/Rise';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -27,6 +27,95 @@ import { FeedbackBox } from '@/components/feedback/FeedbackBox';
 import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
 import { useT } from '@/context/LanguageContext';
 
+function MiniSparkline({
+  values,
+  accent,
+  label,
+  markPeak = false,
+}: {
+  values: number[];
+  accent: 'primary' | 'accent' | 'success' | 'warning';
+  label: string;
+  markPeak?: boolean;
+}) {
+  const finiteValues = values.filter((entry) => Number.isFinite(entry));
+  if (finiteValues.length < 2) return null;
+
+  const width = 144;
+  const height = 56;
+  const padding = 4;
+  const min = Math.min(...finiteValues);
+  const max = Math.max(...finiteValues);
+  const spread = Math.max(1, max - min);
+  const step = (width - padding * 2) / Math.max(1, finiteValues.length - 1);
+  const points = finiteValues.map((entry, index) => {
+    const x = padding + index * step;
+    const y = height - padding - ((entry - min) / spread) * (height - padding * 2);
+    return { x, y, value: entry };
+  });
+  const polyline = points.map((point) => point.x + ',' + point.y).join(' ');
+  const area =
+    padding +
+    ',' +
+    (height - padding) +
+    ' ' +
+    polyline +
+    ' ' +
+    (width - padding) +
+    ',' +
+    (height - padding);
+  const peakPoint = points.reduce((best, point) => (point.value > best.value ? point : best));
+  const accentClass = {
+    primary: 'text-primary',
+    accent: 'text-accent',
+    success: 'text-success',
+    warning: 'text-warning',
+  }[accent];
+
+  return (
+    <svg
+      viewBox={'0 0 ' + width + ' ' + height}
+      role="img"
+      aria-label={label}
+      className={'h-14 w-full overflow-visible ' + accentClass}
+      preserveAspectRatio="none"
+    >
+      <title>{label}</title>
+      <polygon points={area} fill="currentColor" opacity="0.06" />
+      <polyline
+        points={polyline}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+        opacity="0.82"
+      />
+      {markPeak ? (
+        <circle
+          cx={peakPoint.x}
+          cy={peakPoint.y}
+          r="2.8"
+          fill="currentColor"
+          stroke="var(--color-card)"
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : null}
+    </svg>
+  );
+}
+
+function formatTrendPct(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return (
+    (rounded > 0 ? '+' : '') +
+    rounded.toLocaleString('de-DE', { maximumFractionDigits: 1 }) +
+    '%'
+  );
+}
+
 function MiniStat({
   label,
   value,
@@ -34,6 +123,10 @@ function MiniStat({
   suffix = '',
   icon: Icon,
   accent = 'primary',
+  series = [],
+  seriesLabel,
+  trendPct,
+  markPeak = false,
 }: {
   label: string;
   value: number | null | undefined;
@@ -41,6 +134,10 @@ function MiniStat({
   suffix?: string;
   icon?: LucideIcon;
   accent?: 'primary' | 'accent' | 'success' | 'warning';
+  series?: number[];
+  seriesLabel?: string;
+  trendPct?: number | null;
+  markPeak?: boolean;
 }) {
   const accentColor = {
     primary: 'bg-primary/15 border-primary/25 text-primary',
@@ -48,25 +145,99 @@ function MiniStat({
     success: 'bg-success/15 border-success/25 text-success',
     warning: 'bg-warning/15 border-warning/25 text-warning',
   }[accent];
+  const accentVar = {
+    primary: 'var(--color-primary)',
+    accent: 'var(--color-accent)',
+    success: 'var(--color-success)',
+    warning: 'var(--color-warning)',
+  }[accent];
+  const hasSeries = series.filter((entry) => Number.isFinite(entry)).length >= 2;
+  const trendClass =
+    trendPct == null || trendPct === 0
+      ? 'border-border bg-white/[0.035] text-text-secondary'
+      : trendPct > 0
+        ? 'border-success/20 bg-success/10 text-success'
+        : 'border-danger/20 bg-danger/10 text-danger';
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.style.setProperty('--glow-x', event.clientX - rect.left + 'px');
+    event.currentTarget.style.setProperty('--glow-y', event.clientY - rect.top + 'px');
+  };
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,translate,scale,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
+    <div
+      onPointerMove={handlePointerMove}
+      className="group relative min-h-[122px] overflow-hidden rounded-xl border border-border bg-background/50 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] backdrop-blur-sm transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/65 hover:shadow-[0_12px_30px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.035)]"
+      style={
+        {
+          '--stat-accent': accentVar,
+          '--glow-x': '72%',
+          '--glow-y': '20%',
+        } as CSSProperties
+      }
+    >
       <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -right-8 -top-9 h-24 w-24 rounded-full opacity-[0.08] blur-2xl"
+        style={{ backgroundColor: 'var(--stat-accent)' }}
+      />
+      <div
+        aria-hidden="true"
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         style={{
-          background: 'radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--color-primary) 8%, transparent), transparent 60%)',
+          background:
+            'radial-gradient(110px circle at var(--glow-x) var(--glow-y), color-mix(in srgb, var(--stat-accent) 13%, transparent), transparent 72%)',
         }}
       />
-      {Icon ? (
-        <div className={`icon-duotone mb-2 flex h-7 w-7 items-center justify-center rounded-lg border ${accentColor}`}>
-          <Icon className="h-3.5 w-3.5" />
+
+      <div className="relative z-[1] flex min-h-[94px] flex-col justify-between">
+        <div className="flex items-center gap-2">
+          {Icon ? (
+            <div
+              className={
+                'icon-duotone flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ' +
+                accentColor
+              }
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </div>
+          ) : null}
+          <div className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
+            {label}
+          </div>
         </div>
-      ) : null}
-      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">{label}</div>
-      <div
-        className="kpi-number mt-1 text-xl font-bold text-white"
-      >
-        {value != null ? `${prefix}${formatNumber(value)}${suffix}` : '\u2013'}
+
+        <div className="mt-3 flex items-end justify-between gap-3">
+          <div className="min-w-0 shrink-0">
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="kpi-number text-3xl font-bold leading-none tracking-tight text-white md:text-[2.15rem]">
+                {value != null ? prefix + formatNumber(value) + suffix : '\u2013'}
+              </div>
+              {trendPct != null ? (
+                <div
+                  className={
+                    'mb-0.5 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums ' +
+                    trendClass
+                  }
+                >
+                  {formatTrendPct(trendPct)}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {hasSeries ? (
+            <div className="min-w-[64px] flex-1 pb-0.5 opacity-90 transition-opacity duration-200 group-hover:opacity-100">
+              <MiniSparkline
+                values={series}
+                accent={accent}
+                label={seriesLabel || label + ' Verlauf'}
+                markPeak={markPeak}
+              />
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -415,6 +586,8 @@ export function InternalHomeLanding() {
   const streamComparison = data?.streamComparison ?? null;
   const viewersOverTime = data?.viewersOverTime ?? null;
   const liveStatus = data?.liveStatus ?? null;
+  const streamViewerSeries = (viewersOverTime ?? []).map((point) => point.viewers);
+  const weekDailySeries = weekComp?.daily_series ?? null;
 
   const score = Math.max(0, Math.min(100, healthScore?.overall ?? 0));
   const subScores = healthScore?.sub_scores ?? {
@@ -693,89 +866,133 @@ export function InternalHomeLanding() {
 
               <div
                 data-tour-id="tour-stream"
-                className={`panel-card card-glow rounded-2xl p-5 ${healthScore ? 'lg:col-span-2' : 'lg:col-span-3'}`}
+                className={
+                  'stream-metrics-panel panel-card card-glow rounded-2xl p-5 md:p-6 ' +
+                  (healthScore ? 'lg:col-span-2' : 'lg:col-span-3')
+                }
               >
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
-                  Letzter Stream
-                </div>
-                <h2 className="mt-1 text-xl font-semibold text-white">
-                  {lastStream?.started_at
-                    ? `${formatDateWithTime(lastStream.started_at)} · ${formatDurationFromSeconds(
-                        lastStream.duration_seconds
-                      )}`
-                    : 'Keine Stream-Daten verfuegbar'}
-                </h2>
-                <p className="mt-1 text-sm text-text-secondary">
-                  {lastStream?.ended_at
-                    ? `Ende: ${formatDateWithTime(lastStream.ended_at)}`
-                    : 'Sobald ein Stream abgeschlossen ist, erscheint die Zusammenfassung hier.'}
-                </p>
+                <div className="relative z-[1]">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-5">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
+                        Letzter Stream
+                      </div>
 
-                {lastStream ? (
-                  <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <MiniStat
-                      label={'\u00D8 Viewer'}
-                      value={lastStream.avg_viewers}
-                      icon={Users}
-                      accent="primary"
-                    />
-                    <MiniStat
-                      label="Peak"
-                      value={lastStream.peak_viewers}
-                      icon={TrendingUp}
-                      accent="accent"
-                    />
-                    <MiniStat
-                      label="Follower"
-                      value={lastStream.follower_delta}
-                      prefix="+"
-                      icon={Heart}
-                      accent="success"
-                    />
-                    <MiniStat
-                      label="Chat"
-                      value={lastStream.chat_messages}
-                      icon={MessageSquare}
-                      accent="warning"
-                    />
-                  </div>
-                ) : null}
-
-                {weekComp ? (
-                  <div data-tour-id="tour-week" className="mt-5 border-t border-border pt-5">
-                    <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                      Woche vs. Vorwoche
+                      {lastStream?.started_at ? (
+                        <div className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                          <h2 className="text-2xl font-semibold tracking-tight text-white">
+                            {formatCalendarDate(lastStream.started_at)}
+                          </h2>
+                          <span className="hidden h-5 w-px bg-border sm:block" aria-hidden="true" />
+                          <span className="kpi-number text-base font-semibold text-white/85 md:text-lg">
+                            {formatDurationFromSeconds(lastStream.duration_seconds)}
+                          </span>
+                        </div>
+                      ) : (
+                        <h2 className="mt-1 text-xl font-semibold text-white">
+                          Keine Stream-Daten verfuegbar
+                        </h2>
+                      )}
                     </div>
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+
+                    <p className="text-sm text-text-secondary sm:pb-0.5 sm:text-right">
+                      {lastStream?.ended_at
+                        ? 'Ende: ' + formatDateWithTime(lastStream.ended_at)
+                        : 'Sobald ein Stream abgeschlossen ist, erscheint die Zusammenfassung hier.'}
+                    </p>
+                  </div>
+
+                  {lastStream ? (
+                    <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
                       <MiniStat
                         label={'\u00D8 Viewer'}
-                        value={weekComp.current_week.avg_viewers}
+                        value={lastStream.avg_viewers}
                         icon={Users}
                         accent="primary"
+                        series={streamViewerSeries}
+                        seriesLabel="Zuschauerverlauf im letzten Stream"
+                      />
+                      <MiniStat
+                        label="Peak"
+                        value={lastStream.peak_viewers}
+                        icon={TrendingUp}
+                        accent="accent"
+                        series={streamViewerSeries}
+                        seriesLabel="Zuschauerverlauf mit Peak im letzten Stream"
+                        markPeak
                       />
                       <MiniStat
                         label="Follower"
-                        value={weekComp.current_week.total_followers}
-                        icon={TrendingUp}
+                        value={lastStream.follower_delta}
+                        prefix="+"
+                        icon={Heart}
                         accent="success"
                       />
                       <MiniStat
-                        label="Chat-Aktivität"
-                        value={weekComp.current_week.chat_activity}
-                        suffix="/h"
+                        label="Chat"
+                        value={lastStream.chat_messages}
                         icon={MessageSquare}
                         accent="warning"
                       />
-                      <MiniStat
-                        label="Stream-Stunden"
-                        value={weekComp.current_week.stream_hours}
-                        suffix="h"
-                        icon={BarChart3}
-                        accent="accent"
-                      />
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
+
+                  {weekComp ? (
+                    <div data-tour-id="tour-week" className="mt-6 pt-5">
+                      <div
+                        aria-hidden="true"
+                        className="mb-5 h-px w-full opacity-80"
+                        style={{
+                          background:
+                            'linear-gradient(90deg, transparent 0%, var(--color-border) 10%, var(--color-primary) 43%, var(--color-accent) 57%, var(--color-border) 90%, transparent 100%)',
+                        }}
+                      />
+                      <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                        Woche vs. Vorwoche
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <MiniStat
+                          label={'\u00D8 Viewer'}
+                          value={weekComp.current_week.avg_viewers}
+                          icon={Users}
+                          accent="primary"
+                          trendPct={weekComp.changes.avg_viewers_pct}
+                          series={weekDailySeries?.avg_viewers ?? []}
+                          seriesLabel="Durchschnittliche Zuschauer der letzten sieben Tage"
+                        />
+                        <MiniStat
+                          label="Follower"
+                          value={weekComp.current_week.total_followers}
+                          icon={TrendingUp}
+                          accent="success"
+                          trendPct={weekComp.changes.followers_pct}
+                          series={weekDailySeries?.followers ?? []}
+                          seriesLabel="Neue Follower der letzten sieben Tage"
+                        />
+                        <MiniStat
+                          label="Chat-Aktivität"
+                          value={weekComp.current_week.chat_activity}
+                          suffix="/h"
+                          icon={MessageSquare}
+                          accent="warning"
+                          trendPct={weekComp.changes.chat_activity_pct}
+                          series={weekDailySeries?.chat_activity ?? []}
+                          seriesLabel="Chat-Aktivität der letzten sieben Tage"
+                        />
+                        <MiniStat
+                          label="Stream-Stunden"
+                          value={weekComp.current_week.stream_hours}
+                          suffix="h"
+                          icon={BarChart3}
+                          accent="accent"
+                          trendPct={weekComp.changes.stream_hours_pct}
+                          series={weekDailySeries?.stream_hours ?? []}
+                          seriesLabel="Stream-Stunden der letzten sieben Tage"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </Rise>
 
