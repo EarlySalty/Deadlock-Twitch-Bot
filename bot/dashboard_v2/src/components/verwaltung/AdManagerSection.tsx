@@ -2,10 +2,12 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { motion } from 'framer-motion';
 import {
   AlertTriangle,
+  Check,
   Clock3,
   ExternalLink,
   Gamepad2,
   History,
+  Info,
   Loader2,
   PauseCircle,
   Play,
@@ -13,7 +15,6 @@ import {
   Save,
   ShieldCheck,
   SlidersHorizontal,
-  Wallet,
   Zap,
 } from 'lucide-react';
 import {
@@ -174,7 +175,27 @@ function actionOutcomeLabel(outcome: string): string {
   return 'Status unbekannt';
 }
 
-function MiniTile({
+function InfoHint({ label, text }: { label: string; text: string }) {
+  return (
+    <span className="group relative inline-flex shrink-0">
+      <button
+        type="button"
+        aria-label={label}
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full text-text-secondary transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-64 -translate-x-1/2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-normal leading-5 text-text-secondary shadow-lg group-hover:block group-focus-within:block"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function StatusMetric({
   icon,
   label,
   value,
@@ -188,12 +209,12 @@ function MiniTile({
   tone?: string;
 }) {
   return (
-    <div className="panel-inset flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2" title={hint ?? undefined}>
-      <span className={`shrink-0 ${tone}`}>{icon}</span>
-      <span className="min-w-0">
-        <span className="block truncate text-[10px] font-semibold uppercase tracking-wider text-text-secondary">{label}</span>
-        <span className={`block truncate text-sm font-bold leading-tight ${tone}`}>{value}</span>
-      </span>
+    <div className="min-w-0 rounded-xl border border-border bg-background/45 p-3" title={hint ?? undefined}>
+      <div className="flex items-start justify-between gap-3">
+        <span className={`shrink-0 ${tone}`}>{icon}</span>
+        <span className={`min-w-0 text-right text-base font-bold leading-tight ${tone}`}>{value}</span>
+      </div>
+      <span className="mt-2 block text-[10px] font-semibold uppercase tracking-wider text-text-secondary">{label}</span>
     </div>
   );
 }
@@ -222,12 +243,12 @@ function NumberSetting({
   const unitId = `${inputId}-einheit`;
 
   return (
-    <div
-      className={`panel-inset rounded-lg px-3 py-2.5 ${disabled ? 'opacity-50' : ''}`}
-      title={description}
-    >
-      <label htmlFor={inputId} className="block text-[13px] font-semibold text-white">{label}</label>
-      <p id={descriptionId} className="mt-0.5 truncate text-[10px] leading-4 text-text-secondary">{description}</p>
+    <div className={`min-w-0 ${disabled ? 'opacity-50' : ''}`}>
+      <div className="flex items-center gap-1.5">
+        <label htmlFor={inputId} className="text-[13px] font-semibold text-white">{label}</label>
+        <InfoHint label={`${label} erklären`} text={description} />
+      </div>
+      <span id={descriptionId} className="sr-only">{description}</span>
       <span className="mt-1.5 flex items-center gap-1.5">
         <input
           id={inputId}
@@ -456,11 +477,39 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32 }}
     >
-      <div className="mb-4">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="display-font text-2xl font-bold text-white">Intelligenter Werbemanager</h2>
-        <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-          Der Bot verteilt dein Werbebudget in kurzen Blöcken über den Stream und legt sie in ruhige Momente.
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+              draft.enabled ? 'bg-primary/10 text-primary' : 'bg-background/60 text-text-secondary'
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                draft.enabled && status.workerHealthy ? 'animate-pulse bg-primary' : 'bg-text-secondary'
+              }`}
+            />
+            {draft.enabled ? 'Aktiv' : 'Aus'}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={draft.enabled}
+            aria-label="Werbemanager aktiv"
+            title={draft.enabled ? 'Werbemanager ausschalten' : 'Werbemanager einschalten'}
+            onClick={() => patch({ enabled: !draft.enabled })}
+            className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border-2 transition-colors ${
+              draft.enabled ? 'border-primary bg-primary/25' : 'border-border bg-background'
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 rounded-full transition-transform ${
+                draft.enabled ? 'translate-x-7 bg-primary' : 'translate-x-1 bg-text-secondary'
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -487,7 +536,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                 <ShieldCheck className="h-4 w-4" /> Twitch-Berechtigungen fehlen
               </p>
               <p className="mt-1 text-xs text-text-secondary">
-                Fehlend: {missingScopeLabels.join(', ')}. Verbinde Twitch erneut, damit Status und Werbung vollständig funktionieren.
+                Fehlend: {missingScopeLabels.join(', ')}.
               </p>
             </div>
             <a
@@ -504,345 +553,342 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         {laufText}
       </p>
 
-      <div className={`rounded-2xl border bg-background/60 p-4 shadow-[var(--shadow-card-soft)] ${draft.enabled ? 'border-primary/60' : 'border-border'}`}>
-        <div className="flex flex-wrap items-start gap-4">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={draft.enabled}
-            aria-label="Werbemanager aktiv"
-            title={draft.enabled ? 'Werbemanager ausschalten' : 'Werbemanager einschalten'}
-            onClick={() => patch({ enabled: !draft.enabled })}
-            className={`relative inline-flex h-9 w-16 shrink-0 items-center rounded-full border-2 transition-colors ${
-              draft.enabled ? 'border-primary bg-primary/25' : 'border-border bg-background'
-            }`}
-          >
-            <span className={`inline-block h-6 w-6 rounded-full transition-transform ${
-              draft.enabled ? 'translate-x-8 bg-primary' : 'translate-x-1 bg-text-secondary'
-            }`} />
-          </button>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-bold text-white">{draft.enabled ? 'Werbemanager an' : 'Werbemanager aus'}</h3>
-              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                status.isLive ? 'bg-error/10 text-error' : 'bg-background/60 text-text-secondary'
-              }`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${status.isLive ? 'animate-pulse bg-error' : 'bg-text-secondary'}`} />
-                {status.isLive ? 'Stream läuft' : 'Offline'}
-              </span>
-              {draft.enabled && !status.workerHealthy ? (
-                <span className="rounded-full border border-danger/40 bg-danger/10 px-2.5 py-1 text-[11px] font-semibold text-danger">
-                  Bot nicht erreichbar
-                </span>
-              ) : null}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,13fr)_minmax(20rem,7fr)]">
+        <div className="min-w-0 rounded-xl border border-border bg-background/35 p-4 md:p-5">
+          <h3 className="text-lg font-bold text-white">Konfiguration</h3>
+
+          <section className="mt-4">
+            <h4 className="text-sm font-semibold text-white">Strategie</h4>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Werbestrategie">
+              {STRATEGIES.map((strategy) => {
+                const selected = strategy.id === draft.strategy;
+                const recommended = strategy.emphasis === 'recommended';
+                const tooltip = strategy.points?.length
+                  ? `${strategy.description} ${strategy.points.join('. ')}.`
+                  : strategy.description;
+                return (
+                  <button
+                    key={strategy.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => patch({ strategy: strategy.id })}
+                    className={`min-w-0 rounded-xl border px-3 py-3 text-left transition-colors ${
+                      selected
+                        ? 'border-primary bg-primary/15'
+                        : 'border-border bg-background/45 hover:border-border-hover'
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className={selected || recommended ? 'text-primary' : 'text-text-secondary'}>
+                        {strategy.id === 'snooze' ? <PauseCircle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{strategy.label}</span>
+                      <span title={tooltip} aria-label={tooltip} className="shrink-0 text-text-secondary">
+                        <Info className="h-3.5 w-3.5" />
+                      </span>
+                      {selected ? <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" /> : null}
+                    </span>
+                    {strategy.badge ? (
+                      <span
+                        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                          recommended
+                            ? 'border-primary/40 bg-primary/10 text-primary'
+                            : 'border-border bg-card text-text-secondary'
+                        }`}
+                      >
+                        {strategy.badge}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
-            <p className="mt-1 text-sm leading-6 text-text-secondary">{laufText}</p>
-            {draft.enabled && !status.workerHealthy ? (
-              <p className="mt-1 text-xs text-text-secondary">
-                Bis der Bot wieder arbeitet, wird keine Werbung ausgelöst.
-                {status.workerHeartbeatAt ? ` Letztes Lebenszeichen: ${formatDateTime(status.workerHeartbeatAt)}.` : ''}
+          </section>
+
+          <section className="mt-5 border-t border-border pt-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <h4 className="text-sm font-semibold text-white">Chat-Hinweis</h4>
+                <InfoHint
+                  label="Chat-Hinweis erklären"
+                  text="Der Bot schreibt kurz vor einer Werbung eine Zeile in den Chat, wenn der Werbemanager aktiv ist."
+                />
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={chatNoticeOn}
+                aria-label="Chat vor Werbung informieren"
+                title={chatNoticeOn ? 'Hinweis im Chat ausschalten' : 'Hinweis im Chat einschalten'}
+                onClick={() => patch({ chatNoticeBeforeAd: !chatNoticeOn })}
+                className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
+                  chatNoticeOn ? 'border-primary bg-primary/25' : 'border-border bg-background'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 rounded-full transition-transform ${
+                    chatNoticeOn ? 'translate-x-6 bg-primary' : 'translate-x-1 bg-text-secondary'
+                  }`}
+                />
+              </button>
+            </div>
+          </section>
+
+          <section className="mt-5 border-t border-border pt-4">
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-sm font-semibold text-white">Budget</h4>
+              <InfoHint
+                label="Budget erklären"
+                text="Der Werbemanager nutzt den Twitch-Werbeplan, wenn Twitch einen Plan liefert. Sonst gilt dein eigenes Stundenbudget."
+              />
+            </div>
+            {budgetSource === 'twitch' ? (
+              <div className="mt-2">
+                <p className="text-sm font-semibold text-white">Twitch-Werbungs-Manager</p>
+                <p className="mt-1 text-xs text-text-secondary">{budgetVorschau(draft.budgetMinutesPerHour, plan)}</p>
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-wrap items-end gap-3">
+                <label htmlFor="budget-minutes" className="block">
+                  <span className="block text-xs font-medium text-text-secondary">Minuten pro Stunde</span>
+                  <input
+                    id="budget-minutes"
+                    type="number"
+                    min={BUDGET_MINUTES_MIN}
+                    max={BUDGET_MINUTES_MAX}
+                    step={1}
+                    value={draft.budgetMinutesPerHour}
+                    onChange={(event) => patch({ budgetMinutesPerHour: Number(event.target.value) })}
+                    className="mt-1 min-h-10 w-24 rounded-md border border-border-strong bg-card px-2.5 py-1.5 text-sm font-semibold text-white outline-none transition-colors focus:border-primary"
+                  />
+                </label>
+                <p className="pb-2 text-xs text-text-secondary">{budgetVorschau(draft.budgetMinutesPerHour, plan)}</p>
+              </div>
+            )}
+          </section>
+
+          <details className="group mt-5 border-t border-border pt-4">
+            <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary">
+              <SlidersHorizontal className="h-4 w-4" /> Feineinstellungen
+            </summary>
+            <div className="mt-4 grid gap-x-4 gap-y-4 sm:grid-cols-2">
+              <NumberSetting
+                label="Mindestabstand"
+                description="Gilt für Twitch-Pausen und für Werbung, die du selbst startest."
+                value={draft.minIntervalMinutes}
+                min={8}
+                max={180}
+                unit="Min."
+                disabled={smartFieldsDisabled}
+                onChange={(value) => patch({ minIntervalMinutes: value })}
+              />
+              <NumberSetting
+                label="Startschutz"
+                description="Nach Streamstart startet der Bot in diesem Zeitraum keine Werbung."
+                value={draft.startupDelayMinutes}
+                min={0}
+                max={180}
+                unit="Min."
+                disabled={smartFieldsDisabled}
+                onChange={(value) => patch({ startupDelayMinutes: value })}
+              />
+              <NumberSetting
+                label="Chat-Ruhe"
+                description="So lange muss ungefähr keine neue Chat-Nachricht kommen. Gilt, wenn dein Steam-Status gerade nicht frisch ist."
+                value={draft.quietWindowMinutes}
+                min={0}
+                max={60}
+                unit="Min."
+                disabled={smartFieldsDisabled}
+                onChange={(value) => patch({ quietWindowMinutes: value })}
+              />
+              <NumberSetting
+                label="Vorlauf"
+                description="So früh vor der nächsten geplanten Werbung entscheidet der Bot über Pausieren oder Starten."
+                value={draft.actionLeadSeconds}
+                min={10}
+                max={300}
+                unit="Sek."
+                onChange={(value) => patch({ actionLeadSeconds: value })}
+              />
+            </div>
+            {smartFieldsDisabled ? (
+              <p className="mt-3 text-[11px] text-text-secondary">
+                Abstand, Startschutz und Chat-Ruhe gelten bei „Match schützen & Queue nutzen“.
               </p>
+            ) : null}
+          </details>
+
+          <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+            <button
+              type="button"
+              disabled={!dirty || saving}
+              onClick={() => void save()}
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3.5 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Speichern
+            </button>
+            {dirty && !saving ? (
+              <span className="text-[11px] text-text-secondary">
+                {needsInitialSave ? 'Noch nicht eingerichtet.' : 'Ungespeicherte Änderungen.'}
+              </span>
             ) : null}
           </div>
         </div>
 
-        <div className="mt-3.5 border-t border-border pt-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Von Hand</span>
-            <button
-              type="button"
-              disabled={!canSnooze || actionPending !== null}
-              onClick={() => void queueAction('snooze')}
-              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {actionPending === 'snooze' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              5 Min. pausieren
-            </button>
-            <button
-              type="button"
-              disabled={!canRunCommercial || actionPending !== null}
-              onClick={() => void queueAction('commercial')}
-              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {actionPending === 'commercial' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {draft.adDurationSeconds} Sek. Werbung
-            </button>
-            <span className="flex flex-wrap items-center gap-1">
-              {AD_DURATION_OPTIONS.map((seconds) => (
-                <button
-                  key={seconds}
-                  type="button"
-                  aria-pressed={draft.adDurationSeconds === seconds}
-                  onClick={() => patch({ adDurationSeconds: seconds })}
-                  className={`min-h-8 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors ${
-                    draft.adDurationSeconds === seconds
-                      ? 'border-primary bg-primary/15 text-primary'
-                      : 'border-border bg-card text-text-secondary hover:text-white'
-                  }`}
-                >
-                  {seconds}s
-                </button>
-              ))}
-            </span>
-          </div>
-          {!status.isLive ? (
-            <p className="mt-2 text-[11px] text-text-secondary">Aktionen von Hand sind verfügbar, sobald Twitch deinen Stream als live meldet.</p>
-          ) : null}
-        </div>
-
-        <div className="mt-3.5 flex flex-wrap items-center gap-3 border-t border-border pt-3">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={chatNoticeOn}
-            aria-label="Chat vor Werbung informieren"
-            title={chatNoticeOn ? 'Hinweis im Chat ausschalten' : 'Hinweis im Chat einschalten'}
-            onClick={() => patch({ chatNoticeBeforeAd: !chatNoticeOn })}
-            className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
-              chatNoticeOn ? 'border-primary bg-primary/25' : 'border-border bg-background'
-            }`}
-          >
-            <span className={`inline-block h-4 w-4 rounded-full transition-transform ${
-              chatNoticeOn ? 'translate-x-6 bg-primary' : 'translate-x-1 bg-text-secondary'
-            }`} />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-white">Chat vor Werbung informieren</p>
-            <p className="mt-0.5 text-xs text-text-secondary">
-              Kurz vor jeder Werbung schreibt der Bot eine lockere Zeile in den Chat. Nur, wenn der Werbemanager an ist.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <MiniTile
-          icon={<Clock3 className="h-4 w-4" />}
-          label="Nächste Werbung"
-          value={formatNextAd(status.nextAdAt)}
-          hint={status.nextAdAt ? formatDateTime(status.nextAdAt) : null}
-        />
-        <MiniTile
-          icon={<PauseCircle className="h-4 w-4" />}
-          label="Pausen"
-          value={status.snoozeCount === null ? '–' : `${status.snoozeCount}`}
-          hint={status.snoozeRefreshAt ? `Neue ab ${formatDateTime(status.snoozeRefreshAt)}` : null}
-          tone={(status.snoozeCount ?? 0) > 0 ? 'text-success' : 'text-warning'}
-        />
-        <MiniTile
-          icon={<Gamepad2 className="h-4 w-4" />}
-          label="Match-Status"
-          value={steamView.value}
-          hint={steamView.hint}
-          tone={steamView.tone}
-        />
-        {status.lastAction ? (
-          <MiniTile
-            icon={<Clock3 className="h-4 w-4" />}
-            label="Letzte Bot-Aktion"
-            value={actionKindLabel(status.lastAction.kind)}
-            hint={`${actionOutcomeLabel(status.lastAction.outcome)} · ${formatDateTime(status.lastAction.at)}`}
-            tone="text-text-secondary"
-          />
-        ) : null}
-      </div>
-
-      <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-text-secondary">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-        <p>Twitch entscheidet, wann Werbung fällig wird. Der Bot verschiebt oder startet nur im Rahmen der Twitch-Funktionen. Eine Pause verschiebt die nächste Werbung um fünf Minuten, die Anzahl ist begrenzt.</p>
-      </div>
-
-      <div className="mt-5">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-lg font-bold text-white">Strategie</h3>
-          <p className="text-xs text-text-secondary">Empfohlen: Match schützen & Queue nutzen</p>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {STRATEGIES.map((strategy) => {
-            const selected = strategy.id === draft.strategy;
-            const recommended = strategy.emphasis === 'recommended';
-            return (
-              <button
-                key={strategy.id}
-                type="button"
-                aria-pressed={selected}
-                title={strategy.description}
-                onClick={() => patch({ strategy: strategy.id })}
-                className={`rounded-xl border px-4 py-3.5 text-left transition-colors ${
-                  selected
-                    ? 'border-primary bg-primary/15 shadow-[inset_0_0_0_1px_rgba(197,160,89,0.18)]'
-                    : recommended
-                      ? 'border-primary/45 bg-primary/[0.06] hover:border-primary/70'
-                      : 'border-border bg-background/50 hover:border-border-hover'
+        <div className="min-w-0 space-y-4">
+          <section className="rounded-xl border border-border bg-background/35 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold text-white">Live-Status</h3>
+                <p className="mt-1 text-xs leading-5 text-text-secondary">{laufText}</p>
+              </div>
+              <span
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
+                  status.isLive ? 'bg-error/10 text-error' : 'bg-background/60 text-text-secondary'
                 }`}
               >
-                <span className="flex items-center gap-2.5">
-                  <span className={selected || recommended ? 'text-primary' : 'text-text-secondary'}>
-                    {strategy.id === 'snooze' ? <PauseCircle className="h-5 w-5" /> : <Zap className="h-5 w-5" />}
-                  </span>
-                  <span className={`text-[15px] font-bold ${selected || recommended ? 'text-primary' : 'text-white'}`}>
-                    {strategy.label}
-                  </span>
-                  {strategy.badge ? (
-                    <span className={`ml-auto rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider ${
-                      recommended
-                        ? 'border-primary/40 bg-primary/10 text-primary'
-                        : 'border-border bg-card text-text-secondary'
-                    }`}>
-                      {strategy.badge}
-                    </span>
-                  ) : null}
+                <span className={`h-1.5 w-1.5 rounded-full ${status.isLive ? 'animate-pulse bg-error' : 'bg-text-secondary'}`} />
+                {status.isLive ? 'Stream läuft' : 'Offline'}
+              </span>
+            </div>
+
+            {draft.enabled && !status.workerHealthy ? (
+              <div className="mt-3 flex items-center gap-2 text-xs text-danger">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>
+                  Bot nicht erreichbar
+                  {status.workerHeartbeatAt ? ` · ${formatDateTime(status.workerHeartbeatAt)}` : ''}
                 </span>
-                <span className="mt-1.5 block text-xs leading-5 text-text-secondary">{strategy.description}</span>
-                {strategy.points ? (
-                  <span className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 border-t border-border/70 pt-2.5 text-xs leading-5 text-text-secondary">
-                    {strategy.points.map((point) => (
-                      <span key={point} className="inline-flex items-center gap-1.5">
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${recommended ? 'bg-primary' : 'bg-text-secondary/60'}`} />
-                        {point}
-                      </span>
-                    ))}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+              </div>
+            ) : null}
 
-      <div className="mt-4">
-        <h3 className="mb-2 flex items-center gap-2 text-base font-bold text-white">
-          <Wallet className="h-4 w-4 text-primary" /> Budget
-        </h3>
-        {budgetSource === 'twitch' ? (
-          <div className="panel-inset rounded-xl px-3 py-3">
-            <p className="text-[13px] font-semibold text-white">Dein Budget kommt aus dem Twitch-Werbungs-Manager</p>
-            <p className="mt-1.5 text-xs text-text-secondary">
-              Der Bot legt keine eigenen Blöcke obendrauf, sondern verschiebt deine geplante Werbung in gute Fenster.
-            </p>
-            <p className="mt-2 text-xs text-text-secondary">{budgetVorschau(draft.budgetMinutesPerHour, plan)}</p>
-          </div>
-        ) : (
-          <div className="panel-inset rounded-xl px-3 py-3">
-            <label htmlFor="budget-minutes" className="block text-[13px] font-semibold text-white">
-              Werbeminuten pro Stunde
-            </label>
-            <span className="mt-1.5 flex items-center gap-2">
-              <input
-                id="budget-minutes"
-                type="number"
-                min={BUDGET_MINUTES_MIN}
-                max={BUDGET_MINUTES_MAX}
-                step={1}
-                value={draft.budgetMinutesPerHour}
-                onChange={(event) => patch({ budgetMinutesPerHour: Number(event.target.value) })}
-                className="min-h-10 w-24 rounded-md border border-border-strong bg-card px-2.5 py-1.5 text-sm font-semibold text-white outline-none transition-colors focus:border-primary"
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <StatusMetric
+                icon={<Clock3 className="h-4 w-4" />}
+                label="Nächste Werbung"
+                value={formatNextAd(status.nextAdAt)}
+                hint={status.nextAdAt ? formatDateTime(status.nextAdAt) : null}
               />
-              <span className="text-[11px] text-text-secondary">Min. ({BUDGET_MINUTES_MIN} bis {BUDGET_MINUTES_MAX})</span>
-            </span>
-            <p className="mt-2 text-xs text-text-secondary">{budgetVorschau(draft.budgetMinutesPerHour, plan)}</p>
-          </div>
-        )}
-      </div>
+              <StatusMetric
+                icon={<PauseCircle className="h-4 w-4" />}
+                label="Pausen"
+                value={status.snoozeCount === null ? '–' : `${status.snoozeCount}`}
+                hint={status.snoozeRefreshAt ? `Neue ab ${formatDateTime(status.snoozeRefreshAt)}` : null}
+                tone={(status.snoozeCount ?? 0) > 0 ? 'text-success' : 'text-warning'}
+              />
+              <StatusMetric
+                icon={<Gamepad2 className="h-4 w-4" />}
+                label="Match-Status"
+                value={steamView.value}
+                hint={steamView.hint}
+                tone={steamView.tone}
+              />
+              <StatusMetric
+                icon={<Clock3 className="h-4 w-4" />}
+                label="Letzte Bot-Aktion"
+                value={status.lastAction ? actionKindLabel(status.lastAction.kind) : 'Noch keine'}
+                hint={status.lastAction ? `${actionOutcomeLabel(status.lastAction.outcome)} · ${formatDateTime(status.lastAction.at)}` : null}
+                tone={status.lastAction ? 'text-text-secondary' : 'text-white'}
+              />
+            </div>
 
-      <div className="mt-4">
-        <h3 className="mb-2 flex items-center gap-2 text-base font-bold text-white">
-          <History className="h-4 w-4 text-primary" /> Verlauf
-        </h3>
-        {summary ? (
-          <div className="mb-2 flex flex-wrap gap-2">
-            <MiniTile icon={<Play className="h-4 w-4" />} label="Blöcke gelaufen" value={`${summary.blocksRun}`} tone="text-white" />
-            <MiniTile icon={<ShieldCheck className="h-4 w-4" />} label="Davon im Fenster" value={`${summary.blocksInWindow}`} tone="text-success" />
-            <MiniTile icon={<Wallet className="h-4 w-4" />} label="Budget genutzt" value={`${summary.budgetSecondsUsed} / ${summary.budgetSecondsPlanned} Sek.`} tone="text-white" />
-            <MiniTile icon={<RefreshCw className="h-4 w-4" />} label="Verschiebungen" value={`${summary.postponed}`} tone="text-text-secondary" />
-          </div>
-        ) : null}
-        {historyEntries.length > 0 ? (
-          <ul className="panel-inset divide-y divide-border/60 rounded-xl">
-            {historyEntries.map((entry, index) => (
-              <li key={`${entry.at}-${index}`} className="flex items-baseline gap-3 px-3 py-2 text-sm">
-                <span className="shrink-0 tabular-nums text-xs font-semibold text-text-secondary">{formatTime(entry.at)}</span>
-                <span className={entry.decision === 'commercial' ? 'text-white' : 'text-text-secondary'}>{beschreibeEintrag(entry)}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="panel-inset rounded-xl px-3 py-4 text-sm text-text-secondary">
-            Noch keine Entscheidungen in dieser Session. Sobald der Bot Werbung startet oder verschiebt, erscheint sie hier.
-          </div>
-        )}
-      </div>
+            <div className="mt-4 flex items-center gap-2 border-t border-border pt-3 text-xs text-text-secondary">
+              <InfoHint
+                label="Twitch-Steuerung erklären"
+                text="Twitch entscheidet, wann Werbung fällig wird. Der Bot kann innerhalb der Twitch-Funktionen pausieren oder einen Werbeblock starten."
+              />
+              <span>Twitch legt Fälligkeit und Pausen fest.</span>
+            </div>
 
-      <details className="group mt-4 panel-inset rounded-xl px-3 py-2.5">
-        <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary">
-          <SlidersHorizontal className="h-4 w-4" /> Feineinstellungen
-        </summary>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <NumberSetting
-            label="Mindestabstand"
-            description="Gilt für Twitch-Pausen und für Werbung, die du selbst startest."
-            value={draft.minIntervalMinutes}
-            min={8}
-            max={180}
-            unit="Min."
-            disabled={smartFieldsDisabled}
-            onChange={(value) => patch({ minIntervalMinutes: value })}
-          />
-          <NumberSetting
-            label="Startschutz"
-            description="Nach Streamstart startet der Bot in diesem Zeitraum keine Werbung."
-            value={draft.startupDelayMinutes}
-            min={0}
-            max={180}
-            unit="Min."
-            disabled={smartFieldsDisabled}
-            onChange={(value) => patch({ startupDelayMinutes: value })}
-          />
-          <NumberSetting
-            label="Chat-Ruhe"
-            description="So lange muss ungefähr keine neue Chat-Nachricht kommen. Gilt, wenn dein Steam-Status gerade nicht frisch ist."
-            value={draft.quietWindowMinutes}
-            min={0}
-            max={60}
-            unit="Min."
-            disabled={smartFieldsDisabled}
-            onChange={(value) => patch({ quietWindowMinutes: value })}
-          />
-          <NumberSetting
-            label="Vorlauf"
-            description="So früh vor der nächsten geplanten Werbung entscheidet der Bot über Pausieren oder Starten."
-            value={draft.actionLeadSeconds}
-            min={10}
-            max={300}
-            unit="Sek."
-            onChange={(value) => patch({ actionLeadSeconds: value })}
-          />
+            <div className="mt-4 border-t border-border pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold text-white">Von Hand</h4>
+                {!status.isLive ? <span className="text-[10px] text-text-secondary">Im Stream verfügbar</span> : null}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={!canSnooze || actionPending !== null}
+                  onClick={() => void queueAction('snooze')}
+                  className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {actionPending === 'snooze' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  5 Min. pausieren
+                </button>
+                <button
+                  type="button"
+                  disabled={!canRunCommercial || actionPending !== null}
+                  onClick={() => void queueAction('commercial')}
+                  className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {actionPending === 'commercial' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                  {draft.adDurationSeconds} Sek. Werbung
+                </button>
+              </div>
+              <div className="mt-2 inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-border bg-background/45 p-1">
+                {AD_DURATION_OPTIONS.map((seconds) => (
+                  <button
+                    key={seconds}
+                    type="button"
+                    aria-pressed={draft.adDurationSeconds === seconds}
+                    onClick={() => patch({ adDurationSeconds: seconds })}
+                    className={`min-h-7 rounded-md px-2 py-1 text-[11px] font-semibold transition-colors ${
+                      draft.adDurationSeconds === seconds
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-text-secondary hover:text-white'
+                    }`}
+                  >
+                    {seconds}s
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-border bg-background/35 p-4">
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold text-white">Verlauf</h3>
+            </div>
+
+            {summary ? (
+              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
+                <div>
+                  <p className="text-base font-bold text-white">{summary.blocksRun}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Blöcke</p>
+                </div>
+                <div>
+                  <p className="text-base font-bold text-success">{summary.blocksInWindow}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Im Fenster</p>
+                </div>
+                <div>
+                  <p className="text-base font-bold text-white">{summary.budgetSecondsUsed} / {summary.budgetSecondsPlanned} Sek.</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Budget</p>
+                </div>
+                <div>
+                  <p className="text-base font-bold text-text-secondary">{summary.postponed}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Verschoben</p>
+                </div>
+              </div>
+            ) : null}
+
+            {historyEntries.length > 0 ? (
+              <ul className="mt-3 max-h-56 divide-y divide-border/60 overflow-y-auto border-t border-border">
+                {historyEntries.map((entry, index) => (
+                  <li key={`${entry.at}-${index}`} className="flex items-baseline gap-3 py-2 text-xs">
+                    <span className="shrink-0 tabular-nums font-semibold text-text-secondary">{formatTime(entry.at)}</span>
+                    <span className={entry.decision === 'commercial' ? 'text-white' : 'text-text-secondary'}>{beschreibeEintrag(entry)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 border-t border-border pt-3 text-xs text-text-secondary">Noch keine Entscheidungen in dieser Session.</p>
+            )}
+          </section>
         </div>
-        <p className="mt-1.5 text-[11px] text-text-secondary">
-          Der Mindestabstand gilt für Twitch-Pausen und für Werbung, die du selbst startest. Die automatische Verteilung nach deinem Budget richtet sich nicht nach diesem Abstand.
-        </p>
-        {smartFieldsDisabled ? (
-          <p className="mt-1.5 text-[11px] text-text-secondary">
-            Abstand, Startschutz und Chat-Ruhe gelten nur für „Match schützen & Queue nutzen“.
-          </p>
-        ) : null}
-      </details>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3.5">
-        <button
-          type="button"
-          disabled={!dirty || saving}
-          onClick={() => void save()}
-          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3.5 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Speichern
-        </button>
-        {dirty && !saving ? (
-          <span className="text-[11px] text-text-secondary">
-            {needsInitialSave ? 'Noch nicht eingerichtet.' : 'Ungespeicherte Änderungen.'}
-          </span>
-        ) : null}
       </div>
     </motion.section>
   );
