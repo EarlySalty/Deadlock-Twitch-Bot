@@ -59,3 +59,19 @@ GitHub-Abrechnungs-/Ausgabenlimit-Blocker klären; die belegten CI-Schema-/OAuth
 
 MERGEPROTOKOLL[MS-1]: kein Merge: PR-first-Testbetrieb
 LIVEBEWEIS[DV-1]: nicht ausgeführt: PR-first-Testbetrieb
+
+## Nachtrag 2026-09-24 (CI-Fix-Session)
+
+- Schema-Gate: brain-Schema-Fixture `rust/schema-gate/brain-schema.sql` plus
+  Workflow-Schritt in `rust-sqlx-check.yml`; `.sqlx`-Cache gegen den
+  Workspace-Stand neu erzeugt (39 veraltete Einträge entfernt). Lokal geprüft
+  gegen Wegwerf-DB mit Twitch-Migrationen + Fixture: Online-Workspace-Check
+  bestanden, Offline-Check von tb-bot bestanden.
+- Uplink/OAuth-Job: Ursache der sechs 500er war die fehlende Spalte
+  `twitch_partners.raid_admin_enabled` im callback_tests-Fixture (Prod-
+  Migration 20260913153000). Fixture ergänzt; 14/14 Callback-Tests lokal grün,
+  übrige Suiten des Jobs (tb-raid, tb-transport-twitch, tb-internal-api)
+  ebenfalls grün.
+- Details: `.tasks/2026-09-24-werbemanager-ci-fix/AUFTRAG.md`.
+- Unverändert blockiert: GitHub-Actions-Billing für Steam #69 und Bots #451;
+  unabhängiges Review steht noch aus.
