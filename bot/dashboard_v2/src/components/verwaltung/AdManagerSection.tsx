@@ -209,7 +209,7 @@ function StatusMetric({
   tone?: string;
 }) {
   return (
-    <div className="min-w-0 rounded-xl border border-border bg-background/45 p-3" title={hint ?? undefined}>
+    <div className="min-w-0 rounded-xl border border-border bg-background/60 p-3" title={hint ?? undefined}>
       <div className="flex items-start justify-between gap-3">
         <span className={`shrink-0 ${tone}`}>{icon}</span>
         <span className={`min-w-0 text-right text-base font-bold leading-tight ${tone}`}>{value}</span>
@@ -554,7 +554,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       </p>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,13fr)_minmax(20rem,7fr)]">
-        <div className="min-w-0 rounded-xl border border-border bg-background/35 p-4 md:p-5">
+        <div className="min-w-0 rounded-xl border border-border bg-background/60 p-4 md:p-5">
           <h3 className="text-lg font-bold text-white">Konfiguration</h3>
 
           <section className="mt-4">
@@ -576,7 +576,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                     className={`min-w-0 rounded-xl border px-3 py-3 text-left transition-colors ${
                       selected
                         ? 'border-primary bg-primary/15'
-                        : 'border-border bg-background/45 hover:border-border-hover'
+                        : 'border-border bg-background/50 hover:border-border-hover'
                     }`}
                   >
                     <span className="flex min-w-0 items-center gap-2">
@@ -739,7 +739,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         </div>
 
         <div className="min-w-0 space-y-4">
-          <section className="rounded-xl border border-border bg-background/35 p-4">
+          <section className="rounded-xl border border-border bg-background/60 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <h3 className="text-lg font-bold text-white">Live-Status</h3>
@@ -828,7 +828,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                   {draft.adDurationSeconds} Sek. Werbung
                 </button>
               </div>
-              <div className="mt-2 inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-border bg-background/45 p-1">
+              <div className="mt-2 inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-border bg-card p-1">
                 {AD_DURATION_OPTIONS.map((seconds) => (
                   <button
                     key={seconds}
@@ -848,7 +848,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             </div>
           </section>
 
-          <section className="rounded-xl border border-border bg-background/35 p-4">
+          <section className="rounded-xl border border-border bg-background/60 p-4">
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-primary" />
               <h3 className="text-sm font-semibold text-white">Verlauf</h3>
