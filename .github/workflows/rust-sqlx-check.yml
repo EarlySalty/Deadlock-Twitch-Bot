@@ -2,17 +2,40 @@ name: "Rust SQLx Check"
 
 on:
   pull_request:
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-sqlx-check.yml"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: "Rust change detector"
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" HEAD -- rust; then
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          fi
+
   uplink-auth-tests:
     name: "Uplink Auth, Broker und Dashboard-Anschluss"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -21,36 +44,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-
       - name: Install PostgreSQL 16 host programs
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends postgresql-16
           /usr/lib/postgresql/16/bin/initdb --version
           /usr/lib/postgresql/16/bin/postgres --version
-
       - name: Cargo cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "rust"
-
-      # Diese Tests starten eigene begrenzte PostgreSQL-Prozesse auf privaten
-      # Unixsockets. Sie verwenden weder den Schema-Service noch dessen ENV.
       - name: Werbemanager Match Sperre
         run: cargo test --locked -j2 -p tb-analytics --test ad_manager_decision
-
       - name: Auth transactions and callback races
         run: |
           cargo test --locked -j2 -p tb-raid --test auth_writer --test oauth_grant_consistency --test token_refresher --test background_token_refresh
           cargo test --locked -j2 -p tb-transport-twitch --lib user_token
           cargo test --locked -j2 -p tb-bot raid_oauth_impl::callback_tests
           cargo test --locked -j2 -p tb-internal-api handlers::raid_oauth::tests --lib
-
       - name: Titelbefehl und Dashboard-Schalter
         run: |
           cargo test --locked -j2 -p tb-chat title_command_toggle --lib
@@ -58,7 +75,6 @@ jobs:
           cargo test --locked -j2 -p tb-chat statistik_schalter --lib
           cargo test --locked -j2 -p tb-chat stat_commands --lib
           cargo test --locked -j2 -p tb-dashboard-api stat_command_settings --lib
-
       - name: Broker, Uplink disconnect and normal startup
         run: |
           cargo test --locked -j2 -p tb-dashboard-api handlers::platform_token::tests --lib
@@ -68,7 +84,6 @@ jobs:
           cargo check --locked -j2 -p tb-dashboard -p tb-bot
           cargo test --locked -j2 -p tb-dashboard-api handlers::auth_login::tests::callback_ --lib
           cargo run --locked -j2 -p tb-dashboard-api --example uplink_start_probe
-
       - name: Einrichtung, private Rückmeldungen und verifizierte Identitäten
         run: |
           cargo test --locked -j2 -p tb-db embedded_migration_versions_are_unique --lib
@@ -80,29 +95,31 @@ jobs:
 
   offline-build:
     name: "offline-build"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-
       - name: Build workspace from SQLx cache
         run: cd rust && SQLX_OFFLINE=true cargo build --workspace --locked
 
   schema-gate:
     name: "schema-gate"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
         image: timescale/timescaledb:latest-pg16
         env:
           POSTGRES_USER: postgres
-          # Ephemerer CI-Service: passwortlos (trust) statt Wegwerf-Passwort —
-          # kein Secret im Repo, kein false-positive im Secret-Scan.
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: twitchbot_sqlx
         ports:
@@ -117,19 +134,40 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+        with:
+          persist-credentials: false
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-
       - name: Install sqlx-cli
         run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
-
       - name: Apply migrations
         run: cargo sqlx migrate run --source rust/migrations
-
       - name: Check SQLx offline cache
         env:
           SQLX_OFFLINE: "false"
         run: cd rust && cargo sqlx prepare --workspace --check -- --workspace
+
+  required:
+    name: "Rust SQLx required"
+    if: always()
+    needs: [changes, uplink-auth-tests, offline-build, schema-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require applicable Rust gates
+        env:
+          RUST_CHANGED: ${{ needs.changes.outputs.rust }}
+          AUTH_RESULT: ${{ needs.uplink-auth-tests.result }}
+          OFFLINE_RESULT: ${{ needs.offline-build.result }}
+          SCHEMA_RESULT: ${{ needs.schema-gate.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUST_CHANGED" != "true" ]; then
+            echo "No rust/** change; Rust SQLx gate is not applicable."
+            exit 0
+          fi
+          test "$AUTH_RESULT" = "success"
+          test "$OFFLINE_RESULT" = "success"
+          test "$SCHEMA_RESULT" = "success"

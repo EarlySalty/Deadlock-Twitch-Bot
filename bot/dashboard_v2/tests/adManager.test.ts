@@ -149,6 +149,22 @@ test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Ste
   );
 });
 
+test('Werbemanager-UI nutzt die zweispaltige Konfiguration-und-Live-Struktur ohne panel-inset Verschachtelung', () => {
+  assert.match(
+    adManagerSectionSource,
+    /xl:grid-cols-\[minmax\(0,13fr\)_minmax\(20rem,7fr\)\]/,
+    'Desktop muss Konfiguration und Live-Status im 65-zu-35-Layout trennen',
+  );
+  assert.match(adManagerSectionSource, />Konfiguration</);
+  assert.match(adManagerSectionSource, />Live-Status</);
+  assert.match(adManagerSectionSource, /role="radiogroup"/);
+  assert.doesNotMatch(
+    adManagerSectionSource,
+    /panel-inset/,
+    'verschachtelte panel-inset Boxen sollen im Werbemanager nicht zurückkehren',
+  );
+});
+
 test('Verwaltungs-Unterseiten wiederholen die globale Feedback-Box nicht', () => {
   assert.doesNotMatch(verwaltungSource, /FeedbackBox/);
 });
