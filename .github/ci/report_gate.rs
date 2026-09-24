@@ -8,20 +8,64 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+// SARIF 2.1.0 sections 3.27.7, 3.52 and 3.54: rule indices belong to
+// their referenced component, not to a flattened list of query-pack rules.
 const POLICY: &str = r#"
+def checked_index($entries; $index):
+  if ($entries | type) != "array" or ($index | type) != "number"
+  then error("invalid rule or component index")
+  elif $index < 0 or ($index | floor) != $index or $index >= ($entries | length)
+  then error("rule or component index out of range")
+  else $entries[$index] end;
+def unique_match($matches):
+  if ($matches | length) != 1 then error("unknown or ambiguous reference")
+  else $matches[0] end;
+def prefer($primary; $fallback):
+  if $primary == null then $fallback else $primary end;
+def rule_for($run; $finding):
+  prefer($finding.rule; {}) as $ref |
+  prefer($ref.toolComponent; {}) as $component_ref |
+  if ($ref | type) != "object" or ($component_ref | type) != "object"
+  then error("invalid rule reference") else . end |
+  if ($finding.ruleId != null and $ref.id != null and $finding.ruleId != $ref.id)
+    or ($finding.ruleIndex != null and $ref.index != null and $finding.ruleIndex != $ref.index)
+  then error("conflicting rule references") else . end |
+  (if $component_ref.index != null
+   then checked_index($run.tool.extensions; $component_ref.index)
+   elif $component_ref.guid != null
+   then unique_match([$run.tool.driver, $run.tool.extensions[]?] |
+     map(select(.guid == $component_ref.guid)))
+   else $run.tool.driver end) as $component |
+  if ($component_ref.name != null and $component_ref.name != $component.name)
+    or ($component_ref.guid != null and $component_ref.guid != $component.guid)
+  then error("conflicting component identity") else . end |
+  prefer($ref.index; $finding.ruleIndex) as $index |
+  prefer($ref.id; $finding.ruleId) as $id |
+  (if $index != null then checked_index($component.rules; $index)
+   elif $ref.guid != null
+   then unique_match([$component.rules[]? | select(.guid == $ref.guid)])
+   elif ($id | type) == "string" and ($id | length) > 0
+   then unique_match([$component.rules[]? | select(.id == $id)])
+   else error("missing rule reference") end) as $rule |
+  if ($rule | type) != "object" or ($rule.id | type) != "string"
+    or ($id != null and $id != $rule.id)
+    or ($ref.guid != null and $ref.guid != $rule.guid)
+  then error("finding references an unknown rule") else $rule end;
 if .version != "2.1.0" or (.runs | type) != "array" or (.runs | length) == 0
 then error("missing SARIF analysis") else
   [.runs[] |
-    if (.tool.driver.rules | type) != "array" or (.results | type) != "array"
+    if (.tool.driver | type) != "object" or (.results | type) != "array"
+      or (.tool.extensions != null and (.tool.extensions | type) != "array")
     then error("missing rules or results") else . end |
+    [.tool.driver, .tool.extensions[]?] as $components |
+    if any($components[]; type != "object" or (.rules != null and (.rules | type) != "array"))
+      or ([$components[].rules[]?] | length) == 0
+    then error("missing or malformed rule metadata") else . end |
     if any(.invocations[]?; .executionSuccessful == false or
         any(.toolExecutionNotifications[]?; .level == "error"))
     then error("unsuccessful scanner invocation") else . end |
     . as $run | .results[] | . as $finding |
-    (if .ruleIndex != null then $run.tool.driver.rules[.ruleIndex]
-     else [$run.tool.driver.rules[] | select(.id == $finding.ruleId)][0] end) as $rule |
-    if $rule == null or ($finding.ruleId != null and $finding.ruleId != $rule.id)
-    then error("finding references an unknown rule") else . end |
+    rule_for($run; $finding) as $rule |
     ($rule.properties["security-severity"] // null) as $score |
     if $score == null and (($rule.properties.tags // []) | index("security")) != null
     then error("unscored security finding") else . end |
@@ -136,6 +180,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Mirrors CodeQL 4.38.1: the driver has no rules; query packs are
+    // tool.extensions and each result carries rule.toolComponent.index.
+    fn extension_report(score: &str, results: &str) -> String {
+        format!(
+            r#"{{"version":"2.1.0","runs":[{{"tool":{{"driver":{{"name":"CodeQL"}},"extensions":[{{"name":"diff-range","rules":[]}},{{"name":"javascript-queries","guid":"11111111-1111-1111-1111-111111111111","rules":[{{"id":"test/security","properties":{{"security-severity":"{score}","tags":["security"]}}}}]}}]}},"results":{results},"invocations":[{{"executionSuccessful":true}}]}}]}}"#
+        )
+    }
+
+    #[test]
+    fn codeql_extension_rules_preserve_the_severity_threshold() {
+        let finding = r#"[{"ruleId":"test/security","rule":{"id":"test/security","index":0,"toolComponent":{"index":1}}}]"#;
+        for (score, count) in [("6.9", 0), ("7.0", 1), ("9.8", 1)] {
+            assert_eq!(
+                Fixture::new(&extension_report(score, finding))
+                    .result()
+                    .unwrap(),
+                count
+            );
+        }
+        assert_eq!(
+            Fixture::new(&extension_report("9.8", "[]"))
+                .result()
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn component_guid_and_rule_id_resolve_without_array_indices() {
+        let finding = r#"[{"ruleId":"test/security","rule":{"id":"test/security","toolComponent":{"guid":"11111111-1111-1111-1111-111111111111"}}}]"#;
+        assert_eq!(
+            Fixture::new(&extension_report("9.8", finding))
+                .result()
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn malformed_or_conflicting_extension_references_fail_closed() {
+        for finding in [
+            r#"[{"rule":{"index":0,"toolComponent":{"index":-1}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":{"index":9}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":{"index":1.5}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":{"index":"1"}}}]"#,
+            r#"[{"rule":{"index":-1,"toolComponent":{"index":1}}}]"#,
+            r#"[{"rule":{"index":7,"toolComponent":{"index":1}}}]"#,
+            r#"[{"ruleId":"unknown","rule":{"index":0,"toolComponent":{"index":1}}}]"#,
+            r#"[{"ruleId":"test/security","rule":{"id":"other","index":0,"toolComponent":{"index":1}}}]"#,
+            r#"[{"ruleIndex":1,"rule":{"index":0,"toolComponent":{"index":1}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":{"index":1,"name":"wrong-pack"}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":{"guid":"unknown"}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":{"index":1,"guid":"wrong"}}}]"#,
+            r#"[{"rule":{"index":0,"toolComponent":true}}]"#,
+        ] {
+            assert!(
+                Fixture::new(&extension_report("9.8", finding))
+                    .result()
+                    .is_err(),
+                "{finding}"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_driver_indices_cannot_select_a_different_rule() {
+        assert!(Fixture::new(&report("6.9", r#"[{"ruleIndex":-1}]"#, "[]"))
+            .result()
+            .is_err());
     }
 
     #[test]

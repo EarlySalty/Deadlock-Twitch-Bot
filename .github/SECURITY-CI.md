@@ -76,6 +76,14 @@ Rustfmt: Der Ausgangszustand dieser Fortsetzung ergibt unter 1.97.1 und 1.98.0 d
 
 Ruleset `14377032` wurde erneut gelesen: aktiv auf dem Default-Branch, mit Lösch-/Force-Push-Schutz, `copilot_code_review` und `code_quality` bei `warnings`. Es wurde nicht geändert. Die technische Required-Check-/Copilot-Umstellung bleibt bis zur vollständigen positiven und negativen GitHub-Abnahme vorbereitet, nicht aktiviert.
 
+## Fortsetzung vom 24. September: CodeQL-Berichtsvertrag
+
+Übernommener PR-Head: `cc321db4904da94ea9d45e4b72834605937b471e`. Der erneut geprüfte GitHub-Lauf [35909463131](https://github.com/EarlySalty/Deadlock-Twitch-Bot/actions/runs/35909463131) bleibt rot. Sein JS/TS-CodeQL-Job hat die Analyse erfolgreich abgeschlossen, der lokale SARIF-Auswerter konnte die von CodeQL 4.38.1 verwendeten Query-Pack-Referenzen jedoch nicht auflösen: Die Regeln liegen in `tool.extensions`, die Findings referenzieren `rule.toolComponent.index` statt der bisherigen flachen Treiberliste.
+
+Der Auswerter löst jetzt Komponenten und Regeln gemäß SARIF 2.1.0 auf. Negative, gebrochene, mehrdeutige und widersprüchliche Indizes oder Identitäten bleiben Fehler. Die Severity-Schwelle wurde nicht geändert. Reproduktion vor dem Fix: acht grüne und drei rote Tests; nach dem Fix: elf grüne Tests mit `rustc +1.98.0 --test -D warnings`, anschließend rustfmt und erneuter grüner Testlauf. Der originale GitHub-SARIF-Bericht ergibt mit dem korrigierten Auswerter vier blockierende Findings statt eines Strukturfehlers. Das ist ausdrücklich kein positiver Scan und keine Gesamtabnahme.
+
+Die vier Findings betreffen zwei HTML-Testassertionen, die Beacon-Testprüfung und den lokalen Uplink-Browsernachweis. Ihre Behebung und der nächste echte GitHub-Lauf stehen getrennt von dieser Parserkorrektur aus. Der Brain-Export, die volle Rust-/DB-Abnahme und der bestehende Formatierungsbedarf bleiben ebenfalls offene Abnahmepunkte. Ruleset und Copilot-Schutz sind unverändert; der PR bleibt im Testbetrieb offen.
+
 ## Historische lokale Nachweise des ersten Umbaus
 
 - Gate-TDD: zunächst 12 rote/6 grüne Tests mit nicht implementierter Logik, danach 18/18 grün; `rustc -D warnings` und rustfmt der neuen Datei grün.
