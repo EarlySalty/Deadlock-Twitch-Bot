@@ -99,9 +99,9 @@ struct ScopeStatus {
     commercial: bool,
 }
 
-/// Steam-Match-Anbindung des Kanals: `state` ist null ohne Verknüpfung oder
-/// ohne je gesehenen Status, "stale" bei veralteter Presence. Die Automatik
-/// fällt in diesen Fällen auf Chat-Ruhe zurück.
+/// Steam-Match-Anbindung: null ohne Verknüpfung, "stale" für alte Messdaten
+/// und "unavailable" für fehlende oder unvollständige Quellantworten.
+/// Ohne bestätigten frischen Matchstatus startet die Automatik keine eigene Werbung.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SteamStatus {
@@ -116,7 +116,7 @@ fn steam_status(summary: Option<SteamMatchSummary>) -> SteamStatus {
     let Some(summary) = summary else {
         return SteamStatus {
             linked: false,
-            state: None,
+            state: Some("unavailable"),
             hero: None,
             stage: None,
             observed_at: None,
@@ -126,7 +126,9 @@ fn steam_status(summary: Option<SteamMatchSummary>) -> SteamStatus {
         Some(state) if state.in_match => Some("in_match"),
         Some(state) if state.in_deadlock => Some("in_queue"),
         Some(_) => Some("out_of_game"),
-        None if summary.observed_at.is_some() => Some("stale"),
+        None if summary.observed_at.is_some_and(|seen| Utc::now().signed_duration_since(seen)
+            > chrono::Duration::seconds(tb_analytics::ad_manager::MATCH_STATUS_FRESH_SECS)) => Some("stale"),
+        None if summary.steam_linked => Some("unavailable"),
         None => None,
     };
     SteamStatus {
@@ -215,7 +217,7 @@ fn apply_saved_settings(
 async fn response(
     pool: &PgPool,
     uid: &str,
-    login: &str,
+    _login: &str,
 ) -> Result<serde_json::Value, sqlx::Error> {
     let store = AdManagerStore::new(pool.clone());
     let (settings, updated) = store
@@ -224,9 +226,9 @@ async fn response(
         .map(|(s, t)| (s, Some(t.to_rfc3339())))
         .unwrap_or((Settings::default(), None));
     let granted = scopes(pool, uid).await?;
-    // Steam-Status ist Zusatzinformation: ein Fehler hier darf den
-    // Werbemanager-Status nicht sprengen, das UI zeigt dann "nicht verbunden".
-    let steam_summary = match store.steam_match_summary(login, Utc::now()).await {
+    // Keep the dashboard readable on a source failure, but expose unavailable
+    // rather than pretending that the account is unlinked or safe for ads.
+    let steam_summary = match store.steam_match_summary(uid, Utc::now()).await {
         Ok(summary) => Some(summary),
         Err(error) => {
             tracing::warn!(%error, "Werbemanager: Steam-Match-Status nicht lesbar");
@@ -578,13 +580,14 @@ mod tests {
             Some("stale")
         );
         let waiting = steam_status(Some(summary(true, None, None)));
-        assert_eq!(waiting.state, None);
+        assert_eq!(waiting.state, Some("unavailable"));
         assert!(waiting.linked);
         // Ohne Steam-Anknüpfung ist nichts belegt.
         let unlinked = steam_status(Some(summary(false, None, None)));
         assert!(!unlinked.linked);
         assert_eq!(unlinked.state, None);
-        // Lookup-Fehler wird zum neutralen Block, nicht zum Fehler.
+        // A source failure is explicit, not reported as an unlinked account.
+        assert_eq!(steam_status(None).state, Some("unavailable"));
         assert!(!steam_status(None).linked);
     }
 

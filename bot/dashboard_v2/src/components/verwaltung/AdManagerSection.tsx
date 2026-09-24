@@ -65,7 +65,7 @@ const STRATEGIES: Array<{
     points: [
       'Im Match: Werbung verschieben',
       'Queue oder Menü: Werbung starten',
-      'Ohne Steam: ruhige Chat-Phase nutzen',
+      'Ohne frischen Steam-Status: keine eigene Werbung',
     ],
   },
 ];
@@ -75,10 +75,17 @@ function steamStatusView(steam: AdManagerSteamStatus): {
   hint: string;
   tone: string;
 } {
+  if (steam.state === 'unavailable') {
+    return {
+      value: 'Matchstatus nicht verfügbar',
+      hint: 'Der Bot startet keine eigene Werbung. Geplante Twitch-Werbung wird mit verfügbaren Pausen verschoben.',
+      tone: 'text-warning',
+    };
+  }
   if (!steam.linked) {
     return {
       value: 'Nicht verbunden',
-      hint: 'Hinterlege deine SteamID64 unter Bot & Schutz.',
+      hint: 'Verbinde Steam über die Kontoverknüpfung oder hinterlege deine SteamID64 unter Bot & Schutz. Ohne frischen Matchstatus startet der Bot keine eigene Werbung.',
       tone: 'text-text-secondary',
     };
   }
@@ -107,8 +114,8 @@ function steamStatusView(steam: AdManagerSteamStatus): {
       return {
         value: 'Status zu alt',
         hint: steam.observedAt
-          ? `Letzter Stand: ${formatDateTime(steam.observedAt)}. Der Bot nutzt vorerst die Chat-Ruhe.`
-          : 'Der Bot nutzt vorerst die Chat-Ruhe.',
+          ? `Letzter Stand: ${formatDateTime(steam.observedAt)}. Eigene Werbestarts warten auf einen frischen Matchstatus.`
+          : 'Eigene Werbestarts warten auf einen frischen Matchstatus.',
         tone: 'text-warning',
       };
     default:
@@ -800,7 +807,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           />
           <NumberSetting
             label="Chat-Ruhe"
-            description="So lange muss ungefähr keine neue Chat-Nachricht kommen. Gilt, wenn dein Steam-Status gerade nicht frisch ist."
+            description="Chat-Ruhe außerhalb von Deadlock. Ein fehlender oder veralteter Matchstatus bleibt eine Sperre für eigene Werbestarts."
             value={draft.quietWindowMinutes}
             min={0}
             max={60}
@@ -810,7 +817,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           />
           <NumberSetting
             label="Vorlauf"
-            description="So früh vor der nächsten geplanten Werbung entscheidet der Bot über Pausieren oder Starten."
+            description="Vorlauf vor geplanter Werbung. Der Bot nutzt mindestens 60 Sekunden, damit seine regelmäßige Prüfung rechtzeitig greift."
             value={draft.actionLeadSeconds}
             min={10}
             max={300}
