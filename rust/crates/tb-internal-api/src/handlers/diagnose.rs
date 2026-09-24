@@ -49,6 +49,9 @@ pub struct DiagnoseResponse {
     pub is_verified: bool,
     pub is_monitored_only: bool,
     pub is_live: bool,
+    /// Letzte erfolgreiche Live-Beobachtung des Pollers, unabhängig vom Spiel.
+    /// Berechtigungsprüfungen müssen fehlende oder veraltete Werte ablehnen.
+    pub last_seen_at: Option<String>,
     pub raid_bot_enabled: bool,
     pub technical_pause_reason: Option<String>,
     pub operational_state: Option<String>,
@@ -77,6 +80,7 @@ fn empty_response(twitch_login: Option<String>) -> DiagnoseResponse {
         is_verified: false,
         is_monitored_only: false,
         is_live: false,
+        last_seen_at: None,
         raid_bot_enabled: false,
         technical_pause_reason: None,
         operational_state: None,
@@ -148,6 +152,7 @@ pub async fn handler(
         is_verified: row.is_verified != 0,
         is_monitored_only: row.is_monitored_only.unwrap_or(0) != 0,
         is_live: row.is_live != 0,
+        last_seen_at: row.last_seen_at.clone(),
         raid_bot_enabled: row.raid_bot_enabled.unwrap_or(0) != 0,
         technical_pause_reason: row.technical_pause_reason.clone(),
         operational_state: row.operational_state.clone(),
@@ -158,6 +163,24 @@ pub async fn handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnose_live_freshness_is_missing_without_observation() {
+        let value = serde_json::to_value(empty_response(None)).unwrap();
+        assert_eq!(value["is_live"], false);
+        assert!(value["last_seen_at"].is_null());
+    }
+
+    #[test]
+    fn diagnose_live_freshness_serializes_original_timestamp() {
+        let mut response = empty_response(Some("streamer".to_string()));
+        response.found = true;
+        response.is_live = true;
+        response.last_seen_at = Some("2026-09-24T19:59:30+00:00".to_string());
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["last_seen_at"], "2026-09-24T19:59:30+00:00");
+        assert_eq!(value["is_live"], true);
+    }
 
     #[test]
     fn empty_response_form_ohne_login() {
