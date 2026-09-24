@@ -56,3 +56,34 @@ Rust-SQLx-Lauf 35911575974: Offline-Build erfolgreich, Schema-Prüfung und Callb
 Die Testergänzung ist zusätzlich gezielt mit `cargo test --locked -j 2 -p tb-bot --bin tb-bot raid_oauth_impl::callback_tests` geprüft: Exit 0, 14 bestanden, 0 fehlgeschlagen, 0 ignoriert. Der getrennte Paketfehler wird dadurch nicht als behoben ausgewiesen. Die neue GitHub-Abnahme des Teststands steht aus.
 
 Die Dependabot-Workflow-Stellen bleiben beim parallelen PR #953. Schutzregeln und Scanner-Grenzen wurden nicht abgeschwächt. Ohne grüne Gesamtprüfung liegt keine Merge- oder Deploy-Abnahme vor.
+
+## Fortsetzung 24.09.2026
+
+Der Branch wurde mit dem aktuellen `origin/main` zusammengeführt. Der bereits gescannte Stand vor dieser Fortsetzung hatte auf `refs/heads/fix/code-scanning-20260923` nur noch die beiden Zizmor-Meldungen #998 und #999 offen; CodeQL, OSV und Scorecard hatten auf diesem Branch keine offenen Meldungen mehr.
+
+Die beiden verbliebenen Dependabot-Befunde werden nicht per Scanner-Ausnahme behandelt. Wegen des verbindlichen PR-first-Testbetriebs ist die Merge-Automation vollständig pausiert: `pull_request_target`, der spoofbare `github.actor`-Check und sämtliche Schreibrechte des Workflows wurden entfernt. Dependabot darf weiter Update-PRs erzeugen; die regelmäßigen Security-Scans liegen in den getrennten Security-Workflows.
+
+Funktional getesteter Code-Stand vor diesem rein dokumentarischen Nachweis-Update: `cd26f61ac5f72a63825ee026ded70051c2db8596`.
+
+Lokale Nachweise auf diesem Stand:
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| `actionlint .github/workflows/dependabot-auto-merge.yml` | Exit 0 |
+| `git diff --check origin/main...HEAD` | Exit 0 |
+| Caddy-Vertragstest | 1 bestanden |
+| Uplink-Browsertest | 1 bestanden |
+| Highlight-Detektor Python | 13 bestanden |
+| OSV-Scan `ops/highlight-detector/requirements.txt` | keine Findings |
+| Discord-Broker Rust | 30 bestanden |
+| Highlight Rust | 77 bestanden |
+| Instagram Rust | 18 bestanden |
+| Social-Media OAuth Rust | 12 bestanden |
+| `render_clips` | `cargo check` erfolgreich |
+| Stripe Rust | 8 bestanden |
+| Dashboard Auth/OAuth Rust | 33 bestanden |
+| Admin-Query Rust | 9 bestanden |
+
+Der workspace-weite Formatter-Check ist weiterhin kein belastbarer Gate-Nachweis, weil er bereits vorhandene Formatabweichungen außerhalb dieses Security-Diffs meldet. Diese fremden Stellen wurden bewusst nicht umformatiert. Die funktionalen Tests oben liefen davon getrennt erfolgreich.
+
+PR #957 bleibt gemäß PR-first-Testbetrieb offen. Kein Merge nach `main`, kein Auto-Merge, kein Deploy und kein Dienst-Neustart in dieser Fortsetzung. Der vollständige finale Head-SHA und die GitHub-Run-URLs werden nach dem Push zusätzlich direkt am PR dokumentiert.
