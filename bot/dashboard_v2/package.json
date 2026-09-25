@@ -43,7 +43,7 @@
     "react-is": "^19.3.0",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.70.0",
+    "typescript-eslint": "^8.70.1",
     "vite": "^8.3.0",
     "playwright-core": "1.63.0"
   },
