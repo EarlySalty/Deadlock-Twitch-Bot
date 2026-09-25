@@ -11,10 +11,12 @@ import {
   analyticsTabHref,
 } from '@/preview/routes';
 import { formatNumber, formatDuration } from '@/utils/formatters';
+import { HEALTH_SCORE_METRICS, healthScoreBand } from '@/utils/healthScoreContext';
 import {
   ArrowRight,
   BarChart3,
   Heart,
+  Info,
   Loader2,
   MessageSquare,
   ShieldCheck,
@@ -602,32 +604,31 @@ export function InternalHomeLanding() {
     score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger';
   const gaugeStrokeClass =
     score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger';
-  const healthItems = [
-    {
-      label: 'Wachstum',
-      value: subScores.growth,
+  const healthItemMeta = {
+    growth: {
       icon: TrendingUp,
       iconClass: 'border-primary/25 bg-primary/15 text-primary',
     },
-    {
-      label: 'Retention',
-      value: subScores.retention,
+    retention: {
       icon: Users,
       iconClass: 'border-accent/25 bg-accent/15 text-accent',
     },
-    {
-      label: 'Engagement',
-      value: subScores.engagement,
+    engagement: {
       icon: MessageSquare,
       iconClass: 'border-warning/25 bg-warning/15 text-warning',
     },
-    {
-      label: 'Community',
-      value: subScores.community,
+    community: {
       icon: Heart,
       iconClass: 'border-success/25 bg-success/15 text-success',
     },
-  ] as const;
+  } as const;
+  const healthItems = HEALTH_SCORE_METRICS.map((metric) => ({
+    ...metric,
+    value: subScores[metric.key],
+    band: healthScoreBand(subScores[metric.key]),
+    ...healthItemMeta[metric.key],
+  }));
+  const overallHealthBand = healthScoreBand(score);
 
   return (
     <>
@@ -815,14 +816,25 @@ export function InternalHomeLanding() {
                       </div>
                     </div>
 
+                    <div className="mt-3 text-center">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/55 px-2.5 py-1">
+                        <span className="text-xs font-semibold text-white">{overallHealthBand}</span>
+                        <span className="text-[10px] text-text-secondary">letzte 7 Tage</span>
+                      </div>
+                      <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+                        Ein gewichteter Mix aus Wachstum, Konstanz, Chat-Aktivität und Stammcommunity.
+                        Kein Twitch-Ranking und kein Vergleich mit anderen Kanälen.
+                      </p>
+                    </div>
+
                     {healthScore.trend != null ? (
                       <div
                         className={`mt-3 text-sm font-semibold ${
                           healthScore.trend >= 0 ? 'text-success' : 'text-danger'
                         }`}
                       >
-                        {healthScore.trend >= 0 ? '\u2191' : '\u2193'}{' '}
-                        {Math.abs(healthScore.trend)}% vs. Vorwoche
+                        Ø Viewer {healthScore.trend >= 0 ? '\u2191' : '\u2193'}{' '}
+                        {Math.abs(healthScore.trend)}% gegenüber den 7 Tagen davor
                       </div>
                     ) : null}
                   </div>
@@ -838,10 +850,13 @@ export function InternalHomeLanding() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-3">
                             <span className="text-sm font-medium text-white">{item.label}</span>
-                            <span className="text-sm font-semibold text-text-secondary">
-                              {item.value}
+                            <span className="shrink-0 text-xs font-semibold text-text-secondary">
+                              {item.value}/100 · {item.band}
                             </span>
                           </div>
+                          <p className="mt-0.5 text-[11px] leading-snug text-text-secondary">
+                            {item.summary} · {item.weight}% im Gesamtscore
+                          </p>
                           <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/6">
                             <div
                               className="h-full rounded-full transition-[width] duration-500"
@@ -861,6 +876,38 @@ export function InternalHomeLanding() {
                       </div>
                     ))}
                   </div>
+
+                  <details className="group mt-5 rounded-xl border border-border bg-background/45 p-3">
+                    <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-primary">
+                      <Info className="h-4 w-4 shrink-0 text-primary" />
+                      Wie kommt der Score zustande?
+                      <span className="ml-auto text-[10px] font-medium uppercase tracking-[0.14em] text-text-secondary">
+                        Erklärung
+                      </span>
+                    </summary>
+                    <div className="mt-3 space-y-3 border-t border-border pt-3 text-xs leading-relaxed text-text-secondary">
+                      <p>
+                        Der Gesamtscore setzt sich aus vier Signalen zusammen. Er beschreibt nur deinen
+                        eigenen Kanal im aktuellen Zeitraum.
+                      </p>
+                      <div className="space-y-2.5">
+                        {healthItems.map((item) => (
+                          <div key={item.key}>
+                            <div className="font-semibold text-white">
+                              {item.label} · {item.weight}%
+                            </div>
+                            <p className="mt-0.5">{item.detail}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="rounded-lg border border-border bg-card/60 p-2.5">
+                        <div className="font-semibold text-white">Einordnung</div>
+                        <p className="mt-1">
+                          0 bis 39: ausbaufähig · 40 bis 69: solide · 70 bis 100: stark.
+                        </p>
+                      </div>
+                    </div>
+                  </details>
                 </div>
               ) : null}
 

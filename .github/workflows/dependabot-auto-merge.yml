@@ -1,398 +1,146 @@
 name: "Dependabot Auto Merge"
 
+# Trusted metadata only. NEVER check out or execute pull-request code here.
 on:
-  pull_request_target:
+  # zizmor exception: trusted metadata only, no checkout/artifact consumption.
+  # Immutable bot identity, same-repo head and enforced checks are mandatory.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened, synchronize, reopened, ready_for_review]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   auto-merge:
-    name: "Auto-merge trusted Dependabot updates"
-    if: github.event_name == 'pull_request_target' && github.actor == 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    name: "Enable gated Dependabot auto-merge"
+    if: >-
+      github.event.pull_request.user.id == 49699333 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: write
       pull-requests: write
-      checks: read
-      statuses: read
 
     steps:
-      - name: Fetch Dependabot metadata
+      - name: Fetch authenticated Dependabot metadata
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
-          alert-lookup: true
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
-      - name: Decide eligibility
-        id: gate
+      - name: Require conservative policy and enforced PR checks
+        id: policy
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          ALERT_STATE: ${{ steps.metadata.outputs.alert-state }}
-          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
-          DIRECTORY: ${{ steps.metadata.outputs.directory }}
-          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
-          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
-          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
         with:
           script: |
-            const names = (process.env.DEPENDENCY_NAMES || "")
-              .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean);
-            const updateType = process.env.UPDATE_TYPE || "";
-            const securityUpdate = (process.env.ALERT_STATE || "").toUpperCase() === "OPEN";
-            const maintainerChanges = (process.env.MAINTAINER_CHANGES || "").toLowerCase() === "true";
-            const ecosystem = process.env.PACKAGE_ECOSYSTEM || "";
-            const directory = process.env.DIRECTORY || "";
-            const newVersion = process.env.NEW_VERSION || "";
+            core.setOutput("eligible", "false");
 
-            let shouldMerge = false;
-            let reason = "unsupported update type";
+            const permittedUpdateTypes = [
+              "version-update:semver-patch",
+              "version-update:semver-minor",
+            ];
+            if (!permittedUpdateTypes.includes(process.env.UPDATE_TYPE || "")) {
+              core.notice("Major, unknown and unclassified updates require manual review.");
+              return;
+            }
 
-            if (maintainerChanges) {
-              reason = "maintainer changes detected";
-            } else if (securityUpdate) {
-              shouldMerge = true;
-              reason = "security update";
-            } else if (
-              updateType.startsWith("version-update:") ||
-              names.length > 0
+            if (
+              !["npm", "cargo", "pip"].includes(process.env.ECOSYSTEM || "") ||
+              process.env.MAINTAINER_CHANGES !== "false"
             ) {
-              shouldMerge = true;
-              reason = updateType || "dependabot version update";
+              core.notice("Actions updates and maintainer changes require manual review.");
+              return;
             }
 
-            core.setOutput("should_merge", shouldMerge ? "true" : "false");
-            core.setOutput("reason", reason);
-            core.notice(`Auto-merge decision: ${shouldMerge} (${reason})`);
-
-      - name: Merge PR
-        if: steps.gate.outputs.should_merge == 'true' && github.event.pull_request.draft == false
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const pull_number = context.payload.pull_request.number;
-            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-            const requiredChecks = [
-              "Semantic review",
-              "Scope-Abgleich (keine toten Projekte)",
-              "Frontend PR Gate (website)",
-              "Frontend PR Gate (admin_dashboard)",
-              "Frontend PR Gate (dashboard_v2)",
-              "Rust SQLx required",
-            ];
-
-            const verifyGate = async () => {
-              let pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
-              const evaluatedSha = pr.head.sha;
-              const evaluatedBaseSha = pr.base.sha;
-
-              if (pr.base.ref !== "main" || pr.draft || pr.head.repo?.full_name !== `${owner}/${repo}`) {
-                return { ready: false, reason: "PR is no longer an eligible same-repository main PR" };
-              }
-
-              const comparison = await github.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
-                owner,
-                repo,
-                basehead: `${evaluatedBaseSha}...${evaluatedSha}`,
-              });
-              if ((comparison.data.behind_by || 0) > 0) {
-                return { ready: false, reason: `branch is behind main by ${comparison.data.behind_by}` };
-              }
-              if (pr.mergeable !== true || pr.mergeable_state === "dirty") {
-                return { ready: false, reason: `mergeability is ${pr.mergeable_state || "unknown"}` };
-              }
-
-              const checkResponse = await github.rest.checks.listForRef({
-                owner,
-                repo,
-                ref: evaluatedSha,
-                filter: "latest",
-                per_page: 100,
-              });
-              const trustedChecks = (checkResponse.data.check_runs || []).filter(
-                (check) => check.head_sha === evaluatedSha && check.app?.slug === "github-actions",
-              );
-              const byName = new Map(trustedChecks.map((check) => [check.name, check]));
-              const missing = requiredChecks.filter((name) => !byName.has(name));
-              const incomplete = requiredChecks.filter((name) => {
-                const check = byName.get(name);
-                return check && (check.status !== "completed" || check.conclusion !== "success");
-              });
-              if (missing.length || incomplete.length) {
-                return {
-                  ready: false,
-                  reason: `required checks not green (missing=${missing.join(",") || "none"}; incomplete=${incomplete.join(",") || "none"})`,
-                };
-              }
-
-              const accepted = new Set(["success", "neutral", "skipped"]);
-              const ignoredOwnChecks = new Set([
-                "Auto-merge trusted Dependabot updates",
-                "Reconcile open Dependabot PRs",
-              ]);
-              const blockingChecks = (checkResponse.data.check_runs || []).filter(
-                (check) =>
-                  check.head_sha === evaluatedSha &&
-                  !ignoredOwnChecks.has(check.name) &&
-                  (check.status !== "completed" || !accepted.has(check.conclusion || "")),
-              );
-              if (blockingChecks.length) {
-                return {
-                  ready: false,
-                  reason: `other checks not green: ${blockingChecks.map((check) => `${check.name}=${check.status}/${check.conclusion || "pending"}`).join(", ")}`,
-                };
-              }
-
-              const statusResponse = await github.rest.repos.getCombinedStatusForRef({
-                owner,
-                repo,
-                ref: evaluatedSha,
-                per_page: 100,
-              });
-              const latestByContext = new Map();
-              for (const status of statusResponse.data.statuses || []) {
-                const previous = latestByContext.get(status.context);
-                if (
-                  !previous ||
-                  new Date(status.created_at || 0).getTime() >
-                    new Date(previous.created_at || 0).getTime()
-                ) {
-                  latestByContext.set(status.context, status);
-                }
-              }
-              const blockingStatuses = [...latestByContext.values()].filter(
-                (status) => status.state !== "success",
-              );
-              if (blockingStatuses.length) {
-                return {
-                  ready: false,
-                  reason: `commit statuses not green: ${blockingStatuses.map((status) => `${status.context}=${status.state}`).join(", ")}`,
-                };
-              }
-
-              pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
-              if (pr.head.sha !== evaluatedSha || pr.base.sha !== evaluatedBaseSha) {
-                return { ready: false, reason: "head or base changed during gate evaluation" };
-              }
-              return { ready: true, evaluatedSha };
-            };
-
-            for (let attempt = 1; attempt <= 24; attempt += 1) {
-              const gate = await verifyGate();
-              if (!gate.ready) {
-                if (attempt < 24) {
-                  core.notice(`PR #${pull_number}: gate not ready on attempt ${attempt}/24: ${gate.reason}; retrying in 15s.`);
-                  await sleep(15_000);
-                  continue;
-                }
-                core.notice(`PR #${pull_number}: gate remained closed: ${gate.reason}.`);
-                return;
-              }
-
-              try {
-                await github.rest.pulls.merge({
-                  owner,
-                  repo,
-                  pull_number,
-                  merge_method: "squash",
-                  sha: gate.evaluatedSha,
-                });
-                core.notice(`PR #${pull_number} merged at verified head ${gate.evaluatedSha} on attempt ${attempt}.`);
-                return;
-              } catch (error) {
-                const message = String(error?.message || error);
-                const retryable = message.includes("405") || message.includes("Base branch was modified");
-                if (retryable && attempt < 24) {
-                  core.notice(`Could not merge PR #${pull_number}; re-evaluating the gate in 15s (attempt ${attempt}/24): ${message}`);
-                  await sleep(15_000);
-                  continue;
-                }
-                core.warning(`Could not merge PR #${pull_number}: ${message}`);
-                return;
-              }
+            const pr = context.payload.pull_request;
+            const defaultBranch = context.payload.repository.default_branch;
+            if (pr.base.ref !== defaultBranch) {
+              core.notice("Dependabot auto-merge is limited to the default branch.");
+              return;
             }
 
-      - name: Skip note
-        if: steps.gate.outputs.should_merge != 'true'
-        run: |
-          echo "Dependabot PR does not meet auto-merge policy: ${{ steps.gate.outputs.reason }}"
-
-  reconcile-open-prs:
-    name: "Reconcile open Dependabot PRs"
-    if: github.event_name != 'pull_request_target'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      checks: read
-      statuses: read
-
-    steps:
-      - name: Merge open Dependabot PRs
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const requiredChecks = [
-              "Semantic review",
-              "Scope-Abgleich (keine toten Projekte)",
-              "Frontend PR Gate (website)",
-              "Frontend PR Gate (admin_dashboard)",
-              "Frontend PR Gate (dashboard_v2)",
-              "Rust SQLx required",
-            ];
-
-            const verifyGate = async (pull_number) => {
-              let pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
-              const evaluatedSha = pr.head.sha;
-              const evaluatedBaseSha = pr.base.sha;
-
-              if (
-                pr.user?.login !== "dependabot[bot]" ||
-                pr.base.ref !== "main" ||
-                pr.draft ||
-                pr.head.repo?.full_name !== `${owner}/${repo}`
-              ) {
-                return { ready: false, reason: "PR is no longer an eligible Dependabot main PR" };
-              }
-
-              const comparison = await github.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
-                owner,
-                repo,
-                basehead: `${evaluatedBaseSha}...${evaluatedSha}`,
-              });
-              if ((comparison.data.behind_by || 0) > 0) {
-                return { ready: false, reason: `branch is behind main by ${comparison.data.behind_by}` };
-              }
-              if (pr.mergeable !== true || pr.mergeable_state === "dirty") {
-                return { ready: false, reason: `mergeability is ${pr.mergeable_state || "unknown"}` };
-              }
-
-              const checkResponse = await github.rest.checks.listForRef({
-                owner,
-                repo,
-                ref: evaluatedSha,
-                filter: "latest",
-                per_page: 100,
-              });
-              const trustedChecks = (checkResponse.data.check_runs || []).filter(
-                (check) => check.head_sha === evaluatedSha && check.app?.slug === "github-actions",
-              );
-              const byName = new Map(trustedChecks.map((check) => [check.name, check]));
-              const missing = requiredChecks.filter((name) => !byName.has(name));
-              const incomplete = requiredChecks.filter((name) => {
-                const check = byName.get(name);
-                return check && (check.status !== "completed" || check.conclusion !== "success");
-              });
-              if (missing.length || incomplete.length) {
-                return {
-                  ready: false,
-                  reason: `required checks not green (missing=${missing.join(",") || "none"}; incomplete=${incomplete.join(",") || "none"})`,
-                };
-              }
-
-              const accepted = new Set(["success", "neutral", "skipped"]);
-              const ignoredOwnChecks = new Set([
-                "Auto-merge trusted Dependabot updates",
-                "Reconcile open Dependabot PRs",
-              ]);
-              const blockingChecks = (checkResponse.data.check_runs || []).filter(
-                (check) =>
-                  check.head_sha === evaluatedSha &&
-                  !ignoredOwnChecks.has(check.name) &&
-                  (check.status !== "completed" || !accepted.has(check.conclusion || "")),
-              );
-              if (blockingChecks.length) {
-                return {
-                  ready: false,
-                  reason: `other checks not green: ${blockingChecks.map((check) => `${check.name}=${check.status}/${check.conclusion || "pending"}`).join(", ")}`,
-                };
-              }
-
-              const statusResponse = await github.rest.repos.getCombinedStatusForRef({
-                owner,
-                repo,
-                ref: evaluatedSha,
-                per_page: 100,
-              });
-              const latestByContext = new Map();
-              for (const status of statusResponse.data.statuses || []) {
-                const previous = latestByContext.get(status.context);
-                if (
-                  !previous ||
-                  new Date(status.created_at || 0).getTime() >
-                    new Date(previous.created_at || 0).getTime()
-                ) {
-                  latestByContext.set(status.context, status);
-                }
-              }
-              const blockingStatuses = [...latestByContext.values()].filter(
-                (status) => status.state !== "success",
-              );
-              if (blockingStatuses.length) {
-                return {
-                  ready: false,
-                  reason: `commit statuses not green: ${blockingStatuses.map((status) => `${status.context}=${status.state}`).join(", ")}`,
-                };
-              }
-
-              pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
-              if (pr.head.sha !== evaluatedSha || pr.base.sha !== evaluatedBaseSha) {
-                return { ready: false, reason: "head or base changed during gate evaluation" };
-              }
-              return { ready: true, evaluatedSha };
-            };
-
-            const pulls = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              state: "open",
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo,
+              pull_number: pr.number,
               per_page: 100,
             });
-
-            const dependabotPulls = pulls.filter(
-              (pull) => pull.user?.login === "dependabot[bot]" && pull.draft === false,
-            );
-
-            for (const pull of dependabotPulls) {
-              // Skip PRs that touch workflow files — GITHUB_TOKEN cannot merge those
-              const files = await github.paginate(github.rest.pulls.listFiles, {
-                owner,
-                repo,
-                pull_number: pull.number,
-                per_page: 100,
-              });
-              const touchesWorkflows = files.some((f) => f.filename.startsWith(".github/workflows/"));
-              if (touchesWorkflows) {
-                core.notice(`PR #${pull.number} modifies workflow files — requires manual merge (GITHUB_TOKEN lacks workflow scope).`);
-                continue;
-              }
-
-              const gate = await verifyGate(pull.number);
-              if (!gate.ready) {
-                core.notice(`PR #${pull.number} remains open: ${gate.reason}.`);
-                continue;
-              }
-
-              try {
-                await github.rest.pulls.merge({
-                  owner,
-                  repo,
-                  pull_number: pull.number,
-                  merge_method: "squash",
-                  sha: gate.evaluatedSha,
-                });
-                core.notice(`PR #${pull.number} merged at verified head ${gate.evaluatedSha}.`);
-              } catch (error) {
-                core.warning(`Could not merge PR #${pull.number}: ${String(error?.message || error)}`);
-              }
+            const protectedPolicyPath = (filename) =>
+              filename.startsWith(".github/") ||
+              filename.startsWith("scripts/ci/") ||
+              /^rust\/scripts\/(?:central_ci|central_fresh_schema|central_test_db|check)\.sh$/.test(filename);
+            const protectedChanges = files
+              .map((file) => file.filename)
+              .filter(protectedPolicyPath);
+            if (protectedChanges.length > 0) {
+              core.notice(
+                `CI/release-policy changes require manual bootstrap: ${protectedChanges.join(", ")}`,
+              );
+              return;
             }
+
+            // Native auto-merge is only safe when GitHub itself enforces every
+            // release check. Otherwise --auto may merge immediately.
+            const requiredChecks = [
+              "Semantic review",
+              "Scope-Abgleich (keine toten Projekte)",
+              "Frontend PR Gate (website)",
+              "Frontend PR Gate (admin_dashboard)",
+              "Frontend PR Gate (dashboard_v2)",
+              "Rust SQLx required",
+            ];
+            const { data: rules } = await github.request(
+              "GET /repos/{owner}/{repo}/rules/branches/{branch}",
+              { ...context.repo, branch: defaultBranch },
+            );
+            const statusRules = rules.filter(
+              (rule) =>
+                rule.type === "required_status_checks" &&
+                rule.parameters?.strict_required_status_checks_policy === true,
+            );
+            const enforcedChecks = new Set(
+              statusRules.flatMap((rule) =>
+                (rule.parameters?.required_status_checks || [])
+                  .filter((check) => check.integration_id === 15368)
+                  .map((check) => check.context),
+              ),
+            );
+            const missing = requiredChecks.filter((check) => !enforcedChecks.has(check));
+            if (missing.length > 0) {
+              core.notice(
+                `Dependabot auto-merge stays OFF until GitHub Actions enforces: ${missing.join(", ")}`,
+              );
+              return;
+            }
+
+            const { data: current } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: pr.number,
+            });
+            if (
+              current.state !== "open" ||
+              current.head.sha !== pr.head.sha ||
+              current.base.ref !== defaultBranch
+            ) {
+              core.notice("PR state or head changed; the newer event must re-evaluate eligibility.");
+              return;
+            }
+
+            core.setOutput("eligible", "true");
+
+      - name: Enable native auto-merge after the exact head was evaluated
+        if: steps.policy.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: gh pr merge --repo "$GITHUB_REPOSITORY" "$PR_NUMBER" --auto --squash --match-head-commit "$HEAD_SHA"
