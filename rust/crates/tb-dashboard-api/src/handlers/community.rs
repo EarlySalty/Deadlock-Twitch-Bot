@@ -99,7 +99,7 @@ async fn load_members(pool: &PgPool) -> Result<Vec<Member>,sqlx::Error> {
                l.last_game, left(l.last_title,500) AS last_title
         FROM twitch_partners_all_state p
         LEFT JOIN twitch_live_state l ON l.twitch_user_id=p.twitch_user_id
-        WHERE p.is_partner_active=1
+        WHERE p.is_partner_active=1 AND p.departnered_at IS NULL
         ORDER BY lower(p.twitch_login) LIMIT 500
     "#).fetch_all(pool).await
 }
