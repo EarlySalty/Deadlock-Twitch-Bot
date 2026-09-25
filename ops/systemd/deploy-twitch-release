@@ -159,6 +159,10 @@ if [[ ! -d "$src" ]]; then
   echo "Quell-Checkout fehlt: $src" >&2
   exit 1
 fi
+if [[ ! -d "$src/.git" || -L "$src/.git" ]]; then
+  echo "Quell-Checkout muss vor dem Verschieben ein eigenständiger Clone mit internem .git-Verzeichnis sein: $src" >&2
+  exit 1
+fi
 if [[ -e "$dest" || -L "$dest" ]]; then
   echo "Zielverzeichnis existiert schon: $dest" >&2
   exit 1
