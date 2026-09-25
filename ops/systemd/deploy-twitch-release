@@ -155,11 +155,11 @@ fi
 src="${src:-/home/nathanael/repos/twitch-release-$sha}"
 dest="/opt/deadlock/twitch/builds/$sha"
 
-if [[ ! -d "$src" ]]; then
-  echo "Quell-Checkout fehlt: $src" >&2
+if [[ -L "$src" || ! -d "$src" ]]; then
+  echo "Quell-Checkout fehlt oder ist ein Symlink: $src" >&2
   exit 1
 fi
-if [[ ! -d "$src/.git" || -L "$src/.git" ]]; then
+if [[ -L "$src/.git" || ! -d "$src/.git" ]]; then
   echo "Quell-Checkout muss vor dem Verschieben ein eigenständiger Clone mit internem .git-Verzeichnis sein: $src" >&2
   exit 1
 fi
