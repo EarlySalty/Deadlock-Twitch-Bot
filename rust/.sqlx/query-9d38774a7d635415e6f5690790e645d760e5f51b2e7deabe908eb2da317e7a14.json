@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT with_item_id\n        FROM brain.hero_item_synergies\n        WHERE hero_id=$1 AND item_id=$2 AND patch_tag=$3\n        ORDER BY matches DESC, with_item_id ASC\n        LIMIT 8\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "with_item_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9d38774a7d635415e6f5690790e645d760e5f51b2e7deabe908eb2da317e7a14"
+}
