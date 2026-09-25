@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n          i.item_id AS \"item_id!\", i.name AS \"name!\", i.slot_type AS \"slot_type!\",\n          i.tier AS \"tier!\", i.defense_kind::text AS \"defense_kind_json!\",\n          i.damage_axis AS \"damage_axis!\",\n          s.prevalence_builds AS \"prevalence_builds!\", s.wins AS \"wins!\",\n          s.losses AS \"losses!\", s.matches AS \"matches!\",\n          s.avg_buy_time_relative AS \"avg_buy_time_relative?\", s.lift_pp AS \"lift_pp?\"\n        FROM brain.hero_item_stats s\n        JOIN brain.item_catalog i ON i.item_id=s.item_id\n        WHERE s.hero_id=$1 AND s.bracket=$2 AND s.patch_tag=$3\n        ORDER BY s.prevalence_builds DESC, s.matches DESC, i.item_id ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "item_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "slot_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "tier!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "defense_kind_json!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "damage_axis!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "prevalence_builds!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "wins!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "losses!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "matches!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "avg_buy_time_relative?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "lift_pp?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "f67bffe3482fd36af6bb686c9c05beae29ea4175e06f0b8bab4ab81d4fe327dd"
+}
