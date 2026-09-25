@@ -400,24 +400,20 @@ impl CommandEngine {
         self
     }
 
-    async fn command_name_overrides(&self, broadcaster_id: &str) -> BTreeMap<String, String> {
+    async fn command_name_overrides(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<BTreeMap<String, String>, sqlx::Error> {
         if broadcaster_id.trim().is_empty() {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         }
-        match sqlx::query_scalar::<_, DbJson<BTreeMap<String, String>>>(
+        let saved = sqlx::query_scalar::<_, DbJson<BTreeMap<String, String>>>(
             "SELECT command_name_overrides FROM streamer_plans WHERE twitch_user_id = $1 LIMIT 1",
         )
         .bind(broadcaster_id)
         .fetch_optional(&self.pool)
-        .await
-        {
-            Ok(Some(saved)) => saved.0,
-            Ok(None) => BTreeMap::new(),
-            Err(error) => {
-                crate::command_names::warn_read_failure(&error);
-                BTreeMap::new()
-            }
-        }
+        .await?;
+        Ok(saved.map(|value| value.0).unwrap_or_default())
     }
 
     /// Bekannte Automationsbots behalten ihren eingeschränkten Befehlszugang.
@@ -431,9 +427,16 @@ impl CommandEngine {
         if !typed.starts_with('!') {
             return false;
         }
-        let overrides = self
+        let overrides = match self
             .command_name_overrides(&event.broadcaster_user_id)
-            .await;
+            .await
+        {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                crate::command_names::warn_read_failure(&error);
+                return false;
+            }
+        };
         let Some(command) =
             crate::command_names::resolve_command(&typed, &overrides).map(|entry| entry.name)
         else {
@@ -462,9 +465,16 @@ impl CommandEngine {
         if !invoked_command.starts_with('!') {
             return false;
         }
-        let overrides = self
+        let overrides = match self
             .command_name_overrides(&event.broadcaster_user_id)
-            .await;
+            .await
+        {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                crate::command_names::warn_read_failure(&error);
+                return true;
+            }
+        };
         let Some(command_info) =
             crate::command_names::resolve_command(&invoked_command, &overrides)
         else {
@@ -4183,16 +4193,20 @@ mod tests {
         assert!(engine.handle(&make_event("!rank", false, false)).await);
         assert_eq!(
             api.message_count().await,
-            count + 1,
-            "DB-Fehler wird gemeldet"
+            count,
+            "DB-Fehler darf keinen Standard-Trigger reaktivieren"
         );
-        assert!(api
-            .last_message()
-            .await
-            .unwrap()
-            .contains("gerade nicht abrufen"));
-        // Geschützte Commands passieren diesen Schalter auch ohne Einstellungstabelle.
+        // Wenn die kanalbezogenen Namen nicht gelesen werden können, darf auch ein
+        // Standardname nicht versehentlich wieder aktiv werden.
         assert!(engine.handle(&make_event("!commands", false, false)).await);
-        assert_eq!(api.message_count().await, count + 2);
+        assert_eq!(api.message_count().await, count);
+        assert!(!engine
+            .handle_known_bot(&make_event("!commands", false, false))
+            .await);
+        assert_eq!(
+            api.message_count().await,
+            count,
+            "Auch der bekannte-Bot-Pfad bleibt bei DB-Fehler still"
+        );
     }
 }
