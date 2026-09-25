@@ -38,3 +38,6 @@ jobs:
 
       - name: Tests des Scope-Checks
         run: python -m unittest discover -s tests -p 'test_check_manifest_scope.py' -v
+
+      - name: Tests der Dependabot-Merge-Policy
+        run: python -m unittest discover -s tests -p 'test_dependabot_auto_merge_policy.py' -v
