@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, Languages, Radio, Users } from 'lucide-react';
+import { collectorHeartbeatStale } from '@/pages/categoryCollectorStaleness';
 
 const GOLD = '#D6A84B';
 const AMBER = '#D87538';
@@ -22,6 +23,7 @@ const tooltipStyle = { background: '#19130E', border: '1px solid #6F5130', borde
 export function CategoryCollector() {
   const [days, setDays] = useState(7);
   const [language, setLanguage] = useState('all');
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const query = useQuery<CategoryReport>({
     queryKey: ['category-collector', days],
     queryFn: async () => {
@@ -33,6 +35,10 @@ export function CategoryCollector() {
     refetchInterval: 60_000,
     retry: false,
   });
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const data = query.data;
   const totals = useMemo(() => data?.languages.reduce((sum, row) => ({ hours: sum.hours + (row.airtime_hours ?? 0), messages: sum.messages + row.messages, viewerHours: sum.viewerHours + (row.viewer_hours ?? 0) }), { hours: 0, messages: 0, viewerHours: 0 }), [data]);
   const chart = useMemo(() => {
@@ -49,9 +55,7 @@ export function CategoryCollector() {
     return rows;
   }, [data]);
   const hourly = useMemo(() => Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, messages: data?.hourly.filter(row => row.hour === hour && (language === 'all' || row.language === language)).reduce((sum, row) => sum + row.messages, 0) ?? 0 })), [data, language]);
-  const generatedAt = data?.generated_at ? new Date(data.generated_at).getTime() : Number.NaN;
-  const heartbeatAt = data?.heartbeat_at ? new Date(data.heartbeat_at).getTime() : Number.NaN;
-  const stale = !Number.isFinite(generatedAt) || !Number.isFinite(heartbeatAt) || generatedAt - heartbeatAt > 120_000;
+  const stale = collectorHeartbeatStale(data?.heartbeat_at, nowMs);
   const status = data?.status;
   const cards = [
     { icon: Radio, title: 'Entdeckte Live-Kanäle', value: stale ? '—' : number(status?.desired_channels), detail: 'Letzter erfolgreicher Kategorieabruf' },
