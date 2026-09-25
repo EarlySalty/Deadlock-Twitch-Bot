@@ -19,7 +19,7 @@
 //! Broadcaster, nur bei Plänen mit Entitlement `chat.lurker_tax`). Die
 //! Plan-Auflösung läuft über `tb_analytics::plan::resolve_plan_snapshot`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -27,7 +27,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rand::seq::IndexedRandom;
-use sqlx::PgPool;
+use sqlx::{types::Json as DbJson, PgPool};
 use tb_knowledge::{KnowledgeBase, Namespace};
 use tokio::sync::Mutex;
 
@@ -400,19 +400,50 @@ impl CommandEngine {
         self
     }
 
+    async fn command_name_overrides(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<BTreeMap<String, String>, sqlx::Error> {
+        if broadcaster_id.trim().is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let saved = sqlx::query_scalar::<_, DbJson<BTreeMap<String, String>>>(
+            "SELECT command_name_overrides FROM streamer_plans WHERE twitch_user_id = $1 LIMIT 1",
+        )
+        .bind(broadcaster_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(saved.map(|value| value.0).unwrap_or_default())
+    }
+
     /// Bekannte Automationsbots behalten ihren eingeschränkten Befehlszugang.
     pub(crate) async fn handle_known_bot(&self, event: &ChatMessageEvent) -> bool {
-        let command = event
+        let typed = event
             .text()
             .split_whitespace()
             .next()
             .unwrap_or("")
-            .to_lowercase();
-        if crate::stat_commands::StatCommand::from_chat(&command).is_some()
-            || matches!(
-                command.as_str(),
-                "!clip" | "!createclip" | "!discord" | "!dldc" | "!dlde" | "!invite"
-            )
+            .to_ascii_lowercase();
+        if !typed.starts_with('!') {
+            return false;
+        }
+        let overrides = match self
+            .command_name_overrides(&event.broadcaster_user_id)
+            .await
+        {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                crate::command_names::warn_read_failure(&error);
+                return false;
+            }
+        };
+        let Some(command) =
+            crate::command_names::resolve_command(&typed, &overrides).map(|entry| entry.name)
+        else {
+            return false;
+        };
+        if crate::stat_commands::StatCommand::from_chat(command).is_some()
+            || matches!(command, "!clip" | "!discord" | "!invite")
         {
             return false;
         }
@@ -430,8 +461,26 @@ impl CommandEngine {
         // case conversion may change byte offsets. Tabs/newlines are separators too.
         let (command, args) = event.text().split_once(char::is_whitespace)
             .unwrap_or((event.text(), ""));
-        let command = command.to_ascii_lowercase();
-        let cmd = command.as_str();
+        let invoked_command = command.to_ascii_lowercase();
+        if !invoked_command.starts_with('!') {
+            return false;
+        }
+        let overrides = match self
+            .command_name_overrides(&event.broadcaster_user_id)
+            .await
+        {
+            Ok(overrides) => overrides,
+            Err(error) => {
+                crate::command_names::warn_read_failure(&error);
+                return true;
+            }
+        };
+        let Some(command_info) =
+            crate::command_names::resolve_command(&invoked_command, &overrides)
+        else {
+            return false;
+        };
+        let cmd = command_info.name;
         let args = args.trim();
 
         if cmd != "!watchtime"
@@ -538,8 +587,11 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_raid(event).await;
                 } else {
-                    self.reply(event, "Nur Broadcaster oder Mods können !raid benutzen.")
-                        .await;
+                    self.reply(
+                        event,
+                        &format!("Nur Broadcaster oder Mods können {invoked_command} benutzen."),
+                    )
+                    .await;
                 }
                 true
             }
@@ -576,7 +628,7 @@ impl CommandEngine {
                 true
             }
             "!invite" => {
-                self.cmd_invite(event).await;
+                self.cmd_invite(event, args).await;
                 true
             }
             "!commands" => {
@@ -813,8 +865,7 @@ impl CommandEngine {
         self.reply(event, &help_reply(knowledge_base(), args)).await;
     }
 
-    async fn stat_target(&self, event: &ChatMessageEvent, args: &str) -> Option<crate::command_target::CommandTarget> {
-        let is_rank = event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank");
+    async fn stat_target(&self, event: &ChatMessageEvent, args: &str, is_rank: bool) -> Option<crate::command_target::CommandTarget> {
         let rank_me = is_rank && args.trim().eq_ignore_ascii_case("me");
         match crate::command_target::resolve(
             self.api.as_ref(),
@@ -832,8 +883,7 @@ impl CommandEngine {
                         self.reply(event, crate::player_links::DISCONNECTED_REPLY).await;
                         return None;
                     }
-                    Ok(Some(link)) if link.steam_id64.is_some()
-                        && !event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank") => {
+                    Ok(Some(link)) if link.steam_id64.is_some() && !is_rank => {
                         // Never show another Discord-linked Steam account after a direct account switch.
                         let same_legacy = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                             Ok(Some(discord_id)) => matches!(self.rank_lookup.linked_account(&discord_id).await,
@@ -853,8 +903,7 @@ impl CommandEngine {
                 }
                 Some(target)
             },
-            Err(crate::command_target::TargetError::NotFound(login))
-                if event.text().split_whitespace().next().unwrap_or("").eq_ignore_ascii_case("!rank") =>
+            Err(crate::command_target::TargetError::NotFound(login)) if is_rank =>
             {
                 self.reply(event, &format!("Für @{login} gibt es noch keine Steam-Verknüpfung. Verbinden geht hier: {}", crate::player_links::CONNECT_URL)).await;
                 None
@@ -871,7 +920,7 @@ impl CommandEngine {
             }
             Err(()) => self.reply(event, "Verwendung: !rank @username oder !rank steam:<Account-ID/SteamID64>.").await,
             Ok(None) => {
-                let Some(target) = self.stat_target(event, args).await else { return; };
+                let Some(target) = self.stat_target(event, args, true).await else { return; };
                 let text = self.rank_lookup.twitch_reply(&self.pool, &target, !args.is_empty()).await;
                 self.reply(event, &text).await;
             }
@@ -879,7 +928,7 @@ impl CommandEngine {
     }
 
     async fn cmd_wins(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, true)
@@ -900,7 +949,7 @@ impl CommandEngine {
     }
 
     async fn cmd_winrate(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
@@ -919,7 +968,7 @@ impl CommandEngine {
     }
 
     async fn cmd_mmr(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_mmr_trend(&discord_id).await.map(Some),
@@ -938,7 +987,7 @@ impl CommandEngine {
     }
 
     async fn cmd_live(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_live(&discord_id).await.map(Some),
@@ -957,7 +1006,7 @@ impl CommandEngine {
     }
 
     async fn cmd_lastmatch(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
@@ -976,7 +1025,7 @@ impl CommandEngine {
     }
 
     async fn cmd_streak(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
@@ -995,7 +1044,7 @@ impl CommandEngine {
     }
 
     async fn cmd_mostplayed(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args).await else { return; };
+        let Some(target) = self.stat_target(event, args, false).await else { return; };
         let info =
             match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
                 Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
@@ -1974,9 +2023,10 @@ impl CommandEngine {
     // !invite — bot.py:781
     // -----------------------------------------------------------------------
 
-    async fn cmd_invite(&self, event: &ChatMessageEvent) {
-        // Exact-Match: nur "!invite" ohne Argumente — bot.py:784
-        if event.text().trim().to_lowercase() != "!invite" {
+    async fn cmd_invite(&self, event: &ChatMessageEvent, args: &str) {
+        // Exact-Match-Semantik: nur der aufgelöste Befehl ohne Argumente.
+        // Damit gilt dieselbe Regel auch für einen kanalbezogenen eigenen Namen.
+        if !args.is_empty() {
             return;
         }
 
@@ -2865,6 +2915,7 @@ mod tests {
                 lurk_command_enabled INTEGER DEFAULT 1,
                 title_command_enabled INTEGER DEFAULT 1,
                 stat_command_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+                command_name_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
                 clip_command_enabled INTEGER DEFAULT 1,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
@@ -2947,6 +2998,28 @@ mod tests {
         let handled = engine.handle(&make_event("!commands", false, false)).await;
 
         assert!(handled);
+        assert_eq!(api.message_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn eigener_command_name_ersetzt_standard_trigger_nur_im_kanal() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        sqlx::query(
+            r#"INSERT INTO streamer_plans (twitch_user_id, twitch_login, command_name_overrides)
+               VALUES ('bc123', 'testchannel', '{"commands":"!botcommands"}')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool, api.clone());
+
+        assert!(!engine.handle(&make_event("!commands", false, false)).await);
+        assert!(engine
+            .handle(&make_event("!botcommands", false, false))
+            .await);
         assert_eq!(api.message_count().await, 1);
     }
 
@@ -3437,6 +3510,39 @@ mod tests {
             count_first, count_second,
             "Zweiter !invite muss durch Cooldown blockiert werden"
         );
+    }
+
+    #[tokio::test]
+    async fn eigener_invite_name_behaelt_exact_match_semantik() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner(&pool).await;
+        sqlx::query(
+            r#"INSERT INTO streamer_plans (twitch_user_id, twitch_login, command_name_overrides)
+               VALUES ('bc123', 'testchannel', '{"invite":"!join"}')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = MockApi::new();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            MockRaid::default_arc(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite {
+                reply: Some("invite-ok".to_string()),
+            }),
+            Arc::new(MockSuperMod(false)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        assert!(!engine.handle(&make_event("!invite", false, false)).await);
+        assert!(engine.handle(&make_event("!join extra", false, false)).await);
+        assert_eq!(api.message_count().await, 0);
+        assert!(engine.handle(&make_event("!join", false, false)).await);
+        assert_eq!(api.message_count().await, 1);
     }
 
     #[tokio::test]
@@ -4087,16 +4193,20 @@ mod tests {
         assert!(engine.handle(&make_event("!rank", false, false)).await);
         assert_eq!(
             api.message_count().await,
-            count + 1,
-            "DB-Fehler wird gemeldet"
+            count,
+            "DB-Fehler darf keinen Standard-Trigger reaktivieren"
         );
-        assert!(api
-            .last_message()
-            .await
-            .unwrap()
-            .contains("gerade nicht abrufen"));
-        // Geschützte Commands passieren diesen Schalter auch ohne Einstellungstabelle.
+        // Wenn die kanalbezogenen Namen nicht gelesen werden können, darf auch ein
+        // Standardname nicht versehentlich wieder aktiv werden.
         assert!(engine.handle(&make_event("!commands", false, false)).await);
-        assert_eq!(api.message_count().await, count + 2);
+        assert_eq!(api.message_count().await, count);
+        assert!(!engine
+            .handle_known_bot(&make_event("!commands", false, false))
+            .await);
+        assert_eq!(
+            api.message_count().await,
+            count,
+            "Auch der bekannte-Bot-Pfad bleibt bei DB-Fehler still"
+        );
     }
 }
