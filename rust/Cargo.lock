@@ -382,6 +382,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-client"
+version = "0.1.0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=bdcc6dec3424bd313d36e5f545de2a07df564c7f#bdcc6dec3424bd313d36e5f545de2a07df564c7f"
+dependencies = [
+ "brain-contracts",
+ "reqwest",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "brain-contracts"
+version = "0.1.0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=bdcc6dec3424bd313d36e5f545de2a07df564c7f#bdcc6dec3424bd313d36e5f545de2a07df564c7f"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3544,8 +3565,10 @@ dependencies = [
 name = "tb-knowledge"
 version = "0.1.0"
 dependencies = [
+ "brain-client",
  "regex",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

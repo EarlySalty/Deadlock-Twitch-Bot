@@ -1,3 +1,4 @@
+.consumer-ci-reports/
 # Secrets & Environment
 .env
 *.env
