@@ -12,13 +12,6 @@ async fn real_database_filters_partners_and_returns_private_read_only_recommenda
           technical_pause_reason TEXT
         );
         CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
-        CREATE VIEW twitch_partners_all_state AS
-        SELECT p.twitch_user_id, p.twitch_login, p.departnered_at, i.discord_user_id,
-          CASE WHEN p.status='active' AND COALESCE(p.manual_partner_opt_out,0)=0
-            AND COALESCE(p.technical_pause_reason,'')='' AND p.admin_archived_at IS NULL
-            THEN 1 ELSE 0 END AS is_partner_active
-        FROM twitch_partners p
-        LEFT JOIN twitch_streamer_identities i ON i.twitch_user_id=p.twitch_user_id;
         CREATE TABLE twitch_live_state (
           twitch_user_id TEXT PRIMARY KEY, is_live INTEGER, last_seen_at TEXT, last_game TEXT, last_title TEXT
         );
@@ -26,17 +19,18 @@ async fn real_database_filters_partners_and_returns_private_read_only_recommenda
           streamer_login TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ,
           game_name TEXT, stream_title TEXT
         );
-        INSERT INTO twitch_partners (twitch_user_id,twitch_login) VALUES ('1','Alice'),('2','Bob'),('3','archived'),('4','optout'),('5','former'),('6','paused'),('7','stale_former');
+        INSERT INTO twitch_partners (twitch_user_id,twitch_login) VALUES ('1','Alice'),('2','Bob'),('3','archived'),('4','optout'),('5','former'),('6','tokenerror'),('7','botbanned'),('8','blocked');
         UPDATE twitch_partners SET admin_archived_at='2026-01-01' WHERE twitch_user_id='3';
         UPDATE twitch_partners SET manual_partner_opt_out=1 WHERE twitch_user_id='4';
-        UPDATE twitch_partners SET status='departnered', departnered_at='2026-01-01' WHERE twitch_user_id='5';
+        UPDATE twitch_partners SET departnered_at='2026-01-01' WHERE twitch_user_id='5';
         UPDATE twitch_partners SET technical_pause_reason='token_error' WHERE twitch_user_id='6';
-        UPDATE twitch_partners SET departnered_at='2026-01-01' WHERE twitch_user_id='7';
+        UPDATE twitch_partners SET technical_pause_reason='bot_banned' WHERE twitch_user_id='7';
+        UPDATE twitch_partners SET technical_pause_reason='blocked' WHERE twitch_user_id='8';
         INSERT INTO twitch_streamer_identities VALUES ('1',NULL),('2',NULL);
         INSERT INTO twitch_stream_sessions
           SELECT login, NOW()-make_interval(days=>day), NOW()-make_interval(days=>day)+INTERVAL '2 hours',
                  'Deadlock','Street Brawl mit euch'
-          FROM unnest(ARRAY['Alice','Bob','archived','optout','former','paused','stale_former']) login CROSS JOIN unnest(ARRAY[2,9,16]) day;
+          FROM unnest(ARRAY['Alice','Bob','archived','optout','former','tokenerror','botbanned','blocked']) login CROSS JOIN unnest(ARRAY[2,9,16]) day;
         -- Missing end and obviously broken duration must not fabricate a schedule.
         INSERT INTO twitch_stream_sessions VALUES ('Bob',NOW()-INTERVAL '1 day',NULL,'Deadlock',NULL),
           ('Bob',NOW()-INTERVAL '4 days',NOW()-INTERVAL '1 day','Deadlock',NULL);
@@ -64,6 +58,9 @@ async fn real_database_filters_partners_and_returns_private_read_only_recommenda
     assert!(!text.contains("discord_id"));
     assert!(!text.contains("twitch_user_id"));
     assert!(!text.contains("steam_id"));
-    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM twitch_stream_sessions").fetch_one(&db.pool).await.unwrap(),23);
+    assert!(!text.contains("tokenerror"));
+    assert!(!text.contains("botbanned"));
+    assert!(!text.contains("blocked"));
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM twitch_stream_sessions").fetch_one(&db.pool).await.unwrap(),26);
     db.close().await;
 }
