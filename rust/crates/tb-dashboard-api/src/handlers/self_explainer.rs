@@ -434,6 +434,45 @@ async fn answer_question(
     answer
 }
 
+/// Prepared opt-in port for the typed Brain contract. Existing routes do not install it.
+/// Keep history on the legacy route until the canonical API can represent it faithfully.
+/// No logging, Discord relay, local retrieval or model fallback is performed here.
+pub async fn answer_stateless_via_brain(
+    adapter: &tb_knowledge::brain::BrainKnowledgeAdapter,
+    request_id: &str,
+    conversation_id: &str,
+    history: &[Message],
+    question: &str,
+) -> Result<SelfExplainerAnswer, tb_knowledge::brain::BrainAdapterError> {
+    use tb_knowledge::brain::{BrainKnowledgeAdapter, KnowledgeReply};
+    BrainKnowledgeAdapter::require_stateless(history.len(), 0)?;
+    let q = question.trim();
+    if q.is_empty() {
+        return Ok(evaluate_answer("", None));
+    }
+    let q_clean: String = q.chars().take(MAX_QUESTION_LEN).collect();
+    match adapter
+        .answer(request_id, conversation_id, &q_clean)
+        .await?
+    {
+        KnowledgeReply::Answered { text, sources } => {
+            // Reuse the existing output filter, 2000-character truncation and injection flag.
+            // The outer handler retains its 400-character split and response JSON shape.
+            let mut result = evaluate_answer(q, Some(&text));
+            if result.grounded {
+                result.sources = sources;
+            }
+            Ok(result)
+        }
+        KnowledgeReply::NoEvidence => Ok(SelfExplainerAnswer {
+            answer: FALLBACK_NOT_DOCUMENTED.into(),
+            grounded: false,
+            flagged_injection: looks_like_injection(q),
+            sources: Vec::new(),
+        }),
+    }
+}
+
 // ── Rate-Limiter (Sliding-Window pro Peer) ─────────────────────────────────────
 
 const RATE_SWEEP_INTERVALL: usize = 256;
@@ -732,6 +771,32 @@ pub async fn self_explainer_ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn typed_port_does_not_drop_history_or_invoke_legacy_fallbacks() {
+        use tb_knowledge::brain::{BrainAdapterError, BrainKnowledgeAdapter};
+        let adapter = BrainKnowledgeAdapter::new(
+            "http://127.0.0.1:1",
+            "fixture-token",
+            Duration::from_secs(1),
+            std::collections::BTreeSet::from(["fixture.public".into()]),
+        )
+        .unwrap();
+        let history = [Message::user("vorherige Frage")];
+        let error = answer_stateless_via_brain(&adapter, "r", "c", &history, "Abrams")
+            .await
+            .unwrap_err();
+        assert_eq!(error, BrainAdapterError::UnsupportedContext);
+        let empty = answer_stateless_via_brain(&adapter, "r", "c", &[], "")
+            .await
+            .unwrap();
+        assert!(!empty.grounded);
+        assert_eq!(empty.answer, FALLBACK_EMPTY);
+        let error = answer_stateless_via_brain(&adapter, "r", "c", &[], "Abrams")
+            .await
+            .unwrap_err();
+        assert_eq!(error, BrainAdapterError::Backend);
+    }
 
     fn fixture_kb() -> tb_knowledge::KnowledgeBase {
         let root =

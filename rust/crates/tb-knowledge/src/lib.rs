@@ -3,6 +3,7 @@
 //! lexikalischem Scoring in einen Grounding-Prompt — KEIN RAG.
 
 mod base;
+pub mod brain;
 mod doc;
 mod grounding;
 pub mod tips;
