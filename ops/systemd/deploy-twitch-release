@@ -163,6 +163,25 @@ if [[ -L "$src/.git" || ! -d "$src/.git" ]]; then
   echo "Quell-Checkout muss vor dem Verschieben ein eigenständiger Clone mit internem .git-Verzeichnis sein: $src" >&2
   exit 1
 fi
+
+required_artifacts=(
+  rust/target/release/tb-bot
+  rust/target/release/tb-dashboard
+  rust/target/release/tb-stream-audit
+  bot/analytics/dashboard_v2/dist
+  bot/admin_dashboard/dist
+  website/dist
+)
+if [[ -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
+  required_artifacts+=(rust/target/release/tb-category-collector)
+fi
+for artifact in "${required_artifacts[@]}"; do
+  if [[ ! -e "$src/$artifact" ]]; then
+    echo "Release-Artefakt fehlt vor dem Verschieben: $artifact" >&2
+    exit 1
+  fi
+done
+
 if [[ -e "$dest" || -L "$dest" ]]; then
   echo "Zielverzeichnis existiert schon: $dest" >&2
   exit 1
