@@ -57,3 +57,7 @@ Twitch Bot (Discord-Cog)          Dashboard-Service
 ```
 
 Beide teilen sich die PostgreSQL-DB, aber keine direkten Python-Imports voneinander.
+
+## Architektur-Backlog (25.09.2026)
+
+[TODO-Plan mit 20 Einzelaufträgen](.tasks/2026-09-25-architecture-maintainability/PLAN.md) — Prioritäten, Abhängigkeiten, Tests und PR-Schnitte aus dem bereitgestellten Maintainability-Review. Nur Planung; keine Implementierung oder Produktionsfreigabe.
