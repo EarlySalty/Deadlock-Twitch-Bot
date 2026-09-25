@@ -1022,6 +1022,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
 
     Router::new()
         .route(
+            "/twitch/api/v2/admin/category-collector",
+            get(crate::handlers::category_collector::handler),
+        )
+        .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
         )

@@ -6,6 +6,7 @@ import { useDashboardProfile } from '@/hooks/useDashboardProfile';
 import {
   PREVIEW_CHANGELOG_ROUTE,
   PREVIEW_HOME_ROUTE,
+  PREVIEW_KATEGORIEN_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_TITLE_ROUTE,
@@ -20,6 +21,7 @@ import {
   BookOpen,
   FileText,
   Film,
+  Globe,
   Home,
   Loader2,
   MonitorPlay,
@@ -41,6 +43,7 @@ export type DashboardRoute =
   | 'overlay'
   | 'title'
   | 'pricing'
+  | 'kategorien-weltweit'
   | 'hilfe'
   | 'feedback';
 
@@ -89,7 +92,11 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
     adminModeMutation,
     canAccessAnalyticsDashboard,
     profileReady,
+    authStatus,
   } = useDashboardProfile();
+  // Globaler Kategoriesammler: Navigation nur mit echtem Admin-Status,
+  // zusätzlich zur serverseitigen Admin-Prüfung der API.
+  const istAdmin = Boolean(authStatus?.isAdmin || authStatus?.isLocalhost);
   const queryClient = useQueryClient();
   const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -260,6 +267,14 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
                   ? 'Voller Zugriff aktiv, nicht die echte Nutzer-Ansicht.'
                   : 'Du siehst das Dashboard wie ein normaler Nutzer.'}
               </p>
+              {istAdmin && (
+                <SidebarLink
+                  href={PREVIEW_KATEGORIEN_ROUTE}
+                  icon={Globe}
+                  label="Kategorien weltweit"
+                  active={activeRoute === 'kategorien-weltweit'}
+                />
+              )}
             </div>
           </>
         ) : null}

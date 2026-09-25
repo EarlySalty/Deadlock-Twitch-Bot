@@ -28,9 +28,11 @@ members = [
     "crates/tb-stream-audit",
     "crates/tb-scout",
     "crates/tb-load",
+    "crates/tb-category-collector",
     "bin/tb-stream-audit",
     "bin/tb-dashboard",
     "bin/tb-bot",
+    "bin/tb-category-collector",
 ]
 
 [workspace.package]
@@ -101,6 +103,10 @@ tb-vod-archive   = { path = "crates/tb-vod-archive" }
 tb-stream-audit  = { path = "crates/tb-stream-audit" }
 tb-scout         = { path = "crates/tb-scout" }
 tb-load          = { path = "crates/tb-load" }
+tb-category-collector = { path = "crates/tb-category-collector" }
+# Lokale, billige Spracherkennung für den Kategoriesammler (kein Cloud-Dienst,
+# keine eigene Heuristik; whatlang liefert Konfidenz + ISO-Codes).
+whatlang = "0.18"
 url = "2"
 regex = "1"
 unicode-normalization = "0.1"

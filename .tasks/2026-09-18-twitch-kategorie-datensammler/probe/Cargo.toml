@@ -1,0 +1,10 @@
+[package]
+name = "category-anonymous-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tb-monitoring = { path = "../../../rust/crates/tb-monitoring" }
+tb-engagement = { path = "../../../rust/crates/tb-engagement" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

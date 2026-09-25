@@ -1,70 +1,38 @@
 //! Anonymer Read-only-Chat-Sink für alle vom Scout aktuell gefundenen
 //! Deadlock-Live-Kanäle. Der Sink besitzt bewusst weder `ChatApi` noch
 //! Bot-Token oder Helix-Schreib-Handle.
+//!
+//! Die IRC-Arbeit (Sharding, JOIN-Drossel, PING/PONG, Reconnect) macht der
+//! gemeinsame anonyme Transport [`tb_monitoring::anon_chat`]; dieses Modul
+//! hält nur noch die Scout-Anpassung: Nachrichten landen im
+//! `ChatterTracker`, optional mit `CrewGuard`-Beobachtung.
 
-use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use sqlx::PgPool;
-use tb_chat::types::ChatMessageBody;
-use tb_chat::{ChatMessageEvent, ChatterTracker, CrewGuard};
-use tb_engagement::irc_message::parse_privmsg;
+use tb_chat::{ChatterTracker, CrewGuard};
+use tb_monitoring::anon_chat::{AnonChatConfig, AnonChatHandle, PrivmsgSink, TaskSpawner};
 use tb_monitoring::scout::ScoutChatSink;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 
 use crate::task_supervisor::TaskSupervisor;
 
-const IRC_HOST: &str = "irc.chat.twitch.tv";
-const IRC_PORT: u16 = 6667;
-const ANON_NICK_BASE: usize = 13_371_338;
-const CONNECT_BACKOFF: Duration = Duration::from_secs(30);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const JOIN_STAGGER: Duration = Duration::from_millis(600);
-/// Twitch erlaubt pro Chat-User höchstens 100 gleichzeitig gejointe Räume.
-/// Der anonyme Read-Pfad verteilt größere Roster deshalb auf mehrere Nicks.
-const MAX_CHANNELS_PER_CONNECTION: usize = 100;
+/// Spawner-Anpassung: der Bot behält seine Aufsicht über die Transport-Tasks.
+#[derive(Clone)]
+struct SupervisorSpawner(TaskSupervisor);
 
-#[derive(Debug, PartialEq, Eq)]
-enum MembershipCommand {
-    Set(Vec<String>),
-    Join(Vec<String>),
-    Part(Vec<String>),
-}
-
-struct ScoutIrcMembership {
-    tx: mpsc::UnboundedSender<MembershipCommand>,
-}
-
-impl ScoutIrcMembership {
-    fn start(
-        pool: PgPool,
-        crew_guard: Option<Arc<CrewGuard>>,
-        supervisor: &TaskSupervisor,
-    ) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let tracker = Arc::new(ChatterTracker::with_persist_all_games(pool, false));
-        let shard_supervisor = supervisor.clone();
-        supervisor.spawn(
-            "scout_chat_membership_coordinator",
-            run_membership_coordinator(rx, tracker, crew_guard, shard_supervisor),
-        );
-        Self { tx }
-    }
-
-    fn send(&self, command: MembershipCommand) {
-        if self.tx.send(command).is_err() {
-            tracing::warn!("scout-chat: IRC-Membership-Task ist beendet");
-        }
+impl TaskSpawner for SupervisorSpawner {
+    fn spawn_task(
+        &self,
+        name: &'static str,
+        future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    ) {
+        self.0.spawn(name, future);
     }
 }
 
 /// Scout-Sink mit ausschließlich anonymer IRC-Read-Membership.
 pub struct ScoutChatAdapter {
-    membership: ScoutIrcMembership,
+    handle: AnonChatHandle,
 }
 
 impl ScoutChatAdapter {
@@ -81,37 +49,45 @@ impl ScoutChatAdapter {
         crew_guard: Option<Arc<CrewGuard>>,
         supervisor: &TaskSupervisor,
     ) -> Self {
+        let tracker = Arc::new(ChatterTracker::with_persist_all_games(pool, false));
+        let sink = ScoutTrackerSink {
+            tracker,
+            crew_guard,
+        };
         Self {
-            membership: ScoutIrcMembership::start(pool, crew_guard, supervisor),
+            handle: AnonChatHandle::start(
+                Arc::new(sink),
+                AnonChatConfig::default(),
+                Arc::new(SupervisorSpawner(supervisor.clone())),
+            ),
         }
     }
 
     #[cfg(test)]
-    fn with_membership_sender(tx: mpsc::UnboundedSender<MembershipCommand>) -> Self {
-        Self {
-            membership: ScoutIrcMembership { tx },
-        }
+    fn handle(&self) -> &AnonChatHandle {
+        &self.handle
     }
 }
 
 #[async_trait::async_trait]
 impl ScoutChatSink for ScoutChatAdapter {
     async fn set_monitored_channels(&self, logins: &[String]) {
-        self.membership
-            .send(MembershipCommand::Set(normalize_channels(logins)));
+        self.handle
+            .set_channels(normalize_channels(logins))
+            .await;
     }
 
     async fn join_channels(&self, logins: &[String]) {
         let logins = normalize_channels(logins);
         if !logins.is_empty() {
-            self.membership.send(MembershipCommand::Join(logins));
+            self.handle.join_channels(logins).await;
         }
     }
 
     async fn part_channels(&self, logins: &[String]) {
         let logins = normalize_channels(logins);
         if !logins.is_empty() {
-            self.membership.send(MembershipCommand::Part(logins));
+            self.handle.part_channels(logins).await;
         }
     }
 
@@ -135,203 +111,17 @@ fn normalize_channels(logins: &[String]) -> Vec<String> {
     channels
 }
 
-async fn run_membership_coordinator(
-    mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
+/// Privmsg-Sink des Scouts: parsen, trackern, optional CrewGuard beobachten.
+struct ScoutTrackerSink {
     tracker: Arc<ChatterTracker>,
     crew_guard: Option<Arc<CrewGuard>>,
-    supervisor: TaskSupervisor,
-) {
-    let mut channels = HashSet::new();
-    let mut shard_senders = Vec::<mpsc::UnboundedSender<MembershipCommand>>::new();
-    while let Some(command) = rx.recv().await {
-        apply_disconnected(command, &mut channels);
-        let shards = channel_shards(&channels);
-        while shard_senders.len() < shards.len() {
-            let shard_index = shard_senders.len();
-            let (shard_tx, shard_rx) = mpsc::unbounded_channel();
-            supervisor.spawn(
-                "scout_chat_membership_shard",
-                run_membership(
-                    shard_rx,
-                    Arc::clone(&tracker),
-                    crew_guard.clone(),
-                    anonymous_nick(shard_index),
-                ),
-            );
-            shard_senders.push(shard_tx);
-        }
-        for (index, sender) in shard_senders.iter().enumerate() {
-            let assigned = shards.get(index).cloned().unwrap_or_default();
-            if sender.send(MembershipCommand::Set(assigned)).is_err() {
-                tracing::warn!(shard = index, "scout-chat: IRC-Shard ist beendet");
-            }
-        }
-    }
 }
 
-fn channel_shards(channels: &HashSet<String>) -> Vec<Vec<String>> {
-    let mut sorted: Vec<String> = channels.iter().cloned().collect();
-    sorted.sort_unstable();
-    sorted
-        .chunks(MAX_CHANNELS_PER_CONNECTION)
-        .map(<[String]>::to_vec)
-        .collect()
-}
-
-fn anonymous_nick(shard_index: usize) -> String {
-    format!("justinfan{:08}", ANON_NICK_BASE.saturating_add(shard_index))
-}
-
-async fn run_membership(
-    mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
-    tracker: Arc<ChatterTracker>,
-    crew_guard: Option<Arc<CrewGuard>>,
-    anonymous_nick: String,
-) {
-    let mut channels = HashSet::new();
-    loop {
-        while channels.is_empty() {
-            let Some(command) = rx.recv().await else {
-                return;
-            };
-            apply_disconnected(command, &mut channels);
-        }
-
-        match connect(&anonymous_nick).await {
-            Some((reader, writer)) => {
-                serve(
-                    reader,
-                    writer,
-                    &mut rx,
-                    &mut channels,
-                    &tracker,
-                    crew_guard.as_deref(),
-                )
-                .await
-            }
-            None => {
-                tokio::select! {
-                    _ = tokio::time::sleep(CONNECT_BACKOFF) => {}
-                    command = rx.recv() => match command {
-                        Some(command) => apply_disconnected(command, &mut channels),
-                        None => return,
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn apply_disconnected(command: MembershipCommand, channels: &mut HashSet<String>) {
-    match command {
-        MembershipCommand::Set(logins) => *channels = logins.into_iter().collect(),
-        MembershipCommand::Join(logins) => {
-            add_channels(channels, logins);
-        }
-        MembershipCommand::Part(logins) => {
-            for login in logins {
-                channels.remove(&login);
-            }
-        }
-    }
-}
-
-fn add_channels(channels: &mut HashSet<String>, logins: Vec<String>) -> Vec<String> {
-    logins
-        .into_iter()
-        .filter(|login| channels.insert(login.clone()))
-        .collect()
-}
-
-async fn connect(anonymous_nick: &str) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
-    let stream = match TcpStream::connect((IRC_HOST, IRC_PORT)).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::warn!(%error, "scout-chat: IRC-Connect fehlgeschlagen");
-            return None;
-        }
-    };
-    let (read, mut write) = stream.into_split();
-    for command in [
-        format!("NICK {anonymous_nick}\r\n"),
-        "CAP REQ :twitch.tv/tags twitch.tv/commands\r\n".to_string(),
-    ] {
-        if let Err(error) = write.write_all(command.as_bytes()).await {
-            tracing::warn!(%error, "scout-chat: IRC-Handshake fehlgeschlagen");
-            return None;
-        }
-    }
-    if let Err(error) = write.flush().await {
-        tracing::warn!(%error, "scout-chat: IRC-Handshake-Flush fehlgeschlagen");
-        return None;
-    }
-
-    let mut reader = BufReader::new(read);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let read = match tokio::time::timeout(CONNECT_TIMEOUT, reader.read_line(&mut line)).await {
-            Ok(Ok(read)) => read,
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "scout-chat: IRC-Handshake-Read fehlgeschlagen");
-                return None;
-            }
-            Err(_) => {
-                tracing::warn!("scout-chat: IRC-Handshake-Timeout");
-                return None;
-            }
-        };
-        if read == 0 {
-            return None;
-        }
-        let message = line.trim_end();
-        if message.starts_with(":tmi.twitch.tv 001") {
-            tracing::info!("scout-chat: anonymer IRC-Read verbunden");
-            return Some((reader, write));
-        }
-        if message.starts_with("PING") {
-            pong(&mut write, message).await;
-        }
-    }
-}
-
-async fn serve(
-    mut reader: BufReader<OwnedReadHalf>,
-    mut writer: OwnedWriteHalf,
-    rx: &mut mpsc::UnboundedReceiver<MembershipCommand>,
-    channels: &mut HashSet<String>,
-    tracker: &ChatterTracker,
-    crew_guard: Option<&CrewGuard>,
-) {
-    let mut initial: Vec<String> = channels.iter().cloned().collect();
-    initial.sort_unstable();
-    for channel in initial {
-        write_membership(&mut writer, "JOIN", &channel).await;
-        tokio::time::sleep(JOIN_STAGGER).await;
-    }
-
-    let mut line = String::new();
-    loop {
-        line.clear();
-        tokio::select! {
-            result = reader.read_line(&mut line) => match result {
-                Ok(0) => return,
-                Err(error) => {
-                    tracing::warn!(%error, "scout-chat: IRC-Read fehlgeschlagen");
-                    return;
-                }
-                Ok(_) if line.trim_end().starts_with("PING") => pong(&mut writer, line.trim_end()).await,
-                Ok(_) => track_privmsg_inner(
-                    tracker,
-                    crew_guard,
-                    line.trim_end(),
-                ).await,
-            },
-            command = rx.recv() => match command {
-                Some(command) => apply_connected(command, channels, &mut writer).await,
-                None => return,
-            }
-        }
+#[async_trait::async_trait]
+impl PrivmsgSink for ScoutTrackerSink {
+    async fn handle_privmsg(&self, line: String) {
+        // Der gemeinsame Dispatcher wartet bounded; kein unbegrenzter Task je Zeile.
+        track_privmsg_inner(&self.tracker, self.crew_guard.as_deref(), &line).await;
     }
 }
 
@@ -345,8 +135,12 @@ async fn track_privmsg_storage_only(tracker: &ChatterTracker, line: &str) {
     track_privmsg_inner(tracker, None, line).await;
 }
 
-async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewGuard>, line: &str) {
-    let Some(parsed) = parse_privmsg(line) else {
+async fn track_privmsg_inner(
+    tracker: &ChatterTracker,
+    crew_guard: Option<&CrewGuard>,
+    line: &str,
+) {
+    let Some(parsed) = tb_engagement::irc_message::parse_privmsg(line) else {
         return;
     };
     let channel = parsed.channel.trim().to_lowercase();
@@ -362,7 +156,7 @@ async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewG
     {
         return;
     }
-    let event = ChatMessageEvent {
+    let event = tb_chat::ChatMessageEvent {
         broadcaster_user_id: broadcaster_id.to_string(),
         broadcaster_user_login: channel,
         chatter_user_id: chatter_id.to_string(),
@@ -373,7 +167,7 @@ async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewG
             .map_or("", String::as_str)
             .trim()
             .to_string(),
-        message: ChatMessageBody {
+        message: tb_chat::types::ChatMessageBody {
             text: content,
             fragments: Vec::new(),
         },
@@ -388,59 +182,6 @@ async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewG
     tracker.track(&event).await;
     if let Some(crew_guard) = crew_guard {
         crew_guard.observe(&event);
-    }
-}
-
-async fn apply_connected(
-    command: MembershipCommand,
-    channels: &mut HashSet<String>,
-    writer: &mut OwnedWriteHalf,
-) {
-    let (mut joins, mut parts) = match command {
-        MembershipCommand::Set(logins) => {
-            let next: HashSet<String> = logins.into_iter().collect();
-            let joins = next.difference(channels).cloned().collect();
-            let parts = channels.difference(&next).cloned().collect();
-            *channels = next;
-            (joins, parts)
-        }
-        MembershipCommand::Join(logins) => (add_channels(channels, logins), Vec::new()),
-        MembershipCommand::Part(logins) => {
-            let parts = logins
-                .into_iter()
-                .filter(|login| channels.remove(login))
-                .collect();
-            (Vec::new(), parts)
-        }
-    };
-    joins.sort_unstable();
-    parts.sort_unstable();
-    for channel in parts {
-        write_membership(writer, "PART", &channel).await;
-    }
-    for channel in joins {
-        write_membership(writer, "JOIN", &channel).await;
-        tokio::time::sleep(JOIN_STAGGER).await;
-    }
-}
-
-async fn write_membership(writer: &mut OwnedWriteHalf, verb: &str, channel: &str) {
-    if let Err(error) = writer
-        .write_all(format!("{verb} #{channel}\r\n").as_bytes())
-        .await
-    {
-        tracing::warn!(%error, verb, channel, "scout-chat: IRC-Membership-Write fehlgeschlagen");
-        return;
-    }
-    if let Err(error) = writer.flush().await {
-        tracing::warn!(%error, verb, channel, "scout-chat: IRC-Membership-Flush fehlgeschlagen");
-    }
-}
-
-async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
-    let reply = format!("{}\r\n", ping.replacen("PING", "PONG", 1));
-    if let Err(error) = writer.write_all(reply.as_bytes()).await {
-        tracing::warn!(%error, "scout-chat: IRC-PONG fehlgeschlagen");
     }
 }
 
@@ -545,42 +286,40 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn join_channels_ruft_membership_real() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let adapter = ScoutChatAdapter::with_membership_sender(tx);
-        let logins = vec!["a".to_string(), "b".to_string()];
-        adapter.join_channels(&logins).await;
-
-        assert_eq!(
-            rx.recv().await,
-            Some(MembershipCommand::Join(vec![
-                "a".to_string(),
-                "b".to_string()
-            ]))
-        );
-    }
-
     #[test]
     fn sink_konstruktion_braucht_nur_db_pool_und_crew_guard() {
         let _constructor: fn(sqlx::PgPool, Arc<CrewGuard>, &TaskSupervisor) -> ScoutChatAdapter =
             ScoutChatAdapter::new;
     }
 
-    #[test]
-    fn membership_sharding_verliert_bei_mehr_als_100_kanaelen_nichts() {
-        let mut channels = HashSet::new();
-        let logins: Vec<String> = (0..251).map(|index| format!("channel{index}")).collect();
+    #[tokio::test]
+    async fn adapter_normalisiert_roster_und_transport_validiert_logins() {
+        let pool = PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new());
+        let supervisor = TaskSupervisor::start();
+        let adapter = ScoutChatAdapter::storage_only(pool, &supervisor);
 
-        apply_disconnected(MembershipCommand::Join(logins.clone()), &mut channels);
-        let shards = channel_shards(&channels);
+        adapter
+            .set_monitored_channels(&[
+                "NaniCools".to_string(),
+                "#coolysdl".to_string(),
+                "boese\r\nJOIN".to_string(),
+            ])
+            .await;
 
-        assert_eq!(channels.len(), logins.len());
-        assert_eq!(shards.len(), 3);
-        assert!(shards
-            .iter()
-            .all(|shard| shard.len() <= MAX_CHANNELS_PER_CONNECTION));
-        assert_eq!(shards.iter().map(Vec::len).sum::<usize>(), logins.len());
+        // Der Coordinator übernimmt nur valide, deduplizierte Logins; der
+        // Injektionsversuch zählt sichtbar im Verwerfungs-Zähler.
+        let handle = adapter.handle();
+        for _ in 0..100 {
+            let stats = handle.stats();
+            if stats.channels_monitored > 0 {
+                assert_eq!(stats.channels_monitored, 2);
+                assert_eq!(stats.invalid_logins_rejected, 1);
+                supervisor.shutdown().await;
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+        panic!("Roster wurde nicht übernommen");
     }
 
     #[tokio::test]

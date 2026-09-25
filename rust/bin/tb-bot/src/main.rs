@@ -905,7 +905,7 @@ async fn main() {
                 ));
             Arc::new(
                 raid_greeting::RaidGreetingMonitor::new(
-                    h.api_for_context(tb_chat::channel_policy::PolicyContext::Raid),
+                    h.raid_api(),
                     probe,
                 )
                 .with_live_probe(live_probe)

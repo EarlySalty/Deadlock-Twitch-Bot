@@ -231,3 +231,27 @@ BEGIN
 END;
 $$;
 
+-- Kategoriesammler: der Collector (twitchbot) schreibt Beobachtung und
+-- Roh-Chat inklusive Retention-Löschungen. Das Dashboard liest Auswertung
+-- und Gesundheit, aber nie Chat-Rohtexte und darf Rohzeilen nicht löschen.
+DO $category_collector$
+BEGIN
+    IF to_regclass('public.category_chat_messages') IS NOT NULL THEN
+        REVOKE ALL PRIVILEGES ON TABLE public.category_chat_messages
+            FROM twitchdash, twitchlegacy;
+        GRANT SELECT (room_user_id, message_id, source_message_id, sent_at,
+                chatter_user_id, chatter_login, text_len, detected_lang,
+                lang_confidence, lang_method, emote_count)
+            ON public.category_chat_messages TO twitchdash, twitchlegacy;
+    END IF;
+    IF to_regclass('public.category_collector_config') IS NOT NULL THEN
+        REVOKE INSERT, DELETE ON TABLE public.category_collector_config FROM twitchdash;
+        REVOKE ALL ON TABLE public.category_collector_config FROM twitchlegacy;
+    END IF;
+    IF to_regclass('public.category_collector_status') IS NOT NULL THEN
+        REVOKE INSERT, DELETE ON TABLE public.category_collector_status FROM twitchdash;
+        REVOKE ALL ON TABLE public.category_collector_status FROM twitchlegacy;
+    END IF;
+END
+$category_collector$;
+

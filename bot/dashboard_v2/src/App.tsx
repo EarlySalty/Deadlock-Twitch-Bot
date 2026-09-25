@@ -19,6 +19,7 @@ import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { UplinkPage } from '@/pages/Uplink';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
+import { KategorieWeltweitPage } from '@/pages/KategorieWeltweit';
 import Pricing from '@/pages/Pricing';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
@@ -37,6 +38,7 @@ import { parseDaysParam, streamerAusUrlErlaubt } from '@/utils/zeitraum';
 import {
   PREVIEW_ANALYTICS_ROUTE,
   PREVIEW_HOME_ROUTE,
+  PREVIEW_KATEGORIEN_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_TITLE_ROUTE,
@@ -384,6 +386,7 @@ export default function App() {
   const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
+  const isKategorieWeltweitRoute = path === PREVIEW_KATEGORIEN_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
@@ -429,6 +432,10 @@ export default function App() {
           ) : isUplinkRoute ? (
             <DashboardShell activeRoute="uplink">
               <UplinkPage />
+            </DashboardShell>
+          ) : isKategorieWeltweitRoute ? (
+            <DashboardShell activeRoute="kategorien-weltweit">
+              <KategorieWeltweitPage />
             </DashboardShell>
           ) : isInternalHomeRoute ? (
             <DashboardShell activeRoute="home">

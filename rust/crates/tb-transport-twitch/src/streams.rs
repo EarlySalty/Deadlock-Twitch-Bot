@@ -107,8 +107,51 @@ struct ChannelsResponse {
     data: Vec<HelixChannelInfo>,
 }
 
+/// Profil-Stammdaten aus `/users` (Kategoriesammler: Kontalter, Typ, Text).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HelixUser {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub login: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub broadcaster_type: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsersResponse {
+    #[serde(default)]
+    data: Vec<HelixUser>,
+}
+
 /// Hartes Limit der Kategorie-Pagination (Python: `min(limit, 1200)`).
 const CATEGORY_HARD_CAP: usize = 1200;
+
+/// Ergebnis eines vollständigen Kategorie-Durchlaufs
+/// ([`HelixClient::get_streams_by_category_full`]).
+///
+/// `complete == false` bedeutet: Die Beobachtung war unvollständig (Cap,
+/// HTTP-Fehler oder Cursor-Schleife). Der Aufrufer darf solche Streams zwar
+/// verwenden, aber keine Roster-Ersetzung oder Offline-Ableitung darauf stützen.
+#[derive(Debug, Clone, Default)]
+pub struct CategoryStreamsFetch {
+    pub streams: Vec<HelixStream>,
+    /// `true` nur wenn die Pagination natuürlich endete (Cursor erschöpft),
+    /// nichts gekappt wurde und kein Seiten-Request fehlgeschlagen ist.
+    pub complete: bool,
+    /// Abgebrochen, weil das Aufrufer-Limit erreicht war (nicht Twitch leer).
+    pub truncated_by_cap: bool,
+    /// Letzter Fehler einer mittendrin fehlgeschlagenen Seite, falls vorhanden.
+    pub error: Option<String>,
+    /// Anzahl erfolgreicher Seiten-Requests.
+    pub pages_fetched: usize,
+}
 
 impl HelixClient {
     /// Live-Streams für die gegebenen stabilen Twitch-User-IDs (gebatcht à 100).
@@ -172,6 +215,53 @@ impl HelixClient {
         Ok(body.data.into_iter().next())
     }
 
+    /// Kanal-Metadaten für bis zu 100 Broadcasters in einem Request
+    /// (Kategoriesammler: Broadcaster-Sprache der neuen Kanäle).
+    pub async fn get_channel_information_batch(
+        &self,
+        broadcaster_ids: &[String],
+    ) -> Result<Vec<HelixChannelInfo>, HelixError> {
+        let clean: Vec<&String> = broadcaster_ids
+            .iter()
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+        let mut out = Vec::new();
+        for chunk in clean.chunks(100) {
+            let params: Vec<(&str, &str)> = chunk
+                .iter()
+                .map(|id| ("broadcaster_id", id.trim()))
+                .collect();
+            let resp = self.get("/channels").await?.query(&params).send().await?;
+            let body: ChannelsResponse = check_status_and_json(resp).await?;
+            out.extend(body.data);
+        }
+        Ok(out)
+    }
+
+    /// Profil-Stammdaten für bis zu 100 User-IDs (`/users`): Kontalter
+    /// (`created_at`), `broadcaster_type` und Beschreibung des
+    /// Kategoriesammlers. Reines Lesen.
+    pub async fn get_users_by_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<HelixUser>, HelixError> {
+        let clean: Vec<&String> = user_ids
+            .iter()
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+        let mut out = Vec::new();
+        for chunk in clean.chunks(100) {
+            let params: Vec<(&str, &str)> = chunk
+                .iter()
+                .map(|id| ("id", id.trim()))
+                .collect();
+            let resp = self.get("/users").await?.query(&params).send().await?;
+            let body: UsersResponse = check_status_and_json(resp).await?;
+            out.extend(body.data);
+        }
+        Ok(out)
+    }
+
     /// Bis zu `limit` Live-Streams einer Kategorie (Cursor-Pagination à 100).
     pub async fn get_streams_by_category(
         &self,
@@ -204,6 +294,81 @@ impl HelixClient {
         }
         out.truncate(limit);
         Ok(out)
+    }
+
+    /// Voller, deduplizierter Kategorie-Durchlauf über alle Seiten
+    /// (Kategoriesammler). Anders als [`Self::get_streams_by_category`]:
+    ///
+    /// - paginiert bis Twitch den Cursor erschöpft (oder `hard_cap` Seiten-
+    ///   Streams), statt still nach `limit` abzuschneiden,
+    /// - entfernt Duplikate nach `stream.id` (Twitch kann Streams zwischen
+    ///   Seiten wiederholen),
+    /// - bricht bei wiederholtem Cursor ab statt endlos zu paginieren,
+    /// - meldet über [`CategoryStreamsFetch`] transparent, ob der Durchlauf
+    ///   vollständig war — ein Fehler mittendrin liefert die bisherigen
+    ///   Seiten mit `complete = false`, wirft sie nicht weg.
+    ///
+    /// Bestehende Aufrufer von `get_streams_by_category` bleiben unangetastet.
+    pub async fn get_streams_by_category_full(
+        &self,
+        game_id: &str,
+        hard_cap: usize,
+    ) -> CategoryStreamsFetch {
+        let mut fetch = CategoryStreamsFetch::default();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut after: Option<String> = None;
+        let mut previous_cursor: Option<String> = None;
+        while fetch.streams.len() < hard_cap {
+            let mut params: Vec<(&str, String)> = vec![
+                ("game_id", game_id.to_string()),
+                ("first", "100".to_string()),
+            ];
+            if let Some(cursor) = &after {
+                params.push(("after", cursor.clone()));
+            }
+            let request = match self.get("/streams").await {
+                Ok(request) => request.query(&params),
+                Err(error) => {
+                    fetch.error = Some(error.to_string());
+                    return fetch;
+                }
+            };
+            let body: StreamsResponse = match self.send_with_retry(request).await {
+                Ok(response) => match check_status_and_json(response).await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        fetch.error = Some(error.to_string());
+                        return fetch;
+                    }
+                },
+                Err(error) => {
+                    fetch.error = Some(error.to_string());
+                    return fetch;
+                }
+            };
+            fetch.pages_fetched += 1;
+            let empty = body.data.is_empty();
+            for stream in body.data {
+                if seen_ids.insert(stream.id.clone()) {
+                    fetch.streams.push(stream);
+                }
+            }
+            let cursor = body.pagination.cursor;
+            if empty || cursor.is_none() {
+                fetch.complete = true;
+                return fetch;
+            }
+            // Twitch denselben Cursor zweimal liefern wäre eine Endlosschleife;
+            // abbrechen und den Durchlauf als unvollständig melden.
+            if previous_cursor.as_deref() == cursor.as_deref() {
+                fetch.error = Some("cursor wiederholte sich".to_string());
+                return fetch;
+            }
+            previous_cursor = cursor.clone();
+            after = cursor;
+        }
+        fetch.truncated_by_cap = true;
+        fetch
     }
 
     /// game_id einer Kategorie über `/search/categories` (exakter Treffer
@@ -843,6 +1008,146 @@ mod tests {
 
         let streams = client.get_streams_by_category("g1", None, 2).await.unwrap();
         assert_eq!(streams.len(), 2, "Limit erreicht — kein zweiter Request");
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_folgt_cursor_bis_zum_ende_und_markiert_vollstaendig() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_id": format!("{id}0"), "user_login": format!("u{id}"),
+                "game_name": "Deadlock", "viewer_count": 1,
+                "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1"), stream("2"), stream("3")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .expect(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .and(query_param("after", "c1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                // Duplikat über Seitengrenze hinweg → wird dedupliziert.
+                "data": [stream("3"), stream("4")],
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 1200).await;
+
+        assert!(fetch.complete);
+        assert!(!fetch.truncated_by_cap);
+        assert_eq!(fetch.error, None);
+        assert_eq!(fetch.pages_fetched, 2);
+        let ids: Vec<&str> = fetch.streams.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["1", "2", "3", "4"], "Duplikat entfernt, Reihenfolge stabil");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_cap_liefert_unvollstaendig_mit_kappungs_flag() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_login": format!("u{id}"), "game_name": "Deadlock",
+                "viewer_count": 1, "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1"), stream("2")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 2).await;
+
+        assert!(!fetch.complete);
+        assert!(fetch.truncated_by_cap);
+        assert_eq!(fetch.streams.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_seitenfehler_liefert_teilmenge_mit_fehler() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_login": format!("u{id}"), "game_name": "Deadlock",
+                "viewer_count": 1, "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        // Seite 1 ok, Seite 2 dauerhaft 500 (alle Retries).
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .expect(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("after", "c1"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 1200).await;
+
+        assert!(!fetch.complete);
+        assert!(!fetch.truncated_by_cap);
+        assert!(fetch.error.is_some());
+        assert_eq!(fetch.streams.len(), 1, "Seite 1 bleibt erhalten");
+        assert_eq!(fetch.pages_fetched, 1);
+    }
+
+    #[tokio::test]
+    async fn voller_durchlauf_bricht_bei_wiederholtem_cursor_ab() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let stream = |id: &str| {
+            serde_json::json!({
+                "id": id, "user_login": format!("u{id}"), "game_name": "Deadlock",
+                "viewer_count": 1, "started_at": "2026-06-09T18:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("game_id", "g1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [stream("1")],
+                "pagination": {"cursor": "c1"}
+            })))
+            .mount(&server)
+            .await;
+
+        let fetch = client.get_streams_by_category_full("g1", 1200).await;
+
+        assert!(!fetch.complete, "wiederholter Cursor ist nicht vollständig");
+        assert!(fetch
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("cursor")));
     }
 
     #[tokio::test]

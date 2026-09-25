@@ -2,6 +2,9 @@ const PREVIEW_MODE = import.meta.env?.MODE === 'preview';
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1']);
 
 export const PREVIEW_ANALYTICS_ROUTE = PREVIEW_MODE ? '/' : '/analyse';
+export const PREVIEW_KATEGORIEN_ROUTE = PREVIEW_MODE
+  ? '/kategorien-weltweit'
+  : '/twitch/dashboard-v2/kategorien-weltweit';
 export const PREVIEW_HOME_ROUTE = PREVIEW_MODE ? '/dashboard' : '/twitch/dashboard';
 export const PREVIEW_VERWALTUNG_ROUTE = PREVIEW_MODE ? '/verwaltung' : '/twitch/verwaltung';
 export const PREVIEW_OVERLAY_ROUTE = PREVIEW_MODE ? '/overlay' : '/twitch/overlay';
