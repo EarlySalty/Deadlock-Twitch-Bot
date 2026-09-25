@@ -102,6 +102,7 @@ async fn load_members(pool: &PgPool) -> Result<Vec<Member>,sqlx::Error> {
         LEFT JOIN twitch_live_state l ON l.twitch_user_id=p.twitch_user_id
         WHERE p.status='active' AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
           AND COALESCE(p.manual_partner_opt_out,0)=0
+          AND COALESCE(trim(p.technical_pause_reason),'')=''
         ORDER BY lower(p.twitch_login) LIMIT 500
     "#).fetch_all(pool).await
 }
