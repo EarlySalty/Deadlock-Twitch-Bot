@@ -16,6 +16,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      checks: read
+      statuses: read
 
     steps:
       - name: Fetch Dependabot metadata
@@ -78,23 +80,139 @@ jobs:
             const repo = context.repo.repo;
             const pull_number = context.payload.pull_request.number;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const requiredChecks = [
+              "Semantic review",
+              "Scope-Abgleich (keine toten Projekte)",
+              "Frontend PR Gate (website)",
+              "Frontend PR Gate (admin_dashboard)",
+              "Frontend PR Gate (dashboard_v2)",
+              "Rust SQLx required",
+            ];
 
-            for (let attempt = 1; attempt <= 12; attempt += 1) {
+            const verifyGate = async () => {
+              let pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              const evaluatedSha = pr.head.sha;
+              const evaluatedBaseSha = pr.base.sha;
+
+              if (pr.base.ref !== "main" || pr.draft || pr.head.repo?.full_name !== `${owner}/${repo}`) {
+                return { ready: false, reason: "PR is no longer an eligible same-repository main PR" };
+              }
+
+              const comparison = await github.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+                owner,
+                repo,
+                basehead: `${evaluatedBaseSha}...${evaluatedSha}`,
+              });
+              if ((comparison.data.behind_by || 0) > 0) {
+                return { ready: false, reason: `branch is behind main by ${comparison.data.behind_by}` };
+              }
+              if (pr.mergeable !== true || pr.mergeable_state === "dirty") {
+                return { ready: false, reason: `mergeability is ${pr.mergeable_state || "unknown"}` };
+              }
+
+              const checkResponse = await github.rest.checks.listForRef({
+                owner,
+                repo,
+                ref: evaluatedSha,
+                filter: "latest",
+                per_page: 100,
+              });
+              const trustedChecks = (checkResponse.data.check_runs || []).filter(
+                (check) => check.head_sha === evaluatedSha && check.app?.slug === "github-actions",
+              );
+              const byName = new Map(trustedChecks.map((check) => [check.name, check]));
+              const missing = requiredChecks.filter((name) => !byName.has(name));
+              const incomplete = requiredChecks.filter((name) => {
+                const check = byName.get(name);
+                return check && (check.status !== "completed" || check.conclusion !== "success");
+              });
+              if (missing.length || incomplete.length) {
+                return {
+                  ready: false,
+                  reason: `required checks not green (missing=${missing.join(",") || "none"}; incomplete=${incomplete.join(",") || "none"})`,
+                };
+              }
+
+              const accepted = new Set(["success", "neutral", "skipped"]);
+              const ignoredOwnChecks = new Set([
+                "Auto-merge trusted Dependabot updates",
+                "Reconcile open Dependabot PRs",
+              ]);
+              const blockingChecks = (checkResponse.data.check_runs || []).filter(
+                (check) =>
+                  check.head_sha === evaluatedSha &&
+                  !ignoredOwnChecks.has(check.name) &&
+                  (check.status !== "completed" || !accepted.has(check.conclusion || "")),
+              );
+              if (blockingChecks.length) {
+                return {
+                  ready: false,
+                  reason: `other checks not green: ${blockingChecks.map((check) => `${check.name}=${check.status}/${check.conclusion || "pending"}`).join(", ")}`,
+                };
+              }
+
+              const statusResponse = await github.rest.repos.getCombinedStatusForRef({
+                owner,
+                repo,
+                ref: evaluatedSha,
+                per_page: 100,
+              });
+              const latestByContext = new Map();
+              for (const status of statusResponse.data.statuses || []) {
+                const previous = latestByContext.get(status.context);
+                if (
+                  !previous ||
+                  new Date(status.created_at || 0).getTime() >
+                    new Date(previous.created_at || 0).getTime()
+                ) {
+                  latestByContext.set(status.context, status);
+                }
+              }
+              const blockingStatuses = [...latestByContext.values()].filter(
+                (status) => status.state !== "success",
+              );
+              if (blockingStatuses.length) {
+                return {
+                  ready: false,
+                  reason: `commit statuses not green: ${blockingStatuses.map((status) => `${status.context}=${status.state}`).join(", ")}`,
+                };
+              }
+
+              pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              if (pr.head.sha !== evaluatedSha || pr.base.sha !== evaluatedBaseSha) {
+                return { ready: false, reason: "head or base changed during gate evaluation" };
+              }
+              return { ready: true, evaluatedSha };
+            };
+
+            for (let attempt = 1; attempt <= 24; attempt += 1) {
+              const gate = await verifyGate();
+              if (!gate.ready) {
+                if (attempt < 24) {
+                  core.notice(`PR #${pull_number}: gate not ready on attempt ${attempt}/24: ${gate.reason}; retrying in 15s.`);
+                  await sleep(15_000);
+                  continue;
+                }
+                core.notice(`PR #${pull_number}: gate remained closed: ${gate.reason}.`);
+                return;
+              }
+
               try {
                 await github.rest.pulls.merge({
                   owner,
                   repo,
                   pull_number,
                   merge_method: "squash",
+                  sha: gate.evaluatedSha,
                 });
-                core.notice(`PR #${pull_number} merged successfully on attempt ${attempt}.`);
+                core.notice(`PR #${pull_number} merged at verified head ${gate.evaluatedSha} on attempt ${attempt}.`);
                 return;
               } catch (error) {
                 const message = String(error?.message || error);
                 const retryable = message.includes("405") || message.includes("Base branch was modified");
-                if (retryable && attempt < 12) {
-                  core.notice(`Could not merge PR #${pull_number}; retrying in 10s (attempt ${attempt}/12): ${message}`);
-                  await sleep(10_000);
+                if (retryable && attempt < 24) {
+                  core.notice(`Could not merge PR #${pull_number}; re-evaluating the gate in 15s (attempt ${attempt}/24): ${message}`);
+                  await sleep(15_000);
                   continue;
                 }
                 core.warning(`Could not merge PR #${pull_number}: ${message}`);
@@ -114,6 +232,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      checks: read
+      statuses: read
 
     steps:
       - name: Merge open Dependabot PRs
@@ -122,6 +242,115 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const requiredChecks = [
+              "Semantic review",
+              "Scope-Abgleich (keine toten Projekte)",
+              "Frontend PR Gate (website)",
+              "Frontend PR Gate (admin_dashboard)",
+              "Frontend PR Gate (dashboard_v2)",
+              "Rust SQLx required",
+            ];
+
+            const verifyGate = async (pull_number) => {
+              let pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              const evaluatedSha = pr.head.sha;
+              const evaluatedBaseSha = pr.base.sha;
+
+              if (
+                pr.user?.login !== "dependabot[bot]" ||
+                pr.base.ref !== "main" ||
+                pr.draft ||
+                pr.head.repo?.full_name !== `${owner}/${repo}`
+              ) {
+                return { ready: false, reason: "PR is no longer an eligible Dependabot main PR" };
+              }
+
+              const comparison = await github.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+                owner,
+                repo,
+                basehead: `${evaluatedBaseSha}...${evaluatedSha}`,
+              });
+              if ((comparison.data.behind_by || 0) > 0) {
+                return { ready: false, reason: `branch is behind main by ${comparison.data.behind_by}` };
+              }
+              if (pr.mergeable !== true || pr.mergeable_state === "dirty") {
+                return { ready: false, reason: `mergeability is ${pr.mergeable_state || "unknown"}` };
+              }
+
+              const checkResponse = await github.rest.checks.listForRef({
+                owner,
+                repo,
+                ref: evaluatedSha,
+                filter: "latest",
+                per_page: 100,
+              });
+              const trustedChecks = (checkResponse.data.check_runs || []).filter(
+                (check) => check.head_sha === evaluatedSha && check.app?.slug === "github-actions",
+              );
+              const byName = new Map(trustedChecks.map((check) => [check.name, check]));
+              const missing = requiredChecks.filter((name) => !byName.has(name));
+              const incomplete = requiredChecks.filter((name) => {
+                const check = byName.get(name);
+                return check && (check.status !== "completed" || check.conclusion !== "success");
+              });
+              if (missing.length || incomplete.length) {
+                return {
+                  ready: false,
+                  reason: `required checks not green (missing=${missing.join(",") || "none"}; incomplete=${incomplete.join(",") || "none"})`,
+                };
+              }
+
+              const accepted = new Set(["success", "neutral", "skipped"]);
+              const ignoredOwnChecks = new Set([
+                "Auto-merge trusted Dependabot updates",
+                "Reconcile open Dependabot PRs",
+              ]);
+              const blockingChecks = (checkResponse.data.check_runs || []).filter(
+                (check) =>
+                  check.head_sha === evaluatedSha &&
+                  !ignoredOwnChecks.has(check.name) &&
+                  (check.status !== "completed" || !accepted.has(check.conclusion || "")),
+              );
+              if (blockingChecks.length) {
+                return {
+                  ready: false,
+                  reason: `other checks not green: ${blockingChecks.map((check) => `${check.name}=${check.status}/${check.conclusion || "pending"}`).join(", ")}`,
+                };
+              }
+
+              const statusResponse = await github.rest.repos.getCombinedStatusForRef({
+                owner,
+                repo,
+                ref: evaluatedSha,
+                per_page: 100,
+              });
+              const latestByContext = new Map();
+              for (const status of statusResponse.data.statuses || []) {
+                const previous = latestByContext.get(status.context);
+                if (
+                  !previous ||
+                  new Date(status.created_at || 0).getTime() >
+                    new Date(previous.created_at || 0).getTime()
+                ) {
+                  latestByContext.set(status.context, status);
+                }
+              }
+              const blockingStatuses = [...latestByContext.values()].filter(
+                (status) => status.state !== "success",
+              );
+              if (blockingStatuses.length) {
+                return {
+                  ready: false,
+                  reason: `commit statuses not green: ${blockingStatuses.map((status) => `${status.context}=${status.state}`).join(", ")}`,
+                };
+              }
+
+              pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              if (pr.head.sha !== evaluatedSha || pr.base.sha !== evaluatedBaseSha) {
+                return { ready: false, reason: "head or base changed during gate evaluation" };
+              }
+              return { ready: true, evaluatedSha };
+            };
 
             const pulls = await github.paginate(github.rest.pulls.list, {
               owner,
@@ -148,14 +377,21 @@ jobs:
                 continue;
               }
 
+              const gate = await verifyGate(pull.number);
+              if (!gate.ready) {
+                core.notice(`PR #${pull.number} remains open: ${gate.reason}.`);
+                continue;
+              }
+
               try {
                 await github.rest.pulls.merge({
                   owner,
                   repo,
                   pull_number: pull.number,
                   merge_method: "squash",
+                  sha: gate.evaluatedSha,
                 });
-                core.notice(`PR #${pull.number} merged successfully.`);
+                core.notice(`PR #${pull.number} merged at verified head ${gate.evaluatedSha}.`);
               } catch (error) {
                 core.warning(`Could not merge PR #${pull.number}: ${String(error?.message || error)}`);
               }
