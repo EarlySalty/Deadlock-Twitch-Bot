@@ -9,7 +9,9 @@ dass eine Konfiguration es kennt.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -211,3 +213,25 @@ def test_cache_dependency_path_gilt_nicht_als_matrix_eintrag(tmp_path: Path) -> 
 def test_echtes_repo_ist_deckungsgleich() -> None:
     """Der Produktivpfad: die eingecheckte Konfiguration selbst."""
     assert check_manifest_scope.check(REPO_ROOT) == []
+
+
+def _run_standalone() -> None:
+    """Fuehrt diese pytest-kompatiblen Tests ohne Drittanbieter-Abhaengigkeit aus."""
+    tests = [
+        (name, value)
+        for name, value in globals().items()
+        if name.startswith("test_") and callable(value)
+    ]
+    for name, test in sorted(tests):
+        parameters = list(inspect.signature(test).parameters)
+        if not parameters:
+            test()
+            continue
+        if parameters != ["tmp_path"]:
+            raise RuntimeError(f"Nicht unterstuetzte Test-Signatur fuer {name}: {parameters}")
+        with tempfile.TemporaryDirectory(prefix="manifest-scope-") as temp_dir:
+            test(Path(temp_dir))
+
+
+if __name__ == "__main__":
+    _run_standalone()

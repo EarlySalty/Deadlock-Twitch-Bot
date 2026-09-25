@@ -1,0 +1,7 @@
+# rsa 0.9.10 wird nur über die optionale SQLx-MySQL-Unterstützung in Cargo.lock
+# aufgelöst. Der Workspace aktiviert ausschließlich PostgreSQL; `mysql`/`mysql-rsa`
+# sind nicht aktiviert. Upstream hat für den Marvin-Timing-Angriff weiterhin
+# keine gepatchte rsa-Version. OSV verlangt die Config neben rust/Cargo.lock.
+[[IgnoredVulns]]
+id = "CVE-2023-49092"
+reason = "Nicht im Runtime-Graph: rsa kommt nur über das deaktivierte sqlx-mysql; Workspace baut SQLx ausschließlich mit PostgreSQL."

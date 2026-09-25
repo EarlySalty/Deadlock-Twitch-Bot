@@ -186,7 +186,9 @@ fi
 
 if need osv-scanner; then
   osv_args=(scan source -r)
-  if [ -f osv-scanner.toml ]; then
+  if [ -n "$CARGO_DIR" ] && [ -f "$CARGO_DIR/osv-scanner.toml" ]; then
+    osv_args+=(--config "$ROOT/$CARGO_DIR/osv-scanner.toml")
+  elif [ -f osv-scanner.toml ]; then
     osv_args+=(--config "$ROOT/osv-scanner.toml")
   fi
   if osv-scanner "${osv_args[@]}" "$ROOT"; then

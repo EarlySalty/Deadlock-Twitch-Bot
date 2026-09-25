@@ -70,12 +70,15 @@ jobs:
         uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         with:
           category: /language:${{ matrix.language }}
+          # Der Default ist ../results und liegt damit ausserhalb des Checkouts.
+          # Ein expliziter Workspace-Pfad macht die SARIF-Datei archivierbar.
+          output: ${{ github.workspace }}/codeql-results
 
       - name: Archive SARIF
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: "**/*.sarif"
-          if-no-files-found: ignore
+          path: "codeql-results/**/*.sarif"
+          if-no-files-found: error
           retention-days: 30
