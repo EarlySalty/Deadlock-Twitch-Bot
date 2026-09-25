@@ -395,6 +395,9 @@ export default function App() {
     path === '/analyse' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
+  const isCategoryRoute =
+    path === '/twitch/kategorie' ||
+    (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
     !isPreviewModeEnabled() &&
@@ -411,7 +414,7 @@ export default function App() {
       <LanguageProvider>
         <ErrorBoundary>
         <OnboardingProvider>
-          {path === '/twitch/kategorie' ? (
+          {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
           ) : isSocialMediaAdminRoute ? (
             <DashboardShell activeRoute="social">

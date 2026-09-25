@@ -40,6 +40,25 @@ test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein'
   }
 });
 
+test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads', () => {
+  assert.match(
+    SIDEBAR,
+    /href: '\/analyse\?view=category'.*label: 'Deadlock weltweit'/,
+    'Die Admin-Navigation darf nicht von einer separaten /twitch/kategorie-Caddyfreigabe abhängen',
+  );
+  assert.doesNotMatch(
+    SIDEBAR,
+    /href: '\/twitch\/kategorie'.*label: 'Deadlock weltweit'/,
+    'Die Sidebar darf den extern nicht gerouteten Legacy-Pfad nicht mehr verlinken',
+  );
+  assert.match(
+    APP,
+    /const isCategoryRoute =\s*path === '\/twitch\/kategorie' \|\|\s*\(isAnalyticsRoute && new URLSearchParams\(window\.location\.search\)\.get\('view'\) === 'category'\);/,
+    'App.tsx muss die Kategorieansicht unter /analyse?view=category rendern und den Legacy-Pfad intern beibehalten',
+  );
+  assert.match(APP, /\{isCategoryRoute \? \(/);
+});
+
 test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
   for (const page of PAGES) {
     const src = read(page);
