@@ -35,20 +35,16 @@ export function AdminShell() {
     );
   }
 
-  const sidebarUserKey =
-    authQuery.data?.user?.userId ||
-    authQuery.data?.user?.login ||
-    authQuery.data?.user?.username ||
-    authQuery.data?.user?.displayName ||
-    (authQuery.data?.isLocalhost ? 'localhost-admin' : 'admin');
+  // Ohne von der Auth-Schicht bestätigte Twitch-ID bleibt der Zustand nur im RAM.
+  const sidebarUserId = authQuery.data?.user?.userId;
 
   return (
     <div className="admin-shell flex">
       <Sidebar
-        key={sidebarUserKey}
+        key={sidebarUserId ?? 'session-admin'}
         collapsed={collapsed}
         onToggle={() => setCollapsed((current) => !current)}
-        storageKey={sidebarStorageKey(sidebarUserKey)}
+        storageKey={sidebarUserId ? sidebarStorageKey(sidebarUserId) : undefined}
       />
       <div className="min-h-screen min-w-0 flex-1 px-4 py-4 md:px-6">
         <TopBar auth={authQuery.data} />

@@ -36,7 +36,7 @@ import { NavLink } from 'react-router';
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
-  storageKey: string;
+  storageKey?: string;
 }
 
 interface NavigationItem {
@@ -108,11 +108,11 @@ const navigationGroups: NavigationGroup[] = [
 export function Sidebar({ collapsed, onToggle, storageKey }: SidebarProps) {
   const groupLabels = navigationGroups.map((group) => group.label);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
-    readSidebarGroupState(window.localStorage, storageKey, groupLabels),
+    readSidebarGroupState(() => window.localStorage, storageKey, groupLabels),
   );
 
   useEffect(() => {
-    writeSidebarGroupState(window.localStorage, storageKey, openGroups);
+    writeSidebarGroupState(() => window.localStorage, storageKey, openGroups);
   }, [openGroups, storageKey]);
 
   return (
@@ -132,7 +132,7 @@ export function Sidebar({ collapsed, onToggle, storageKey }: SidebarProps) {
           </p>
           <h1 className="display-font text-lg font-semibold text-white">Twitch Admin</h1>
         </div>
-        <button className="rounded-2xl border border-white/10 bg-white/5 p-2 text-white/80" onClick={onToggle} type="button">
+        <button aria-label={collapsed ? 'Navigation ausklappen' : 'Navigation einklappen'} className="rounded-2xl border border-white/10 bg-white/5 p-2 text-white/80" onClick={onToggle} type="button">
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
       </div>

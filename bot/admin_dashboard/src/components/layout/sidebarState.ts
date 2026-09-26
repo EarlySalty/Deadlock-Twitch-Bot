@@ -13,14 +13,17 @@ export function defaultSidebarGroupState(groupLabels: readonly string[]): Sideba
 }
 
 export function readSidebarGroupState(
-  storage: Pick<Storage, 'getItem'>,
-  key: string,
+  storage: () => Pick<Storage, 'getItem'>,
+  key: string | undefined,
   groupLabels: readonly string[],
 ): SidebarGroupState {
   const defaults = defaultSidebarGroupState(groupLabels);
 
   try {
-    const raw = storage.getItem(key);
+    if (!key) {
+      return defaults;
+    }
+    const raw = storage().getItem(key);
     if (!raw) {
       return defaults;
     }
@@ -38,12 +41,14 @@ export function readSidebarGroupState(
 }
 
 export function writeSidebarGroupState(
-  storage: Pick<Storage, 'setItem'>,
-  key: string,
+  storage: () => Pick<Storage, 'setItem'>,
+  key: string | undefined,
   state: SidebarGroupState,
 ): void {
   try {
-    storage.setItem(key, JSON.stringify(state));
+    if (key) {
+      storage().setItem(key, JSON.stringify(state));
+    }
   } catch {
     // Navigation bleibt auch verfügbar, wenn der Browser Storage blockiert.
   }

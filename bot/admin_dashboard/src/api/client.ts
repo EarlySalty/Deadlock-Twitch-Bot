@@ -607,6 +607,7 @@ export async function fetchAuthStatus(): Promise<AdminAuthStatus> {
       user: {
         displayName: readString(payload, 'displayName', 'display_name', 'twitchLogin', 'login') || undefined,
         login: readString(payload, 'twitchLogin', 'login') || undefined,
+        userId: readString(payload, 'twitchUserId', 'twitch_user_id') || undefined,
         authType: readString(payload, 'authType', 'auth_type') || undefined,
       },
       permissions: coerceRecord(payload.permissions),
