@@ -690,6 +690,7 @@ pub struct ChatPipelineParts {
     pub standard_replies: Arc<StandardReplies>,
     pub invite_question: Arc<InviteQuestionResponder>,
     pub lfg_pitch: Arc<LfgPitchResponder>,
+    pub streamer_voice: Option<Arc<crate::streamer_voice::StreamerVoiceResponder>>,
     pub promos: Arc<PromoEngine>,
     pub commands: Arc<CommandEngine>,
     pub mention_resolver: Arc<dyn MentionResolver>,
@@ -1245,6 +1246,22 @@ impl ChatPipeline {
             fun.maybe_respond(&event_for_step, &fun_channel).await;
         })
         .await;
+
+        // Requested co-play help precedes the game-access and marketing paths.
+        if let Some(voice) = &p.streamer_voice {
+            let voice = Arc::clone(voice);
+            let event = event.clone();
+            let api = Arc::clone(&p.api);
+            let bot_id = p.bot_user_id.clone();
+            if run_pipeline_step("streamer_voice", channel_login, chatter_login, async move {
+                voice.maybe_respond(&event, api.as_ref(), &bot_id).await
+            })
+            .await
+            .unwrap_or(false)
+            {
+                return;
+            }
+        }
 
         // Schritt 10a: Deadlock-Zugangsfrage (Regex → KI → Antwort/Rückfrage)
         let invite_question = Arc::clone(&p.invite_question);
@@ -2486,6 +2503,7 @@ mod tests {
                 None,
                 None,
             )),
+            streamer_voice: None,
             lfg_pitch: Arc::new(crate::lfg_pitch::LfgPitchResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -2765,6 +2783,7 @@ mod tests {
                 None,
                 None,
             )),
+            streamer_voice: None,
             lfg_pitch: Arc::new(
                 crate::lfg_pitch::LfgPitchResponder::new(
                     Arc::clone(&api_trait),
@@ -2944,6 +2963,68 @@ mod tests {
         );
     }
 
+    struct AvailableStreamerVoice;
+
+    #[async_trait::async_trait]
+    impl crate::streamer_voice::StreamerVoicePort for AvailableStreamerVoice {
+        async fn invite_for(
+            &self,
+            broadcaster: &str,
+            message: &str,
+        ) -> Result<Option<crate::streamer_voice::VoiceInvite>, String> {
+            assert_eq!(broadcaster, "123");
+            assert_eq!(message, "voice-integration-1");
+            Ok(Some(crate::streamer_voice::VoiceInvite {
+                url: "https://discord.gg/currentVoice".to_string(),
+                slot_added: true,
+            }))
+        }
+    }
+
+    struct VoiceChatHistory;
+
+    #[async_trait::async_trait]
+    impl crate::lfg_pitch::RecentChatPort for VoiceChatHistory {
+        async fn recent_chat(&self, _: &str, _: &str) -> Vec<String> {
+            vec!["Streamer: Wir können zusammen spielen".to_string()]
+        }
+    }
+
+    #[tokio::test]
+    async fn streamer_voice_reply_precedes_access_faq_and_deduplicates_delivery() {
+        let pool =
+            sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").expect("lazy test pool");
+        let api = Arc::new(RecordingChatApi::default());
+        let (mut pipeline, access_api) = pipeline_for_lfg_detector(Arc::clone(&api), pool);
+        pipeline.parts.streamer_voice = Some(Arc::new(
+            crate::streamer_voice::StreamerVoiceResponder::new(
+                Arc::new(AvailableStreamerVoice),
+                Arc::new(AlwaysYesLfgJudge),
+                Arc::new(VoiceChatHistory),
+                None,
+            ),
+        ));
+        let mut event = strong_timeout_event();
+        event.broadcaster_user_id = "123".to_string();
+        event.broadcaster_user_login = "streamer".to_string();
+        event.chatter_user_id = "456".to_string();
+        event.chatter_user_login = "viewer".to_string();
+        event.message_id = "voice-integration-1".to_string();
+        // The legacy access judge would say yes to this ambiguous message.
+        // Current conversation context has already confirmed a co-play intent.
+        event.message.text = "Kannst du mich einladen?".to_string();
+        for _ in 0..2 {
+            pipeline
+                .run_deadlock_chat_detectors(&event, "streamer", "viewer")
+                .await;
+        }
+        let calls = api.calls();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert!(calls[0].contains("https://discord.gg/currentVoice"));
+        assert!(calls[0].contains("um einen Platz erweitert"));
+        assert!(access_api.calls().is_empty(), "{:?}", access_api.calls());
+    }
+
     #[tokio::test]
     async fn invite_antwort_ueberspringt_lfg_pitch_bei_doppelintent() {
         let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
@@ -2952,7 +3033,8 @@ mod tests {
         let mut event = strong_timeout_event();
         event.chatter_user_login = "viewer".to_string();
         event.chatter_user_id = "viewer-id".to_string();
-        event.message.text = "Wie kann ich mitspielen, suche noch Leute für die Lobby?".to_string();
+        event.message.text =
+            "Wie bekomme ich Zugang zum Spiel? Suche danach Leute für die Lobby.".to_string();
 
         pipeline
             .run_deadlock_chat_detectors(&event, "channel", "viewer")
@@ -3530,6 +3612,7 @@ mod tests {
                 None,
                 None,
             )),
+            streamer_voice: None,
             lfg_pitch: Arc::new(crate::lfg_pitch::LfgPitchResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),

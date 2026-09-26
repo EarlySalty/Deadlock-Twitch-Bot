@@ -1,6 +1,8 @@
 //! LFG-Mitspieler-Pitch: billiger Regex-Vorfilter vor dem KI-Judge.
 
 use std::collections::HashMap;
+#[cfg(not(test))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,8 +23,27 @@ const LFG_PITCH_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
-pub const LFG_PITCH_REPLY: &str =
-    "@{chatter} Klar, gern! Auf unserem Discord verabredet sich die Community zum gemeinsamen Deadlock-Spielen – komm einfach hier dazu: {invite}";
+pub const LFG_PITCH_REPLIES: [&str; 4] = [
+    "@{chatter} Klar! Im Discord findest du Mitspieler für Deadlock und die passenden Sprachkanäle dazu :) {invite}",
+    "@{chatter} Für die nächste Deadlock-Runde fehlt dir noch jemand? Im Discord findest du Mitspieler :) {invite}",
+    "@{chatter} Gemeinsam spielt sich's besser. Im Discord kannst du dich direkt für eine Deadlock-Runde verabreden :) {invite}",
+    "@{chatter} Im Discord sind Leute für gemeinsame Deadlock-Runden unterwegs. Schau rein, wenn du mitspielen magst :) {invite}",
+];
+pub const LFG_PITCH_REPLY: &str = LFG_PITCH_REPLIES[0];
+#[cfg(not(test))]
+static LFG_PITCH_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn next_lfg_pitch_reply() -> &'static str {
+    #[cfg(test)]
+    {
+        LFG_PITCH_REPLIES[0]
+    }
+    #[cfg(not(test))]
+    {
+        LFG_PITCH_REPLIES
+            [LFG_PITCH_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % LFG_PITCH_REPLIES.len()]
+    }
+}
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -37,7 +58,7 @@ Regeln:
 - "yes", wenn die Person Mitspieler sucht oder sich selbst einer Runde anschließen will ("ich hau mich dazu", "kann ich mit?", "noch Platz frei?", "wer zockt noch").
 - "no", wenn die Nachricht eine Antwort auf eine Frage im Verlauf ist, eine Aufzählung (Helden, Namen, Ergebnisse) oder ein Kommentar zum Stream ohne eigenen Wunsch mitzuspielen.
 - "no" bei Builds, reinen Gameplay-Fragen ("spielt ihr ranked oder normal?"), Smalltalk oder Zugang/Invite-Fragen ohne Bezug zum Mitspielen.
-- "yes" nur, wenn die Person selbst und ausdrücklich Mitspieler sucht oder mitspielen will.
+- "yes" nur, wenn die Person selbst und ausdrücklich Mitspieler sucht oder mitspielen will. Eine Bitte an den Streamer, nach der Runde oder über Discord eingeladen zu werden, zählt als Anschlusswunsch. Eine Einladung für den Spielzugang oder Beta-Key zählt nicht.
 - "unsure" wenn die Absicht unklar ist."#;
 
 fn direct_lfg_re() -> &'static Result<Regex, regex::Error> {
@@ -90,6 +111,7 @@ pub fn classify_lfg(content: &str) -> bool {
 
     is_match(direct_lfg_re(), raw)
         || is_match(join_lfg_re(), raw)
+        || crate::streamer_voice::is_group_join_request(raw)
         || (is_match(search_lfg_re(), raw) && is_match(object_lfg_re(), raw))
 }
 
@@ -838,7 +860,7 @@ impl LfgPitchResponder {
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let message = LFG_PITCH_REPLY
+        let message = next_lfg_pitch_reply()
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &message).await
@@ -886,6 +908,18 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use tb_engagement::llm_chat::EngagementLlmClient;
+
+    #[test]
+    fn alle_lfg_antworten_enthalten_genau_einen_link_und_bleiben_kurz() {
+        for template in LFG_PITCH_REPLIES {
+            assert_eq!(template.matches("{chatter}").count(), 1);
+            assert_eq!(template.matches("{invite}").count(), 1);
+            let message = template
+                .replace("{chatter}", "abcdefghijklmnopqrstuvwxy")
+                .replace("{invite}", "https://discord.gg/abcdefghijklmnopqrstu");
+            assert!(message.len() < 500);
+        }
+    }
 
     #[test]
     fn parse_lfg_verdict_liefert_yes_mit_confidence() {
