@@ -42,10 +42,6 @@ impl Client {
                 .get(format!("{}/internal/player-live", self.base))
                 .query(&[("steam_id", id.to_string())])
                 .header("x-internal-token", self.token.as_deref()?),
-            Identity::Discord(id) => self
-                .http
-                .get(format!("{}/player-live", self.base))
-                .query(&[("discord_id", id)]),
             Identity::None | Identity::Disabled => return None,
         };
         let mut response = request.send().await.ok()?.error_for_status().ok()?;
@@ -71,7 +67,6 @@ enum Identity {
     None,
     Disabled,
     Steam { id: i64, revision: Option<i64> },
-    Discord(String),
 }
 
 fn valid_steam_id(raw: &str) -> Option<i64> {
@@ -108,14 +103,10 @@ async fn identity(pool: &PgPool, uid: &str) -> Result<Identity, sqlx::Error> {
             None => Identity::Disabled,
         });
     }
-    let discord: Option<String> = sqlx::query_scalar("SELECT NULLIF(BTRIM(discord_user_id),'') FROM twitch_streamer_identities WHERE twitch_user_id=$1")
-        .bind(uid).fetch_optional(pool).await?.flatten();
-    Ok(discord
-        .filter(|id| {
-            id.bytes().all(|b| b.is_ascii_digit()) && id.parse::<u64>().is_ok_and(|id| id > 0)
-        })
-        .map(Identity::Discord)
-        .unwrap_or(Identity::None))
+    // The public Discord endpoint reports incomplete Steam presence as
+    // `live: false`; treating that as a safe window could start ads in a match.
+    // Only the strict internal Steam-ID contract can certify presence.
+    Ok(Identity::None)
 }
 
 fn empty(linked: bool) -> SteamMatchSummary {
@@ -126,12 +117,10 @@ fn empty(linked: bool) -> SteamMatchSummary {
     }
 }
 
-fn parse_presence(value: &Value, discord: bool, now: DateTime<Utc>) -> SteamMatchSummary {
-    let found = value
-        .get(if discord { "linked" } else { "found" })
-        .and_then(Value::as_bool);
+fn parse_presence(value: &Value, now: DateTime<Utc>) -> SteamMatchSummary {
+    let found = value.get("found").and_then(Value::as_bool);
     if found == Some(false) {
-        return empty(!discord);
+        return empty(true);
     }
     let observed_at = value
         .get("last_update")
@@ -152,9 +141,7 @@ fn parse_presence(value: &Value, discord: bool, now: DateTime<Utc>) -> SteamMatc
         return summary;
     }
     let (Some(in_match), Some(in_deadlock)) = (
-        value
-            .get(if discord { "live" } else { "in_match" })
-            .and_then(Value::as_bool),
+        value.get("in_match").and_then(Value::as_bool),
         value.get("in_deadlock").and_then(Value::as_bool),
     ) else {
         return summary;
@@ -199,7 +186,7 @@ pub(super) async fn summary(
     }
     Ok(response
         .as_ref()
-        .map(|value| parse_presence(value, matches!(selected, Identity::Discord(_)), now))
+        .map(|value| parse_presence(value, now))
         .unwrap_or_else(|| empty(true)))
 }
 
@@ -216,32 +203,32 @@ mod tests {
     fn source_time_and_required_fields_determine_safety() {
         let now = DateTime::from_timestamp(1_780_000_000, 0).unwrap();
         let base = json!({"found":true,"in_match":true,"in_deadlock":true,"stage":"match","last_update":now.timestamp()});
-        assert!(parse_presence(&base, false, now).state.unwrap().in_match);
+        assert!(parse_presence(&base, now).state.unwrap().in_match);
         let queue = json!({"found":true,"in_match":false,"in_deadlock":true,"stage":"lobby","last_update":now.timestamp()});
-        assert!(!parse_presence(&queue, false, now).state.unwrap().in_match);
+        assert!(!parse_presence(&queue, now).state.unwrap().in_match);
         for field in ["found", "in_match", "in_deadlock", "last_update"] {
             let mut bad = base.clone();
             bad.as_object_mut().unwrap().remove(field);
-            assert!(parse_presence(&bad, false, now).state.is_none(), "{field}");
+            assert!(parse_presence(&bad, now).state.is_none(), "{field}");
         }
         for stamp in [now.timestamp() - 181, now.timestamp() + 31] {
             let mut old = queue.clone();
             old["last_update"] = json!(stamp);
-            let summary = parse_presence(&old, false, now);
+            let summary = parse_presence(&old, now);
             assert!(summary.state.is_none());
             assert_eq!(summary.observed_at.unwrap().timestamp(), stamp);
         }
-        assert!(parse_presence(&json!({"found":false}), false, now)
+        assert!(parse_presence(&json!({"found":false}), now)
             .state
             .is_none());
         for (in_deadlock, stage) in [(true, None), (true, Some("match")), (false, Some("match"))] {
             let bad = json!({"found":true,"in_match":false,"in_deadlock":in_deadlock,"stage":stage,"last_update":now.timestamp()});
-            assert!(parse_presence(&bad, false, now).state.is_none());
+            assert!(parse_presence(&bad, now).state.is_none());
         }
-        assert!(!parse_presence(&json!({"linked":false,"live":false}), true, now).steam_linked);
-        let legacy =
-            json!({"linked":true,"live":true,"in_deadlock":true,"last_update":now.timestamp()});
-        assert!(parse_presence(&legacy, true, now).state.unwrap().in_match);
+        // The public Discord contract can produce this for an incomplete
+        // presence row. It must not become a safe advertising window.
+        let incomplete = json!({"linked":true,"live":false,"in_deadlock":false,"last_update":now.timestamp()});
+        assert!(parse_presence(&incomplete, now).state.is_none());
     }
 
     #[tokio::test]

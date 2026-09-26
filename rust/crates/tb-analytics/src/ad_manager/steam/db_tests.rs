@@ -212,15 +212,17 @@ async fn unlink_waehrend_http_verwirft_alten_status() {
     f.cleanup().await;
 }
 #[tokio::test]
-async fn discord_verknuepfung_nutzt_bestehenden_http_vertrag() {
+async fn discord_verknuepfung_ohne_steam_id_gibt_keine_werbefreigabe() {
     let f = Fixture::new().await;
     sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('42','123')")
         .execute(&f.pool)
         .await
         .unwrap();
-    Mock::given(method("GET")).and(path("/player-live")).and(query_param("discord_id","123"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"linked":true,"live":true,"in_deadlock":true,"last_update":Utc::now().timestamp()})))
-        .mount(&f.server).await;
-    assert!(f.read().await.state.unwrap().in_match);
+    // The public Discord endpoint can return `live:false` for incomplete
+    // presence, so it must never certify a safe advertising window.
+    let result = f.read().await;
+    assert!(!result.steam_linked);
+    assert!(result.state.is_none());
+    assert!(f.server.received_requests().await.unwrap().is_empty());
     f.cleanup().await;
 }
