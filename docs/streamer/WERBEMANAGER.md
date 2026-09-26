@@ -34,7 +34,7 @@ Jede Aktion und jede Verschiebung steht mit Uhrzeit und Grund im Verlauf, dazu d
 
 ## Voraussetzung für die Queue-Steuerung
 
-Das über die Kontoverknüpfung gewählte Steam-Konto hat Vorrang. Ohne direkte Zuordnung kann der Bot die bestehende SteamID64 unter Verwaltung, Bot & Schutz oder die hinterlegte Discord-Verknüpfung nutzen. Eine getrennte direkte Verknüpfung wird respektiert. Der Matchstatus kommt über die Steam-Bot-Schnittstelle mit dem ursprünglichen Messzeitpunkt, nicht aus der Twitch-Datenbank. Ältere Daten als drei Minuten, Quellenfehler und unvollständige Antworten bestätigen kein Werbefenster. Das Dashboard zeigt fehlende oder veraltete Daten gesondert an.
+Das über die Kontoverknüpfung gewählte Steam-Konto hat Vorrang. Ohne direkte Zuordnung kann der Bot die bestehende SteamID64 unter Verwaltung, Bot & Schutz nutzen. Eine Discord-Verknüpfung allein reicht für die Queue-Steuerung nicht aus. Eine getrennte direkte Verknüpfung wird respektiert. Der Matchstatus kommt über die Steam-Bot-Schnittstelle mit dem ursprünglichen Messzeitpunkt, nicht aus der Twitch-Datenbank. Ältere Daten als drei Minuten, Quellenfehler und unvollständige Antworten bestätigen kein Werbefenster. Das Dashboard zeigt fehlende oder veraltete Daten gesondert an.
 
 ## Grenzen
 
