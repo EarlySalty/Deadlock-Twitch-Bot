@@ -76,8 +76,8 @@ pub async fn player_profile(discord_id: &str) -> PlayerProfile {
         .unwrap_or_else(|| "http://127.0.0.1:8783/rank".into());
     let base = rank_url.trim_end_matches('/').strip_suffix("/rank").unwrap_or(rank_url.trim_end_matches('/'));
     let matches_url = format!("{base}/player-matches");
-    let rank_fetch = async { client().get(&rank_url).query(&[("discord_id",discord_id)]).send().await?.error_for_status()?.json::<Rank>().await };
-    let matches_fetch = async { client().get(&matches_url).query(&[("discord_id",discord_id),("limit","30")]).send().await?.error_for_status()?.json::<Matches>().await };
+    let rank_fetch = async { client().get(&rank_url).query(&[("discord_id",discord_id),("cached_only","1")]).send().await?.error_for_status()?.json::<Rank>().await };
+    let matches_fetch = async { client().get(&matches_url).query(&[("discord_id",discord_id),("limit","30"),("cached_only","1")]).send().await?.error_for_status()?.json::<Matches>().await };
     let (rank, matches): (Result<Rank,reqwest::Error>,Result<Matches,reqwest::Error>) = tokio::join!(rank_fetch,matches_fetch);
     if rank.is_err() || matches.is_err() { tracing::debug!("Community Steam enrichment partly unavailable"); }
     let result = project_profile(rank.ok(),matches.ok(),Utc::now().timestamp());

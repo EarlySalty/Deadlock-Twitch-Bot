@@ -144,6 +144,13 @@ jobs:
         run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
       - name: Apply migrations
         run: cargo sqlx migrate run --source rust/migrations
+      - name: Load canonical Brain schema (CI-only bootstrap)
+        run: |
+          sudo apt-get install --yes --no-install-recommends postgresql-client
+          for file in scripts/ci/brain-schema/*.sql; do
+            echo "Loading ${file}"
+            psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 --single-transaction --file "${file}"
+          done
       - name: Check SQLx offline cache
         env:
           SQLX_OFFLINE: "false"

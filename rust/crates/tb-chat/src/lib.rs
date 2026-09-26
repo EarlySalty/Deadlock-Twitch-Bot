@@ -27,6 +27,7 @@ pub mod catalog;
 pub mod channel_classifier;
 pub mod channel_policy;
 pub mod chatter_tracking;
+pub mod command_names;
 mod command_target;
 pub mod commands;
 mod rank_lookup;

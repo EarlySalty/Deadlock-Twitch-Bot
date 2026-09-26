@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT e.primary_external_id AS \"primary_external_id?\", e.canonical_name AS \"canonical_name!\"\n        FROM brain.entity_aliases a\n        JOIN brain.entities e ON e.id = a.entity_id\n        WHERE a.alias_norm=$1 AND e.entity_type='hero'\n        ORDER BY e.id\n        LIMIT 5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "primary_external_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "canonical_name!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "9454e69f524d0568b022e277a95be241e082314c0ac7b90e98c014c74bf14a19"
+}
