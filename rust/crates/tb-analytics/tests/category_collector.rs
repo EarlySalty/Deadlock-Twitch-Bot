@@ -68,7 +68,8 @@ async fn category_storage_deletions_rollups_preservation_and_report() {
         category::delete_chat(
             pool,
             "@room-id=r1;target-msg-id=m1 :tmi.twitch.tv CLEARMSG #sample :deleted",
-            "r1"
+            "r1",
+            Utc::now(),
         )
         .await
         .unwrap(),
@@ -94,6 +95,7 @@ async fn category_storage_deletions_rollups_preservation_and_report() {
         pool,
         "@room-id=r1;target-user-id=u1 :tmi.twitch.tv CLEARCHAT #sample :sampleuser",
         "r1",
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -157,7 +159,8 @@ async fn explicit_source_removal_also_covers_late_shared_chat_copies() {
         category::delete_chat(
             &db.pool,
             "@room-id=10;target-msg-id=original :tmi.twitch.tv CLEARMSG #source :deleted",
-            "10"
+            "10",
+            Utc::now(),
         )
         .await
         .unwrap(),
@@ -168,7 +171,8 @@ async fn explicit_source_removal_also_covers_late_shared_chat_copies() {
         category::delete_chat(
             &db.pool,
             "@room-id=10 :tmi.twitch.tv CLEARCHAT #source",
-            "10"
+            "10",
+            Utc::now(),
         )
         .await
         .unwrap(),

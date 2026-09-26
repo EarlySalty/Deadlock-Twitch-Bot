@@ -61,12 +61,12 @@ BEGIN
         REVOKE ALL ON public.category_collector_config FROM twitchcollector;
         GRANT SELECT ON public.category_collector_config TO twitchcollector,twitchdash;
     END IF;
-    IF to_regprocedure('public.category_redact_chat_event(text,text,text)') IS NOT NULL THEN
-        REVOKE ALL ON FUNCTION public.category_redact_chat_event(text,text,text) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
-        GRANT EXECUTE ON FUNCTION public.category_redact_chat_event(text,text,text) TO twitchcollector;
+    IF to_regprocedure('public.category_redact_chat_event(text,text,text,timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.category_redact_chat_event(text,text,text,timestamptz) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
+        GRANT EXECUTE ON FUNCTION public.category_redact_chat_event(text,text,text,timestamptz) TO twitchcollector;
     END IF;
-    IF to_regprocedure('public.category_redact_chat_event_locked(text,text,text)') IS NOT NULL THEN
-        REVOKE ALL ON FUNCTION public.category_redact_chat_event_locked(text,text,text) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy,twitchcollector;
+    IF to_regprocedure('public.category_redact_chat_event_locked(text,text,text,timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.category_redact_chat_event_locked(text,text,text,timestamptz) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy,twitchcollector;
     END IF;
     IF to_regprocedure('public.category_lock_chat_rooms(text[])') IS NOT NULL THEN
         REVOKE ALL ON FUNCTION public.category_lock_chat_rooms(text[]) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;

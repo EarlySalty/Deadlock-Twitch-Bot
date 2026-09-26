@@ -71,12 +71,12 @@ REVOKE ALL ON FUNCTION category_lock_chat_rooms(text[]) FROM PUBLIC;
 -- Der Dienst bekommt keine freie DELETE-Berechtigung auf Rohdaten.
 -- Nur explizite Moderationsziele werden durch diese eng begrenzte Funktion bearbeitet.
 -- Ein kanalweiter CLEARCHAT ohne Ziel ist ausdrücklich KEINE Archivlöschung.
-CREATE FUNCTION category_redact_chat_event_locked(room_id text, message_id text, user_id text)
+CREATE FUNCTION category_redact_chat_event_locked(room_id text, message_id text, user_id text, event_at timestamptz)
 RETURNS bigint LANGUAGE sql SECURITY INVOKER SET search_path=pg_catalog,public AS $$
     WITH bounds AS MATERIALIZED (
         SELECT COALESCE((SELECT s.started_at FROM public.category_stream_snapshots AS s
-            WHERE s.user_id=$1 ORDER BY s.snapshot_at DESC LIMIT 1),now()) AS started_at,
-            now() AS ended_at
+            WHERE s.user_id=$1 AND s.snapshot_at <= $4 ORDER BY s.snapshot_at DESC LIMIT 1),$4) AS started_at,
+            $4 AS ended_at
     ), notice AS (
         INSERT INTO public.category_chat_redactions(room_user_id,message_id)
         SELECT $1,$2
@@ -87,7 +87,7 @@ RETURNS bigint LANGUAGE sql SECURITY INVOKER SET search_path=pg_catalog,public A
             (room_user_id,chatter_user_id,started_at,ended_at)
         SELECT $1,$3,b.started_at,b.ended_at FROM bounds AS b
         WHERE nullif(btrim($1),'') IS NOT NULL AND nullif(btrim($3),'') IS NOT NULL
-          AND $2 IS NULL
+          AND $2 IS NULL AND b.started_at <= b.ended_at
         ON CONFLICT DO NOTHING
     ), removed AS (
         DELETE FROM public.category_chat_messages AS m
@@ -111,17 +111,17 @@ RETURNS bigint LANGUAGE sql SECURITY INVOKER SET search_path=pg_catalog,public A
         ON CONFLICT DO NOTHING
     ) SELECT count(*)::bigint FROM removed;
 $$;
-REVOKE ALL ON FUNCTION category_redact_chat_event_locked(text,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION category_redact_chat_event_locked(text,text,text,timestamptz) FROM PUBLIC;
 
 -- Lock acquisition is a separate statement: under READ COMMITTED the DELETE
 -- then sees writes committed while the lock was held by an earlier writer.
-CREATE FUNCTION category_redact_chat_event(room_id text, message_id text, user_id text)
+CREATE FUNCTION category_redact_chat_event(room_id text, message_id text, user_id text, event_at timestamptz)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 BEGIN
     PERFORM public.category_lock_chat_rooms(ARRAY[room_id]);
-    RETURN public.category_redact_chat_event_locked(room_id,message_id,user_id);
+    RETURN public.category_redact_chat_event_locked(room_id,message_id,user_id,event_at);
 END $$;
-REVOKE ALL ON FUNCTION category_redact_chat_event(text,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION category_redact_chat_event(text,text,text,timestamptz) FROM PUBLIC;
 
 DO $$
 DECLARE role_name text; child record;
@@ -135,7 +135,7 @@ BEGIN
         GRANT SELECT ON category_chat_redactions TO twitchcollector;
         GRANT SELECT ON category_chat_user_redactions TO twitchcollector;
         GRANT EXECUTE ON FUNCTION category_lock_chat_rooms(text[]) TO twitchcollector;
-        GRANT EXECUTE ON FUNCTION category_redact_chat_event(text,text,text) TO twitchcollector;
+        GRANT EXECUTE ON FUNCTION category_redact_chat_event(text,text,text,timestamptz) TO twitchcollector;
         REVOKE UPDATE,DELETE,TRUNCATE ON category_chat_messages FROM twitchcollector;
         FOR child IN SELECT inhrelid::regclass AS relation FROM pg_inherits
             WHERE inhparent='category_chat_messages'::regclass LOOP

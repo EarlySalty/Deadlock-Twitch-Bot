@@ -39,7 +39,8 @@ export function CategoryCollector() {
   const totals = useMemo(() => data?.languages.reduce((sum, row) => ({ hours: sum.hours + (row.airtime_hours ?? 0), messages: sum.messages + row.messages, viewerHours: sum.viewerHours + (row.viewer_hours ?? 0) }), { hours: 0, messages: 0, viewerHours: 0 }), [data]);
   const chart = useMemo(() => buildCategoryTrend(data?.trend ?? []), [data]);
   const hourly = useMemo(() => Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, messages: data?.hourly.filter(row => row.hour === hour && (language === 'all' || row.language === language)).reduce((sum, row) => sum + row.messages, 0) ?? 0 })), [data, language]);
-  const stale = !data?.heartbeat_at || clock - new Date(data.heartbeat_at).getTime() > 120_000;
+  const heartbeatAt = data?.heartbeat_at ? Date.parse(data.heartbeat_at) : NaN;
+  const stale = !Number.isFinite(heartbeatAt) || heartbeatAt > clock + 120_000 || clock - heartbeatAt > 120_000;
   const status = data?.status;
   const cards = [
     { icon: Radio, title: 'Entdeckte Live-Kanäle', value: stale ? '—' : number(status?.desired_channels), detail: 'Letzter erfolgreicher Kategorieabruf' },

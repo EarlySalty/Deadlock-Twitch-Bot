@@ -261,7 +261,12 @@ pub async fn store_messages(pool: &PgPool, messages: &[RawMessage]) -> Result<i6
 }
 
 /// Honor Twitch deletions, without keeping a second raw-text audit copy.
-pub async fn delete_chat(pool: &PgPool, line: &str, room_id: &str) -> Result<u64, sqlx::Error> {
+pub async fn delete_chat(
+    pool: &PgPool,
+    line: &str,
+    room_id: &str,
+    received_at: DateTime<Utc>,
+) -> Result<u64, sqlx::Error> {
     let Some(tags_part) = line.strip_prefix('@').and_then(|s| s.split_once(' ')) else {
         return Ok(0);
     };
@@ -283,12 +288,22 @@ pub async fn delete_chat(pool: &PgPool, line: &str, room_id: &str) -> Result<u64
     {
         return Ok(0);
     }
+    // Twitch attaches the moderation event's server timestamp. The receive
+    // timestamp is a bounded fallback for malformed or missing tags; never
+    // extend a user clear to the later database processing time.
+    let event_at = tags
+        .get("tmi-sent-ts")
+        .and_then(|value| value.parse::<i64>().ok())
+        .and_then(DateTime::from_timestamp_millis)
+        .filter(|at| *at <= received_at + chrono::Duration::minutes(2))
+        .unwrap_or(received_at);
     // The runtime role cannot DELETE raw rows itself. Only a narrowly scoped,
     // operator-installed function can apply an explicit moderation target.
-    let affected: i64 = sqlx::query_scalar("SELECT category_redact_chat_event($1,$2,$3)")
+    let affected: i64 = sqlx::query_scalar("SELECT category_redact_chat_event($1,$2,$3,$4)")
         .bind(room_id)
         .bind(message)
         .bind(user)
+        .bind(event_at)
         .fetch_one(pool)
         .await?;
     Ok(affected.max(0) as u64)

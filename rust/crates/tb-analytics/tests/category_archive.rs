@@ -94,6 +94,7 @@ async fn concurrent_redaction_and_late_delivery_cannot_restore_a_message() {
             &pool,
             "@room-id=100;target-msg-id=in-flight :tmi.twitch.tv CLEARMSG #sample :entfernt",
             "100",
+            Utc::now(),
         )
         .await
     });
@@ -103,6 +104,39 @@ async fn concurrent_redaction_and_late_delivery_cannot_restore_a_message() {
         "redaction must wait for the writer commit"
     );
     writer_lock.commit().await.unwrap();
+    assert_eq!(clear.await.unwrap().unwrap(), 1);
+    assert_eq!(count(&db).await, 2);
+}
+
+#[tokio::test]
+async fn shared_chat_writer_commits_before_source_redaction_snapshot() {
+    let db = fixture().await;
+    let mut writer = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT category_lock_chat_rooms(ARRAY['100','300'])")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO category_chat_messages
+        (sent_at,received_at,room_user_id,message_id,chatter_user_id,chatter_login,message_text,
+         detected_lang,stream_language,language_confidence,message_len,emote_count,shared_chat_copy,tags)
+        SELECT now(),now(),'300','copy-in-flight',chatter_user_id,chatter_login,message_text,
+         detected_lang,stream_language,language_confidence,message_len,emote_count,true,
+         '{\"source-room-id\":\"100\",\"source-id\":\"source-in-flight\"}'::jsonb
+        FROM category_chat_messages WHERE message_id='recent'")
+        .execute(&mut *writer).await.unwrap();
+    let pool = db.pool.clone();
+    let clear =
+        tokio::spawn(async move {
+            category::delete_chat(&pool,
+            "@room-id=100;target-msg-id=source-in-flight :tmi.twitch.tv CLEARMSG #sample :entfernt",
+            "100",Utc::now()).await
+        });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !clear.is_finished(),
+        "redaction waits for shared-chat writer"
+    );
+    writer.commit().await.unwrap();
     assert_eq!(clear.await.unwrap().unwrap(), 1);
     assert_eq!(count(&db).await, 2);
 }
@@ -132,7 +166,8 @@ async fn targeted_clearchat_blocks_late_delivery_from_the_same_stream_window() {
         category::delete_chat(
             &db.pool,
             "@room-id=100;target-user-id=200 :tmi.twitch.tv CLEARCHAT #sample :viewer",
-            "100"
+            "100",
+            now,
         )
         .await
         .unwrap(),
@@ -154,6 +189,126 @@ async fn targeted_clearchat_blocks_late_delivery_from_the_same_stream_window() {
         0
     );
     assert_eq!(count(&db).await, 1);
+}
+
+#[tokio::test]
+async fn delayed_clearchat_keeps_messages_after_twitch_event_time() {
+    let db = fixture().await;
+    let received_at = Utc::now();
+    let event_at = received_at - Duration::minutes(10);
+    category::store_snapshot(
+        &db.pool,
+        event_at - Duration::minutes(1),
+        &[HelixStream {
+            id: "stream".into(),
+            user_id: "100".into(),
+            user_login: "sample".into(),
+            user_name: "Sample".into(),
+            language: "de".into(),
+            game_id: "deadlock".into(),
+            started_at: (event_at - Duration::hours(1)).to_rfc3339(),
+            ..Default::default()
+        }],
+        60,
+    )
+    .await
+    .unwrap();
+    let make_message = |id: &str, sent_at: chrono::DateTime<Utc>| {
+        let line = format!("@room-id=100;user-id=200;id={id};tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Nachricht rund um die verspätete Moderation.", sent_at.timestamp_millis());
+        category::raw_message(&line, sent_at, "100", "de").unwrap()
+    };
+    let before = event_at - Duration::minutes(5);
+    let after = event_at + Duration::minutes(5);
+    assert_eq!(
+        category::store_messages(
+            &db.pool,
+            &[make_message("before", before), make_message("after", after)]
+        )
+        .await
+        .unwrap(),
+        2
+    );
+    let clear = format!(
+        "@room-id=100;target-user-id=200;tmi-sent-ts={} :tmi.twitch.tv CLEARCHAT #sample :viewer",
+        event_at.timestamp_millis()
+    );
+    assert_eq!(
+        category::delete_chat(&db.pool, &clear, "100", received_at)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        category::store_messages(&db.pool, &[make_message("before-late", before)])
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        category::store_messages(&db.pool, &[make_message("after-late", after)])
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        count(&db).await,
+        4,
+        "archive, recent and both post-event messages remain"
+    );
+}
+
+#[tokio::test]
+async fn missing_invalid_or_future_twitch_time_uses_irc_receive_time() {
+    for tag in ["", ";tmi-sent-ts=invalid", ";tmi-sent-ts=9999999999999"] {
+        let db = fixture().await;
+        let received_at = Utc::now();
+        category::store_snapshot(
+            &db.pool,
+            received_at - Duration::minutes(1),
+            &[HelixStream {
+                id: "stream".into(),
+                user_id: "100".into(),
+                user_login: "sample".into(),
+                user_name: "Sample".into(),
+                language: "de".into(),
+                game_id: "deadlock".into(),
+                started_at: (received_at - Duration::hours(1)).to_rfc3339(),
+                ..Default::default()
+            }],
+            60,
+        )
+        .await
+        .unwrap();
+        let clear = format!(
+            "@room-id=100;target-user-id=200{tag} :tmi.twitch.tv CLEARCHAT #sample :viewer"
+        );
+        assert_eq!(
+            category::delete_chat(&db.pool, &clear, "100", received_at)
+                .await
+                .unwrap(),
+            1
+        );
+        let before = received_at - Duration::minutes(5);
+        let after = received_at + Duration::minutes(1);
+        let message = |id: &str, at: chrono::DateTime<Utc>| {
+            let line = format!("@room-id=100;user-id=200;id={id};tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Prüfung des Zeitfensters bei fehlendem Zeit-Tag.",at.timestamp_millis());
+            category::raw_message(&line, at, "100", "de").unwrap()
+        };
+        assert_eq!(
+            category::store_messages(&db.pool, &[message("before", before)])
+                .await
+                .unwrap(),
+            0,
+            "tag={tag}"
+        );
+        assert_eq!(
+            category::store_messages(&db.pool, &[message("after", after)])
+                .await
+                .unwrap(),
+            1,
+            "tag={tag}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -194,6 +349,7 @@ async fn clearing_a_room_is_not_permission_to_destroy_its_archive() {
         &db.pool,
         "@room-id=100 :tmi.twitch.tv CLEARCHAT #sample",
         "100",
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -231,6 +387,7 @@ async fn a_targeted_chat_clear_is_limited_to_the_observed_stream() {
         &db.pool,
         "@room-id=100;target-user-id=200 :tmi.twitch.tv CLEARCHAT #sample :viewer",
         "100",
+        now,
     )
     .await
     .unwrap();
@@ -248,6 +405,7 @@ async fn a_targeted_chat_clear_is_limited_to_the_observed_stream() {
         &db.pool,
         "@room-id=100;target-msg-id=archive :tmi.twitch.tv CLEARMSG #sample :deleted",
         "100",
+        Utc::now(),
     )
     .await
     .unwrap();
@@ -297,7 +455,7 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
     .unwrap();
     assert!(preserved);
     let can_call_unlocked: bool = sqlx::query_scalar(
-        "SELECT has_function_privilege('twitchcollector', 'category_redact_chat_event_locked(text,text,text)', 'EXECUTE')",
+        "SELECT has_function_privilege('twitchcollector', 'category_redact_chat_event_locked(text,text,text,timestamptz)', 'EXECUTE')",
     )
     .fetch_one(&mut *connection).await.unwrap();
     assert!(
@@ -321,10 +479,11 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
             "{forbidden}: {err}"
         );
     }
-    let removed: i64 = sqlx::query_scalar("SELECT category_redact_chat_event('100','recent',NULL)")
-        .fetch_one(&mut *connection)
-        .await
-        .unwrap();
+    let removed: i64 =
+        sqlx::query_scalar("SELECT category_redact_chat_event('100','recent',NULL,now())")
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
     assert_eq!(
         removed, 1,
         "an explicit removal still works without DELETE privilege"
@@ -351,7 +510,7 @@ async fn targeted_removal_has_bounded_index_work_in_a_large_archive() {
         FROM generate_series(1,60000) n;
         ANALYZE category_chat_messages;")
         .execute(&db.pool).await.unwrap();
-    let body: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='category_redact_chat_event_locked(text,text,text)'::regprocedure")
+    let body: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='category_redact_chat_event_locked(text,text,text,timestamptz)'::regprocedure")
         .fetch_one(&db.pool).await.unwrap();
     let mut connection = db.pool.acquire().await.unwrap();
     sqlx::query("SET plan_cache_mode=force_generic_plan")
@@ -359,13 +518,13 @@ async fn targeted_removal_has_bounded_index_work_in_a_large_archive() {
         .await
         .unwrap();
     sqlx::raw_sql(&format!(
-        "PREPARE archive_redact_plan(text,text,text) AS {body}"
+        "PREPARE archive_redact_plan(text,text,text,timestamptz) AS {body}"
     ))
     .execute(&mut *connection)
     .await
     .unwrap();
     let plan = sqlx::query_scalar::<_, String>(
-        "EXPLAIN (ANALYZE, BUFFERS) EXECUTE archive_redact_plan('100','source-30000',NULL)",
+        "EXPLAIN (ANALYZE, BUFFERS) EXECUTE archive_redact_plan('100','source-30000',NULL,now())",
     )
     .fetch_all(&mut *connection)
     .await

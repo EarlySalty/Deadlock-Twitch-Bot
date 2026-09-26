@@ -272,7 +272,7 @@ async fn write_chat(
                 let verb=command_channel(&event.line).map(|(verb,_)|verb).unwrap_or("");
                 if matches!(verb,"CLEARMSG"|"CLEARCHAT") {
                     flush(&pool,&mut batch,&counters).await?;
-                    category::delete_chat(&pool,&event.line,&room_id).await?;
+                    category::delete_chat(&pool,&event.line,&room_id,event.received_at).await?;
                 } else if counters.raw_paused.load(Ordering::Relaxed) {
                     counters.storage_dropped.fetch_add(1,Ordering::Relaxed);
                 } else if let Some(raw)=category::raw_message(&event.line,event.received_at,&room_id,&language) {
