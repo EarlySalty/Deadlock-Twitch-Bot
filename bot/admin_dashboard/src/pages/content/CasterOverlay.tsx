@@ -413,7 +413,7 @@ export default function CasterOverlayPage() {
                     <option value="">Platz leer</option>
                     {scene.roster.map((person) => (
                       <option key={person.id} value={person.id}>
-                        {person.name}{person.cameraId ? ' · Community-Cam' : person.cameraUrl ? ' · URL Cam' : ' · ohne Cam'}
+                        {person.name}{person.cameraId ? ' · Community-Kamera' : person.cameraUrl ? ' · URL Cam' : ' · ohne Cam'}
                       </option>
                     ))}
                   </select>
