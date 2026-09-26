@@ -17,6 +17,8 @@ test('bare profiles and calendar queries reach the backend without stealing exis
   const directory = mkdtempSync(join(tmpdir(), 'partner-profile-caddy-'));
   // Only isolated loopback listeners; the production Caddy admin is never used.
   const upstream = createServer((request, response) => {
+    response.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Cache-Control', 'no-store, max-age=0');
     response.setHeader('Content-Security-Policy', "default-src 'self'");
     response.statusCode = request.url.includes('@') || request.url.includes('inactive') ? 404 : 200;
@@ -72,6 +74,8 @@ http://127.0.0.1:${port} {
       assert.equal(await response.text(), `profile:${path}`);
       assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
       assert.equal(response.headers.get('content-security-policy'), "default-src 'self'");
+      assert.equal(response.headers.get('content-type'), 'text/plain; charset=utf-8');
+      assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     }
     for (const path of ['/streamer/inactive', '/streamer/@alice']) {
       const response = await fetch(base + path);

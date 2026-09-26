@@ -4,8 +4,10 @@ import {readFile, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
-const require = createRequire(new URL('../../.roadmap-test-runtime/package.json', import.meta.url));
-const {chromium} = require('playwright');
+// Reuse the reviewed lockfile, including npm integrity hashes, rather than
+// resolving a separate untracked Playwright dependency tree at CI runtime.
+const require = createRequire(new URL('../../bot/dashboard_v2/package.json', import.meta.url));
+const {chromium} = require('playwright-core');
 const root = resolve(new URL('../..', import.meta.url).pathname);
 const output = resolve(root, 'dist/roadmap-history');
 const html = await readFile(resolve(output, 'index.html'), 'utf8');
@@ -253,12 +255,18 @@ try {
   assert.equal(await mobile.locator('#detail').evaluate(d => d.contains(document.activeElement)), true);
   await screenshot(mobile, 'family-mobile-detail', false);
   await mobile.locator('#close-detail').tap();
+  // HTMLDialogElement.close() changes `open` before its queued close event
+  // restores scrolling and focus. Verify the completed interaction, not that gap.
+  await mobile.waitForFunction(() => !document.querySelector('#detail').open
+    && document.body.style.overflow === '', null, {timeout: 5000});
   assert.equal(await mobile.locator('#detail').evaluate(d => d.open), false);
   await mobile.locator('#zoom-out').tap();
   assert.equal(await mobile.locator('#zoom-reset').textContent(), '83 %');
   await mobile.locator('#focus-feature').selectOption('rank-steam');
   await mobile.locator('.branch-label[data-feature=rank-steam] .branch-title').tap();
   await mobile.keyboard.press('Escape');
+  await mobile.waitForFunction(() => !document.querySelector('#detail').open
+    && document.body.style.overflow === '', null, {timeout: 5000});
   assert.equal(await mobile.locator('#detail').evaluate(d => d.open), false);
   assert.equal(await mobile.evaluate(() => document.body.style.overflow), '');
   assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

@@ -36,6 +36,9 @@ pub enum StripeError {
     /// Antwort war kein JSON-Objekt bzw. nicht parsebar.
     #[error("invalid stripe response")]
     InvalidResponse,
+    /// Ein Request würde ein unerwartetes oder unsicheres Ziel verwenden.
+    #[error("unsafe stripe endpoint")]
+    UnsafeEndpoint,
     /// Erfolgs-Antwort enthielt keine `id`.
     #[error("stripe response missing id")]
     MissingId,
@@ -61,6 +64,8 @@ impl StripeClient {
         }
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .build()?;
         Ok(Self {
             http,
@@ -82,6 +87,36 @@ impl StripeClient {
         self
     }
 
+    fn request_url(&self, raw: &str) -> Result<reqwest::Url, StripeError> {
+        let url = reqwest::Url::parse(raw).map_err(|_| StripeError::UnsafeEndpoint)?;
+        let production = url.scheme() == "https"
+            && matches!(
+                url.host_str(),
+                Some("api.stripe.com" | "connect.stripe.com")
+            )
+            && url.port_or_known_default() == Some(443);
+        let loopback = url.host_str().is_some_and(|host| {
+            host.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        });
+        let configured_test_origin = loopback
+            && matches!(url.scheme(), "http" | "https")
+            && [&self.api_base, &self.connect_base].iter().any(|base| {
+                reqwest::Url::parse(base).is_ok_and(|base| base.origin() == url.origin())
+            });
+        if !(production || configured_test_origin)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(StripeError::UnsafeEndpoint);
+        }
+        Ok(url)
+    }
+
     // -- gemeinsame Transport-Helfer ------------------------------------- //
 
     async fn post_form(
@@ -90,6 +125,7 @@ impl StripeClient {
         params: &[(String, String)],
         idempotency_key: Option<&str>,
     ) -> Result<Value, StripeError> {
+        let url = self.request_url(url)?;
         let mut req = self
             .http
             .post(url)
@@ -103,6 +139,7 @@ impl StripeClient {
     }
 
     async fn get(&self, url: &str, query: &[(String, String)]) -> Result<Value, StripeError> {
+        let url = self.request_url(url)?;
         let resp = self
             .http
             .get(url)
@@ -256,7 +293,12 @@ impl StripeClient {
 
     /// Baut die Stripe-Connect-Authorize-URL (reine String-Erzeugung, kein HTTP).
     /// Entspricht `STRIPE_CONNECT_AUTHORIZE_URL` mit `scope=read_write`.
-    pub fn connect_authorize_url(&self, client_id: &str, redirect_uri: &str, state: &str) -> String {
+    pub fn connect_authorize_url(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+        state: &str,
+    ) -> String {
         let query = form_urlencode(&[
             ("response_type", "code"),
             ("client_id", client_id),
@@ -381,14 +423,74 @@ fn encode_component(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_stripe_only_accepts_provider_or_configured_loopback_origins() {
+        let client = StripeClient::new("synthetic-test-key")
+            .unwrap()
+            .with_api_base("http://127.0.0.1:12345");
+        for url in [
+            "https://api.stripe.com/v1/customers",
+            "https://connect.stripe.com/oauth/token",
+            "http://127.0.0.1:12345/v1/customers",
+        ] {
+            assert!(client.request_url(url).is_ok());
+        }
+        for url in [
+            "http://api.stripe.com/v1/customers",
+            "https://api.stripe.com.evil.test/v1/customers",
+            "https://example.test/v1/customers",
+            "https://user@api.stripe.com/v1/customers",
+            "https://api.stripe.com:444/v1/customers",
+            "http://127.0.0.1:12346/v1/customers",
+            "http://localhost:12345/v1/customers",
+            "https://api.stripe.com/v1/customers?injected=1",
+            "https://api.stripe.com/v1/customers#fragment",
+        ] {
+            assert!(client.request_url(url).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn security_stripe_does_not_forward_credentials_on_redirect() {
+        let target = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&target)
+            .await;
+        let origin = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(307).insert_header("Location", target.uri()),
+            )
+            .expect(1)
+            .mount(&origin)
+            .await;
+        let client = StripeClient::new("synthetic-test-key")
+            .unwrap()
+            .with_api_base(origin.uri());
+        assert!(client
+            .get(&format!("{}/v1/customers", origin.uri()), &[])
+            .await
+            .is_err());
+        assert!(target.received_requests().await.unwrap().is_empty());
+    }
+
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn missing_secret_key_is_rejected() {
-        assert!(matches!(StripeClient::new(""), Err(StripeError::SecretKeyMissing)));
-        assert!(matches!(StripeClient::new("   "), Err(StripeError::SecretKeyMissing)));
+        assert!(matches!(
+            StripeClient::new(""),
+            Err(StripeError::SecretKeyMissing)
+        ));
+        assert!(matches!(
+            StripeClient::new("   "),
+            Err(StripeError::SecretKeyMissing)
+        ));
         assert!(StripeClient::new("sk_test_x").is_ok());
     }
 
@@ -442,7 +544,10 @@ mod tests {
             .await
             .expect("checkout session created");
 
-        assert_eq!(session.get("id").and_then(|v| v.as_str()), Some("cs_test_123"));
+        assert_eq!(
+            session.get("id").and_then(|v| v.as_str()),
+            Some("cs_test_123")
+        );
         assert_eq!(
             session.get("url").and_then(|v| v.as_str()),
             Some("https://checkout.stripe.com/c/pay/cs_test_123")
@@ -469,7 +574,10 @@ mod tests {
             .await
             .expect_err("should fail");
         match err {
-            StripeError::Api { status, stripe_type } => {
+            StripeError::Api {
+                status,
+                stripe_type,
+            } => {
                 assert_eq!(status, 400);
                 assert_eq!(stripe_type.as_deref(), Some("invalid_request_error"));
             }
@@ -497,7 +605,10 @@ mod tests {
             .cancel_subscription_at_period_end("sub_123")
             .await
             .expect("cancel ok");
-        assert_eq!(sub.get("cancel_at_period_end").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            sub.get("cancel_at_period_end").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[test]

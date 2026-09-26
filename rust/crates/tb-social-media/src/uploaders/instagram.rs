@@ -172,7 +172,7 @@ impl InstagramUploader {
             rupload_base: DEFAULT_RUPLOAD_BASE.to_string(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             poll_timeout: DEFAULT_POLL_TIMEOUT,
-            http: reqwest::Client::new(),
+            http: crate::http_security::client(Duration::from_secs(60)),
         }
     }
 
@@ -195,20 +195,58 @@ impl InstagramUploader {
         self
     }
 
+    fn api_endpoint(&self, segments: &[&str]) -> Result<reqwest::Url, UploadError> {
+        let mut url = crate::http_security::endpoint(&self.api_base)
+            .map_err(|detail| UploadError::Request(detail.into()))?;
+        if url.query().is_some() {
+            return Err(UploadError::Request(
+                "API base must not contain a query".into(),
+            ));
+        }
+        if segments
+            .iter()
+            .any(|segment| matches!(*segment, "" | "." | ".."))
+        {
+            return Err(UploadError::Request(
+                "Invalid Graph API path segment".into(),
+            ));
+        }
+        // Encode account/container identifiers as individual path segments. The
+        // validated origin is retained, including for identifiers containing '/'.
+        url.path_segments_mut()
+            .map_err(|_| UploadError::Request("Invalid Graph API base path".into()))?
+            .pop_if_empty()
+            .extend(segments.iter().copied());
+        Ok(url)
+    }
+
+    fn validate_upload_endpoint(&self, raw: &str) -> Result<reqwest::Url, UploadError> {
+        let url = crate::http_security::endpoint(raw)
+            .map_err(|detail| UploadError::Request(detail.into()))?;
+        let base = crate::http_security::endpoint(&self.rupload_base)
+            .map_err(|detail| UploadError::Request(detail.into()))?;
+        if url.origin() != base.origin() {
+            return Err(UploadError::Request(
+                "Unexpected Instagram upload origin".into(),
+            ));
+        }
+        Ok(url)
+    }
+
     /// Prüft das Access-Token via `GET /me`. Läuft als Preflight vor dem
     /// Container-Call, damit ein abgelaufenes Token nicht erst nach dem
     /// Datei-Upload auffällt.
     pub async fn verify_token(&self) -> Result<Value, UploadError> {
         let resp = self
             .http
-            .get(format!("{}/me", self.api_base))
+            .get(self.api_endpoint(&["me"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", "user_id,username"),
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         graph_json(resp, "Instagram auth check").await
     }
 
@@ -218,17 +256,14 @@ impl InstagramUploader {
     pub async fn check_publishing_limit(&self) -> Result<(), UploadError> {
         let resp = self
             .http
-            .get(format!(
-                "{}/{}/content_publishing_limit",
-                self.api_base, self.business_account_id
-            ))
+            .get(self.api_endpoint(&[&self.business_account_id, "content_publishing_limit"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", "config,quota_usage"),
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = match graph_json(resp, "Instagram publishing limit").await {
             Ok(v) => v,
             // Kontingent- und Token-Fehler zählen, alles andere darf den Upload
@@ -265,10 +300,7 @@ impl InstagramUploader {
     ) -> Result<String, UploadError> {
         let resp = self
             .http
-            .post(format!(
-                "{}/{}/media",
-                self.api_base, self.business_account_id
-            ))
+            .post(self.api_endpoint(&[&self.business_account_id, "media"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("media_type", "REELS"),
@@ -281,7 +313,7 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = graph_json(resp, "Instagram create container").await?;
         data["id"]
             .as_str()
@@ -298,10 +330,7 @@ impl InstagramUploader {
     ) -> Result<(String, String), UploadError> {
         let resp = self
             .http
-            .post(format!(
-                "{}/{}/media",
-                self.api_base, self.business_account_id
-            ))
+            .post(self.api_endpoint(&[&self.business_account_id, "media"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("media_type", "REELS"),
@@ -314,15 +343,15 @@ impl InstagramUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = graph_json(resp, "Instagram create container").await?;
         let id = data["id"]
             .as_str()
             .map(str::to_string)
             .ok_or_else(|| UploadError::Api("No container ID in response".to_string()))?;
-        // Die Antwort liefert die fertige Upload-Adresse gleich mit. Solange die
-        // Basis nicht für Tests überschrieben ist, nehmen wir sie, damit ein
-        // Hostwechsel bei Meta nicht sofort alles bricht.
+        // The API may select an upload path, but not an arbitrary origin. The
+        // final URL is checked against rupload_base before any bytes or token
+        // are sent; a provider host change requires an explicit configuration update.
         let uri = data["uri"]
             .as_str()
             .filter(|u| !u.is_empty() && self.rupload_base == DEFAULT_RUPLOAD_BASE)
@@ -338,6 +367,8 @@ impl InstagramUploader {
         upload_uri: &str,
         video_path: &str,
     ) -> Result<(), UploadError> {
+        // Validate before reading the file or attaching the credential.
+        let upload_uri = self.validate_upload_endpoint(upload_uri)?;
         let bytes = tokio::fs::read(video_path).await?;
         let file_size = bytes.len();
         let resp = self
@@ -353,7 +384,7 @@ impl InstagramUploader {
             .body(bytes)
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         graph_json(resp, "Instagram resumable upload").await?;
         Ok(())
     }
@@ -362,14 +393,14 @@ impl InstagramUploader {
     pub async fn container_status(&self, container_id: &str) -> Result<Value, UploadError> {
         let resp = self
             .http
-            .get(format!("{}/{}", self.api_base, container_id))
+            .get(self.api_endpoint(&[container_id])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", "status_code,status"),
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         graph_json(resp, "Instagram container status").await
     }
 
@@ -408,17 +439,14 @@ impl InstagramUploader {
     pub async fn publish_container(&self, container_id: &str) -> Result<String, UploadError> {
         let resp = self
             .http
-            .post(format!(
-                "{}/{}/media_publish",
-                self.api_base, self.business_account_id
-            ))
+            .post(self.api_endpoint(&[&self.business_account_id, "media_publish"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("creation_id", container_id),
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let data = graph_json(resp, "Instagram publish").await?;
         data["id"]
             .as_str()
@@ -515,14 +543,14 @@ impl PlatformUploader for InstagramUploader {
     ) -> Result<AnalyticsSnapshot, UploadError> {
         let media_resp = self
             .http
-            .get(format!("{}/{}", self.api_base, media_id))
+            .get(self.api_endpoint(&[media_id])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("fields", MEDIA_FIELDS),
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let media = graph_json(media_resp, "Instagram analytics").await?;
 
         // Insights sind best-effort, aber nicht mehr still: ein Fehlschlag wird
@@ -531,14 +559,14 @@ impl PlatformUploader for InstagramUploader {
         // Historie mit Nullen, die man nicht von echten Nullen unterscheidet.
         let insights_resp = self
             .http
-            .get(format!("{}/{}/insights", self.api_base, media_id))
+            .get(self.api_endpoint(&[media_id, "insights"])?)
             .query(&[
                 ("access_token", self.access_token.as_str()),
                 ("metric", INSIGHT_METRICS),
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let insights = match read_graph_json(insights_resp).await {
             Ok(v) => v,
             Err(f) if f.code == Some(190) => return Err(UploadError::NotAuthenticated),
@@ -594,6 +622,91 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const BIZ: &str = "17841400000";
+
+    #[test]
+    fn security_graph_identifiers_cannot_change_origin_or_query() {
+        let uploader = InstagramUploader::new("synthetic", BIZ);
+        let base = reqwest::Url::parse(DEFAULT_API_BASE).unwrap();
+        for identifier in [
+            "a/b?extra=value#fragment",
+            "https://example.test/x",
+            "//example.test/x",
+        ] {
+            let endpoint = uploader.api_endpoint(&[identifier, "media"]).unwrap();
+            assert_eq!(endpoint.origin(), base.origin());
+            assert!(endpoint.query().is_none());
+            assert!(endpoint.fragment().is_none());
+            assert!(endpoint.path().contains("%2F"));
+            assert!(endpoint.path().ends_with("/media"));
+        }
+        for identifier in ["", ".", ".."] {
+            assert!(uploader.api_endpoint(&[identifier]).is_err());
+        }
+    }
+
+    #[test]
+    fn security_upload_destination_must_match_the_configured_origin() {
+        let uploader = InstagramUploader::new("synthetic", BIZ);
+        assert!(uploader
+            .validate_upload_endpoint("https://rupload.facebook.com/ig-api-upload/v23.0/123")
+            .is_ok());
+        for uri in [
+            "https://example.test/123",
+            "https://rupload.facebook.com.evil.test/123",
+            "http://rupload.facebook.com/123",
+            "http://127.0.0.1/123",
+            "https://rupload.facebook.com:8443/123",
+        ] {
+            assert!(uploader.validate_upload_endpoint(uri).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn security_all_graph_operations_reject_remote_http() {
+        let uploader =
+            InstagramUploader::new("synthetic", BIZ).with_api_base("http://example.test");
+        assert!(uploader.verify_token().await.is_err());
+        assert!(uploader.check_publishing_limit().await.is_err());
+        assert!(uploader
+            .create_media_container("https://example.test/video", "", false)
+            .await
+            .is_err());
+        assert!(uploader
+            .create_resumable_container("", false)
+            .await
+            .is_err());
+        assert!(uploader.container_status("123").await.is_err());
+        assert!(uploader.publish_container("123").await.is_err());
+        assert!(uploader.fetch_video_analytics("123", "day").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn security_transport_errors_never_echo_the_access_token_url() {
+        let mut uploader = InstagramUploader::new("synthetic-sensitive-value", BIZ)
+            .with_api_base("http://127.0.0.1:1");
+        // HTTPS-only rejects before networking, producing a real reqwest URL
+        // error for the same credential-bearing request as the upload path.
+        uploader.http = reqwest::Client::builder().https_only(true).build().unwrap();
+        let error = uploader.verify_token().await.unwrap_err();
+        let diagnostic = format!("{error:?}");
+        assert!(!diagnostic.contains("synthetic-sensitive-value"));
+        assert!(!diagnostic.contains("access_token="));
+    }
+
+    #[tokio::test]
+    async fn security_upload_rejects_an_unexpected_host_before_opening_the_file() {
+        let uploader = InstagramUploader::new("synthetic", BIZ);
+        let error = uploader
+            .upload_file_resumable(
+                "https://example.test/upload",
+                "/nonexistent/security-fixture.mp4",
+            )
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Unexpected Instagram upload origin"));
+    }
 
     fn fast(uploader: InstagramUploader) -> InstagramUploader {
         uploader.with_poll_timing(Duration::from_millis(5), Duration::from_millis(500))

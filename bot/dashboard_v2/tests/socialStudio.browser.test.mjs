@@ -155,6 +155,7 @@ test(
       };
       const streamer =
         url.searchParams.get('streamer') ?? url.searchParams.get('streamer_login') ?? 'earlysalty';
+      if (!Object.hasOwn(plans, streamer)) return json({ error: 'unknown_streamer' }, 404);
       let input = {};
       if (req.method !== 'GET') {
         let body = '';
@@ -214,17 +215,23 @@ test(
       if (p.includes('/settings/posting-plan')) {
         const plan = plans[streamer];
         if (req.method !== 'GET') {
-          if (p.includes('/platform/'))
-            Object.assign(
-              plan.platforms.find((item) => item.platform === p.split('/').at(-1)),
-              input,
-            );
-          else if (p.includes('/category/'))
-            Object.assign(
-              plan.categories.find((item) => item.category_key === p.split('/').at(-1)),
-              input,
-            );
-          else Object.assign(plan, input);
+          if (!input || typeof input !== 'object' || Array.isArray(input))
+            return json({ error: 'invalid_patch' }, 400);
+          // Fixture updates model the API fields, not arbitrary JSON object merging.
+          // Never copy attacker-selected keys such as __proto__ or constructor.
+          let target = plan;
+          let fields = ['approval_mode', 'timezone', 'subtitles_enabled'];
+          if (p.includes('/platform/')) {
+            target = plan.platforms.find((item) => item.platform === p.split('/').at(-1));
+            fields = ['auto_post', 'posts_per_week', 'max_posts_per_day', 'post_times'];
+          } else if (p.includes('/category/')) {
+            target = plan.categories.find((item) => item.category_key === p.split('/').at(-1));
+            fields = ['enrichment_enabled', 'auto_post'];
+          }
+          if (!target) return json({ error: 'unknown_target' }, 404);
+          for (const field of fields) {
+            if (Object.hasOwn(input, field)) target[field] = input[field];
+          }
           if (fremdAenderung) {
             fremdAenderung();
             fremdAenderung = null;
@@ -322,6 +329,31 @@ test(
     t.after(async () => {
       await browser.close();
       await new Promise((resolve) => server.close(resolve));
+    });
+    await t.test('Fixture-API weist fremde Konten ab und kopiert keine Prototyp-Schlüssel', async () => {
+      const endpoint = base + '/social-media/api/settings/posting-plan';
+      const before = JSON.stringify(plans.earlysalty);
+      const malicious = '{"__proto__":{"fixturePolluted":true},"constructor":{"prototype":{"fixturePolluted":true}}}';
+      const patched = await fetch(endpoint + '?streamer=earlysalty', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: malicious,
+      });
+      assert.equal(patched.status, 200);
+      await patched.json();
+      assert.equal(JSON.stringify(plans.earlysalty), before);
+      assert.equal(Object.getPrototypeOf(plans.earlysalty), Object.prototype);
+      assert.equal(Object.hasOwn(plans.earlysalty, 'constructor'), false);
+      assert.equal(plans.earlysalty.fixturePolluted, undefined);
+      for (const streamer of ['__proto__', 'constructor', 'unknown']) {
+        const rejected = await fetch(endpoint + '?streamer=' + streamer, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' }, body: malicious,
+        });
+        assert.equal(rejected.status, 404);
+        await rejected.json();
+      }
+      assert.equal(Object.prototype.fixturePolluted, undefined);
+      // The UI write-count assertions below start from an empty observation log.
+      writes.length = 0;
+      requests.length = 0;
     });
     const page = await browser.newPage({
       viewport: { width: 1440, height: 1080 },
