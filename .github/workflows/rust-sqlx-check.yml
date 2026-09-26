@@ -162,19 +162,17 @@ jobs:
     needs: [changes, uplink-auth-tests, offline-build, schema-gate]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Require applicable Rust gates
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           RUST_CHANGED: ${{ needs.changes.outputs.rust }}
           AUTH_RESULT: ${{ needs.uplink-auth-tests.result }}
           OFFLINE_RESULT: ${{ needs.offline-build.result }}
           SCHEMA_RESULT: ${{ needs.schema-gate.result }}
         shell: bash
         run: |
-          set -euo pipefail
-          if [ "$RUST_CHANGED" != "true" ]; then
-            echo "No rust/** change; Rust SQLx gate is not applicable."
-            exit 0
-          fi
-          test "$AUTH_RESULT" = "success"
-          test "$OFFLINE_RESULT" = "success"
-          test "$SCHEMA_RESULT" = "success"
+          bash scripts/ci/required-rust-gate.sh --self-test
+          bash scripts/ci/required-rust-gate.sh
