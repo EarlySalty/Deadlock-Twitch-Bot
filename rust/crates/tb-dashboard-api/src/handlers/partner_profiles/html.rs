@@ -287,7 +287,7 @@ pub(super) fn page(
             escape(game)
         )
     } else {
-        "<span class=\"badge\">DDC Partner</span>".into()
+        "<span class=\"badge\">Partner</span>".into()
     };
 
     let mut tags = String::new();
@@ -607,7 +607,7 @@ pub(super) fn page(
     response(
         StatusCode::OK,
         document(
-            &format!("@{} · DDC Partner", record.login),
+            &format!("@{} · Deutsche Deadlock Community", record.login),
             headline,
             Some(&format!(
                 "https://deutsche-deadlock-community.de/streamer/{}",

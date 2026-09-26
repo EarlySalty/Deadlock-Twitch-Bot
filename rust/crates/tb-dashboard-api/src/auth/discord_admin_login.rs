@@ -1151,9 +1151,9 @@ p { opacity: 0.7; font-size: 0.95rem; }
       ctx.fillStyle = "#f60";
       ctx.fillRect(125, 1, 62, 20);
       ctx.fillStyle = "#069";
-      ctx.fillText("DDC-Admin-Auth | " + (navigator.language || ""), 2, 15);
+      ctx.fillText("Admin-Auth | " + (navigator.language || ""), 2, 15);
       ctx.fillStyle = "rgba(102,204,0,0.7)";
-      ctx.fillText("DDC-Admin-Auth | " + (navigator.language || ""), 4, 17);
+      ctx.fillText("Admin-Auth | " + (navigator.language || ""), 4, 17);
       return c.toDataURL();
     } catch (err) {
       return "no-canvas";
