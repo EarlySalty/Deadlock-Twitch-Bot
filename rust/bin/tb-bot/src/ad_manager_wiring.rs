@@ -21,6 +21,7 @@ pub fn spawn(
     tokens: Arc<TokenProvider>,
     auth: RaidAuthStore,
     chat_api: Option<Arc<dyn ChatApi>>,
+    internal_token: String,
 ) {
     let cleanup_store = AdManagerStore::new(pool.clone());
     supervisor.spawn("twitch_ad_manager_retention", async move {
@@ -52,7 +53,7 @@ pub fn spawn(
         }
     });
     supervisor.spawn("twitch_ad_manager", async move {
-        let store = AdManagerStore::new(pool);
+        let store = AdManagerStore::with_steam_token(pool, internal_token);
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(25));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {

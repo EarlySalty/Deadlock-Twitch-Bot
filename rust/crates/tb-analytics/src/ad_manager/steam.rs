@@ -18,8 +18,8 @@ pub(super) struct Client {
 }
 
 impl Client {
-    pub(super) fn new() -> Self {
-        Self::with_base(STEAM_BASE, std::env::var("TWITCH_INTERNAL_API_TOKEN").ok())
+    pub(super) fn new(token: Option<String>) -> Self {
+        Self::with_base(STEAM_BASE, token)
     }
 
     fn with_base(base: &str, token: Option<String>) -> Self {

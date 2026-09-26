@@ -1,7 +1,7 @@
 //! Session-gebundene API des Twitch-Werbemanagers.
 
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -14,6 +14,7 @@ use tb_analytics::ad_manager::{
     AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE, READ_SCOPE,
     SNOOZE_SCOPE,
 };
+use tb_http_core::ExpectedToken;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -218,8 +219,9 @@ async fn response(
     pool: &PgPool,
     uid: &str,
     _login: &str,
+    internal_token: &str,
 ) -> Result<serde_json::Value, sqlx::Error> {
-    let store = AdManagerStore::new(pool.clone());
+    let store = AdManagerStore::with_steam_token(pool.clone(), internal_token.to_owned());
     let (settings, updated) = store
         .load_settings(uid)
         .await?
@@ -321,12 +323,16 @@ async fn response(
     Ok(json!({"settings":SettingsResponse{value:settings,updated_at:updated},"status":status}))
 }
 
-pub async fn get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
+pub async fn get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Extension(ExpectedToken(internal_token)): Extension<ExpectedToken>,
+) -> Response {
     let (uid, login) = match identity(auth) {
         Ok(v) => v,
         Err(error) => return error.into_response(),
     };
-    match response(&pool, &uid, &login).await {
+    match response(&pool, &uid, &login, &internal_token).await {
         Ok(body) => Json(body).into_response(),
         Err(error) => {
             tracing::error!(%error,"Werbemanager konnte nicht gelesen werden");
@@ -346,6 +352,7 @@ fn bad_request(message: &str) -> Response {
 pub async fn save_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    Extension(ExpectedToken(internal_token)): Extension<ExpectedToken>,
     Json(raw): Json<serde_json::Value>,
 ) -> Response {
     let (uid, login) = match identity(auth) {
@@ -382,7 +389,7 @@ pub async fn save_handler(
             return reauth(absent);
         }
     }
-    let mut body = match response(&pool, &uid, &login).await {
+    let mut body = match response(&pool, &uid, &login, &internal_token).await {
         Ok(body) => body,
         Err(error) => {
             tracing::error!(%error,"Werbemanager-Status konnte vor dem Speichern nicht gelesen werden");

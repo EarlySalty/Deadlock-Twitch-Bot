@@ -847,7 +847,13 @@ pub struct AdManagerStore {
 
 impl AdManagerStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, steam: steam::Client::new() }
+        Self { pool, steam: steam::Client::new(None) }
+    }
+
+    /// Steam-Präsenz benötigt denselben internen Token wie die Runtime-API.
+    /// Ohne explizite Übergabe bleibt die Abfrage geschlossen.
+    pub fn with_steam_token(pool: PgPool, token: String) -> Self {
+        Self { pool, steam: steam::Client::new(Some(token)) }
     }
     pub fn pool(&self) -> &PgPool {
         &self.pool
