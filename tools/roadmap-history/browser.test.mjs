@@ -18,6 +18,7 @@ assert.ok(original.nodes.length > 800);
 const rootNode = original.nodes.find(n => n.id === 'genesis');
 assert.equal(rootNode.commitHash, '3654f6c73be53fc569da673fb307e7e0c79f2b87');
 assert.equal(rootNode.date, '2025-09-21');
+assert.equal(rootNode.title, 'Twitch Bot Genesis / Core Init');
 const index = new Map(original.nodes.map(n => [n.id, n]));
 for (const node of original.nodes) {
   const seen = new Set(); let current = node;
@@ -41,6 +42,7 @@ try {
   const page = await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}); watch(page);
   await page.goto(base); await page.locator('.node').first().waitFor();
   assert.equal(await page.locator('.node.root').count(),1);
+  assert.equal(await page.locator('.node.root .label').textContent(),'Twitch-Bot: erster belegter Stand');
   assert.equal(await page.locator('[data-view=overview]').getAttribute('aria-pressed'),'true');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   const overview = await page.locator('.node').count(); assert.ok(overview<original.nodes.length/4);

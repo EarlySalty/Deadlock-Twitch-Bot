@@ -10,6 +10,10 @@ on:
       - .github/workflows/roadmap-history.yml
       - bot/dashboard_v2/package.json
       - bot/dashboard_v2/package-lock.json
+      - ops/systemd/install-roadmap-history.sh
+      - ops/systemd/deadlock-roadmap-history.service
+      - ops/systemd/deadlock-roadmap-history.timer
+      - ops/tests/roadmap_installer_permissions.test.sh
   workflow_dispatch:
 
 permissions:
@@ -43,6 +47,11 @@ jobs:
           node --check tools/roadmap-history/browser.test.mjs
       - name: Generate from the pinned real main history
         run: python3 tools/generate_roadmap.py --ref origin/main
+      - name: Installer service-user and failed-preflight proof
+        run: |
+          shellcheck ops/systemd/install-roadmap-history.sh ops/tests/roadmap_installer_permissions.test.sh
+          systemd-analyze verify ops/systemd/deadlock-roadmap-history.service ops/systemd/deadlock-roadmap-history.timer
+          sudo bash ops/tests/roadmap_installer_permissions.test.sh
       - name: Install the integrity-locked browser test runtime
         run: |
           npm ci --prefix bot/dashboard_v2 --no-audit --no-fund --ignore-scripts

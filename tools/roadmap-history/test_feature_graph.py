@@ -3,38 +3,48 @@ import copy
 import gzip
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
-from feature_graph import (GENESIS, LEGACY_REPOSITORY, CURRENT_REPOSITORY, LEGACY_PATHS,
-                           atomic_write, build_graph, canonical, load_legacy, validate_graph)
+from feature_graph import (
+    CURRENT_REPOSITORY,
+    GENESIS,
+    LEGACY_PATHS,
+    LEGACY_REPOSITORY,
+    ROOT_TITLE,
+    atomic_write,
+    build_graph,
+    canonical,
+    load_legacy,
+    validate_graph,
+)
 
 HERE = Path(__file__).resolve().parent
 
 
 def commit(sha, date, features=('chat',), kind='fix', repository=CURRENT_REPOSITORY):
-    return dict(id=sha, date=date, timestamp=date + 'T12:00:00+02:00',
-                title='Änderung ' + sha[:8], subject=kind + ': Änderung', kind=kind,
-                repository=repository, features=list(features), paths=['bot/chat.py'],
-                pathCount=1, basis='subject')
+    return {'id': sha, 'date': date, 'timestamp': date + 'T12:00:00+02:00',
+                'title': 'Änderung ' + sha[:8], 'subject': kind + ': Änderung', 'kind': kind,
+                'repository': repository, 'features': list(features), 'paths': ['bot/chat.py'],
+                'pathCount': 1, 'basis': 'subject'}
 
 
 def fixture():
     taxonomy = {'features': [
-        dict(id='chat', title='Chat', description='Chat-Befehle', parentId='product'),
-        dict(id='chat-commands', title='Befehle', description='Unterfunktion', parentId='chat'),
-        dict(id='other', title='Offene Zuordnung', description='Unklar', parentId='product'),
+        {'id': 'chat', 'title': 'Chat', 'description': 'Chat-Befehle', 'parentId': 'product'},
+        {'id': 'chat-commands', 'title': 'Befehle', 'description': 'Unterfunktion', 'parentId': 'chat'},
+        {'id': 'other', 'title': 'Offene Zuordnung', 'description': 'Unklar', 'parentId': 'product'},
     ]}
     legacy = {'commits': [commit(GENESIS, '2025-09-21', repository=LEGACY_REPOSITORY)],
-              'source': dict(repository=LEGACY_REPOSITORY, revision='b' * 40, shallow=False,
-                             cutoff='2026-02-24', paths=list(LEGACY_PATHS))}
+              'source': {'repository': LEGACY_REPOSITORY, 'revision': 'b' * 40, 'shallow': False,
+                             'cutoff': '2026-02-24', 'paths': list(LEGACY_PATHS)}}
     legacy['sha256'] = hashlib.sha256(canonical(legacy)).hexdigest()
-    data = dict(commits=[commit('a' * 40, '2026-02-24', kind='feat')], revision='a' * 40,
-                ref='test', generatedAt='2026-09-24T10:00:00Z', shallow=False)
+    data = {'commits': [commit('a' * 40, '2026-02-24', kind='feat')], 'revision': 'a' * 40,
+                'ref': 'test', 'generatedAt': '2026-09-24T10:00:00Z', 'shallow': False}
     return data, taxonomy, legacy
 
 
@@ -91,6 +101,12 @@ class FeatureGraphTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_graph(data, taxonomy, legacy)
 
+    def test_shallow_current_history_is_rejected(self):
+        data, taxonomy, legacy = fixture()
+        data['shallow'] = True
+        with self.assertRaisesRegex(ValueError, 'vollständige Git-Historie'):
+            build_graph(data, taxonomy, legacy)
+
     def test_cutoff_mismatch_is_rejected(self):
         data, taxonomy, legacy = fixture()
         legacy['source']['cutoff'] = '2026-02-25'
@@ -123,6 +139,21 @@ class FeatureGraphTests(unittest.TestCase):
                 node['parentId'] = 'fake'
         with self.assertRaises(ValueError):
             validate_graph(nodes)
+
+    def test_direct_graph_rejects_forged_genesis_metadata(self):
+        for field, value in (
+            ('title', 'Erfunden'),
+            ('date', '2024-01-01'),
+            ('commitHash', '0' * 40),
+            ('repository', CURRENT_REPOSITORY),
+            ('role', 'feature'),
+            ('commitIds', []),
+        ):
+            nodes = copy.deepcopy(self.graph()['nodes'])
+            nodes[0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_graph(nodes)
+        self.assertEqual(self.graph()['nodes'][0]['title'], ROOT_TITLE)
 
     def test_cycle_is_rejected(self):
         nodes = self.graph()['nodes']
@@ -160,7 +191,7 @@ class FeatureGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             source, target = Path(folder) / 'nodes.json', Path(folder) / 'result.json'
             source.write_text(json.dumps(self.graph()['nodes']))
-            result = subprocess.run([sys.executable, str(HERE / 'feature_graph.py'), '--input', str(source), '--output', str(target), '--legacy-cache', str(Path(folder) / 'missing')], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, str(HERE / 'feature_graph.py'), '--input', str(source), '--output', str(target), '--legacy-cache', str(Path(folder) / 'missing')], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(target.read_text())['rootId'], 'genesis')
 
@@ -169,9 +200,27 @@ class FeatureGraphTests(unittest.TestCase):
             source, target = Path(folder) / 'nodes.json', Path(folder) / 'result.json'
             source.write_text('[]')
             target.write_bytes(b'previous valid deployment')
-            result = subprocess.run([sys.executable, str(HERE / 'feature_graph.py'), '--input', str(source), '--output', str(target)], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, str(HERE / 'feature_graph.py'), '--input', str(source), '--output', str(target)], capture_output=True, text=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(target.read_bytes(), b'previous valid deployment')
+
+    def test_shallow_current_input_preserves_previous_output(self):
+        data, _, legacy = fixture()
+        data['shallow'] = True
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'shallow.json'
+            cache = Path(folder) / 'legacy.json.gz'
+            target = Path(folder) / 'published.html'
+            source.write_text(json.dumps(data), encoding='utf-8')
+            cache.write_bytes(gzip.compress(canonical(legacy), mtime=0))
+            target.write_text('previous valid deployment', encoding='utf-8')
+            result = subprocess.run(
+                [sys.executable, str(HERE / 'feature_graph.py'), '--input', str(source),
+                 '--legacy-cache', str(cache), '--output', str(target)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(target.read_text(encoding='utf-8'), 'previous valid deployment')
 
     def test_frozen_real_legacy_snapshot(self):
         legacy = load_legacy(HERE / 'legacy-history.json.gz')
@@ -194,7 +243,7 @@ class FeatureGraphTests(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(root / 'tools' / 'generate_roadmap.py'),
                  '--repo', str(HERE.parents[1]), '--ref', 'origin/main', '--output', str(published)],
-                capture_output=True, text=True,
+                capture_output=True, text=True, check=False,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(published.read_text(encoding='utf-8'), 'previous valid page')

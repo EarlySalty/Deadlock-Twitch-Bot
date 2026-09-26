@@ -11,9 +11,10 @@ import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import tempfile
+from pathlib import Path
+from typing import Any
 
 from history_data import attribute, build_data, git, load_taxonomy, parse_log
 
@@ -24,6 +25,7 @@ GENESIS = '3654f6c73be53fc569da673fb307e7e0c79f2b87'
 LEGACY_REPOSITORY = 'EarlySalty/Deadlock-Bots'
 CURRENT_REPOSITORY = 'EarlySalty/Deadlock-Twitch-Bot'
 LEGACY_PATHS = ('cogs/twitch_deadlock', 'cogs/twitch', 'cogs/twitch_cog')
+ROOT_TITLE = 'Twitch Bot Genesis / Core Init'
 CATEGORY_ROOTS = {
     'runtime': 'core', 'brain': 'core', 'other': 'core',
     'auth': 'api', 'billing': 'api',
@@ -34,11 +36,11 @@ CATEGORY_ROOTS = {
 SHA = re.compile(r'[0-9a-f]{40,64}')
 
 
-def canonical(value):
+def canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
 
 
-def atomic_write(path, content):
+def atomic_write(path: str | Path, content: bytes) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
@@ -55,7 +57,7 @@ def atomic_write(path, content):
             temporary.unlink(missing_ok=True)
 
 
-def load_legacy(path):
+def load_legacy(path: str | Path) -> dict[str, Any]:
     """A frozen closed chapter: SHA-256 detects truncation or accidental edits."""
     raw = Path(path).read_bytes()
     payload = json.loads(gzip.decompress(raw) if raw[:2] == b'\x1f\x8b' else raw)
@@ -73,7 +75,7 @@ def load_legacy(path):
     return payload
 
 
-def extract_legacy(repo, ref, taxonomy, cutoff='2026-02-24'):
+def extract_legacy(repo: str | Path, ref: str, taxonomy: dict[str, Any], cutoff: str = '2026-02-24') -> dict[str, Any]:
     dt.date.fromisoformat(cutoff)
     revision = git(repo, 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}').strip()
     shallow = git(repo, 'rev-parse', '--is-shallow-repository').strip() == 'true'
@@ -91,13 +93,13 @@ def extract_legacy(repo, ref, taxonomy, cutoff='2026-02-24'):
                         'repository': LEGACY_REPOSITORY})
     if not commits or commits[0]['id'] != GENESIS or commits[0]['date'] != '2025-09-21':
         raise ValueError('Der geprüfte Twitch-Ursprung wurde in dieser Historie nicht gefunden.')
-    source = dict(repository=LEGACY_REPOSITORY, revision=revision, ref=ref,
-                  shallow=False, paths=list(LEGACY_PATHS), cutoff=cutoff)
-    body = dict(commits=commits, source=source)
+    source = {'repository': LEGACY_REPOSITORY, 'revision': revision, 'ref': ref,
+                  'shallow': False, 'paths': list(LEGACY_PATHS), 'cutoff': cutoff}
+    body = {'commits': commits, 'source': source}
     return {**body, 'sha256': hashlib.sha256(canonical(body)).hexdigest()}
 
 
-def validate_graph(nodes):
+def validate_graph(nodes: list[dict[str, Any]]) -> str:
     index = {}
     for n in nodes:
         for key in ('id', 'title', 'description', 'date', 'category', 'type', 'parentId'):
@@ -106,7 +108,7 @@ def validate_graph(nodes):
         if not isinstance(n['id'], str) or not n['id'] or n['id'] in index:
             raise ValueError('Knoten-ID fehlt oder ist doppelt.')
         if not isinstance(n['title'], str) or not isinstance(n['description'], str):
-            raise ValueError('Titel und Beschreibung müssen Text sein.')
+            raise TypeError('Titel und Beschreibung müssen Text sein.')
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', n['date']):
             raise ValueError('ISO-Datum erforderlich.')
         dt.date.fromisoformat(n['date'])
@@ -126,6 +128,13 @@ def validate_graph(nodes):
     roots = [n for n in nodes if n['parentId'] is None]
     if len(roots) != 1 or roots[0]['type'] != 'root' or roots[0]['id'] != 'genesis':
         raise ValueError('Genau ein Ursprung genesis mit parentId=null erforderlich.')
+    root = roots[0]
+    if (root['title'] != ROOT_TITLE or root['date'] != '2025-09-21'
+            or root.get('commitHash') != GENESIS
+            or root.get('repository') != LEGACY_REPOSITORY
+            or root.get('role') != 'root'
+            or root.get('commitIds') != [GENESIS]):
+        raise ValueError('Der belegte Twitch-Ursprung wurde verändert.')
     done = set()
     for n in nodes:
         seen, cursor = set(), n
@@ -145,7 +154,9 @@ def validate_graph(nodes):
     return roots[0]['id']
 
 
-def build_graph(data, taxonomy, legacy, bucket_days=14):
+def build_graph(data: dict[str, Any], taxonomy: dict[str, Any], legacy: dict[str, Any], bucket_days: int = 14) -> dict[str, Any]:
+    if data.get('shallow') is not False:
+        raise ValueError('Für den aktuellen Twitch-Verlauf wird eine vollständige Git-Historie benötigt.')
     if not 1 <= bucket_days <= 31:
         raise ValueError('Bündelfenster muss zwischen 1 und 31 Tagen liegen.')
     features = {f['id']: f for f in taxonomy['features']}
@@ -184,7 +195,7 @@ def build_graph(data, taxonomy, legacy, bucket_days=14):
         if lead.get('prUrl'):
             result['prUrl'] = lead['prUrl']
         return result
-    nodes = [node('genesis', 'Twitch Bot Genesis / Core Init',
+    nodes = [node('genesis', ROOT_TITLE,
                   'Erster Git-Nachweis des Twitch-Bots im ursprünglichen Deadlock-Bots-Repository. Kein Nachweis des ersten Live-Betriebs.',
                   origin, 'core', 'root', None, role='root', commitIds=[origin['id']], maintenance=False)]
     epoch = dt.date(1970, 1, 1)
@@ -204,7 +215,7 @@ def build_graph(data, taxonomy, legacy, bucket_days=14):
         for c in direct:
             if c['id'] in initial_ids or c['id'] == origin['id']:
                 continue
-            kind = 'refactor' if re.match(r'^(refactor|perf|refine)(?:\(|:)', c['subject'], re.I) else 'major_feature' if c['kind'] == 'feat' else 'update'
+            kind = 'refactor' if re.match(r'^(refactor|perf|refine)(?:\(|:)', c['subject'], re.IGNORECASE) else 'major_feature' if c['kind'] == 'feat' else 'update'
             maintenance = c['kind'] in MAINTENANCE
             bucket = (dt.date.fromisoformat(c['date']) - epoch).days // bucket_days
             buckets.setdefault((bucket, kind, maintenance), []).append(c)
@@ -220,16 +231,16 @@ def build_graph(data, taxonomy, legacy, bucket_days=14):
     represented = {sha for n in nodes for sha in n['commitIds']}
     if represented != set(unique):
         raise ValueError('Die Bündelung hat Git-Änderungen verloren.')
-    return dict(schemaVersion=3, rootId='genesis', nodes=nodes, commits=commits,
-                revision=data['revision'], ref=data['ref'], generatedAt=data['generatedAt'],
-                shallow=data['shallow'], timezone='Europe/Berlin', bucketDays=bucket_days,
-                sources=[legacy['source'], dict(repository=CURRENT_REPOSITORY, revision=data['revision'], ref=data['ref'])],
-                legacyFingerprint=legacy['sha256'], coverage=dict(first=origin['date'], last=commits[-1]['date']),
-                stats=dict(commits=len(commits), nodes=len(nodes), features=sum(n['role'] == 'feature' for n in nodes),
-                           legacyCommits=len(legacy['commits']), unassigned=sum(c['basis'] in ('unassigned', 'ambiguous') for c in commits)))
+    return {'schemaVersion': 3, 'rootId': 'genesis', 'nodes': nodes, 'commits': commits,
+                'revision': data['revision'], 'ref': data['ref'], 'generatedAt': data['generatedAt'],
+                'shallow': data['shallow'], 'timezone': 'Europe/Berlin', 'bucketDays': bucket_days,
+                'sources': [legacy['source'], {'repository': CURRENT_REPOSITORY, 'revision': data['revision'], 'ref': data['ref']}],
+                'legacyFingerprint': legacy['sha256'], 'coverage': {'first': origin['date'], 'last': commits[-1]['date']},
+                'stats': {'commits': len(commits), 'nodes': len(nodes), 'features': sum(n['role'] == 'feature' for n in nodes),
+                           'legacyCommits': len(legacy['commits']), 'unassigned': sum(c['basis'] in ('unassigned', 'ambiguous') for c in commits)}}
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path)
     parser.add_argument('--ref', default='origin/main')

@@ -33,6 +33,9 @@ if [[ ! -d $release ]]; then
   install -d -m 0755 "$stage/tools/roadmap-history"
   install -m 0644 "$src/tools/generate_roadmap.py" "$stage/tools/generate_roadmap.py"
   for file in "${files[@]}"; do install -m 0644 "$src/tools/roadmap-history/$file" "$stage/tools/roadmap-history/$file"; done
+  # mktemp -d starts at 0700. The oneshot service runs as nathanael and must
+  # traverse the immutable release after the atomic rename.
+  chmod 0755 "$stage"
   mv -T -- "$stage" "$release"
   stage=''
   trap - EXIT

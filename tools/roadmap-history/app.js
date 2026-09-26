@@ -8,6 +8,7 @@ const children = new Map(data.nodes.map(node => [node.id, []]));
 for (const node of data.nodes) if (node.parentId) children.get(node.parentId).push(node.id);
 const $ = id => document.getElementById(id);
 const categories = {core:'Kern', twitch:'Twitch', dashboard:'Dashboard', api:'API', community:'Community'};
+const displayTitle = node => node.id === 'genesis' ? 'Twitch-Bot: erster belegter Stand' : node.title;
 const number = value => Number(value).toLocaleString('de-DE');
 const day = date => Date.parse(date + 'T00:00:00Z') / 86400000;
 const fmt = date => new Intl.DateTimeFormat('de-DE', {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}).format(new Date(date + 'T00:00:00Z'));
@@ -35,7 +36,7 @@ $('generated').textContent='Erzeugt '+new Date(data.generatedAt).toLocaleString(
 function ancestry(id, output) {let node=byId.get(id); while(node) {output.add(node.id); node=byId.get(node.parentId);}}
 function descendsFrom(id, parent) {let current=byId.get(id); while(current) {if(current.id===parent) return true; current=byId.get(current.parentId);} return false;}
 function descendantCommits(id) {const ids=new Set(); const todo=[id]; while(todo.length) {const next=todo.pop(); for(const hash of byId.get(next)?.commitIds||[]) ids.add(hash); todo.push(...(children.get(next)||[]));} return [...ids].map(hash=>commits.get(hash)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id));}
-function matching(node, term) {if(!term) return true; if((node.title+' '+node.description).toLocaleLowerCase('de-DE').includes(term)) return true; return (node.commitIds||[]).some(id => {const c=commits.get(id); return c && (c.subject+' '+c.title+' '+c.id).toLocaleLowerCase('de-DE').includes(term);});}
+function matching(node, term) {if(!term) return true; if((displayTitle(node)+' '+node.title+' '+node.description).toLocaleLowerCase('de-DE').includes(term)) return true; return (node.commitIds||[]).some(id => {const c=commits.get(id); return c && (c.subject+' '+c.title+' '+c.id).toLocaleLowerCase('de-DE').includes(term);});}
 function selected() {
   const term=$('search').value.trim().toLocaleLowerCase('de-DE');
   const category=$('category').value, kind=$('kind').value, from=$('from').value, to=$('to').value;
@@ -102,7 +103,7 @@ function draw() {
     const n=p.node, wrapper=make('div','node '+(n.role==='root'?'root':n.role==='event'?'event':'feature')+(result.matches && !matching(n,$('search').value.trim().toLocaleLowerCase('de-DE'))?' context':''));
     wrapper.dataset.id=n.id; wrapper.dataset.category=n.category;
     Object.assign(wrapper.style,{left:p.x+'px',top:p.y+'px',width:p.width+'px',height:p.height+'px'});
-    const open=button('',()=>openDetail(n.id),'node-open'); open.setAttribute('aria-label',n.title+', '+fmt(n.date)+': Details öffnen'); open.append(make('span','label',n.title),make('small','',fmt(n.date)+(n.maintenance?' · Pflege':''))); wrapper.append(open);
+    const open=button('',()=>openDetail(n.id),'node-open'); open.setAttribute('aria-label',displayTitle(n)+', '+fmt(n.date)+': Details öffnen'); open.append(make('span','label',displayTitle(n)),make('small','',fmt(n.date)+(n.maintenance?' · Pflege':''))); wrapper.append(open);
     if(n.role==='feature' && (children.get(n.id)||[]).length) {const toggle=button(collapse.has(n.id)?'+':'−',()=>{collapse.has(n.id)?collapse.delete(n.id):collapse.add(n.id); draw(); save();},'node-toggle'); toggle.setAttribute('aria-label',(collapse.has(n.id)?'Zweig öffnen: ':'Zweig schließen: ')+n.title); wrapper.append(toggle);}
     nodeLayer.append(wrapper);
   }
@@ -115,13 +116,13 @@ function zoom(factor,x=$('graph').clientWidth/2,y=$('graph').clientHeight/2) {co
 function reveal(id) {const p=layout?.positions.get(id); if(!p) return; const box=$('graph'); offsetX=box.clientWidth/2-(p.x+p.width/2)*scale; offsetY=box.clientHeight/2-(p.y+p.height/2)*scale; transform();}
 function openDetail(id) {
   const n=byId.get(id); if(!n) return; active=id; page=0; focusReturn=document.activeElement;
-  $('detail-title').textContent=n.title; $('detail-category').textContent=categories[n.category]+' · '+fmt(n.date);
+  $('detail-title').textContent=displayTitle(n); $('detail-category').textContent=categories[n.category]+' · '+fmt(n.date);
   renderDetail(); $('detail').showModal(); document.body.style.overflow='hidden'; $('detail-close').focus(); save();
 }
 function renderDetail() {
   const n=byId.get(active), body=$('detail-body'); body.replaceChildren(); body.append(make('p','',n.description));
   const meta=make('div','meta'); for(const text of [n.role==='root'?'Ursprung':n.role==='feature'?'Funktionsfamilie':'Änderung',n.type,n.repository||'',n.spanEnd&&n.spanEnd!==n.date?'Bis '+fmt(n.spanEnd):''].filter(Boolean)) meta.append(make('span','',text)); body.append(meta);
-  if(n.parentId) {const parent=byId.get(n.parentId); const go=button('Elternast: '+parent.title,()=>{closeDetail(); reveal(parent.id); openDetail(parent.id);},'more'); body.append(go);}
+  if(n.parentId) {const parent=byId.get(n.parentId); const go=button('Elternast: '+displayTitle(parent),()=>{closeDetail(); reveal(parent.id); openDetail(parent.id);},'more'); body.append(go);}
   if(n.role==='feature') body.append(button('Diesen Zweig ansehen',()=>{focusRoot=n.id; view='all'; closeDetail(); draw(); fit(); reveal(n.id); save();},'more'));
   if(n.prUrl && safePr(n.prUrl)) {const paragraph=make('p'); paragraph.append(link('Zugehörigen PR ansehen ↗',n.prUrl)); body.append(paragraph);}
   const list=descendantCommits(n.id); body.append(make('h3','',number(list.length)+' zugeordnete Commits'));

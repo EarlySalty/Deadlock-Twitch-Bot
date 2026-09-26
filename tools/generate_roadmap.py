@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate the admin-only, self-contained feature history; no API or LLM calls.
 
 Usage: python3 tools/generate_roadmap.py --ref origin/main --output dist/roadmap-history/index.html
@@ -9,15 +8,15 @@ import collections
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = Path(__file__).resolve().parent / 'roadmap-history'
 sys.path.insert(0, str(ASSETS))
-from history_data import build_data, load_taxonomy
 from feature_graph import build_graph, load_legacy
+from history_data import build_data, load_taxonomy
 
 
 def safe_json(value):
