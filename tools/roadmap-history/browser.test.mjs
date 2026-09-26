@@ -46,6 +46,9 @@ try {
   assert.equal(await page.locator('[data-view=overview]').getAttribute('aria-pressed'),'true');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   const overview = await page.locator('.node').count(); assert.ok(overview<original.nodes.length/4);
+  await page.locator('#maintenance').check();
+  assert.ok(await page.locator('.node').count()>overview);
+  await page.locator('#maintenance').uncheck();
   await screenshot(page,'feature-tree-desktop'); checks.push('Desktop: echter Ursprung, reduzierte Übersicht, keine Seitenüberbreite');
   await page.locator('[data-view=features]').click();
   assert.ok(await page.locator('.node.feature').count()>=original.stats.features);
@@ -69,6 +72,9 @@ try {
   const bundle=original.nodes.find(n=>n.role==='event'&&n.commitIds.length>1&&!n.maintenance&&n.commitIds.some(id=>original.commits.find(c=>c.id===id)?.title?.length>18));
   assert.ok(bundle); const tail=original.commits.find(c=>c.id===bundle.commitIds.at(-1));
   await page.locator('#search').fill(tail.id); assert.ok(await page.locator('.node[data-id="'+bundle.id+'"]').count()===1); checks.push('Suche findet auch nicht führende Commits eines Bündels');
+  await page.locator('#search').fill('kein-treffer-fuer-diesen-feature-stammbaum');
+  assert.equal(await page.locator('.node').count(),0);
+  assert.match(await page.locator('#status').textContent(),/Keine passenden Änderungen/);
   await page.locator('#reset').click(); await page.locator('[data-view=all]').click();
   const spanning=original.nodes.find(n=>n.role==='event'&&n.spanEnd>n.date&&!n.maintenance);
   assert.ok(spanning); await page.locator('#from').fill(spanning.spanEnd); await page.locator('#from').dispatchEvent('change');

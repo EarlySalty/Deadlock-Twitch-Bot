@@ -46,6 +46,10 @@ function selected() {
     for(const cat of Object.keys(categories)) {
       const latest=data.nodes.filter(n=>n.category===cat && !n.maintenance && n.role==='event').sort((a,b)=>b.date.localeCompare(a.date))[0];
       if(latest) ancestry(latest.id,included);
+      if($('maintenance').checked) {
+        const upkeep=data.nodes.filter(n=>n.category===cat && n.maintenance && n.role==='event').sort((a,b)=>b.date.localeCompare(a.date))[0];
+        if(upkeep) ancestry(upkeep.id,included);
+      }
     }
   } else {
     for(const node of data.nodes) {
@@ -61,6 +65,7 @@ function selected() {
       matches.push(node.id); ancestry(node.id,included);
     }
   }
+  if(term && matches.length===0) return {ids:[],matches:0,emptySearch:true};
   // Hidden children do not reappear through a search until their branch is expanded.
   if(focusRoot && focusRoot!=='genesis') {
     const ancestors=new Set(); ancestry(focusRoot,ancestors);
@@ -108,7 +113,7 @@ function draw() {
     if(n.role==='feature' && (children.get(n.id)||[]).length) {const toggle=button(collapse.has(n.id)?'+':'−',()=>{collapse.has(n.id)?collapse.delete(n.id):collapse.add(n.id); draw(); save();},'node-toggle'); toggle.setAttribute('aria-label',(collapse.has(n.id)?'Zweig öffnen: ':'Zweig schließen: ')+n.title); wrapper.append(toggle);}
     nodeLayer.append(wrapper);
   }
-  $('status').textContent=result.invalidRange?'Der Zeitraum ist ungültig: „Von“ liegt nach „Bis“.':number(result.ids.length)+' Knoten sichtbar · '+number(data.stats.unassigned)+' Zuordnungen offen';
+  $('status').textContent=result.invalidRange?'Der Zeitraum ist ungültig: „Von“ liegt nach „Bis“.':result.emptySearch?'Keine passenden Änderungen gefunden.':number(result.ids.length)+' Knoten sichtbar · '+number(data.stats.unassigned)+' Zuordnungen offen';
   for(const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed',String(b.dataset.view===view));
   transform();
 }

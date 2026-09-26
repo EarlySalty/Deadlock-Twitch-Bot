@@ -87,7 +87,9 @@ rollback() {
   rm -f -- "$candidate"
 }
 trap rollback EXIT
-systemctl stop deadlock-roadmap-history.timer deadlock-roadmap-history.service
+for running_unit in deadlock-roadmap-history.timer deadlock-roadmap-history.service; do
+  if systemctl cat "$running_unit" >/dev/null 2>&1; then systemctl stop "$running_unit"; fi
+done
 install -m 0644 "$src/ops/systemd/deadlock-roadmap-history.service" "$unit"
 install -m 0644 "$src/ops/systemd/deadlock-roadmap-history.timer" "$timer"
 ln -s "$release" "$base/.current-next"
