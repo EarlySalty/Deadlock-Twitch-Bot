@@ -4084,19 +4084,31 @@ async fn eligible_voice_streamer_id(
     broadcaster_id: &str,
 ) -> Result<Option<u64>, sqlx::Error> {
     let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT NULLIF(trim(i.discord_user_id), ''), l.last_seen_at
+        "WITH normalized_identities AS (
+             SELECT twitch_user_id,
+                    CASE WHEN trimmed_discord_id ~ '^[0-9]+$'
+                         THEN NULLIF(ltrim(trimmed_discord_id, '0'), '')
+                    END AS discord_user_id
+               FROM (
+                   SELECT twitch_user_id,
+                          regexp_replace(discord_user_id, '^[[:space:]]+|[[:space:]]+$', '', 'g') AS trimmed_discord_id
+                     FROM twitch_streamer_identities
+               ) identities
+         )
+         SELECT i.discord_user_id, l.last_seen_at
              FROM twitch_partners p
              JOIN twitch_streamers_partner_state ps ON ps.twitch_user_id = p.twitch_user_id
-             JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id
+             JOIN normalized_identities i ON i.twitch_user_id = p.twitch_user_id
              JOIN twitch_live_state l ON l.twitch_user_id = p.twitch_user_id
              WHERE p.twitch_user_id = $1 AND ps.is_partner_active = 1
                AND p.status = 'active'
                AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
                AND COALESCE(p.manual_partner_opt_out, 0) = 0
+               AND i.discord_user_id IS NOT NULL
                AND l.is_live = 1 AND lower(l.last_game) = 'deadlock'
                AND NOT EXISTS (
-                   SELECT 1 FROM twitch_streamer_identities other
-                    WHERE trim(other.discord_user_id) = trim(i.discord_user_id)
+                   SELECT 1 FROM normalized_identities other
+                    WHERE other.discord_user_id = i.discord_user_id
                       AND other.twitch_user_id <> i.twitch_user_id
                )",
     )
@@ -4186,8 +4198,33 @@ mod voice_identity_tests {
             .execute(pool)
             .await
             .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX discord_user_id_raw_unique ON twitch_streamer_identities (discord_user_id) WHERE discord_user_id IS NOT NULL AND discord_user_id <> ''")
+            .execute(pool)
+            .await
+            .unwrap();
 
         sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', ' 555 ')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '0555')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', $1)")
+            .bind("\t555\t")
             .execute(pool)
             .await
             .unwrap();
@@ -4211,6 +4248,37 @@ mod voice_identity_tests {
             .execute(pool)
             .await
             .unwrap();
+
+        for discord_id in ["0555", "\t555\t"] {
+            sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = $1 WHERE twitch_user_id = '123'")
+                .bind(discord_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(555));
+            sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+            sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = '18446744073709551615' WHERE twitch_user_id = '123'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(u64::MAX));
+        for discord_id in ["+555", "18446744073709551616", "kein-discord-id"] {
+            sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = $1 WHERE twitch_user_id = '123'")
+                .bind(discord_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        }
         sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = '555' WHERE twitch_user_id = '123'")
             .execute(pool)
             .await
