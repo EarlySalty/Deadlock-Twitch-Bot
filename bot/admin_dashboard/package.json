@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --test src/utils/commissionRate.test.mjs src/utils/partnerAccess.test.mjs src/utils/brainLab.test.mjs",
+    "test": "node --experimental-strip-types --test src/utils/commissionRate.test.mjs src/utils/partnerAccess.test.mjs src/utils/brainLab.test.mjs src/components/layout/sidebarState.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -26,11 +26,16 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^10.11.0",
     "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
     "vite": "^8.3.0"
   },
   "overrides": {
     "ajv": "^8.18.0",
+    "eslint": {
+      "ajv": "^6.12.6"
+    },
     "minimatch": "^10.2.3",
     "picomatch": "^4.0.4",
     "postcss": "^8.5.23",
