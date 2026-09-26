@@ -729,7 +729,7 @@ export default function CasterOverlayPage() {
               </button>
             </div>
             <p className="text-xs text-white/45">
-              Unsere Kameras übertragen per WebRTC. Externe HTTPS-Browserquellen bleiben als Ersatz möglich. Bei strengen NAT-Einstellungen verbessert später ein eigener TURN-Relay die Verbindung.
+              Unsere Kameras übertragen per WebRTC. Externe HTTPS-Browserquellen bleiben als Ersatz möglich. Bei strengen NAT-Einstellungen verbessert später ein eigenes TURN-Relay die Verbindung.
             </p>
           </section>
         </>
