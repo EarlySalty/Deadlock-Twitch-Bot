@@ -1482,6 +1482,7 @@ async fn main() {
                 token_provider,
                 raid_auth,
                 ad_manager_chat_api.clone(),
+                settings.internal_api.token.clone(),
             ),
             None => tracing::error!(
                 "Werbemanager wurde nicht gestartet: Broadcaster-Tokenzugriff fehlt"

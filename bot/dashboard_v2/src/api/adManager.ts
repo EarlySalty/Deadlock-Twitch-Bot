@@ -31,7 +31,7 @@ export interface AdManagerLastAction {
   at: string;
 }
 
-export type AdManagerSteamState = 'in_match' | 'in_queue' | 'out_of_game' | 'stale';
+export type AdManagerSteamState = 'in_match' | 'in_queue' | 'out_of_game' | 'stale' | 'unavailable';
 
 export interface AdManagerSteamStatus {
   linked: boolean;
