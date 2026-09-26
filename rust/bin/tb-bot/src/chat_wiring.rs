@@ -4096,7 +4096,7 @@ async fn eligible_voice_streamer_id(
                AND l.is_live = 1 AND lower(l.last_game) = 'deadlock'
                AND NOT EXISTS (
                    SELECT 1 FROM twitch_streamer_identities other
-                    WHERE other.discord_user_id = i.discord_user_id
+                    WHERE trim(other.discord_user_id) = trim(i.discord_user_id)
                       AND other.twitch_user_id <> i.twitch_user_id
                )",
     )
@@ -4183,6 +4183,35 @@ mod voice_identity_tests {
             .unwrap();
         assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
         sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', ' 555 ')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = ' 555 ' WHERE twitch_user_id = '123'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(555));
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = '555' WHERE twitch_user_id = '123'")
             .execute(pool)
             .await
             .unwrap();
