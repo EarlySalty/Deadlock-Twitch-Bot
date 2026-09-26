@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, Languages, Radio, Users } from 'lucide-react';
-import { buildCategoryTrend, categoryArchiveLabel, categoryUtcLabel } from './categoryCollectorViewModel';
+import { buildCategoryTrend, categoryArchiveLabel, categoryUtcLabel, languageName } from './categoryCollectorViewModel';
 
 const GOLD = '#C5A059';
 const AMBER = '#D9752E';
@@ -13,10 +13,6 @@ interface TrendRow { at: string; streams: number | null; viewers: number | null;
 interface Status { desired_channels?: number; confirmed_channels?: number; connected_shards?: number; discovery_state?: string; received_messages?: number; stored_this_process?: number; queue_drops?: number; storage_drops?: number; invalid_events?: number; raw_bytes?: number; retention_days?: number | null; preserve_raw_data?: boolean; storage_warning?: boolean; disk_paused?: boolean; free_disk_bytes?: number; raw_budget_bytes?: number; raw_paused?: boolean; oldest_raw_message?: string; last_discovery?: string; media_enabled?: boolean }
 export interface CategoryReport { days: number; generated_at: string; heartbeat_at: string | null; first_snapshot: string | null; last_snapshot: string | null; total_polls: number; languages: LanguageRow[]; top_channels: ChannelRow[]; trend: TrendRow[]; hourly: { language: string; hour: number; messages: number }[]; status: Status | null }
 const number = (value: number | null | undefined, digits = 0) => value == null ? '—' : new Intl.NumberFormat('de-DE', { maximumFractionDigits: digits }).format(value);
-export const languageName = (code: string) => {
-  if (code === 'und') return 'Unbekannt / nicht sicher erkannt';
-  try { return new Intl.DisplayNames(['de'], { type: 'language' }).of(code) ?? code; } catch { return code; }
-};
 const dateTime = (date: string | null | undefined) => date ? new Date(date).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' }) : 'Noch keine Messung';
 const tooltipStyle = { background: '#161616', border: '1px solid #6B4E27', borderRadius: 12, color: '#F2EEE6' };
 
