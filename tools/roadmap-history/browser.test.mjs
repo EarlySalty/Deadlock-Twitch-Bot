@@ -254,6 +254,7 @@ try {
   await screenshot(mobile, 'family-mobile-detail', false);
   await mobile.locator('#close-detail').tap();
   assert.equal(await mobile.locator('#detail').evaluate(d => d.open), false);
+  assert.equal(await mobile.evaluate(() => document.body.style.overflow), '');
   await mobile.locator('#zoom-out').tap();
   assert.equal(await mobile.locator('#zoom-reset').textContent(), '83 %');
   await mobile.locator('#focus-feature').selectOption('rank-steam');
