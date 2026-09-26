@@ -81,11 +81,18 @@ async fn concurrent_redaction_and_late_delivery_cannot_restore_a_message() {
         .execute(&mut *writer_lock)
         .await
         .unwrap();
+    sqlx::query("INSERT INTO category_chat_messages
+        (sent_at,received_at,room_user_id,message_id,chatter_user_id,chatter_login,message_text,
+         detected_lang,stream_language,language_confidence,message_len,emote_count,shared_chat_copy,tags)
+        SELECT now(),now(),room_user_id,'in-flight',chatter_user_id,chatter_login,message_text,
+         detected_lang,stream_language,language_confidence,message_len,emote_count,shared_chat_copy,tags
+        FROM category_chat_messages WHERE message_id='recent'")
+        .execute(&mut *writer_lock).await.unwrap();
     let pool = db.pool.clone();
     let clear = tokio::spawn(async move {
         category::delete_chat(
             &pool,
-            "@room-id=100;target-msg-id=archive :tmi.twitch.tv CLEARMSG #sample :entfernt",
+            "@room-id=100;target-msg-id=in-flight :tmi.twitch.tv CLEARMSG #sample :entfernt",
             "100",
         )
         .await
@@ -97,6 +104,55 @@ async fn concurrent_redaction_and_late_delivery_cannot_restore_a_message() {
     );
     writer_lock.commit().await.unwrap();
     assert_eq!(clear.await.unwrap().unwrap(), 1);
+    assert_eq!(count(&db).await, 2);
+}
+
+#[tokio::test]
+async fn targeted_clearchat_blocks_late_delivery_from_the_same_stream_window() {
+    let db = fixture().await;
+    let now = Utc::now();
+    category::store_snapshot(
+        &db.pool,
+        now,
+        &[HelixStream {
+            id: "stream".into(),
+            user_id: "100".into(),
+            user_login: "sample".into(),
+            user_name: "Sample".into(),
+            language: "de".into(),
+            game_id: "deadlock".into(),
+            started_at: (now - Duration::hours(1)).to_rfc3339(),
+            ..Default::default()
+        }],
+        60,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        category::delete_chat(
+            &db.pool,
+            "@room-id=100;target-user-id=200 :tmi.twitch.tv CLEARCHAT #sample :viewer",
+            "100"
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let delayed_at = now - Duration::minutes(30);
+    let line = format!("@room-id=100;user-id=200;id=late-user;tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Verspätet nach der Moderation zugestellt.", delayed_at.timestamp_millis());
+    let delayed = category::raw_message(&line, delayed_at, "100", "de").unwrap();
+    assert_eq!(
+        category::store_messages(&db.pool, &[delayed])
+            .await
+            .unwrap(),
+        0
+    );
+    let shared_line = format!("@room-id=300;source-room-id=100;source-id=source-late;user-id=200;id=shared-late;tmi-sent-ts={} :viewer!v@v PRIVMSG #other :Auch die verspätete Shared-Chat-Kopie bleibt entfernt.", delayed_at.timestamp_millis());
+    let shared = category::raw_message(&shared_line, delayed_at, "300", "de").unwrap();
+    assert_eq!(
+        category::store_messages(&db.pool, &[shared]).await.unwrap(),
+        0
+    );
     assert_eq!(count(&db).await, 1);
 }
 
@@ -240,6 +296,14 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
     .await
     .unwrap();
     assert!(preserved);
+    let can_call_unlocked: bool = sqlx::query_scalar(
+        "SELECT has_function_privilege('twitchcollector', 'category_redact_chat_event_locked(text,text,text)', 'EXECUTE')",
+    )
+    .fetch_one(&mut *connection).await.unwrap();
+    assert!(
+        !can_call_unlocked,
+        "runtime cannot bypass the redaction lock"
+    );
     for forbidden in [
         "DELETE FROM category_chat_messages WHERE false",
         "TRUNCATE category_chat_messages",
@@ -287,7 +351,7 @@ async fn targeted_removal_has_bounded_index_work_in_a_large_archive() {
         FROM generate_series(1,60000) n;
         ANALYZE category_chat_messages;")
         .execute(&db.pool).await.unwrap();
-    let body: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='category_redact_chat_event(text,text,text)'::regprocedure")
+    let body: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid='category_redact_chat_event_locked(text,text,text)'::regprocedure")
         .fetch_one(&db.pool).await.unwrap();
     let mut connection = db.pool.acquire().await.unwrap();
     sqlx::query("SET plan_cache_mode=force_generic_plan")

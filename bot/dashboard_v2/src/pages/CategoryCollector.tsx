@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, Languages, Radio, Users } from 'lucide-react';
@@ -23,6 +23,11 @@ const tooltipStyle = { background: '#161616', border: '1px solid #6B4E27', borde
 export function CategoryCollector() {
   const [days, setDays] = useState(7);
   const [language, setLanguage] = useState('all');
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const query = useQuery<CategoryReport>({
     queryKey: ['category-collector', days],
     queryFn: async () => {
@@ -38,7 +43,7 @@ export function CategoryCollector() {
   const totals = useMemo(() => data?.languages.reduce((sum, row) => ({ hours: sum.hours + (row.airtime_hours ?? 0), messages: sum.messages + row.messages, viewerHours: sum.viewerHours + (row.viewer_hours ?? 0) }), { hours: 0, messages: 0, viewerHours: 0 }), [data]);
   const chart = useMemo(() => buildCategoryTrend(data?.trend ?? []), [data]);
   const hourly = useMemo(() => Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, messages: data?.hourly.filter(row => row.hour === hour && (language === 'all' || row.language === language)).reduce((sum, row) => sum + row.messages, 0) ?? 0 })), [data, language]);
-  const stale = !data?.heartbeat_at || Date.now() - new Date(data.heartbeat_at).getTime() > 120_000;
+  const stale = !data?.heartbeat_at || clock - new Date(data.heartbeat_at).getTime() > 120_000;
   const status = data?.status;
   const cards = [
     { icon: Radio, title: 'Entdeckte Live-Kanäle', value: stale ? '—' : number(status?.desired_channels), detail: 'Letzter erfolgreicher Kategorieabruf' },

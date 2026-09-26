@@ -113,6 +113,10 @@ category_chat_messages|tags|jsonb|NO|'{}'::jsonb
 category_chat_redactions|message_id|text|NO|
 category_chat_redactions|observed_at|timestamp with time zone|NO|now()
 category_chat_redactions|room_user_id|text|NO|
+category_chat_user_redactions|chatter_user_id|text|NO|
+category_chat_user_redactions|ended_at|timestamp with time zone|NO|
+category_chat_user_redactions|room_user_id|text|NO|
+category_chat_user_redactions|started_at|timestamp with time zone|NO|
 category_chat_rollup|avg_len|double precision|NO|
 category_chat_rollup|distinct_chatter|bigint|NO|
 category_chat_rollup|hour_at|timestamp with time zone|NO|

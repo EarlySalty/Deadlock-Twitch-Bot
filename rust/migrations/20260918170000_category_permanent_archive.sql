@@ -36,6 +36,14 @@ CREATE TABLE category_chat_redactions (
     observed_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(room_user_id,message_id)
 );
+CREATE TABLE category_chat_user_redactions (
+    room_user_id text NOT NULL,
+    chatter_user_id text NOT NULL,
+    started_at timestamptz NOT NULL,
+    ended_at timestamptz NOT NULL,
+    CHECK (started_at <= ended_at),
+    PRIMARY KEY(room_user_id,chatter_user_id,started_at,ended_at)
+);
 
 -- Gezielte Shared-Chat-Entfernungen brauchen einen Ausdrucksindex in jeder
 -- Partition. Der gleiche Teilindex-Filter steht ausdrücklich im DELETE,
@@ -63,18 +71,26 @@ REVOKE ALL ON FUNCTION category_lock_chat_rooms(text[]) FROM PUBLIC;
 -- Der Dienst bekommt keine freie DELETE-Berechtigung auf Rohdaten.
 -- Nur explizite Moderationsziele werden durch diese eng begrenzte Funktion bearbeitet.
 -- Ein kanalweiter CLEARCHAT ohne Ziel ist ausdrücklich KEINE Archivlöschung.
-CREATE FUNCTION category_redact_chat_event(room_id text, message_id text, user_id text)
-RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
-    WITH locked AS MATERIALIZED (
-        SELECT public.category_lock_chat_rooms(ARRAY[$1]) AS held
+CREATE FUNCTION category_redact_chat_event_locked(room_id text, message_id text, user_id text)
+RETURNS bigint LANGUAGE sql SECURITY INVOKER SET search_path=pg_catalog,public AS $$
+    WITH bounds AS MATERIALIZED (
+        SELECT COALESCE((SELECT s.started_at FROM public.category_stream_snapshots AS s
+            WHERE s.user_id=$1 ORDER BY s.snapshot_at DESC LIMIT 1),now()) AS started_at,
+            now() AS ended_at
     ), notice AS (
         INSERT INTO public.category_chat_redactions(room_user_id,message_id)
-        SELECT $1,$2 FROM locked
+        SELECT $1,$2
         WHERE nullif(btrim($1),'') IS NOT NULL AND nullif(btrim($2),'') IS NOT NULL
+        ON CONFLICT DO NOTHING
+    ), user_notice AS (
+        INSERT INTO public.category_chat_user_redactions
+            (room_user_id,chatter_user_id,started_at,ended_at)
+        SELECT $1,$3,b.started_at,b.ended_at FROM bounds AS b
+        WHERE nullif(btrim($1),'') IS NOT NULL AND nullif(btrim($3),'') IS NOT NULL
+          AND $2 IS NULL
         ON CONFLICT DO NOTHING
     ), removed AS (
         DELETE FROM public.category_chat_messages AS m
-        USING locked
         WHERE nullif(btrim($1),'') IS NOT NULL AND (
             (nullif(btrim($2),'') IS NOT NULL AND (
                 (m.room_user_id=$1 AND m.message_id=$2)
@@ -82,10 +98,11 @@ RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public A
                     AND m.tags->>'source-room-id'=$1 AND m.tags->>'source-id'=$2)
             )) OR (
                 $2 IS NULL AND nullif(btrim($3),'') IS NOT NULL
-                AND m.room_user_id=$1 AND m.chatter_user_id=$3
-                AND m.sent_at >= COALESCE((SELECT s.started_at FROM public.category_stream_snapshots AS s
-                    WHERE s.user_id=$1 ORDER BY s.snapshot_at DESC LIMIT 1),now())
-                AND m.sent_at <= now()
+                AND (m.room_user_id=$1 OR (m.tags ? 'source-room-id'
+                    AND m.tags->>'source-room-id'=$1))
+                AND m.chatter_user_id=$3
+                AND m.sent_at >= (SELECT b.started_at FROM bounds AS b)
+                AND m.sent_at <= (SELECT b.ended_at FROM bounds AS b)
             )
         ) RETURNING sent_at,room_user_id,detected_lang
     ), dirty AS (
@@ -94,6 +111,16 @@ RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public A
         ON CONFLICT DO NOTHING
     ) SELECT count(*)::bigint FROM removed;
 $$;
+REVOKE ALL ON FUNCTION category_redact_chat_event_locked(text,text,text) FROM PUBLIC;
+
+-- Lock acquisition is a separate statement: under READ COMMITTED the DELETE
+-- then sees writes committed while the lock was held by an earlier writer.
+CREATE FUNCTION category_redact_chat_event(room_id text, message_id text, user_id text)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+    PERFORM public.category_lock_chat_rooms(ARRAY[room_id]);
+    RETURN public.category_redact_chat_event_locked(room_id,message_id,user_id);
+END $$;
 REVOKE ALL ON FUNCTION category_redact_chat_event(text,text,text) FROM PUBLIC;
 
 DO $$
@@ -106,6 +133,7 @@ BEGIN
     END LOOP;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='twitchcollector') THEN
         GRANT SELECT ON category_chat_redactions TO twitchcollector;
+        GRANT SELECT ON category_chat_user_redactions TO twitchcollector;
         GRANT EXECUTE ON FUNCTION category_lock_chat_rooms(text[]) TO twitchcollector;
         GRANT EXECUTE ON FUNCTION category_redact_chat_event(text,text,text) TO twitchcollector;
         REVOKE UPDATE,DELETE,TRUNCATE ON category_chat_messages FROM twitchcollector;

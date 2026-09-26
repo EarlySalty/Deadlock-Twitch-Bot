@@ -248,6 +248,9 @@ pub async fn store_messages(pool: &PgPool, messages: &[RawMessage]) -> Result<i6
          WHERE NOT EXISTS (SELECT 1 FROM category_chat_redactions AS r
              WHERE (r.room_user_id=x.room_user_id AND r.message_id=x.message_id)
                 OR (r.room_user_id=(x.tags->>'source-room-id') AND r.message_id=(x.tags->>'source-id')))
+           AND NOT EXISTS (SELECT 1 FROM category_chat_user_redactions AS r
+             WHERE r.chatter_user_id=x.chatter_user_id AND x.sent_at BETWEEN r.started_at AND r.ended_at
+               AND (r.room_user_id=x.room_user_id OR r.room_user_id=(x.tags->>'source-room-id')))
          ON CONFLICT DO NOTHING RETURNING sent_at,room_user_id,detected_lang),
          dirty AS (INSERT INTO category_chat_dirty SELECT DISTINCT date_trunc('hour',sent_at),room_user_id,detected_lang
          FROM inserted ON CONFLICT DO NOTHING)
