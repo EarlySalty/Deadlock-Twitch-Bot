@@ -9,6 +9,8 @@ Der Discord-Verbraucher fordert einen frischen positiven Live-Nachweis, gültige
 
 **Offene Intent-Lücke:** Der vorhandene Poller beobachtet aktive Partner und `twitch_streamers`-Einträge. Eine Discord-Streamer-Rolle oder eine verknüpfte Twitch-Identität allein trägt den Kanal bisher nicht in diese Tracking-Menge ein. Der ID-sichere Diagnosepfad kann daher für einen nicht getrackten Rolleninhaber keinen frischen Live-Nachweis liefern. Vor Merge muss eine gezielte Aufnahme dieser Kanäle in den bestehenden Poller samt Prüfung seiner Nebenwirkungen und Last geklärt werden; das Versprechen „jeder Streamer-Rolleninhaber“ ist mit dieser Änderung allein nicht erfüllt.
 
+Ein möglicher Abschlussweg ist, beim bestehenden Discord-Rollen-/Twitch-Link-Vertrag die verknüpfte Twitch-ID als beobachteten Kanal zu registrieren und beim Rollenentzug wieder zu entfernen. Der vorhandene Poller kann diesen Kanal dann über seine ID-Batch-Abfrage sehen. Dazu gehören ein Cross-Repo-Vertrag, Prüfung der Session-/Statistik-Nebenwirkungen und eine Lastmessung; bloß alle Identitäten ungeprüft in den Poller aufzunehmen wäre kein gleichwertiger Ersatz. Ein direkter Helix-Check im Diagnose-Request wäre eine andere Lösung, müsste aber die zusätzliche API-Last, das Zwei-Sekunden-Budget des Discord-Verbrauchers und einen echten Beobachtungszeitpunkt gesondert absichern. Keiner dieser beiden Wege ist in diesem Zwischenfix implementiert.
+
 ## Prüfnachweise
 Basis: `947e1344b2b4249b2b8ac48f521863cd0abe1d34`.
 
