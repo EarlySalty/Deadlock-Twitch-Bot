@@ -32,6 +32,8 @@ class DependabotAutoMergePolicyTests(unittest.TestCase):
             "Frontend PR Gate (admin_dashboard)",
             "Frontend PR Gate (dashboard_v2)",
             "Rust SQLx required",
+            "Typed Brain fixtures (knowledge)",
+            "Typed Brain fixtures (self-explainer)",
         ):
             self.assertIn(f'"{check}"', self.workflow)
 
