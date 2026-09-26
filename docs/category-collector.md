@@ -1,42 +1,58 @@
 # Globaler Deadlock-Kategoriesammler
 
-Der eigene Rust-Dienst `tb-category-collector.service` liest die gesamte über Helix sichtbare Live-Kategorie ohne Sprachfilter. Er ist kein Twitch-Chatbot: Seine IRC-Komponente nimmt keine Zugangsdaten entgegen und besitzt keine Sende-, Whisper- oder Moderationsschnittstelle. Der vorhandene Scout verwendet dieselbe gemeinsame anonyme Lesekomponente.
+`tb-category-collector.service` ist ein eigener Rust-Dienst mit dem Betriebssystem- und PostgreSQL-Benutzer `twitchcollector`. Er liest die gesamte über Helix sichtbare Live-Kategorie ohne Sprachfilter. IRC läuft ausschließlich anonym über `justinfan`. Die gemeinsame Lesekomponente wird auch vom bestehenden Scout verwendet und besitzt keine Sende-, Whisper- oder Moderationsschnittstelle.
 
 ## Daten und Grenzen
 
-Minütliche, vollständig paginierte Stream-Snapshots enthalten Kanal- und Stream-IDs, Titel, Zuschaueraggregat, Stream-Sprache, Startzeit, Tags, Vorschaubild und Mature-Kennzeichnung. Öffentliche Kanalprofile werden täglich ergänzt. Der vorhandene Bot-Prozess ergänzt Follower-Gesamtzahlen mit seinem bereits verwalteten User-Token; es gibt keinen zweiten Token-Refresh-Besitzer. Einzelne Follower, Subscriber, vollständige Chatters-/Lurker-Listen und Zuschauerländer werden nicht abgefragt.
+Vollständig paginierte Stream-Snapshots enthalten Kanal- und Stream-IDs, Titel, Zuschaueraggregat, Stream-Sprache, Startzeit, Tags, Vorschaubild und Mature-Kennzeichnung. Öffentliche Kanalprofile werden ergänzt. Der bestehende Bot ergänzt Follower-Gesamtzahlen mit seinem bereits verwalteten User-Token; ein fehlgeschlagener Abruf bleibt unbekannt. Es werden keine Follower-Einzellisten, Subscriber-Daten, vollständigen Zuschauer-/Lurker-Listen oder Zuschauerländer abgefragt.
 
-Chat wird über `justinfan` gelesen, nach Nachrichten-ID dedupliziert und mit Herkunft, Zeit, Tags, Emotezahl und lokaler Sprachdetektion gespeichert. Nachrichten unter 20 Buchstaben sowie unsichere Erkennungen bleiben `und`. Stream-Sprache und erkannte Nachrichtensprache sind getrennte Merkmale. Sprache ist ausdrücklich keine Geolokation. Shared-Chat-Kopien bleiben als solche erkennbar und werden nicht mehrfach in die Volumensummen aufgenommen. Beobachtete CLEARMSG/CLEARCHAT-Ereignisse entfernen Rohzeilen und korrigieren Stundenaggregate.
+Chat wird mit Nachrichten-ID, Herkunft, Zeit, Tags, Emotezahl und lokaler Sprachdetektion gespeichert. Kurze und unsichere Texte bleiben `und`. Stream-Sprache und Nachrichtensprache sind getrennte Merkmale, keine Geografie. Shared-Chat-Kopien sind gekennzeichnet und werden nicht mehrfach in die Volumensummen aufgenommen.
 
-Optional werden ausschließlich VOD-/Clip-Metadaten gesammelt, keine Medien heruntergeladen. Clips werden in einem gleitenden Sieben-Tage-Fenster abgefragt; verfügbare VOD-Seiten werden nachgezogen. Cursor und Wiederaufnahme sind persistent. API-Seitenlimits und wiederholte Cursor werden als unvollständig protokolliert. VODs besitzen keine verlässliche kategorieweite Zuordnung und werden deshalb nicht automatisch als Deadlock-Videos ausgegeben.
+VOD- und Clip-Metadaten sind in der DB standardmäßig aktiviert. Es werden keine Videos oder Audiodaten heruntergeladen und keine STT- oder Cloud-Sprachdienste verwendet. Clips werden im gleitenden Sieben-Tage-Fenster abgefragt; verfügbare VOD-Seiten werden mit persistenten Cursorn nachgezogen. Das ist kein vollständiges historisches Medienarchiv. Kanal-VODs werden nicht automatisch als Deadlock-Videos ausgegeben.
 
-## Speicherung und Retention
+## Dauerhafte Speicherung
 
-PostgreSQL-Datenbank: `twitch_analytics`. Alle neuen Tabellen beginnen mit `category_`. Rohchat liegt in täglichen UTC-Partitionen. Stundenaggregate werden über gesperrte Dirty-Buckets idempotent neu berechnet. Abgelaufene Partitionen werden erst nach ihrer Aggregation entfernt; dadurch wird tatsächlicher Plattenplatz zurückgegeben.
+Datenbank: `twitch_analytics`. Die Sammlertabellen beginnen mit `category_`; Rohchat liegt in täglichen UTC-Partitionen. **Es gibt keine automatische Alterslöschung und keine Kürzung des Bestands bei Speicherknappheit.** Stundenaggregate ergänzen die Rohdaten, sie ersetzen sie nicht.
 
-Die reguläre Rohchat-Retention beträgt maximal 90 Tage. Die Beispielkonfiguration setzt zusätzlich ein Rohdatenbudget von 20 GiB. Bei Budgetdruck können bereits aggregierte, abgeschlossene Tage früher entfernt werden. Reicht das nicht, pausiert die Rohspeicherung; die Oberfläche zeigt Einschränkung und verworfene Ereignisse. Deshalb sind 90 Tage kein garantierter Mindestbestand und 20 GiB keine harte Grenze für die gesamte Datenbank: Snapshots, Indizes, WAL, Metadaten und dauerhafte Rollups belegen zusätzlichen Platz. Wartungsintervalle können eine begrenzte Überschreitung verursachen.
+Die additive Migration `20260918170000_category_permanent_archive.sql` deaktiviert auch die alte Partitions-Prune-Funktion. Der Rust-Kompatibilitätseinstieg zur Alterslöschung ist ebenfalls wirkungslos. Die Laufzeitrolle hat weder DELETE-, UPDATE- noch TRUNCATE-Rechte auf Rohchat. Bereits angewandte historische Migrationen werden nicht geändert.
 
-Snapshots und Rollups bleiben bestehen. Sendestunden/Zuschauerstunden sind aus erfolgreichen Messintervallen geschätzt. Längere Abruflücken werden nicht als beobachtete Sendezeit hochgerechnet. Fehlgeschlagene oder unvollständige API-Abfragen erzeugen keinen falschen Null-Snapshot. Stündlich eindeutige Schreiber sind keine global eindeutigen Zuschauer und werden nicht als solche summiert.
+Die DB-Konfiguration setzt anfänglich 20 GiB Rohdatenbudget und 10 GiB freien Plattenplatz als Reserve. Ab 80 Prozent des Budgets erscheint eine Warnung. Bei erreichtem Rohdatenbudget pausieren neue Chatzeilen; bei zu wenig oder nicht prüfbarem freien Plattenplatz pausieren auch neue Snapshots und Medienmetadaten. Bestandsdaten bleiben erhalten. Diese Werte sind veränderbare Betriebsgrenzen, keine Aufbewahrungsfristen und keine garantierte Grenze für die gesamte PostgreSQL-Belegung einschließlich WAL und anderer Dienste.
 
-## Konfiguration und Diensttrennung
+Explizite Twitch-Moderationsereignisse sind ein getrennter Vorgang: CLEARMSG entfernt nur die konkret bezeichnete Nachricht einschließlich zugehöriger Shared-Chat-Kopien. Gespeicherte Ziel-IDs und transaktionsgebundene Raumsperren verhindern deren Wiederherstellung durch verspätete oder parallel laufende Zustellungen. Ein personenbezogenes CLEARCHAT ist auf das Zeitfenster des zum Twitch-Ereignis beobachteten Streams begrenzt; die Zielmarke aus Nutzer-ID und Zeitfenster endet am Twitch-Zeitstempel, bei fehlendem Tag an der IRC-Empfangszeit. So bleiben verspätete ältere Nachrichten entfernt, aber später gesendete Nachrichten erhalten. Ein allgemeines CLEARCHAT ohne Ziel löscht kein Kanalarchiv. Stundenaggregate werden danach neu berechnet. Eine rechtlich oder vom Betreiber angeordnete Datenlöschung ist nicht Teil einer pauschalen Retention.
 
-Es gibt keine ENV-Konfiguration für den Collector. Der Start ist explizit:
+## Konfiguration ohne ENV
+
+Der Bootstrap enthält ausschließlich DB-Zugang und die Quelle der geschützten App-Zugangsdaten:
 
 ```sh
 tb-category-collector --config /etc/deadlock-twitch/category-collector.json
 ```
 
-Eine vollständige Vorlage liegt unter `ops/systemd/category-collector.example.json`. Zugangsdaten kommen produktiv aus einem hostverschlüsselten systemd-Credential mit ausschließlich Twitch-App-ID und App-Secret. Der Collector erhält weder Bot-Token noch Infisical-Bootstrap- oder Benachrichtigungs-Token.
+Vorlage: `ops/systemd/category-collector.example.json`. Produktiv erhält der Dienst ein hostverschlüsseltes systemd-Credential mit nur Twitch-App-ID und App-Secret. Er bekommt weder Bot-Token noch Infisical-Bootstrap- oder Benachrichtigungs-Token. Verhaltensparameter werden laufend aus `category_collector_config` gelesen. Alte Retention-Felder in einem vorhandenen Bootstrap werden lediglich zur Abwärtskompatibilität akzeptiert, niemals als Löschfreigabe verwendet.
 
-Die systemweite Unit läuft als eigener Benutzer `twitchcollector`, analog zur bestehenden isolierten Twitch-Laufzeit, mit Peer-Postgres-Rolle, 512 MiB Speicherlimit, CPU-Begrenzung und Restart-Backoff. Die Rollenmatrix erlaubt nur die eigenen Tabellen und zwei eng begrenzte Partitionsfunktionen. Dashboard und Legacy-Rollen dürfen keinen Rohchat lesen. Der Bot darf ausschließlich Kanalstammdaten lesen und Followerfelder aktualisieren. Eine separate OnFailure-Unit benachrichtigt den bereits konfigurierten Betreiber über den lokalen Discord-Broker.
+```sql
+SELECT * FROM category_collector_config;
+-- Änderungen führt der Betreiber als postgres aus, nicht der Collector:
+UPDATE category_collector_config
+SET raw_budget_bytes = 107374182400, updated_at = now()
+WHERE singleton;
+```
 
-## Dashboard und Betrieb
+`enabled=false` pausiert die Erfassung; vorhandene Daten bleiben zugänglich. Das Plattenmessziel `/var/lib/postgresql` muss auf demselben Dateisystem wie PostgreSQL liegen. Auf diesem Host liegt dessen Datenverzeichnis unter `/var/lib/postgresql/16/main`.
 
-Die serverseitig adminpflichtige Seite ist `/twitch/kategorie`; die Datenroute ist `/twitch/api/v2/category-collector?days=7`, mit ausschließlich 7, 30 oder 90 Tagen. Sidebar: **Deadlock weltweit** im Admin-Modus. Die Oberfläche zeigt Sprachen, Kategorie-Trend, Top-Kanäle nach Zuschauerstunden, Chat-Tageszeiten in UTC sowie Messabdeckung und Speicherwarnungen. Es existiert kein Rohchat-API-Endpunkt.
+## Dashboard
 
-Release-Build und Installation erfolgen über die vorhandenen Herkunftsprüfungen in `deploy-twitch-release` und `install-twitch-release`. Der Collector trägt ebenfalls eine `.twitch_build`-SHA. Nach der Datenbankmigration richtet die geprüfte root-eigene Kopie von `ops/systemd/install-category-collector.py` Benutzer, Credentials, Unit, Peer-Regeln und die eng ergänzten Caddy-Matcher ein. Bestehende Caddy-Regeln werden nicht ersetzt; vor Reload wird die Konfiguration validiert.
+Admin-Seite: `/twitch/kategorie`, Navigation **Deadlock weltweit**. Datenroute: `/twitch/api/v2/category-collector?days=7` mit 7, 30 oder 90 Tagen. Diese Werte sind ausschließlich Ansichtsfenster. Beide Routen sind serverseitig adminpflichtig: 401 ohne Anmeldung, 403 für normale Partner. Es gibt keinen Rohchat-Endpunkt; auch die Dashboard-DB-Rolle darf Rohchat nicht lesen.
 
-Prüfung nach Start:
+Die Seite zeigt Sprachen, Stundenverlauf, Top-Kanäle nach Zuschauerstunden und Chat-Tageszeiten in UTC. Stundenwerte bleiben unverändert; Lücken werden nicht zu Nullwerten oder falschen Tagesmitteln. Unbekannte gewichtete Durchschnitte bleiben unbekannt. Kanal- und Shard-Abdeckung, Datenbeginn, letzte Messung, Speicherstand, Warnungen und seit Prozessstart bekannte Verluste sind sichtbar. Stündlich eindeutige Schreiber werden nicht über Stunden zu angeblich eindeutigen Zuschauern aufsummiert.
+
+## Installation und Prüfung
+
+Der vorhandene Release-Weg baut alle vier Rust-Binaries aus demselben sauberen SHA: `tb-bot`, `tb-dashboard`, `tb-stream-audit` und `tb-category-collector`, dazu die bestehenden Frontends. Herkunftsnachweis: ELF-Sektion `.twitch_build`. Die aktualisierten, geprüften Wrapper unter `ops/systemd/deploy-twitch-release` und `ops/systemd/install-twitch-release.sh` müssen installiert sein; ältere Host-Wrapper kennen den Collector noch nicht.
+
+`deploy-twitch-release` wendet Migrationen als postgres an. Danach richtet die root-eigene Kopie von `ops/systemd/install-category-collector.py` im versiegelten Release Benutzer, Peer-Zugang, eingeschränkte Rollen, Credentials, Unit und Caddy-Matcher ein. Dieser vorhandene Installationshelfer ist ein Einmalwerkzeug; die Sammlerlaufzeit selbst ist Rust. Neue Caddy-Regeln werden vor Reload validiert, bestehende Regeln nicht ersetzt.
+
+Die Unit hat 512 MiB Speicherlimit, CPU-Begrenzung und eine getrennte OnFailure-Benachrichtigung. Die neue Migration und Rollenmatrix müssen vor dem Collector-Start angewandt sein, damit er ausschließlich gezielte Moderationsereignisse entfernen kann.
 
 ```sh
 systemctl status tb-category-collector.service
@@ -45,10 +61,6 @@ sudo -u postgres psql -d twitch_analytics -c "SELECT * FROM category_collection_
 sudo -u postgres psql -d twitch_analytics -c "SELECT heartbeat_at,details FROM category_collector_status"
 ```
 
-Bei einer Störung kann ausschließlich der neue Dienst angehalten werden: `sudo systemctl stop tb-category-collector.service`. Bestehender Bot und Dashboard benötigen dazu keinen Neustart. Vor einem Rollback auf einen Release ohne Collector muss der neue Dienst angehalten werden. Rohdaten bleiben der Retention unterworfen, die Wartung läuft allerdings nur bei aktivem Collector.
+Ein Stopp nur des Collectors beeinträchtigt Bot und Dashboard nicht. Vor einem Rollback auf eine Version vor der dauerhaften Archivierung den Collector anhalten: Der alte Rust-Retentionpfad würde mit den absichtlich entzogenen DELETE-Rechten scheitern. Die Datenbank-Löschsperre nicht zurücknehmen.
 
-## Nachweise
-
-Automatische Tests decken vollständige Pagination über 1.200 Streams, wiederholte Cursor, leere Kategorien, anonymen Socket-Verkehr, inkrementelle Shards, Eingabevalidierung, Deduplizierung, Shared Chat, Löschungen, Rollups, Retention und serverseitige Admin-Sperren ab. PostgreSQL-Tests werden in expliziten Wegwerfdatenbanken ausgeführt, nicht gegen Produktivdaten. Die Schutztests des bestehenden Bots verweigern auch im Raid-Kontext Schreibaktionen außerhalb der autorisierten Partnerliste.
-
-Eine erfolgreiche anonyme IRC-Begrüßung allein beweist noch keine vollständige Kategorieabdeckung. Für eine belastbare 24–48-Stunden-Skalierungsmessung müssen entsprechend lange echte Messdaten vorliegen. Live-Zahlen, Release-SHA und verbleibende Einschränkungen gehören in das zugehörige Abnahmeprotokoll; sie werden nicht durch synthetische Testdaten ersetzt.
+Tests verwenden isolierte PostgreSQL-Instanzen und Mock-/lokale IRC-Verbindungen, keine produktiven Testnachrichten. Ein kurzer Live-Lauf belegt nur den beobachteten Datenfluss. Eine vollständige 24–48-Stunden-Abdeckungsmessung benötigt entsprechende reale Laufzeit; konkrete Live-Zahlen und Release-SHA stehen separat im Abnahmebericht.

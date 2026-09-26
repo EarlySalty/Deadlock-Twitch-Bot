@@ -46,6 +46,32 @@ BEGIN
         GRANT SELECT ON public.category_channels TO twitchbot;
         GRANT UPDATE(followers_total,followers_checked_at,followers_http_status) ON public.category_channels TO twitchbot;
     END IF;
+    -- Archive tables are append-only for the service. Targeted Twitch removal
+    -- events use the separately constrained function, never generic DELETE.
+    IF to_regclass('public.category_chat_messages') IS NOT NULL THEN
+        REVOKE UPDATE,DELETE,TRUNCATE ON public.category_chat_messages FROM twitchcollector;
+    END IF;
+    IF to_regclass('public.category_chat_redactions') IS NOT NULL THEN
+        GRANT SELECT ON public.category_chat_redactions TO twitchcollector;
+    END IF;
+    IF to_regclass('public.category_chat_user_redactions') IS NOT NULL THEN
+        GRANT SELECT ON public.category_chat_user_redactions TO twitchcollector;
+    END IF;
+    IF to_regclass('public.category_collector_config') IS NOT NULL THEN
+        REVOKE ALL ON public.category_collector_config FROM twitchcollector;
+        GRANT SELECT ON public.category_collector_config TO twitchcollector,twitchdash;
+    END IF;
+    IF to_regprocedure('public.category_redact_chat_event(text,text,text,timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.category_redact_chat_event(text,text,text,timestamptz) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
+        GRANT EXECUTE ON FUNCTION public.category_redact_chat_event(text,text,text,timestamptz) TO twitchcollector;
+    END IF;
+    IF to_regprocedure('public.category_redact_chat_event_locked(text,text,text,timestamptz)') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.category_redact_chat_event_locked(text,text,text,timestamptz) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy,twitchcollector;
+    END IF;
+    IF to_regprocedure('public.category_lock_chat_rooms(text[])') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.category_lock_chat_rooms(text[]) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
+        GRANT EXECUTE ON FUNCTION public.category_lock_chat_rooms(text[]) TO twitchcollector;
+    END IF;
     IF to_regprocedure('public.category_prepare_partitions()') IS NOT NULL THEN
         REVOKE ALL ON FUNCTION public.category_prepare_partitions() FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
         GRANT EXECUTE ON FUNCTION public.category_prepare_partitions() TO twitchcollector;

@@ -3271,6 +3271,7 @@ name = "tb-category-collector"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "nix 0.31.3",
  "reqwest",
  "serde",
  "serde_json",
