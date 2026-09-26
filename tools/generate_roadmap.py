@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate the admin-only, self-contained feature history; no API or LLM calls.
 
 Usage: python3 tools/generate_roadmap.py --ref origin/main --output dist/roadmap-history/index.html
@@ -6,15 +5,17 @@ The reference is pinned once. Publication is an atomic file replacement.
 """
 import argparse
 import collections
+import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = Path(__file__).resolve().parent / 'roadmap-history'
 sys.path.insert(0, str(ASSETS))
+from feature_graph import build_graph, load_legacy
 from history_data import build_data, load_taxonomy
 
 
@@ -28,7 +29,7 @@ def safe_json(value):
 def render(data):
     template = (ASSETS / 'index.html').read_text(encoding='utf-8')
     style = (ASSETS / 'style.css').read_text(encoding='utf-8')
-    script = (ASSETS / 'model.js').read_text(encoding='utf-8') + '\n' + (ASSETS / 'app.js').read_text(encoding='utf-8')
+    script = (ASSETS / 'app.js').read_text(encoding='utf-8')
     return (template.replace('<!-- ROADMAP_STYLE -->', '<style>' + style + '</style>')
             .replace('<!-- ROADMAP_DATA -->', '<script id="roadmap-data" type="application/json">' + safe_json(data) + '</script>')
             .replace('<!-- ROADMAP_SCRIPT -->', '<script>\n' + script + '\n</script>'))
@@ -58,7 +59,12 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/roadmap-history/index.html')
     args = parser.parse_args()
     taxonomy = load_taxonomy(ASSETS / 'features.json')
-    data = build_data(args.repo.resolve(), args.ref, taxonomy)
+    data = build_graph(build_data(args.repo.resolve(), args.ref, taxonomy), taxonomy,
+                       load_legacy(ASSETS / 'legacy-history.json.gz'))
+    renderer = hashlib.sha256()
+    for name in ('index.html', 'style.css', 'app.js'):
+        renderer.update((ASSETS / name).read_bytes())
+    data['rendererRevision'] = renderer.hexdigest()
     atomic_write(args.output, render(data))
     print(json.dumps({'output': str(args.output), 'revision': data['revision'], 'commits': len(data['commits']), 'kinds': dict(collections.Counter(c['kind'] for c in data['commits'])), 'shallow': data['shallow']}))
 
