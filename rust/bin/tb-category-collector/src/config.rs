@@ -12,23 +12,16 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct Config {
     pub database_url: String,
     pub secrets: SecretSource,
-    #[serde(default = "poll_default")]
-    pub poll_seconds: u64,
-    #[serde(default = "retention_default")]
-    pub retention_days: i32,
-    #[serde(default = "budget_default")]
-    pub raw_budget_bytes: i64,
-    #[serde(default)]
-    pub media_enabled: bool,
-}
-fn poll_default() -> u64 {
-    60
-}
-fn retention_default() -> i32 {
-    90
-}
-fn budget_default() -> i64 {
-    20 * 1024 * 1024 * 1024
+    // Accepted only to keep old bootstrap files readable. Runtime behavior is
+    // exclusively in category_collector_config; no legacy value enables deletion.
+    #[serde(default, rename = "poll_seconds")]
+    _legacy_poll_seconds: Option<u64>,
+    #[serde(default, rename = "retention_days")]
+    _legacy_retention_days: Option<i32>,
+    #[serde(default, rename = "raw_budget_bytes")]
+    _legacy_raw_budget_bytes: Option<i64>,
+    #[serde(default, rename = "media_enabled")]
+    _legacy_media_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -65,13 +58,9 @@ impl Config {
         }
         let config: Self =
             serde_json::from_slice(&bytes).map_err(|_| "invalid collector JSON configuration")?;
-        if !(60..=300).contains(&config.poll_seconds)
-            || !(1..=90).contains(&config.retention_days)
-            || config.raw_budget_bytes < 100 * 1024 * 1024
+        if !(config.database_url.starts_with("postgres://")
+            || config.database_url.starts_with("postgresql://"))
         {
-            return Err("invalid poll, retention or storage budget".into());
-        }
-        if !config.database_url.starts_with("postgres") {
             return Err("Postgres is required".into());
         }
         Ok(config)
@@ -212,17 +201,26 @@ struct Reply {
 mod tests {
     use super::*;
     #[test]
-    fn environment_is_not_a_configuration_source() {
+    fn bootstrap_requires_postgres_and_ignores_all_legacy_retention_values() {
         let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(),r#"{"database_url":"postgresql:///test","secrets":{"type":"file","path":"/test"},"poll_seconds":1}"#).unwrap();
-        assert!(Config::load(file.path()).is_err());
-        std::fs::write(file.path(),r#"{"database_url":"postgresql:///test","secrets":{"type":"file","path":"/test"},"retention_days":91}"#).unwrap();
-        assert!(Config::load(file.path()).is_err());
+        for retention in [
+            serde_json::Value::Null,
+            serde_json::json!(1),
+            serde_json::json!(90),
+            serde_json::json!(1000),
+        ] {
+            let content = serde_json::json!({"database_url":"postgresql:///test",
+                "secrets":{"type":"file","path":"/test"},"retention_days":retention});
+            std::fs::write(file.path(), content.to_string()).unwrap();
+            assert!(Config::load(file.path()).is_ok());
+        }
         std::fs::write(
             file.path(),
-            r#"{"database_url":"postgresql:///test","secrets":{"type":"file","path":"/test"}}"#,
+            r#"{"database_url":"sqlite:///test","secrets":{"type":"file","path":"/test"}}"#,
         )
         .unwrap();
-        assert_eq!(Config::load(file.path()).unwrap().retention_days, 90);
+        assert!(Config::load(file.path()).is_err());
+        // No environment fallback when an explicit bootstrap is missing.
+        assert!(Config::load(Path::new("/nonexistent/category-bootstrap.json")).is_err());
     }
 }
