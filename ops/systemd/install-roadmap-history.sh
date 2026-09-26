@@ -51,8 +51,13 @@ if ! runuser -u nathanael -- python3 "$release/tools/generate_roadmap.py" --repo
 fi
 old_link="$(readlink "$base/current" 2>/dev/null || true)"
 old_timer_active="$(systemctl is-active deadlock-roadmap-history.timer 2>/dev/null || true)"
+old_timer_enabled="$(systemctl is-enabled deadlock-roadmap-history.timer 2>/dev/null || true)"
 backup="$(mktemp /var/backups/deadlock-roadmap/index.XXXXXXXX.html)"
-if [[ -f $webroot/index.html ]]; then cp -- "$webroot/index.html" "$backup"; fi
+old_page_present=0
+if [[ -f $webroot/index.html ]]; then
+  old_page_present=1
+  cp -- "$webroot/index.html" "$backup"
+fi
 chmod 0640 "$backup"
 old_unit="$(mktemp /var/backups/deadlock-roadmap/service.XXXXXXXX)"
 if [[ -f $unit ]]; then cp -- "$unit" "$old_unit"; else : > "$old_unit"; fi
@@ -61,17 +66,21 @@ if [[ -f $timer ]]; then cp -- "$timer" "$old_timer"; else : > "$old_timer"; fi
 rollback() {
   local status=$?
   if (( status != 0 )); then
+    systemctl stop deadlock-roadmap-history.timer deadlock-roadmap-history.service || true
     if [[ -n $old_link ]]; then ln -s "$old_link" "$base/.current-rollback"; mv -Tf "$base/.current-rollback" "$base/current"; else rm -f "$base/current"; fi
+    rm -f -- "$base/.current-next"
     if [[ -s $old_unit ]]; then cp -- "$old_unit" "$unit"; else rm -f "$unit"; fi
     if [[ -s $old_timer ]]; then cp -- "$old_timer" "$timer"; else rm -f "$timer"; fi
-    if [[ -s $backup ]]; then
+    if (( old_page_present )); then
       restore="$(mktemp "$webroot/.roadmap-restore.XXXXXXXX")"
       cp -- "$backup" "$restore"
       chown nathanael:nathanael "$restore"
       chmod 0644 "$restore"
       mv -Tf -- "$restore" "$webroot/index.html"
-    fi
+    else rm -f -- "$webroot/index.html"; fi
     systemctl daemon-reload || true
+    if [[ $old_timer_enabled == enabled ]]; then systemctl enable deadlock-roadmap-history.timer || true
+    else systemctl disable deadlock-roadmap-history.timer || true; fi
     if [[ $old_timer_active == active ]]; then systemctl start deadlock-roadmap-history.timer || true; fi
     echo 'Roadmap-Installation zurückgesetzt; vorherige Seite bleibt erhalten.' >&2
   fi

@@ -54,7 +54,15 @@ try {
   const geometry = await page.evaluate(() => {
     const positions=[...layout.positions.values()], seen=new Set(); let overlap=0,badEdge=0;
     for(const p of positions) {for(const other of positions) {if(p===other||seen.has(other.node.id)) continue; if(p.x<other.x+other.width&&p.x+p.width>other.x&&p.y<other.y+other.height&&p.y+p.height>other.y) overlap++;} seen.add(p.node.id);}
-    for(const path of document.querySelectorAll('#edges path')) {const a=layout.positions.get(path.dataset.parent),b=layout.positions.get(path.dataset.child); const start=path.getPointAtLength(0),end=path.getPointAtLength(path.getTotalLength()); if(!a||!b||!Number.isFinite(start.x)||!Number.isFinite(end.x)) badEdge++;}
+    for(const path of document.querySelectorAll('#edges path')) {
+      const a=layout.positions.get(path.dataset.parent),b=layout.positions.get(path.dataset.child);
+      const start=path.getPointAtLength(0),end=path.getPointAtLength(path.getTotalLength());
+      if(!a||!b||![start.x,start.y,end.x,end.y].every(Number.isFinite)) {badEdge++; continue;}
+      const vertical=b.x<=a.x+a.width+16;
+      const expectedStart=vertical?{x:a.x+a.width/2,y:a.y+a.height}:{x:a.x+a.width,y:a.y+a.height/2};
+      const expectedEnd=vertical?{x:b.x+b.width/2,y:b.y}:{x:b.x,y:b.y+b.height/2};
+      if(Math.hypot(start.x-expectedStart.x,start.y-expectedStart.y)>.1||Math.hypot(end.x-expectedEnd.x,end.y-expectedEnd.y)>.1) badEdge++;
+    }
     const sameDate=new Map(); for(const p of positions) {const existing=sameDate.get(p.node.date); if(existing!==undefined&&Math.abs(existing-p.x)>.01) return {overlap,badEdge,sameDate:false}; sameDate.set(p.node.date,p.x);} return {overlap,badEdge,sameDate:true};
   });
   assert.deepEqual(geometry,{overlap:0,badEdge:0,sameDate:true}); checks.push('Alle Änderungen: Knoten ohne Kollisionen, echte Elternkanten, dasselbe Datum auf derselben X-Position');
@@ -66,6 +74,11 @@ try {
   assert.ok(spanning); await page.locator('#from').fill(spanning.spanEnd); await page.locator('#from').dispatchEvent('change');
   await page.locator('#to').fill(spanning.spanEnd); await page.locator('#to').dispatchEvent('change');
   assert.equal(await page.locator('.node[data-id="'+spanning.id+'"]').count(),1); checks.push('Datumsfilter berücksichtigt überlappende Bündelintervalle');
+  await page.locator('#from').fill(original.coverage.last); await page.locator('#from').dispatchEvent('change');
+  await page.locator('#to').fill(original.coverage.first); await page.locator('#to').dispatchEvent('change');
+  assert.equal(await page.locator('.node').count(),0);
+  assert.match(await page.locator('#status').textContent(),/Zeitraum ist ungültig/);
+  checks.push('Umgekehrter Zeitraum zeigt keine irreführenden Knoten');
   await page.locator('#reset').click(); await page.locator('.node.root .node-open').click();
   assert.equal(await page.locator('#detail').evaluate(d=>d.open),true);
   assert.ok(await page.locator('#detail-body .commit-list li').count()<=30);
@@ -73,8 +86,13 @@ try {
   assert.equal(await page.evaluate(()=>document.body.style.overflow),''); checks.push('Dialog: paginierter Verlauf, Escape und Scroll-Freigabe');
   await page.goto(base+'/?focus=owner-does-not-exist'); assert.ok(await page.locator('.node.root').count()===1);
   const feature=original.nodes.find(n=>n.role==='feature'); await page.goto(base+'/?feature='+encodeURIComponent(feature.featureId));
-  assert.equal(await page.locator('[data-view=features]').getAttribute('aria-pressed'),'true'); checks.push('Direktlink auf bestehendes Feature');
-  await page.locator('.node[data-id="'+feature.id+'"] .node-open').click();
+  assert.equal(await page.locator('[data-view=features]').getAttribute('aria-pressed'),'true');
+  assert.equal(await page.locator('#detail').evaluate(d=>d.open),true);
+  assert.equal(await page.locator('#detail-title').textContent(),feature.title);
+  await page.goto(base+'/?feature='+encodeURIComponent(feature.featureId)+'&focus=product');
+  assert.equal(await page.locator('[data-view=all]').getAttribute('aria-pressed'),'true');
+  assert.equal(await page.locator('#detail-title').textContent(),feature.title);
+  checks.push('Direktlinks stellen Feature-Details und unabhängigen Zweigfokus wieder her');
   await page.locator('#detail-body .more').filter({hasText:'Diesen Zweig ansehen'}).click();
   assert.ok(new URL(page.url()).searchParams.get('focus')===feature.featureId);
   assert.ok(await page.locator('.node').count()<original.nodes.length); checks.push('Zweigfokus behält Elternkontext und blendet fremde Äste aus');

@@ -25,8 +25,8 @@ let collapse = new Set((params.get('collapsed')||'').split(',').filter(id => byI
 let page = 0, drag = null;
 const controls = ['search','category','kind','from','to','maintenance'];
 for (const id of controls) {const value=params.get(id); if(id==='maintenance') $(id).checked=value==='1'; else if(value) $(id).value=value;}
-if (params.has('feature')) {const id='feature:'+params.get('feature'); if(byId.has(id)) {view='features'; active=id;}}
-if (params.has('focus')) {const raw=params.get('focus'); const id=raw==='product'?'genesis':byId.has(raw)?raw:'feature:'+raw; if(byId.has(id)) {view='all'; focusRoot=id; active=id;}}
+if (params.has('feature')) {const raw=params.get('feature'); const id=raw==='product'?'genesis':byId.has(raw)?raw:'feature:'+raw; if(byId.has(id)) {view='features'; active=id;}}
+if (params.has('focus')) {const raw=params.get('focus'); const id=raw==='product'?'genesis':byId.has(raw)?raw:'feature:'+raw; if(byId.has(id)) {view='all'; focusRoot=id;}}
 $('from').min=data.coverage.first; $('from').max=data.coverage.last;
 $('to').min=data.coverage.first; $('to').max=data.coverage.last;
 $('snapshot-date').textContent=fmt(data.coverage.last);
@@ -40,6 +40,7 @@ function matching(node, term) {if(!term) return true; if((displayTitle(node)+' '
 function selected() {
   const term=$('search').value.trim().toLocaleLowerCase('de-DE');
   const category=$('category').value, kind=$('kind').value, from=$('from').value, to=$('to').value;
+  if(from && to && from>to) return {ids:[],matches:0,invalidRange:true};
   const included=new Set(['genesis']), matches=[];
   if(view==='overview' && !term && !category && !kind && !from && !to) {
     for(const cat of Object.keys(categories)) {
@@ -107,7 +108,7 @@ function draw() {
     if(n.role==='feature' && (children.get(n.id)||[]).length) {const toggle=button(collapse.has(n.id)?'+':'−',()=>{collapse.has(n.id)?collapse.delete(n.id):collapse.add(n.id); draw(); save();},'node-toggle'); toggle.setAttribute('aria-label',(collapse.has(n.id)?'Zweig öffnen: ':'Zweig schließen: ')+n.title); wrapper.append(toggle);}
     nodeLayer.append(wrapper);
   }
-  $('status').textContent=number(result.ids.length)+' Knoten sichtbar · '+number(data.stats.unassigned)+' Zuordnungen offen';
+  $('status').textContent=result.invalidRange?'Der Zeitraum ist ungültig: „Von“ liegt nach „Bis“.':number(result.ids.length)+' Knoten sichtbar · '+number(data.stats.unassigned)+' Zuordnungen offen';
   for(const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed',String(b.dataset.view===view));
   transform();
 }
@@ -146,3 +147,4 @@ window.addEventListener('resize',()=>transform());
 draw();
 if (matchMedia('(max-width:760px)').matches) {scale=.9; offsetX=12; offsetY=12; transform(); if(active) reveal(active);}
 else {fit(); if(active) reveal(active);}
+if(active) openDetail(active);
