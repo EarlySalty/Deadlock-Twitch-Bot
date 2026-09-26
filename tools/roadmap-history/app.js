@@ -350,7 +350,13 @@ function openDetail(id, eventId = '', month = '', bundle = null) {
   requestAnimationFrame(() => {reveal(selectedKey()); saveState();});
   saveState();
 }
-function closeDetail() {if ($('detail').open) $('detail').close();}
+function closeDetail() {
+  if (!$('detail').open) return;
+  // The dialog's close event runs later; unlock scrolling in the same input
+  // event so Escape and the close button leave no locked page behind.
+  document.body.style.overflow = '';
+  $('detail').close();
+}
 $('detail').addEventListener('close', () => {
   if (ignoreClose) {ignoreClose = false; return;}
   currentFeature = ''; currentEvent = ''; currentMonth = ''; currentBundle = null; detailFull = false;
