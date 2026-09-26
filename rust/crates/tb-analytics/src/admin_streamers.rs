@@ -569,6 +569,37 @@ pub async fn login_for_discord_user(
     Ok(row.flatten())
 }
 
+/// Kanonische Twitch-Identität und Live-Beobachtung zu einer Discord-ID.
+/// Rechtebeweise verwenden ausschließlich die Twitch-User-ID; Logins sind
+/// Anzeigedaten und dürfen bei einer Umbenennung nicht auf fremde Kanäle zeigen.
+#[derive(Debug, sqlx::FromRow)]
+pub struct DiscordLinkedLiveState {
+    pub twitch_user_id: String,
+    pub twitch_login: Option<String>,
+    pub is_live: i32,
+    pub last_seen_at: Option<String>,
+}
+
+pub async fn linked_live_state_for_discord_user(
+    pool: &sqlx::PgPool,
+    discord_user_id: &str,
+) -> Result<Option<DiscordLinkedLiveState>, sqlx::Error> {
+    sqlx::query_as(
+        r#"SELECT i.twitch_user_id,
+                  COALESCE(NULLIF(BTRIM(i.twitch_login), ''), NULLIF(BTRIM(l.streamer_login), '')) AS twitch_login,
+                  COALESCE(l.is_live, 0) AS is_live,
+                  l.last_seen_at
+             FROM twitch_streamer_identities i
+             LEFT JOIN twitch_live_state l ON l.twitch_user_id = i.twitch_user_id
+            WHERE i.discord_user_id = $1
+              AND NULLIF(BTRIM(i.twitch_user_id), '') IS NOT NULL
+            LIMIT 1"#,
+    )
+    .bind(discord_user_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Holt Statistik-Aggregat und letzte 10 Sessions für einen Streamer.
 ///
 /// Beide Queries laufen sequentiell auf derselben Verbindung.
@@ -1067,6 +1098,63 @@ mod tests {
         let row = streamer_detail(&pool, "Bekannter").await.expect("query"); // case-insensitive!
         assert!(row.is_some());
         assert_eq!(row.unwrap().twitch_login, "bekannter");
+    }
+
+    #[tokio::test]
+    async fn discord_live_nachweis_benutzt_nur_die_verknuepfte_twitch_id() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_admin_str_discord_live_id").await;
+        sqlx::query(
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                discord_user_id TEXT UNIQUE)",
+        )
+        .execute(&pool)
+        .await
+        .expect("identity schema");
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('42', 'reused', '777')")
+            .execute(&pool)
+            .await
+            .expect("identity");
+        sqlx::query(
+            "INSERT INTO twitch_live_state (streamer_login, twitch_user_id, is_live, last_seen_at)
+             VALUES ('reused', '99', 1, '2026-09-24T19:59:30+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .expect("fremder Live-State mit recyceltem Login");
+
+        let linked = linked_live_state_for_discord_user(&pool, "777")
+            .await
+            .expect("lookup")
+            .expect("identity");
+        assert_eq!(linked.twitch_user_id, "42");
+        assert_eq!(linked.twitch_login.as_deref(), Some("reused"));
+        assert_eq!(linked.is_live, 0);
+        assert_eq!(linked.last_seen_at, None);
+
+        sqlx::query(
+            "INSERT INTO twitch_live_state (streamer_login, twitch_user_id, is_live, last_seen_at)
+             VALUES ('renamed', '42', 1, '2026-09-24T20:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .expect("eigener Live-State ohne Partner-State");
+        let linked = linked_live_state_for_discord_user(&pool, "777")
+            .await
+            .expect("lookup")
+            .expect("identity");
+        assert_eq!(linked.is_live, 1);
+        assert_eq!(
+            linked.last_seen_at.as_deref(),
+            Some("2026-09-24T20:00:00+00:00")
+        );
     }
 
     #[tokio::test]

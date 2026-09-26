@@ -30,7 +30,7 @@ pub struct DiagnoseQuery {
 #[derive(Serialize)]
 pub struct DiagnoseResponse {
     pub ok: bool,
-    /// true, wenn zur Discord-ID ein Twitch-Streamer-Account mit Partner-State existiert
+    /// true, wenn zur Discord-ID eine Twitch-User-ID verknüpft ist
     pub found: bool,
     pub twitch_login: Option<String>,
     pub discord_linked: bool,
@@ -58,7 +58,6 @@ pub struct DiagnoseResponse {
 }
 
 /// Antwort, wenn kein verknüpfter/auswertbarer Streamer-Account existiert.
-/// `twitch_login` kann gesetzt sein (verknüpft, aber kein Partner-State).
 fn empty_response(twitch_login: Option<String>) -> DiagnoseResponse {
     DiagnoseResponse {
         ok: true,
@@ -87,6 +86,15 @@ fn empty_response(twitch_login: Option<String>) -> DiagnoseResponse {
     }
 }
 
+fn linked_response(linked: &admin_streamers::DiscordLinkedLiveState) -> DiagnoseResponse {
+    let mut response = empty_response(linked.twitch_login.clone());
+    response.found = true;
+    response.discord_linked = true;
+    response.is_live = linked.is_live != 0;
+    response.last_seen_at = linked.last_seen_at.clone();
+    response
+}
+
 pub async fn handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
@@ -102,28 +110,37 @@ pub async fn handler(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::bad_request("missing discord_id"))?;
 
-    let login = admin_streamers::login_for_discord_user(&pool, &discord_id)
+    let linked = admin_streamers::linked_live_state_for_discord_user(&pool, &discord_id)
         .await
         .map_err(|e| {
-            tracing::error!("diagnose: login lookup failed: {e}");
+            tracing::error!("diagnose: identity/live lookup failed: {e}");
             ApiError::internal()
         })?;
 
-    let Some(login) = login else {
+    let Some(linked) = linked else {
         // Keine Twitch-Streamer-Verknüpfung zu dieser Discord-ID.
         return Ok(Json(empty_response(None)));
     };
 
-    let detail = admin_streamers::streamer_detail(&pool, &login)
+    let linked_response = linked_response(&linked);
+
+    let Some(login) = linked.twitch_login.as_deref() else {
+        return Ok(Json(linked_response));
+    };
+
+    let detail = admin_streamers::streamer_detail(&pool, login)
         .await
         .map_err(|e| {
             tracing::error!("diagnose: streamer_detail failed: {e}");
             ApiError::internal()
         })?;
 
-    let Some(row) = detail else {
-        // Verknüpft, aber kein Partner-State vorhanden.
-        return Ok(Json(empty_response(Some(login))));
+    let Some(row) =
+        detail.filter(|row| row.twitch_user_id.as_deref() == Some(linked.twitch_user_id.as_str()))
+    else {
+        // Kein Partner-State oder ein Login wurde inzwischen an ein anderes
+        // Twitch-Konto vergeben. Live-Rechte bleiben an die verknüpfte ID gebunden.
+        return Ok(Json(linked_response));
     };
 
     let snap =
@@ -151,8 +168,8 @@ pub async fn handler(
         is_partner_active: row.is_partner_active != 0,
         is_verified: row.is_verified != 0,
         is_monitored_only: row.is_monitored_only.unwrap_or(0) != 0,
-        is_live: row.is_live != 0,
-        last_seen_at: row.last_seen_at.clone(),
+        is_live: linked.is_live != 0,
+        last_seen_at: linked.last_seen_at,
         raid_bot_enabled: row.raid_bot_enabled.unwrap_or(0) != 0,
         technical_pause_reason: row.technical_pause_reason.clone(),
         operational_state: row.operational_state.clone(),
@@ -180,6 +197,23 @@ mod tests {
         let value = serde_json::to_value(response).unwrap();
         assert_eq!(value["last_seen_at"], "2026-09-24T19:59:30+00:00");
         assert_eq!(value["is_live"], true);
+    }
+
+    #[test]
+    fn verknuepfter_nichtpartner_bekommt_den_id_gebundenen_live_nachweis() {
+        let linked = admin_streamers::DiscordLinkedLiveState {
+            twitch_user_id: "42".to_string(),
+            twitch_login: Some("streamer".to_string()),
+            is_live: 1,
+            last_seen_at: Some("2026-09-24T19:59:30+00:00".to_string()),
+        };
+        let value = serde_json::to_value(linked_response(&linked)).unwrap();
+        assert_eq!(value["found"], true);
+        assert_eq!(value["discord_linked"], true);
+        assert_eq!(value["partner_status"], "non_partner");
+        assert_eq!(value["is_partner_active"], false);
+        assert_eq!(value["is_live"], true);
+        assert_eq!(value["last_seen_at"], "2026-09-24T19:59:30+00:00");
     }
 
     #[test]
