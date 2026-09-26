@@ -44,6 +44,63 @@ async fn count(db: &TestPostgres) -> i64 {
 }
 
 #[tokio::test]
+async fn concurrent_redaction_and_late_delivery_cannot_restore_a_message() {
+    let db = fixture().await;
+    let now = Utc::now();
+    let line = format!(
+        "@room-id=100;user-id=200;id=late;tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Diese verspätete Nachricht darf nach dem Entfernen nicht wieder erscheinen.",
+        now.timestamp_millis()
+    );
+    let late = category::raw_message(&line, now, "100", "de").unwrap();
+
+    let mut redaction = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT category_lock_chat_rooms(ARRAY['100'])")
+        .execute(&mut *redaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO category_chat_redactions(room_user_id,message_id) VALUES ('100','late')",
+    )
+    .execute(&mut *redaction)
+    .await
+    .unwrap();
+
+    let pool = db.pool.clone();
+    let writer = tokio::spawn(async move { category::store_messages(&pool, &[late]).await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !writer.is_finished(),
+        "writer must wait for the redaction commit"
+    );
+    redaction.commit().await.unwrap();
+    assert_eq!(writer.await.unwrap().unwrap(), 0);
+    assert_eq!(count(&db).await, 2);
+
+    let mut writer_lock = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT category_lock_chat_rooms(ARRAY['100'])")
+        .execute(&mut *writer_lock)
+        .await
+        .unwrap();
+    let pool = db.pool.clone();
+    let clear = tokio::spawn(async move {
+        category::delete_chat(
+            &pool,
+            "@room-id=100;target-msg-id=archive :tmi.twitch.tv CLEARMSG #sample :entfernt",
+            "100",
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !clear.is_finished(),
+        "redaction must wait for the writer commit"
+    );
+    writer_lock.commit().await.unwrap();
+    assert_eq!(clear.await.unwrap().unwrap(), 1);
+    assert_eq!(count(&db).await, 1);
+}
+
+#[tokio::test]
 async fn old_row_pruning_is_inert_even_for_legacy_callers() {
     let db = fixture().await;
     assert_eq!(category::trim_expired_rows(&db.pool, 90).await.unwrap(), 0);

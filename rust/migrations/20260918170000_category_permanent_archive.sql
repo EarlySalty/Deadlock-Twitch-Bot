@@ -44,17 +44,37 @@ CREATE INDEX category_chat_shared_source ON public.category_chat_messages
     ((tags->>'source-room-id'), (tags->>'source-id'))
     WHERE tags ? 'source-room-id' AND tags ? 'source-id';
 
+-- Writer und gezielte Entfernung sperren dieselben Räume bis zum Commit.
+-- Sonst kann ein paralleler INSERT die Redaction-Marke vor deren Commit nicht
+-- sehen und erst nach dem DELETE sichtbar werden. Sortierung vermeidet Deadlocks
+-- bei Batches mit mehreren Shared-Chat-Räumen.
+CREATE FUNCTION category_lock_chat_rooms(room_ids text[])
+RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog AS $$
+DECLARE room_id text;
+BEGIN
+    FOR room_id IN SELECT DISTINCT value FROM unnest(room_ids) AS ids(value)
+        WHERE nullif(btrim(value),'') IS NOT NULL ORDER BY value
+    LOOP
+        PERFORM pg_advisory_xact_lock(hashtextextended('category-chat-room:' || room_id, 0));
+    END LOOP;
+END $$;
+REVOKE ALL ON FUNCTION category_lock_chat_rooms(text[]) FROM PUBLIC;
+
 -- Der Dienst bekommt keine freie DELETE-Berechtigung auf Rohdaten.
 -- Nur explizite Moderationsziele werden durch diese eng begrenzte Funktion bearbeitet.
 -- Ein kanalweiter CLEARCHAT ohne Ziel ist ausdrücklich KEINE Archivlöschung.
 CREATE FUNCTION category_redact_chat_event(room_id text, message_id text, user_id text)
 RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
-    WITH notice AS (
+    WITH locked AS MATERIALIZED (
+        SELECT public.category_lock_chat_rooms(ARRAY[$1]) AS held
+    ), notice AS (
         INSERT INTO public.category_chat_redactions(room_user_id,message_id)
-        SELECT $1,$2 WHERE nullif(btrim($1),'') IS NOT NULL AND nullif(btrim($2),'') IS NOT NULL
+        SELECT $1,$2 FROM locked
+        WHERE nullif(btrim($1),'') IS NOT NULL AND nullif(btrim($2),'') IS NOT NULL
         ON CONFLICT DO NOTHING
     ), removed AS (
         DELETE FROM public.category_chat_messages AS m
+        USING locked
         WHERE nullif(btrim($1),'') IS NOT NULL AND (
             (nullif(btrim($2),'') IS NOT NULL AND (
                 (m.room_user_id=$1 AND m.message_id=$2)
@@ -86,6 +106,7 @@ BEGIN
     END LOOP;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='twitchcollector') THEN
         GRANT SELECT ON category_chat_redactions TO twitchcollector;
+        GRANT EXECUTE ON FUNCTION category_lock_chat_rooms(text[]) TO twitchcollector;
         GRANT EXECUTE ON FUNCTION category_redact_chat_event(text,text,text) TO twitchcollector;
         REVOKE UPDATE,DELETE,TRUNCATE ON category_chat_messages FROM twitchcollector;
         FOR child IN SELECT inhrelid::regclass AS relation FROM pg_inherits

@@ -62,6 +62,10 @@ BEGIN
         REVOKE ALL ON FUNCTION public.category_redact_chat_event(text,text,text) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
         GRANT EXECUTE ON FUNCTION public.category_redact_chat_event(text,text,text) TO twitchcollector;
     END IF;
+    IF to_regprocedure('public.category_lock_chat_rooms(text[])') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.category_lock_chat_rooms(text[]) FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
+        GRANT EXECUTE ON FUNCTION public.category_lock_chat_rooms(text[]) TO twitchcollector;
+    END IF;
     IF to_regprocedure('public.category_prepare_partitions()') IS NOT NULL THEN
         REVOKE ALL ON FUNCTION public.category_prepare_partitions() FROM PUBLIC,twitchbot,twitchdash,twitchlegacy;
         GRANT EXECUTE ON FUNCTION public.category_prepare_partitions() TO twitchcollector;

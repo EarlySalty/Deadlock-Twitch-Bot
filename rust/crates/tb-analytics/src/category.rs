@@ -217,8 +217,29 @@ pub async fn store_messages(pool: &PgPool, messages: &[RawMessage]) -> Result<i6
     }
     let payload =
         serde_json::to_string(messages).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let rooms: Vec<String> = messages
+        .iter()
+        .flat_map(|message| {
+            [
+                Some(message.room_user_id.as_str()),
+                message
+                    .tags
+                    .get("source-room-id")
+                    .and_then(|value| value.as_str()),
+            ]
+        })
+        .flatten()
+        .map(str::to_owned)
+        .collect();
+    let mut tx = pool.begin().await?;
+    // Keep the room locks through INSERT and commit. A concurrent CLEARMSG
+    // cannot miss an uncommitted row or be missed by a later delivery.
+    sqlx::query("SELECT category_lock_chat_rooms($1)")
+        .bind(&rooms)
+        .execute(&mut *tx)
+        .await?;
     // Mark only inserted rows as dirty. Replayed deliveries cannot inflate counts.
-    sqlx::query_scalar(
+    let inserted = sqlx::query_scalar(
         "WITH inserted AS (INSERT INTO category_chat_messages
          SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(sent_at timestamptz,received_at timestamptz,
          message_id text,room_user_id text,chatter_user_id text,chatter_login text,message_text text,
@@ -231,7 +252,9 @@ pub async fn store_messages(pool: &PgPool, messages: &[RawMessage]) -> Result<i6
          dirty AS (INSERT INTO category_chat_dirty SELECT DISTINCT date_trunc('hour',sent_at),room_user_id,detected_lang
          FROM inserted ON CONFLICT DO NOTHING)
          SELECT count(*)::bigint FROM inserted")
-        .bind(payload).fetch_one(pool).await
+        .bind(payload).fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(inserted)
 }
 
 /// Honor Twitch deletions, without keeping a second raw-text audit copy.
