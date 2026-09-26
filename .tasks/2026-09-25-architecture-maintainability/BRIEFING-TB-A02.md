@@ -15,13 +15,13 @@ rust/crates/tb-dashboard-api/src/ai_state.rs; zuständige typisierte Settings; S
 
 ## TODO
 
-- [ ] Auf aktuellem main zuerst prüfen, ob DDC_PENTEST_DISABLE_RATE_LIMITS noch existiert und welche Werte/Build-Modi tatsächlich unterstützt werden.
-- [ ] Produktionskonfiguration mit aktiviertem Bypass beim Start ablehnen. Ein expliziter Pentest-Modus beziehungsweise getrenntes Build-Feature darf den Ausnahmefall nur bewusst zulassen.
-- [ ] Konfigurationsmatrix und Verhalten für fehlende, leere, gültige und ungültige Werte festschreiben; normale Auth- und Limit-Semantik unverändert lassen.
+- [ ] Auf aktuellem main prüfen, wo `DDC_PENTEST_DISABLE_RATE_LIMITS` gelesen wird und welche Testpfade den Bypass benötigen. Den ENV-Schalter als Konfigurationsweg entfernen; keine ENV-Datei und keine Environment-Variable für Konfiguration verwenden.
+- [ ] Produktivbetrieb muss den Bypass beim Start ablehnen. Falls Pentests ihn weiterhin benötigen, nur über einen ausdrücklich getrennten Test-Build zulassen; sonst den Bypass vollständig entfernen. Nicht geheime Laufzeitkonfiguration gehört in die normale Config-Datei, Secrets kommen aus Infisical.
+- [ ] Zulässige Build-/Config-Kombinationen und das Verhalten bei fehlenden oder ungültigen Werten festschreiben; normale Auth- und Limit-Semantik unverändert lassen.
 
 ## Tests und Abnahme
 
-Produktionsmodus plus Bypass endet mit nachvollziehbarem Startfehler; normale Produktion behält Limits; nur der ausdrücklich erlaubte Testmodus kann sie deaktivieren; keine Secret-Werte in Fehlermeldungen.
+Produktionsmodus plus Bypass endet mit nachvollziehbarem Startfehler; normale Produktion behält Limits; nur ein ausdrücklich getrennter Test-Build kann sie bei weiter bestehendem Bedarf deaktivieren. Tests belegen, dass ein gesetztes `DDC_PENTEST_DISABLE_RATE_LIMITS` keine Konfiguration mehr steuert; keine Secret-Werte in Fehlermeldungen.
 
 - [ ] Befund und Base-SHA dokumentiert; bereits gelöste/überholte Punkte mit Beleg statt Doppelimplementierung abgeschlossen.
 - [ ] Slice-spezifische Tests tatsächlich ausgeführt und CI-/Review-Ergebnis im Register verlinkt; nicht ausgeführte Runtime-Prüfungen separat offen.
@@ -36,6 +36,6 @@ Branch-Vorschlag: `codex/twitch-tb-a02-<kurzer-slice>`; von aktuellem main oder 
 
 ## Nicht im Scope
 
-Keine Produktions-Environment-Variablen ändern. Keine pauschale Lockerung anderer Schutzmechanismen.
+Keine ENV-Dateien oder Environment-Variablen als Konfigurationsweg beibehalten oder neu einführen. Keine pauschale Lockerung anderer Schutzmechanismen.
 
 Es gilt [CONTRACT.md](CONTRACT.md): Die Erstellung dieses Backlogs implementiert nichts und autorisiert keine Produktionsaktionen.
