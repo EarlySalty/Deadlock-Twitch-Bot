@@ -54,19 +54,21 @@ impl BrainKnowledgeAdapter {
         }
         Ok(())
     }
-    fn query(
+    fn query_with_limit(
         &self,
         request_id: &str,
         conversation_id: &str,
-        question: &str,
+        text: &str,
+        max_chars: usize,
     ) -> Result<Query, BrainAdapterError> {
-        if question.trim().is_empty() || question.chars().count() > 500 {
+        if text.trim().is_empty() || text.chars().count() > max_chars {
             return Err(BrainAdapterError::InvalidQuestion);
         }
         let query = Query {
             request_id: request_id.into(),
             conversation_id: conversation_id.into(),
-            text: question.into(),
+            text: text.into(),
+            domain: None,
             requested_scopes: self.scopes.clone(),
             profile: AnswerProfile::Explain,
             patch: None,
@@ -77,13 +79,17 @@ impl BrainKnowledgeAdapter {
             .map_err(|_| BrainAdapterError::InvalidQuestion)?;
         Ok(query)
     }
-    pub async fn answer(
+
+    fn query(
         &self,
         request_id: &str,
         conversation_id: &str,
         question: &str,
-    ) -> Result<KnowledgeReply, BrainAdapterError> {
-        let query = self.query(request_id, conversation_id, question)?;
+    ) -> Result<Query, BrainAdapterError> {
+        self.query_with_limit(request_id, conversation_id, question, 500)
+    }
+
+    async fn send(&self, query: Query) -> Result<KnowledgeReply, BrainAdapterError> {
         let response = self
             .client
             .answer(&query)
@@ -91,15 +97,36 @@ impl BrainKnowledgeAdapter {
             .map_err(|_| BrainAdapterError::Backend)?;
         project(response)
     }
+
+    pub async fn answer(
+        &self,
+        request_id: &str,
+        conversation_id: &str,
+        question: &str,
+    ) -> Result<KnowledgeReply, BrainAdapterError> {
+        self.send(self.query(request_id, conversation_id, question)?)
+            .await
+    }
+
+    pub async fn answer_with_context(
+        &self,
+        request_id: &str,
+        conversation_id: &str,
+        query_text: &str,
+    ) -> Result<KnowledgeReply, BrainAdapterError> {
+        self.send(self.query_with_limit(request_id, conversation_id, query_text, 16 * 1024)?)
+            .await
+    }
 }
 fn project(response: PublicAnswerResponse) -> Result<KnowledgeReply, BrainAdapterError> {
     match response.status {
-        AnswerStatus::Answered => Ok(KnowledgeReply::Answered {
+        AnswerStatus::Answered | AnswerStatus::BuildRejected => Ok(KnowledgeReply::Answered {
             text: response.text,
             sources: response.citations.into_iter().map(|c| c.label).collect(),
         }),
         AnswerStatus::InsufficientEvidence => Ok(KnowledgeReply::NoEvidence),
         AnswerStatus::UnauthorizedEvidence
+        | AnswerStatus::Unavailable
         | AnswerStatus::ProviderError
         | AnswerStatus::BudgetExceeded => Err(BrainAdapterError::Backend),
     }
@@ -178,6 +205,15 @@ mod tests {
                 sources: vec!["Beleg 1".into()]
             }
         );
+        response.status = AnswerStatus::BuildRejected;
+        response.text = "Build abgelehnt: Item ist in diesem Slot illegal.".into();
+        assert_eq!(
+            project(response.clone()).unwrap(),
+            KnowledgeReply::Answered {
+                text: response.text.clone(),
+                sources: vec!["Beleg 1".into()]
+            }
+        );
         response.status = AnswerStatus::InsufficientEvidence;
         assert_eq!(
             project(response.clone()).unwrap(),
@@ -185,6 +221,7 @@ mod tests {
         );
         for status in [
             AnswerStatus::UnauthorizedEvidence,
+            AnswerStatus::Unavailable,
             AnswerStatus::ProviderError,
             AnswerStatus::BudgetExceeded,
         ] {
