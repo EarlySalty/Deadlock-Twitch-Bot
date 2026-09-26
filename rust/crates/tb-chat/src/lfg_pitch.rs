@@ -1,6 +1,7 @@
 //! LFG-Mitspieler-Pitch: billiger Regex-Vorfilter vor dem KI-Judge.
 
 use std::collections::HashMap;
+#[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -907,6 +908,18 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use tb_engagement::llm_chat::EngagementLlmClient;
+
+    #[test]
+    fn alle_lfg_antworten_enthalten_genau_einen_link_und_bleiben_kurz() {
+        for template in LFG_PITCH_REPLIES {
+            assert_eq!(template.matches("{chatter}").count(), 1);
+            assert_eq!(template.matches("{invite}").count(), 1);
+            let message = template
+                .replace("{chatter}", "abcdefghijklmnopqrstuvwxy")
+                .replace("{invite}", "https://discord.gg/abcdefghijklmnopqrstu");
+            assert!(message.len() < 500);
+        }
+    }
 
     #[test]
     fn parse_lfg_verdict_liefert_yes_mit_confidence() {

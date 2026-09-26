@@ -4079,6 +4079,49 @@ struct StreamerVoiceResolver {
     relay: BrokerRelay,
 }
 
+async fn eligible_voice_streamer_id(
+    pool: &PgPool,
+    broadcaster_id: &str,
+) -> Result<Option<u64>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT NULLIF(trim(i.discord_user_id), ''), l.last_seen_at
+             FROM twitch_partners p
+             JOIN twitch_streamers_partner_state ps ON ps.twitch_user_id = p.twitch_user_id
+             JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id
+             JOIN twitch_live_state l ON l.twitch_user_id = p.twitch_user_id
+             WHERE p.twitch_user_id = $1 AND ps.is_partner_active = 1
+               AND p.status = 'active'
+               AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
+               AND COALESCE(p.manual_partner_opt_out, 0) = 0
+               AND l.is_live = 1 AND lower(l.last_game) = 'deadlock'
+               AND NOT EXISTS (
+                   SELECT 1 FROM twitch_streamer_identities other
+                    WHERE other.discord_user_id = i.discord_user_id
+                      AND other.twitch_user_id <> i.twitch_user_id
+               )",
+    )
+    .bind(broadcaster_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((Some(discord_id), Some(seen))) = row else {
+        return Ok(None);
+    };
+    let Ok(streamer_id) = discord_id.parse::<u64>() else {
+        return Ok(None);
+    };
+    if streamer_id == 0 {
+        return Ok(None);
+    }
+    let Ok(seen) = chrono::DateTime::parse_from_rfc3339(&seen) else {
+        return Ok(None);
+    };
+    let age = chrono::Utc::now().signed_duration_since(seen);
+    if age < chrono::Duration::seconds(-5) || age > chrono::Duration::minutes(5) {
+        return Ok(None);
+    }
+    Ok(Some(streamer_id))
+}
+
 #[async_trait::async_trait]
 impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
     async fn invite_for(
@@ -4086,36 +4129,12 @@ impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
         broadcaster_id: &str,
         message_id: &str,
     ) -> Result<Option<tb_chat::streamer_voice::VoiceInvite>, String> {
-        let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT NULLIF(trim(i.discord_user_id), ''), l.last_seen_at
-             FROM twitch_partners p
-             JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id
-             JOIN twitch_live_state l ON l.twitch_user_id = p.twitch_user_id
-             WHERE p.twitch_user_id = $1 AND p.status = 'active'
-               AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
-               AND COALESCE(p.manual_partner_opt_out, 0) = 0
-               AND l.is_live = 1 AND lower(l.last_game) = 'deadlock'",
-        )
-        .bind(broadcaster_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| "voice_identity_unavailable".to_string())?;
-        let Some((Some(discord_id), Some(seen))) = row else {
+        let Some(streamer_id) = eligible_voice_streamer_id(&self.pool, broadcaster_id)
+            .await
+            .map_err(|_| "voice_identity_unavailable".to_string())?
+        else {
             return Ok(None);
         };
-        let Ok(streamer_id) = discord_id.parse::<u64>() else {
-            return Ok(None);
-        };
-        if streamer_id == 0 {
-            return Ok(None);
-        }
-        let Ok(seen) = chrono::DateTime::parse_from_rfc3339(&seen) else {
-            return Ok(None);
-        };
-        let age = chrono::Utc::now().signed_duration_since(seen);
-        if age < chrono::Duration::seconds(-5) || age > chrono::Duration::minutes(5) {
-            return Ok(None);
-        }
         self.relay
             .streamer_voice_invite(1289721245281292288, streamer_id, message_id)
             .await
@@ -4126,5 +4145,67 @@ impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
                 })
             })
             .map_err(|_| "voice_broker_unavailable".to_string())
+    }
+}
+
+#[cfg(test)]
+mod voice_identity_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn voice_identity_braucht_aktiven_partner_eindeutige_ids_und_frisches_deadlock_live() {
+        let database = invite_test_postgres::TestPostgres::start().await;
+        let pool = &database.pool;
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, status TEXT, departnered_at TEXT, admin_archived_at TEXT, manual_partner_opt_out INTEGER);
+             CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, is_partner_active INTEGER);
+             CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT);
+             CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INTEGER, last_game TEXT, last_seen_at TEXT);
+             INSERT INTO twitch_partners VALUES ('123', 'active', NULL, NULL, 0);
+             INSERT INTO twitch_streamers_partner_state VALUES ('123', 1);
+             INSERT INTO twitch_streamer_identities VALUES ('123', '555');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('123', 1, 'Deadlock', $1)")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(555));
+        assert_eq!(eligible_voice_streamer_id(pool, "999").await.unwrap(), None);
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE twitch_live_state SET last_game = 'Andere Kategorie'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("UPDATE twitch_live_state SET last_game = 'Deadlock', last_seen_at = '2020-01-01T00:00:00Z'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("UPDATE twitch_live_state SET last_seen_at = $1")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active = 0")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
     }
 }
