@@ -13,6 +13,8 @@
 //! löst die URL erneut auf; fehlt sie dann, wird das Fenster verbraucht.
 
 use std::collections::HashMap;
+#[cfg(not(test))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -33,9 +35,44 @@ const INVITE_QUESTION_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const INVITE_QUESTION_USER_COOLDOWN: Duration = Duration::from_secs(3600);
 const INVITE_QUESTION_JUDGED_COOLDOWN: Duration = Duration::from_secs(30);
 const PENDING_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
-const GO_REPLY: &str = "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}";
-const CONFIRM_REPLY: &str =
-    "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg.";
+const GO_REPLIES: [&str; 4] = [
+    "@{chatter} Deadlock-Zugang gesucht? Im Discord bei frag-die-community kurz nach einem Invite fragen und am besten direkt den Steam-Freundescode dazupacken :) {invite}",
+    "@{chatter} Für den Deadlock-Invite einmal zu frag-die-community im Discord und den Steam-Freundescode dazupacken, dann weiß jeder direkt Bescheid :) {invite}",
+    "@{chatter} Den Deadlock-Invite klären wir im Discord: frag-die-community öffnen, Steam-Freundescode dazu und los :) {invite}",
+    "@{chatter} Spiel-Invite fehlt noch? Im Discord bei frag-die-community den Steam-Freundescode dazulassen, dann kann dir jemand direkt helfen :) {invite}",
+];
+const CONFIRM_REPLIES: [&str; 4] = [
+    "@{chatter} Meinst du einen Invite fürs Spiel? Ein kurzes ja reicht, dann schick ich dir direkt den Weg.",
+    "@{chatter} Geht es um Deadlock-Zugang? Sag kurz ja, dann bekommst du direkt den Weg.",
+    "@{chatter} Suchst du wirklich den Spiel-Invite? Dann einmal ja und ich schick dir den Weg.",
+    "@{chatter} Fehlt dir der Zugang zu Deadlock? Wenn ja, sag kurz ja, dann geht es direkt weiter.",
+];
+#[cfg(not(test))]
+static GO_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(test))]
+static CONFIRM_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn next_go_reply() -> &'static str {
+    #[cfg(test)]
+    {
+        GO_REPLIES[0]
+    }
+    #[cfg(not(test))]
+    {
+        GO_REPLIES[GO_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % GO_REPLIES.len()]
+    }
+}
+
+fn next_confirm_reply() -> &'static str {
+    #[cfg(test)]
+    {
+        CONFIRM_REPLIES[0]
+    }
+    #[cfg(not(test))]
+    {
+        CONFIRM_REPLIES[CONFIRM_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % CONFIRM_REPLIES.len()]
+    }
+}
 
 const INVITE_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -103,7 +140,10 @@ struct InviteQuestionSignal {
 
 fn classify_invite_question(content: &str) -> InviteQuestionSignal {
     let raw = content.trim();
-    if raw.is_empty() || raw.starts_with('!') {
+    if raw.is_empty()
+        || raw.starts_with('!')
+        || crate::streamer_voice::is_explicit_group_join_request(raw)
+    {
         return InviteQuestionSignal {
             is_candidate: false,
             has_strong_access: false,
@@ -1056,12 +1096,12 @@ impl InviteQuestionResponder {
         event: &ChatMessageEvent,
         chatter_login: &str,
     ) -> bool {
-        let msg = CONFIRM_REPLY.replace("{chatter}", chatter_login);
+        let msg = next_confirm_reply().replace("{chatter}", chatter_login);
         self.send(event, &msg).await
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let msg = GO_REPLY
+        let msg = next_go_reply()
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &msg).await
@@ -1300,6 +1340,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn discord_group_invite_is_not_game_access_but_beta_invite_is() {
+        assert!(
+            !classify_invite_question("Kannste mich nach der runde über dc direk einladen?")
+                .is_candidate
+        );
+        assert!(!classify_invite_question("Kannst du mich in die Lobby einladen?").is_candidate);
+        assert!(classify_invite_question("Kannst du mich einladen?").is_candidate);
+        assert!(classify_invite_question("Kannst du mich für die Beta einladen?").is_candidate);
+        assert!(classify_invite_question("Wie bekomme ich Zugang zum Spiel?").is_candidate);
+    }
+
     struct FakeStore {
         rollup: InviteQuestionRollup,
     }
@@ -1474,15 +1526,13 @@ mod tests {
     }
 
     fn expected_go_with_invite(chatter: &str, invite: &str) -> String {
-        format!(
-            "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}"
-        )
+        GO_REPLIES[0]
+            .replace("{chatter}", chatter)
+            .replace("{invite}", invite)
     }
 
     fn expected_confirm(chatter: &str) -> String {
-        format!(
-            "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."
-        )
+        CONFIRM_REPLIES[0].replace("{chatter}", chatter)
     }
 
     async fn decide_action(
@@ -2094,25 +2144,24 @@ mod tests {
 
     #[test]
     fn go_text_unter_twitch_limit() {
-        assert_eq!(
-            GO_REPLY,
-            "@{chatter} Für einen Deadlock-Invite: Komm auf unseren Discord und frag im Channel frag-die-community nach einem Invite, am besten gleich mit deinem Steam Freundescode. Dann geht das schnell und unkompliziert. {invite}"
-        );
-        assert_eq!(
-            CONFIRM_REPLY,
-            "@{chatter} Suchst du einen Invite für Deadlock? Sag einfach kurz ja, dann schick ich dir den Weg."
-        );
-
         let chatter = "abcdefghijklmnopqrstuvwxy";
         let invite = "https://discord.gg/abcdefghijklmnopqrstu";
         assert_eq!(chatter.len(), 25);
         assert_eq!(invite.len(), 40);
 
-        let rendered = GO_REPLY
-            .replace("{chatter}", chatter)
-            .replace("{invite}", invite);
-
-        assert!(rendered.len() < 500);
+        for template in GO_REPLIES {
+            let rendered = template
+                .replace("{chatter}", chatter)
+                .replace("{invite}", invite);
+            assert!(rendered.len() < 500);
+            assert_eq!(template.matches("{chatter}").count(), 1);
+            assert_eq!(template.matches("{invite}").count(), 1);
+        }
+        for template in CONFIRM_REPLIES {
+            let rendered = template.replace("{chatter}", chatter);
+            assert!(rendered.len() < 500);
+            assert_eq!(template.matches("{chatter}").count(), 1);
+        }
     }
 
     #[tokio::test]
