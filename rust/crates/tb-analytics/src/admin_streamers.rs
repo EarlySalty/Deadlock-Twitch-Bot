@@ -593,6 +593,11 @@ pub async fn linked_live_state_for_discord_user(
              LEFT JOIN twitch_live_state l ON l.twitch_user_id = i.twitch_user_id
             WHERE i.discord_user_id = $1
               AND NULLIF(BTRIM(i.twitch_user_id), '') IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM twitch_streamer_identities other
+                   WHERE other.discord_user_id = i.discord_user_id
+                     AND BTRIM(other.twitch_user_id) <> BTRIM(i.twitch_user_id)
+              )
             LIMIT 1"#,
     )
     .bind(discord_user_id)

@@ -12,14 +12,179 @@
 //! Discord-ID statt des Logins.
 
 use axum::{
-    Json,
     extract::{Query, State},
     response::IntoResponse,
+    Extension, Json,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tb_analytics::admin_streamers;
 use tb_http_core::{ApiError, AuthLevel};
+use tb_transport_twitch::{streams::HelixStream, HelixClient};
+use tokio::sync::{Mutex, Semaphore};
+
+const LIVE_MAX_AGE: i64 = 180;
+const HELIX_TIMEOUT: Duration = Duration::from_millis(1200);
+const HELIX_CACHE_AGE: Duration = Duration::from_secs(30);
+const HELIX_CACHE_LIMIT: usize = 256;
+const HELIX_CALLS_PER_MINUTE: usize = 60;
+
+#[derive(Clone)]
+struct LiveEvidence {
+    is_live: bool,
+    last_seen_at: Option<String>,
+    twitch_login: Option<String>,
+}
+
+struct CachedEvidence {
+    evidence: LiveEvidence,
+    cached_at: Instant,
+}
+
+/// Limits on-demand checks for linked role holders absent from the poller.
+pub struct LiveProbeCache {
+    entries: Mutex<HashMap<String, CachedEvidence>>,
+    calls: Mutex<VecDeque<Instant>>,
+    permits: Semaphore,
+}
+
+impl Default for LiveProbeCache {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            calls: Mutex::new(VecDeque::new()),
+            permits: Semaphore::new(8),
+        }
+    }
+}
+
+impl LiveProbeCache {
+    async fn cached_evidence(&self, id: &str) -> Option<LiveEvidence> {
+        let entries = self.entries.lock().await;
+        entries.get(id).and_then(|entry| {
+            (entry.cached_at.elapsed() < HELIX_CACHE_AGE).then(|| entry.evidence.clone())
+        })
+    }
+
+    async fn claim_helix_call(&self) -> bool {
+        let mut calls = self.calls.lock().await;
+        while calls
+            .front()
+            .is_some_and(|called| called.elapsed() >= Duration::from_secs(60))
+        {
+            calls.pop_front();
+        }
+        if calls.len() >= HELIX_CALLS_PER_MINUTE {
+            return false;
+        }
+        calls.push_back(Instant::now());
+        true
+    }
+}
+
+fn fresh_poller_evidence(linked: &admin_streamers::DiscordLinkedLiveState) -> Option<LiveEvidence> {
+    if linked.is_live == 0
+        || linked
+            .twitch_login
+            .as_deref()
+            .is_none_or(|name| name.trim().is_empty())
+    {
+        return None;
+    }
+    let seen = linked
+        .last_seen_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())?;
+    let age = Utc::now().signed_duration_since(seen);
+    if age < chrono::Duration::zero() || age > chrono::Duration::seconds(LIVE_MAX_AGE) {
+        return None;
+    }
+    Some(LiveEvidence {
+        is_live: true,
+        last_seen_at: linked.last_seen_at.clone(),
+        twitch_login: linked.twitch_login.clone(),
+    })
+}
+
+fn helix_evidence(id: &str, streams: Vec<HelixStream>) -> LiveEvidence {
+    let stream = streams.into_iter().find(|stream| {
+        stream.user_id == id && !stream.id.is_empty() && !stream.user_login.trim().is_empty()
+    });
+    match stream {
+        Some(stream) => LiveEvidence {
+            is_live: true,
+            last_seen_at: Some(Utc::now().to_rfc3339()),
+            twitch_login: Some(stream.user_login),
+        },
+        None => LiveEvidence {
+            is_live: false,
+            last_seen_at: None,
+            twitch_login: None,
+        },
+    }
+}
+
+async fn live_evidence(
+    linked: &admin_streamers::DiscordLinkedLiveState,
+    helix: &Option<HelixClient>,
+    cache: &LiveProbeCache,
+) -> LiveEvidence {
+    if let Some(evidence) = fresh_poller_evidence(linked) {
+        return evidence;
+    }
+    let denied = || LiveEvidence {
+        is_live: false,
+        last_seen_at: None,
+        twitch_login: None,
+    };
+    let id = linked.twitch_user_id.trim();
+    if id.is_empty()
+        || !id.bytes().all(|byte| byte.is_ascii_digit())
+        || !id.parse::<u64>().is_ok_and(|value| value > 0)
+    {
+        return denied();
+    }
+    let Some(helix) = helix.as_ref() else {
+        return denied();
+    };
+    if let Some(evidence) = cache.cached_evidence(id).await {
+        return evidence;
+    }
+    let Ok(_permit) = cache.permits.try_acquire() else {
+        return denied();
+    };
+    if !cache.claim_helix_call().await {
+        return denied();
+    }
+    let response = tokio::time::timeout(
+        HELIX_TIMEOUT,
+        helix.get_streams_by_user_ids(&[id.to_string()], None),
+    )
+    .await;
+    let evidence = match response {
+        Ok(Ok(streams)) => helix_evidence(id, streams),
+        _ => return denied(),
+    };
+    let mut entries = cache.entries.lock().await;
+    entries.retain(|_, entry| entry.cached_at.elapsed() < HELIX_CACHE_AGE);
+    if entries.len() >= HELIX_CACHE_LIMIT {
+        entries.clear();
+    }
+    entries.insert(
+        id.to_string(),
+        CachedEvidence {
+            evidence: evidence.clone(),
+            cached_at: Instant::now(),
+        },
+    );
+    evidence
+}
 
 #[derive(Deserialize)]
 pub struct DiagnoseQuery {
@@ -99,6 +264,8 @@ pub async fn handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
     Query(q): Query<DiagnoseQuery>,
+    Extension(helix): Extension<Arc<Option<HelixClient>>>,
+    Extension(cache): Extension<Arc<LiveProbeCache>>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
@@ -122,7 +289,13 @@ pub async fn handler(
         return Ok(Json(empty_response(None)));
     };
 
-    let linked_response = linked_response(&linked);
+    let evidence = live_evidence(&linked, helix.as_ref(), &cache).await;
+    let mut linked_response = linked_response(&linked);
+    linked_response.is_live = evidence.is_live;
+    linked_response.last_seen_at = evidence.last_seen_at.clone();
+    if evidence.twitch_login.is_some() {
+        linked_response.twitch_login = evidence.twitch_login.clone();
+    }
 
     let Some(login) = linked.twitch_login.as_deref() else {
         return Ok(Json(linked_response));
@@ -155,7 +328,9 @@ pub async fn handler(
     let resp = DiagnoseResponse {
         ok: true,
         found: true,
-        twitch_login: Some(row.twitch_login.clone()),
+        twitch_login: evidence
+            .twitch_login
+            .or_else(|| Some(row.twitch_login.clone())),
         discord_linked: row.is_on_discord.unwrap_or(0) != 0,
         oauth_connected: snap.connected,
         needs_reauth: snap.needs_reauth,
@@ -168,8 +343,8 @@ pub async fn handler(
         is_partner_active: row.is_partner_active != 0,
         is_verified: row.is_verified != 0,
         is_monitored_only: row.is_monitored_only.unwrap_or(0) != 0,
-        is_live: linked.is_live != 0,
-        last_seen_at: linked.last_seen_at,
+        is_live: evidence.is_live,
+        last_seen_at: evidence.last_seen_at,
         raid_bot_enabled: row.raid_bot_enabled.unwrap_or(0) != 0,
         technical_pause_reason: row.technical_pause_reason.clone(),
         operational_state: row.operational_state.clone(),
@@ -180,6 +355,87 @@ pub async fn handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn linked(
+        id: &str,
+        is_live: i32,
+        last_seen_at: Option<String>,
+    ) -> admin_streamers::DiscordLinkedLiveState {
+        admin_streamers::DiscordLinkedLiveState {
+            twitch_user_id: id.to_string(),
+            twitch_login: Some("streamer".to_string()),
+            is_live,
+            last_seen_at,
+        }
+    }
+
+    #[test]
+    fn poller_positiv_nur_mit_frischem_timestamp() {
+        let now = Utc::now();
+        assert!(fresh_poller_evidence(&linked("42", 1, Some(now.to_rfc3339()))).is_some());
+        assert!(fresh_poller_evidence(&linked("42", 0, Some(now.to_rfc3339()))).is_none());
+        assert!(fresh_poller_evidence(&linked(
+            "42",
+            1,
+            Some((now - chrono::Duration::minutes(4)).to_rfc3339())
+        ))
+        .is_none());
+        assert!(fresh_poller_evidence(&linked(
+            "42",
+            1,
+            Some((now + chrono::Duration::minutes(1)).to_rfc3339())
+        ))
+        .is_none());
+    }
+
+    #[test]
+    fn helix_live_nachweis_akzeptiert_jedes_spiel_nur_fuer_verknuepfte_id() {
+        let stream = HelixStream {
+            id: "live-1".to_string(),
+            user_id: "42".to_string(),
+            user_login: "umbenannt".to_string(),
+            game_name: "Just Chatting".to_string(),
+            ..Default::default()
+        };
+        let allowed = helix_evidence("42", vec![stream.clone()]);
+        assert!(allowed.is_live);
+        assert_eq!(allowed.twitch_login.as_deref(), Some("umbenannt"));
+        assert!(allowed.last_seen_at.is_some());
+        let denied = helix_evidence("43", vec![stream]);
+        assert!(!denied.is_live);
+        assert!(denied.last_seen_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn nicht_beobachteter_streamer_kann_id_gebundenen_cache_nutzen() {
+        let cache = LiveProbeCache::default();
+        cache.entries.lock().await.insert(
+            "42".to_string(),
+            CachedEvidence {
+                evidence: LiveEvidence {
+                    is_live: true,
+                    last_seen_at: Some(Utc::now().to_rfc3339()),
+                    twitch_login: Some("streamer".to_string()),
+                },
+                cached_at: Instant::now(),
+            },
+        );
+        let evidence = cache.cached_evidence("42").await.expect("cached id");
+        assert!(evidence.is_live);
+        assert!(evidence.last_seen_at.is_some());
+        assert!(cache.cached_evidence("43").await.is_none());
+        let invalid = live_evidence(&linked("streamer", 0, None), &None, &cache).await;
+        assert!(!invalid.is_live);
+    }
+
+    #[tokio::test]
+    async fn helix_budget_stoppt_weitere_anfragen() {
+        let cache = LiveProbeCache::default();
+        for _ in 0..HELIX_CALLS_PER_MINUTE {
+            assert!(cache.claim_helix_call().await);
+        }
+        assert!(!cache.claim_helix_call().await);
+    }
 
     #[test]
     fn diagnose_live_freshness_is_missing_without_observation() {
