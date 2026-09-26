@@ -1,6 +1,7 @@
 //! LFG-Mitspieler-Pitch: billiger Regex-Vorfilter vor dem KI-Judge.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,8 +22,27 @@ const LFG_PITCH_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
-pub const LFG_PITCH_REPLY: &str =
-    "@{chatter} Klar, gern! Auf unserem Discord verabredet sich die Community zum gemeinsamen Deadlock-Spielen – komm einfach hier dazu: {invite}";
+pub const LFG_PITCH_REPLIES: [&str; 4] = [
+    "@{chatter} Klar! Im Discord findest du Mitspieler für Deadlock und die passenden Sprachkanäle dazu :) {invite}",
+    "@{chatter} Für die nächste Deadlock-Runde fehlt dir noch jemand? Im Discord findest du Mitspieler :) {invite}",
+    "@{chatter} Gemeinsam spielt sich's besser. Im Discord kannst du dich direkt für eine Deadlock-Runde verabreden :) {invite}",
+    "@{chatter} Im Discord sind Leute für gemeinsame Deadlock-Runden unterwegs. Schau rein, wenn du mitspielen magst :) {invite}",
+];
+pub const LFG_PITCH_REPLY: &str = LFG_PITCH_REPLIES[0];
+#[cfg(not(test))]
+static LFG_PITCH_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn next_lfg_pitch_reply() -> &'static str {
+    #[cfg(test)]
+    {
+        LFG_PITCH_REPLIES[0]
+    }
+    #[cfg(not(test))]
+    {
+        LFG_PITCH_REPLIES
+            [LFG_PITCH_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % LFG_PITCH_REPLIES.len()]
+    }
+}
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -839,7 +859,7 @@ impl LfgPitchResponder {
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let message = LFG_PITCH_REPLY
+        let message = next_lfg_pitch_reply()
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &message).await
