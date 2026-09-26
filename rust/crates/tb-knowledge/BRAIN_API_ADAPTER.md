@@ -11,7 +11,7 @@ Die bestehende Route `POST /twitch/api/v2/self-explainer/ask` installiert `SelfE
 - `mode = "legacy" | "shadow" | "typed"`
 - `endpoint` — lokale Brain-Adresse, vom Config-Schema und BrainClient auf Loopback begrenzt
 - `public_scopes` — vertrauenswürdige Scope-Bindung für die öffentliche Route
-- `timeout_ms` — optional, Default 8000 ms
+- `timeout_ms` — optional, Default 8000 ms; zulässig 1–60000 ms gemäß BrainClient-Vertrag
 
 Das Bearer-Credential ist der bereits vorhandene `TWITCH_INTERNAL_API_TOKEN`. Der Brain-Consumer bezieht ihn ausschließlich aus dem bestehenden Uplink-Infisical-FD-Import im RAM. Brain muss denselben Dienst-Token für diesen lokalen Pfad akzeptieren. Ist der FD-Import nicht eingerichtet oder fehlt der Token, bleibt `typed` fail-closed bei der sicheren Unsicherheitsantwort; `shadow` liefert weiter die Legacy-Antwort. Für Brain wird kein Token in TOML oder einer neuen ENV-Variable hinterlegt. Im Legacy-Default wird kein Brain-Token angefordert.
 

@@ -50,7 +50,7 @@ impl BrainClientOptions {
         }
         if self
             .timeout_ms
-            .is_some_and(|timeout| !(1..=115_000).contains(&timeout))
+            .is_some_and(|timeout| !(1..=60_000).contains(&timeout))
         {
             return Err(FileError::invalid(
                 "dashboard.options.brain_client.timeout_ms",
@@ -355,5 +355,10 @@ mod brain_client_tests {
         config.endpoint = Some("http://127.0.0.1:8789".into());
         config.public_scopes.clear();
         assert!(config.validate().is_err());
+        config.public_scopes.push("bot.public".into());
+        config.timeout_ms = Some(60_001);
+        assert!(config.validate().is_err());
+        config.timeout_ms = Some(60_000);
+        assert!(config.validate().is_ok());
     }
 }
