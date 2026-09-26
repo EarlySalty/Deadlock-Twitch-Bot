@@ -382,6 +382,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-client"
+version = "0.1.0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=3b86d3cbe5ea39a67b8b1fbd8a3d48ab935982ef#3b86d3cbe5ea39a67b8b1fbd8a3d48ab935982ef"
+dependencies = [
+ "brain-contracts",
+ "reqwest",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "brain-contracts"
+version = "0.1.0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=3b86d3cbe5ea39a67b8b1fbd8a3d48ab935982ef#3b86d3cbe5ea39a67b8b1fbd8a3d48ab935982ef"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3544,8 +3565,10 @@ dependencies = [
 name = "tb-knowledge"
 version = "0.1.0"
 dependencies = [
+ "brain-client",
  "regex",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -3793,7 +3816,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

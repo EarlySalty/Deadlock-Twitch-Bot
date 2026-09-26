@@ -75,6 +75,12 @@ pub(crate) fn platform_value(name: &str) -> Option<String> {
     runtime().ok()?.platform_value(name)
 }
 
+/// Bestehender interner Dienst-Token aus dem geschützten Infisical-FD-Pfad.
+/// Nur für lokale Dienst-zu-Dienst-Aufrufe; der Wert wird nie protokolliert.
+pub fn brain_service_token() -> Option<String> {
+    platform_value("TWITCH_INTERNAL_API_TOKEN")
+}
+
 pub fn install(runtime: UplinkRuntime) -> Result<(), &'static str> {
     RUNTIME
         .set(runtime)
