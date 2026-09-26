@@ -252,15 +252,29 @@ try {
   await mobile.keyboard.press('Tab');
   assert.equal(await mobile.locator('#detail').evaluate(d => d.contains(document.activeElement)), true);
   await screenshot(mobile, 'family-mobile-detail', false);
+  await mobile.evaluate(() => {
+    document.querySelector('#close-detail').addEventListener('click', () => {
+      queueMicrotask(() => {window.__overflowAfterCloseClick = document.body.style.overflow;});
+    }, {once: true});
+  });
   await mobile.locator('#close-detail').tap();
   assert.equal(await mobile.locator('#detail').evaluate(d => d.open), false);
+  assert.equal(await mobile.evaluate(() => window.__overflowAfterCloseClick), '');
   assert.equal(await mobile.evaluate(() => document.body.style.overflow), '');
   await mobile.locator('#zoom-out').tap();
   assert.equal(await mobile.locator('#zoom-reset').textContent(), '83 %');
   await mobile.locator('#focus-feature').selectOption('rank-steam');
   await mobile.locator('.branch-label[data-feature=rank-steam] .branch-title').tap();
+  await mobile.evaluate(() => {
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        queueMicrotask(() => {window.__overflowAfterEscape = document.body.style.overflow;});
+      }
+    }, {once: true});
+  });
   await mobile.keyboard.press('Escape');
   assert.equal(await mobile.locator('#detail').evaluate(d => d.open), false);
+  assert.equal(await mobile.evaluate(() => window.__overflowAfterEscape), '');
   assert.equal(await mobile.evaluate(() => document.body.style.overflow), '');
   assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await screenshot(mobile, 'family-mobile', true);
