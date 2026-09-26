@@ -738,6 +738,7 @@ pub async fn build_runtime(
     // Promo-Invite-Resolver: lazy On-Miss-Erstellung (PromoEngine) UND eager
     // Backfill beim Startup (P2.14) teilen sich denselben Resolver, damit beide
     // Pfade dieselbe Broker-/DB-Logik nutzen.
+    let voice_relay = invite_relay.clone();
     let invite_resolver = Arc::new(DbInviteResolver {
         pool: pool.clone(),
         relay: invite_relay,
@@ -853,6 +854,9 @@ pub async fn build_runtime(
         Arc::clone(&crew_centroid),
         true,
     ));
+    let lfg_judge: Arc<dyn tb_chat::lfg_pitch::LfgJudge> = Arc::new(LlmLfgJudge::new(
+        EngagementLlmClient::new(None, None, None, None),
+    ));
     let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
@@ -886,13 +890,22 @@ pub async fn build_runtime(
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
         )),
+        streamer_voice: voice_relay.map(|relay| {
+            Arc::new(tb_chat::streamer_voice::StreamerVoiceResponder::new(
+                Arc::new(StreamerVoiceResolver {
+                    pool: pool.clone(),
+                    relay,
+                }),
+                Arc::clone(&lfg_judge),
+                Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>,
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+            ))
+        }),
         lfg_pitch: Arc::new({
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
                 Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
-                Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
-                    None, None, None, None,
-                ))),
+                Arc::clone(&lfg_judge),
                 lfg_pitch_enabled,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>),
@@ -3236,6 +3249,7 @@ mod chat_notification_tests {
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
+            streamer_voice: None,
             lfg_pitch: Arc::new(LfgPitchResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -4055,5 +4069,62 @@ mod command_adapter_regressions {
         );
         assert!(port.discord_invite("newname").await.unwrap().is_none());
         assert!(port.discord_invite("").await.unwrap().is_none());
+    }
+}
+
+/// Resolve the established Twitch/Discord identity by platform ID. A stale or
+/// disabled partner never causes a Discord write, even if an old chat event arrives.
+struct StreamerVoiceResolver {
+    pool: PgPool,
+    relay: BrokerRelay,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
+    async fn invite_for(
+        &self,
+        broadcaster_id: &str,
+        message_id: &str,
+    ) -> Result<Option<tb_chat::streamer_voice::VoiceInvite>, String> {
+        let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT NULLIF(trim(i.discord_user_id), ''), l.last_seen_at
+             FROM twitch_partners p
+             JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id
+             JOIN twitch_live_state l ON l.twitch_user_id = p.twitch_user_id
+             WHERE p.twitch_user_id = $1 AND p.status = 'active'
+               AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
+               AND COALESCE(p.manual_partner_opt_out, 0) = 0
+               AND l.is_live = 1 AND lower(l.last_game) = 'deadlock'",
+        )
+        .bind(broadcaster_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| "voice_identity_unavailable".to_string())?;
+        let Some((Some(discord_id), Some(seen))) = row else {
+            return Ok(None);
+        };
+        let Ok(streamer_id) = discord_id.parse::<u64>() else {
+            return Ok(None);
+        };
+        if streamer_id == 0 {
+            return Ok(None);
+        }
+        let Ok(seen) = chrono::DateTime::parse_from_rfc3339(&seen) else {
+            return Ok(None);
+        };
+        let age = chrono::Utc::now().signed_duration_since(seen);
+        if age < chrono::Duration::seconds(-5) || age > chrono::Duration::minutes(5) {
+            return Ok(None);
+        }
+        self.relay
+            .streamer_voice_invite(1289721245281292288, streamer_id, message_id)
+            .await
+            .map(|invite| {
+                invite.map(|invite| tb_chat::streamer_voice::VoiceInvite {
+                    url: invite.invite_url,
+                    slot_added: invite.slot_added,
+                })
+            })
+            .map_err(|_| "voice_broker_unavailable".to_string())
     }
 }

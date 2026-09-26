@@ -71,6 +71,14 @@ pub struct InviteInfo {
     pub guild_id: u64,
 }
 
+/// Result of the channel-scoped, short-lived streamer voice invitation.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StreamerVoiceInvite {
+    pub invite_url: String,
+    pub channel_id: String,
+    pub slot_added: bool,
+}
+
 /// Reaktionszähler einer Discord-Nachricht.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct MessageReaction {
@@ -347,6 +355,59 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         Ok(())
+    }
+
+    /// Resolve the streamer by Discord ID at the broker, not a channel name.
+    /// Message ID is part of the idempotency key so retries cannot add slots.
+    pub async fn streamer_voice_invite(
+        &self,
+        guild_id: u64,
+        streamer_id: u64,
+        message_id: &str,
+    ) -> Result<Option<StreamerVoiceInvite>, DiscordError> {
+        let payload = serde_json::json!({
+            "guild_id": guild_id,
+            "streamer_id": streamer_id,
+            "message_id": message_id,
+        });
+        let key = Self::idempotency_key("streamer-voice", &payload);
+        let response = self
+            .post_with_retry(
+                "/internal/master/v1/discord/streamer-voice-invite",
+                &payload,
+                &key,
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(DiscordError::BrokerError {
+                status: response.status().as_u16(),
+                body: "streamer voice unavailable".into(),
+            });
+        }
+        let envelope: BrokerEnvelope<serde_json::Value> = response.json().await?;
+        let result =
+            envelope
+                .result
+                .filter(|_| envelope.ok)
+                .ok_or_else(|| DiscordError::BrokerError {
+                    status: 502,
+                    body: "missing streamer voice result".into(),
+                })?;
+        match result.get("available").and_then(serde_json::Value::as_bool) {
+            Some(false) => Ok(None),
+            Some(true) => {
+                serde_json::from_value(result)
+                    .map(Some)
+                    .map_err(|_| DiscordError::BrokerError {
+                        status: 502,
+                        body: "invalid streamer voice result".into(),
+                    })
+            }
+            None => Err(DiscordError::BrokerError {
+                status: 502,
+                body: "invalid streamer voice status".into(),
+            }),
+        }
     }
 
     /// Erstellt einen permanenten Discord-Invite für den angegebenen Kanal.
@@ -871,6 +932,75 @@ mod tests {
             display_name: None,
         };
         assert_eq!(user.preferred_display_name().as_deref(), Some("rawname"));
+    }
+
+    #[tokio::test]
+    async fn streamer_voice_invite_reuses_auth_and_message_scoped_idempotency() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/streamer-voice-invite"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": {"available": true, "invite_url": "https://discord.gg/voiceTest", "channel_id": "42", "slot_added": true}
+            }))).expect(3).mount(&server).await;
+        let relay = BrokerRelay::new(&test_config(&server.uri())).expect("relay");
+        for message in ["same-message", "same-message", "another-message"] {
+            let invite = relay
+                .streamer_voice_invite(1289721245281292288, 7, message)
+                .await
+                .expect("response")
+                .expect("invite");
+            assert_eq!(invite.channel_id, "42");
+            assert!(invite.slot_added);
+        }
+        let requests = server.received_requests().await.expect("requests");
+        let key = |index: usize| {
+            requests[index]
+                .headers
+                .get("X-Idempotency-Key")
+                .expect("key")
+                .to_str()
+                .expect("text")
+        };
+        assert_eq!(key(0), key(1));
+        assert_ne!(key(0), key(2));
+        let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("json");
+        assert_eq!(payload["streamer_id"], 7);
+        assert!(payload.get("channel_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn streamer_voice_invite_never_treats_malformed_or_failed_response_as_success() {
+        for (body, absent) in [
+            (
+                serde_json::json!({"ok": true, "result": {"available": false}}),
+                true,
+            ),
+            (
+                serde_json::json!({"ok": false, "result": {"available": true}}),
+                false,
+            ),
+            (
+                serde_json::json!({"ok": true, "result": {"available": true}}),
+                false,
+            ),
+            (serde_json::json!({"ok": true, "result": {}}), false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            let relay = BrokerRelay::new(&test_config(&server.uri())).expect("relay");
+            let result = relay
+                .streamer_voice_invite(1289721245281292288, 7, "test-message")
+                .await;
+            if absent {
+                assert!(result.expect("absent").is_none());
+            } else {
+                assert!(result.is_err());
+            }
+        }
     }
 
     #[tokio::test]
