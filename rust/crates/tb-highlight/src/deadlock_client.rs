@@ -18,7 +18,23 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Holt eine URL und parst die Antwort als JSON. HTTP-Status ≥400 wird zum
 /// Fehler (Parität zu `response.raise_for_status()`).
 async fn get_json(url: &str) -> Result<serde_json::Value, String> {
+    let url = reqwest::Url::parse(url).map_err(|_| "Invalid Deadlock API endpoint".to_string())?;
+    let loopback = url.host_str().is_some_and(|host| {
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+    });
+    if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Deadlock API requires HTTPS or literal loopback".into());
+    }
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|e| e.to_string())?;
@@ -75,9 +91,10 @@ fn json_truthy(v: &serde_json::Value) -> bool {
 
 fn extract_match_list(payload: serde_json::Value) -> Vec<serde_json::Value> {
     match payload {
-        serde_json::Value::Array(items) => {
-            items.into_iter().filter(serde_json::Value::is_object).collect()
-        }
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter(serde_json::Value::is_object)
+            .collect(),
         serde_json::Value::Object(map) => {
             // Python: matches = payload.get("matches") or payload.get("data") or []
             let chosen = [map.get("matches"), map.get("data")]
@@ -108,6 +125,40 @@ fn extract_match_info(payload: serde_json::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn security_deadlock_api_rejects_remote_plaintext_before_requesting() {
+        for base in [
+            "http://example.test",
+            "http://localhost",
+            "http://127.0.0.1.evil.test",
+            "http://127.0.0.1@evil.test",
+        ] {
+            let error = get_match_history(base, 42, 10).await.unwrap_err();
+            assert_eq!(error, "Deadlock API requires HTTPS or literal loopback");
+        }
+    }
+
+    #[tokio::test]
+    async fn security_deadlock_api_does_not_follow_redirects() {
+        let target = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(0)
+            .mount(&target)
+            .await;
+        let origin = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302).insert_header("Location", target.uri()),
+            )
+            .expect(1)
+            .mount(&origin)
+            .await;
+        assert!(get_match_history(&origin.uri(), 42, 10).await.is_err());
+        assert!(target.received_requests().await.unwrap().is_empty());
+    }
+
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

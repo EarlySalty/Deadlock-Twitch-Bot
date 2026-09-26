@@ -342,8 +342,10 @@ async fn callback_handler_inner(
     };
 
     if login_state.next_path == tb_chat::player_links::CONNECT_PATH {
-        return no_store(clear_context_and_respond(config.cookie_secure,
-            super::player_connect::complete_twitch_login(&state, &config, identity).await));
+        return no_store(clear_context_and_respond(
+            config.cookie_secure,
+            super::player_connect::complete_twitch_login(&state, &config, identity).await,
+        ));
     }
 
     // Partner-Gate (Python _is_partner_allowed). Kein Partner → 403, KEINE Session.
@@ -520,9 +522,15 @@ async fn call_raid_oauth_callback(
         "state": state_token,
         "error": error,
     });
+    // Validate the actual request target as well as the environment-derived
+    // configuration. This also protects independently constructed test configs.
+    let Some(endpoint) = raid_oauth_request_url(&config.endpoint_url) else {
+        warn!("Raid-OAuth-Callback-Ziel ist kein gültiger Loopback-Endpunkt");
+        return (raid_oauth_unavailable_response(), None);
+    };
     let response = config
         .client
-        .post(&config.endpoint_url)
+        .post(endpoint)
         .header(INTERNAL_TOKEN_HEADER, &config.internal_token)
         .header(
             IDEMPOTENCY_KEY_HEADER,
@@ -817,17 +825,40 @@ pub fn oauth_login_config_from_env() -> Option<OAuthLoginConfig> {
     })
 }
 
+fn raid_oauth_request_url(raw: &str) -> Option<reqwest::Url> {
+    let endpoint = reqwest::Url::parse(raw).ok()?;
+    let loopback = match endpoint.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        _ => false,
+    };
+    if !loopback
+        || !matches!(endpoint.scheme(), "http" | "https")
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return None;
+    }
+    Some(endpoint)
+}
+
+fn raid_oauth_callback_endpoint(base: &str) -> Option<String> {
+    // This token is for the local worker, never for a DNS-selected remote host.
+    let origin = crate::uplink_config::local_origin(base).ok()?;
+    Some(format!(
+        "{origin}{INTERNAL_API_BASE_PATH}{RAID_OAUTH_CALLBACK_PATH}"
+    ))
+}
+
 fn raid_oauth_callback_config_from_env() -> Option<RaidOAuthCallbackConfig> {
     let internal_token = non_empty_env("TWITCH_INTERNAL_API_TOKEN")?;
-    let endpoint_url = format!(
-        "{}{}{}",
-        worker_internal_base_url(),
-        INTERNAL_API_BASE_PATH,
-        RAID_OAUTH_CALLBACK_PATH
-    );
+    let endpoint_url = raid_oauth_callback_endpoint(&worker_internal_base_url())?;
     let client = reqwest::Client::builder()
         .timeout(RAID_OAUTH_CALLBACK_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
         .ok()?;
     Some(RaidOAuthCallbackConfig {
@@ -907,6 +938,66 @@ fn validate_oauth_redirect_uri(raw: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_raid_callback_endpoint_is_literal_loopback_only() {
+        for base in ["http://127.0.0.1:8776", "http://[::1]:8776"] {
+            assert_eq!(
+                raid_oauth_callback_endpoint(base).unwrap(),
+                format!("{base}{INTERNAL_API_BASE_PATH}{RAID_OAUTH_CALLBACK_PATH}")
+            );
+        }
+        for base in [
+            "http://example.test",
+            "http://localhost:8776",
+            "http://127.0.0.1.evil.test",
+            "http://127.0.0.1@evil.test",
+            "http://10.0.0.1",
+            "http://127.0.0.1:8776/other",
+            "http://127.0.0.1:8776?next=",
+            "http://127.0.0.1:8776#fragment",
+        ] {
+            assert!(raid_oauth_callback_endpoint(base).is_none());
+        }
+    }
+
+    #[test]
+    fn security_raid_request_url_rejects_untrusted_destinations() {
+        for raw in [
+            "https://example.test/callback",
+            "http://localhost/callback",
+            "http://127.0.0.1.evil.test/callback",
+            "http://127.0.0.1@evil.test/callback",
+            "http://127.0.0.1/callback?next=remote",
+            "http://127.0.0.1/callback#fragment",
+        ] {
+            assert!(raid_oauth_request_url(raw).is_none());
+        }
+        assert!(raid_oauth_request_url("http://127.0.0.1:8776/callback").is_some());
+        assert!(raid_oauth_request_url("http://[::1]:8776/callback").is_some());
+    }
+
+    #[tokio::test]
+    async fn security_raid_callback_revalidates_before_sending_a_token() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let mut endpoint = reqwest::Url::parse(&format!("{}/callback", server.uri())).unwrap();
+        endpoint.set_username("untrusted").unwrap();
+        let config = RaidOAuthCallbackConfig {
+            endpoint_url: endpoint.to_string(),
+            internal_token: "synthetic-test-value".into(),
+            client: reqwest::Client::new(),
+        };
+        let (_, identity) = call_raid_oauth_callback(&config, "code", "state", "").await;
+        assert!(identity.is_none());
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
     use crate::auth::oauth_login::TwitchIdentity;
     use async_trait::async_trait;
     use axum::http::StatusCode;

@@ -95,10 +95,7 @@ pub struct OAuthManager {
 
 impl OAuthManager {
     pub fn new(pool: PgPool, cipher: Arc<FieldCipher>) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(OAUTH_TIMEOUT)
-            .build()
-            .unwrap_or_default();
+        let http = crate::http_security::client(OAUTH_TIMEOUT);
         Self {
             pool,
             cipher,
@@ -484,6 +481,10 @@ impl OAuthManager {
         url: &str,
         params: &[(&str, &str)],
     ) -> Result<serde_json::Value, OAuthError> {
+        let url = crate::http_security::endpoint(url).map_err(|detail| OAuthError::Exchange {
+            platform,
+            detail: detail.into(),
+        })?;
         let resp =
             self.http
                 .get(url)
@@ -492,13 +493,13 @@ impl OAuthManager {
                 .await
                 .map_err(|e| OAuthError::Exchange {
                     platform,
-                    detail: e.to_string(),
+                    detail: e.without_url().to_string(),
                 })?;
         resp.json::<serde_json::Value>()
             .await
             .map_err(|e| OAuthError::Exchange {
                 platform,
-                detail: e.to_string(),
+                detail: e.without_url().to_string(),
             })
     }
 
@@ -510,6 +511,10 @@ impl OAuthManager {
         url: &str,
         form: &[(&str, &str)],
     ) -> Result<serde_json::Value, OAuthError> {
+        let url = crate::http_security::endpoint(url).map_err(|detail| OAuthError::Exchange {
+            platform,
+            detail: detail.into(),
+        })?;
         let resp =
             self.http
                 .post(url)
@@ -518,13 +523,13 @@ impl OAuthManager {
                 .await
                 .map_err(|e| OAuthError::Exchange {
                     platform,
-                    detail: e.to_string(),
+                    detail: e.without_url().to_string(),
                 })?;
         resp.json::<serde_json::Value>()
             .await
             .map_err(|e| OAuthError::Exchange {
                 platform,
-                detail: e.to_string(),
+                detail: e.without_url().to_string(),
             })
     }
 
