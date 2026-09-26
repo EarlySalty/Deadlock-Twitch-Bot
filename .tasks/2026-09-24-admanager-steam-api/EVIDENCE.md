@@ -1,5 +1,15 @@
 # Abnahme: Twitch-Werbemanager
 
+## Nachprüfung nach Rebase auf main
+
+Der PR wurde auf den aktuellen Hauptzweig nachgezogen. Dessen CI lädt das
+kanonische Brain-Schema bereits aus `scripts/ci/brain-schema/`; die ältere,
+PR-eigene Kopie unter `rust/schema-gate/` wurde entfernt. Das aktuelle
+Dashboard-Layout blieb erhalten, die korrigierten Status- und Hilfetexte sind
+integriert. Eine vorhandene moderne Steam-Verknüpfung ohne gewähltes
+Primärkonto sperrt nun die Rückkehr zu älteren Engagement- oder
+Discord-Konten. Der Wegwerf-Datenbanktest deckt diesen Fall ab.
+
 Stand: 24. September 2026. Branch `fix/admanager-steam-api-20260924`, Basis `1442640c3ea4857f785985b892dc12c831719ddf`. Noch nicht produktiv ausgeliefert.
 
 ## Ursache und Korrektur

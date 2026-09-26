@@ -94,6 +94,10 @@ async fn identity(pool: &PgPool, uid: &str) -> Result<Identity, sqlx::Error> {
                 None => Identity::Disabled,
             });
         }
+        // A modern link record without a selected primary account is an
+        // explicit absence. Falling through could advertise using an older
+        // engagement or Discord account after the primary was removed.
+        return Ok(Identity::None);
     }
     // The legacy field is selected only through the ID-owned channel record.
     let legacy: Option<String> = sqlx::query_scalar("SELECT NULLIF(BTRIM(es.steam_id),'') FROM twitch_ad_manager_settings s JOIN twitch_engagement_settings es ON es.channel_login=s.twitch_login WHERE s.twitch_user_id=$1")

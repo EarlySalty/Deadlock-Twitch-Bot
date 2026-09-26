@@ -168,6 +168,26 @@ async fn optout_verhindert_jeden_legacy_abruf() {
     f.cleanup().await;
 }
 #[tokio::test]
+async fn ohne_primaerkonto_keine_werbefreigabe_durch_alte_zuordnung() {
+    let f = Fixture::new().await;
+    f.legacy("76561198000000021").await;
+    sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('42','123')")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    // This is the state left when the final verified primary account is removed.
+    sqlx::query("INSERT INTO twitch_player_steam_links VALUES ('42',NULL,true,2)")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(identity(&f.pool, "42").await.unwrap(), Identity::None);
+    let result = f.read().await;
+    assert!(!result.steam_linked);
+    assert!(result.state.is_none());
+    assert!(f.server.received_requests().await.unwrap().is_empty());
+    f.cleanup().await;
+}
+#[tokio::test]
 async fn unlink_waehrend_http_verwirft_alten_status() {
     let f = Fixture::new().await;
     f.direct(true).await;
