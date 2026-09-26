@@ -60,6 +60,11 @@ async fn queue_lease_idempotenz_und_state_sind_atomar() {
     .await
     .unwrap();
     sqlx::raw_sql(MIGRATION).execute(&pool).await.unwrap();
+    // The fixture must include the already-shipped budget and notice columns.
+    sqlx::raw_sql(include_str!("../../../migrations/20260918120000_werbemanager_budget_smart.sql"))
+        .execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../../../migrations/20260918150000_werbemanager_chat_hinweis.sql"))
+        .execute(&pool).await.unwrap();
     let store = AdManagerStore::new(pool.clone());
 
     store
