@@ -64,6 +64,7 @@ pub mod enrich_pipeline;
 pub mod enrichment;
 pub mod enrichment_worker;
 pub mod forms;
+mod http_security;
 pub mod insights_worker;
 pub mod layout;
 pub mod llm;
@@ -95,9 +96,7 @@ pub mod vocab;
 pub mod vod_archive;
 
 pub use clip::{
-    repository::ClipRepository,
-    helix::HelixClipSource,
-    service::ClipFetchService,
+    helix::HelixClipSource, repository::ClipRepository, service::ClipFetchService,
     task::ClipFetchTask,
 };
 

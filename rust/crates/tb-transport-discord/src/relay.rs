@@ -205,12 +205,47 @@ where
 impl BrokerRelay {
     /// Erstellt einen neuen BrokerRelay aus der übergebenen Konfiguration.
     pub fn new(config: &BrokerConfig) -> Result<Self, reqwest::Error> {
-        let client = Client::builder().timeout(TIMEOUT).build()?;
+        let client = Client::builder()
+            .timeout(TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()?;
         Ok(Self {
             client: Arc::new(client),
             base_url: config.base_url.clone(),
             token: config.token.clone(),
         })
+    }
+
+    /// HTTP is permitted only for literal loopback addresses. The internal
+    /// token must never cross a plaintext network or an inherited HTTP proxy.
+    fn request_url(&self, path: &str) -> Result<reqwest::Url, DiscordError> {
+        let invalid = || DiscordError::BrokerError {
+            status: 400,
+            body: "Ungültiger Broker-Endpunkt: HTTPS oder numerischer Loopback erforderlich".into(),
+        };
+        let mut url = reqwest::Url::parse(&self.base_url).map_err(|_| invalid())?;
+        let loopback = url.host_str().is_some_and(|host| {
+            host.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        });
+        if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.path() != "/"
+            || !path.starts_with("/internal/master/v1/discord/")
+            || path.contains(['?', '#', '\\'])
+            || path.split('/').any(|part| part == "." || part == "..")
+        {
+            return Err(invalid());
+        }
+        url.set_path(path);
+        Ok(url)
     }
 
     /// Berechnet den deterministischen Idempotency-Key.
@@ -240,13 +275,13 @@ impl BrokerRelay {
         payload: &T,
         idempotency_key: &str,
     ) -> Result<reqwest::Response, DiscordError> {
-        let url = format!("{}{}", self.base_url, path);
+        let url = self.request_url(path)?;
         let mut last_err: Option<DiscordError> = None;
 
         for attempt in 0..MAX_ATTEMPTS {
             let result = self
                 .client
-                .post(&url)
+                .post(url.clone())
                 .header("X-Internal-Token", &self.token)
                 .header("X-Idempotency-Key", idempotency_key)
                 .json(payload)
@@ -369,12 +404,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<InviteInfo> = resp.json().await?;
-        envelope.result.filter(|_| envelope.ok).ok_or_else(|| {
-            DiscordError::BrokerError {
+        envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or_else(|| DiscordError::BrokerError {
                 status: 502,
                 body: "missing create-invite result".to_string(),
-            }
-        })
+            })
     }
 
     /// Legt eine Discord-Rolle über den Broker an
@@ -402,10 +438,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<CreateRoleResponse> = resp.json().await?;
-        let parsed = envelope.result.filter(|_| envelope.ok).ok_or(DiscordError::BrokerError {
-            status: 502,
-            body: "missing create-role result".to_string(),
-        })?;
+        let parsed = envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or(DiscordError::BrokerError {
+                status: 502,
+                body: "missing create-role result".to_string(),
+            })?;
         Ok(parsed.role_id)
     }
 
@@ -417,10 +456,10 @@ impl BrokerRelay {
         guild_id: u64,
         name: &str,
     ) -> Result<Option<u64>, DiscordError> {
-        let url = format!("{}{}", self.base_url, ROLES_PATH);
+        let url = self.request_url(ROLES_PATH)?;
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .query(&[("guild_id", guild_id.to_string())])
             .timeout(Duration::from_secs(15))
             .send()
@@ -441,10 +480,10 @@ impl BrokerRelay {
     /// Holt alle nicht-Bot-Guild-Member vom Broker (loopback, kein Token).
     /// `GET /internal/master/v1/discord/members`
     pub async fn list_members(&self) -> Result<Vec<GuildMember>, DiscordError> {
-        let url = format!("{}{}", self.base_url, MEMBERS_PATH);
+        let url = self.request_url(MEMBERS_PATH)?;
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .timeout(Duration::from_secs(15))
             .send()
             .await
@@ -468,10 +507,10 @@ impl BrokerRelay {
         channel_id: &str,
         message_id: &str,
     ) -> Result<MessageReactions, DiscordError> {
-        let url = format!("{}{}", self.base_url, MESSAGE_REACTIONS_PATH);
+        let url = self.request_url(MESSAGE_REACTIONS_PATH)?;
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .header("X-Internal-Token", &self.token)
             .query(&[("channel_id", channel_id), ("message_id", message_id)])
             .send()
@@ -579,6 +618,65 @@ mod tests {
             base_url: base_url.to_string(),
             token: "test-token".to_string(),
         }
+    }
+
+    #[test]
+    fn security_broker_rejects_remote_http_and_ambiguous_origins() {
+        for base in [
+            "http://example.test",
+            "http://localhost",
+            "http://127.0.0.1.example.test",
+            "http://127.0.0.1@evil.test",
+            "http://10.0.0.1",
+            "http://[::ffff:10.0.0.1]",
+            "https://user:password@example.test",
+            "https://example.test?override=",
+            "https://example.test#fragment",
+            "https://example.test/unexpected",
+        ] {
+            let relay = BrokerRelay::new(&test_config(base)).unwrap();
+            assert!(
+                relay.request_url(SEND_PATH).is_err(),
+                "accepted unsafe origin"
+            );
+        }
+    }
+
+    #[test]
+    fn security_broker_accepts_https_and_literal_loopback_only() {
+        for base in [
+            "https://broker.example.test",
+            "http://127.0.0.1:8770",
+            "http://[::1]:8770",
+        ] {
+            let relay = BrokerRelay::new(&test_config(base)).unwrap();
+            let url = relay.request_url(SEND_PATH).unwrap();
+            assert_eq!(url.path(), SEND_PATH);
+        }
+    }
+
+    #[tokio::test]
+    async fn security_broker_does_not_forward_internal_token_on_redirect() {
+        let destination = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&destination)
+            .await;
+        let broker = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", destination.uri()))
+            .expect(1)
+            .mount(&broker)
+            .await;
+        let relay = BrokerRelay::new(&test_config(&broker.uri())).unwrap();
+        let response = relay
+            .post_with_retry(SEND_PATH, &serde_json::json!({}), "redirect-test")
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 307);
+        assert!(destination.received_requests().await.unwrap().is_empty());
     }
 
     fn sample_send_payload() -> SendRichMessage {
@@ -1094,7 +1192,10 @@ mod tests {
             .await;
 
         let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
-        let invite = relay.create_invite(123, "streamer-invite:test").await.unwrap();
+        let invite = relay
+            .create_invite(123, "streamer-invite:test")
+            .await
+            .unwrap();
         assert_eq!(invite.invite_url, "https://discord.gg/abc");
         assert_eq!(invite.code, "abc");
         assert_eq!(invite.channel_id, 123);
@@ -1210,7 +1311,10 @@ mod tests {
             .await;
 
         let server = server_task.await.expect("Mock-Server");
-        assert!(result.is_ok(), "zweiter Versuch muss durchkommen: {result:?}");
+        assert!(
+            result.is_ok(),
+            "zweiter Versuch muss durchkommen: {result:?}"
+        );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
@@ -1238,7 +1342,10 @@ mod tests {
             })
             .await
             .expect_err("404 ist ein Fehler");
-        assert!(matches!(error, DiscordError::BrokerError { status: 404, .. }));
+        assert!(matches!(
+            error,
+            DiscordError::BrokerError { status: 404, .. }
+        ));
         server.verify().await;
     }
 

@@ -4,3 +4,8 @@ pytesseract==0.3.13
 requests==2.33.0
 psycopg[binary]==3.2.3
 pytest==9.0.3
+# Pin security-fixed transitive dependencies used by pytesseract, requests and pytest.
+# GHSA-vjc4-5qp5-m44j, GHSA-65pc-fj4g-8rjx, GHSA-5239-wwwm-4pmq.
+Pillow==12.3.0
+idna==3.15
+Pygments==2.20.0
