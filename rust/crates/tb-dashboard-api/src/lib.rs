@@ -93,6 +93,13 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
+    build_public_router_with_brain(pool, handlers::self_explainer::SelfExplainerBrainRuntime::legacy())
+}
+
+pub fn build_public_router_with_brain(
+    pool: PgPool,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
     use handlers::{
         bans, health_probe, network, network_stats, overlay, raids, self_explainer, social_media,
         streamer_comparison,
@@ -146,9 +153,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
         .layer(Extension(
             streamer_comparison::StreamerComparisonCache::default(),
         ))
-        .layer(Extension(
-            self_explainer::SelfExplainerBrainRuntime::from_env(),
-        ))
+        .layer(Extension(brain_runtime))
         .layer(CorsLayer::permissive());
 
     // HTML, Login-Redirects und OAuth-Callbacks sind zwar öffentlich erreichbar,
@@ -1929,6 +1934,20 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
 
 /// Wie [`build_router`], aber mit optionalem Helix-Client fuer den OBS-Pause-Loop.
 pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixClient>) -> Router {
+    build_router_with_helix_and_brain(
+        pool,
+        token,
+        helix,
+        handlers::self_explainer::SelfExplainerBrainRuntime::legacy(),
+    )
+}
+
+pub fn build_router_with_helix_and_brain(
+    pool: PgPool,
+    token: String,
+    helix: Option<HelixClient>,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
     // P2.86/133/138/140: gemeinsamer Rate-Limiter (atomares Sliding-Window auf
     // dashboard_sessions). Der Fernet-Key wird aus der Env gelesen (gleiche
     // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
@@ -1942,7 +1961,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         None => handlers::pause_loop::build_unavailable_pause_loop_router(),
     };
 
-    let mut app = build_public_router(pool.clone())
+    let mut app = build_public_router_with_brain(pool.clone(), brain_runtime)
         .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
         .merge(build_partner_login_router(

@@ -98,44 +98,23 @@ impl SelfExplainerBrainRuntime {
         }
     }
 
-    pub fn from_env() -> Self {
-        let mode = match std::env::var("TWITCH_BRAIN_CLIENT_MODE")
-            .unwrap_or_else(|_| "legacy".into())
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "typed" => BrainRouteMode::Typed,
-            "shadow" => BrainRouteMode::Shadow,
-            other => {
-                tracing::warn!(
-                    mode = %other,
-                    "unbekannter TWITCH_BRAIN_CLIENT_MODE; es gilt der dokumentierte Legacy-Default"
-                );
-                BrainRouteMode::Legacy
-            }
+    pub fn from_config(
+        config: &tb_config::dashboard_options::BrainClientOptions,
+        token: Option<&str>,
+    ) -> Self {
+        let mode = match config.mode {
+            tb_config::dashboard_options::BrainClientMode::Legacy => BrainRouteMode::Legacy,
+            tb_config::dashboard_options::BrainClientMode::Shadow => BrainRouteMode::Shadow,
+            tb_config::dashboard_options::BrainClientMode::Typed => BrainRouteMode::Typed,
         };
         if mode == BrainRouteMode::Legacy {
             return Self::legacy();
         }
-        let endpoint = std::env::var("TWITCH_BRAIN_API_ENDPOINT").unwrap_or_default();
-        let token = std::env::var("TWITCH_BRAIN_API_TOKEN").unwrap_or_default();
-        let scopes: std::collections::BTreeSet<String> = std::env::var("TWITCH_BRAIN_API_SCOPES")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|scope| !scope.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-        let timeout_ms = std::env::var("TWITCH_BRAIN_API_TIMEOUT_MS")
-            .ok()
-            .and_then(|raw| raw.parse::<u64>().ok())
-            .unwrap_or(8_000)
-            .max(1);
+        let scopes = config.public_scopes.iter().cloned().collect();
         let adapter = tb_knowledge::brain::BrainKnowledgeAdapter::new(
-            &endpoint,
-            &token,
-            Duration::from_millis(timeout_ms),
+            config.endpoint.as_deref().unwrap_or_default(),
+            token.unwrap_or_default(),
+            Duration::from_millis(config.timeout_ms.unwrap_or(8_000)),
             scopes,
         )
         .map(Arc::new)
@@ -943,6 +922,24 @@ pub async fn self_explainer_ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brain_runtime_nutzt_config_und_bleibt_ohne_infisical_token_geschlossen() {
+        use tb_config::dashboard_options::{BrainClientMode, BrainClientOptions};
+        let mut config = BrainClientOptions::default();
+        assert_eq!(
+            SelfExplainerBrainRuntime::from_config(&config, None).mode,
+            BrainRouteMode::Legacy
+        );
+        config.mode = BrainClientMode::Typed;
+        config.endpoint = Some("http://127.0.0.1:1".into());
+        config.public_scopes = vec!["bot.public".into()];
+        let unavailable = SelfExplainerBrainRuntime::from_config(&config, None);
+        assert_eq!(unavailable.mode, BrainRouteMode::Typed);
+        assert!(unavailable.adapter.is_none());
+        let available = SelfExplainerBrainRuntime::from_config(&config, Some("fixture-token"));
+        assert!(available.adapter.is_some());
+    }
 
     #[tokio::test]
     async fn typed_port_does_not_drop_history_or_invoke_legacy_fallbacks() {

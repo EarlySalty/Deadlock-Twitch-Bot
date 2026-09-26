@@ -12,7 +12,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use tb_dashboard_api::build_router_with_helix;
+use tb_dashboard_api::build_router_with_helix_and_brain;
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 #[cfg(test)]
@@ -424,7 +424,20 @@ async fn main() {
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     spawn_affiliate_gutschrift_loop(pool.clone());
     let pause_loop_helix = pause_loop_helix_client_from_env();
-    let mut app = build_router_with_helix(pool.clone(), token, pause_loop_helix);
+    let brain_token = if config.dashboard.options.brain_client.mode
+        == tb_config::dashboard_options::BrainClientMode::Legacy
+    {
+        None
+    } else {
+        tb_dashboard_api::uplink_config::brain_service_token()
+    };
+    let brain_runtime =
+        tb_dashboard_api::handlers::self_explainer::SelfExplainerBrainRuntime::from_config(
+            &config.dashboard.options.brain_client,
+            brain_token.as_deref(),
+        );
+    let mut app =
+        build_router_with_helix_and_brain(pool.clone(), token, pause_loop_helix, brain_runtime);
     app = app.layer(axum::Extension(readiness_fingerprint));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));

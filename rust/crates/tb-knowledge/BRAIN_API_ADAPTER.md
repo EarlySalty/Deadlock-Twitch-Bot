@@ -6,13 +6,14 @@ Stand: 2026-09-26. C9 verdrahtet den typisierten Brain-Port in die echte öffent
 
 ## Runtime-Modi
 
-Die bestehende Route `POST /twitch/api/v2/self-explainer/ask` installiert `SelfExplainerBrainRuntime` im Router. Der Default bleibt `legacy`. Eine Umstellung erfolgt nur durch explizite Runtime-Konfiguration:
+Die bestehende Route `POST /twitch/api/v2/self-explainer/ask` installiert `SelfExplainerBrainRuntime` im Router. Der Default bleibt `legacy`. Eine Umstellung erfolgt nur durch die normale Dashboard-TOML-Konfiguration unter `[dashboard.options.brain_client]`:
 
-- `TWITCH_BRAIN_CLIENT_MODE=legacy|shadow|typed`
-- `TWITCH_BRAIN_API_ENDPOINT` — vom BrainClient auf Loopback begrenzt
-- `TWITCH_BRAIN_API_TOKEN` — Bearer-Credential
-- `TWITCH_BRAIN_API_SCOPES` — vertrauenswürdige, kommagetrennte Scope-Bindung
-- `TWITCH_BRAIN_API_TIMEOUT_MS` — Default 8000 ms
+- `mode = "legacy" | "shadow" | "typed"`
+- `endpoint` — lokale Brain-Adresse, vom Config-Schema und BrainClient auf Loopback begrenzt
+- `public_scopes` — vertrauenswürdige Scope-Bindung für die öffentliche Route
+- `timeout_ms` — optional, Default 8000 ms
+
+Das Bearer-Credential ist der bereits vorhandene `TWITCH_INTERNAL_API_TOKEN`. Der Brain-Consumer bezieht ihn ausschließlich aus dem bestehenden Uplink-Infisical-FD-Import im RAM. Brain muss denselben Dienst-Token für diesen lokalen Pfad akzeptieren. Ist der FD-Import nicht eingerichtet oder fehlt der Token, bleibt `typed` fail-closed bei der sicheren Unsicherheitsantwort; `shadow` liefert weiter die Legacy-Antwort. Für Brain wird kein Token in TOML oder einer neuen ENV-Variable hinterlegt. Im Legacy-Default wird kein Brain-Token angefordert.
 
 `typed` verwendet für die sichtbare Antwort ausschließlich brain-serve. Ein Transport-/ACL-/Provider-/`unavailable`-Fehler fällt nicht still auf das alte Modell/RAG zurück, sondern nutzt nur die bestehende sichere Unsicherheitsantwort. `shadow` ruft den typisierten Port zusätzlich report-only auf und lässt weiterhin den Legacy-Pfad sichtbar antworten.
 

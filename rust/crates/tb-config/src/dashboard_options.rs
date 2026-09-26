@@ -7,6 +7,59 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BrainClientMode {
+    #[default]
+    Legacy,
+    Shadow,
+    Typed,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrainClientOptions {
+    pub mode: BrainClientMode,
+    pub endpoint: Option<String>,
+    pub public_scopes: Vec<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+impl BrainClientOptions {
+    fn validate(&self) -> Result<(), FileError> {
+        if self.mode != BrainClientMode::Legacy {
+            let endpoint = self
+                .endpoint
+                .as_deref()
+                .ok_or_else(|| FileError::invalid("dashboard.options.brain_client.endpoint"))?;
+            crate::global::public_url(endpoint, "dashboard.options.brain_client.endpoint", true)?;
+            if self.public_scopes.is_empty()
+                || self.public_scopes.len() > 32
+                || self.public_scopes.iter().any(|scope| {
+                    scope.is_empty()
+                        || scope.len() > 128
+                        || !scope.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                        })
+                })
+            {
+                return Err(FileError::invalid(
+                    "dashboard.options.brain_client.public_scopes",
+                ));
+            }
+        }
+        if self
+            .timeout_ms
+            .is_some_and(|timeout| !(1..=115_000).contains(&timeout))
+        {
+            return Err(FileError::invalid(
+                "dashboard.options.brain_client.timeout_ms",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StripePlanPriceIds {
@@ -24,6 +77,7 @@ impl StripePlanPriceIds {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DashboardOptions {
+    pub brain_client: BrainClientOptions,
     pub affiliate_mail: crate::affiliate_options::AffiliateMailOptions,
     pub affiliate_seller: crate::affiliate_options::AffiliateSellerOptions,
     pub runtime_enforce: bool,
@@ -64,6 +118,7 @@ pub struct DashboardOptions {
 impl Default for DashboardOptions {
     fn default() -> Self {
         Self {
+            brain_client: Default::default(),
             affiliate_mail: Default::default(),
             affiliate_seller: Default::default(),
             runtime_enforce: true,
@@ -105,6 +160,7 @@ impl Default for DashboardOptions {
 }
 impl DashboardOptions {
     pub(crate) fn validate(&self) -> Result<(), FileError> {
+        self.brain_client.validate()?;
         if self.affiliate_mail.port == 0 {
             return Err(FileError::invalid("dashboard.options.affiliate_mail.port"));
         }
@@ -272,4 +328,32 @@ fn validate_path(path: &Path) -> Result<(), FileError> {
         return Err(FileError::invalid("dashboard.options.paths"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod brain_client_tests {
+    use super::*;
+
+    #[test]
+    fn brain_client_bleibt_standardmaessig_legacy() {
+        let config = DashboardOptions::default();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.brain_client.mode, BrainClientMode::Legacy);
+    }
+
+    #[test]
+    fn typed_brain_braucht_lokalen_endpoint_und_explizite_scopes() {
+        let mut config = BrainClientOptions {
+            mode: BrainClientMode::Typed,
+            endpoint: Some("http://127.0.0.1:8789".into()),
+            public_scopes: vec!["bot.public".into()],
+            timeout_ms: Some(8_000),
+        };
+        assert!(config.validate().is_ok());
+        config.endpoint = Some("https://example.org".into());
+        assert!(config.validate().is_err());
+        config.endpoint = Some("http://127.0.0.1:8789".into());
+        config.public_scopes.clear();
+        assert!(config.validate().is_err());
+    }
 }
