@@ -124,8 +124,8 @@ def validate_graph(nodes):
             raise ValueError('Ungültige PR-Referenz.')
         index[n['id']] = n
     roots = [n for n in nodes if n['parentId'] is None]
-    if len(roots) != 1 or roots[0]['type'] != 'root':
-        raise ValueError('Genau ein Ursprung mit parentId=null erforderlich.')
+    if len(roots) != 1 or roots[0]['type'] != 'root' or roots[0]['id'] != 'genesis':
+        raise ValueError('Genau ein Ursprung genesis mit parentId=null erforderlich.')
     done = set()
     for n in nodes:
         seen, cursor = set(), n

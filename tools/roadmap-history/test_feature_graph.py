@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -114,6 +115,15 @@ class FeatureGraphTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_graph(nodes)
 
+    def test_root_must_be_the_verified_genesis(self):
+        nodes = self.graph()['nodes']
+        nodes[0]['id'] = 'fake'
+        for node in nodes[1:]:
+            if node['parentId'] == 'genesis':
+                node['parentId'] = 'fake'
+        with self.assertRaises(ValueError):
+            validate_graph(nodes)
+
     def test_cycle_is_rejected(self):
         nodes = self.graph()['nodes']
         nodes[-1]['parentId'] = nodes[-1]['id']
@@ -168,6 +178,26 @@ class FeatureGraphTests(unittest.TestCase):
         self.assertEqual(legacy['commits'][0]['id'], GENESIS)
         self.assertGreater(len(legacy['commits']), 300)
         self.assertTrue(all(c['date'] <= legacy['source']['cutoff'] for c in legacy['commits']))
+
+    def test_generator_keeps_published_html_when_legacy_cache_is_damaged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            assets = root / 'tools' / 'roadmap-history'
+            assets.mkdir(parents=True)
+            shutil.copy2(HERE.parent / 'generate_roadmap.py', root / 'tools' / 'generate_roadmap.py')
+            for name in ('features.json', 'index.html', 'style.css', 'app.js',
+                         'history_data.py', 'feature_graph.py'):
+                shutil.copy2(HERE / name, assets / name)
+            (assets / 'legacy-history.json.gz').write_bytes(b'corrupt cache')
+            published = root / 'published.html'
+            published.write_text('previous valid page', encoding='utf-8')
+            result = subprocess.run(
+                [sys.executable, str(root / 'tools' / 'generate_roadmap.py'),
+                 '--repo', str(HERE.parents[1]), '--ref', 'origin/main', '--output', str(published)],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(published.read_text(encoding='utf-8'), 'previous valid page')
 
 
 if __name__ == '__main__':
