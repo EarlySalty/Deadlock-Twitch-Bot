@@ -33,7 +33,7 @@ fn document(
         .unwrap_or_else(|| "<meta name=\"robots\" content=\"noindex\">".into());
 
     format!(
-        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><meta name="description" content="{}">{}<link rel="stylesheet" href="/twitch/profile-assets/profile.css"></head><body class="{}"><header class="site-head"><a href="/" class="brand" aria-label="Deutsche Deadlock Community"><img class="brand-logo" src="/streamer/brand/deadlock-d-logo.png" alt="" width="48" height="48"><img class="brand-wordmark-img" src="/streamer/brand/wordmark.svg" alt="" width="210" height="54"></a><nav aria-label="Community"><a href="/streamer#partner">Partner entdecken</a><a href="/twitch/verwaltung#profil">Mein Profil</a></nav></header><main>{}</main><footer><a href="/streamer">Teil des Partnernetzwerks werden</a><span><a href="/twitch/impressum">Impressum</a> · <a href="/twitch/datenschutz">Datenschutz</a></span></footer></body></html>"#,
+        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><meta name="description" content="{}">{}<link rel="stylesheet" href="/twitch/profile-assets/profile.css"></head><body class="{}"><header class="site-head"><a href="/" class="brand" aria-label="Deutsche Deadlock Community"><img class="brand-logo" src="/streamer/brand/deadlock-d-logo.png" alt="" width="48" height="48"><img class="brand-wordmark-img" src="/streamer/brand/wordmark.svg" alt="" width="240" height="54"></a><nav aria-label="Community"><a href="/streamer#partner">Partner entdecken</a><a href="/twitch/verwaltung#profil">Mein Profil</a></nav></header><main>{}</main><footer><a href="/streamer">Teil des Partnernetzwerks werden</a><span><a href="/twitch/impressum">Impressum</a> · <a href="/twitch/datenschutz">Datenschutz</a></span></footer></body></html>"#,
         escape(title),
         escape(description),
         metadata,
@@ -214,7 +214,7 @@ pub(super) fn page(
         twitch.display_name.trim()
     };
     let headline = if p.headline.is_empty() {
-        "Deadlock Streamer aus dem DDC Partnernetzwerk"
+        "Deadlock-Streamer aus dem Partnernetzwerk"
     } else {
         &p.headline
     };

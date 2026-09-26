@@ -418,7 +418,7 @@ export default function CasterOverlayPage() {
                     ))}
                   </select>
                   <p className="mt-2 text-xs text-white/45">
-                    {slots[index]?.cameraId ? 'Eigene Community-WebRTC-Cam' : slots[index]?.cameraUrl ? 'Externe Browserquelle' : 'Kein Kamerabild – Fenster bleibt frei'}
+                    {slots[index]?.cameraId ? 'Eigene Kamera über WebRTC' : slots[index]?.cameraUrl ? 'Externe Browserquelle' : 'Kein Kamerabild – Fenster bleibt frei'}
                   </p>
                 </div>
               ))}
@@ -637,7 +637,7 @@ export default function CasterOverlayPage() {
             <div>
               <h2 className="text-lg font-semibold text-white">Community-Kamera-Portal</h2>
               <p className="mt-1 text-sm text-white/60">
-                Wir speichern Kamera-ID, Zuordnung und Freigabestatus – keine Videodatei. Der User öffnet seinen Einladungs-Link, erlaubt die Kamera ausdrücklich und muss die Seite für die Live-Übertragung geöffnet lassen.
+                Wir speichern Kamera-ID, Zuordnung und Freigabestatus – keine Videodatei. Die eingeladene Person öffnet den Link, gibt die Kamera ausdrücklich frei und lässt die Seite während der Live-Übertragung geöffnet.
               </p>
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -730,7 +730,7 @@ export default function CasterOverlayPage() {
               </button>
             </div>
             <p className="text-xs text-white/45">
-              Managed Community-Cams laufen per WebRTC. Externe HTTPS-Browserquellen bleiben als Fallback möglich. Auf restriktiven NATs ist später ein eigener TURN-Relay der nächste Zuverlässigkeitsschritt.
+              Unsere Kameras übertragen per WebRTC. Externe HTTPS-Browserquellen bleiben als Ersatz möglich. Bei strengen NAT-Einstellungen verbessert später ein eigener TURN-Relay die Verbindung.
             </p>
           </section>
         </>
