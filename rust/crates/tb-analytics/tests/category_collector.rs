@@ -1,30 +1,23 @@
-//! Integration contract against an explicitly provisioned, disposable database.
-//! Never skips silently and never defaults to the production database.
+//! Real isolated PostgreSQL; never uses production or skips the storage contract.
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
+
 use chrono::{Duration, Utc};
-use sqlx::{postgres::PgPoolOptions, Row};
+use sqlx::Row;
 use tb_analytics::category;
 use tb_transport_twitch::streams::HelixStream;
+use test_postgres::TestPostgres;
 
 #[tokio::test]
-#[ignore = "requires disposable database configured in /tmp/tb-category-test-dsn"]
-async fn category_storage_deletions_rollups_retention_and_report() {
-    let dsn =
-        std::fs::read_to_string("/tmp/tb-category-test-dsn").expect("explicit disposable test DSN");
-    assert!(
-        dsn.contains("categorytest_"),
-        "production database is forbidden"
-    );
-    let pool = PgPoolOptions::new()
-        .max_connections(3)
-        .connect(dsn.trim())
-        .await
-        .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/20260918123000_category_collector.sql"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
+async fn category_storage_deletions_rollups_preservation_and_report() {
+    let db = TestPostgres::start().await;
+    let pool = &db.pool;
+    for migration in [
+        include_str!("../../../migrations/20260918123000_category_collector.sql"),
+        include_str!("../../../migrations/20260918170000_category_permanent_archive.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(pool).await.unwrap();
+    }
     let now = Utc::now();
     let streams = vec![HelixStream {
         id: "s1".into(),
@@ -38,10 +31,10 @@ async fn category_storage_deletions_rollups_retention_and_report() {
         started_at: (now - Duration::hours(1)).to_rfc3339(),
         ..Default::default()
     }];
-    category::store_snapshot(&pool, now - Duration::seconds(61), &streams, 60)
+    category::store_snapshot(pool, now - Duration::seconds(61), &streams, 60)
         .await
         .unwrap();
-    category::store_snapshot(&pool, now - Duration::seconds(1), &streams, 60)
+    category::store_snapshot(pool, now - Duration::seconds(1), &streams, 60)
         .await
         .unwrap();
     let line = |id: &str| {
@@ -52,92 +45,133 @@ async fn category_storage_deletions_rollups_retention_and_report() {
     let shared_line = line("copy").replace("@room-id=", "@source-room-id=other;room-id=");
     let shared = category::raw_message(&shared_line, now, "r1", "de").unwrap();
     assert_eq!(
-        category::store_messages(&pool, &[first.clone(), first.clone(), second, shared])
+        category::store_messages(pool, &[first.clone(), first.clone(), second, shared])
             .await
             .unwrap(),
         3
     );
-    assert_eq!(category::store_messages(&pool, &[first]).await.unwrap(), 0);
-    assert_eq!(category::flush_rollups(&pool, 100).await.unwrap(), 1);
+    assert_eq!(
+        category::store_messages(pool, &[first.clone()])
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(category::flush_rollups(pool, 100).await.unwrap(), 1);
     let row = sqlx::query("SELECT messages,distinct_chatter FROM category_chat_rollup")
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap();
     assert_eq!(row.get::<i64, _>("messages"), 2);
     assert_eq!(row.get::<i64, _>("distinct_chatter"), 1);
-    assert_eq!(category::flush_rollups(&pool, 100).await.unwrap(), 0);
-    category::delete_chat(
-        &pool,
-        "@room-id=r1;target-msg-id=m1 :tmi.twitch.tv CLEARMSG #sample :deleted",
-        "r1",
-    )
-    .await
-    .unwrap();
-    category::flush_rollups(&pool, 100).await.unwrap();
-    let messages: i64 = sqlx::query_scalar("SELECT messages FROM category_chat_rollup")
-        .fetch_one(&pool)
+    assert_eq!(category::flush_rollups(pool, 100).await.unwrap(), 0);
+    assert_eq!(
+        category::delete_chat(
+            pool,
+            "@room-id=r1;target-msg-id=m1 :tmi.twitch.tv CLEARMSG #sample :deleted",
+            "r1"
+        )
         .await
-        .unwrap();
-    assert_eq!(messages, 1);
-    let report = category::report(&pool, 7).await.unwrap();
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        category::store_messages(pool, &[first]).await.unwrap(),
+        0,
+        "a late duplicate cannot resurrect removed text"
+    );
+    category::flush_rollups(pool, 100).await.unwrap();
+    let report = category::report(pool, 7).await.unwrap();
     assert_eq!(report["languages"][0]["language"], "de");
     assert_eq!(report["languages"][0]["streams"], 1);
     assert_eq!(report["languages"][0]["messages"], 1);
     assert_eq!(report["trend"][0]["viewers"], 100.0);
     assert!((report["languages"][0]["airtime_hours"].as_f64().unwrap() - 1.0 / 60.0).abs() < 1e-8);
     assert_eq!(report["method"]["region"], "language_not_geography");
+    let output = report.to_string();
+    assert!(!output.contains("message_text"));
+    assert!(!output.contains("chatter_user_id"));
     category::delete_chat(
-        &pool,
+        pool,
         "@room-id=r1;target-user-id=u1 :tmi.twitch.tv CLEARCHAT #sample :sampleuser",
         "r1",
     )
     .await
     .unwrap();
-    category::flush_rollups(&pool, 100).await.unwrap();
+    category::flush_rollups(pool, 100).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM category_chat_messages")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap(),
         0
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT messages FROM category_chat_rollup")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap(),
         0
     );
-    // A fully expired partition is actually dropped, but only after its pending
-    // aggregation has been finalized. Rollup rows themselves must survive.
+
     let day = (now - Duration::days(100)).date_naive();
     let name = format!("category_chat_messages_p{}", day.format("%Y%m%d"));
-    sqlx::raw_sql(&format!("CREATE TABLE {name} PARTITION OF category_chat_messages FOR VALUES FROM ('{day} 00:00:00+00') TO ('{} 00:00:00+00');
-        INSERT INTO category_chat_dirty VALUES('{day} 00:00:00+00','old','de');",day.succ_opt().unwrap())).execute(&pool).await.unwrap();
-    let dropped: i32 =
-        sqlx::query_scalar("SELECT dropped FROM category_prune_partitions(90,21474836480)")
-            .fetch_one(&pool)
+    sqlx::raw_sql(&format!("CREATE TABLE {name} PARTITION OF category_chat_messages FOR VALUES FROM ('{day} 00:00:00+00') TO ('{} 00:00:00+00'); INSERT INTO category_chat_dirty VALUES('{day} 00:00:00+00','old','de');",day.succ_opt().unwrap())).execute(pool).await.unwrap();
+    category::flush_rollups(pool, 100).await.unwrap();
+    for days in [1, 90, 91, 1000] {
+        let dropped: i32 =
+            sqlx::query_scalar("SELECT dropped FROM category_prune_partitions($1,21474836480)")
+                .bind(days)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(dropped, 0, "age is never permission to destroy an archive");
+    }
+    assert_eq!(category::trim_expired_rows(pool, 90).await.unwrap(), 0);
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert!(exists, "old partitions must remain present");
+}
+
+#[tokio::test]
+async fn explicit_source_removal_also_covers_late_shared_chat_copies() {
+    let db = TestPostgres::start().await;
+    for migration in [
+        include_str!("../../../migrations/20260918123000_category_collector.sql"),
+        include_str!("../../../migrations/20260918170000_category_permanent_archive.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
+    }
+    let now = Utc::now();
+    let copied = format!("@room-id=20;user-id=30;id=copy;source-room-id=10;source-id=original;tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Eine kopierte Nachricht für den kontrollierten Datenbanktest.",now.timestamp_millis());
+    let row = category::raw_message(&copied, now, "20", "de").unwrap();
+    assert_eq!(
+        category::store_messages(&db.pool, &[row.clone()])
             .await
-            .unwrap();
-    assert_eq!(dropped, 0, "unprocessed buckets cannot be pruned");
-    category::flush_rollups(&pool, 100).await.unwrap();
-    let dropped: i32 =
-        sqlx::query_scalar("SELECT dropped FROM category_prune_partitions(90,21474836480)")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(dropped, 1);
-    let retained: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM category_chat_rollup WHERE room_user_id='old'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(retained, 1);
-    assert!(
-        sqlx::query("SELECT * FROM category_prune_partitions(91,21474836480)")
-            .fetch_all(&pool)
-            .await
-            .is_err()
+            .unwrap(),
+        1
     );
-    pool.close().await;
+    assert_eq!(
+        category::delete_chat(
+            &db.pool,
+            "@room-id=10;target-msg-id=original :tmi.twitch.tv CLEARMSG #source :deleted",
+            "10"
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(category::store_messages(&db.pool, &[row]).await.unwrap(), 0);
+    assert_eq!(
+        category::delete_chat(
+            &db.pool,
+            "@room-id=10 :tmi.twitch.tv CLEARCHAT #source",
+            "10"
+        )
+        .await
+        .unwrap(),
+        0
+    );
 }

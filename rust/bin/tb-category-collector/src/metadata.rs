@@ -1,5 +1,5 @@
 //! Public profile and media metadata enrichment. No downloads or Twitch writes.
-use crate::{config::Config, Error};
+use crate::{Counters, Error};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::{sync::Arc, time::Duration};
@@ -8,13 +8,21 @@ use tb_transport_twitch::HelixClient;
 pub async fn run(
     pool: PgPool,
     helix: Arc<HelixClient>,
-    config: Arc<Config>,
+    counters: Arc<Counters>,
     game_id: String,
 ) -> Result<(), Error> {
     let mut timer = tokio::time::interval(Duration::from_secs(10));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         timer.tick().await;
+        let config = tb_analytics::category::collector_config(&pool).await?;
+        if !config.enabled
+            || counters
+                .disk_paused
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            continue;
+        }
         // Metadata failures must not erase snapshots or reconnect anonymous chat.
         if let Err(error) = profiles(&pool, &helix).await {
             tracing::warn!(%error,"public category profile enrichment failed");
