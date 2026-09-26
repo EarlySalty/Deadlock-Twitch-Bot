@@ -30,11 +30,13 @@ import { Monitor,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { NavLink, useLocation } from 'react-router';
+import { readSidebarGroupState, writeSidebarGroupState } from './sidebarState';
+import { NavLink } from 'react-router';
 
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  storageKey?: string;
 }
 
 interface NavigationItem {
@@ -103,40 +105,15 @@ const navigationGroups: NavigationGroup[] = [
   },
 ];
 
-function isItemActive(pathname: string, to: string, end?: boolean) {
-  if (end) {
-    return pathname === to;
-  }
-  return pathname === to || pathname.startsWith(`${to}/`);
-}
-
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const location = useLocation();
-  const activeGroup = navigationGroups.find((group) =>
-    group.items.some((item) => isItemActive(location.pathname, item.to, item.end)),
-  )?.label;
+export function Sidebar({ collapsed, onToggle, storageKey }: SidebarProps) {
+  const groupLabels = navigationGroups.map((group) => group.label);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(
-      navigationGroups.map((group) => [
-        group.label,
-        group.items.some((item) => isItemActive(location.pathname, item.to, item.end)),
-      ]),
-    ),
+    readSidebarGroupState(() => window.localStorage, storageKey, groupLabels),
   );
 
   useEffect(() => {
-    if (!activeGroup) {
-      return;
-    }
-
-    setOpenGroups((current) => {
-      if (current[activeGroup]) {
-        return current;
-      }
-
-      return { ...current, [activeGroup]: true };
-    });
-  }, [activeGroup]);
+    writeSidebarGroupState(() => window.localStorage, storageKey, openGroups);
+  }, [openGroups, storageKey]);
 
   return (
     <aside
@@ -155,7 +132,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </p>
           <h1 className="display-font text-lg font-semibold text-white">Twitch Admin</h1>
         </div>
-        <button className="rounded-2xl border border-white/10 bg-white/5 p-2 text-white/80" onClick={onToggle} type="button">
+        <button aria-label={collapsed ? 'Navigation ausklappen' : 'Navigation einklappen'} className="rounded-2xl border border-white/10 bg-white/5 p-2 text-white/80" onClick={onToggle} type="button">
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
       </div>
@@ -163,7 +140,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <nav className="mt-8 flex-1 space-y-4 overflow-y-auto pr-1">
         {navigationGroups.map((group) => {
           const groupOpen = collapsed ? true : openGroups[group.label];
-          const groupIsActive = group.label === activeGroup;
 
           return (
             <div key={group.label} className="space-y-2">
@@ -172,10 +148,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   aria-expanded={groupOpen}
                   className="flex w-full items-center justify-between px-2 text-left"
                   onClick={() => {
-                    if (groupIsActive) {
-                      return;
-                    }
-
                     setOpenGroups((current) => ({ ...current, [group.label]: !current[group.label] }));
                   }}
                   type="button"
