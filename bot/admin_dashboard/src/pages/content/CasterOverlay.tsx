@@ -13,7 +13,6 @@ import {
   type CasterContextTeam,
   type CasterDocument,
   type CasterLayout,
-  type CasterMatchContext,
   type CasterPerson,
   type CasterScene,
   type CasterSceneTeam,
