@@ -107,7 +107,13 @@ impl SelfExplainerBrainRuntime {
         {
             "typed" => BrainRouteMode::Typed,
             "shadow" => BrainRouteMode::Shadow,
-            _ => BrainRouteMode::Legacy,
+            other => {
+                tracing::warn!(
+                    mode = %other,
+                    "unbekannter TWITCH_BRAIN_CLIENT_MODE; es gilt der dokumentierte Legacy-Default"
+                );
+                BrainRouteMode::Legacy
+            }
         };
         if mode == BrainRouteMode::Legacy {
             return Self::legacy();
@@ -879,23 +885,25 @@ pub async fn self_explainer_ask(
             }
         }
         BrainRouteMode::Shadow => {
-            let (legacy, typed) = tokio::join!(
-                legacy_route_answer(&history, &question),
-                typed_route_answer(&brain_runtime, &history, &question)
-            );
-            match typed {
-                Ok(ref observed) => tracing::info!(
-                    typed_grounded = observed.grounded,
-                    typed_sources = observed.sources.len(),
-                    legacy_grounded = legacy.grounded,
-                    legacy_sources = legacy.sources.len(),
-                    "self_explainer: typed Brain shadow completed"
-                ),
-                Err(ref error) => {
-                    tracing::warn!(%error, "self_explainer: typed Brain shadow failed")
+            // Report-only: die Typed-Probe läuft abgekoppelt mit eigener Frist. Eine
+            // langsame oder hängende Typed-Umgebung darf die sichtbare Legacy-Antwort
+            // weder verzögern noch verändern.
+            let probe_runtime = brain_runtime.clone();
+            let probe_history = history.clone();
+            let probe_question = question.clone();
+            tokio::spawn(async move {
+                match typed_route_answer(&probe_runtime, &probe_history, &probe_question).await {
+                    Ok(observed) => tracing::info!(
+                        typed_grounded = observed.grounded,
+                        typed_sources = observed.sources.len(),
+                        "self_explainer: typed Brain shadow completed"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(%error, "self_explainer: typed Brain shadow failed")
+                    }
                 }
-            }
-            legacy
+            });
+            legacy_route_answer(&history, &question).await
         }
     };
 
@@ -1221,5 +1229,22 @@ mod tests {
         assert!(fireworks.contains("Fireworks-Generierung fehlgeschlagen"));
         assert!(timeout.contains("permission_fallback"));
         assert!(timeout.contains("legacy generation timed out"));
+    }
+
+    #[test]
+    fn shadow_probe_laeuft_abgekoppelt_und_blockiert_die_legacy_antwort_nicht() {
+        let production = include_str!("self_explainer.rs")
+            .split("// ── Tests")
+            .next()
+            .expect("Produktionscode steht vor dem Testmodul");
+        let shadow = production
+            .split("BrainRouteMode::Shadow => {")
+            .nth(1)
+            .and_then(|source| source.split("let log_pool = pool.clone();").next())
+            .expect("Shadow-Zweig ist vorhanden");
+        assert!(shadow.contains("tokio::spawn"));
+        assert!(!shadow.contains("tokio::join!"));
+        assert!(shadow.contains("legacy_route_answer"));
+        assert!(shadow.contains("typed_route_answer"));
     }
 }
