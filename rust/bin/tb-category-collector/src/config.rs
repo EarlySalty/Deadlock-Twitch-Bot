@@ -163,14 +163,63 @@ fn validate(credentials: Credentials) -> Result<Credentials, String> {
 }
 
 pub fn protected_text(path: &Path) -> Result<Zeroizing<String>, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = std::fs::metadata(path).map_err(|_| "credential file unavailable")?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 || metadata.len() > 65536 {
+    protected_text_at(path, Path::new("/run/credentials"), 0, 0)
+}
+
+fn protected_text_at(
+    path: &Path,
+    systemd_root: &Path,
+    systemd_owner: u32,
+    systemd_group: u32,
+) -> Result<Zeroizing<String>, String> {
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    };
+    // Open once and inspect the same inode that will be read. A symlink must not
+    // redirect a credential check to a different file.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC | nix::libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| "credential file unavailable")?;
+    let metadata = file.metadata().map_err(|_| "credential file unavailable")?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    let private_file = mode & 0o077 == 0;
+    let systemd_file = path
+        == systemd_root
+            .join("tb-category-collector.service")
+            .join("category-twitch")
+        && mode == 0o440
+        && metadata.uid() == systemd_owner
+        && metadata.gid() == systemd_group
+        && trusted_systemd_directory(systemd_root, systemd_owner, systemd_group)
+        && trusted_systemd_directory(
+            &systemd_root.join("tb-category-collector.service"),
+            systemd_owner,
+            systemd_group,
+        );
+    if !metadata.is_file() || metadata.len() > 65536 || !(private_file || systemd_file) {
         return Err("credential file must be private and bounded".into());
     }
-    std::fs::read_to_string(path)
-        .map(Zeroizing::new)
-        .map_err(|_| "credential file unreadable".into())
+    let mut text = Zeroizing::new(String::new());
+    file.take(65537)
+        .read_to_string(&mut text)
+        .map_err(|_| "credential file unreadable")?;
+    if text.len() > 65536 {
+        return Err("credential file too large".into());
+    }
+    Ok(text)
+}
+
+fn trusted_systemd_directory(path: &Path, owner: u32, group: u32) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.is_dir()
+            && metadata.uid() == owner
+            && metadata.gid() == group
+            && metadata.permissions().mode() & 0o022 == 0
+    })
 }
 #[derive(Deserialize)]
 struct Entry {
@@ -200,6 +249,81 @@ struct Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn credential_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("credentials");
+        let unit = root.join("tb-category-collector.service");
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&unit, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = unit.join("category-twitch");
+        std::fs::write(&path, "bootstrap-token").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o440)).unwrap();
+        (dir, root, path)
+    }
+
+    #[test]
+    fn only_the_root_owned_systemd_credential_can_be_group_readable() {
+        let (_dir, root, path) = credential_fixture();
+        let owner = unsafe { nix::libc::geteuid() };
+        let group = unsafe { nix::libc::getegid() };
+        assert_eq!(
+            protected_text_at(&path, &root, owner, group)
+                .unwrap()
+                .as_str(),
+            "bootstrap-token"
+        );
+        assert!(protected_text_at(&path, &root, owner + 1, group).is_err());
+        assert!(protected_text_at(&path, &root, owner, group + 1).is_err());
+
+        let other = root.join("tb-category-collector.service").join("other");
+        std::fs::write(&other, "wrong-path").unwrap();
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o440)).unwrap();
+        assert!(protected_text_at(&other, &root, owner, group).is_err());
+        assert!(protected_text_at(&path, &root.join("wrong-root"), owner, group).is_err());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(protected_text_at(&path, &root, owner, group).is_err());
+    }
+
+    #[test]
+    fn systemd_credential_rejects_symlinks_and_writable_directories() {
+        let (_dir, root, path) = credential_fixture();
+        let owner = unsafe { nix::libc::geteuid() };
+        let group = unsafe { nix::libc::getegid() };
+        let unit = root.join("tb-category-collector.service");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(root.join("target"), "target").unwrap();
+        symlink(root.join("target"), &path).unwrap();
+        assert!(protected_text_at(&path, &root, owner, group).is_err());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "bootstrap-token").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o440)).unwrap();
+        std::fs::set_permissions(&unit, std::fs::Permissions::from_mode(0o770)).unwrap();
+        assert!(protected_text_at(&path, &root, owner, group).is_err());
+    }
+
+    #[test]
+    fn regular_credential_files_keep_private_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ordinary-credential");
+        std::fs::write(&path, "private-token").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(protected_text(&path).unwrap().as_str(), "private-token");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(protected_text(&path).is_err());
+    }
+
+    #[test]
+    fn fifo_is_rejected_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fifo");
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        assert!(protected_text(&path).is_err());
+    }
     #[test]
     fn bootstrap_requires_postgres_and_ignores_all_legacy_retention_values() {
         let file = tempfile::NamedTempFile::new().unwrap();
