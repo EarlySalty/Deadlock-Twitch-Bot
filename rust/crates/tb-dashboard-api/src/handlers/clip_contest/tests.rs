@@ -338,7 +338,7 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
     .await
     .unwrap());
     // Same outbox columns as the effort-engine consumer, with authoritative channel ID.
-    let rows=sqlx::query("SELECT event_type,streamer_login,source_id,occurred_at,payload::text AS payload FROM twitch_clip_contest_effort_outbox ORDER BY occurred_at,id")
+    let rows=sqlx::query("SELECT event_type,streamer_login,source_id,occurred_at,metadata::text AS metadata FROM twitch_clip_contest_effort_outbox ORDER BY occurred_at,id")
         .fetch_all(&pool).await.unwrap();
     assert_eq!(rows.len(), 11);
     assert!(
@@ -347,6 +347,23 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
             .await
             .is_err()
     );
+    // Exact clip-consumer query from PR #997 (07f75b4), exercised against our migration.
+    sqlx::query("CREATE TABLE partner_effort_source_receipts (source TEXT, source_id TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let events = sqlx::query("SELECT o.id,o.event_type,o.source_id,o.occurred_at,o.metadata,s.broadcaster_twitch_id FROM twitch_clip_contest_effort_outbox o JOIN twitch_clip_contest_submissions s ON s.id=(o.metadata->>'submission_id')::bigint WHERE o.occurred_at <= $1 AND NOT EXISTS(SELECT 1 FROM partner_effort_source_receipts r WHERE r.source='clips' AND r.source_id=o.id::text) ORDER BY o.occurred_at,o.id LIMIT $2")
+        .bind(Utc::now() + Duration::seconds(1)).bind(100i64).fetch_all(&pool).await.unwrap();
+    assert_eq!(events.len(), 11);
+    for event in events {
+        assert_eq!(event.get::<String, _>("broadcaster_twitch_id"), "900");
+        let metadata: Value = event.get("metadata");
+        assert_eq!(metadata["partner_twitch_user_id"], "900");
+        assert!(metadata["submission_id"].as_i64().unwrap() > 0);
+        if event.get::<String, _>("event_type") == "clip_top3" {
+            assert!((1..=3).contains(&metadata["rank"].as_i64().unwrap()));
+        }
+    }
     let key = base64::engine::general_purpose::URL_SAFE.encode([7u8; 32]);
     let state = DashboardAuthState::new(pool.clone(), key);
     let session = state

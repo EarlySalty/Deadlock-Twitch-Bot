@@ -1,6 +1,11 @@
 //! Transactional contest rules. All writes to one month use the same lock.
 use super::*;
 
+const ACTIVE_PARTNER_SQL: &str = "SELECT twitch_login FROM twitch_partners
+        WHERE twitch_user_id=$1 AND departnered_at IS NULL AND admin_archived_at IS NULL
+        AND COALESCE(status,'')='active' AND COALESCE(manual_partner_opt_out,0)=0
+        AND COALESCE(technical_pause_reason,'')='' ORDER BY id DESC LIMIT 1 FOR SHARE";
+
 #[derive(Deserialize, Default)]
 pub struct CurrentQuery {
     #[serde(default)]
@@ -90,7 +95,7 @@ async fn emit_effort_event(
     payload["schema_version"] = json!(1);
     sqlx::query(
         "INSERT INTO twitch_clip_contest_effort_outbox
-        (event_type, partner_twitch_user_id, streamer_login, source_id, occurred_at, payload)
+        (event_type, partner_twitch_user_id, streamer_login, source_id, occurred_at, metadata)
         VALUES ($1,$2,LOWER($3),$4,$5,$6) ON CONFLICT (source_id) DO NOTHING",
     )
     .bind(event_type)
@@ -523,20 +528,11 @@ pub async fn submit_handler(
             "Der Clip muss aus einem Deadlock-Stream stammen.",
         );
     }
-    let mut tx = match begin_write(&pool, &clock, Phase::Submission).await {
-        Ok(tx) => tx,
-        Err(response) => return response,
-    };
-    // Partner status is checked while holding the contest lock, by immutable Twitch ID.
-    let channel: Option<String> = match sqlx::query_scalar(
-        "SELECT twitch_login FROM twitch_partners
-        WHERE twitch_user_id=$1 AND departnered_at IS NULL AND admin_archived_at IS NULL
-        AND COALESCE(status,'')='active' AND COALESCE(manual_partner_opt_out,0)=0
-        AND COALESCE(technical_pause_reason,'')='' ORDER BY id DESC LIMIT 1 FOR SHARE",
-    )
-    .bind(&clip.broadcaster_id)
-    .fetch_optional(&mut *tx)
-    .await
+    // Preflight before the shared repository, without occupying a transaction connection.
+    let channel: Option<String> = match sqlx::query_scalar(ACTIVE_PARTNER_SQL)
+        .bind(&clip.broadcaster_id)
+        .fetch_optional(&pool)
+        .await
     {
         Ok(channel) => channel,
         Err(_) => return unavailable(),
@@ -548,13 +544,6 @@ pub async fn submit_handler(
             "Der Clip muss aus einem aktuell aktiven Partnerkanal stammen.",
         );
     };
-    let now = match database_now(&mut tx).await {
-        Ok(now) => now,
-        Err(_) => return unavailable(),
-    };
-    if let Err(response) = validate_clip_age(&clip, now) {
-        return response;
-    }
     // Check quota before registering a new shared clip. A hidden clip still uses a slot.
     match submissions_used(&pool, clock.month, &identity.aliases).await {
         Ok(n) if n < MAX_SUBMISSIONS_PER_MONTH => {}
@@ -605,6 +594,27 @@ pub async fn submit_handler(
                 Ok(id) => id,
                 Err(_) => return unavailable(),
             }
+        }
+        Err(_) => return unavailable(),
+    };
+    let mut tx = match begin_write(&pool, &clock, Phase::Submission).await {
+        Ok(tx) => tx,
+        Err(response) => return response,
+    };
+    // No secondary pool checkout while holding the month lock. Revalidate the
+    // partner under a row lock because status or login may have changed during I/O.
+    let channel: String = match sqlx::query_scalar(ACTIVE_PARTNER_SQL)
+        .bind(&clip.broadcaster_id)
+        .fetch_optional(&mut *tx)
+        .await
+    {
+        Ok(Some(channel)) => channel,
+        Ok(None) => {
+            return json_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "channel_not_active_partner",
+                "Der Quellkanal ist nicht mehr als aktiver Partner freigegeben.",
+            )
         }
         Err(_) => return unavailable(),
     };

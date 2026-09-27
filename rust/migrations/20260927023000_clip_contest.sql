@@ -94,7 +94,7 @@ CREATE TABLE public.twitch_clip_contest_effort_outbox (
     streamer_login TEXT NOT NULL,
     source_id TEXT NOT NULL UNIQUE,
     occurred_at TIMESTAMPTZ NOT NULL,
-    payload JSONB NOT NULL DEFAULT '{}'::jsonb
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
 CREATE FUNCTION public.clip_contest_append_only() RETURNS trigger
