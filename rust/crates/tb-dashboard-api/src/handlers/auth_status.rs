@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::auth::{
     level::{
-        AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DEFAULT_ADMIN_LOGIN,
+        AdminActor, AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DEFAULT_ADMIN_LOGIN,
         DashboardAuthLevel, is_admin_login,
     },
     session::DashboardAuthState,
@@ -98,7 +98,7 @@ pub async fn auth_status_handler(
         DashboardAuthLevel::None => unauth_response().await,
         DashboardAuthLevel::Admin { actor: Some(actor) } => {
             if admin_mode_header_active(&headers) {
-                admin_response("admin", true, true, csrf_token.as_deref())
+                admin_response("admin", true, true, csrf_token.as_deref(), Some(actor))
             } else {
                 partner_response(
                     &pool,
@@ -112,7 +112,7 @@ pub async fn auth_status_handler(
             }
         }
         DashboardAuthLevel::Admin { actor: None } => {
-            admin_response("admin", false, true, csrf_token.as_deref())
+            admin_response("admin", false, true, csrf_token.as_deref(), None)
         }
         DashboardAuthLevel::Partner {
             twitch_login,
@@ -205,6 +205,7 @@ fn admin_response(
     admin_eligible: bool,
     admin_mode: bool,
     csrf_token: Option<&str>,
+    actor: Option<&AdminActor>,
 ) -> Response {
     // Admin gilt serverseitig als Creator Pro (`auth::stufe_fuer_auth`), also
     // steht hier auch Pro. Vorher lieferte der synthetische Plan die
@@ -231,7 +232,8 @@ fn admin_response(
         "adminMode": admin_mode,
         "isLocalhost": is_localhost,
         "canViewAllStreamers": true,
-        "twitchLogin": null,
+        "twitchLogin": actor.map(|actor| actor.twitch_login.as_str()),
+        "twitchUserId": actor.map(|actor| actor.twitch_user_id.as_str()),
         "adminDefaultStreamer": ADMIN_DEFAULT_STREAMER,
         "displayName": null,
         "partnerStatus": "active",
@@ -446,6 +448,7 @@ mod tests {
         assert_eq!(value["isAdmin"], true);
         assert_eq!(value["adminEligible"], true);
         assert_eq!(value["adminMode"], true);
+        assert_eq!(value["twitchUserId"], "42");
         assert_eq!(value["plan"]["tier"], "extended");
         assert_eq!(value["plan"]["planName"], "Creator Pro (Admin)");
         // Admin gilt serverseitig als Pro, also muss der synthetische Plan auch
@@ -460,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_response_liefert_session_csrf() {
-        let value = json_body(admin_response("admin", false, true, Some("session-csrf"))).await;
+        let value = json_body(admin_response("admin", false, true, Some("session-csrf"), None)).await;
 
         assert_eq!(value["csrfToken"], "session-csrf");
         assert_eq!(value["csrf_token"], "session-csrf");
@@ -505,6 +508,7 @@ mod tests {
         assert_eq!(value["adminMode"], false);
         assert_eq!(value["level"], "partner");
         assert_eq!(value["twitchLogin"], "earlysalty");
+        assert_eq!(value["twitchUserId"], "42");
     }
 
     #[tokio::test]

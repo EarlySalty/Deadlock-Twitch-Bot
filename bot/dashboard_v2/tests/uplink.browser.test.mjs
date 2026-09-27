@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { readFile, writeFile, mkdir, mkdtemp, rm, lstat, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { readFile, writeFile, mkdir, mkdtemp, rm, open } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve, extname } from 'node:path';
@@ -12,13 +13,21 @@ import { getPreviewApiFixture, getPreviewPathFixture } from '../src/preview/fixt
 // Dieser lokale Bediennachweis verwendet ausschließlich den geprüften Build.
 assert.equal(process.argv.length, 2, 'Dieser Nachweis akzeptiert keine CLI-Argumente');
 const executable = '/home/nathanael/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell';
-const executableInfo = await lstat(executable);
-assert.ok(executableInfo.isFile() && !executableInfo.isSymbolicLink()
-  && (executableInfo.mode & 0o022) === 0, 'Chromium muss eine geschützte reguläre Datei sein');
-assert.equal(await realpath(executable), executable, 'Chromium darf nicht umgeleitet sein');
-assert.equal(createHash('sha256').update(await readFile(executable)).digest('hex'),
-  'e11fc9ce65c96313476f7ee9844b6fb6a9220fb048693cfe9eee00acf4170a9f',
-  'Der Chromium-Build stimmt nicht mit dem geprüften Build überein');
+// Open once without following a leaf symlink. Metadata, digest and execution
+// use this same descriptor, so replacing the pathname cannot swap the binary
+// between verification and spawn. The pinned digest remains mandatory.
+const executableHandle = await open(executable, constants.O_RDONLY | constants.O_NOFOLLOW);
+try {
+  const executableInfo = await executableHandle.stat();
+  assert.ok(executableInfo.isFile() && (executableInfo.mode & 0o022) === 0,
+    'Chromium muss eine geschützte reguläre Datei sein');
+  assert.equal(createHash('sha256').update(await executableHandle.readFile()).digest('hex'),
+    'e11fc9ce65c96313476f7ee9844b6fb6a9220fb048693cfe9eee00acf4170a9f',
+    'Der Chromium-Build stimmt nicht mit dem geprüften Build überein');
+} catch (error) {
+  await executableHandle.close();
+  throw error;
+}
 const artifacts = new URL('./artifacts/uplink/', import.meta.url);
 await mkdir(artifacts, { recursive: true });
 const dist = resolve(new URL('../../analytics/dashboard_v2/dist/', import.meta.url).pathname);
@@ -92,7 +101,8 @@ const server = createServer(async (request, response) => {
 });
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
 const origin = `http://127.0.0.1:${server.address().port}`;
-const chrome = spawn(executable, ['--no-sandbox', '--disable-gpu', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+const chrome = spawn('/proc/self/fd/3', ['--no-sandbox', '--disable-gpu', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe', executableHandle.fd] });
+await executableHandle.close();
 let socket;
 try {
   const browserUrl = await new Promise((resolve, reject) => {

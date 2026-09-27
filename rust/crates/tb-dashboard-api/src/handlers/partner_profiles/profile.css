@@ -146,38 +146,25 @@ footer {
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 10px;
+  gap: 0.45rem;
 }
 
-.brand-mark {
+.brand-logo {
   display: block;
-  width: 38px;
-  height: 38px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   object-fit: contain;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.35));
 }
 
-.brand-copy {
-  display: flex;
+.brand-wordmark-img {
+  display: block;
+  width: auto;
+  height: 54px;
   min-width: 0;
-  flex-direction: column;
-  line-height: 1.08;
-}
-
-.brand-copy strong {
-  color: var(--primary);
-  font-family: "Sora", sans-serif;
-  font-size: 1rem;
-  font-weight: 800;
-}
-
-.brand-copy span {
-  margin-top: 2px;
-  color: var(--muted-2);
-  font-size: 0.58rem;
-  font-weight: 750;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  flex: 0 1 auto;
+  object-fit: contain;
 }
 
 .site-head nav {
@@ -1076,12 +1063,15 @@ footer a:hover {
 
   .site-head {
     min-height: 72px;
-    align-items: flex-start;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
     padding-block: 14px;
   }
 
   .site-head nav {
-    gap: 1px;
+    justify-content: flex-start;
+    gap: 2px;
   }
 
   .site-head nav a {
@@ -1089,8 +1079,8 @@ footer a:hover {
     font-size: 0.64rem;
   }
 
-  .brand-copy span {
-    display: none;
+  .brand-wordmark-img {
+    height: 42px;
   }
 
   main {

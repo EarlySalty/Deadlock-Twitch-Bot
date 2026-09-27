@@ -3,9 +3,5 @@
   "secrets": {
     "type": "file",
     "path": "/run/credentials/tb-category-collector.service/category-twitch"
-  },
-  "poll_seconds": 60,
-  "retention_days": 90,
-  "raw_budget_bytes": 21474836480,
-  "media_enabled": true
+  }
 }

@@ -61,7 +61,7 @@ jobs:
             relative+=("${file#"$PROJECT_PATH/"}")
           done
           cd "$PROJECT_PATH"
-          npx eslint "${relative[@]}"
+          npx --no-install eslint "${relative[@]}"
 
       - name: Build changed head
         working-directory: ${{ matrix.project.path }}

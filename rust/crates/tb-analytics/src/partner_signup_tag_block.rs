@@ -61,7 +61,7 @@ pub fn matching_tag(tags: &[String], blocked: &[TagBlockEntry]) -> Option<String
     }
     blocked
         .iter()
-        .find(|entry| clean.iter().any(|tag| *tag == entry.tag))
+        .find(|entry| clean.contains(&entry.tag))
         .map(|entry| entry.tag.clone())
 }
 
@@ -320,7 +320,7 @@ async fn is_active_partner<'e, E>(
 where
     E: PgExecutor<'e>,
 {
-    Ok(sqlx::query_scalar(
+    sqlx::query_scalar(
         r#"
         SELECT EXISTS (
             SELECT 1 FROM twitch_partners
@@ -332,7 +332,7 @@ where
     .bind(twitch_user_id)
     .bind(twitch_login.trim().to_lowercase())
     .fetch_one(executor)
-    .await?)
+    .await
 }
 
 fn parse_session_tags(raw: &str) -> Vec<String> {

@@ -110,6 +110,13 @@ category_chat_messages|sent_at|timestamp with time zone|NO|
 category_chat_messages|shared_chat_copy|boolean|NO|false
 category_chat_messages|stream_language|text|NO|
 category_chat_messages|tags|jsonb|NO|'{}'::jsonb
+category_chat_redactions|message_id|text|NO|
+category_chat_redactions|observed_at|timestamp with time zone|NO|now()
+category_chat_redactions|room_user_id|text|NO|
+category_chat_user_redactions|chatter_user_id|text|NO|
+category_chat_user_redactions|ended_at|timestamp with time zone|NO|
+category_chat_user_redactions|room_user_id|text|NO|
+category_chat_user_redactions|started_at|timestamp with time zone|NO|
 category_chat_rollup|avg_len|double precision|NO|
 category_chat_rollup|distinct_chatter|bigint|NO|
 category_chat_rollup|hour_at|timestamp with time zone|NO|
@@ -123,6 +130,14 @@ category_collection_runs|poll_seconds|integer|NO|
 category_collection_runs|snapshot_at|timestamp with time zone|NO|
 category_collection_runs|streams|integer|NO|
 category_collection_runs|viewers|bigint|NO|
+category_collector_config|enabled|boolean|NO|true
+category_collector_config|media_enabled|boolean|NO|true
+category_collector_config|min_free_bytes|bigint|NO|'10737418240'::bigint
+category_collector_config|poll_seconds|integer|NO|60
+category_collector_config|preserve_raw_data|boolean|NO|true
+category_collector_config|raw_budget_bytes|bigint|NO|'21474836480'::bigint
+category_collector_config|singleton|boolean|NO|true
+category_collector_config|updated_at|timestamp with time zone|NO|now()
 category_collector_status|details|jsonb|NO|'{}'::jsonb
 category_collector_status|heartbeat_at|timestamp with time zone|NO|now()
 category_collector_status|singleton|boolean|NO|true

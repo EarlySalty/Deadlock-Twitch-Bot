@@ -1,6 +1,6 @@
 # Werbemanager (Twitch-Werbung)
 
-Stand: `2026-09-18`
+Stand des PR: `2026-09-24`. Noch nicht produktiv ausgeliefert.
 
 Der Werbemanager wählt den klugen Zeitpunkt für die Twitch-Werbung deines Streams. Er ersetzt nicht den Twitch-Werbungs-Manager, sondern legt die Werbung in ruhige Momente. Du findest ihn im Dashboard unter Verwaltung, Tab Werbung. Er regelt nicht die Chat-Einladung des Bots; dafür gibt es die FAQ zur Chat-Werbung im Wissensbestand.
 
@@ -11,7 +11,7 @@ Der Bot erkennt selbst, woher die Werbemenge kommt:
 - Hast du bei Twitch einen Werbeplan aktiv, ist Twitch die Quelle. Der Bot legt nichts obendrauf, sondern bewegt die geplante Werbung: er zieht sie in ein gutes Fenster vor oder schiebt sie mit einer Pause aus einem schlechten Moment heraus.
 - Hast du keinen Twitch-Plan, verteilt der Bot dein eigenes Budget selbst: kurze Blöcke von 30 Sekunden, gleichmäßig über die Stunde.
 
-Gute Fenster sind die Queue, das Menü und die erste Minute eines Matches. Aus dem Match ab Minute 1 hält er Werbung heraus, ebenso nach einem Raid und kurz nach einem neuen Erstchatter. Nach einem Match wartet er eine Minute; schreibt der Chat in dieser Minute, verschiebt er, bleibt es ruhig, schaltet er.
+Gute Fenster sind eine bestätigte Queue oder das Menü. Sobald ein laufendes Match erkannt ist, startet der Bot keinen eigenen Werbeblock und zieht keinen vor. Bei einer anstehenden Twitch-Werbung nutzt er verfügbare Pausen. Ohne frischen Matchstatus bleiben eigene Werbestarts gesperrt; Chat-Ruhe ersetzt diesen Nachweis nicht. Nach einem Match wartet er eine Minute und berücksichtigt danach die Chat-Aktivität.
 
 ## Zwei Strategien
 
@@ -34,12 +34,13 @@ Jede Aktion und jede Verschiebung steht mit Uhrzeit und Grund im Verlauf, dazu d
 
 ## Voraussetzung für die Queue-Steuerung
 
-Hinterlege deine SteamID64 im Dashboard unter Verwaltung, Tab Bot & Schutz, Abschnitt KI-Engagement. Der Steam-Bot liest damit deinen Match-Status: im Match, in der Queue oder im Menü, nicht im Spiel. Der Status gilt nur frisch (rund drei Minuten). Fehlt die Anbindung oder ist der Status zu alt, nutzt der Bot ruhige Chat-Phasen und macht nichts Unerwartetes.
+Das über die Kontoverknüpfung gewählte Steam-Konto hat Vorrang. Ohne direkte Zuordnung kann der Bot die bestehende SteamID64 unter Verwaltung, Bot & Schutz nutzen. Eine Discord-Verknüpfung allein reicht für die Queue-Steuerung nicht aus. Eine getrennte direkte Verknüpfung wird respektiert. Der Matchstatus kommt über die Steam-Bot-Schnittstelle mit dem ursprünglichen Messzeitpunkt, nicht aus der Twitch-Datenbank. Ältere Daten als drei Minuten, Quellenfehler und unvollständige Antworten bestätigen kein Werbefenster. Das Dashboard zeigt fehlende oder veraltete Daten gesondert an.
 
 ## Grenzen
 
 - Wie viel Werbung insgesamt läuft, bleibt deine Twitch-Einstellung. Der Bot kann sie lesen, pausieren und Werbung starten, aber die Menge bei Twitch nicht ändern.
-- Twitch erlaubt es nicht, geplante Werbung ganz abzuschalten. Ohne verfügbare Pausen läuft sie, auch im Match. Der Bot hält sie so lange wie möglich heraus.
+- Der Bot kann einen aktiven Twitch-Werbeplan über diese Schnittstelle nicht abschalten. Ein Snooze verschiebt die nächste Werbung um fünf Minuten. Ohne verfügbare Pausen kann Twitch Werbung auch während eines Matches ausspielen. Werbung zu Queue-Beginn garantiert daher kein vollständig werbefreies Match.
+- Der Worker prüft im 25-Sekunden-Takt. Der effektive Vorlauf für Verschiebungen beträgt mindestens 60 Sekunden, auch bei einer kürzeren Einstellung.
 - Der Startschutz verhindert Werbung in den ersten Minuten nach Streamstart.
 - Abonnenten und Turbo-Nutzer sehen keine Werbung.
 

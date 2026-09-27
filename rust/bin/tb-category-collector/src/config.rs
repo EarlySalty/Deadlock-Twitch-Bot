@@ -12,23 +12,16 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct Config {
     pub database_url: String,
     pub secrets: SecretSource,
-    #[serde(default = "poll_default")]
-    pub poll_seconds: u64,
-    #[serde(default = "retention_default")]
-    pub retention_days: i32,
-    #[serde(default = "budget_default")]
-    pub raw_budget_bytes: i64,
-    #[serde(default)]
-    pub media_enabled: bool,
-}
-fn poll_default() -> u64 {
-    60
-}
-fn retention_default() -> i32 {
-    90
-}
-fn budget_default() -> i64 {
-    20 * 1024 * 1024 * 1024
+    // Accepted only to keep old bootstrap files readable. Runtime behavior is
+    // exclusively in category_collector_config; no legacy value enables deletion.
+    #[serde(default, rename = "poll_seconds")]
+    _legacy_poll_seconds: Option<u64>,
+    #[serde(default, rename = "retention_days")]
+    _legacy_retention_days: Option<i32>,
+    #[serde(default, rename = "raw_budget_bytes")]
+    _legacy_raw_budget_bytes: Option<i64>,
+    #[serde(default, rename = "media_enabled")]
+    _legacy_media_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -65,13 +58,9 @@ impl Config {
         }
         let config: Self =
             serde_json::from_slice(&bytes).map_err(|_| "invalid collector JSON configuration")?;
-        if !(60..=300).contains(&config.poll_seconds)
-            || !(1..=90).contains(&config.retention_days)
-            || config.raw_budget_bytes < 100 * 1024 * 1024
+        if !(config.database_url.starts_with("postgres://")
+            || config.database_url.starts_with("postgresql://"))
         {
-            return Err("invalid poll, retention or storage budget".into());
-        }
-        if !config.database_url.starts_with("postgres") {
             return Err("Postgres is required".into());
         }
         Ok(config)
@@ -174,14 +163,63 @@ fn validate(credentials: Credentials) -> Result<Credentials, String> {
 }
 
 pub fn protected_text(path: &Path) -> Result<Zeroizing<String>, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = std::fs::metadata(path).map_err(|_| "credential file unavailable")?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 || metadata.len() > 65536 {
+    protected_text_at(path, Path::new("/run/credentials"), 0, 0)
+}
+
+fn protected_text_at(
+    path: &Path,
+    systemd_root: &Path,
+    systemd_owner: u32,
+    systemd_group: u32,
+) -> Result<Zeroizing<String>, String> {
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    };
+    // Open once and inspect the same inode that will be read. A symlink must not
+    // redirect a credential check to a different file.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC | nix::libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| "credential file unavailable")?;
+    let metadata = file.metadata().map_err(|_| "credential file unavailable")?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    let private_file = mode & 0o077 == 0;
+    let systemd_file = path
+        == systemd_root
+            .join("tb-category-collector.service")
+            .join("category-twitch")
+        && mode == 0o440
+        && metadata.uid() == systemd_owner
+        && metadata.gid() == systemd_group
+        && trusted_systemd_directory(systemd_root, systemd_owner, systemd_group)
+        && trusted_systemd_directory(
+            &systemd_root.join("tb-category-collector.service"),
+            systemd_owner,
+            systemd_group,
+        );
+    if !metadata.is_file() || metadata.len() > 65536 || !(private_file || systemd_file) {
         return Err("credential file must be private and bounded".into());
     }
-    std::fs::read_to_string(path)
-        .map(Zeroizing::new)
-        .map_err(|_| "credential file unreadable".into())
+    let mut text = Zeroizing::new(String::new());
+    file.take(65537)
+        .read_to_string(&mut text)
+        .map_err(|_| "credential file unreadable")?;
+    if text.len() > 65536 {
+        return Err("credential file too large".into());
+    }
+    Ok(text)
+}
+
+fn trusted_systemd_directory(path: &Path, owner: u32, group: u32) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.is_dir()
+            && metadata.uid() == owner
+            && metadata.gid() == group
+            && metadata.permissions().mode() & 0o022 == 0
+    })
 }
 #[derive(Deserialize)]
 struct Entry {
@@ -211,18 +249,102 @@ struct Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn credential_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("credentials");
+        let unit = root.join("tb-category-collector.service");
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&unit, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = unit.join("category-twitch");
+        std::fs::write(&path, "bootstrap-token").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o440)).unwrap();
+        (dir, root, path)
+    }
+
     #[test]
-    fn environment_is_not_a_configuration_source() {
+    fn only_the_root_owned_systemd_credential_can_be_group_readable() {
+        let (_dir, root, path) = credential_fixture();
+        let owner = unsafe { nix::libc::geteuid() };
+        let group = unsafe { nix::libc::getegid() };
+        assert_eq!(
+            protected_text_at(&path, &root, owner, group)
+                .unwrap()
+                .as_str(),
+            "bootstrap-token"
+        );
+        assert!(protected_text_at(&path, &root, owner + 1, group).is_err());
+        assert!(protected_text_at(&path, &root, owner, group + 1).is_err());
+
+        let other = root.join("tb-category-collector.service").join("other");
+        std::fs::write(&other, "wrong-path").unwrap();
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o440)).unwrap();
+        assert!(protected_text_at(&other, &root, owner, group).is_err());
+        assert!(protected_text_at(&path, &root.join("wrong-root"), owner, group).is_err());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(protected_text_at(&path, &root, owner, group).is_err());
+    }
+
+    #[test]
+    fn systemd_credential_rejects_symlinks_and_writable_directories() {
+        let (_dir, root, path) = credential_fixture();
+        let owner = unsafe { nix::libc::geteuid() };
+        let group = unsafe { nix::libc::getegid() };
+        let unit = root.join("tb-category-collector.service");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(root.join("target"), "target").unwrap();
+        symlink(root.join("target"), &path).unwrap();
+        assert!(protected_text_at(&path, &root, owner, group).is_err());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "bootstrap-token").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o440)).unwrap();
+        std::fs::set_permissions(&unit, std::fs::Permissions::from_mode(0o770)).unwrap();
+        assert!(protected_text_at(&path, &root, owner, group).is_err());
+    }
+
+    #[test]
+    fn regular_credential_files_keep_private_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ordinary-credential");
+        std::fs::write(&path, "private-token").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(protected_text(&path).unwrap().as_str(), "private-token");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(protected_text(&path).is_err());
+    }
+
+    #[test]
+    fn fifo_is_rejected_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fifo");
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        assert!(protected_text(&path).is_err());
+    }
+    #[test]
+    fn bootstrap_requires_postgres_and_ignores_all_legacy_retention_values() {
         let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(),r#"{"database_url":"postgresql:///test","secrets":{"type":"file","path":"/test"},"poll_seconds":1}"#).unwrap();
-        assert!(Config::load(file.path()).is_err());
-        std::fs::write(file.path(),r#"{"database_url":"postgresql:///test","secrets":{"type":"file","path":"/test"},"retention_days":91}"#).unwrap();
-        assert!(Config::load(file.path()).is_err());
+        for retention in [
+            serde_json::Value::Null,
+            serde_json::json!(1),
+            serde_json::json!(90),
+            serde_json::json!(1000),
+        ] {
+            let content = serde_json::json!({"database_url":"postgresql:///test",
+                "secrets":{"type":"file","path":"/test"},"retention_days":retention});
+            std::fs::write(file.path(), content.to_string()).unwrap();
+            assert!(Config::load(file.path()).is_ok());
+        }
         std::fs::write(
             file.path(),
-            r#"{"database_url":"postgresql:///test","secrets":{"type":"file","path":"/test"}}"#,
+            r#"{"database_url":"sqlite:///test","secrets":{"type":"file","path":"/test"}}"#,
         )
         .unwrap();
-        assert_eq!(Config::load(file.path()).unwrap().retention_days, 90);
+        assert!(Config::load(file.path()).is_err());
+        // No environment fallback when an explicit bootstrap is missing.
+        assert!(Config::load(Path::new("/nonexistent/category-bootstrap.json")).is_err());
     }
 }

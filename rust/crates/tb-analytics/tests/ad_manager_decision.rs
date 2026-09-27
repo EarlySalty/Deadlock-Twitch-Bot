@@ -44,7 +44,8 @@ fn base(strategy: Strategy) -> DecisionInput {
         quiet_chat_messages: 0,
         recent_chat_messages: 0,
         chat_ingest_healthy: true,
-        steam_match_state: None,
+        // Budget/lock tests use an explicitly fresh non-match. Unknown has its own tests.
+        steam_match_state: Some(steam_state(false, false)),
         plan: due_plan(),
         match_started_at: None,
         match_ended_at: None,
@@ -305,12 +306,12 @@ fn twitch_plan_nutzt_matchrisiko_nur_ausserhalb_des_matches() {
 
     value.steam_match_state = Some(steam_state(true, true));
     value.match_started_at = Some(value.now - Duration::seconds(30));
-    assert_eq!(decide(&value).reason, "twitch_plan_active");
-    assert_eq!(decide(&value).action, DecisionAction::None);
+    assert_eq!(decide(&value).reason, "in_match");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
 
     value.match_started_at = None;
-    assert_eq!(decide(&value).reason, "twitch_plan_active");
-    assert_eq!(decide(&value).action, DecisionAction::None);
+    assert_eq!(decide(&value).reason, "in_match");
+    assert_eq!(decide(&value).action, DecisionAction::Postpone);
 }
 
 #[test]

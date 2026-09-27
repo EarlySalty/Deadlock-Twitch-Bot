@@ -1,7 +1,7 @@
 //! Session-gebundene API des Twitch-Werbemanagers.
 
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -14,6 +14,7 @@ use tb_analytics::ad_manager::{
     AdManagerStore, EnqueueOutcome, Settings, SteamMatchSummary, COMMERCIAL_SCOPE, READ_SCOPE,
     SNOOZE_SCOPE,
 };
+use tb_http_core::ExpectedToken;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -99,9 +100,9 @@ struct ScopeStatus {
     commercial: bool,
 }
 
-/// Steam-Match-Anbindung des Kanals: `state` ist null ohne Verknüpfung oder
-/// ohne je gesehenen Status, "stale" bei veralteter Presence. Die Automatik
-/// fällt in diesen Fällen auf Chat-Ruhe zurück.
+/// Steam-Match-Anbindung: null ohne Verknüpfung, "stale" für alte Messdaten
+/// und "unavailable" für fehlende oder unvollständige Quellantworten.
+/// Ohne bestätigten frischen Matchstatus startet die Automatik keine eigene Werbung.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SteamStatus {
@@ -116,7 +117,7 @@ fn steam_status(summary: Option<SteamMatchSummary>) -> SteamStatus {
     let Some(summary) = summary else {
         return SteamStatus {
             linked: false,
-            state: None,
+            state: Some("unavailable"),
             hero: None,
             stage: None,
             observed_at: None,
@@ -126,7 +127,9 @@ fn steam_status(summary: Option<SteamMatchSummary>) -> SteamStatus {
         Some(state) if state.in_match => Some("in_match"),
         Some(state) if state.in_deadlock => Some("in_queue"),
         Some(_) => Some("out_of_game"),
-        None if summary.observed_at.is_some() => Some("stale"),
+        None if summary.observed_at.is_some_and(|seen| Utc::now().signed_duration_since(seen)
+            > chrono::Duration::seconds(tb_analytics::ad_manager::MATCH_STATUS_FRESH_SECS)) => Some("stale"),
+        None if summary.steam_linked => Some("unavailable"),
         None => None,
     };
     SteamStatus {
@@ -215,18 +218,19 @@ fn apply_saved_settings(
 async fn response(
     pool: &PgPool,
     uid: &str,
-    login: &str,
+    _login: &str,
+    internal_token: &str,
 ) -> Result<serde_json::Value, sqlx::Error> {
-    let store = AdManagerStore::new(pool.clone());
+    let store = AdManagerStore::with_steam_token(pool.clone(), internal_token.to_owned());
     let (settings, updated) = store
         .load_settings(uid)
         .await?
         .map(|(s, t)| (s, Some(t.to_rfc3339())))
         .unwrap_or((Settings::default(), None));
     let granted = scopes(pool, uid).await?;
-    // Steam-Status ist Zusatzinformation: ein Fehler hier darf den
-    // Werbemanager-Status nicht sprengen, das UI zeigt dann "nicht verbunden".
-    let steam_summary = match store.steam_match_summary(login, Utc::now()).await {
+    // Keep the dashboard readable on a source failure, but expose unavailable
+    // rather than pretending that the account is unlinked or safe for ads.
+    let steam_summary = match store.steam_match_summary(uid, Utc::now()).await {
         Ok(summary) => Some(summary),
         Err(error) => {
             tracing::warn!(%error, "Werbemanager: Steam-Match-Status nicht lesbar");
@@ -319,12 +323,16 @@ async fn response(
     Ok(json!({"settings":SettingsResponse{value:settings,updated_at:updated},"status":status}))
 }
 
-pub async fn get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
+pub async fn get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Extension(ExpectedToken(internal_token)): Extension<ExpectedToken>,
+) -> Response {
     let (uid, login) = match identity(auth) {
         Ok(v) => v,
         Err(error) => return error.into_response(),
     };
-    match response(&pool, &uid, &login).await {
+    match response(&pool, &uid, &login, &internal_token).await {
         Ok(body) => Json(body).into_response(),
         Err(error) => {
             tracing::error!(%error,"Werbemanager konnte nicht gelesen werden");
@@ -344,6 +352,7 @@ fn bad_request(message: &str) -> Response {
 pub async fn save_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    Extension(ExpectedToken(internal_token)): Extension<ExpectedToken>,
     Json(raw): Json<serde_json::Value>,
 ) -> Response {
     let (uid, login) = match identity(auth) {
@@ -380,7 +389,7 @@ pub async fn save_handler(
             return reauth(absent);
         }
     }
-    let mut body = match response(&pool, &uid, &login).await {
+    let mut body = match response(&pool, &uid, &login, &internal_token).await {
         Ok(body) => body,
         Err(error) => {
             tracing::error!(%error,"Werbemanager-Status konnte vor dem Speichern nicht gelesen werden");
@@ -578,13 +587,14 @@ mod tests {
             Some("stale")
         );
         let waiting = steam_status(Some(summary(true, None, None)));
-        assert_eq!(waiting.state, None);
+        assert_eq!(waiting.state, Some("unavailable"));
         assert!(waiting.linked);
         // Ohne Steam-Anknüpfung ist nichts belegt.
         let unlinked = steam_status(Some(summary(false, None, None)));
         assert!(!unlinked.linked);
         assert_eq!(unlinked.state, None);
-        // Lookup-Fehler wird zum neutralen Block, nicht zum Fehler.
+        // A source failure is explicit, not reported as an unlinked account.
+        assert_eq!(steam_status(None).state, Some("unavailable"));
         assert!(!steam_status(None).linked);
     }
 

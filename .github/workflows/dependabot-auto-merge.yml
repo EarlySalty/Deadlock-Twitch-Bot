@@ -97,6 +97,8 @@ jobs:
               "Frontend PR Gate (admin_dashboard)",
               "Frontend PR Gate (dashboard_v2)",
               "Rust SQLx required",
+              "Typed Brain fixtures (knowledge)",
+              "Typed Brain fixtures (self-explainer)",
             ];
             const { data: rules } = await github.request(
               "GET /repos/{owner}/{repo}/rules/branches/{branch}",

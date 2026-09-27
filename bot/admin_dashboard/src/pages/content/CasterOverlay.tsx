@@ -13,7 +13,6 @@ import {
   type CasterContextTeam,
   type CasterDocument,
   type CasterLayout,
-  type CasterMatchContext,
   type CasterPerson,
   type CasterScene,
   type CasterSceneTeam,
@@ -413,12 +412,12 @@ export default function CasterOverlayPage() {
                     <option value="">Platz leer</option>
                     {scene.roster.map((person) => (
                       <option key={person.id} value={person.id}>
-                        {person.name}{person.cameraId ? ' · DDC Cam' : person.cameraUrl ? ' · URL Cam' : ' · ohne Cam'}
+                        {person.name}{person.cameraId ? ' · Community-Kamera' : person.cameraUrl ? ' · URL Cam' : ' · ohne Cam'}
                       </option>
                     ))}
                   </select>
                   <p className="mt-2 text-xs text-white/45">
-                    {slots[index]?.cameraId ? 'Eigene DDC-WebRTC-Cam' : slots[index]?.cameraUrl ? 'Externe Browserquelle' : 'Kein Kamerabild – Fenster bleibt frei'}
+                    {slots[index]?.cameraId ? 'Eigene Kamera über WebRTC' : slots[index]?.cameraUrl ? 'Externe Browserquelle' : 'Kein Kamerabild – Fenster bleibt frei'}
                   </p>
                 </div>
               ))}
@@ -563,7 +562,7 @@ export default function CasterOverlayPage() {
                         />
                       </label>
                       <label className="text-xs text-white/55">
-                        DDC-Kamera
+                        Community-Kamera
                         <select
                           className={`${input} mt-1`}
                           value={person.cameraId ?? ''}
@@ -635,9 +634,9 @@ export default function CasterOverlayPage() {
 
           <section className="panel-card space-y-4 rounded-2xl p-5">
             <div>
-              <h2 className="text-lg font-semibold text-white">DDC Camera Portal</h2>
+              <h2 className="text-lg font-semibold text-white">Community-Kamera-Portal</h2>
               <p className="mt-1 text-sm text-white/60">
-                Wir speichern Kamera-ID, Zuordnung und Freigabestatus – keine Videodatei. Der User öffnet seinen Einladungs-Link, erlaubt die Kamera ausdrücklich und muss die Seite für die Live-Übertragung geöffnet lassen.
+                Wir speichern Kamera-ID, Zuordnung und Freigabestatus – keine Videodatei. Die eingeladene Person öffnet den Link, gibt die Kamera ausdrücklich frei und lässt die Seite während der Live-Übertragung geöffnet.
               </p>
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -693,7 +692,7 @@ export default function CasterOverlayPage() {
                   <button className={button} disabled={busy} onClick={() => void revokeCamera(camera)}>Widerrufen</button>
                 </div>
               ))}
-              {cameras.length === 0 && <p className="text-sm text-white/50">Noch keine DDC-Kamera angelegt.</p>}
+              {cameras.length === 0 && <p className="text-sm text-white/50">Noch keine Community-Kamera angelegt.</p>}
             </div>
           </section>
 
@@ -730,7 +729,7 @@ export default function CasterOverlayPage() {
               </button>
             </div>
             <p className="text-xs text-white/45">
-              Managed DDC-Cams laufen per WebRTC. Externe HTTPS-Browserquellen bleiben als Fallback möglich. Auf restriktiven NATs ist später ein eigener TURN-Relay der nächste Zuverlässigkeitsschritt.
+              Unsere Kameras übertragen per WebRTC. Externe HTTPS-Browserquellen bleiben als Ersatz möglich. Bei strengen NAT-Einstellungen verbessert später ein eigenes TURN-Relay die Verbindung.
             </p>
           </section>
         </>
