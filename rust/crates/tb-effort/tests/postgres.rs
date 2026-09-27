@@ -347,7 +347,8 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
         CREATE TABLE voice.deadlock_party_members(party_id text,steam_id text,seen_at timestamptz);
         CREATE TABLE activity.live_player_state(steam_id text,deadlock_minutes integer,deadlock_updated_at timestamptz,in_deadlock_now boolean,in_match_now_strict boolean);
         INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login,discord_user_id,is_on_discord) VALUES('101','alice','1001',1),('102','bob','1002',1) ON CONFLICT(twitch_user_id) DO UPDATE SET discord_user_id=EXCLUDED.discord_user_id,is_on_discord=EXCLUDED.is_on_discord;
-        INSERT INTO core.steam_links VALUES(1001,'76561197960265801',TRUE),(1002,'76561197960265802',TRUE);")
+        UPDATE twitch_streamer_identities SET discord_user_id='1003',is_on_discord=0 WHERE twitch_user_id='103';
+        INSERT INTO core.steam_links VALUES(1001,'76561197960265801',TRUE),(1002,'76561197960265802',TRUE),(1003,'76561197960265803',TRUE);")
         .execute(&pool).await.unwrap();
     for (id, login, stream, session) in [
         ("101", "alice", "stream-a", 9001i64),
@@ -381,7 +382,11 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
     .unwrap();
     assert_eq!(points, 16);
     let observed = start + Duration::minutes(35);
-    for steam in ["76561197960265801", "76561197960265802"] {
+    for steam in [
+        "76561197960265801",
+        "76561197960265802",
+        "76561197960265803",
+    ] {
         sqlx::query("INSERT INTO voice.deadlock_party_members VALUES('real-party',$1,$2)")
             .bind(steam)
             .bind(observed)

@@ -192,7 +192,7 @@ impl Engine {
     }
 
     async fn links(&self) -> Result<Vec<Link>> {
-        let identities: Vec<(String,String,Option<bool>,Option<i64>)>=sqlx::query_as("SELECT i.twitch_user_id,i.discord_user_id,l.lookup_enabled,l.steam_id64 FROM twitch_streamer_identities i LEFT JOIN twitch_player_steam_links l ON l.twitch_user_id=i.twitch_user_id WHERE NULLIF(trim(i.discord_user_id),'') IS NOT NULL").fetch_all(&self.pool).await?;
+        let identities: Vec<(String,String,Option<bool>,Option<i64>)>=sqlx::query_as("SELECT i.twitch_user_id,i.discord_user_id,l.lookup_enabled,l.steam_id64 FROM twitch_streamer_identities i LEFT JOIN twitch_player_steam_links l ON l.twitch_user_id=i.twitch_user_id WHERE NULLIF(trim(i.discord_user_id),'') IS NOT NULL AND (i.is_on_discord=1 OR EXISTS(SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id=i.twitch_user_id AND p.status='active' AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL AND COALESCE(p.manual_partner_opt_out,0)=0 AND COALESCE(trim(p.technical_pause_reason),'')=''))").fetch_all(&self.pool).await?;
         let mut by_discord: HashMap<i64, Vec<(String, Option<i64>)>> = HashMap::new();
         for (twitch, discord, enabled, steam) in identities {
             if enabled == Some(false) || (enabled == Some(true) && steam.is_none()) {
