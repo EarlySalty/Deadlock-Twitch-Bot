@@ -937,6 +937,16 @@ pub async fn promote_streamer_to_partner(
         .await?;
     }
 
+    if active.is_none() {
+        crate::streamer_referrals::credit_first_activation(
+            tx,
+            &normalized_user_id,
+            &normalized_login,
+            now,
+        )
+        .await?;
+    }
+
     normalize_related_tables(tx, &normalized_user_id, &normalized_login).await?;
 
     if args.clear_source {
@@ -1356,6 +1366,13 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
+    mod referral_test_support {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/streamer_referrals.rs"
+        ));
+    }
+
     async fn testpool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new()
@@ -1422,6 +1439,7 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        referral_test_support::schema(&pool).await;
         Some(pool)
     }
 

@@ -7,31 +7,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClaimWindowDuration {
-    seconds: i64,
-    sql_interval: &'static str,
-}
-
-impl ClaimWindowDuration {
-    pub const fn seconds(self) -> i64 {
-        self.seconds
-    }
-
-    pub const fn sql_interval(self) -> &'static str {
-        self.sql_interval
-    }
-}
-
-pub const RESERVATION_TTL: ClaimWindowDuration = ClaimWindowDuration {
-    seconds: 4 * 24 * 60 * 60,
-    sql_interval: "4 days",
-};
-
-pub const POST_ACTIVATION_GRACE: ClaimWindowDuration = ClaimWindowDuration {
-    seconds: 24 * 60 * 60,
-    sql_interval: "24 hours",
-};
+pub use tb_domain::referral_window::{ClaimWindowDuration, POST_ACTIVATION_GRACE, RESERVATION_TTL};
 
 pub fn claim_in_activation_window(claimed_at: DateTime<Utc>, partnered_at: DateTime<Utc>) -> bool {
     claimed_at >= partnered_at - Duration::seconds(RESERVATION_TTL.seconds())

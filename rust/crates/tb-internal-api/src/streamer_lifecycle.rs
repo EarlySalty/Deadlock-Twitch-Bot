@@ -501,7 +501,13 @@ pub async fn promote_streamer_to_partner(
     )
     .await?;
 
-    let partnered_at = now_iso();
+    let activation_time = chrono::Utc::now();
+    let partnered_at = activation_time.to_rfc3339();
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('partner_signup'), hashtext($1::text))")
+        .bind(normalized_user_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Bestehenden Partner-Datensatz (egal welcher Status) reaktivieren …
     let updated = sqlx::query!(
@@ -528,11 +534,12 @@ pub async fn promote_streamer_to_partner(
         &partnered_at,
         STATUS_ACTIVE
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
     if updated > 0 {
+        tx.commit().await?;
         return Ok(PromoteOutcome::Promoted);
     }
 
@@ -555,9 +562,17 @@ pub async fn promote_streamer_to_partner(
         &partnered_at,
         STATUS_ACTIVE
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tb_raid::streamer_referrals::credit_first_activation(
+        &mut tx,
+        normalized_user_id,
+        &normalized_login,
+        activation_time,
+    )
+    .await?;
+    tx.commit().await?;
     Ok(PromoteOutcome::Promoted)
 }
 
@@ -1185,6 +1200,13 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL");
         }
+        mod referral_test_support {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/streamer_referrals.rs"
+            ));
+        }
+        referral_test_support::schema(&pool).await;
         pool
     }
 
@@ -1212,6 +1234,8 @@ mod tests {
         .await
         .expect("insert identity");
     }
+
+    include!("streamer_referral_tests.rs");
 
     #[tokio::test]
     async fn departner_setzt_status_und_disabled_raid_auth() {

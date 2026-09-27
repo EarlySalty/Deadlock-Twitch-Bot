@@ -3,6 +3,7 @@
 pub mod ids;
 pub mod login;
 pub mod partner;
+pub mod referral_window;
 pub mod signup_block;
 
 pub use ids::{StreamerLogin, TwitchUserId};

@@ -113,10 +113,6 @@ category_chat_messages|tags|jsonb|NO|'{}'::jsonb
 category_chat_redactions|message_id|text|NO|
 category_chat_redactions|observed_at|timestamp with time zone|NO|now()
 category_chat_redactions|room_user_id|text|NO|
-category_chat_user_redactions|chatter_user_id|text|NO|
-category_chat_user_redactions|ended_at|timestamp with time zone|NO|
-category_chat_user_redactions|room_user_id|text|NO|
-category_chat_user_redactions|started_at|timestamp with time zone|NO|
 category_chat_rollup|avg_len|double precision|NO|
 category_chat_rollup|distinct_chatter|bigint|NO|
 category_chat_rollup|hour_at|timestamp with time zone|NO|
@@ -125,6 +121,10 @@ category_chat_rollup|messages|bigint|NO|
 category_chat_rollup|room_user_id|text|NO|
 category_chat_rollup|total_chars|bigint|NO|
 category_chat_rollup|updated_at|timestamp with time zone|NO|now()
+category_chat_user_redactions|chatter_user_id|text|NO|
+category_chat_user_redactions|ended_at|timestamp with time zone|NO|
+category_chat_user_redactions|room_user_id|text|NO|
+category_chat_user_redactions|started_at|timestamp with time zone|NO|
 category_collection_runs|completed_at|timestamp with time zone|NO|
 category_collection_runs|poll_seconds|integer|NO|
 category_collection_runs|snapshot_at|timestamp with time zone|NO|
@@ -1841,6 +1841,15 @@ twitch_streamer_invites|invite_url|text|NO|
 twitch_streamer_invites|last_sent_at|text|YES|
 twitch_streamer_invites|streamer_login|text|NO|
 twitch_streamer_invites|twitch_user_id|text|YES|
+twitch_streamer_referral_credits|credited_at|timestamp with time zone|NO|
+twitch_streamer_referral_credits|event_type|text|NO|'streamer_referral'::text
+twitch_streamer_referral_credits|referred_login|text|NO|
+twitch_streamer_referral_credits|referred_twitch_user_id|text|NO|
+twitch_streamer_referral_credits|source_claimed_at|timestamp with time zone|NO|
+twitch_streamer_referral_credits|source_id|text|NO|
+twitch_streamer_referral_credits|source_type|text|NO|'affiliate_streamer_claim'::text
+twitch_streamer_referral_credits|streamer_login|text|NO|
+twitch_streamer_referral_credits|streamer_twitch_user_id|text|NO|
 twitch_streamers_partner_state|archived_at|text|YES|
 twitch_streamers_partner_state|created_at|text|YES|
 twitch_streamers_partner_state|discord_display_name|text|YES|

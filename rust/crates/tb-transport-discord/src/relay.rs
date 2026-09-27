@@ -21,6 +21,7 @@ const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
 const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
 const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
 const CREATE_INVITE_PATH: &str = "/internal/master/v1/discord/create-invite";
+const PERSONAL_INVITE_PATH: &str = "/internal/master/v1/twitch/personal-invite";
 const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
@@ -210,6 +211,12 @@ where
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PersonalInvite {
+    pub invite_url: String,
+    pub personal: bool,
+}
+
 impl BrokerRelay {
     /// Erstellt einen neuen BrokerRelay aus der übergebenen Konfiguration.
     pub fn new(config: &BrokerConfig) -> Result<Self, reqwest::Error> {
@@ -246,7 +253,7 @@ impl BrokerRelay {
             || url.query().is_some()
             || url.fragment().is_some()
             || url.path() != "/"
-            || !path.starts_with("/internal/master/v1/discord/")
+            || !(path.starts_with("/internal/master/v1/discord/") || path == PERSONAL_INVITE_PATH)
             || path.contains(['?', '#', '\\'])
             || path.split('/').any(|part| part == "." || part == "..")
         {
@@ -446,6 +453,68 @@ impl BrokerRelay {
     }
 
     /// Erstellt einen permanenten Discord-Invite für den angegebenen Kanal.
+    pub async fn personal_invite(
+        &self,
+        streamer_login: &str,
+        streamer_twitch_user_id: &str,
+        inviter_twitch_user_id: &str,
+    ) -> Result<PersonalInvite, DiscordError> {
+        let invalid = || DiscordError::BrokerError {
+            status: 400,
+            body: "Ungültige Twitch-Einladungsanfrage".into(),
+        };
+        if ![streamer_twitch_user_id, inviter_twitch_user_id]
+            .iter()
+            .all(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|c| c.is_ascii_digit())
+                    && id.parse::<u64>().is_ok_and(|id| id > 0)
+            })
+        {
+            return Err(invalid());
+        }
+        let url = self.request_url(PERSONAL_INVITE_PATH)?;
+        if !url.host_str().is_some_and(|host| {
+            host.trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        }) {
+            return Err(invalid());
+        }
+        let payload = serde_json::json!({
+            "streamer_login": streamer_login.trim().to_ascii_lowercase(),
+            "streamer_twitch_user_id": streamer_twitch_user_id,
+            "inviter_twitch_user_id": inviter_twitch_user_id,
+        });
+        let key = Self::idempotency_key("personal-invite", &payload);
+        let response = self
+            .post_with_retry(PERSONAL_INVITE_PATH, &payload, &key)
+            .await?;
+        if !response.status().is_success() {
+            return Err(DiscordError::BrokerError {
+                status: response.status().as_u16(),
+                body: "Persönlicher Discord-Link nicht verfügbar".into(),
+            });
+        }
+        let envelope: BrokerEnvelope<PersonalInvite> = response.json().await?;
+        envelope
+            .result
+            .filter(|result| {
+                envelope.ok
+                    && result
+                        .invite_url
+                        .strip_prefix("https://discord.gg/")
+                        .is_some_and(|code| {
+                            !code.is_empty()
+                                && code.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                        })
+            })
+            .ok_or_else(|| DiscordError::BrokerError {
+                status: 502,
+                body: "Ungültige Discord-Einladungsantwort".into(),
+            })
+    }
+
     pub async fn create_invite(
         &self,
         channel_id: u64,
@@ -668,6 +737,7 @@ impl DiscordBackend for BrokerRelay {
 
 #[cfg(test)]
 mod tests {
+    include!("personal_invite_tests.rs");
     use super::*;
     use crate::DeleteMessage;
     use tb_config::BrokerConfig;
