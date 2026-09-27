@@ -181,12 +181,15 @@ impl MonthlyRaidBoostStore {
             .await?;
         }
 
-        let winner = standings.first().map(|standing| SeasonWinner {
-            twitch_user_id: standing.twitch_user_id.clone(),
-            twitch_login: standing.twitch_login.clone(),
-            points: standing.points,
-            qualified_invites: standing.qualified_invites,
-        });
+        let winner = standings
+            .first()
+            .filter(|standing| standing.points > 0)
+            .map(|standing| SeasonWinner {
+                twitch_user_id: standing.twitch_user_id.clone(),
+                twitch_login: standing.twitch_login.clone(),
+                points: standing.points,
+                qualified_invites: standing.qualified_invites,
+            });
 
         if let Some(winner) = &winner {
             sqlx::query(
@@ -241,6 +244,13 @@ impl MonthlyRaidBoostStore {
         }
 
         let mut tx = self.pool.begin().await?;
+        // Alle Finalize-/Reserve-Schritte eines Partners serialisieren. Ohne
+        // diesen Lock kann ein schneller Restart parallel den alten Stream
+        // verbrauchen und zugleich schon einen neuen Slot reservieren.
+        sqlx::query("SELECT pg_advisory_xact_lock(27182, hashtext($1))")
+            .bind(twitch_user_id)
+            .execute(&mut *tx)
+            .await?;
         let consumed_stream = finalize_finished_usages(&mut tx, twitch_user_id, now).await?;
 
         let live = sqlx::query_as::<_, CurrentLiveState>(
@@ -303,8 +313,9 @@ impl MonthlyRaidBoostStore {
                 AND streams_remaining > 0
                 AND granted_at <= $2
                 AND expires_at > $2
-              ORDER BY granted_at DESC
-              LIMIT 1",
+              ORDER BY expires_at ASC, granted_at ASC, id ASC
+              LIMIT 1
+              FOR UPDATE",
         )
         .bind(twitch_user_id)
         .bind(session.started_at)
@@ -366,19 +377,44 @@ async fn load_effort_standings(
                AND COALESCE(manual_partner_opt_out, 0) = 0
                AND COALESCE(TRIM(technical_pause_reason), '') = ''
         ),
+        event_running AS (
+            SELECT e.partner_twitch_user_id,
+                   e.event_type,
+                   e.occurred_at,
+                   e.id,
+                   SUM(e.points) OVER (
+                       PARTITION BY e.partner_twitch_user_id
+                       ORDER BY e.occurred_at, e.id
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                   )::bigint AS running_points,
+                   SUM(e.points) OVER (
+                       PARTITION BY e.partner_twitch_user_id
+                   )::bigint AS final_points
+              FROM partner_effort_events e
+             WHERE e.occurred_at >= $1
+               AND e.occurred_at < $2
+        ),
+        monthly AS (
+            SELECT partner_twitch_user_id AS twitch_user_id,
+                   MAX(final_points)::bigint AS points,
+                   COUNT(*) FILTER (WHERE event_type = 'qualified_invite')::bigint
+                       AS qualified_invites,
+                   MIN(occurred_at) FILTER (WHERE running_points = final_points)
+                       AS score_reached_at
+              FROM event_running
+             GROUP BY partner_twitch_user_id
+        ),
         scores AS (
             SELECT a.twitch_user_id,
                    a.twitch_login,
-                   COALESCE(SUM(e.points), 0)::bigint AS points,
-                   COUNT(*) FILTER (WHERE e.event_type = 'qualified_invite')::bigint
-                       AS qualified_invites,
-                   MAX(e.occurred_at) FILTER (WHERE e.points > 0) AS score_reached_at
+                   COALESCE(m.points, 0)::bigint AS points,
+                   COALESCE(m.qualified_invites, 0)::bigint AS qualified_invites,
+                   CASE
+                       WHEN COALESCE(m.points, 0) = 0 THEN $1
+                       ELSE m.score_reached_at
+                   END AS score_reached_at
               FROM active a
-              LEFT JOIN partner_effort_events e
-                ON e.partner_twitch_user_id = a.twitch_user_id
-               AND e.occurred_at >= $1
-               AND e.occurred_at < $2
-             GROUP BY a.twitch_user_id, a.twitch_login
+              LEFT JOIN monthly m ON m.twitch_user_id = a.twitch_user_id
         )
         SELECT twitch_user_id,
                twitch_login,
@@ -467,7 +503,7 @@ async fn finalize_finished_usages(
           WHERE twitch_user_id = $1
             AND stream_ended_at IS NULL
           ORDER BY id
-          FOR UPDATE SKIP LOCKED",
+          FOR UPDATE",
     )
     .bind(twitch_user_id)
     .fetch_all(&mut **tx)

@@ -276,7 +276,9 @@ async fn season_close_ist_beim_zweiten_lauf_idempotent() {
              ('winner', 'Winner', 'active'),
              ('runner', 'Runner', 'active'),
              ('early', 'Early', 'active'),
-             ('late', 'Late', 'active')",
+             ('late', 'Late', 'active'),
+             ('corrected', 'Corrected', 'active'),
+             ('later10', 'Later10', 'active')",
     )
     .execute(&pool)
     .await
@@ -290,7 +292,11 @@ async fn season_close_ist_beim_zweiten_lauf_idempotent() {
              ('winner', 'winner', 'qualified_invite', 'invite-1', 10, '2026-08-20T12:00:00Z'),
              ('runner', 'runner', 'co_stream', 'stream-1', 10, '2026-08-10T12:00:00Z'),
              ('early', 'early', 'co_stream', 'stream-2', 5, '2026-08-05T12:00:00Z'),
-             ('late', 'late', 'co_stream', 'stream-3', 5, '2026-08-15T12:00:00Z')",
+             ('late', 'late', 'co_stream', 'stream-3', 5, '2026-08-15T12:00:00Z'),
+             ('corrected', 'corrected', 'co_stream', 'corr-1', 10, '2026-08-01T12:00:00Z'),
+             ('corrected', 'corrected', 'co_stream', 'corr-2', 5, '2026-08-20T12:00:00Z'),
+             ('corrected', 'corrected', 'co_stream', 'corr-3', -5, '2026-08-25T12:00:00Z'),
+             ('later10', 'later10', 'co_stream', 'later-1', 10, '2026-08-10T12:00:00Z')",
     )
     .execute(&pool)
     .await
@@ -308,7 +314,7 @@ async fn season_close_ist_beim_zweiten_lauf_idempotent() {
         first,
         SeasonCloseOutcome::Closed {
             ref season_key,
-            partners: 4,
+            partners: 6,
             ..
         } if season_key == "2026-08"
     ));
@@ -345,7 +351,7 @@ async fn season_close_ist_beim_zweiten_lauf_idempotent() {
     .unwrap();
 
     assert_eq!(closures, 1);
-    assert_eq!(results, 4);
+    assert_eq!(results, 6);
     assert_eq!(grants, 1);
     assert_eq!(winner, "winner");
 
@@ -362,6 +368,21 @@ async fn season_close_ist_beim_zweiten_lauf_idempotent() {
     assert!(
         early_rank < late_rank,
         "bei gleichem Score und Invite-Zähler gewinnt der frühere Score-Zeitpunkt"
+    );
+
+    let (corrected_rank, later10_rank): (i32, i32) = sqlx::query_as(
+        "SELECT
+             MAX(rank) FILTER (WHERE twitch_user_id = 'corrected')::int4,
+             MAX(rank) FILTER (WHERE twitch_user_id = 'later10')::int4
+           FROM twitch_partner_effort_season_results
+          WHERE season_key = '2026-08'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        corrected_rank < later10_rank,
+        "Korrekturpunkte müssen den Zeitpunkt des finalen kumulierten Scores respektieren"
     );
 
     pool.close().await;
@@ -497,6 +518,155 @@ async fn kurzer_stream_verbraucht_nicht_und_abgelaufener_grant_startet_nicht() {
         .await
         .unwrap();
     assert!(!expired.stream_boost_active);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn season_ohne_effort_hat_keinen_sieger_und_keinen_grant() {
+    let Some(pool) = pool_or_skip("monthly_raid_boost_zero_season").await else {
+        return;
+    };
+    create_schema(&pool).await;
+
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
+         VALUES ('alpha', 'Alpha', 'active'), ('beta', 'Beta', 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let now = Utc
+        .with_ymd_and_hms(2026, 8, 31, 22, 5, 0)
+        .single()
+        .unwrap();
+    let outcome = MonthlyRaidBoostStore::new(pool.clone())
+        .close_previous_season(now)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        SeasonCloseOutcome::Closed {
+            partners: 2,
+            winner: None,
+            ..
+        }
+    ));
+    let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(grants, 0);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn paralleler_restart_kann_keinen_dritten_slot_reservieren() {
+    let Some(pool) = pool_or_skip("monthly_raid_boost_restart_race").await else {
+        return;
+    };
+    create_schema(&pool).await;
+
+    let granted_at = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    let grant_id = insert_grant(&pool, "grant-race", "winner", granted_at).await;
+    sqlx::query(
+        "UPDATE twitch_partner_raid_boost_grants
+            SET streams_remaining = 1
+          WHERE id = $1",
+    )
+    .bind(grant_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    let previous_start = Utc.with_ymd_and_hms(2026, 9, 2, 10, 0, 0).single().unwrap();
+    set_live_session(&pool, 301, "winner", previous_start, "Deadlock").await;
+    assert!(
+        store
+            .reconcile_partner(
+                "winner",
+                "winner",
+                previous_start + chrono::Duration::minutes(1),
+            )
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+
+    end_session(
+        &pool,
+        301,
+        "winner",
+        previous_start + chrono::Duration::minutes(31),
+    )
+    .await;
+    let next_start = previous_start + chrono::Duration::minutes(32);
+    set_live_session(&pool, 302, "winner", next_start, "Deadlock").await;
+
+    let first = store.clone();
+    let second = store.clone();
+    let (a, b) = tokio::join!(
+        first.reconcile_partner(
+            "winner",
+            "winner",
+            next_start + chrono::Duration::seconds(10)
+        ),
+        second.reconcile_partner(
+            "winner",
+            "winner",
+            next_start + chrono::Duration::seconds(10)
+        )
+    );
+    assert!(!a.unwrap().stream_boost_active);
+    assert!(!b.unwrap().stream_boost_active);
+
+    let remaining: i16 = sqlx::query_scalar(
+        "SELECT streams_remaining FROM twitch_partner_raid_boost_grants WHERE id = $1",
+    )
+    .bind(grant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let next_reservations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_partner_raid_boost_streams WHERE session_id = 302",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 0);
+    assert_eq!(next_reservations, 0);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn ueberlappende_grants_verbrauchen_den_frueher_ablaufenden_zuerst() {
+    let Some(pool) = pool_or_skip("monthly_raid_boost_overlap").await else {
+        return;
+    };
+    create_schema(&pool).await;
+
+    let old_granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    let new_granted = Utc.with_ymd_and_hms(2026, 9, 20, 0, 5, 0).single().unwrap();
+    let old_id = insert_grant(&pool, "grant-old", "winner", old_granted).await;
+    let new_id = insert_grant(&pool, "grant-new", "winner", new_granted).await;
+
+    let start = Utc
+        .with_ymd_and_hms(2026, 9, 25, 10, 0, 0)
+        .single()
+        .unwrap();
+    set_live_session(&pool, 401, "winner", start, "Deadlock").await;
+    let state = MonthlyRaidBoostStore::new(pool.clone())
+        .reconcile_partner("winner", "winner", start + chrono::Duration::minutes(1))
+        .await
+        .unwrap();
+
+    assert_eq!(state.grant_id, Some(old_id));
+    assert_ne!(state.grant_id, Some(new_id));
 
     pool.close().await;
 }
