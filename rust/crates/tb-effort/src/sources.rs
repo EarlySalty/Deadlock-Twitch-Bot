@@ -1,3 +1,4 @@
+mod cursor;
 mod live;
 
 use crate::{Engine, Error, Event, EventKind, Result};
@@ -68,82 +69,91 @@ impl Engine {
     }
 
     async fn invites(&self, now: DateTime<Utc>) -> Result<()> {
-        let central = self.central()?;
-        let mut cursor = 0i64;
-        loop {
-            let rows=sqlx::query("SELECT q.join_event_id,q.guild_id,q.user_id,q.inviter_twitch_user_id,q.qualified_at,i.twitch_user_id FROM activity.twitch_invite_qualifications q JOIN bot.twitch_streamer_invites i ON i.streamer_login=q.streamer_login AND i.guild_id=q.guild_id WHERE q.status='qualified' AND q.qualified_at IS NOT NULL AND q.qualified_at <= $1 AND q.join_event_id>$2 AND q.guild_id=$3 ORDER BY q.join_event_id LIMIT $4")
-                .bind(now).bind(cursor).bind(self.cfg.community_guild_id).bind(self.cfg.source_batch_size).fetch_all(central).await?;
-            if rows.is_empty() {
-                break;
-            }
+        let mut ready = true;
+        for lane in ["recent", "reconcile"] {
+            let cursor = self.cursor("invites", lane, now).await?;
+            let rows = self.source_page("invites", lane, &cursor, now).await?;
+            let count = rows.len();
             let ids: Vec<String> = rows
                 .iter()
-                .map(|r| {
-                    r.try_get::<i64, _>("join_event_id")
+                .map(|row| {
+                    row.try_get::<i64, _>("join_event_id")
                         .map(|id| id.to_string())
                 })
                 .collect::<std::result::Result<_, _>>()?;
             let seen = self.seen("invites", &ids).await?;
             for row in rows {
                 let join: i64 = row.try_get("join_event_id")?;
-                cursor = cursor.max(join);
-                if seen.contains(&join.to_string()) {
-                    continue;
+                let at: DateTime<Utc> = row.try_get("qualified_at")?;
+                if !seen.contains(&join.to_string()) {
+                    let id: Option<String> = row.try_get("twitch_user_id")?;
+                    let id = id.ok_or(Error::Invalid("invite_streamer_identity"))?;
+                    let viewer: Option<String> = row.try_get("inviter_twitch_user_id")?;
+                    let event = Event {
+                        partner_twitch_user_id: id.clone(),
+                        kind: EventKind::QualifiedInvite,
+                        source_id: format!("discord-join:{join}"),
+                        occurred_at: at,
+                        viewer_twitch_user_id: viewer.filter(|v| v != &id),
+                        metadata: json!({"join_event_id":join,"guild_id":row.try_get::<i64,_>("guild_id")?,"discord_user_id":row.try_get::<i64,_>("user_id")?}),
+                    };
+                    self.consume("invites", &join.to_string(), event, now)
+                        .await?;
                 }
-                let id: Option<String> = row.try_get("twitch_user_id")?;
-                let id = id.ok_or(Error::Invalid("invite_streamer_identity"))?;
-                let viewer: Option<String> = row.try_get("inviter_twitch_user_id")?;
-                let event = Event {
-                    partner_twitch_user_id: id.clone(),
-                    kind: EventKind::QualifiedInvite,
-                    source_id: format!("discord-join:{join}"),
-                    occurred_at: row.try_get("qualified_at")?,
-                    viewer_twitch_user_id: viewer.filter(|v| v != &id),
-                    metadata: json!({"join_event_id":join,"guild_id":row.try_get::<i64,_>("guild_id")?,"discord_user_id":row.try_get::<i64,_>("user_id")?}),
-                };
-                self.consume("invites", &join.to_string(), event, now)
-                    .await?;
+                self.advance_cursor("invites", lane, join, at).await?;
             }
+            ready &= self
+                .finish_page("invites", lane, count, cursor.completed_once)
+                .await?;
+        }
+        if !ready {
+            return Err(Error::Source("invites_backfill_pending"));
         }
         Ok(())
     }
 
     async fn referrals(&self, now: DateTime<Utc>) -> Result<()> {
-        let central = self.central()?;
-        let mut cursor = 0i64;
-        loop {
-            let rows=sqlx::query("SELECT join_event_id,inviter_twitch_user_id,invited_twitch_user_id,credited_at FROM activity.streamer_referral_credits WHERE join_event_id>$1 AND credited_at <= $2 AND guild_id=$3 ORDER BY join_event_id LIMIT $4")
-                .bind(cursor).bind(now).bind(self.cfg.community_guild_id).bind(self.cfg.source_batch_size).fetch_all(central).await?;
-            if rows.is_empty() {
-                break;
-            }
+        let mut ready = true;
+        for lane in ["recent", "reconcile"] {
+            let cursor = self.cursor("referrals", lane, now).await?;
+            let rows = self.source_page("referrals", lane, &cursor, now).await?;
+            let count = rows.len();
             let ids: Vec<String> = rows
                 .iter()
-                .map(|r| r.try_get::<i64, _>("join_event_id").map(|v| v.to_string()))
+                .map(|row| {
+                    row.try_get::<i64, _>("join_event_id")
+                        .map(|id| id.to_string())
+                })
                 .collect::<std::result::Result<_, _>>()?;
             let seen = self.seen("referrals", &ids).await?;
             for row in rows {
                 let join: i64 = row.try_get("join_event_id")?;
-                cursor = cursor.max(join);
-                if seen.contains(&join.to_string()) {
-                    continue;
+                let at: DateTime<Utc> = row.try_get("credited_at")?;
+                if !seen.contains(&join.to_string()) {
+                    let id: String = row.try_get("inviter_twitch_user_id")?;
+                    let referred: String = row.try_get("invited_twitch_user_id")?;
+                    if id == referred {
+                        return Err(Error::Invalid("self_referral"));
+                    }
+                    let event = Event {
+                        partner_twitch_user_id: id,
+                        kind: EventKind::StreamerReferral,
+                        source_id: format!("referred-partner:{referred}"),
+                        occurred_at: at,
+                        viewer_twitch_user_id: None,
+                        metadata: json!({"join_event_id":join,"referred_twitch_user_id":referred}),
+                    };
+                    self.consume("referrals", &join.to_string(), event, now)
+                        .await?;
                 }
-                let id: String = row.try_get("inviter_twitch_user_id")?;
-                let referred: String = row.try_get("invited_twitch_user_id")?;
-                if id == referred {
-                    return Err(Error::Invalid("self_referral"));
-                }
-                let event = Event {
-                    partner_twitch_user_id: id,
-                    kind: EventKind::StreamerReferral,
-                    source_id: format!("referred-partner:{referred}"),
-                    occurred_at: row.try_get("credited_at")?,
-                    viewer_twitch_user_id: None,
-                    metadata: json!({"join_event_id":join,"referred_twitch_user_id":referred}),
-                };
-                self.consume("referrals", &join.to_string(), event, now)
-                    .await?;
+                self.advance_cursor("referrals", lane, join, at).await?;
             }
+            ready &= self
+                .finish_page("referrals", lane, count, cursor.completed_once)
+                .await?;
+        }
+        if !ready {
+            return Err(Error::Source("referrals_backfill_pending"));
         }
         Ok(())
     }

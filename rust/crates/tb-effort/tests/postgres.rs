@@ -11,6 +11,13 @@ use tb_effort::{
     Engine, Event, EventKind,
 };
 
+fn idle_helix() -> tb_transport_twitch::HelixClient {
+    let mut config = tb_transport_twitch::HelixConfig::new("fixture", "fixture");
+    config.token_url = "http://127.0.0.1:1/token".into();
+    config.helix_base = "http://127.0.0.1:1".into();
+    tb_transport_twitch::HelixClient::new(config).unwrap()
+}
+
 async fn fixture() -> (PgPool, PgPool, String) {
     let dsn = std::env::var("TB_TEST_DATABASE_URL")
         .expect("TB_TEST_DATABASE_URL must point to the disposable test container");
@@ -71,7 +78,13 @@ async fn ledger_caps_sources_streaks_achievements_and_fail_closed() {
         .unwrap()
         .with_timezone(&Utc);
     let cfg = Challenges::default();
-    let engine = Engine::new(pool.clone(), cfg.clone(), Some(pool.clone()), None).unwrap();
+    let engine = Engine::new(
+        pool.clone(),
+        cfg.clone(),
+        Some(pool.clone()),
+        Some(idle_helix()),
+    )
+    .unwrap();
     let mut invite = event(
         "101",
         EventKind::QualifiedInvite,
@@ -296,6 +309,22 @@ async fn ledger_caps_sources_streaks_achievements_and_fail_closed() {
         .await
         .unwrap();
     assert!(engine.ensure_ready(now).await.is_err());
+    let missing_helix = Engine::new(pool.clone(), cfg.clone(), Some(pool.clone()), None).unwrap();
+    assert!(missing_helix
+        .tick(now + Duration::seconds(3))
+        .await
+        .is_err());
+    let healthy: bool = sqlx::query_scalar(
+        "SELECT healthy FROM partner_effort_source_state WHERE source='shared_chat'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!healthy);
+    assert!(missing_helix
+        .ensure_ready(now + Duration::seconds(3))
+        .await
+        .is_err());
     pool.close().await;
     assert!(engine
         .append(
@@ -452,6 +481,23 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
         Some("Recruiter Name")
     );
     assert_eq!(viewers.recruiters[0].qualified_invites, 1);
+    sqlx::query("INSERT INTO partner_effort_party_observations(partner_twitch_user_id,stream_id,party_id,steam_id,other_steam_id,discord_id,other_discord_id,observed_at,match_started_at,stream_started_at) VALUES('101','expired-stream','expired-party','76561197960265801','76561197960265802',1001,1002,$1,$1,$1)")
+        .bind(finished-Duration::days(8)).execute(&pool).await.unwrap();
+    engine.tick(finished + Duration::seconds(2)).await.unwrap();
+    let expired: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM partner_effort_party_observations WHERE party_id='expired-party'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(expired, 0);
+    let permanent: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM partner_effort_events WHERE event_type='party_play'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(permanent, 2);
 
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name}"))
@@ -468,7 +514,7 @@ async fn stream_proof_ignores_reach_and_survives_snapshot_retention() {
         pool.clone(),
         Challenges::default(),
         Some(pool.clone()),
-        None,
+        Some(idle_helix()),
     )
     .unwrap();
     let start = DateTime::parse_from_rfc3339("2026-10-26T10:00:00Z")
@@ -537,6 +583,104 @@ async fn stream_proof_ignores_reach_and_survives_snapshot_retention() {
         engine.me("102", now).await.unwrap().level.total_points,
         bob.level.total_points
     );
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn source_cursors_resume_and_reconcile_late_rows_without_starving_new_events() {
+    let (admin, pool, name) = fixture().await;
+    let cfg = Challenges {
+        source_batch_size: 2,
+        ..Challenges::default()
+    };
+    let now = DateTime::parse_from_rfc3339("2026-10-26T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    sqlx::query("INSERT INTO bot.twitch_streamer_invites VALUES('alice',$1,'101')")
+        .bind(cfg.community_guild_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for id in [10i64, 20, 30, 40, 50, 60] {
+        sqlx::query("INSERT INTO activity.twitch_invite_qualifications VALUES($1,$1,$2,'alice','501','qualified',$3)").bind(id).bind(cfg.community_guild_id).bind(now-Duration::days(2)).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO activity.streamer_referral_credits VALUES($1,'101',$2,$3,$4)")
+            .bind(id)
+            .bind(format!("90{id}"))
+            .bind(cfg.community_guild_id)
+            .bind(now - Duration::days(2))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let engine = Engine::new(
+        pool.clone(),
+        cfg.clone(),
+        Some(pool.clone()),
+        Some(idle_helix()),
+    )
+    .unwrap();
+    assert!(engine.tick(now).await.is_err());
+    let cursors: Vec<i64>=sqlx::query_scalar("SELECT source_id FROM partner_effort_source_cursors WHERE lane='reconcile' ORDER BY source").fetch_all(&pool).await.unwrap();
+    assert_eq!(cursors, vec![20, 20]);
+    assert!(engine.ensure_ready(now).await.is_err());
+    sqlx::query("INSERT INTO activity.twitch_invite_qualifications VALUES(99,99,$1,'alice','501','qualified',$2)").bind(cfg.community_guild_id).bind(now).execute(&pool).await.unwrap();
+    let restarted = Engine::new(
+        pool.clone(),
+        cfg.clone(),
+        Some(pool.clone()),
+        Some(idle_helix()),
+    )
+    .unwrap();
+    assert!(restarted.tick(now + Duration::seconds(1)).await.is_err());
+    let cursors: Vec<i64>=sqlx::query_scalar("SELECT source_id FROM partner_effort_source_cursors WHERE lane='reconcile' ORDER BY source").fetch_all(&pool).await.unwrap();
+    assert_eq!(cursors, vec![40, 40]);
+    let fresh: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM partner_effort_events WHERE source_id='discord-join:99')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(fresh);
+    let _ = restarted.tick(now + Duration::seconds(2)).await;
+    restarted.tick(now + Duration::seconds(3)).await.unwrap();
+    restarted
+        .ensure_ready(now + Duration::seconds(3))
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO activity.twitch_invite_qualifications VALUES(5,5,$1,'alice','501','qualified',$2)").bind(cfg.community_guild_id).bind(now-Duration::days(3)).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO activity.streamer_referral_credits VALUES(5,'101','905',$1,$2)")
+        .bind(cfg.community_guild_id)
+        .bind(now - Duration::days(3))
+        .execute(&pool)
+        .await
+        .unwrap();
+    restarted.tick(now + Duration::seconds(4)).await.unwrap();
+    let late: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM partner_effort_events WHERE source_id='discord-join:5')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(late);
+    let invites: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM partner_effort_events WHERE event_type='qualified_invite'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let referrals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM partner_effort_events WHERE event_type='streamer_referral'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(invites, 8);
+    assert_eq!(referrals, 7);
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name}"))
         .execute(&admin)

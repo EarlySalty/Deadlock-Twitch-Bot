@@ -345,6 +345,11 @@ partner_effort_shared_chat_observations|other_partner_twitch_user_id|text|NO|
 partner_effort_shared_chat_observations|partner_twitch_user_id|text|NO|
 partner_effort_shared_chat_observations|shared_chat_session_id|text|NO|
 partner_effort_shared_chat_observations|stream_id|text|NO|
+partner_effort_source_cursors|completed_once|boolean|NO|false
+partner_effort_source_cursors|lane|text|NO|
+partner_effort_source_cursors|occurred_at|timestamp with time zone|NO|
+partner_effort_source_cursors|source_id|bigint|NO|0
+partner_effort_source_cursors|source|text|NO|
 partner_effort_source_receipts|received_at|timestamp with time zone|NO|now()
 partner_effort_source_receipts|source_id|text|NO|
 partner_effort_source_receipts|source|text|NO|
