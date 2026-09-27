@@ -124,14 +124,14 @@ impl Engine {
     }
 
     pub(super) async fn shared_chat(&self, now: DateTime<Utc>) -> Result<()> {
-        let live = self.live(now).await?;
-        if live.is_empty() {
-            return Ok(());
-        }
         let helix = self
             .helix
             .as_ref()
             .ok_or(Error::Source("helix_not_configured"))?;
+        let live = self.live(now).await?;
+        if live.is_empty() {
+            return Ok(());
+        }
         let previous_ok: bool=sqlx::query_scalar("SELECT COALESCE((SELECT healthy FROM partner_effort_source_state WHERE source='shared_chat'),FALSE)").fetch_one(&self.pool).await?;
         if !previous_ok {
             sqlx::query("DELETE FROM partner_effort_shared_chat_observations")
@@ -248,6 +248,9 @@ impl Engine {
     }
 
     pub(super) async fn party_play(&self, now: DateTime<Utc>) -> Result<()> {
+        sqlx::query("DELETE FROM partner_effort_party_observations WHERE observed_at < $1-INTERVAL '7 days'")
+            .bind(now).execute(&self.pool).await?;
+
         let live = self.live(now).await?;
         let links = self.links().await?;
         if !live.is_empty() && links.len() > 1 {

@@ -83,7 +83,7 @@ impl Engine {
             return Err(Error::Invalid("partial_quest_assignment"));
         }
         let mut available = vec![QuestKind::Invite, QuestKind::StreamExtra];
-        if self.active_partners().await?.len() > 1 {
+        if self.helix.is_some() && self.active_partners().await?.len() > 1 {
             available.push(QuestKind::CoStream);
         }
         if self.party_available(&partner.twitch_user_id).await? {

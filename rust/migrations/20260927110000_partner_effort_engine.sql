@@ -109,6 +109,15 @@ CREATE TABLE partner_effort_source_receipts (
     PRIMARY KEY (source,source_id)
 );
 
+CREATE TABLE partner_effort_source_cursors (
+    source TEXT NOT NULL,
+    lane TEXT NOT NULL CHECK (lane IN ('recent','reconcile')),
+    source_id BIGINT NOT NULL DEFAULT 0 CHECK (source_id >= 0),
+    occurred_at TIMESTAMPTZ NOT NULL,
+    completed_once BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (source,lane)
+);
+
 CREATE TABLE partner_effort_source_state (
     source TEXT PRIMARY KEY,
     checked_at TIMESTAMPTZ NOT NULL,
@@ -129,7 +138,7 @@ CREATE TRIGGER partner_effort_quests_immutable BEFORE UPDATE OR DELETE OR TRUNCA
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['partner_effort_program','partner_effort_events','partner_effort_weekly_quests','partner_effort_stream_weeks','partner_effort_weeks','partner_effort_streaks','partner_effort_achievements','partner_effort_shared_chat_observations','partner_effort_party_observations','partner_effort_source_receipts','partner_effort_source_state'] LOOP
+    FOREACH t IN ARRAY ARRAY['partner_effort_program','partner_effort_events','partner_effort_weekly_quests','partner_effort_stream_weeks','partner_effort_weeks','partner_effort_streaks','partner_effort_achievements','partner_effort_shared_chat_observations','partner_effort_party_observations','partner_effort_source_receipts','partner_effort_source_cursors','partner_effort_source_state'] LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
             EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO twitchbot',t);
         END IF;

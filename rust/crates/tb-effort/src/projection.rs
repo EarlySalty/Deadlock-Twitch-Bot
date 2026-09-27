@@ -214,7 +214,7 @@ impl Engine {
                 "",
             ),
         ];
-        if self.active_partners().await?.len() > 1 {
+        if self.helix.is_some() && self.active_partners().await?.len() > 1 {
             routes.push(route(
                 p.co_stream,
                 i64::MAX,

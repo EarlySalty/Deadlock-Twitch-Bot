@@ -11,7 +11,7 @@ Alle Datenbankprüfungen liefen im eigens angelegten Wegwerf-Container `tb-effor
 | SQLx-Metadaten gegen migrierte Testdatenbank erzeugt | Exit 0 |
 | `cargo check -p tb-effort -p tb-config -p tb-dashboard-api -p tb-bot --all-targets -j2` | Exit 0 |
 | `cargo test -p tb-config` mit bestehender Testsuite | 61 bestanden |
-| `cargo test -p tb-effort` | 8 Unit-Tests und 3 PostgreSQL-Integrationstests bestanden |
+| `cargo test -p tb-effort` | 8 Unit-Tests und 4 PostgreSQL-Integrationstests bestanden |
 | `cargo test -p tb-dashboard-api handlers::challenges --lib` | 2 bestanden |
 | `cargo clippy -p tb-effort --all-targets -- -D warnings` | Exit 0 |
 | `cargo clippy -p tb-dashboard-api -p tb-bot --all-targets --no-deps` | Exit 0; bestehende Warnungen außerhalb der Challenge-Implementierung |
@@ -19,7 +19,7 @@ Alle Datenbankprüfungen liefen im eigens angelegten Wegwerf-Container `tb-effor
 | `git diff --check` | Exit 0 |
 | Bestehendes Security-Push-Gate einschließlich gitleaks, RustSec und weiterer Scanner | Exit 0 |
 
-Die drei Postgres-Tests enthalten insbesondere:
+Die vier Postgres-Tests enthalten insbesondere:
 
 - Parallele Match-Buchungen über zwölf Tasks mit nur vier bezahlten Ereignissen, Clip-Cap, alle drei Platzierungswerte, gleiche qualifizierte Join-Zeit mit verschiedenen Quellen-IDs, widersprüchliche Replays und Cross-Partner-Attribution.
 - Datenbankseitiger UPDATE/DELETE/TRUNCATE-Schutz, abgewiesene inaktive Partner und Zukunftsereignisse, keine beliebig buchbare Quest-Belohnung, fehlende Quellen und geschlossene DB-Verbindungen, Monats- gegen Lifetime-Punkte und permanente Achievement-Stufen.
@@ -36,3 +36,7 @@ Der erste automatische Semantic-Review-Lauf `36288998112` scheiterte vor der Cod
 Keine unabhängige lokale Modellprüfung behauptet: Implementierung und Eigenprüfung wurden direkt erledigt. Der bestehende automatische GitHub-Review läuft über die Repository-Konfiguration.
 
 Kein Merge, kein Deploy, kein produktiver Datenbankeingriff und kein Neustart von Bot- oder Dashboard-Diensten.
+
+## GitHub-Review-Korrekturen
+
+Die drei konkreten Review-Fundstellen wurden direkt behoben: persistierte begrenzte Quellenscans mit separatem Pfad für neue Bestätigungen und zyklischem historischem Abgleich; Löschung temporärer Party-Belege nach sieben Tagen; fehlender Helix-Client macht die Quelle auch ohne laufenden Stream ungesund und entfernt Stream Together aus dem erreichbaren Aufgabenpool. Regressionstests prüfen Fortsetzung nach Engine-Neustart, neue Ereignisse während des Backfills, verspätete ältere IDs in beiden Quellen, die Aufbewahrungsgrenze sowie den Fehlerzustand im Leerlauf.
