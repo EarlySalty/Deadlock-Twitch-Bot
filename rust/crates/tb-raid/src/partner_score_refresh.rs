@@ -78,6 +78,7 @@ pub struct ExistingCache {
     pub viewer_fairness_score: f64,
     pub base_score: f64,
     pub final_score: f64,
+    pub raid_boost_multiplier: f64,
 }
 
 /// Gebündelte Roh-Eingaben für [`build_score_upsert`].
@@ -240,7 +241,14 @@ pub fn build_score_upsert(
         fairness_score = round_score(cache.fairness_score);
         viewer_fairness_score = round_score(cache.viewer_fairness_score);
         base_score = round_score(cache.base_score);
-        final_score = round_score(cache.final_score);
+        // Historische Basis einfrieren, einen verbrauchten/abgelaufenen Boost
+        // aber nicht im Endscore konservieren.
+        final_score = if (cache.raid_boost_multiplier - raid_boost_multiplier).abs() > f64::EPSILON
+        {
+            compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier)
+        } else {
+            round_score(cache.final_score)
+        };
     } else {
         current_started_at = None;
         current_uptime_sec = 0;
@@ -679,6 +687,7 @@ impl PartnerScoreRefresher {
             viewer_fairness_score: r.viewer_fairness_score,
             base_score: r.base_score,
             final_score: r.final_score,
+            raid_boost_multiplier: r.raid_boost_multiplier,
         }))
     }
 }
@@ -837,6 +846,7 @@ mod tests {
             viewer_fairness_score: 0.66,
             base_score: 0.55,
             final_score: 0.61,
+            raid_boost_multiplier: 1.0,
         });
         let upsert = build_score_upsert(&input, now);
         assert_eq!(upsert.is_live, 0);
@@ -848,6 +858,42 @@ mod tests {
             upsert.current_started_at.as_deref(),
             Some("2026-06-20T10:00:00+00:00")
         );
+    }
+
+    #[test]
+    fn offline_boost_wechsel_rechnet_end_score_neu_ohne_basis_zu_aendern() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 27, 0, 0, 0).unwrap();
+        for (old_boost, new_boost) in [(true, false), (false, true)] {
+            let mut input = base_input("winner");
+            input.raid_boost_enabled = new_boost;
+            input.existing_cache = Some(ExistingCache {
+                current_started_at: None,
+                current_uptime_sec: 1800,
+                duration_score: 0.42,
+                time_pattern_score: 0.6,
+                readiness_score: 0.5,
+                fairness_score: 0.7,
+                viewer_fairness_score: 0.66,
+                base_score: 0.55,
+                final_score: compute_final_score(
+                    0.55,
+                    1.25,
+                    compute_raid_boost_multiplier(old_boost),
+                ),
+                raid_boost_multiplier: compute_raid_boost_multiplier(old_boost),
+            });
+            let row = build_score_upsert(&input, now);
+            assert_eq!(row.base_score, 0.55);
+            assert_eq!(row.duration_score, 0.42);
+            assert_eq!(
+                row.final_score,
+                compute_final_score(
+                    row.base_score,
+                    row.new_partner_multiplier,
+                    compute_raid_boost_multiplier(new_boost)
+                )
+            );
+        }
     }
 
     #[test]

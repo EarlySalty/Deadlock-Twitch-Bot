@@ -75,13 +75,28 @@ CREATE INDEX IF NOT EXISTS idx_raid_boost_streams_open
     ON public.twitch_partner_raid_boost_streams (twitch_user_id, session_id)
     WHERE stream_ended_at IS NULL;
 
+-- Saison-Snapshots bleiben auch für spätere Schreibpfade unveränderlich.
+CREATE FUNCTION public.twitch_effort_season_immutable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '55000';
+END
+$$;
+CREATE TRIGGER effort_season_closures_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON public.twitch_partner_effort_season_closures
+    FOR EACH STATEMENT EXECUTE FUNCTION public.twitch_effort_season_immutable();
+CREATE TRIGGER effort_season_results_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON public.twitch_partner_effort_season_results
+    FOR EACH STATEMENT EXECUTE FUNCTION public.twitch_effort_season_immutable();
+
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
-        GRANT SELECT, INSERT, UPDATE
+        GRANT SELECT, INSERT
             ON public.twitch_partner_effort_season_closures,
-               public.twitch_partner_effort_season_results,
-               public.twitch_partner_raid_boost_grants,
+               public.twitch_partner_effort_season_results TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE
+            ON public.twitch_partner_raid_boost_grants,
                public.twitch_partner_raid_boost_streams
             TO twitchbot;
         GRANT USAGE, SELECT

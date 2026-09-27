@@ -58,57 +58,59 @@ async fn close_once(
     pool: &PgPool,
     now: chrono::DateTime<Utc>,
 ) -> bool {
-    match store.close_previous_season(now).await {
+    let season_key = match store.close_previous_season(now).await {
         Ok(SeasonCloseOutcome::Closed {
             season_key,
             partners,
-            winner,
+            ..
         }) => {
-            tracing::info!(
-                %season_key,
-                partners,
-                winner_id = winner.as_ref().map(|value| value.twitch_user_id.as_str()),
-                "Partner-Effort-Season abgeschlossen"
-            );
-
-            if let Some(winner) = winner {
-                let resolver = ScoreRefreshResolver::new(pool.clone());
-                match resolver
-                    .refresh_scores(
-                        &[(winner.twitch_user_id.clone(), winner.twitch_login.clone())],
-                        now,
-                    )
-                    .await
-                {
-                    Ok(written) => tracing::info!(
-                        %season_key,
-                        twitch_user_id = %winner.twitch_user_id,
-                        written,
-                        "Raid-Score nach Monatsboost sofort neu berechnet"
-                    ),
-                    Err(error) => tracing::error!(
-                        %error,
-                        %season_key,
-                        twitch_user_id = %winner.twitch_user_id,
-                        "Sofortiger Raid-Score-Refresh nach Monatsboost fehlgeschlagen"
-                    ),
-                }
-            }
-            true
+            tracing::info!(%season_key, partners, "Partner-Effort-Season abgeschlossen");
+            season_key
         }
-        Ok(SeasonCloseOutcome::AlreadyClosed { season_key }) => {
-            tracing::debug!(%season_key, "Partner-Effort-Season bereits abgeschlossen");
-            true
-        }
+        Ok(SeasonCloseOutcome::AlreadyClosed { season_key }) => season_key,
         Ok(SeasonCloseOutcome::SourceUnavailable { season_key }) => {
-            tracing::warn!(
-                %season_key,
-                "Partner-Effort-Eventquelle noch nicht verfügbar; Monatsabschluss wird erneut versucht"
-            );
-            false
+            tracing::warn!(%season_key, "Partner-Effort-Eventquelle noch nicht verfügbar; Monatsabschluss wird erneut versucht");
+            return false;
         }
         Err(error) => {
             tracing::error!(%error, "Partner-Effort-Monatsabschluss fehlgeschlagen; Retry folgt");
+            return false;
+        }
+    };
+
+    // Auch AlreadyClosed muss den Score schreiben: Ein Prozessabbruch zwischen
+    // Grant-Commit und Score-Refresh darf den Sofort-Refresh nicht verschlucken.
+    // Den aktuellen Login ausschließlich über die stabile Twitch-ID auflösen.
+    let recipient: Option<(String, String)> = match sqlx::query_as(
+        "SELECT g.twitch_user_id, COALESCE(p.twitch_login, g.twitch_login)
+           FROM twitch_partner_raid_boost_grants g
+           LEFT JOIN twitch_partners p ON p.twitch_user_id = g.twitch_user_id
+          WHERE g.season_key = $1",
+    )
+    .bind(&season_key)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(recipient) => recipient,
+        Err(error) => {
+            tracing::error!(%error, %season_key, "Monatsboost-Score-Refresh konnte nicht vorbereitet werden");
+            return false;
+        }
+    };
+    let Some(recipient) = recipient else {
+        return true;
+    };
+    match ScoreRefreshResolver::new(pool.clone())
+        .refresh_scores(&[recipient], now)
+        .await
+    {
+        Ok(1) => true,
+        Ok(written) => {
+            tracing::warn!(%season_key, written, "Monatsboost-Score fehlt; Refresh wird erneut versucht");
+            false
+        }
+        Err(error) => {
+            tracing::error!(%error, %season_key, "Sofortiger Raid-Score-Refresh nach Monatsboost fehlgeschlagen; Retry folgt");
             false
         }
     }
