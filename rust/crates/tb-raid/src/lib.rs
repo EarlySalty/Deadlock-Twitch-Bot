@@ -42,6 +42,7 @@ pub mod eligibility;
 pub mod external_recruitment_store;
 pub mod flip_unraid;
 pub mod manual_suppression;
+pub mod monthly_raid_boost;
 pub mod oauth_flow;
 pub mod offline_eligibility;
 pub mod outreach_boost;
@@ -116,6 +117,12 @@ pub use flip_unraid::{
     FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS,
 };
 pub use manual_suppression::ManualRaidSuppression;
+pub use monthly_raid_boost::{
+    combined_raid_boost_enabled, deadlock_seconds_for_timeline, next_monthly_close_after,
+    previous_season_window, remaining_after_stream, stream_consumes_boost, MonthlyRaidBoostStore,
+    SeasonCloseOutcome, SeasonWinner, SeasonalBoostState, MONTHLY_BOOST_STREAMS,
+    MONTHLY_BOOST_TTL_DAYS, QUALIFYING_DEADLOCK_SECONDS,
+};
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,

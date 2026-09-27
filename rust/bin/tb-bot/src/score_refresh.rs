@@ -17,7 +17,10 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
 use sqlx::PgPool;
 use tb_raid::courtesy_store::CourtesyStore;
-use tb_raid::{compute_scores, PartnerRaidScoreUpsert, ScoreStore, ScoringInputs};
+use tb_raid::{
+    combined_raid_boost_enabled, compute_final_score, compute_scores, MonthlyRaidBoostStore,
+    PartnerRaidScoreUpsert, ScoreStore, ScoringInputs,
+};
 
 /// Anzahl Tage Lookback für Sessions (identisch zu Python LOOKBACK_DAYS = 45, Z. 19).
 const LOOKBACK_DAYS: i64 = 45;
@@ -114,16 +117,19 @@ pub struct ScoreRefreshResolver {
     pool: PgPool,
     score_store: ScoreStore,
     courtesy_store: CourtesyStore,
+    monthly_boost_store: MonthlyRaidBoostStore,
 }
 
 impl ScoreRefreshResolver {
     pub fn new(pool: PgPool) -> Self {
         let score_store = ScoreStore::new(pool.clone());
         let courtesy_store = CourtesyStore::new(pool.clone());
+        let monthly_boost_store = MonthlyRaidBoostStore::new(pool.clone());
         Self {
             pool,
             score_store,
             courtesy_store,
+            monthly_boost_store,
         }
     }
 
@@ -226,11 +232,16 @@ impl ScoreRefreshResolver {
                 .get(user_id.as_str())
                 .copied()
                 .unwrap_or_default();
-            let boost = boost_flags
+            let plan_boost = boost_flags
                 .iter()
                 .find(|b| b.twitch_user_id == *user_id)
                 .map(|b| boost_active(b, now))
                 .unwrap_or(false);
+            let seasonal_boost = self
+                .monthly_boost_store
+                .reconcile_partner(user_id, login, now)
+                .await?;
+            let boost = combined_raid_boost_enabled(plan_boost, seasonal_boost.stream_boost_active);
 
             let courtesy = courtesy_by_id
                 .get(user_id.as_str())
@@ -277,7 +288,18 @@ impl ScoreRefreshResolver {
                         c.fairness_score,
                         c.viewer_fairness_score,
                         c.base_score,
-                        c.final_score,
+                        if (c.raid_boost_multiplier - scores.raid_boost_multiplier)
+                            .abs()
+                            > f64::EPSILON
+                        {
+                            compute_final_score(
+                                c.base_score,
+                                c.new_partner_multiplier,
+                                scores.raid_boost_multiplier,
+                            )
+                        } else {
+                            c.final_score
+                        },
                     )
                 }
                 _ => (

@@ -23,6 +23,7 @@ mod eventsub_stats_adapter;
 mod flip_unraid;
 mod irc_lurker_wiring;
 mod mcp;
+mod monthly_raid_boost;
 mod oauth_followups;
 mod obs_dock;
 mod offline_side_effects;
@@ -499,6 +500,11 @@ async fn main() {
     } else {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
+
+    supervisor.spawn(
+        "monthly_effort_raid_boost",
+        monthly_raid_boost::run(pool.clone()),
+    );
 
     let outreach_shadow =
         outreach_shadow_wiring::start(&supervisor, pool.clone(), &settings.broker, &config.bot);
