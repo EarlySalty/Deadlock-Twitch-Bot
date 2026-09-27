@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(points),0)::bigint AS \"total!\" FROM partner_effort_events WHERE partner_twitch_user_id=$1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "26809958a12727d18d7187abb0d7ce69c31edf2d1960a6f2b28d8c9f41302bca"
+}

@@ -3262,6 +3262,7 @@ dependencies = [
  "tb-config",
  "tb-crypto",
  "tb-db",
+ "tb-effort",
  "tb-engagement",
  "tb-highlight",
  "tb-internal-api",
@@ -3421,6 +3422,7 @@ dependencies = [
  "tb-crypto",
  "tb-db",
  "tb-domain",
+ "tb-effort",
  "tb-engagement",
  "tb-error",
  "tb-http-core",
@@ -3465,6 +3467,26 @@ name = "tb-domain"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "tb-effort"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "tb-config",
+ "tb-db",
+ "tb-transport-twitch",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

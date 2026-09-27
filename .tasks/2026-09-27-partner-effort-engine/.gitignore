@@ -1,0 +1,5 @@
+*.log
+*.exit
+*.pid
+*.py
+*.json

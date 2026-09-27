@@ -13,6 +13,7 @@ name = "zuschauer-register-backfill"
 path = "src/zuschauer_register_backfill.rs"
 
 [dependencies]
+tb-effort = { workspace = true }
 tokio              = { workspace = true, features = ["signal"] }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
