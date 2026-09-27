@@ -204,6 +204,18 @@ jobs:
           TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
           SQLX_OFFLINE: "true"
         run: cd rust && cargo test --locked -j2 -p tb-dashboard-api --lib clip_contest -- --nocapture
+      - name: Personal invites and first-activation referral regressions
+        working-directory: rust
+        env:
+          TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+          TB_TEST_REQUIRE_DB: "1"
+          SQLX_OFFLINE: "true"
+        run: |
+          cargo test --locked -j2 -p tb-chat --lib dldc
+          cargo test --locked -j2 -p tb-transport-discord --lib
+          cargo test --locked -j2 -p tb-raid --test partner_setup
+          cargo test --locked -j2 -p tb-raid --lib streamer_referrals
+          cargo test --locked -j2 -p tb-internal-api --lib streamer_lifecycle::tests::verify_
       - name: Check SQLx offline cache
         env:
           SQLX_OFFLINE: "false"
