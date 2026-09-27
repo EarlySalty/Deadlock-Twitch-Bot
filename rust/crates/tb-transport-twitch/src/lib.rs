@@ -8,6 +8,7 @@ pub mod eventsub;
 pub mod moderation;
 pub mod raid;
 pub mod schedule;
+pub mod shared_chat;
 pub mod streams;
 pub mod token;
 pub mod user_token;

@@ -93,7 +93,10 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    build_public_router_with_brain(pool, handlers::self_explainer::SelfExplainerBrainRuntime::legacy())
+    build_public_router_with_brain(
+        pool,
+        handlers::self_explainer::SelfExplainerBrainRuntime::legacy(),
+    )
 }
 
 pub fn build_public_router_with_brain(
@@ -236,6 +239,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(handlers::partner_profiles::get_handler)
                 .put(handlers::partner_profiles::put_handler)
                 .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/twitch/api/v2/challenges/me",
+            get(handlers::challenges::me_handler),
+        )
+        .route(
+            "/twitch/api/v2/challenges/viewers",
+            get(handlers::challenges::viewers_handler),
         )
         .route(
             "/twitch/api/v2/community",
@@ -1956,6 +1967,18 @@ pub fn build_router_with_helix_and_brain(
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
+    let challenge_engine = tb_config::runtime::settings().ok().and_then(|settings| {
+        let central =
+            tb_effort::Engine::readonly_central(std::env::var("DEADLOCK_CENTRAL_DSN").ok()).ok()?;
+        tb_effort::Engine::new(
+            pool.clone(),
+            settings.challenges.clone(),
+            central,
+            helix.clone(),
+        )
+        .ok()
+    });
+    let challenge_engine = handlers::challenges::ChallengeEngine(challenge_engine);
     let pause_loop_router = match helix {
         Some(helix) => build_pause_loop_router(pool.clone(), helix),
         None => handlers::pause_loop::build_unavailable_pause_loop_router(),
@@ -2052,6 +2075,8 @@ pub fn build_router_with_helix_and_brain(
         app = app.layer(Extension(config));
         tracing::info!("Uplink Multi-Chat: Twitch-Token-Weg aktiv");
     }
+
+    app = app.layer(Extension(challenge_engine));
 
     // P2.108: globaler Default-Security-Header-Bundle auf ALLE Antworten
     // (if_not_present überschreibt keine handler-eigenen Header).

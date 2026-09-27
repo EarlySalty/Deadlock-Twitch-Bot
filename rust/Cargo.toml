@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "vendor/uplink-infisical-transport",
+    "crates/tb-effort",
     "crates/tb-error",
     "crates/tb-crypto",
     "crates/tb-domain",
@@ -77,6 +78,7 @@ uuid = { version = "1", features = ["v4"] }
 wiremock = "0.6"
 printpdf = { version = "0.12.7", default-features = false }
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "rustls-tls", "hostname"] }
+tb-effort = { path = "crates/tb-effort" }
 tb-error = { path = "crates/tb-error" }
 tb-crypto = { path = "crates/tb-crypto" }
 tb-domain = { path = "crates/tb-domain" }

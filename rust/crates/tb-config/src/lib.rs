@@ -3,9 +3,10 @@
 //! Der Loader nimmt eine Quelle `Fn(&str) -> Option<String>` entgegen, damit er
 //! ohne Prozess-Env testbar ist. `from_env()` nutzt `std::env::var`.
 
-pub mod discord;
 pub mod affiliate_options;
+pub mod challenges;
 pub mod dashboard_options;
+pub mod discord;
 pub mod editor;
 pub mod file;
 pub mod global;

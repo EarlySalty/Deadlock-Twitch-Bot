@@ -113,10 +113,6 @@ category_chat_messages|tags|jsonb|NO|'{}'::jsonb
 category_chat_redactions|message_id|text|NO|
 category_chat_redactions|observed_at|timestamp with time zone|NO|now()
 category_chat_redactions|room_user_id|text|NO|
-category_chat_user_redactions|chatter_user_id|text|NO|
-category_chat_user_redactions|ended_at|timestamp with time zone|NO|
-category_chat_user_redactions|room_user_id|text|NO|
-category_chat_user_redactions|started_at|timestamp with time zone|NO|
 category_chat_rollup|avg_len|double precision|NO|
 category_chat_rollup|distinct_chatter|bigint|NO|
 category_chat_rollup|hour_at|timestamp with time zone|NO|
@@ -125,6 +121,10 @@ category_chat_rollup|messages|bigint|NO|
 category_chat_rollup|room_user_id|text|NO|
 category_chat_rollup|total_chars|bigint|NO|
 category_chat_rollup|updated_at|timestamp with time zone|NO|now()
+category_chat_user_redactions|chatter_user_id|text|NO|
+category_chat_user_redactions|ended_at|timestamp with time zone|NO|
+category_chat_user_redactions|room_user_id|text|NO|
+category_chat_user_redactions|started_at|timestamp with time zone|NO|
 category_collection_runs|completed_at|timestamp with time zone|NO|
 category_collection_runs|poll_seconds|integer|NO|
 category_collection_runs|snapshot_at|timestamp with time zone|NO|
@@ -311,6 +311,75 @@ obs_dock_events|created_at|timestamp with time zone|NO|now()
 obs_dock_events|dedupe_key|text|YES|
 obs_dock_events|id|bigint|NO|nextval('obs_dock_events_id_seq'::regclass)
 obs_dock_events|payload|jsonb|NO|
+partner_effort_achievements|achievement_key|text|NO|
+partner_effort_achievements|earned_at|timestamp with time zone|NO|
+partner_effort_achievements|partner_twitch_user_id|text|NO|
+partner_effort_achievements|target|bigint|NO|
+partner_effort_events|created_at|timestamp with time zone|NO|now()
+partner_effort_events|event_type|text|NO|
+partner_effort_events|id|bigint|NO|nextval('partner_effort_events_id_seq'::regclass)
+partner_effort_events|metadata|jsonb|NO|'{}'::jsonb
+partner_effort_events|occurred_at|timestamp with time zone|NO|
+partner_effort_events|partner_login|text|NO|
+partner_effort_events|partner_twitch_user_id|text|NO|
+partner_effort_events|points|integer|NO|
+partner_effort_events|rules_hash|text|NO|
+partner_effort_events|source_id|text|NO|
+partner_effort_events|viewer_twitch_user_id|text|YES|
+partner_effort_party_observations|discord_id|bigint|NO|
+partner_effort_party_observations|match_started_at|timestamp with time zone|NO|
+partner_effort_party_observations|observed_at|timestamp with time zone|NO|
+partner_effort_party_observations|other_discord_id|bigint|NO|
+partner_effort_party_observations|other_steam_id|text|NO|
+partner_effort_party_observations|partner_twitch_user_id|text|NO|
+partner_effort_party_observations|party_id|text|NO|
+partner_effort_party_observations|steam_id|text|NO|
+partner_effort_party_observations|stream_id|text|NO|
+partner_effort_party_observations|stream_started_at|timestamp with time zone|NO|
+partner_effort_program|singleton|boolean|NO|true
+partner_effort_program|started_at|timestamp with time zone|NO|now()
+partner_effort_shared_chat_observations|confirmed_seconds|bigint|NO|0
+partner_effort_shared_chat_observations|first_seen_at|timestamp with time zone|NO|
+partner_effort_shared_chat_observations|last_seen_at|timestamp with time zone|NO|
+partner_effort_shared_chat_observations|other_partner_twitch_user_id|text|NO|
+partner_effort_shared_chat_observations|partner_twitch_user_id|text|NO|
+partner_effort_shared_chat_observations|shared_chat_session_id|text|NO|
+partner_effort_shared_chat_observations|stream_id|text|NO|
+partner_effort_source_receipts|received_at|timestamp with time zone|NO|now()
+partner_effort_source_receipts|source_id|text|NO|
+partner_effort_source_receipts|source|text|NO|
+partner_effort_source_state|checked_at|timestamp with time zone|NO|
+partner_effort_source_state|error_code|text|YES|
+partner_effort_source_state|healthy|boolean|NO|false
+partner_effort_source_state|source|text|NO|
+partner_effort_source_state|successful_at|timestamp with time zone|YES|
+partner_effort_streaks|current_streak|integer|NO|0
+partner_effort_streaks|last_qualified_week|date|YES|
+partner_effort_streaks|longest_streak|integer|NO|0
+partner_effort_streaks|partner_twitch_user_id|text|NO|
+partner_effort_streaks|updated_at|timestamp with time zone|NO|
+partner_effort_stream_weeks|deadlock_seconds|bigint|NO|
+partner_effort_stream_weeks|observed_through|timestamp with time zone|NO|
+partner_effort_stream_weeks|partner_twitch_user_id|text|NO|
+partner_effort_stream_weeks|stream_id|text|NO|
+partner_effort_stream_weeks|week_start|date|NO|
+partner_effort_weekly_quests|assigned_at|timestamp with time zone|NO|now()
+partner_effort_weekly_quests|baseline_minutes|bigint|NO|0
+partner_effort_weekly_quests|bonus_points|integer|NO|
+partner_effort_weekly_quests|goal|bigint|NO|
+partner_effort_weekly_quests|partner_twitch_user_id|text|NO|
+partner_effort_weekly_quests|position|smallint|NO|
+partner_effort_weekly_quests|quest_key|text|NO|
+partner_effort_weekly_quests|reward_points|integer|NO|
+partner_effort_weekly_quests|rules_hash|text|NO|
+partner_effort_weekly_quests|week_start|date|NO|
+partner_effort_weeks|effort|boolean|NO|false
+partner_effort_weeks|evaluated_at|timestamp with time zone|NO|
+partner_effort_weeks|frozen|boolean|NO|false
+partner_effort_weeks|partner_twitch_user_id|text|NO|
+partner_effort_weeks|streak|integer|NO|0
+partner_effort_weeks|streamed|boolean|NO|false
+partner_effort_weeks|week_start|date|NO|
 platform_connections|access_token_enc|bytea|NO|
 platform_connections|created_at|timestamp with time zone|NO|now()
 platform_connections|enc_kid|text|NO|'v1'::text

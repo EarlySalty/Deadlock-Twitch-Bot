@@ -93,6 +93,52 @@ jobs:
           cargo test --locked -j2 -p tb-dashboard-api identity_regression_tests --lib
           cargo test --locked -j2 -p tb-dashboard-api target_identity_tests --lib
 
+  partner-effort-tests:
+    name: "Partner effort engine"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: timescale/timescaledb:2.17.2-pg16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: effort_tests
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d effort_tests"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/effort_tests
+      SQLX_OFFLINE: "true"
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: rust
+      - name: Format and lint
+        run: |
+          cargo fmt --check -p tb-effort
+          cargo clippy --locked -j2 -p tb-effort --all-targets -- -D warnings
+      - name: Evidence, economy and session boundaries
+        run: |
+          cargo test --locked -j2 -p tb-effort -p tb-config
+          cargo test --locked -j2 -p tb-dashboard-api handlers::challenges --lib
+          cargo test --locked -j2 -p tb-db --test fresh_migrations_schema
+
   offline-build:
     name: "offline-build"
     needs: changes
@@ -159,7 +205,7 @@ jobs:
   required:
     name: "Rust SQLx required"
     if: always()
-    needs: [changes, uplink-auth-tests, offline-build, schema-gate]
+    needs: [changes, uplink-auth-tests, offline-build, schema-gate, partner-effort-tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -172,7 +218,9 @@ jobs:
           AUTH_RESULT: ${{ needs.uplink-auth-tests.result }}
           OFFLINE_RESULT: ${{ needs.offline-build.result }}
           SCHEMA_RESULT: ${{ needs.schema-gate.result }}
+          EFFORT_RESULT: ${{ needs.partner-effort-tests.result }}
         shell: bash
         run: |
           bash scripts/ci/required-rust-gate.sh --self-test
           bash scripts/ci/required-rust-gate.sh
+          if [ "$RUST_CHANGED" = "true" ]; then test "$EFFORT_RESULT" = "success"; fi

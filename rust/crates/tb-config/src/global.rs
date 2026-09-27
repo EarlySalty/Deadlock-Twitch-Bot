@@ -19,6 +19,8 @@ pub type BotConfigSnapshot = Snapshot<BotConfig>;
 #[serde(deny_unknown_fields)]
 pub struct BotConfig {
     pub schema_version: u32,
+    #[serde(default)]
+    pub challenges: crate::challenges::Challenges,
     pub twitch: Twitch,
     #[serde(default)]
     pub bot: crate::operations::BotOperations,
@@ -320,6 +322,7 @@ impl Schema for BotConfig {
         }
         public_url(&self.broker.base_url, "broker.base_url", true)?;
         self.stt.validate()?;
+        self.challenges.validate()?;
         self.knowledge.validate()?;
         self.media.validate()?;
         self.bot.validate()?;
