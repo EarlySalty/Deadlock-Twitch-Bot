@@ -30,6 +30,7 @@ use sqlx::PgPool;
 
 use crate::courtesy::CourtesySummary;
 use crate::courtesy_store::CourtesyStore;
+use crate::monthly_raid_boost::{combined_raid_boost_enabled, MonthlyRaidBoostStore};
 use crate::score_store::{PartnerRaidScoreUpsert, ScoreStore};
 use crate::scoring::{
     compute_base_score, compute_fairness_score, compute_final_score,
@@ -358,6 +359,7 @@ pub struct PartnerScoreRefresher {
     pool: PgPool,
     store: ScoreStore,
     courtesy: CourtesyStore,
+    monthly_boost: MonthlyRaidBoostStore,
     boost_resolver: RaidBoostResolver,
 }
 
@@ -365,10 +367,12 @@ impl PartnerScoreRefresher {
     pub fn new(pool: PgPool) -> Self {
         let store = ScoreStore::new(pool.clone());
         let courtesy = CourtesyStore::new(pool.clone());
+        let monthly_boost = MonthlyRaidBoostStore::new(pool.clone());
         Self {
             pool,
             store,
             courtesy,
+            monthly_boost,
             boost_resolver: raid_boost_nur_spalte,
         }
     }
@@ -426,9 +430,15 @@ impl PartnerScoreRefresher {
         let (sent_30d, received_30d, received_7d, sent_viewers_30d, received_viewers_30d) = self
             .load_internal_metrics(&partner.twitch_user_id, now_utc)
             .await?;
-        let raid_boost_enabled = self
+        let plan_boost_enabled = self
             .load_boost_flag(&partner.twitch_user_id, now_utc)
             .await?;
+        let seasonal_boost = self
+            .monthly_boost
+            .reconcile_partner(&partner.twitch_user_id, &partner.twitch_login, now_utc)
+            .await?;
+        let raid_boost_enabled =
+            combined_raid_boost_enabled(plan_boost_enabled, seasonal_boost.stream_boost_active);
         let live_state = self.load_live_state(&partner.twitch_user_id).await?;
         let existing_cache = self.load_existing_cache(&partner.twitch_user_id).await?;
         let courtesy = self
