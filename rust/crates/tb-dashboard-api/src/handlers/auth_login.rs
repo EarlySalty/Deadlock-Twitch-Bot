@@ -348,6 +348,14 @@ async fn callback_handler_inner(
         ));
     }
 
+    // Same OAuth state, client, token exchange and identity validation as the
+    // dashboard. A viewer login for /clips must not activate or grant a partnership.
+    if login_state.next_path.split(['?', '#']).next().is_some_and(|path| matches!(path, "/clips" | "/clips/")) {
+        let response = super::clip_contest::complete_twitch_login(
+            &state, &identity, config.cookie_secure).await;
+        return no_store(clear_context_and_respond(config.cookie_secure, response));
+    }
+
     // Partner-Gate (Python _is_partner_allowed). Kein Partner → 403, KEINE Session.
     let partner = match state
         .find_partner_for_login(&identity.twitch_login, &identity.twitch_user_id)

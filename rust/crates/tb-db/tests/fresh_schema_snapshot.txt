@@ -788,6 +788,54 @@ twitch_chatter_rollup|last_seen_at|timestamp with time zone|NO|
 twitch_chatter_rollup|streamer_login|text|NO|
 twitch_chatter_rollup|total_messages|integer|YES|0
 twitch_chatter_rollup|total_sessions|integer|YES|0
+twitch_clip_contest_effort_outbox|event_type|text|NO|
+twitch_clip_contest_effort_outbox|id|bigint|NO|nextval('twitch_clip_contest_effort_outbox_id_seq'::regclass)
+twitch_clip_contest_effort_outbox|occurred_at|timestamp with time zone|NO|
+twitch_clip_contest_effort_outbox|partner_twitch_user_id|text|NO|
+twitch_clip_contest_effort_outbox|payload|jsonb|NO|'{}'::jsonb
+twitch_clip_contest_effort_outbox|source_id|text|NO|
+twitch_clip_contest_effort_outbox|streamer_login|text|NO|
+twitch_clip_contest_hall_of_fame|contest_month|date|NO|
+twitch_clip_contest_hall_of_fame|finalized_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_hall_of_fame|rank|smallint|NO|
+twitch_clip_contest_hall_of_fame|submission_id|bigint|NO|
+twitch_clip_contest_hall_of_fame|vote_count|integer|NO|
+twitch_clip_contest_moderation|actor|text|NO|
+twitch_clip_contest_moderation|created_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_moderation|hidden|boolean|NO|
+twitch_clip_contest_moderation|id|bigint|NO|nextval('twitch_clip_contest_moderation_id_seq'::regclass)
+twitch_clip_contest_moderation|reason|text|NO|''::text
+twitch_clip_contest_moderation|submission_id|bigint|NO|
+twitch_clip_contest_months|contest_month|date|NO|
+twitch_clip_contest_months|finalized_at|timestamp with time zone|YES|
+twitch_clip_contest_submissions|broadcaster_login|text|NO|
+twitch_clip_contest_submissions|broadcaster_name|text|YES|
+twitch_clip_contest_submissions|broadcaster_twitch_id|text|NO|
+twitch_clip_contest_submissions|clip_created_at|timestamp with time zone|NO|
+twitch_clip_contest_submissions|clip_db_id|bigint|YES|
+twitch_clip_contest_submissions|clip_thumbnail_url|text|YES|
+twitch_clip_contest_submissions|clip_title|text|NO|
+twitch_clip_contest_submissions|clip_url|text|NO|
+twitch_clip_contest_submissions|contest_month|date|NO|
+twitch_clip_contest_submissions|creator_twitch_id|text|YES|
+twitch_clip_contest_submissions|game_id|text|NO|
+twitch_clip_contest_submissions|hidden_at|timestamp with time zone|YES|
+twitch_clip_contest_submissions|hidden_by|text|YES|
+twitch_clip_contest_submissions|id|bigint|NO|nextval('twitch_clip_contest_submissions_id_seq'::regclass)
+twitch_clip_contest_submissions|submission_slot|smallint|NO|
+twitch_clip_contest_submissions|submitted_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_submissions|submitter_aliases|ARRAY|NO|
+twitch_clip_contest_submissions|submitter_display_name|text|NO|
+twitch_clip_contest_submissions|submitter_person_key|text|NO|
+twitch_clip_contest_submissions|submitter_provider|text|NO|
+twitch_clip_contest_submissions|submitter_user_id|text|NO|
+twitch_clip_contest_submissions|twitch_clip_id|text|NO|
+twitch_clip_contest_votes|contest_month|date|NO|
+twitch_clip_contest_votes|id|bigint|NO|nextval('twitch_clip_contest_votes_id_seq'::regclass)
+twitch_clip_contest_votes|submission_id|bigint|NO|
+twitch_clip_contest_votes|vote_slot|smallint|NO|
+twitch_clip_contest_votes|voted_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_votes|voter_discord_id|text|NO|
 twitch_clip_form_submissions|clip_id|integer|NO|
 twitch_clip_form_submissions|created_at|timestamp with time zone|NO|now()
 twitch_clip_form_submissions|error|text|YES|

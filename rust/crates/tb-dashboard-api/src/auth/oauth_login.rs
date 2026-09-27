@@ -42,6 +42,7 @@ const ALLOWED_NEXT_PREFIXES: &[&str] = &[
     "/twitch/pricing",
     "/twitch/raid/auth",
     "/analyse",
+    "/clips",
 ];
 
 /// Normalisiert einen `next`-Query-Parameter auf ein sicheres internes Ziel.

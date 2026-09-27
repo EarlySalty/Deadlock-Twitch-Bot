@@ -1924,6 +1924,61 @@ pub fn build_website_router() -> Router {
         )
 }
 
+/// Öffentlicher monatlicher Clip-Wettbewerb. Lesen ist öffentlich, Schreiben
+/// nutzt die bestehenden Dashboard-/Discord-Sitzungen und eigene enge Rate-Limits.
+pub fn build_clip_contest_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
+    use handlers::{clip_contest, website};
+
+    let submit_rl =
+        RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_submit", 6, 60);
+    let vote_rl =
+        RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_vote", 20, 60);
+    let login_rl =
+        RateLimitLayerConfig::new(rate_limiter, "clip_contest_discord_login", 10, 60);
+
+    Router::new()
+        .route("/clips", get(website::clips_page_handler))
+        .route("/clips/", get(website::clips_page_handler))
+        .route("/clips/api/current", get(clip_contest::current_handler))
+        .route("/clips/api/archive", get(clip_contest::archive_handler))
+        .route("/clips/api/admin/submissions", get(clip_contest::admin_submissions_handler))
+        .route("/clips/api/session", get(clip_contest::session_handler))
+        .route(
+            "/clips/api/submit",
+            post(clip_contest::submit_handler).layer(axum::middleware::from_fn_with_state(
+                submit_rl.clone(),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/api/vote",
+            post(clip_contest::vote_handler).layer(axum::middleware::from_fn_with_state(
+                vote_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/api/admin/hide",
+            post(clip_contest::hide_handler).layer(axum::middleware::from_fn_with_state(
+                submit_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/auth/discord/login",
+            get(clip_contest::discord_login_handler).layer(
+                axum::middleware::from_fn_with_state(login_rl, rate_limit_middleware),
+            ),
+        )
+        .route(
+            "/clips/auth/discord/callback",
+            get(clip_contest::discord_callback_handler),
+        )
+        .route("/clips/auth/logout", post(clip_contest::logout_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(4096))
+        .with_state(pool)
+}
+
 /// Zusammengeführter Router: public + auth (Login) + billing-webhook + authed +
 /// admin-system + admin-streamers + admin-config + Legal-Seiten (HTML, statuslos).
 ///
@@ -1978,6 +2033,7 @@ pub fn build_router_with_helix_and_brain(
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))
         .merge(build_website_router())
+        .merge(build_clip_contest_router(pool.clone(), rate_limiter.clone()))
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),
         ))

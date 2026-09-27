@@ -287,6 +287,7 @@ async fn fetch(config: &UplinkConfig, token: &str) -> Result<UplinkRuntime, &'st
             "RS_RELAY_API_SECRET",
             "RS_RELAY_ADMIN_SECRET",
             "TWITCH_ANALYTICS_DSN",
+            "DEADLOCK_CENTRAL_READONLY_DSN",
             "TWITCH_CLIENT_ID",
             "TWITCH_CLIENT_SECRET",
             "DB_MASTER_KEY_V1",

@@ -151,6 +151,12 @@ jobs:
             echo "Loading ${file}"
             psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 --single-transaction --file "${file}"
           done
+      - name: Clip contest PostgreSQL rules and existing OAuth sessions
+        env:
+          TB_TEST_REQUIRE_DB: "1"
+          TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+          SQLX_OFFLINE: "true"
+        run: cd rust && cargo test --locked -j2 -p tb-dashboard-api --lib clip_contest -- --nocapture
       - name: Check SQLx offline cache
         env:
           SQLX_OFFLINE: "false"
