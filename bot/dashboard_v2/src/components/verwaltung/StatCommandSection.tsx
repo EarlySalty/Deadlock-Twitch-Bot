@@ -71,7 +71,7 @@ export function StatCommandRows({ settings, pending, messages, onToggle }: { set
                     <h3 className={`text-sm font-bold ${enabled ? 'text-success' : 'text-text-secondary'}`}>{enabled ? 'Aktiv' : 'Aus'}</h3>
                     <p className="text-xs text-text-secondary mt-0.5">{description}</p>
                   </div>
-                  <button type="button" disabled={pending[command]} onClick={() => void onToggle(command)} aria-label={`Statistikbefehl ${enabled ? 'deaktivieren' : 'aktivieren'}`} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${enabled ? 'border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20' : 'border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                  <button type="button" disabled={pending[command]} onClick={() => void onToggle(command)} aria-label={`${description.replace(/\.$/, '')} ${enabled ? 'deaktivieren' : 'aktivieren'}`} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${enabled ? 'border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20' : 'border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'} disabled:opacity-50 disabled:cursor-not-allowed`}>
                     {pending[command] ? <Loader2 className="h-4 w-4 animate-spin" /> : enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                     {enabled ? 'Deaktivieren' : 'Aktivieren'}
                   </button>

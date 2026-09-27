@@ -114,6 +114,7 @@ export function LurkCommandSection() {
             </div>
             <button
               type="button"
+              aria-label={`Lurk-Befehl ${enabled ? 'deaktivieren' : 'aktivieren'}`}
               disabled={pending}
               onClick={() => void onToggle()}
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${

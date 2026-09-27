@@ -41,6 +41,16 @@ pub fn entry_by_key(command_key: &str) -> Option<&'static CommandInfo> {
 /// Das hält die Auflösung exakt zu `commands.rs`, das Commands ebenfalls
 /// ASCII-case-insensitiv behandelt.
 pub fn normalize_custom_name(raw: &str) -> Result<String, CommandNameValidationError> {
+    normalize_name(raw, false)
+}
+
+/// Liest Namen, die vor der strengeren Eingabeprüfung gespeichert wurden.
+/// Neue Änderungen laufen ausschließlich über `normalize_custom_name`.
+pub fn normalize_saved_name(raw: &str) -> Result<String, CommandNameValidationError> {
+    normalize_name(raw, true)
+}
+
+fn normalize_name(raw: &str, allow_legacy: bool) -> Result<String, CommandNameValidationError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(CommandNameValidationError::Empty);
@@ -54,7 +64,9 @@ pub fn normalize_custom_name(raw: &str) -> Result<String, CommandNameValidationE
     if full_len > MAX_COMMAND_NAME_LEN {
         return Err(CommandNameValidationError::TooLong);
     }
-    if !normalized.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+    if !normalized.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || (allow_legacy && (byte == b'_' || byte == b'-'))
+    }) {
         return Err(CommandNameValidationError::InvalidCharacters);
     }
     Ok(format!("!{normalized}"))
@@ -63,7 +75,7 @@ pub fn normalize_custom_name(raw: &str) -> Result<String, CommandNameValidationE
 fn valid_override(overrides: &BTreeMap<String, String>, entry: &CommandInfo) -> Option<String> {
     overrides
         .get(key(entry))
-        .and_then(|name| normalize_custom_name(name).ok())
+        .and_then(|name| normalize_saved_name(name).ok())
 }
 
 /// Liefert den tatsächlich aktiven Hauptnamen eines Befehls.
@@ -107,7 +119,9 @@ pub fn conflicting_command(
     candidate: &str,
     overrides: &BTreeMap<String, String>,
 ) -> Option<&'static CommandInfo> {
-    let candidate = normalize_custom_name(candidate).ok()?;
+    // Auch Katalognamen und vorhandene Overrides können `_` oder `-` tragen.
+    // Neue Nutzereingaben sind bereits vor diesem Aufruf streng validiert.
+    let candidate = normalize_saved_name(candidate).ok()?;
     catalog().iter().find(|entry| {
         if key(entry) == command_key {
             return false;
@@ -225,6 +239,27 @@ mod tests {
     }
 
     #[test]
+    fn alte_namen_mit_unterstrich_oder_bindestrich_bleiben_aktiv() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("raid".into(), "!mein_raid".into());
+        assert_eq!(normalize_saved_name("!mein_raid"), Ok("!mein_raid".into()));
+        assert_eq!(
+            normalize_custom_name("!mein_raid"),
+            Err(CommandNameValidationError::InvalidCharacters)
+        );
+        assert_eq!(
+            resolve_command("!mein_raid", &overrides).map(|c| c.name),
+            Some("!raid")
+        );
+        assert!(resolve_command("!raid", &overrides).is_none());
+        overrides.insert("raid".into(), "!mein-raid".into());
+        assert_eq!(
+            resolve_command("!mein-raid", &overrides).map(|c| c.name),
+            Some("!raid")
+        );
+    }
+
+    #[test]
     fn stat_commands_custom_names_kollisionspruefung_beruecksichtigt_effektive_namen() {
         let mut overrides = BTreeMap::new();
         assert_eq!(
@@ -237,6 +272,17 @@ mod tests {
         assert_eq!(
             conflicting_command("raid", "!siege", &overrides).map(|c| c.name),
             Some("!wins")
+        );
+    }
+
+    #[test]
+    fn reset_eines_katalogbefehls_mit_unterstrich_erkennt_legacy_kollision() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("connect".into(), "!raid_history".into());
+        overrides.insert("raid_history".into(), "!meinehistorie".into());
+        assert_eq!(
+            conflicting_command("raid_history", "!raid_history", &overrides).map(|c| c.name),
+            Some("!connect")
         );
     }
 }

@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use tb_chat::catalog::catalog;
 use tb_chat::command_names::{
     conflicting_command, effective_aliases, effective_name, entry_by_key, key,
-    normalize_custom_name, CommandNameValidationError,
+    normalize_custom_name, normalize_saved_name, CommandNameValidationError,
 };
 
 #[derive(Deserialize, Default)]
@@ -88,7 +88,7 @@ fn views(overrides: &BTreeMap<String, String>) -> Vec<CommandNameView> {
         .map(|entry| {
             let custom_name = overrides
                 .get(key(entry))
-                .and_then(|value| normalize_custom_name(value).ok());
+                .and_then(|value| normalize_saved_name(value).ok());
             CommandNameView {
                 command: key(entry),
                 default_name: entry.name,
@@ -434,6 +434,77 @@ mod tests {
         let (status, collision) = body(collision).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(collision["conflict_command"], "ping");
+    }
+
+    #[tokio::test]
+    async fn alte_befehlsnamen_bleiben_lesbar_aber_nicht_neu_speicherbar() {
+        let database = database().await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, command_name_overrides)
+             VALUES ('42', 'nani', '{\"raid\":\"!mein_raid\"}')",
+        )
+        .execute(&database.pool)
+        .await
+        .unwrap();
+
+        let (status, current) = body(
+            get_handler(
+                partner("42"),
+                State(database.pool.clone()),
+                Query(CommandNameQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let raid = current["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["command"] == "raid")
+            .unwrap();
+        assert_eq!(raid["custom_name"], "!mein_raid");
+        assert_eq!(raid["effective_name"], "!mein_raid");
+
+        let response = post_handler(
+            partner("42"),
+            State(database.pool.clone()),
+            Query(CommandNameQuery::default()),
+            Ok(Json(CommandNameUpdate {
+                command: "raid".into(),
+                name: Some("!anderer_raid".into()),
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn reset_mit_unterstrich_im_standardnamen_prueft_kollision() {
+        let database = database().await;
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, command_name_overrides)
+             VALUES ('42', 'nani', '{\"connect\":\"!raid_history\",\"raid_history\":\"!meinehistorie\"}')",
+        )
+        .execute(&database.pool)
+        .await
+        .unwrap();
+
+        let (status, payload) = body(
+            post_handler(
+                partner("42"),
+                State(database.pool.clone()),
+                Query(CommandNameQuery::default()),
+                Ok(Json(CommandNameUpdate {
+                    command: "raid_history".into(),
+                    name: None,
+                })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(payload["conflict_command"], "connect");
     }
 
     #[tokio::test]

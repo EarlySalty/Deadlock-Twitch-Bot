@@ -47,8 +47,8 @@ test('zeigt acht unabhängige Schalter und sperrt nur die gerade gespeicherte Re
   const html = renderToStaticMarkup(<CommandNamesProvider><StatCommandRows settings={commands} pending={{rank:true}} messages={{rank:'Gespeichert.'}} onToggle={() => {}} /></CommandNamesProvider>);
   assert.equal((html.match(/<button /g) ?? []).length, 8);
   assert.equal((html.match(/disabled=""/g) ?? []).length, 1);
-  assert.ok(html.includes('aria-label="Statistikbefehl aktivieren"'));
-  assert.ok(html.includes('aria-label="Statistikbefehl deaktivieren"'));
+  assert.ok(html.includes('aria-label="Dein aktueller Rang aktivieren"'));
+  assert.ok(html.includes('aria-label="Deine Siege deaktivieren"'));
   assert.ok(html.includes('role="status"'));
   assert.equal((html.match(/Befehl wird geladen/g) ?? []).length, 8);
 });
