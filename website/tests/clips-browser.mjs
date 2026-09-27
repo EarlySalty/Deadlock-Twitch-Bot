@@ -18,8 +18,8 @@ let loggedIn = true
 let votesUsed = 1
 let submitted = 0
 let tooYoung = false
-let hideState = new Set()
-let voted = new Set([2])
+const hideState = new Set()
+const voted = new Set([2])
 const requests = []
 const titles = ['Der letzte Treffer dreht den Fight', 'Vier Gegner. Ein perfekter Moment.', 'Die Rettung mit zwölf Lebenspunkten', 'Der Steal war nicht geplant', 'Dieser Haken trifft immer', 'Knapp daneben ist auch vorbei']
 const posters = ['johnnyblazedx', 'miracleghost9', 'whysolowkey', 'coolysdl', 'duzzel', 'kdenos']
@@ -58,7 +58,7 @@ const server = createServer(async (request, response) => {
     const body = raw ? JSON.parse(raw) : {}
     if (url.pathname === '/clips/api/vote') { voted.add(body.submission_id); votesUsed++; return json(response, { ok: true }) }
     if (url.pathname === '/clips/api/submit') { assert.ok(body.clip_url.startsWith('https://clips.twitch.tv/')); submitted++; return json(response, { ok: true }) }
-    if (url.pathname === '/clips/api/admin/hide') { body.hidden ? hideState.add(body.submission_id) : hideState.delete(body.submission_id); return json(response, { ok: true }) }
+    if (url.pathname === '/clips/api/admin/hide') { if (body.hidden) hideState.add(body.submission_id); else hideState.delete(body.submission_id); return json(response, { ok: true }) }
     if (url.pathname === '/clips/auth/logout') { loggedIn = false; return json(response, { ok: true }) }
     return json(response, { message: 'Not found in fixture' }, 404)
   }
