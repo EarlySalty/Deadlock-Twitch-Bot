@@ -11,6 +11,7 @@ import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
 import { Planung } from '@/pages/Planung';
 import { Community } from '@/pages/Community';
+import { Challenges } from '@/pages/Challenges';
 import { PartnerProfile } from '@/pages/PartnerProfile';
 import { CategoryCollector } from '@/pages/CategoryCollector';
 import { TitleGenerator } from '@/pages/TitleGenerator';
@@ -384,6 +385,7 @@ export default function App() {
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';
+  const isChallengesRoute = path === '/twitch/challenges';
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
   const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
@@ -424,6 +426,8 @@ export default function App() {
             <DashboardShell activeRoute="hilfe"><EinrichtungCard help /><FeedbackBox area="Hilfe" /></DashboardShell>
           ) : isFeedbackRoute ? (
             <DashboardShell activeRoute="feedback"><FeedbackPage /></DashboardShell>
+          ) : isChallengesRoute ? (
+            <DashboardShell activeRoute="challenges"><Challenges /></DashboardShell>
           ) : isVerwaltungRoute ? (
             <DashboardShell activeRoute="verwaltung">
               <VerwaltungPage />

@@ -26,7 +26,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -98,15 +98,23 @@ pub async fn leaderboard_handler(
     // P2.124: Discord-IDs/-Namen nur für privilegierte Aufrufer (Localhost/Admin)
     // serialisieren — nicht für eingeloggte Partner (Python: localhost-only gate).
     let show_discord = auth.is_privileged();
-    let tracked_entries = shape_entries(
-        tracked,
+    let own_login = match &auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.as_str()),
+        DashboardAuthLevel::Admin {
+            actor: Some(actor), ..
+        } => Some(actor.twitch_login.as_str()),
+        DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
+    };
+    let shape_options = ShapeOptions {
         sort_key,
         descending,
         min_samples,
         min_avg,
         limit,
         show_discord,
-    );
+    };
+    let (tracked_entries, tracked_own_position) =
+        shape_entries_with_own(tracked, shape_options, own_login);
     let category_entries = shape_entries(
         category,
         sort_key,
@@ -132,6 +140,7 @@ pub async fn leaderboard_handler(
                 "title": "Top Tracked",
                 "count": tracked_entries.len(),
                 "entries": tracked_entries,
+                "own_position": tracked_own_position,
             },
             {
                 "key": "category",
@@ -140,6 +149,145 @@ pub async fn leaderboard_handler(
                 "entries": category_entries,
             },
         ],
+    }))
+    .into_response()
+}
+
+/// `GET /twitch/api/v2/leaderboard/effort`.
+///
+/// Monatswertung aus der append-only Effort-Engine. Nicht eingeloggte Requests
+/// erhalten bewusst 401. Passive Partner werden weiterhin vom zentralen
+/// Partner-Status-Gate vor dem Handler abgewiesen.
+pub async fn effort_leaderboard_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    if !auth.is_authenticated() {
+        return crate::auth::unauthorized_v2_response();
+    }
+
+    let own_login = match &auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.to_lowercase()),
+        DashboardAuthLevel::Admin {
+            actor: Some(actor), ..
+        } => Some(actor.twitch_login.to_lowercase()),
+        DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
+    };
+
+    let sql = r#"
+        WITH bounds AS (
+            SELECT
+                date_trunc('month', timezone('Europe/Berlin', now()))
+                    AT TIME ZONE 'Europe/Berlin' AS start_at,
+                (date_trunc('month', timezone('Europe/Berlin', now())) + interval '1 month')
+                    AT TIME ZONE 'Europe/Berlin' AS end_at,
+                to_char(timezone('Europe/Berlin', now()), 'YYYY-MM') AS month_key
+        ),
+        active AS (
+            SELECT twitch_user_id, lower(twitch_login) AS twitch_login
+            FROM twitch_partners
+            WHERE status='active'
+              AND departnered_at IS NULL
+              AND admin_archived_at IS NULL
+              AND COALESCE(manual_partner_opt_out,0)=0
+              AND COALESCE(trim(technical_pause_reason),'')=''
+        ),
+        scores AS (
+            SELECT
+                a.twitch_user_id,
+                a.twitch_login,
+                COALESCE(SUM(e.points),0)::bigint AS points,
+                COUNT(e.id) FILTER (WHERE e.event_type='qualified_invite')::bigint
+                    AS qualified_invites,
+                MAX(e.occurred_at) FILTER (WHERE e.points > 0) AS score_reached_at
+            FROM active a
+            CROSS JOIN bounds b
+            LEFT JOIN partner_effort_events e
+              ON e.partner_twitch_user_id=a.twitch_user_id
+             AND e.occurred_at >= b.start_at
+             AND e.occurred_at < b.end_at
+            GROUP BY a.twitch_user_id, a.twitch_login
+        ),
+        ranked AS (
+            SELECT
+                twitch_user_id,
+                twitch_login,
+                points,
+                ROW_NUMBER() OVER (
+                    ORDER BY points DESC,
+                             qualified_invites DESC,
+                             score_reached_at ASC NULLS LAST,
+                             twitch_user_id
+                )::bigint AS rank
+            FROM scores
+        )
+        SELECT r.twitch_login, r.points, r.rank, b.month_key
+        FROM ranked r
+        CROSS JOIN bounds b
+        ORDER BY r.rank
+    "#;
+
+    let rows = match sqlx::query(sql).fetch_all(&pool).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "effort leaderboard query failed");
+            return analytics_error();
+        }
+    };
+
+    let mut entries = Vec::new();
+    let mut own_position = None;
+    let mut month = String::new();
+
+    for row in rows {
+        let twitch_login: String = match row.try_get("twitch_login") {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(%error, "effort leaderboard login decode failed");
+                return analytics_error();
+            }
+        };
+        let points: i64 = match row.try_get("points") {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(%error, "effort leaderboard points decode failed");
+                return analytics_error();
+            }
+        };
+        let rank: i64 = match row.try_get("rank") {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(%error, "effort leaderboard rank decode failed");
+                return analytics_error();
+            }
+        };
+        if month.is_empty() {
+            month = row.try_get("month_key").unwrap_or_default();
+        }
+
+        let is_self = own_login
+            .as_deref()
+            .is_some_and(|login| twitch_login.eq_ignore_ascii_case(login));
+        let value = json!({
+            "rank": rank,
+            "twitch_login": twitch_login,
+            "points": points,
+            "raid_boost": rank == 1,
+            "is_self": is_self,
+        });
+
+        if is_self {
+            own_position = Some(value.clone());
+        }
+        if rank <= 10 {
+            entries.push(value);
+        }
+    }
+
+    Json(json!({
+        "month": month,
+        "entries": entries,
+        "own_position": own_position,
     }))
     .into_response()
 }
@@ -162,6 +310,16 @@ impl SortKey {
             Self::Name => "name",
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct ShapeOptions {
+    sort_key: SortKey,
+    descending: bool,
+    min_samples: Option<i64>,
+    min_avg: Option<f64>,
+    limit: i64,
+    show_discord: bool,
 }
 
 fn normalize_sort(raw: Option<&str>) -> SortKey {
@@ -222,10 +380,9 @@ async fn load_category(pool: &PgPool, tracked: bool) -> Result<Vec<TopRow>, sqlx
     sqlx::query_as::<_, TopRow>(&sql).fetch_all(pool).await
 }
 
-/// Filtert (min_samples/min_avg), sortiert und kürzt auf `limit` Einträge,
-/// vergibt Ränge und serialisiert (Python `_finalize_top` analog).
+/// Filtert, sortiert und kürzt auf das angeforderte Limit.
 fn shape_entries(
-    mut rows: Vec<TopRow>,
+    rows: Vec<TopRow>,
     sort_key: SortKey,
     descending: bool,
     min_samples: Option<i64>,
@@ -233,14 +390,40 @@ fn shape_entries(
     limit: i64,
     show_discord: bool,
 ) -> Vec<Value> {
-    rows.retain(|r| {
-        let samples_ok = min_samples.is_none_or(|m| r.samples.unwrap_or(0) >= m);
-        let avg_ok = min_avg.is_none_or(|m| r.avg_viewers.unwrap_or(0.0) >= m);
+    shape_entries_with_own(
+        rows,
+        ShapeOptions {
+            sort_key,
+            descending,
+            min_samples,
+            min_avg,
+            limit,
+            show_discord,
+        },
+        None,
+    )
+    .0
+}
+
+fn shape_entries_with_own(
+    mut rows: Vec<TopRow>,
+    options: ShapeOptions,
+    own_login: Option<&str>,
+) -> (Vec<Value>, Option<Value>) {
+    let ShapeOptions {
+        sort_key,
+        descending,
+        min_samples,
+        min_avg,
+        limit,
+        show_discord,
+    } = options;
+    rows.retain(|row| {
+        let samples_ok = min_samples.is_none_or(|minimum| row.samples.unwrap_or(0) >= minimum);
+        let avg_ok = min_avg.is_none_or(|minimum| row.avg_viewers.unwrap_or(0.0) >= minimum);
         samples_ok && avg_ok
     });
 
-    // Einheitlicher Vergleich in natürlicher (aufsteigender) Richtung; `descending`
-    // dreht danach um — wie Pythons `sorted(items, key=_key_func, reverse=descending)`.
     rows.sort_by(|a, b| {
         let ord = match sort_key {
             SortKey::Avg => a
@@ -259,32 +442,45 @@ fn shape_entries(
         }
     });
 
-    rows.into_iter()
+    let own_position = own_login.and_then(|login| {
+        rows.iter()
+            .position(|row| row.streamer.eq_ignore_ascii_case(login))
+            .map(|index| row_json(&rows[index], index + 1, show_discord))
+    });
+
+    let entries = rows
+        .iter()
         .take(limit as usize)
         .enumerate()
-        .map(|(idx, r)| {
-            // `has_discord_profile` bleibt sichtbar (reines Bool-Flag, keine ID-Leakage);
-            // die rohen Discord-Felder werden nur für privilegierte Aufrufer gesetzt.
-            let has_discord_profile = r.discord_user_id.is_some();
-            let (discord_user_id, discord_display_name) = if show_discord {
-                (r.discord_user_id, r.discord_display_name)
-            } else {
-                (None, None)
-            };
-            json!({
-                "rank": idx + 1,
-                "streamer": r.streamer,
-                "avg_viewers": r.avg_viewers.unwrap_or(0.0),
-                "max_viewers": r.max_viewers.unwrap_or(0),
-                "samples": r.samples.unwrap_or(0),
-                "is_partner": r.is_partner.unwrap_or(0),
-                "is_on_discord": r.is_on_discord.unwrap_or(0),
-                "has_discord_profile": i64::from(has_discord_profile),
-                "discord_user_id": discord_user_id,
-                "discord_display_name": discord_display_name,
-            })
-        })
-        .collect()
+        .map(|(index, row)| row_json(row, index + 1, show_discord))
+        .collect();
+
+    (entries, own_position)
+}
+
+fn row_json(row: &TopRow, rank: usize, show_discord: bool) -> Value {
+    let has_discord_profile = row.discord_user_id.is_some();
+    let (discord_user_id, discord_display_name) = if show_discord {
+        (
+            row.discord_user_id.as_deref(),
+            row.discord_display_name.as_deref(),
+        )
+    } else {
+        (None, None)
+    };
+
+    json!({
+        "rank": rank,
+        "streamer": row.streamer,
+        "avg_viewers": row.avg_viewers.unwrap_or(0.0),
+        "max_viewers": row.max_viewers.unwrap_or(0),
+        "samples": row.samples.unwrap_or(0),
+        "is_partner": row.is_partner.unwrap_or(0),
+        "is_on_discord": row.is_on_discord.unwrap_or(0),
+        "has_discord_profile": i64::from(has_discord_profile),
+        "discord_user_id": discord_user_id,
+        "discord_display_name": discord_display_name,
+    })
 }
 
 fn analytics_error() -> Response {
@@ -343,6 +539,38 @@ mod tests {
         // b rausgefiltert (4 < 10), limit 1 → nur Top-Eintrag (a, avg 100 > c 80).
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["streamer"], "a");
+    }
+
+    #[test]
+    fn eigene_position_bleibt_ausserhalb_des_limits_verfuegbar() {
+        let rows = (1..=12)
+            .map(|rank| {
+                let login = if rank == 12 {
+                    "mein_kanal".to_string()
+                } else {
+                    format!("kanal_{rank}")
+                };
+                row(&login, f64::from(13 - rank) * 10.0, 100, 20)
+            })
+            .collect();
+
+        let (entries, own_position) = shape_entries_with_own(
+            rows,
+            ShapeOptions {
+                sort_key: SortKey::Avg,
+                descending: true,
+                min_samples: None,
+                min_avg: None,
+                limit: 10,
+                show_discord: false,
+            },
+            Some("MEIN_KANAL"),
+        );
+
+        assert_eq!(entries.len(), 10);
+        let own_position = own_position.expect("eigene Position fehlt");
+        assert_eq!(own_position["rank"], 12);
+        assert_eq!(own_position["streamer"], "mein_kanal");
     }
 
     #[test]
