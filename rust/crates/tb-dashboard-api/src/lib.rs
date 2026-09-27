@@ -765,6 +765,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(leaderboard::leaderboard_handler),
         )
         .route(
+            "/twitch/api/v2/leaderboard/effort",
+            get(leaderboard::effort_leaderboard_handler),
+        )
+        .route(
             "/twitch/api/v2/follower-funnel",
             get(follower_funnel::follower_funnel_handler),
         )

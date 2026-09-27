@@ -29,12 +29,14 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Trophy,
   type LucideIcon,
 } from 'lucide-react';
 
 export type DashboardRoute =
   | 'category'
   | 'home'
+  | 'challenges'
   | 'analyse'
   | 'social'
   | 'uplink'
@@ -82,6 +84,7 @@ interface SidebarNavItem {
 
 export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute }) {
   const {
+    authStatus,
     displayName,
     avatarUrl,
     planName,
@@ -95,10 +98,16 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
   const shownAvatar = avatarFailed ? null : avatarUrl;
+  const canSeeChallenges = Boolean(
+    authStatus?.authenticated && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
+  );
 
   const mainNavItems: SidebarNavItem[] = [
     ...(adminEligible && adminMode ? [{ href: '/analyse?view=category', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
     { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: activeRoute === 'home' },
+    ...(canSeeChallenges
+      ? [{ href: '/twitch/challenges', label: 'Challenges', icon: Trophy, active: activeRoute === 'challenges' }]
+      : []),
     ...(canAccessAnalyticsDashboard
       ? [
           {
