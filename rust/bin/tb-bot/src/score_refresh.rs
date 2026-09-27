@@ -146,7 +146,9 @@ impl ScoreRefreshResolver {
         partner_user_ids: &[(String, String)],
         now: DateTime<Utc>,
     ) -> Result<usize, sqlx::Error> {
-        let upserts = self.compute_upserts(partner_user_ids, now).await?;
+        let upserts = self
+            .compute_upserts_internal(partner_user_ids, now, true)
+            .await?;
         let mut written = 0usize;
         for upsert in &upserts {
             self.score_store.upsert(upsert).await?;
@@ -155,13 +157,23 @@ impl ScoreRefreshResolver {
         Ok(written)
     }
 
-    /// Compute-only-Pfad: berechnet die Score-Zeilen ohne zu schreiben.
-    /// Genutzt vom `refresh_scores`-Schreibpfad und vom read-only
-    /// Prod-Cross-Check (Pre-Cutover-Gate).
+    /// Compute-only-Pfad: liest den persistierten Boost, ohne Streams zu
+    /// reservieren oder zu verbrauchen. Auch mit read-only DB-Rolle nutzbar.
+    /// Genutzt vom Prod-Cross-Check (Pre-Cutover-Gate).
     pub async fn compute_upserts(
         &self,
         partner_user_ids: &[(String, String)],
         now: DateTime<Utc>,
+    ) -> Result<Vec<PartnerRaidScoreUpsert>, sqlx::Error> {
+        self.compute_upserts_internal(partner_user_ids, now, false)
+            .await
+    }
+
+    async fn compute_upserts_internal(
+        &self,
+        partner_user_ids: &[(String, String)],
+        now: DateTime<Utc>,
+        reconcile_streams: bool,
     ) -> Result<Vec<PartnerRaidScoreUpsert>, sqlx::Error> {
         if partner_user_ids.is_empty() {
             return Ok(Vec::new());
@@ -237,11 +249,17 @@ impl ScoreRefreshResolver {
                 .find(|b| b.twitch_user_id == *user_id)
                 .map(|b| boost_active(b, now))
                 .unwrap_or(false);
-            let seasonal_boost = self
-                .monthly_boost_store
-                .reconcile_partner(user_id, login, now)
-                .await?;
-            let boost = combined_raid_boost_enabled(plan_boost, seasonal_boost.stream_boost_active);
+            let seasonal_boost_active = if reconcile_streams {
+                self.monthly_boost_store
+                    .reconcile_partner(user_id, login, now)
+                    .await?
+                    .stream_boost_active
+            } else {
+                self.monthly_boost_store
+                    .reserved_stream_boost_active(user_id)
+                    .await?
+            };
+            let boost = combined_raid_boost_enabled(plan_boost, seasonal_boost_active);
 
             let courtesy = courtesy_by_id
                 .get(user_id.as_str())
