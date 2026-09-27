@@ -63,6 +63,7 @@ export default defineConfig({
         // Caddy serviert /twitch/faq* aus dist/faq — der Entry MUSS faq/index.html
         // heissen, sonst zeigt die Route weiter ins Leere (genau das war der 404).
         faq: path.resolve(__dirname, 'faq/index.html'),
+        clips: path.resolve(__dirname, 'clips/index.html'),
       },
     },
   },

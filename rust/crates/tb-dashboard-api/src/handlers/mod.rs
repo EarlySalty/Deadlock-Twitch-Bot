@@ -50,6 +50,7 @@ pub mod chat_hype_timeline;
 pub mod chat_social_graph;
 pub mod chatter_verlauf;
 pub mod clip_command_settings;
+pub mod clip_contest;
 pub mod coaching;
 pub mod command_name_settings;
 pub mod dashboard_assistent;

@@ -45,6 +45,11 @@ pub async fn streamer_asset_handler(Path(raw_path): Path<String>) -> Response {
     serve_website_asset(website_dist_root(), raw_path.trim_start_matches('/')).await
 }
 
+/// Öffentliche Seite des monatlichen Clip-Wettbewerbs.
+pub async fn clips_page_handler() -> Response {
+    serve_website_asset(website_dist_root(), "clips/index.html").await
+}
+
 // ── /website (Legacy-Redirect) ────────────────────────────────────────────────
 
 /// `GET /website` — 301 auf `/streamer/` (Query erhalten).

@@ -556,6 +556,49 @@ impl DashboardAuthState {
     /// Bei DB-Fehler `Err`: anders als der Sliding-Refresh (Komfort) ist das Anlegen
     /// der Session der Login selbst — ohne persistierte Session kann sich der User
     /// nicht anmelden, also fail-closed statt stiller Erfolg.
+    /// Public contest identities share the encrypted dashboard session store.
+    /// This session type is deliberately never accepted by the partner/admin gates.
+    pub async fn create_clip_contest_session(
+        &self, provider: &str, user_id: &str, display_name: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        if !matches!(provider, "discord" | "twitch")
+            || user_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
+        {
+            return Err(sqlx::Error::InvalidArgument("invalid contest identity".into()));
+        }
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + 30.0 * 24.0 * 3600.0;
+        let payload = serde_json::json!({
+            "provider": provider, "user_id": user_id, "display_name": display_name,
+            "identity_version": 1, "csrf_token": csrf_token,
+            "created_at": now as f64, "expires_at": expires_at,
+        });
+        self.persist_new_session(&session_id, "clip_contest", &payload,
+            now as f64, expires_at).await?;
+        Ok(SessionCreation { session_id, csrf_token })
+    }
+
+    pub async fn load_clip_contest_session(
+        &self, token: &str,
+    ) -> Result<Option<(String, String, String)>, sqlx::Error> {
+        if !(20..=128).contains(&token.len()) { return Ok(None); }
+        let now = unix_now();
+        let Some(payload) = self.fetch_session_payload(
+            token, "clip_contest", now).await? else { return Ok(None); };
+        if payload_expired(&payload, now)
+            || payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1)
+        { return Ok(None); }
+        let field = |name: &str| payload.get(name).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let provider = field("provider");
+        let user_id = field("user_id");
+        if !matches!(provider.as_str(), "discord" | "twitch")
+            || user_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
+        { return Ok(None); }
+        Ok(Some((provider, user_id, field("display_name"))))
+    }
+
     pub async fn create_partner_session(
         &self,
         twitch_login: &str,
