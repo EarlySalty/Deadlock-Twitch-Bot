@@ -425,6 +425,113 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
     sqlx::query("INSERT INTO activity.voice_session_log VALUES(1,1001,$1,99,$2,$3),(2,1002,$1,99,$2,$3),(3,1002,$1,99,$2,$3)").bind(cfg.community_guild_id).bind(start).bind(start+Duration::hours(1)).execute(&pool).await.unwrap();
     let me = engine.me("101", finished).await.unwrap();
     assert_eq!(me.with_us.community_hours, 1.0);
+    Mock::given(method("GET"))
+        .and(path("/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"data":[{"id":"501","login":"recruiter","display_name":"Recruiter Name"}]}),
+        ))
+        .mount(&server)
+        .await;
+    let mut invite = event(
+        "101",
+        EventKind::QualifiedInvite,
+        "recruiter-proof",
+        finished,
+    );
+    invite.viewer_twitch_user_id = Some("501".into());
+    engine.append(&invite, finished).await.unwrap();
+    let viewers = engine.viewers("101", finished).await.unwrap();
+    assert_eq!(viewers.recruiters.len(), 1);
+    assert_eq!(
+        viewers.recruiters[0].display_name.as_deref(),
+        Some("Recruiter Name")
+    );
+    assert_eq!(viewers.recruiters[0].qualified_invites, 1);
+
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn stream_proof_ignores_reach_and_survives_snapshot_retention() {
+    let (admin, pool, name) = fixture().await;
+    let engine = Engine::new(
+        pool.clone(),
+        Challenges::default(),
+        Some(pool.clone()),
+        None,
+    )
+    .unwrap();
+    let start = DateTime::parse_from_rfc3339("2026-10-26T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for n in 1..=40 {
+        let at = start + Duration::minutes(n);
+        sqlx::query("INSERT INTO category_collection_runs(snapshot_at,completed_at,streams,viewers,poll_seconds) VALUES($1,$1,2,0,60)").bind(at).execute(&pool).await.unwrap();
+        for (id, login, stream, stream_start) in [
+            (
+                "101",
+                "alice",
+                if n <= 20 { "short-a" } else { "short-b" },
+                if n <= 20 {
+                    start
+                } else {
+                    start + Duration::minutes(20)
+                },
+            ),
+            ("102", "bob", "long", start),
+        ] {
+            sqlx::query("INSERT INTO category_stream_snapshots(snapshot_at,stream_id,user_id,user_login,viewer_count,title,language,started_at,is_mature,sample_seconds) VALUES($1,$2,$3,$4,0,'Deadlock','de',$5,FALSE,60)")
+                .bind(at).bind(stream).bind(id).bind(login).bind(stream_start).execute(&pool).await.unwrap();
+        }
+    }
+    let now = start + Duration::minutes(41);
+    for id in ["101", "102"] {
+        engine
+            .append(
+                &event(
+                    id,
+                    EventKind::QualifiedInvite,
+                    &format!("snapshot-invite:{id}"),
+                    start,
+                ),
+                now,
+            )
+            .await
+            .unwrap();
+    }
+    engine.tick(now).await.unwrap();
+    let alice = engine.me("101", now).await.unwrap();
+    let bob = engine.me("102", now).await.unwrap();
+    assert_eq!(alice.streak.current, 0);
+    assert_eq!(bob.streak.current, 1);
+    sqlx::query("UPDATE category_stream_snapshots SET viewer_count=1000000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    engine.tick(now + Duration::seconds(1)).await.unwrap();
+    assert_eq!(
+        engine.me("101", now).await.unwrap().level.total_points,
+        alice.level.total_points
+    );
+    assert_eq!(
+        engine.me("102", now).await.unwrap().level.total_points,
+        bob.level.total_points
+    );
+    sqlx::query("DELETE FROM category_collection_runs")
+        .execute(&pool)
+        .await
+        .unwrap();
+    engine.tick(now + Duration::seconds(2)).await.unwrap();
+    assert_eq!(engine.me("102", now).await.unwrap().streak.current, 1);
+    assert_eq!(
+        engine.me("102", now).await.unwrap().level.total_points,
+        bob.level.total_points
+    );
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name}"))
         .execute(&admin)
