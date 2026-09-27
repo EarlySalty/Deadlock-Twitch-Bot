@@ -790,9 +790,9 @@ twitch_chatter_rollup|total_messages|integer|YES|0
 twitch_chatter_rollup|total_sessions|integer|YES|0
 twitch_clip_contest_effort_outbox|event_type|text|NO|
 twitch_clip_contest_effort_outbox|id|bigint|NO|nextval('twitch_clip_contest_effort_outbox_id_seq'::regclass)
+twitch_clip_contest_effort_outbox|metadata|jsonb|NO|'{}'::jsonb
 twitch_clip_contest_effort_outbox|occurred_at|timestamp with time zone|NO|
 twitch_clip_contest_effort_outbox|partner_twitch_user_id|text|NO|
-twitch_clip_contest_effort_outbox|payload|jsonb|NO|'{}'::jsonb
 twitch_clip_contest_effort_outbox|source_id|text|NO|
 twitch_clip_contest_effort_outbox|streamer_login|text|NO|
 twitch_clip_contest_hall_of_fame|contest_month|date|NO|

@@ -38,14 +38,14 @@ Alle Browser-Schreibwege verlangen einen passenden Origin oder Referer und verwe
 |---|---|
 | `event_type` | `clip_submitted` oder `clip_top3` |
 | `partner_twitch_user_id` | Unveränderliche ID des Quellkanals, nicht des Einreichers |
-| `streamer_login` | Kompatibler Namens-Snapshot für den vorhandenen Consumer-Entwurf |
+| `streamer_login` | Namens-Snapshot für die Nachvollziehbarkeit, nicht zur Identitätsauflösung |
 | `source_id` | Eindeutige, wiederholungsfeste Herkunft |
 | `occurred_at` | Einreichungszeit oder exakte Berliner Zeit des Ergebnis-Monatsersten |
-| `payload` | `schema_version=1`, Quellkanal-ID, Monat, Einreichung, bei Gewinnern zusätzlich Rang und Stimmen |
+| `metadata` | `schema_version=1`, Quellkanal-ID, Monat, Einreichung, bei Gewinnern zusätzlich Rang und Stimmen |
 
-Die Spaltennamen passen zum gelesenen `sync_clip_outbox` im parallelen Branch `feat/partner-effort-engine-20260926`. Punktehöhe und Wochenlimits bleiben Aufgabe dieser Engine. Der Wettbewerb rechnet keine zweite Punktelogik nach.
+Der veröffentlichte Engine-PR #997 (`07f75b427f8936010cd1822b6bad49db996ee77b`) liest `metadata.submission_id` und verbindet die Outbox mit der gespeicherten Einreichung. Die Partnerzuordnung erfolgt über deren unveränderliche `broadcaster_twitch_id`, nicht über einen Login. Unser PostgreSQL-Test führt genau diese Consumer-Abfrage gegen die tatsächliche Wettbewerbs-Migration aus und prüft alle elf erzeugten Ereignisse, ihre Quellkanal-ID und die drei Gewinner-Ränge.
 
-**Integrationsabhängigkeit:** Die Engine war bei Prüfung noch nicht als eigener PR veröffentlicht. Ihr gelesener Consumer-Entwurf löst den Partner noch über `streamer_login` auf. Vor gemeinsamer Abnahme muss er stattdessen `partner_twitch_user_id` aus dieser Outbox verwenden, damit Umbenennungen keine falsche Gutschrift verursachen. Die ID steht auch im Payload. Der Produzent ist transaktional geprüft; eine produktive Ende-zu-Ende-Gutschrift wird in diesem PR nicht behauptet.
+Punktehöhe und Wochenlimits bleiben Aufgabe dieser Engine. Der Wettbewerb rechnet keine zweite Punktelogik nach. Beide PRs sind für den tatsächlichen Betrieb zusammen erforderlich. Es wird keine produktive Gutschrift behauptet, da dieser Auftrag ausdrücklich keine Zusammenführung, Migration oder Auslieferung umfasst.
 
 ## Datenbank und Konfiguration
 
