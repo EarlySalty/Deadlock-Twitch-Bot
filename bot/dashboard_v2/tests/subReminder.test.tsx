@@ -3,11 +3,12 @@ import React from 'react';
 import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SubReminderSection } from '../src/components/verwaltung/SubReminderSection';
+import { CommandNamesProvider } from '../src/components/verwaltung/CommandNameSection';
 import { subReminderSettings } from '../src/api/subReminder';
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 test('Subkarte nennt öffentliche eigene Zustimmung und jederzeitiges Abbestellen', () => {
-  const html=renderToStaticMarkup(<SubReminderSection />);
+  const html=renderToStaticMarkup(<CommandNamesProvider><SubReminderSection /></CommandNamesProvider>);
   assert.match(html,/!sub erinnerung an/);
   assert.match(html,/!sub erinnerung aus/);
   assert.match(html,/öffentlich im Chat/);
