@@ -288,8 +288,7 @@ impl ScoreRefreshResolver {
                         c.fairness_score,
                         c.viewer_fairness_score,
                         c.base_score,
-                        if (c.raid_boost_multiplier - scores.raid_boost_multiplier)
-                            .abs()
+                        if (c.raid_boost_multiplier - scores.raid_boost_multiplier).abs()
                             > f64::EPSILON
                         {
                             compute_final_score(

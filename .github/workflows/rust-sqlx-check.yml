@@ -67,6 +67,7 @@ jobs:
           cargo test --locked -j2 -p tb-raid --test auth_writer --test oauth_grant_consistency --test token_refresher --test background_token_refresh
           cargo test --locked -j2 -p tb-transport-twitch --lib user_token
           cargo test --locked -j2 -p tb-bot raid_oauth_impl::callback_tests
+          cargo test --locked -j2 -p tb-bot monthly_raid_boost::tests
           cargo test --locked -j2 -p tb-internal-api handlers::raid_oauth::tests --lib
       - name: Titelbefehl und Dashboard-Schalter
         run: |
@@ -155,6 +156,15 @@ jobs:
         env:
           SQLX_OFFLINE: "false"
         run: cd rust && cargo sqlx prepare --workspace --check -- --workspace
+
+      - name: Monthly effort raid boost regression tests
+        env:
+          TB_TEST_DATABASE_URL: postgres://postgres@localhost:5432/twitchbot_sqlx
+        run: |
+          cd rust
+          cargo test --locked -j2 -p tb-raid --lib monthly_raid_boost
+          cargo test --locked -j2 -p tb-raid --lib partner_score_refresh
+          cargo test --locked -j2 -p tb-raid --test monthly_raid_boost
 
   required:
     name: "Rust SQLx required"

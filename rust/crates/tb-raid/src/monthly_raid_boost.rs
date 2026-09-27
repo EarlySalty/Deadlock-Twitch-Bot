@@ -181,15 +181,12 @@ impl MonthlyRaidBoostStore {
             .await?;
         }
 
-        let winner = standings
-            .first()
-            .filter(|standing| standing.points > 0)
-            .map(|standing| SeasonWinner {
-                twitch_user_id: standing.twitch_user_id.clone(),
-                twitch_login: standing.twitch_login.clone(),
-                points: standing.points,
-                qualified_invites: standing.qualified_invites,
-            });
+        let winner = standings.first().map(|standing| SeasonWinner {
+            twitch_user_id: standing.twitch_user_id.clone(),
+            twitch_login: standing.twitch_login.clone(),
+            points: standing.points,
+            qualified_invites: standing.qualified_invites,
+        });
 
         if let Some(winner) = &winner {
             sqlx::query(
@@ -228,7 +225,7 @@ impl MonthlyRaidBoostStore {
     pub async fn reconcile_partner(
         &self,
         twitch_user_id: &str,
-        twitch_login: &str,
+        _twitch_login: &str,
         now: DateTime<Utc>,
     ) -> Result<SeasonalBoostState, sqlx::Error> {
         let tables_ready: Option<String> =
@@ -274,8 +271,8 @@ impl MonthlyRaidBoostStore {
         };
 
         let session = match live.active_session_id {
-            Some(session_id) => load_session_by_id(&mut tx, session_id).await?,
-            None => load_open_session(&mut tx, twitch_user_id, twitch_login).await?,
+            Some(session_id) => load_session_by_id(&mut tx, twitch_user_id, session_id).await?,
+            None => load_open_session(&mut tx, twitch_user_id).await?,
         };
 
         let Some(session) = session else {
@@ -308,9 +305,12 @@ impl MonthlyRaidBoostStore {
 
         let grant = sqlx::query_as::<_, GrantRow>(
             "SELECT id, granted_at, expires_at, streams_remaining
-               FROM twitch_partner_raid_boost_grants
+               FROM twitch_partner_raid_boost_grants g
               WHERE twitch_user_id = $1
-                AND streams_remaining > 0
+                AND streams_remaining > (
+                    SELECT COUNT(*) FROM twitch_partner_raid_boost_streams u
+                    WHERE u.grant_id = g.id AND u.stream_ended_at IS NULL
+                )
                 AND granted_at <= $2
                 AND expires_at > $2
               ORDER BY expires_at ASC, granted_at ASC, id ASC
@@ -436,6 +436,7 @@ async fn load_effort_standings(
 
 async fn load_session_by_id(
     tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
     session_id: i64,
 ) -> Result<Option<SessionForBoost>, sqlx::Error> {
     sqlx::query_as::<_, SessionForBoost>(
@@ -444,10 +445,11 @@ async fn load_session_by_id(
                 NULLIF(ended_at::text, '')::timestamptz AS ended_at,
                 game_name
            FROM twitch_stream_sessions
-          WHERE id::bigint = $1
+          WHERE id::bigint = $1 AND twitch_user_id = $2
           LIMIT 1",
     )
     .bind(session_id)
+    .bind(twitch_user_id)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -455,7 +457,6 @@ async fn load_session_by_id(
 async fn load_open_session(
     tx: &mut Transaction<'_, Postgres>,
     twitch_user_id: &str,
-    twitch_login: &str,
 ) -> Result<Option<SessionForBoost>, sqlx::Error> {
     sqlx::query_as::<_, SessionForBoost>(
         "SELECT id::bigint AS id,
@@ -464,12 +465,11 @@ async fn load_open_session(
                 game_name
            FROM twitch_stream_sessions
           WHERE ended_at IS NULL
-            AND (twitch_user_id = $1 OR LOWER(streamer_login) = LOWER($2))
+            AND twitch_user_id = $1
           ORDER BY started_at::text::timestamptz DESC
           LIMIT 1",
     )
     .bind(twitch_user_id)
-    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -511,7 +511,7 @@ async fn finalize_finished_usages(
 
     let mut consumed_any = false;
     for usage in usages {
-        let Some(session) = load_session_by_id(tx, usage.session_id).await? else {
+        let Some(session) = load_session_by_id(tx, twitch_user_id, usage.session_id).await? else {
             continue;
         };
         let Some(ended_at) = session.ended_at else {
@@ -566,10 +566,10 @@ async fn deadlock_seconds_for_session(
         "SELECT recorded_at::text::timestamptz AS recorded_at, game_name
            FROM twitch_channel_updates
           WHERE twitch_user_id = $1
-            AND recorded_at::text::timestamptz > $2
+            AND recorded_at::text::timestamptz >= $2
             AND recorded_at::text::timestamptz < $3
             AND game_name IS NOT NULL
-          ORDER BY recorded_at::text::timestamptz ASC",
+          ORDER BY recorded_at::text::timestamptz ASC, id ASC",
     )
     .bind(twitch_user_id)
     .bind(session.started_at)
@@ -675,7 +675,7 @@ pub fn deadlock_seconds_for_timeline(
         return 0;
     }
 
-    let mut total = 0i64;
+    let mut total = Duration::zero();
     let mut cursor = started_at;
     let mut current_game = initial_game.trim().to_string();
 
@@ -691,16 +691,16 @@ pub fn deadlock_seconds_for_timeline(
             continue;
         }
         if is_deadlock(&current_game) {
-            total += (*at - cursor).num_seconds().max(0);
+            total += *at - cursor;
         }
         cursor = *at;
         current_game = game.trim().to_string();
     }
 
     if is_deadlock(&current_game) {
-        total += (ended_at - cursor).num_seconds().max(0);
+        total += ended_at - cursor;
     }
-    total
+    total.num_seconds()
 }
 
 fn is_deadlock(game: &str) -> bool {
@@ -766,6 +766,33 @@ mod tests {
             deadlock_seconds_for_timeline(start, end, "Deadlock", &updates),
             45 * 60
         );
+    }
+
+    #[test]
+    fn teilsekunden_werden_erst_nach_dem_summieren_abgerundet() {
+        let start = utc(2026, 9, 10, 18, 0);
+        let updates = vec![
+            (
+                start + Duration::milliseconds(900_500),
+                "Just Chatting".to_string(),
+            ),
+            (
+                start + Duration::milliseconds(901_000),
+                "Deadlock".to_string(),
+            ),
+        ];
+        let end = start + Duration::milliseconds(1_800_500);
+        assert_eq!(
+            deadlock_seconds_for_timeline(start, end, "Deadlock", &updates),
+            1800
+        );
+    }
+
+    #[test]
+    fn unbekannte_kategorie_zaehlt_nicht_als_deadlock() {
+        let start = utc(2026, 9, 10, 18, 0);
+        let end = start + Duration::hours(2);
+        assert_eq!(deadlock_seconds_for_timeline(start, end, "", &[]), 0);
     }
 
     #[test]

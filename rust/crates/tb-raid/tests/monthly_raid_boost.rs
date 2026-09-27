@@ -72,71 +72,11 @@ async fn create_schema(pool: &PgPool) {
     .await
     .unwrap();
 
-    sqlx::query(
-        "CREATE TABLE twitch_partner_effort_season_closures (
-            season_key TEXT PRIMARY KEY,
-            season_started_at TIMESTAMPTZ NOT NULL,
-            season_ended_at TIMESTAMPTZ NOT NULL,
-            closed_at TIMESTAMPTZ NOT NULL
-        )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        "CREATE TABLE twitch_partner_effort_season_results (
-            season_key TEXT NOT NULL REFERENCES twitch_partner_effort_season_closures(season_key),
-            twitch_user_id TEXT NOT NULL,
-            twitch_login TEXT NOT NULL DEFAULT '',
-            rank INTEGER NOT NULL,
-            points BIGINT NOT NULL,
-            qualified_invites BIGINT NOT NULL DEFAULT 0,
-            score_reached_at TIMESTAMPTZ,
-            closed_at TIMESTAMPTZ NOT NULL,
-            PRIMARY KEY (season_key, twitch_user_id),
-            UNIQUE (season_key, rank)
-        )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        "CREATE TABLE twitch_partner_raid_boost_grants (
-            id BIGSERIAL PRIMARY KEY,
-            season_key TEXT NOT NULL UNIQUE REFERENCES twitch_partner_effort_season_closures(season_key),
-            twitch_user_id TEXT NOT NULL,
-            twitch_login TEXT NOT NULL DEFAULT '',
-            multiplier DOUBLE PRECISION NOT NULL DEFAULT 1.15,
-            streams_total SMALLINT NOT NULL DEFAULT 2,
-            streams_remaining SMALLINT NOT NULL DEFAULT 2,
-            granted_at TIMESTAMPTZ NOT NULL,
-            expires_at TIMESTAMPTZ NOT NULL
-        )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        "CREATE TABLE twitch_partner_raid_boost_streams (
-            id BIGSERIAL PRIMARY KEY,
-            grant_id BIGINT NOT NULL REFERENCES twitch_partner_raid_boost_grants(id),
-            twitch_user_id TEXT NOT NULL,
-            session_id BIGINT NOT NULL,
-            stream_started_at TIMESTAMPTZ NOT NULL,
-            reserved_at TIMESTAMPTZ NOT NULL,
-            stream_ended_at TIMESTAMPTZ,
-            deadlock_seconds INTEGER,
-            qualified BOOLEAN,
-            consumed_at TIMESTAMPTZ,
-            UNIQUE (twitch_user_id, session_id)
-        )",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
+    // Execute the shipped migration in this test's isolated search_path.
+    let migration =
+        include_str!("../../../migrations/20260926230500_monthly_effort_raid_boost.sql")
+            .replace("public.", "");
+    sqlx::raw_sql(&migration).execute(pool).await.unwrap();
 
     sqlx::query(
         "CREATE TABLE twitch_live_state (
@@ -165,6 +105,7 @@ async fn create_schema(pool: &PgPool) {
 
     sqlx::query(
         "CREATE TABLE twitch_channel_updates (
+            id BIGSERIAL PRIMARY KEY,
             twitch_user_id TEXT NOT NULL,
             game_name TEXT,
             recorded_at TIMESTAMPTZ NOT NULL
@@ -396,7 +337,7 @@ async fn grant_wird_nach_zwei_qualifizierenden_streams_verbraucht() {
     create_schema(&pool).await;
 
     let granted_at = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
-    insert_grant(&pool, "grant-two", "winner", granted_at).await;
+    insert_grant(&pool, "2026-08", "winner", granted_at).await;
     let store = MonthlyRaidBoostStore::new(pool.clone());
 
     for (session_id, hour) in [(101_i64, 10_u32), (102_i64, 12_u32)] {
@@ -468,7 +409,7 @@ async fn kurzer_stream_verbraucht_nicht_und_abgelaufener_grant_startet_nicht() {
     create_schema(&pool).await;
 
     let granted_at = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
-    insert_grant(&pool, "grant-short", "winner", granted_at).await;
+    insert_grant(&pool, "2026-08", "winner", granted_at).await;
     let store = MonthlyRaidBoostStore::new(pool.clone());
 
     let short_start = Utc.with_ymd_and_hms(2026, 9, 2, 10, 0, 0).single().unwrap();
@@ -523,7 +464,7 @@ async fn kurzer_stream_verbraucht_nicht_und_abgelaufener_grant_startet_nicht() {
 }
 
 #[tokio::test]
-async fn season_ohne_effort_hat_keinen_sieger_und_keinen_grant() {
+async fn rang_eins_bekommt_den_grant_auch_ohne_zusaetzliche_mindestpunktzahl() {
     let Some(pool) = pool_or_skip("monthly_raid_boost_zero_season").await else {
         return;
     };
@@ -550,15 +491,15 @@ async fn season_ohne_effort_hat_keinen_sieger_und_keinen_grant() {
         outcome,
         SeasonCloseOutcome::Closed {
             partners: 2,
-            winner: None,
+            winner: Some(ref winner),
             ..
-        }
+        } if winner.twitch_user_id == "alpha" && winner.points == 0
     ));
     let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_grants")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(grants, 0);
+    assert_eq!(grants, 1);
 
     pool.close().await;
 }
@@ -571,7 +512,7 @@ async fn paralleler_restart_kann_keinen_dritten_slot_reservieren() {
     create_schema(&pool).await;
 
     let granted_at = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
-    let grant_id = insert_grant(&pool, "grant-race", "winner", granted_at).await;
+    let grant_id = insert_grant(&pool, "2026-08", "winner", granted_at).await;
     sqlx::query(
         "UPDATE twitch_partner_raid_boost_grants
             SET streams_remaining = 1
@@ -652,8 +593,8 @@ async fn ueberlappende_grants_verbrauchen_den_frueher_ablaufenden_zuerst() {
 
     let old_granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
     let new_granted = Utc.with_ymd_and_hms(2026, 9, 20, 0, 5, 0).single().unwrap();
-    let old_id = insert_grant(&pool, "grant-old", "winner", old_granted).await;
-    let new_id = insert_grant(&pool, "grant-new", "winner", new_granted).await;
+    let old_id = insert_grant(&pool, "2026-08", "winner", old_granted).await;
+    let new_id = insert_grant(&pool, "2026-09", "winner", new_granted).await;
 
     let start = Utc
         .with_ymd_and_hms(2026, 9, 25, 10, 0, 0)
@@ -668,5 +609,306 @@ async fn ueberlappende_grants_verbrauchen_den_frueher_ablaufenden_zuerst() {
     assert_eq!(state.grant_id, Some(old_id));
     assert_ne!(state.grant_id, Some(new_id));
 
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn laufender_stream_bleibt_bei_ablauf_aktiv_aber_neuer_stream_nicht() {
+    let Some(pool) = pool_or_skip("monthly_boost_expiry_midstream").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    let granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    let expiry = granted + chrono::Duration::days(30);
+    let id = insert_grant(&pool, "2026-08", "winner", granted).await;
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    let start = expiry - chrono::Duration::minutes(1);
+    set_live_session(&pool, 501, "winner", start, "Deadlock").await;
+    assert!(
+        store
+            .reconcile_partner("winner", "winner", start)
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    // A recreated store simulates a process restart after expiry.
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    assert!(
+        store
+            .reconcile_partner("winner", "winner", expiry + chrono::Duration::minutes(40))
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    end_session(&pool, 501, "winner", expiry + chrono::Duration::minutes(40)).await;
+    let state = store
+        .reconcile_partner("winner", "winner", expiry + chrono::Duration::minutes(41))
+        .await
+        .unwrap();
+    assert!(state.consumed_stream);
+    assert!(!state.stream_boost_active);
+    let replay = store
+        .reconcile_partner("winner", "winner", expiry + chrono::Duration::minutes(41))
+        .await
+        .unwrap();
+    assert!(!replay.consumed_stream);
+    let remaining: i16 = sqlx::query_scalar(
+        "SELECT streams_remaining FROM twitch_partner_raid_boost_grants WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 1);
+    set_live_session(
+        &pool,
+        502,
+        "winner",
+        expiry + chrono::Duration::hours(2),
+        "Deadlock",
+    )
+    .await;
+    assert!(
+        !store
+            .reconcile_partner("winner", "winner", expiry + chrono::Duration::hours(2))
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn fremde_session_und_recycelter_login_bekommen_keinen_grant() {
+    let Some(pool) = pool_or_skip("monthly_boost_session_identity").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    let granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    insert_grant(&pool, "2026-08", "winner", granted).await;
+    let start = granted + chrono::Duration::days(1);
+    set_live_session(&pool, 601, "another_id", start, "Deadlock").await;
+    sqlx::query("UPDATE twitch_stream_sessions SET streamer_login='winner' WHERE id=601")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_live_state VALUES ('winner',1,601)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    assert!(
+        !store
+            .reconcile_partner("winner", "winner", start)
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    sqlx::query(
+        "UPDATE twitch_live_state SET active_session_id=NULL WHERE twitch_user_id='winner'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !store
+            .reconcile_partner("winner", "winner", start)
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    let reservations: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_streams")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reservations, 0);
+    // Renaming the winner is safe: the ID, not the supplied login, owns the stream.
+    set_live_session(&pool, 602, "winner", start, "Deadlock").await;
+    assert!(
+        store
+            .reconcile_partner("winner", "renamed", start)
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn offener_alter_stream_reserviert_letzten_slot_bis_zum_abschluss() {
+    let Some(pool) = pool_or_skip("monthly_boost_pending_slot").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    let granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    let id = insert_grant(&pool, "2026-08", "winner", granted).await;
+    sqlx::query("UPDATE twitch_partner_raid_boost_grants SET streams_remaining=1 WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let start = granted + chrono::Duration::days(1);
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    set_live_session(&pool, 701, "winner", start, "Deadlock").await;
+    assert!(
+        store
+            .reconcile_partner("winner", "winner", start)
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    // Simulate delayed finalization: live_state already points at the next stream.
+    set_live_session(
+        &pool,
+        702,
+        "winner",
+        start + chrono::Duration::hours(1),
+        "Deadlock",
+    )
+    .await;
+    assert!(
+        !store
+            .reconcile_partner("winner", "winner", start + chrono::Duration::hours(1))
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    let reservations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_partner_raid_boost_streams WHERE grant_id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reservations, 1);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn kategorie_am_streamstart_zaehlt_und_plan_verschiebt_verbrauch_nicht() {
+    let Some(pool) = pool_or_skip("monthly_boost_category_plan").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    let granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    let id = insert_grant(&pool, "2026-08", "winner", granted).await;
+    let start = granted + chrono::Duration::days(1);
+    set_live_session(&pool, 801, "winner", start, "Just Chatting").await;
+    sqlx::query("INSERT INTO twitch_channel_updates(twitch_user_id,recorded_at,game_name) VALUES ('winner',$1,'Deadlock')").bind(start).execute(&pool).await.unwrap();
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    let active = store
+        .reconcile_partner("winner", "winner", start)
+        .await
+        .unwrap();
+    assert!(active.stream_boost_active);
+    let combined = tb_raid::combined_raid_boost_enabled(true, active.stream_boost_active);
+    assert_eq!(
+        tb_raid::compute_raid_boost_multiplier(combined),
+        tb_raid::RAID_BOOST_MULTIPLIER
+    );
+    end_session(&pool, 801, "winner", start + chrono::Duration::minutes(30)).await;
+    assert!(
+        store
+            .reconcile_partner("winner", "winner", start + chrono::Duration::minutes(30))
+            .await
+            .unwrap()
+            .consumed_stream
+    );
+    let remaining: i16 = sqlx::query_scalar(
+        "SELECT streams_remaining FROM twitch_partner_raid_boost_grants WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 1);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn paralleler_abschluss_ist_einmalig_und_ergebnisse_sind_unveraenderlich() {
+    let Some(pool) = pool_or_skip("monthly_boost_concurrent_close").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    sqlx::query(
+        "INSERT INTO twitch_partners(twitch_user_id,twitch_login) VALUES ('winner','winner')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO partner_effort_events(partner_twitch_user_id,partner_login,event_type,source_id,points,occurred_at) VALUES ('winner','winner','qualified_invite','invite',10,'2026-08-20T10:00:00Z')").execute(&pool).await.unwrap();
+    let now = Utc
+        .with_ymd_and_hms(2026, 8, 31, 22, 5, 0)
+        .single()
+        .unwrap();
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    let (a, b) = tokio::join!(
+        store.close_previous_season(now),
+        store.close_previous_season(now)
+    );
+    let outcomes = [a.unwrap(), b.unwrap()];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|r| matches!(r, SeasonCloseOutcome::Closed { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|r| matches!(r, SeasonCloseOutcome::AlreadyClosed { .. }))
+            .count(),
+        1
+    );
+    let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(grants, 1);
+    for sql in [
+        "UPDATE twitch_partner_effort_season_results SET points=99",
+        "DELETE FROM twitch_partner_effort_season_results",
+        "TRUNCATE twitch_partner_effort_season_results",
+        "UPDATE twitch_partner_effort_season_closures SET closed_at=now()",
+    ] {
+        let error = sqlx::query(sql).execute(&pool).await.unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("55000")
+        );
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn saison_ohne_partner_schliesst_ohne_grant() {
+    let Some(pool) = pool_or_skip("monthly_boost_empty_season").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    let now = Utc
+        .with_ymd_and_hms(2026, 8, 31, 22, 5, 0)
+        .single()
+        .unwrap();
+    let outcome = MonthlyRaidBoostStore::new(pool.clone())
+        .close_previous_season(now)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        SeasonCloseOutcome::Closed {
+            partners: 0,
+            winner: None,
+            ..
+        }
+    ));
+    let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(grants, 0);
     pool.close().await;
 }
