@@ -19,7 +19,7 @@ Die Einladungs- und Empfehlungsquellen gehören zur Arbeit „Qualified Discord 
 
 Steam-Match-Belege werden aus bereits abgeschlossenen `steam.steam_tasks` des Typs `GC_GET_MATCH_HISTORY` gelesen. Es werden keine neuen GC-Abfragen angelegt. Die Engine prüft den Steam-Eigentümer der Antwort, eine gültige Match-ID, den Startzeitpunkt und ein abgeschlossenes Ergebnis. Beide Personen müssen denselben Match-Eintrag besitzen. Zur Zuordnung zum beobachteten Party-Spiel dient die vorhandene Rich-Presence-Spielzeit; die 90-Sekunden-Toleranz berücksichtigt deren Minutenrundung. Fehlende Historie führt nicht zu einer ersatzweisen Vergabe. Noch nicht bestätigte Beobachtungen werden bis zu sieben Tage später erneut abgeglichen.
 
-Die Identitätskette verwendet `twitch_streamer_identities`, die vorhandene Auswahl in `twitch_player_steam_links` und bestätigte `core.steam_links`. Ein deaktivierter Lookup oder eine ausdrücklich entfernte Primärauswahl wird respektiert. Identische Discord- oder Steam-Konten zählen nicht als Mitspieler des eigenen Kontos.
+Die Identitätskette verwendet `twitch_streamer_identities`, die vorhandene Auswahl in `twitch_player_steam_links` und bestätigte `core.steam_links`. Ein deaktivierter Lookup oder eine ausdrücklich entfernte Primärauswahl wird respektiert. Identische Discord- oder Steam-Konten zählen nicht als Mitspieler des eigenen Kontos. Nicht-Partner brauchen zusätzlich die bestätigte Community-Mitgliedschaft aus der bestehenden Identität; eine zurückgebliebene Steam-Verknüpfung nach dem Austritt genügt nicht.
 
 ## Ledger und Wiederholungssicherheit
 
