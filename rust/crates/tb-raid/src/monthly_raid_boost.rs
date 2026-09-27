@@ -119,7 +119,7 @@ impl MonthlyRaidBoostStore {
     /// Schließt den unmittelbar vorherigen Berlin-Kalendermonat.
     ///
     /// Der Quellvertrag aus der Effort-Engine ist bewusst klein:
-    /// partner_effort_events(partner_twitch_user_id, partner_login, event_type, points, occurred_at).
+    /// partner_effort_events(partner_twitch_user_id, partner_login, event_type, source_id, points, occurred_at).
     /// Fehlt die Tabelle noch, wird nichts geschlossen. Dadurch kann dieser
     /// Baustein vor dem Effort-PR landen, ohne einen zweiten Event-Store zu bauen.
     pub async fn close_previous_season(
@@ -381,10 +381,10 @@ async fn load_effort_standings(
             SELECT e.partner_twitch_user_id,
                    e.event_type,
                    e.occurred_at,
-                   e.id,
+                   e.source_id,
                    SUM(e.points) OVER (
                        PARTITION BY e.partner_twitch_user_id
-                       ORDER BY e.occurred_at, e.id
+                       ORDER BY e.occurred_at, e.source_id
                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                    )::bigint AS running_points,
                    SUM(e.points) OVER (
