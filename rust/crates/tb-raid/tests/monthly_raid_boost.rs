@@ -912,3 +912,69 @@ async fn saison_ohne_partner_schliesst_ohne_grant() {
     assert_eq!(grants, 0);
     pool.close().await;
 }
+
+#[tokio::test]
+async fn read_only_boost_lesepfad_reserviert_und_verbraucht_nicht() {
+    let schema = "monthly_boost_read_only";
+    let Some(pool) = pool_or_skip(schema).await else {
+        return;
+    };
+    create_schema(&pool).await;
+    let granted = Utc.with_ymd_and_hms(2026, 9, 1, 0, 5, 0).single().unwrap();
+    let id = insert_grant(&pool, "2026-08", "winner", granted).await;
+    let start = granted + chrono::Duration::days(1);
+    set_live_session(&pool, 901, "winner", start, "Deadlock").await;
+
+    let options = PgConnectOptions::from_str(&std::env::var("TB_TEST_DATABASE_URL").unwrap())
+        .unwrap()
+        .options([
+            ("search_path", schema),
+            ("default_transaction_read_only", "on"),
+        ]);
+    let read_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let reader = MonthlyRaidBoostStore::new(read_pool.clone());
+    assert!(!reader.reserved_stream_boost_active("winner").await.unwrap());
+    let reservations: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_streams")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reservations, 0);
+
+    let writer = MonthlyRaidBoostStore::new(pool.clone());
+    writer
+        .reconcile_partner("winner", "winner", start)
+        .await
+        .unwrap();
+    assert!(reader.reserved_stream_boost_active("winner").await.unwrap());
+    assert!(!reader
+        .reserved_stream_boost_active("another_id")
+        .await
+        .unwrap());
+    end_session(&pool, 901, "winner", start + chrono::Duration::minutes(30)).await;
+    assert!(!reader.reserved_stream_boost_active("winner").await.unwrap());
+    let remaining: i16 = sqlx::query_scalar(
+        "SELECT streams_remaining FROM twitch_partner_raid_boost_grants WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        remaining, 2,
+        "A read must not consume a completed qualifying stream"
+    );
+    assert!(
+        writer
+            .reconcile_partner("winner", "winner", start + chrono::Duration::minutes(30))
+            .await
+            .unwrap()
+            .consumed_stream
+    );
+    read_pool.close().await;
+    pool.close().await;
+}

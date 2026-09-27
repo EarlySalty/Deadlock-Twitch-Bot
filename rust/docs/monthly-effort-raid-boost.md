@@ -72,6 +72,11 @@ die historischen Basiskomponenten erhalten, ein geänderter Boost-Faktor wird
 aber im Endscore berücksichtigt. Ein verbrauchter Boost kann deshalb nicht
 als alter Endscore im Cache verbleiben.
 
+Der Compute-only-/Vergleichspfad liest ausschließlich bereits persistierte
+Stream-Reservierungen. Er schreibt keine Grants oder Verbrauchseinträge und
+funktioniert auch mit einer schreibgeschützten Datenbankverbindung. Nur der
+echte Score-Refresh gleicht den Stream-Lebenszyklus ab.
+
 ## Abhängigkeiten und Sichtbarkeit
 
 Die Migration `20260926230500_monthly_effort_raid_boost.sql` erzeugt nur

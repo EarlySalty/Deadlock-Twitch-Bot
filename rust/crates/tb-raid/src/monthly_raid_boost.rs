@@ -216,6 +216,40 @@ impl MonthlyRaidBoostStore {
         })
     }
 
+    /// Liest ausschließlich den persistierten Boost des aktuellen Streams.
+    /// Der Compute-only-/Vergleichspfad darf weder reservieren noch verbrauchen.
+    pub async fn reserved_stream_boost_active(
+        &self,
+        twitch_user_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let ready: Option<String> =
+            sqlx::query_scalar("SELECT to_regclass('twitch_partner_raid_boost_streams')::text")
+                .fetch_one(&self.pool)
+                .await?;
+        if ready.is_none() {
+            return Ok(false);
+        }
+        sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM twitch_partner_raid_boost_streams u
+                JOIN twitch_stream_sessions s ON s.id::bigint = u.session_id
+                    AND s.twitch_user_id = u.twitch_user_id
+                JOIN twitch_live_state l ON l.twitch_user_id = u.twitch_user_id
+                WHERE u.twitch_user_id = $1
+                  AND COALESCE(l.is_live, 0) <> 0
+                  AND s.ended_at IS NULL AND u.stream_ended_at IS NULL
+                  AND u.session_id = COALESCE(l.active_session_id::bigint, (
+                      SELECT id::bigint FROM twitch_stream_sessions
+                       WHERE twitch_user_id = $1 AND ended_at IS NULL
+                       ORDER BY started_at::text::timestamptz DESC LIMIT 1
+                  ))
+            )",
+        )
+        .bind(twitch_user_id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     /// Gleicht Reservierungen mit dem aktuellen Streamzustand ab und liefert,
     /// ob der laufende Stream den Monatsboost tatsächlich trägt.
     ///
