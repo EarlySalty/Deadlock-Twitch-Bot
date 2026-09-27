@@ -57,7 +57,36 @@ export function fetchCommandNames(): Promise<{ commands: CommandNameSetting[] }>
 export function saveCommandName(command: string, name: string | null): Promise<CommandNameSaveResult> {
   return fetchJson({
     method: 'POST',
+    keepalive: true,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command, name }),
   });
+}
+
+export function validCommandNameInput(value: string): boolean {
+  return /^[A-Za-z0-9]*$/.test(value);
+}
+
+export interface CommandNameSaveQueue {
+  savedName: string;
+  lastAttempt: string | null;
+  queued: number;
+  tail: Promise<void>;
+}
+
+export function enqueueCommandNameSave(
+  queue: CommandNameSaveQueue,
+  requested: string | null,
+  save: (name: string) => Promise<void>,
+): Promise<void> | null {
+  if (requested === null || !validCommandNameInput(requested)
+    || (requested === queue.savedName && queue.queued === 0)
+    || requested === queue.lastAttempt) return null;
+  queue.lastAttempt = requested;
+  queue.queued += 1;
+  queue.tail = queue.tail.catch(() => {}).then(async () => {
+    await save(requested);
+    queue.savedName = requested;
+  }).finally(() => { queue.queued -= 1; });
+  return queue.tail;
 }

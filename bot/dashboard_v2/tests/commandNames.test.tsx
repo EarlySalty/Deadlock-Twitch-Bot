@@ -6,25 +6,15 @@ import {
   CommandNameApiError,
   fetchCommandNames,
   saveCommandName,
-  type CommandNameSetting,
+  validCommandNameInput,
+  enqueueCommandNameSave,
+  type CommandNameSaveQueue,
 } from '../src/api/commandNames';
-import { CommandNameRow } from '../src/components/verwaltung/CommandNameSection';
+import { CommandNamesProvider, EditableCommandName } from '../src/components/verwaltung/CommandNameSection';
 
 Object.assign(globalThis, { React });
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
-
-const raid: CommandNameSetting = {
-  command: 'raid',
-  default_name: '!raid',
-  default_aliases: ['!traid'],
-  custom_name: '!dachraid',
-  effective_name: '!dachraid',
-  effective_aliases: [],
-  group: 'mod',
-  group_label: 'Moderation',
-  summary: 'Startet einen Raid.',
-};
 
 test('API lädt und speichert kanalbezogene Command-Namen mit Sessioncookie', async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -43,7 +33,7 @@ test('API lädt und speichert kanalbezogene Command-Namen mit Sessioncookie', as
         }),
       };
     }
-    return { ok: true, json: async () => ({ commands: [raid] }) };
+    return { ok: true, json: async () => ({ commands: [{ command: 'raid', effective_name: '!dachraid' }] }) };
   }) as typeof fetch;
 
   const loaded = await fetchCommandNames();
@@ -60,6 +50,7 @@ test('API lädt und speichert kanalbezogene Command-Namen mit Sessioncookie', as
     command: 'raid',
     name: 'DACHRAID',
   });
+  assert.equal(calls.at(-1)?.init.keepalive, true);
 });
 
 test('API reicht verständlichen Konfliktfehler durch', async () => {
@@ -81,39 +72,48 @@ test('API reicht verständlichen Konfliktfehler durch', async () => {
   );
 });
 
-test('Zeile zeigt Standard, aktiven eigenen Namen und Reset getrennt', () => {
-  const html = renderToStaticMarkup(
-    <CommandNameRow
-      row={raid}
-      draft="!dachraid"
-      pending={false}
-      message="Gespeichert."
-      onDraft={() => {}}
-      onSave={() => {}}
-      onReset={() => {}}
-    />,
-  );
-  assert.ok(html.includes('!raid'));
-  assert.ok(html.includes('!traid'));
-  assert.ok(html.includes('aktiv als !dachraid'));
-  assert.ok(html.includes('aria-label="!raid eigener Name"'));
-  assert.ok(html.includes('Zurücksetzen'));
-  assert.ok(html.includes('role="status"'));
+test('Eingabe akzeptiert nur Buchstaben und Zahlen ohne zweites Präfix', () => {
+  assert.equal(validCommandNameInput('DACHraid7'), true);
+  for (const invalid of ['!!raid', '#raid', 'raid_test', 'raid-test', 'räid']) {
+    assert.equal(validCommandNameInput(invalid), false);
+  }
 });
 
-test('unveränderte Standardzeile hat keinen Reset', () => {
-  const standard = { ...raid, custom_name: null, effective_name: '!raid', effective_aliases: ['!traid'] };
+test('Inline-Editor zeigt während des Ladens keinen zweiten Einstellungsdialog', () => {
   const html = renderToStaticMarkup(
-    <CommandNameRow
-      row={standard}
-      draft=""
-      pending={false}
-      message=""
-      onDraft={() => {}}
-      onSave={() => {}}
-      onReset={() => {}}
-    />,
+    <CommandNamesProvider><EditableCommandName command="connect" /></CommandNamesProvider>,
   );
-  assert.ok(!html.includes('Zurücksetzen'));
-  assert.ok(html.includes('disabled=""'));
+  assert.ok(html.includes('Befehl wird geladen'));
+  assert.ok(!html.includes('Speichern</button>'));
+});
+
+test('laufender Save und Rückkehr zum alten Namen werden in SQL-Reihenfolge geschrieben', async () => {
+  let releaseFirst: (() => void) | undefined;
+  const firstFinished = new Promise<void>(resolve => { releaseFirst = resolve; });
+  let markStarted: (() => void) | undefined;
+  const firstStarted = new Promise<void>(resolve => { markStarted = resolve; });
+  const writes: string[] = [];
+  const queue: CommandNameSaveQueue = {
+    savedName: 'rank', lastAttempt: null, queued: 0, tail: Promise.resolve(),
+  };
+  const save = async (name: string) => {
+    writes.push(name);
+    if (name === 'abc') {
+      markStarted?.();
+      await firstFinished;
+    }
+  };
+  const first = enqueueCommandNameSave(queue, 'abc', save);
+  assert.ok(first);
+  await firstStarted;
+  assert.deepEqual(writes, ['abc']);
+  queue.lastAttempt = null; // neue Eingabe während der erste Request noch läuft
+  const second = enqueueCommandNameSave(queue, 'rank', save);
+  assert.ok(second);
+  assert.deepEqual(writes, ['abc']);
+  releaseFirst?.();
+  await second;
+  assert.deepEqual(writes, ['abc', 'rank']);
+  assert.equal(queue.savedName, 'rank');
+  assert.equal(queue.queued, 0);
 });

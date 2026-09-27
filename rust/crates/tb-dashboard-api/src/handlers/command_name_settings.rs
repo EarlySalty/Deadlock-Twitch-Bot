@@ -56,7 +56,7 @@ fn validation_error(error: CommandNameValidationError) -> Response {
         CommandNameValidationError::Empty => "Bitte einen Befehlsnamen eingeben.",
         CommandNameValidationError::TooLong => "Der Befehlsname ist zu lang.",
         CommandNameValidationError::InvalidCharacters => {
-            "Erlaubt sind nur Buchstaben, Zahlen, _ und -."
+            "Erlaubt sind nur Buchstaben und Zahlen. Das ! steht bereits davor."
         }
     };
     (
@@ -386,7 +386,16 @@ mod tests {
         let database = database().await;
         let pool = &database.pool;
 
-        for name in ["!", "!raid bitte", "!räid"] {
+        for name in [
+            "!",
+            "!raid bitte",
+            "!räid",
+            "!!raid",
+            "#raid",
+            "!raid#",
+            "!mein_raid",
+            "!mein-raid",
+        ] {
             let response = post_handler(
                 partner("42"),
                 State(pool.clone()),

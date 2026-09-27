@@ -1,3 +1,4 @@
+import { EditableCommandName } from './CommandNameSection';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Power, PowerOff } from 'lucide-react';
@@ -62,10 +63,10 @@ export function LurkCommandSection() {
           Chat-Befehl
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          !lurk-Command
+          Lurk-Befehl
         </h2>
         <p className="text-sm text-text-secondary">
-          Steuert, ob dein Chat auf !lurk noch eine Antwort bekommt. Aus lässt den Befehl
+          Steuert, ob dein Chat auf den Befehl noch eine Antwort bekommt. Aus lässt den Befehl
           bestehen, der Bot antwortet dann einfach nicht mehr darauf.
         </p>
       </div>
@@ -95,19 +96,20 @@ export function LurkCommandSection() {
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="min-w-0">
+              <EditableCommandName command="lurk" className="mb-2" />
               <p
                 className={`text-base font-bold ${
                   enabled ? 'text-success' : 'text-text-secondary'
                 }`}
               >
                 {enabled
-                  ? '!lurk ist aktiv'
-                  : '!lurk ist aus'}
+                  ? 'Befehl ist aktiv'
+                  : 'Befehl ist aus'}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
-                  ? 'Dein Chat kriegt auf !lurk die Standard-Antwort.'
-                  : 'Der Bot bleibt auf !lurk stumm.'}
+                  ? 'Dein Chat kriegt darauf die Standard-Antwort.'
+                  : 'Der Bot bleibt auf den Befehl stumm.'}
               </p>
             </div>
             <button
@@ -127,7 +129,7 @@ export function LurkCommandSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? '!lurk deaktivieren' : '!lurk aktivieren'}
+              {enabled ? 'Deaktivieren' : 'Aktivieren'}
             </button>
           </div>
         </div>

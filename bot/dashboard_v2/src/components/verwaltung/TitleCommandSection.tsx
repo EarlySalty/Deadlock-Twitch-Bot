@@ -1,3 +1,4 @@
+import { EditableCommandName } from './CommandNameSection';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Power, PowerOff } from 'lucide-react';
@@ -62,11 +63,11 @@ export function TitleCommandSection() {
           Chat-Befehl
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          !title-Command
+          Titel-Befehl
         </h2>
         <p className="text-sm text-text-secondary">
-          Du und deine Mods können mit !title Stichwörter neue Stream-Titel vorschlagen lassen.
-          Das gilt auch für !titel. Aus heißt: Der Bot reagiert auf beide Befehle nicht mehr –
+          Du und deine Mods können damit Stichwörter für neue Stream-Titel vorschlagen lassen.
+          Aus heißt: Der Bot reagiert auf den Befehl nicht mehr –
           auch wenn ein anderer Bot sie nutzt.
         </p>
       </div>
@@ -96,19 +97,20 @@ export function TitleCommandSection() {
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="min-w-0">
+              <EditableCommandName command="title" className="mb-2" />
               <p
                 className={`text-base font-bold ${
                   enabled ? 'text-success' : 'text-text-secondary'
                 }`}
               >
                 {enabled
-                  ? '!title ist aktiv'
-                  : '!title ist aus'}
+                  ? 'Befehl ist aktiv'
+                  : 'Befehl ist aus'}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
                   ? 'Du und deine Mods können Titelvorschläge anfordern.'
-                  : 'Der Bot bleibt auf !title stumm.'}
+                  : 'Der Bot bleibt auf den Befehl stumm.'}
               </p>
             </div>
             <button
@@ -128,7 +130,7 @@ export function TitleCommandSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? '!title deaktivieren' : '!title aktivieren'}
+              {enabled ? 'Deaktivieren' : 'Aktivieren'}
             </button>
           </div>
         </div>

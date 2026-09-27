@@ -10,7 +10,7 @@ import { PartnerProfile } from './PartnerProfile';
 import { PlanProvider } from '../context/PlanContext';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
-import { CommandNameSection } from '@/components/verwaltung/CommandNameSection';
+import { CommandNamesProvider } from '@/components/verwaltung/CommandNameSection';
 import { StatCommandSection } from '@/components/verwaltung/StatCommandSection';
 import { SubReminderSection } from '@/components/verwaltung/SubReminderSection';
 import { TitleCommandSection } from '@/components/verwaltung/TitleCommandSection';
@@ -380,25 +380,24 @@ export function VerwaltungPage() {
   );
 
   const chatTab = (
-    <>
+    <CommandNamesProvider>
       <GreetingSection />
       <LurkCommandSection />
       <ClipCommandSection />
       <TitleCommandSection />
-      <CommandNameSection />
       <StatCommandSection />
       <SubReminderSection />
       <LurkerTaxSection />
-    </>
+    </CommandNamesProvider>
   );
 
   const botTab = (
-    <>
+    <CommandNamesProvider>
       <ModerationSection />
       <ScamGuardSection />
       <SilentNotificationsSection />
       <DisconnectBotSection login={selfLogin} />
-    </>
+    </CommandNamesProvider>
   );
 
   const overlayTab = (

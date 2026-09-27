@@ -2,11 +2,11 @@ export const STAT_COMMANDS = [
   { command: 'rank', label: '!rank', description: 'Dein aktueller Rang.' },
   { command: 'wins', label: '!wins', description: 'Deine Siege.' },
   { command: 'winrate', label: '!winrate', description: 'Deine Siegquote.' },
-  { command: 'mmr', label: '!mmr', description: 'Deine Rangentwicklung. Gilt auch für !climb.' },
+  { command: 'mmr', label: '!mmr', description: 'Deine Rangentwicklung.' },
   { command: 'live', label: '!live', description: 'Infos zu deinem laufenden Match.' },
-  { command: 'lastmatch', label: '!lastmatch', description: 'Dein letztes Match. Gilt auch für !last.' },
+  { command: 'lastmatch', label: '!lastmatch', description: 'Dein letztes Match.' },
   { command: 'streak', label: '!streak', description: 'Deine aktuelle Sieg- oder Niederlagenserie.' },
-  { command: 'mostplayed', label: '!mostplayed', description: 'Dein meistgespielter Held. Gilt auch für !main.' },
+  { command: 'mostplayed', label: '!mostplayed', description: 'Dein meistgespielter Held.' },
 ] as const;
 
 export type StatCommand = typeof STAT_COMMANDS[number]['command'];

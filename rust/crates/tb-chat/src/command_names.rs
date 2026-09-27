@@ -37,7 +37,7 @@ pub fn entry_by_key(command_key: &str) -> Option<&'static CommandInfo> {
 
 /// Normalisiert Nutzereingaben auf `!name`.
 ///
-/// Erlaubt werden bewusst nur ASCII-Buchstaben, Ziffern, `_` und `-`.
+/// Erlaubt werden bewusst nur ASCII-Buchstaben und Ziffern.
 /// Das hält die Auflösung exakt zu `commands.rs`, das Commands ebenfalls
 /// ASCII-case-insensitiv behandelt.
 pub fn normalize_custom_name(raw: &str) -> Result<String, CommandNameValidationError> {
@@ -54,10 +54,7 @@ pub fn normalize_custom_name(raw: &str) -> Result<String, CommandNameValidationE
     if full_len > MAX_COMMAND_NAME_LEN {
         return Err(CommandNameValidationError::TooLong);
     }
-    if !normalized
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    {
+    if !normalized.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
         return Err(CommandNameValidationError::InvalidCharacters);
     }
     Ok(format!("!{normalized}"))
@@ -154,10 +151,10 @@ mod tests {
     #[test]
     fn stat_commands_custom_names_normalisiert_ergonomisch_und_lehnt_unsichere_namen_ab() {
         assert_eq!(
-            normalize_custom_name(" DACH_Raid "),
-            Ok("!dach_raid".into())
+            normalize_custom_name(" DACHRaid7 "),
+            Ok("!dachraid7".into())
         );
-        assert_eq!(normalize_custom_name("!mein-raid"), Ok("!mein-raid".into()));
+        assert_eq!(normalize_custom_name("!meinraid"), Ok("!meinraid".into()));
         assert_eq!(
             normalize_custom_name(""),
             Err(CommandNameValidationError::Empty)
@@ -174,6 +171,13 @@ mod tests {
             normalize_custom_name("!räid"),
             Err(CommandNameValidationError::InvalidCharacters)
         );
+        for invalid in ["!!raid", "#raid", "!raid#", "!mein_raid", "!mein-raid"] {
+            assert_eq!(
+                normalize_custom_name(invalid),
+                Err(CommandNameValidationError::InvalidCharacters),
+                "{invalid}"
+            );
+        }
         let too_long = format!("!{}", "a".repeat(MAX_COMMAND_NAME_LEN));
         assert_eq!(
             normalize_custom_name(&too_long),
