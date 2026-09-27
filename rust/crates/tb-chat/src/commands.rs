@@ -88,14 +88,20 @@ const COMMANDS_URL: &str = "https://deutsche-deadlock-community.de/streamer/comm
 const DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/twitch/dashboard";
 
 fn knowledge_dir() -> Result<PathBuf, String> {
-    let snapshot = tb_config::runtime::active()
-        .ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
-    snapshot.resolve(&snapshot.settings().knowledge.directory).map_err(|e| e.to_string())
+    let snapshot =
+        tb_config::runtime::active().ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
+    snapshot
+        .resolve(&snapshot.settings().knowledge.directory)
+        .map_err(|e| e.to_string())
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
-    KB.get_or_init(|| knowledge_dir().and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string())).unwrap_or_default())
+    KB.get_or_init(|| {
+        knowledge_dir()
+            .and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string()))
+            .unwrap_or_default()
+    })
 }
 
 /// `!commands` schickt nur den Link — die Befehlsliste im Chat war eine
@@ -209,6 +215,15 @@ pub trait DiscordLinkPort: Send + Sync {
     /// `None` = kein Link hinterlegt; `Err` = technischer Fehler.
     /// Der Handler antwortet mit einem passenden Leer- oder Fehlerhinweis.
     async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String>;
+
+    async fn personal_discord_invite(
+        &self,
+        broadcaster_id: &str,
+        _streamer_login: &str,
+        _inviter_twitch_user_id: &str,
+    ) -> Result<Option<String>, String> {
+        self.discord_invite(broadcaster_id).await
+    }
 }
 
 /// Port für den `!invite`-Command-Handler.
@@ -459,7 +474,9 @@ impl CommandEngine {
     pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
         // Split the original text before normalizing the command: Unicode
         // case conversion may change byte offsets. Tabs/newlines are separators too.
-        let (command, args) = event.text().split_once(char::is_whitespace)
+        let (command, args) = event
+            .text()
+            .split_once(char::is_whitespace)
             .unwrap_or((event.text(), ""));
         let invoked_command = command.to_ascii_lowercase();
         if !invoked_command.starts_with('!') {
@@ -821,22 +838,40 @@ impl CommandEngine {
             cooldowns.insert(key.clone(), reservation);
         }
         let target = crate::command_target::resolve(
-            self.api.as_ref(), event, args, crate::command_target::DefaultTarget::Chatter,
-        ).await;
+            self.api.as_ref(),
+            event,
+            args,
+            crate::command_target::DefaultTarget::Chatter,
+        )
+        .await;
         let text = match target {
             Err(error) => error.reply(),
             Ok(target) => {
                 let other = target.user_id != event.chatter_user_id;
                 match tb_analytics::stream_kennzahlen::zuschauer_watchtime(
-                    &self.pool, &event.broadcaster_user_id, &target.user_id,
-                ).await {
+                    &self.pool,
+                    &event.broadcaster_user_id,
+                    &target.user_id,
+                )
+                .await
+                {
                     Ok(time) if time.gesamt_minuten == 0.0 => {
-                        if other { format!("Für @{} ist hier noch keine Zuschauerzeit erfasst.", target.login) }
-                        else { "Für dich ist hier noch keine Zuschauerzeit erfasst.".into() }
+                        if other {
+                            format!(
+                                "Für @{} ist hier noch keine Zuschauerzeit erfasst.",
+                                target.login
+                            )
+                        } else {
+                            "Für dich ist hier noch keine Zuschauerzeit erfasst.".into()
+                        }
                     }
                     Ok(time) => {
                         let total = watchtime_dauer(time.gesamt_minuten);
-                        let prefix = if other { format!("Zuschauerzeit von @{}: ", target.login) } else { String::new() };
+                        let prefix = if other {
+                            format!("Zuschauerzeit von @{}: ", target.login)
+                        } else {
+                            String::new()
+                        };
                         match time.laufend_minuten {
                             Some(current) => format!("{prefix}Hier bisher erfasst: ca. {total}, davon {} in diesem Stream.", watchtime_dauer(current)),
                             None => format!("{prefix}Hier bisher erfasst: ca. {total}."),
@@ -844,8 +879,11 @@ impl CommandEngine {
                     }
                     Err(error) => {
                         tracing::warn!(%error, broadcaster_id = %key.0, "!watchtime Abruf fehlgeschlagen");
-                        if other { format!("Die Zuschauerzeit von @{} kann ich gerade nicht abrufen. Versuch es gleich nochmal.", target.login) }
-                        else { "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal.".into() }
+                        if other {
+                            format!("Die Zuschauerzeit von @{} kann ich gerade nicht abrufen. Versuch es gleich nochmal.", target.login)
+                        } else {
+                            "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal.".into()
+                        }
                     }
                 }
             }
@@ -865,7 +903,12 @@ impl CommandEngine {
         self.reply(event, &help_reply(knowledge_base(), args)).await;
     }
 
-    async fn stat_target(&self, event: &ChatMessageEvent, args: &str, is_rank: bool) -> Option<crate::command_target::CommandTarget> {
+    async fn stat_target(
+        &self,
+        event: &ChatMessageEvent,
+        args: &str,
+        is_rank: bool,
+    ) -> Option<crate::command_target::CommandTarget> {
         let rank_me = is_rank && args.trim().eq_ignore_ascii_case("me");
         match crate::command_target::resolve(
             self.api.as_ref(),
@@ -876,188 +919,191 @@ impl CommandEngine {
             } else {
                 crate::command_target::DefaultTarget::Broadcaster
             },
-        ).await {
+        )
+        .await
+        {
             Ok(target) => {
                 match crate::player_links::load(&self.pool, &target.user_id).await {
                     Ok(Some(link)) if !link.lookup_enabled => {
-                        self.reply(event, crate::player_links::DISCONNECTED_REPLY).await;
+                        self.reply(event, crate::player_links::DISCONNECTED_REPLY)
+                            .await;
                         return None;
                     }
                     Ok(Some(link)) if link.steam_id64.is_some() && !is_rank => {
                         // Never show another Discord-linked Steam account after a direct account switch.
-                        let same_legacy = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                            Ok(Some(discord_id)) => matches!(self.rank_lookup.linked_account(&discord_id).await,
-                                Ok(Some((id, true))) if Some(id) == link.account_id()),
-                            _ => false,
-                        };
+                        let same_legacy =
+                            match crate::stats::resolve_discord_id(&self.pool, &target.user_id)
+                                .await
+                            {
+                                Ok(Some(discord_id)) => {
+                                    matches!(self.rank_lookup.linked_account(&discord_id).await,
+                                Ok(Some((id, true))) if Some(id) == link.account_id())
+                                }
+                                _ => false,
+                            };
                         if !same_legacy {
                             self.reply(event, &format!("{} hat Steam direkt verbunden. Über diese Verbindung ist !rank verfügbar; dieser Statistikbefehl benötigt noch die zusätzliche Discord-/Steam-Verknüpfung.", target.name)).await;
                             return None;
                         }
                     }
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(_) => {
                         self.reply(event, "Die Kontozuordnung kann ich gerade nicht abrufen. Bitte erneut versuchen.").await;
                         return None;
                     }
                 }
                 Some(target)
-            },
-            Err(crate::command_target::TargetError::NotFound(login)) if is_rank =>
-            {
+            }
+            Err(crate::command_target::TargetError::NotFound(login)) if is_rank => {
                 self.reply(event, &format!("Für @{login} gibt es noch keine Steam-Verknüpfung. Verbinden geht hier: {}", crate::player_links::CONNECT_URL)).await;
                 None
             }
-            Err(error) => { self.reply(event, &error.reply()).await; None }
+            Err(error) => {
+                self.reply(event, &error.reply()).await;
+                None
+            }
         }
     }
 
     async fn cmd_rank(&self, event: &ChatMessageEvent, args: &str) {
         match crate::rank_lookup::parse_steam_id(args) {
             Ok(Some(account_id)) => {
-                let text = self.rank_lookup.account_reply(account_id, &format!("Steam-Account {account_id}"), false).await;
+                let text = self
+                    .rank_lookup
+                    .account_reply(account_id, &format!("Steam-Account {account_id}"), false)
+                    .await;
                 self.reply(event, &text).await;
             }
-            Err(()) => self.reply(event, "Verwendung: !rank @username oder !rank steam:<Account-ID/SteamID64>.").await,
+            Err(()) => {
+                self.reply(
+                    event,
+                    "Verwendung: !rank @username oder !rank steam:<Account-ID/SteamID64>.",
+                )
+                .await
+            }
             Ok(None) => {
-                let Some(target) = self.stat_target(event, args, true).await else { return; };
-                let text = self.rank_lookup.twitch_reply(&self.pool, &target, !args.is_empty()).await;
+                let Some(target) = self.stat_target(event, args, true).await else {
+                    return;
+                };
+                let text = self
+                    .rank_lookup
+                    .twitch_reply(&self.pool, &target, !args.is_empty())
+                    .await;
                 self.reply(event, &text).await;
             }
         }
     }
 
     async fn cmd_wins(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, true)
-                    .await
-                    .map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_rank_checked(&discord_id, true)
+                .await
+                .map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::wins_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::wins_reply),
         )
         .await;
     }
 
     async fn cmd_winrate(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::winrate_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::winrate_reply),
         )
         .await;
     }
 
     async fn cmd_mmr(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_mmr_trend(&discord_id).await.map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_mmr_trend(&discord_id).await.map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::mmr_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::mmr_reply),
         )
         .await;
     }
 
     async fn cmd_live(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_live(&discord_id).await.map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_live(&discord_id).await.map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::live_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::live_reply),
         )
         .await;
     }
 
     async fn cmd_lastmatch(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::lastmatch_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::lastmatch_reply),
         )
         .await;
     }
 
     async fn cmd_streak(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::streak_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::streak_reply),
         )
         .await;
     }
 
     async fn cmd_mostplayed(&self, event: &ChatMessageEvent, args: &str) {
-        let Some(target) = self.stat_target(event, args, false).await else { return; };
-        let info =
-            match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
-                Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+        let Some(target) = self.stat_target(event, args, false).await else {
+            return;
+        };
+        let info = match crate::stats::resolve_discord_id(&self.pool, &target.user_id).await {
+            Ok(Some(discord_id)) => crate::stats::fetch_matches(&discord_id).await.map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
         self.reply(
             event,
-            &crate::stats::command_reply(
-                &target.name,
-                info,
-                crate::stats::mostplayed_reply,
-            ),
+            &crate::stats::command_reply(&target.name, info, crate::stats::mostplayed_reply),
         )
         .await;
     }
@@ -1999,13 +2045,22 @@ impl CommandEngine {
     async fn cmd_dldc(&self, event: &ChatMessageEvent) {
         let channel_login = event.broadcaster_user_login.to_lowercase();
 
-        match self
-            .discord_link
-            .discord_invite(&event.broadcaster_user_id)
-            .await
-        {
+        let result = if event.chatter_user_id == event.broadcaster_user_id {
+            self.discord_link
+                .discord_invite(&event.broadcaster_user_id)
+                .await
+        } else {
+            self.discord_link
+                .personal_discord_invite(
+                    &event.broadcaster_user_id,
+                    &channel_login,
+                    &event.chatter_user_id,
+                )
+                .await
+        };
+        match result {
             Ok(Some(url)) if !url.is_empty() => {
-                self.reply(event, &format!("Discord: {url}")).await;
+                self.reply_plain(event, &url).await;
             }
             Ok(None) | Ok(Some(_)) => {
                 self.reply(event, "Kein Discord-Link für diesen Streamer hinterlegt.")
@@ -2328,6 +2383,7 @@ impl CommandEngine {
 
 #[cfg(test)]
 mod tests {
+    include!("personal_discord_command_tests.rs");
     include!("sub_reminder_tests.rs");
     include!("watchtime_tests.rs");
     include!("command_target_tests.rs");
@@ -2424,7 +2480,12 @@ mod tests {
         }
         async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String> {
             self.lookup_calls.lock().await.push(login.into());
-            self.user_lookups.lock().await.get(login).cloned().unwrap_or(Ok(None))
+            self.user_lookups
+                .lock()
+                .await
+                .get(login)
+                .cloned()
+                .unwrap_or(Ok(None))
         }
         async fn bot_user_id(&self) -> String {
             "botid".to_string()
@@ -2783,8 +2844,18 @@ mod tests {
     }
 
     async fn apply_ddl(pool: &PgPool) {
-    sqlx::raw_sql(include_str!("../../../migrations/20260918100000_twitch_player_steam_links.sql")).execute(pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../../../migrations/20260920170000_twitch_player_multi_steam.sql")).execute(pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260918100000_twitch_player_steam_links.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260920170000_twitch_player_multi_steam.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
         for ddl in [
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, is_live INTEGER, last_game TEXT)",
             // twitch_streamers_partner_state — prod-treu: is_partner_active INTEGER
@@ -3017,9 +3088,11 @@ mod tests {
         let engine = make_engine_with_pool(pool, api.clone());
 
         assert!(!engine.handle(&make_event("!commands", false, false)).await);
-        assert!(engine
-            .handle(&make_event("!botcommands", false, false))
-            .await);
+        assert!(
+            engine
+                .handle(&make_event("!botcommands", false, false))
+                .await
+        );
         assert_eq!(api.message_count().await, 1);
     }
 
@@ -3539,7 +3612,11 @@ mod tests {
         );
 
         assert!(!engine.handle(&make_event("!invite", false, false)).await);
-        assert!(engine.handle(&make_event("!join extra", false, false)).await);
+        assert!(
+            engine
+                .handle(&make_event("!join extra", false, false))
+                .await
+        );
         assert_eq!(api.message_count().await, 0);
         assert!(engine.handle(&make_event("!join", false, false)).await);
         assert_eq!(api.message_count().await, 1);
@@ -4200,9 +4277,11 @@ mod tests {
         // Standardname nicht versehentlich wieder aktiv werden.
         assert!(engine.handle(&make_event("!commands", false, false)).await);
         assert_eq!(api.message_count().await, count);
-        assert!(!engine
-            .handle_known_bot(&make_event("!commands", false, false))
-            .await);
+        assert!(
+            !engine
+                .handle_known_bot(&make_event("!commands", false, false))
+                .await
+        );
         assert_eq!(
             api.message_count().await,
             count,

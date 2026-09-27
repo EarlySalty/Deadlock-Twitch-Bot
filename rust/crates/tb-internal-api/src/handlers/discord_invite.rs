@@ -1,9 +1,9 @@
 //! GET /internal/twitch/v1/streamer/:login/discord-invite
 
 use axum::{
-    Json,
     extract::{Path, State},
     response::IntoResponse,
+    Json,
 };
 use serde::Serialize;
 use sqlx::PgPool;
@@ -49,10 +49,12 @@ pub async fn handler(
 }
 
 /// Eine Zeile aus `twitch_streamer_invites` (für den Deadlock-Bot-Sync).
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct StreamerInviteEntry {
     pub streamer_login: String,
     pub guild_id: i64,
+    pub channel_id: Option<i64>,
+    pub twitch_user_id: Option<String>,
     pub invite_code: String,
     pub invite_url: String,
     pub created_at: Option<String>,
@@ -65,33 +67,24 @@ pub struct StreamerInviteEntry {
 /// das in seine sqlite, damit die Join-Quellen-Klassifikation Streamer-Invites
 /// erkennt (die Zuordnung liegt sonst nur in dieser Postgres-DB).
 pub async fn list_all_handler(State(pool): State<PgPool>) -> Result<impl IntoResponse, ApiError> {
-    let rows = sqlx::query!(
-        r#"SELECT streamer_login AS "streamer_login!",
-                  guild_id AS "guild_id!",
-                  invite_code AS "invite_code!",
-                  invite_url AS "invite_url!",
-                  created_at,
-                  last_sent_at
-             FROM twitch_streamer_invites
-            ORDER BY streamer_login"#
+    let rows: Vec<StreamerInviteEntry> = sqlx::query_as(
+        "SELECT i.streamer_login, i.guild_id, i.channel_id,
+                COALESCE(NULLIF(i.twitch_user_id, ''), p.twitch_user_id) AS twitch_user_id,
+                i.invite_code, i.invite_url, i.created_at, i.last_sent_at
+         FROM twitch_streamer_invites i
+         LEFT JOIN LATERAL (
+             SELECT twitch_user_id FROM twitch_streamers_partner_state
+             WHERE LOWER(twitch_login) = LOWER(i.streamer_login)
+                 AND COALESCE(is_partner_active, 0) <> 0
+             ORDER BY twitch_user_id LIMIT 1
+         ) p ON TRUE
+         ORDER BY i.streamer_login",
     )
     .fetch_all(&pool)
     .await
-    .map_err(|e| {
-        tracing::error!("streamer-invites list DB-Fehler: {e}");
+    .map_err(|error| {
+        tracing::error!(%error, "Streamer-Einladungen konnten nicht exportiert werden");
         ApiError::internal()
     })?;
-
-    let out: Vec<StreamerInviteEntry> = rows
-        .into_iter()
-        .map(|row| StreamerInviteEntry {
-            streamer_login: row.streamer_login,
-            guild_id: row.guild_id,
-            invite_code: row.invite_code,
-            invite_url: row.invite_url,
-            created_at: row.created_at,
-            last_sent_at: row.last_sent_at,
-        })
-        .collect();
-    Ok(Json(out))
+    Ok(Json(rows))
 }

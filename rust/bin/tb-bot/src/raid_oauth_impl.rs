@@ -759,9 +759,18 @@ impl TbRaidOAuthImpl {
         config: &tb_config::discord::RaidOAuth,
     ) -> Self {
         // None lässt den bisherigen Guard aus; Some([]) sperrt vollständig.
-        let allowed_guild_ids = config.allowed_guild_ids.as_ref().map(|ids| ids.iter().copied().collect());
-        let allowed_channel_ids = config.allowed_channel_ids.as_ref().map(|ids| ids.iter().copied().collect());
-        let allowed_role_ids = config.allowed_role_ids.as_ref().map(|ids| ids.iter().copied().collect());
+        let allowed_guild_ids = config
+            .allowed_guild_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect());
+        let allowed_channel_ids = config
+            .allowed_channel_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect());
+        let allowed_role_ids = config
+            .allowed_role_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect());
         let success_redirect_url = config.success_redirect_url.clone();
         Self {
             pool,
@@ -1344,8 +1353,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             tb_raid::scope_profiles::normalize_scope_profile(&state_info.scope_profile);
         let title_only_flow =
             normalized_scope_profile == tb_raid::scope_profiles::TITLE_SCOPE_PROFILE;
-        let uplink_flow =
-            normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
+        let uplink_flow = normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
         let activates_raid_features = !title_only_flow && !uplink_flow;
         let new_auth = tb_raid::auth_writer::NewAuth {
             twitch_user_id: twitch_user_id.clone(),
@@ -2957,6 +2965,13 @@ mod callback_tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        mod referral_test_support {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/streamer_referrals.rs"
+            ));
+        }
+        referral_test_support::schema(&pool).await;
         pool
     }
 

@@ -57,7 +57,15 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     pool
 }
 
+mod referral_test_support {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/streamer_referrals.rs"
+    ));
+}
+
 async fn apply_ddl(pool: &PgPool) {
+    referral_test_support::schema(pool).await;
     for ddl in [
         // Prod: alle Timestamp-Spalten TEXT, Flags INTEGER, live_ping_role_id BIGINT.
         r#"CREATE TABLE twitch_partners (
@@ -1086,7 +1094,10 @@ async fn signup_block_legt_keine_partner_zeile_an() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    assert!(result.signup_block.is_some(), "Block muss durchgereicht werden");
+    assert!(
+        result.signup_block.is_some(),
+        "Block muss durchgereicht werden"
+    );
     assert_eq!(result.hard_pause_reason.as_deref(), Some("signup_blocked"));
     assert!(!result.reactivated);
     assert_eq!(
@@ -1206,3 +1217,5 @@ async fn signup_block_ohne_eigenen_text_nutzt_standard() {
     assert_eq!(block.public_text(), tb_domain::SIGNUP_BLOCK_BODY);
     assert!(block.public_text().contains("repräsentieren"));
 }
+
+include!("fixtures/streamer_referral_cases.rs");

@@ -3575,6 +3575,7 @@ dependencies = [
  "tb-error",
  "tb-http-core",
  "tb-monitoring",
+ "tb-raid",
  "tb-transport-twitch",
  "tempfile",
  "tokio",
