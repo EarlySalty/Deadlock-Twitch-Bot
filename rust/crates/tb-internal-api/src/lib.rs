@@ -23,6 +23,9 @@ use tower_http::trace::TraceLayer;
 
 pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
+pub use handlers::patch_announcement::{
+    PatchEvent, PatchProcessError, PatchProcessOutcome, PatchReceiver, PatchReceiverExt,
+};
 pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
 pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
 pub use handlers::scam_guard::{ScamEnforceExt, ScamEnforcePort, ScamRevokeExt, ScamRevokePort};
@@ -68,15 +71,20 @@ pub fn build_internal_router(
 ) -> Router {
     use handlers::{
         chat_command, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
-        partner_signup_block, python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all,
-        scam_guard, self_explainer_log, session_detail, spam_learning, stats_native,
-        streamer_analytics_native, streamer_link, streamers, telemetry_routes,
+        partner_signup_block, patch_announcement, python_stubs, raid, raid_blacklist,
+        raid_oauth as oauth, reauth_all, scam_guard, self_explainer_log, session_detail,
+        spam_learning, stats_native, streamer_analytics_native, streamer_link, streamers,
+        telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
     Router::new()
         .route(&format!("{base}/healthz"), get(healthz::healthz_handler))
+        .route(
+            &format!("{base}/patch-announcement"),
+            post(patch_announcement::handler),
+        )
         .route(
             &format!("{base}/eventsub/dispatch"),
             post(eventsub::dispatch_handler),
