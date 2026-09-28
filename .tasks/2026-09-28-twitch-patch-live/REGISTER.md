@@ -10,7 +10,8 @@ Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzer
 | A Chat-Transport, Fortsetzung | `76c2c4c3-8aa9-494b-96a5-9f2d3535f7ae` | gpt-6-sol | derselbe Worktree | derselbe Branch | Commit `ecd21dfa` gepusht; ursprünglicher Worker gesettelt |
 | A unabhängiges Vorabreview | `a1556ccf-e805-423f-a8b3-49404073cfd9` | gpt-6-astra | lesend im A-Worktree | kein eigener Branch | drei bestätigte Blocker; Baseline der 36 roten Tests gemessen |
 | A Fix nach Review | `e147fe44-27ea-4c91-8799-e25854314c4f` | gpt-6-luna | derselbe A-Worktree | `feat/twitch-patch-transport-20260928` | Fix `8a01fb17` gepusht; Selbstreview ALLOW, 870/36 tb-chat, 113/0 Transport; gesettelt |
-| A unabhängige Nachprüfung | `51d2621f-acc1-41bf-8310-9a2e0a596744` | gpt-6-astra | lesend im A-Worktree | kein eigener Branch | prüft drei bestätigte A-Befunde |
+| A unabhängige Nachprüfung | `51d2621f-acc1-41bf-8310-9a2e0a596744` | gpt-6-astra | lesend im A-Worktree | kein eigener Branch | A2/A3 behoben; konkreter A1-Guard-Race bestätigt, Korrektur vorgeschlagen, gesettelt |
+| A Guard-Race-Fix | `51d25b69-8577-4f77-a1f9-d91006d72619` | gpt-6-luna | `/home/nathanael/.worktrees/twitch-patch-transport-20260928` | `feat/twitch-patch-transport-20260928` | arbeitet nach `WORKER-A-RACE-FIX.md`, danach unabhängig nachprüfen |
 | B Empfänger | `a0eb3799-f205-46a5-bcc9-0bef8720f5c9` | gpt-6-sol | `/home/nathanael/.worktrees/twitch-patch-receiver-20260928` | `feat/twitch-patch-receiver-20260928` | Commit `2ac90595` gepusht, 322 Crate-Tests bestanden; Vorabreview offen |
 | B unabhängiges Vorabreview | `2e5efc44-5585-401f-9ae1-f793b4e3da7c` | gpt-6-astra | lesend im B-Worktree | kein eigener Branch | fünf bestätigte Befunde in `REVIEW.md`, gesettelt |
 | B Fix nach Review | `0dd42e92-bf40-49ce-bf99-7b441e27b4e1` | gpt-6-luna | derselbe B-Worktree | `feat/twitch-patch-receiver-20260928` | behebt Snapshot, Laufzeitrollen, Deadline und Diagnose |
@@ -19,6 +20,6 @@ Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzer
 | C unabhängiges Vorabreview | `0e665ed3-6e4d-4446-8a39-adf211215555` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | drei bestätigte Blocker in `REVIEW.md`, Fix nötig |
 | C Fix nach Review | `ff5e7f5c-b402-4e24-a11d-950c8519cd54` | gpt-6-luna | derselbe C-Worktree | `feat/twitch-patch-feed-20260928` | Commits `228d0585`, `c61f168c` gepusht; check/fmt und 12 Tests bestanden, gesettelt |
 | C unabhängige Nachprüfung | `62036f18-bf3e-4462-9efc-bb04f046a6cb` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | drei C-Befunde behoben, fertig J/Fix nötig N; gesettelt, gemeinsamer PostgreSQL-Nachweis offen |
-| D Integration | ausstehend | worker_gross | `/home/nathanael/.worktrees/twitch-patch-integration-20260928` | `feat/twitch-patch-integration-20260928` | wartet auf A/B/C |
+| D Integration | ausstehend | worker_gross | `/home/nathanael/.worktrees/twitch-patch-integration-20260928` | `feat/twitch-patch-integration-20260928` | sauber ab origin/main `992e2659` vorbereitet; wartet auf unabhängige A- und B-Freigabe |
 
 Orchestrations-Artefakte: `/home/nathanael/.worktrees/twitch-patch-orchestration-20260928/.tasks/2026-09-28-twitch-patch-live/` auf Branch `feat/patch-twitch-orchestration-20260928`, Basis `992e265961048ee72d03a483673c92ef3c49e715`.
