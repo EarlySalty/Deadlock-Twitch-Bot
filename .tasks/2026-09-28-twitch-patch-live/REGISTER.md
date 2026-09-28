@@ -16,7 +16,8 @@ Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzer
 | C Website-Beobachter, erster Lauf | `518a816b-2670-4d20-87cb-0da4e99189a6` | claude-opus-5-5 | `/home/nathanael/.worktrees/twitch-patch-feed-20260928` | `feat/twitch-patch-feed-20260928` | Kontingentfehler vor Code, gesettelt; nicht wieder aufnehmen |
 | C Website-Beobachter, Fortsetzung | `8d3d07a7-51d1-47a6-b7d7-9afafb92dea3` | gpt-6-sol | derselbe Worktree | derselbe Branch | Commit `7593923f` gepusht, 10 Tests; unabhängiges Review und Integration offen |
 | C unabhängiges Vorabreview | `0e665ed3-6e4d-4446-8a39-adf211215555` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | drei bestätigte Blocker in `REVIEW.md`, Fix nötig |
-| C Fix nach Review | `ff5e7f5c-b402-4e24-a11d-950c8519cd54` | gpt-6-luna | derselbe C-Worktree | `feat/twitch-patch-feed-20260928` | ersetzt Cursor durch Einzelbeobachtungen |
+| C Fix nach Review | `ff5e7f5c-b402-4e24-a11d-950c8519cd54` | gpt-6-luna | derselbe C-Worktree | `feat/twitch-patch-feed-20260928` | Commits `228d0585`, `c61f168c` gepusht; check/fmt und 12 Tests bestanden, gesettelt |
+| C unabhängige Nachprüfung | `62036f18-bf3e-4462-9efc-bb04f046a6cb` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | prüft drei ursprüngliche Befunde; Mittelmodelle nicht frei oder Autor |
 | D Integration | ausstehend | worker_gross | `/home/nathanael/.worktrees/twitch-patch-integration-20260928` | `feat/twitch-patch-integration-20260928` | wartet auf A/B/C |
 
 Orchestrations-Artefakte: `/home/nathanael/.worktrees/twitch-patch-orchestration-20260928/.tasks/2026-09-28-twitch-patch-live/` auf Branch `feat/patch-twitch-orchestration-20260928`, Basis `992e265961048ee72d03a483673c92ef3c49e715`.
