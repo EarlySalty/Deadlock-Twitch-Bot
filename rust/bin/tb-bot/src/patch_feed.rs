@@ -212,8 +212,7 @@ async fn fetch_article<H: FeedHttp>(
 }
 
 fn pending_is_expired(now: DateTime<Utc>, observed_at: DateTime<Utc>) -> bool {
-    now.signed_duration_since(observed_at)
-        >= chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS)
+    now.signed_duration_since(observed_at) >= chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS)
 }
 
 async fn run_feed<H, S, D, Fut>(
@@ -314,7 +313,7 @@ async fn observe_index(
                      VALUES ($1, $2, 'historical', $2) ON CONFLICT (patch_id) DO NOTHING",
                 )
                 .bind(id)
-                .bind(bootstrapped_at.clone())
+                .bind(bootstrapped_at)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -444,6 +443,7 @@ where
         );
         return Ok(false);
     }
+    let article_id = article.id;
     callback(article.into_patch_article(observed_at))
         .await
         .map_err(|error| PatchFeedError::Callback(Box::new(error)))?;
@@ -451,7 +451,7 @@ where
         "UPDATE twitch_patch_feed_observations \
          SET status = 'processed', finalized_at = NOW() WHERE patch_id = $1 AND status = 'pending'",
     )
-    .bind(article.id)
+    .bind(article_id)
     .execute(&mut *delivery)
     .await?;
     delivery.commit().await?;
@@ -591,7 +591,7 @@ mod tests {
                 .unwrap()
                 .observations
                 .get(&id)
-                .map(|observation| observation.observed_at.clone())
+                .map(|observation| observation.observed_at)
         }
 
         fn set_observed_at(&self, id: i64, observed_at: DateTime<Utc>) {
@@ -643,7 +643,7 @@ mod tests {
                 .filter(|(_, observation)| observation.status == "pending")
                 .map(|(id, observation)| PendingObservation {
                     id: *id,
-                    observed_at: observation.observed_at.clone(),
+                    observed_at: observation.observed_at,
                 })
                 .collect();
             pending.sort_by_key(|observation| (observation.observed_at, observation.id));
@@ -960,7 +960,10 @@ mod tests {
             .unwrap(),
             1
         );
-        assert_eq!(cursor.current_status(286), Some("expired_missing_from_index"));
+        assert_eq!(
+            cursor.current_status(286),
+            Some("expired_missing_from_index")
+        );
         assert_eq!(sent, vec![287]);
     }
 
