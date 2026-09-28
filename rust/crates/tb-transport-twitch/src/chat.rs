@@ -348,6 +348,63 @@ impl HelixClient {
         }
     }
 
+    pub async fn send_source_only_chat_message(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, HelixError> {
+        let resp = self
+            .post("/chat/messages")
+            .await?
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "broadcaster_id": broadcaster_id,
+                "sender_id": sender_id,
+                "message": message,
+                "for_source_only": true,
+            }))
+            .send()
+            .await?;
+
+        let status = resp.status().as_u16();
+        if status == 200 {
+            let parsed: SendMessageResponse =
+                resp.json()
+                    .await
+                    .map_err(|_| HelixError::AmbiguousOutcome {
+                        reason: "source_only_chat_body_unreadable",
+                    })?;
+            let [item] = parsed.data.as_slice() else {
+                return Err(HelixError::AmbiguousOutcome {
+                    reason: "source_only_chat_result_missing",
+                });
+            };
+            if item.is_sent {
+                return Ok(SendOutcome::Sent);
+            }
+            let (code, msg) = item
+                .drop_reason
+                .as_ref()
+                .map(|r| (r.code.clone(), r.message.clone()))
+                .unwrap_or_else(|| ("unknown".to_string(), String::new()));
+            return Ok(SendOutcome::Dropped { code, message: msg });
+        }
+        if (200..300).contains(&status) {
+            return Err(HelixError::AmbiguousOutcome {
+                reason: "source_only_chat_unexpected_success_status",
+            });
+        }
+        if status == 401 {
+            self.invalidate_app_token().await;
+        }
+        let body_text = resp.text().await.unwrap_or_default();
+        Ok(SendOutcome::HttpError {
+            status,
+            body: body_text.chars().take(300).collect(),
+        })
+    }
+
     /// Sendet einen Whisper via `POST /whispers`.
     ///
     /// Scope: `user:manage:whispers`; `from_user_id` muss zur User-Token-
@@ -728,7 +785,7 @@ pub fn parse_created_at(s: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
     use crate::client::{HelixClient, HelixConfig};
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{body_partial_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Baut einen HelixClient gegen einen MockServer (ohne App-Token-Präfetch).
@@ -837,6 +894,116 @@ mod tests {
             matches!(result, SendOutcome::Dropped { ref code, .. } if code == "sender_banned"),
             "{result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn source_only_uses_app_token_and_explicit_source_flag() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(header("Client-Id", "cid"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "111",
+                "sender_id": "222",
+                "message": "Patch!",
+                "for_source_only": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"message_id": "abc", "is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::Sent
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_200_not_sent_is_drop() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "is_sent": false,
+                    "drop_reason": {"code": "sender_timedout", "message": "Timed out"}
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::Dropped {
+                code: "sender_timedout".to_string(),
+                message: "Timed out".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn source_only_401_does_not_retry_with_user_token() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("missing grant"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::HttpError {
+                status: 401,
+                body: "missing grant".to_string()
+            }
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_ambiguous_success_never_claims_delivery() {
+        for (status, body) in [
+            (200, "not-json"),
+            (200, r#"{"data":[]}"#),
+            (200, r#"{"data":[{"is_sent":true},{"is_sent":true}]}"#),
+            (204, ""),
+        ] {
+            let server = MockServer::start().await;
+            let client = mock_client(&server).await;
+            Mock::given(method("POST"))
+                .and(path("/helix/chat/messages"))
+                .respond_with(ResponseTemplate::new(status).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            assert!(matches!(
+                client
+                    .send_source_only_chat_message("111", "222", "Patch!")
+                    .await,
+                Err(HelixError::AmbiguousOutcome { .. })
+            ));
+            server.verify().await;
+        }
     }
 
     // -----------------------------------------------------------------------

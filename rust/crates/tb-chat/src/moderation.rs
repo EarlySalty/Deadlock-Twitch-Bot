@@ -187,6 +187,32 @@ impl ChatApi for HelixChatClient {
         })
     }
 
+    async fn send_source_only_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        let sender_id = self.token_mgr.bot_user_id().await;
+        let is_twitch_id = |id: &str| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit());
+        if !is_twitch_id(broadcaster_id) || !is_twitch_id(&sender_id) {
+            return Err("source_only_chat_invalid_identity".to_string());
+        }
+        if message.trim().is_empty() || message.chars().count() > 500 {
+            return Err("source_only_chat_invalid_message".to_string());
+        }
+        match self
+            .helix
+            .send_source_only_chat_message(broadcaster_id, &sender_id, message)
+            .await
+        {
+            Ok(outcome) => Ok(outcome),
+            Err(tb_transport_twitch::HelixError::AmbiguousOutcome { reason }) => {
+                Err(format!("source_only_chat_outcome_unknown: {reason}"))
+            }
+            Err(e) => Err(format!("source_only_chat_transport_failed: {e}")),
+        }
+    }
+
     /// Sendet Whisper — 2-Attempt: 401 → force_refresh → retry.
     async fn send_whisper(&self, to_user_id: &str, message: &str) -> Result<bool, String> {
         let from_user_id = self.token_mgr.bot_user_id().await;
@@ -1417,6 +1443,8 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use wiremock::matchers::{body_partial_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -----------------------------------------------------------------------
     // Mock-ChatApi
@@ -1515,6 +1543,92 @@ mod tests {
     // -----------------------------------------------------------------------
     // ModerationEngine-Tests
     // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn source_only_without_implementation_fails_closed() {
+        let api = MockApi::with_ban_result(BanOutcome::Banned);
+        assert_eq!(
+            api.send_source_only_message("111", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_not_supported"
+        );
+        assert_eq!(api.send_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn source_only_uses_validated_bot_identity_and_rejects_invalid_input() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth seed-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "login": "bot",
+                "user_id": "222",
+                "scopes": ["user:bot", "user:write:chat"],
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "111",
+                "sender_id": "222",
+                "message": "Patch!",
+                "for_source_only": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut config = tb_transport_twitch::HelixConfig::new("cid", "sec");
+        config.helix_base = format!("{}/helix", server.uri());
+        config.token_url = format!("{}/oauth2/token", server.uri());
+        let helix = Arc::new(tb_transport_twitch::HelixClient::new(config).unwrap());
+        let token_mgr = Arc::new(
+            BotTokenManager::new("cid".to_string(), "sec".to_string())
+                .unwrap()
+                .with_urls(
+                    format!("{}/validate", server.uri()),
+                    format!("{}/oauth2/token", server.uri()),
+                ),
+        );
+        token_mgr
+            .initialize(Some("seed-token"), "refresh")
+            .await
+            .unwrap();
+        let api = HelixChatClient::new(helix, token_mgr);
+        assert_eq!(
+            api.send_source_only_message("111", "Patch!").await.unwrap(),
+            SendOutcome::Sent
+        );
+        assert_eq!(
+            api.send_source_only_message("other", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_invalid_identity"
+        );
+        assert_eq!(
+            api.send_source_only_message("111", &"x".repeat(501))
+                .await
+                .unwrap_err(),
+            "source_only_chat_invalid_message"
+        );
+        server.verify().await;
+    }
 
     async fn pg_pool_in_schema_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = match std::env::var("TB_TEST_DATABASE_URL") {

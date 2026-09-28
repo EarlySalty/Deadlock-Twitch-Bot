@@ -161,21 +161,12 @@ impl TimeoutTrackingChatApi {
         .flatten();
         login.filter(|l| !l.trim().is_empty())
     }
-}
 
-#[async_trait]
-impl ChatApi for TimeoutTrackingChatApi {
-    /// Sendet die Nachricht über `inner` und meldet einen Bot-Timeout-Drop an
-    /// den Guard. Das Original-Ergebnis bleibt unverändert.
-    async fn send_message(
+    async fn track_send_outcome(
         &self,
         broadcaster_id: &str,
-        message: &str,
+        result: Result<SendOutcome, String>,
     ) -> Result<SendOutcome, String> {
-        let result = self.inner.send_message(broadcaster_id, message).await;
-
-        // Nur im seltenen Bot-Timeout-Drop-Fall die DB für die id→login-Auflösung
-        // bemühen (moderation.py:1535–1538).
         if let Ok(outcome) = &result {
             let timeout_drop = is_bot_timeout_drop(outcome).is_some();
             let bot_ban_reason = bot_banned_reason(outcome);
@@ -206,6 +197,37 @@ impl ChatApi for TimeoutTrackingChatApi {
         }
 
         result
+    }
+}
+
+#[async_trait]
+impl ChatApi for TimeoutTrackingChatApi {
+    /// Sendet die Nachricht über `inner` und meldet einen Bot-Timeout-Drop an
+    /// den Guard. Das Original-Ergebnis bleibt unverändert.
+    async fn send_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.track_send_outcome(
+            broadcaster_id,
+            self.inner.send_message(broadcaster_id, message).await,
+        )
+        .await
+    }
+
+    async fn send_source_only_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.track_send_outcome(
+            broadcaster_id,
+            self.inner
+                .send_source_only_message(broadcaster_id, message)
+                .await,
+        )
+        .await
     }
 
     async fn send_announcement(
@@ -338,6 +360,7 @@ mod tests {
 
     struct MockApi {
         send_calls: AtomicUsize,
+        source_only_calls: AtomicUsize,
         outcome: SendOutcome,
     }
 
@@ -345,6 +368,7 @@ mod tests {
         fn with_outcome(outcome: SendOutcome) -> Arc<Self> {
             Arc::new(Self {
                 send_calls: AtomicUsize::new(0),
+                source_only_calls: AtomicUsize::new(0),
                 outcome,
             })
         }
@@ -354,6 +378,14 @@ mod tests {
     impl ChatApi for MockApi {
         async fn send_message(&self, _b: &str, _m: &str) -> Result<SendOutcome, String> {
             self.send_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.outcome.clone())
+        }
+        async fn send_source_only_message(
+            &self,
+            _b: &str,
+            _m: &str,
+        ) -> Result<SendOutcome, String> {
+            self.source_only_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.outcome.clone())
         }
         async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
@@ -530,6 +562,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_only_decorator_never_falls_back_to_ordinary_chat() {
+        let inner = MockApi::with_outcome(SendOutcome::Sent);
+        let guard = Arc::new(TimeoutGuard::new());
+        let pool = sqlx::PgPool::connect_lazy("postgres://x:x@127.0.0.1:1/x").unwrap();
+        let api = TimeoutTrackingChatApi::new(inner.clone(), guard, pool);
+
+        assert_eq!(
+            api.send_source_only_message("111", "Patch!").await.unwrap(),
+            SendOutcome::Sent
+        );
+        assert_eq!(inner.source_only_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(inner.send_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn decorator_channel_settings_drop_triggert_kein_record() {
         let inner = MockApi::with_outcome(SendOutcome::Dropped {
             code: "channel_settings".into(),
@@ -614,12 +661,24 @@ mod db_tests {
     /// Mock-ChatApi, das immer einen sender_timedout-Drop liefert.
     struct TimedOutApi {
         send_calls: AtomicUsize,
+        source_only_calls: AtomicUsize,
     }
 
     #[async_trait]
     impl ChatApi for TimedOutApi {
         async fn send_message(&self, _b: &str, _m: &str) -> Result<SendOutcome, String> {
             self.send_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(SendOutcome::Dropped {
+                code: "sender_timedout".into(),
+                message: "Bot ist getimed outed".into(),
+            })
+        }
+        async fn send_source_only_message(
+            &self,
+            _b: &str,
+            _m: &str,
+        ) -> Result<SendOutcome, String> {
+            self.source_only_calls.fetch_add(1, Ordering::SeqCst);
             Ok(SendOutcome::Dropped {
                 code: "sender_timedout".into(),
                 message: "Bot ist getimed outed".into(),
@@ -671,6 +730,7 @@ mod db_tests {
 
         let inner = Arc::new(TimedOutApi {
             send_calls: AtomicUsize::new(0),
+            source_only_calls: AtomicUsize::new(0),
         });
         let guard = Arc::new(TimeoutGuard::new());
         let api = TimeoutTrackingChatApi::new(inner.clone(), Arc::clone(&guard), pool.clone());
@@ -695,11 +755,43 @@ mod db_tests {
     }
 
     #[tokio::test]
+    async fn source_only_timeout_drop_triggert_den_gleichen_guard() {
+        let pool = pool_or_skip!("tt_source_only_mute");
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) \
+             VALUES ('111', 'streamerlogin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let inner = Arc::new(TimedOutApi {
+            send_calls: AtomicUsize::new(0),
+            source_only_calls: AtomicUsize::new(0),
+        });
+        let guard = Arc::new(TimeoutGuard::new());
+        let api = TimeoutTrackingChatApi::new(inner.clone(), Arc::clone(&guard), pool);
+        for _ in 0..TIMEOUT_MUTE_DAILY_THRESHOLD {
+            assert!(matches!(
+                api.send_source_only_message("111", "Patch!").await.unwrap(),
+                SendOutcome::Dropped { ref code, .. } if code == "sender_timedout"
+            ));
+        }
+        assert!(guard.is_muted("streamerlogin"));
+        assert_eq!(
+            inner.source_only_calls.load(Ordering::SeqCst),
+            TIMEOUT_MUTE_DAILY_THRESHOLD
+        );
+        assert_eq!(inner.send_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn decorator_ohne_login_registriert_nichts() {
         let pool = pool_or_skip!("tt_decorator_no_login");
         // KEINE Identität angelegt → resolve_login findet nichts.
         let inner = Arc::new(TimedOutApi {
             send_calls: AtomicUsize::new(0),
+            source_only_calls: AtomicUsize::new(0),
         });
         let guard = Arc::new(TimeoutGuard::new());
         let api = TimeoutTrackingChatApi::new(inner, Arc::clone(&guard), pool);
