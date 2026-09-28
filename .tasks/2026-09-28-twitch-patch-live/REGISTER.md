@@ -7,11 +7,13 @@ Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzer
 | Paket | Thread-ID | Modell | Worktree | Branch | Status / letzte Meldung |
 |---|---|---|---|---|---|
 | A Chat-Transport, erster Lauf | `4539f485-8243-415b-83e1-67e37432fe62` | claude-opus-5-5 | `/home/nathanael/.worktrees/twitch-patch-transport-20260928` | `feat/twitch-patch-transport-20260928` | Kontingentfehler nach drei Edits, gesettelt; nicht wieder aufnehmen |
-| A Chat-Transport, Fortsetzung | `76c2c4c3-8aa9-494b-96a5-9f2d3535f7ae` | gpt-6-sol | derselbe Worktree | derselbe Branch | baut auf vorhandenem Stand |
-| B Empfänger | ausstehend | worker_mittel | `/home/nathanael/.worktrees/twitch-patch-receiver-20260928` | `feat/twitch-patch-receiver-20260928` | wartet auf A |
+| A Chat-Transport, Fortsetzung | `76c2c4c3-8aa9-494b-96a5-9f2d3535f7ae` | gpt-6-sol | derselbe Worktree | derselbe Branch | Commit `ecd21dfa` gepusht; Vollsuite 36 rot ohne Baseline, Vorabreview offen |
+| A unabhängiges Vorabreview | `a1556ccf-e805-423f-a8b3-49404073cfd9` | gpt-6-astra | lesend im A-Worktree | kein eigener Branch | prüft Transport und Test-Baseline |
+| B Empfänger | `a0eb3799-f205-46a5-bcc9-0bef8720f5c9` | gpt-6-sol | `/home/nathanael/.worktrees/twitch-patch-receiver-20260928` | `feat/twitch-patch-receiver-20260928` | baut auf `ecd21dfa` |
 | C Website-Beobachter, erster Lauf | `518a816b-2670-4d20-87cb-0da4e99189a6` | claude-opus-5-5 | `/home/nathanael/.worktrees/twitch-patch-feed-20260928` | `feat/twitch-patch-feed-20260928` | Kontingentfehler vor Code, gesettelt; nicht wieder aufnehmen |
 | C Website-Beobachter, Fortsetzung | `8d3d07a7-51d1-47a6-b7d7-9afafb92dea3` | gpt-6-sol | derselbe Worktree | derselbe Branch | Commit `7593923f` gepusht, 10 Tests; unabhängiges Review und Integration offen |
-| C unabhängiges Vorabreview | `0e665ed3-6e4d-4446-8a39-adf211215555` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | läuft gegen Commit `7593923f` |
+| C unabhängiges Vorabreview | `0e665ed3-6e4d-4446-8a39-adf211215555` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | drei bestätigte Blocker in `REVIEW.md`, Fix nötig |
+| C Fix nach Review | `ff5e7f5c-b402-4e24-a11d-950c8519cd54` | gpt-6-luna | derselbe C-Worktree | `feat/twitch-patch-feed-20260928` | ersetzt Cursor durch Einzelbeobachtungen |
 | D Integration | ausstehend | worker_gross | `/home/nathanael/.worktrees/twitch-patch-integration-20260928` | `feat/twitch-patch-integration-20260928` | wartet auf A/B/C |
 
 Orchestrations-Artefakte: `/home/nathanael/.worktrees/twitch-patch-orchestration-20260928/.tasks/2026-09-28-twitch-patch-live/` auf Branch `feat/patch-twitch-orchestration-20260928`, Basis `992e265961048ee72d03a483673c92ef3c49e715`.

@@ -1,4 +1,4 @@
-status: aktiv (2026-09-28)
+status: überholt (2026-09-28), Cursor-Teil ersetzt durch `WORKER-C-FIX.md` und `REVIEW.md`
 
 # Worker C: Website-Patchfeed im Rust-Twitch-Bot beobachten
 

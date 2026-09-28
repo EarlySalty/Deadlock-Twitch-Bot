@@ -1,0 +1,11 @@
+status: aktiv (2026-09-28)
+
+# Unabhängiges Vorabreview A: Chat-Transport
+
+Lies `AUFTRAG.md`, `PAKETE.md` und `WORKER-A.md` im selben Ordner. Prüfe lesend Commit `ecd21dfa` im Worktree `/home/nathanael/.worktrees/twitch-patch-transport-20260928`, Branch `feat/twitch-patch-transport-20260928`, gegen Basis `992e2659`. Autor war GPT 6 Sol. Keine Edits, keine Unter-Threads, kein Commit, Merge, Deploy oder echter Chatversand. Das kombinierte Review aller Pakete folgt später.
+
+Ziel: Die bestehende `ChatApi` kann eine Patchnachricht genau in den eigenen Partnerkanal senden, selbst während Shared Chat. Die Twitch-Dokumentation zu `POST /helix/chat/messages` erlaubt `for_source_only=true` ausschließlich mit App Access Token; dafür braucht die App `user:write:chat` und `user:bot` des Senders sowie `channel:bot` des Broadcasters oder Moderatorstatus des Senders. Ein User Access Token mit `for_source_only` ergibt HTTP 400. Prüfe App-Token, Sender-ID, Opt-out und bestehende Kanal- und Timeout-Guards bis zur untersten Sendestelle, `is_sent=false`/`drop_reason`, 401/403/429, mehrdeutige Netzfehler, Datenleck in Fehlerlogs und Shared-Chat-Fanout. Empfänger ohne bestätigtes Chat-Schreibrecht gehören nicht in den späteren Snapshot von B.
+
+Der Autor meldete `cargo check` und Clippy erfolgreich, 120 Transporttests, fünf Chat-Tests und einen isolierten DB-Test bestanden. Die vollständige `tb-chat`-Suite meldete 868 bestanden und 36 fehlgeschlagen, ohne gemessene Baseline. Untersuche, welche der 36 Fehler auf diesem Commit neu sind: denselben Befehl mit denselben Voraussetzungen gegen die unveränderte Basis aus einem sauberen Tree ausführen oder begründet erklären, warum das nicht möglich ist. `cargo fmt --check` zeigte 147 Abweichungen auf Feature und Basis; prüfe nur die geänderten Dateien. Keine vorbestehenden Fehler behaupten ohne Zahl-gegen-Zahl-Beleg.
+
+Ergebnis: nummerierte Befunde mit `Datei:Zeile`, Eingabefall, Folge, Fix und Testbefund; `fertig J/N`, Abweichungen und `Fix nötig J/N`. Melde an Intent-Thread `4ddc68d5-0c42-41ce-b02c-c1be909c20fd`. Bei Bump-up: `[Bump-up] Review A: Grund: ... Erledigt: ... Worktree: /home/nathanael/.worktrees/twitch-patch-transport-20260928 Offen: ...`.
