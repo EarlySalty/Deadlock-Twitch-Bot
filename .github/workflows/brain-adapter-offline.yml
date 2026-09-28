@@ -32,7 +32,7 @@ jobs:
         run: cargo fetch --manifest-path rust/Cargo.toml --locked
       - name: Test current checkout without application credentials
         run: bash rust/scripts/check-brain-consumer.sh ${{ matrix.suite }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: brain-adapter-${{ matrix.suite }}-${{ github.sha }}-${{ github.run_attempt }}
