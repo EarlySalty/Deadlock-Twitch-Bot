@@ -11,6 +11,7 @@ use tb_transport_twitch::{HelixClient, HelixStream};
 
 const EVENT_TTL_SECONDS: i64 = 120;
 const SNAPSHOT_TTL_SECONDS: i64 = 120;
+const SOURCE_ONLY_SEND_RESERVE_SECONDS: i64 = 45;
 const MESSAGE_PREFIX: &str = "Neuer Deadlock-Patch ist da 🔥 Die Änderungen auf Deutsch: ";
 const ARTICLE_PREFIX: &str = "https://deutsche-deadlock-community.de/patchnotes/patch-";
 
@@ -100,11 +101,19 @@ fn fresh(at: DateTime<Utc>, now: DateTime<Utc>, ttl: i64) -> bool {
     at <= now && now.signed_duration_since(at) <= chrono::Duration::seconds(ttl)
 }
 
+fn source_only_send_window_open(detected_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    fresh(
+        detected_at,
+        now,
+        EVENT_TTL_SECONDS - SOURCE_ONLY_SEND_RESERVE_SECONDS,
+    )
+}
+
 #[derive(Debug)]
 pub enum PatchProcessError {
     Invalid(&'static str),
     Unavailable,
-    Database,
+    Database { sqlstate: Option<String> },
 }
 
 impl fmt::Display for PatchProcessError {
@@ -112,7 +121,7 @@ impl fmt::Display for PatchProcessError {
         match self {
             Self::Invalid(message) => write!(f, "{message}"),
             Self::Unavailable => f.write_str("patch transport unavailable"),
-            Self::Database => f.write_str("patch persistence unavailable"),
+            Self::Database { .. } => f.write_str("patch persistence unavailable"),
         }
     }
 }
@@ -123,7 +132,9 @@ impl From<PatchProcessError> for ApiError {
     fn from(error: PatchProcessError) -> Self {
         match error {
             PatchProcessError::Invalid(message) => ApiError::bad_request(message),
-            PatchProcessError::Unavailable | PatchProcessError::Database => ApiError::unavailable(),
+            PatchProcessError::Unavailable | PatchProcessError::Database { .. } => {
+                ApiError::unavailable()
+            }
         }
     }
 }
@@ -139,27 +150,35 @@ pub enum PatchProcessOutcome {
 #[derive(Debug, sqlx::FromRow)]
 struct Candidate {
     twitch_user_id: String,
-    last_stream_id: Option<String>,
-    last_seen_at: Option<String>,
+    last_stream_id: String,
 }
 
-fn eligible(
-    candidate: &Candidate,
-    stream: &HelixStream,
-    event: &PatchEvent,
-    now: DateTime<Utc>,
-) -> bool {
+fn eligible(candidate: &Candidate, stream: &HelixStream, event: &PatchEvent) -> bool {
     candidate.twitch_user_id == stream.user_id
+        && candidate.last_stream_id == stream.id
         && !stream.id.is_empty()
-        && candidate.last_stream_id.as_deref() == Some(stream.id.as_str())
         && stream.game_name == "Deadlock"
         && !stream.game_id.is_empty()
         && DateTime::parse_from_rfc3339(&stream.started_at).is_ok_and(|at| at <= event.detected_at)
-        && candidate
-            .last_seen_at
-            .as_deref()
-            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
-            .is_some_and(|at| fresh(at.with_timezone(&Utc), now, SNAPSHOT_TTL_SECONDS))
+}
+
+#[derive(Debug)]
+struct DeliveryResult {
+    status: &'static str,
+    drop_code: Option<String>,
+    http_status: Option<i16>,
+    uncertainty_reason: Option<&'static str>,
+}
+
+impl DeliveryResult {
+    fn status(status: &'static str) -> Self {
+        Self {
+            status,
+            drop_code: None,
+            http_status: None,
+            uncertainty_reason: None,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -171,7 +190,8 @@ trait Transport: Send + Sync {
         id: &str,
         stream_id: &str,
         message: &str,
-    ) -> Result<&'static str, PatchProcessError>;
+        detected_at: DateTime<Utc>,
+    ) -> Result<DeliveryResult, PatchProcessError>;
 }
 
 struct LiveTransport<'a> {
@@ -244,9 +264,18 @@ impl Transport for LiveTransport<'_> {
         id: &str,
         stream_id: &str,
         message: &str,
-    ) -> Result<&'static str, PatchProcessError> {
+        detected_at: DateTime<Utc>,
+    ) -> Result<DeliveryResult, PatchProcessError> {
         if !self.can_send(id, stream_id).await? {
-            return Ok("skipped");
+            return Ok(DeliveryResult::status("skipped"));
+        }
+        if !source_only_send_window_open(detected_at, Utc::now()) {
+            return Ok(DeliveryResult {
+                status: "skipped",
+                drop_code: None,
+                http_status: None,
+                uncertainty_reason: Some("event_expired_before_post"),
+            });
         }
         Ok(
             match self
@@ -255,17 +284,81 @@ impl Transport for LiveTransport<'_> {
                 .send_source_only_message(id, message)
                 .await
             {
-                Ok(SendOutcome::Sent) => "sent",
-                Ok(SendOutcome::Dropped { .. }) => "dropped",
-                Ok(SendOutcome::HttpError { .. }) | Err(_) => "uncertain",
+                Ok(SendOutcome::Sent) => DeliveryResult::status("sent"),
+                Ok(SendOutcome::Dropped { code, .. }) => DeliveryResult {
+                    status: "dropped",
+                    drop_code: Some(redact_drop_code(&code)),
+                    http_status: None,
+                    uncertainty_reason: None,
+                },
+                Ok(SendOutcome::HttpError { status, .. }) => DeliveryResult {
+                    status: "uncertain",
+                    drop_code: None,
+                    http_status: Some(status as i16),
+                    uncertainty_reason: Some("http_error"),
+                },
+                Err(error) => DeliveryResult {
+                    status: "uncertain",
+                    drop_code: None,
+                    http_status: None,
+                    uncertainty_reason: Some(send_error_reason(&error)),
+                },
             },
         )
     }
 }
 
-fn database_error(_: sqlx::Error) -> PatchProcessError {
-    tracing::error!("Patch announcement persistence failed");
-    PatchProcessError::Database
+fn redact_drop_code(code: &str) -> String {
+    if !code.is_empty()
+        && code.len() <= 64
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        code.to_owned()
+    } else {
+        "redacted".to_owned()
+    }
+}
+
+fn send_error_reason(error: &str) -> &'static str {
+    if error.starts_with("source_only_chat_outcome_unknown:") {
+        "ambiguous_http_outcome"
+    } else if error.starts_with("source_only_chat_transport_failed:") {
+        "transport_error"
+    } else {
+        "send_error"
+    }
+}
+
+fn database_error(error: sqlx::Error) -> PatchProcessError {
+    let sqlstate = error
+        .as_database_error()
+        .and_then(|database| database.code())
+        .map(|code| code.into_owned());
+    tracing::error!(sqlstate = ?sqlstate, "Patch announcement persistence failed");
+    PatchProcessError::Database { sqlstate }
+}
+
+fn log_database_context(error: &PatchProcessError, event_id: &str, broadcaster_id: &str) {
+    if let PatchProcessError::Database { sqlstate } = error {
+        tracing::error!(
+            event_id,
+            broadcaster_id,
+            sqlstate = ?sqlstate,
+            "Patch announcement delivery database operation failed"
+        );
+    }
+}
+
+fn database_error_for(
+    error: sqlx::Error,
+    event_id: &str,
+    broadcaster_id: &str,
+) -> PatchProcessError {
+    let error = database_error(error);
+    log_database_context(&error, event_id, broadcaster_id);
+    error
 }
 
 pub struct PatchReceiver {
@@ -294,12 +387,20 @@ impl PatchReceiver {
         &self,
         event: &PatchEvent,
     ) -> Result<PatchProcessOutcome, PatchProcessError> {
-        tokio::time::timeout(
+        let result = tokio::time::timeout(
             Duration::from_secs(EVENT_TTL_SECONDS as u64),
             process(&self.pool, &LiveTransport { receiver: self }, event),
         )
         .await
-        .map_err(|_| PatchProcessError::Unavailable)?
+        .map_err(|_| PatchProcessError::Unavailable)?;
+        if let Err(PatchProcessError::Database { sqlstate }) = &result {
+            tracing::error!(
+                event_id = %event.event_id,
+                sqlstate = ?sqlstate,
+                "Patch announcement event database operation failed"
+            );
+        }
+        result
     }
 }
 
@@ -337,19 +438,18 @@ async fn process(
     .map_err(database_error)?
     .rows_affected() == 1;
     if inserted {
+        let patch_id = event
+            .article_url
+            .strip_prefix(ARTICLE_PREFIX)
+            .and_then(|value| value.strip_suffix('/'))
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or(PatchProcessError::Invalid("invalid article URL"))?;
         let candidates = sqlx::query_as::<_, Candidate>(
-            "SELECT DISTINCT p.twitch_user_id, l.last_stream_id, l.last_seen_at \
-             FROM twitch_streamers_partner_state p \
-             JOIN twitch_live_state l ON l.twitch_user_id = p.twitch_user_id \
-             WHERE p.is_partner_active = 1 AND COALESCE(p.manual_partner_opt_out, 0) = 0 \
-               AND l.is_live = 1 AND l.last_game = 'Deadlock' \
-               AND COALESCE(p.twitch_user_id, '') <> '' \
-               AND EXISTS (SELECT 1 FROM twitch_raid_auth ra \
-                           WHERE ra.twitch_user_id = p.twitch_user_id \
-                             AND ra.needs_reauth IS FALSE \
-                             AND 'channel:bot' = ANY(regexp_split_to_array( \
-                                 COALESCE(ra.scopes, ''), '[[:space:],]+')))",
+            "SELECT broadcaster_id AS twitch_user_id, stream_id AS last_stream_id \
+             FROM twitch_patch_announcement_recipients WHERE patch_id=$1 \
+             ORDER BY broadcaster_id",
         )
+        .bind(patch_id)
         .fetch_all(&mut *tx)
         .await
         .map_err(database_error)?;
@@ -362,17 +462,25 @@ async fn process(
         } else {
             transport.streams(&ids).await?
         };
-        let now = Utc::now();
-        if !event.validate(now)? {
+        if !event.validate(Utc::now())? {
             return Ok(PatchProcessOutcome::SkippedExpired);
         }
         let mut selected = HashSet::new();
         for candidate in &candidates {
             for stream in &streams {
-                if eligible(candidate, stream, event, now)
-                    && !selected.contains(&stream.user_id)
-                    && transport.can_send(&stream.user_id, &stream.id).await?
-                {
+                let current_recipient =
+                    eligible(candidate, stream, event) && !selected.contains(&stream.user_id);
+                let can_send = if current_recipient {
+                    transport
+                        .can_send(&stream.user_id, &stream.id)
+                        .await
+                        .inspect_err(|error| {
+                            log_database_context(error, &event.event_id, &stream.user_id);
+                        })?
+                } else {
+                    false
+                };
+                if current_recipient && can_send {
                     selected.insert(stream.user_id.clone());
                     sqlx::query(
                         "INSERT INTO twitch_patch_announcement_deliveries (event_id, broadcaster_id, stream_id) \
@@ -383,7 +491,7 @@ async fn process(
                     .bind(&stream.id)
                     .execute(&mut *tx)
                     .await
-                    .map_err(database_error)?;
+                    .map_err(|error| database_error_for(error, &event.event_id, &stream.user_id))?;
                 }
             }
         }
@@ -437,10 +545,24 @@ async fn process(
                 && stream.game_name == "Deadlock"
                 && !stream.game_id.is_empty()
         });
-        let can_send = still_live && transport.can_send(&id, &stream_id).await?;
-        let status = if can_send { "attempted" } else { "skipped" };
+        let can_send = if still_live {
+            transport
+                .can_send(&id, &stream_id)
+                .await
+                .inspect_err(|error| {
+                    log_database_context(error, &event.event_id, &id);
+                })?
+        } else {
+            false
+        };
+        let send_budget = source_only_send_window_open(detected_at, Utc::now());
+        let status = if can_send && send_budget {
+            "attempted"
+        } else {
+            "skipped"
+        };
         let claimed = sqlx::query(
-            "UPDATE twitch_patch_announcement_deliveries SET status=$3, attempted_at=now() \
+            "UPDATE twitch_patch_announcement_deliveries SET status=$3, attempted_at=CASE WHEN $3='attempted' THEN now() ELSE attempted_at END \
              WHERE event_id=$1 AND broadcaster_id=$2 AND status='pending'",
         )
         .bind(&event.event_id)
@@ -448,22 +570,40 @@ async fn process(
         .bind(status)
         .execute(pool)
         .await
-        .map_err(database_error)?
+        .map_err(|error| database_error_for(error, &event.event_id, &id))?
         .rows_affected()
             == 1;
-        if claimed && can_send && fresh(detected_at, Utc::now(), EVENT_TTL_SECONDS) {
-            let outcome = transport.send(&id, &stream_id, &message).await?;
+        if claimed && can_send && send_budget {
+            let outcome = match transport.send(&id, &stream_id, &message, detected_at).await {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    log_database_context(&error, &event.event_id, &id);
+                    return Err(error);
+                }
+            };
             sqlx::query(
-                "UPDATE twitch_patch_announcement_deliveries SET status=$3 \
+                "UPDATE twitch_patch_announcement_deliveries \
+                 SET status=$3, drop_code=$4, http_status=$5, uncertainty_reason=$6 \
                  WHERE event_id=$1 AND broadcaster_id=$2 AND status='attempted'",
             )
             .bind(&event.event_id)
             .bind(&id)
-            .bind(outcome)
+            .bind(outcome.status)
+            .bind(outcome.drop_code.as_deref())
+            .bind(outcome.http_status)
+            .bind(outcome.uncertainty_reason)
             .execute(pool)
             .await
-            .map_err(database_error)?;
-            tracing::info!(event_id=%event.event_id, broadcaster_id=%id, outcome, "Patch announcement delivery");
+            .map_err(|error| database_error_for(error, &event.event_id, &id))?;
+            tracing::info!(
+                event_id=%event.event_id,
+                broadcaster_id=%id,
+                outcome=outcome.status,
+                drop_code=?outcome.drop_code,
+                http_status=?outcome.http_status,
+                uncertainty_reason=?outcome.uncertainty_reason,
+                "Patch announcement delivery"
+            );
         }
     }
     let counts = sqlx::query_as::<_, (String, i64)>(
@@ -523,6 +663,23 @@ mod tests {
     }
 
     #[test]
+    fn reserves_a_bounded_source_only_send_window_before_event_expiry() {
+        let detected_at = DateTime::from_timestamp(1_000, 0).unwrap();
+        assert!(source_only_send_window_open(
+            detected_at,
+            detected_at + chrono::Duration::seconds(75)
+        ));
+        assert!(!source_only_send_window_open(
+            detected_at,
+            detected_at + chrono::Duration::seconds(76)
+        ));
+        assert!(!source_only_send_window_open(
+            detected_at,
+            detected_at - chrono::Duration::seconds(1)
+        ));
+    }
+
+    #[test]
     fn rejects_lookalike_urls_credentials_and_extra_fields() {
         for source in [
             "https://forums.playdeadlock.com.evil.test/posts/1/",
@@ -557,11 +714,9 @@ mod tests {
     #[test]
     fn only_current_deadlock_stream_with_matching_stable_identity() {
         let event = patch_event();
-        let now = Utc::now();
         let candidate = Candidate {
             twitch_user_id: "42".into(),
-            last_stream_id: Some("s1".into()),
-            last_seen_at: Some(now.to_rfc3339()),
+            last_stream_id: "s1".into(),
         };
         let stream = HelixStream {
             id: "s1".into(),
@@ -571,7 +726,7 @@ mod tests {
             started_at: (event.detected_at - chrono::Duration::hours(1)).to_rfc3339(),
             ..Default::default()
         };
-        assert!(eligible(&candidate, &stream, &event, now));
+        assert!(eligible(&candidate, &stream, &event));
         for wrong in [
             HelixStream {
                 user_id: "99".into(),
@@ -590,12 +745,13 @@ mod tests {
                 ..stream.clone()
             },
         ] {
-            assert!(!eligible(&candidate, &wrong, &event, now));
+            assert!(!eligible(&candidate, &wrong, &event));
         }
-        let stale = Candidate {
-            last_seen_at: Some((now - chrono::Duration::seconds(121)).to_rfc3339()),
-            ..candidate
-        };
-        assert!(!eligible(&stale, &stream, &event, now));
+        assert_eq!(redact_drop_code("sender_timedout"), "sender_timedout");
+        assert_eq!(redact_drop_code("token:secret"), "redacted");
+        assert_eq!(
+            send_error_reason("source_only_chat_outcome_unknown: xyz"),
+            "ambiguous_http_outcome"
+        );
     }
 }

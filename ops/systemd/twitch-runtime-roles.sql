@@ -247,3 +247,37 @@ $$;
 -- Global category permissions are narrowed after the broad legacy grants.
 \ir category-runtime-roles.sql
 
+DO $patch_announcement_roles$
+BEGIN
+    IF to_regclass('public.twitch_patch_announcements') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_announcements FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_announcements TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_announcements TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_announcement_deliveries') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_announcement_deliveries FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_announcement_deliveries TO twitchbot;
+        GRANT UPDATE (status, attempted_at, drop_code, http_status, uncertainty_reason)
+            ON public.twitch_patch_announcement_deliveries TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_announcement_deliveries TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_feed_state') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_feed_state FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_feed_state TO twitchbot;
+        GRANT UPDATE (singleton) ON public.twitch_patch_feed_state TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_feed_state TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_feed_observations') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_feed_observations FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_feed_observations TO twitchbot;
+        GRANT UPDATE (status, finalized_at) ON public.twitch_patch_feed_observations TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_feed_observations TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_announcement_recipients') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_announcement_recipients FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_announcement_recipients TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_announcement_recipients TO twitchdash;
+    END IF;
+END
+$patch_announcement_roles$;
+

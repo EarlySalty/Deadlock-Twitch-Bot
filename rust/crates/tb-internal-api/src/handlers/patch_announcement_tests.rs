@@ -3,9 +3,12 @@ use super::*;
 #[path = "../../../../test-support/postgres.rs"]
 mod postgres;
 use postgres::TestPostgres;
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Mutex,
+use std::{
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 struct FakeTransport {
@@ -81,7 +84,8 @@ impl Transport for FakeTransport {
         id: &str,
         _stream_id: &str,
         message: &str,
-    ) -> Result<&'static str, PatchProcessError> {
+        _detected_at: DateTime<Utc>,
+    ) -> Result<DeliveryResult, PatchProcessError> {
         let attempted: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM twitch_patch_announcement_deliveries \
              WHERE broadcaster_id=$1 AND status='attempted' AND attempted_at IS NOT NULL",
@@ -95,7 +99,7 @@ impl Transport for FakeTransport {
             return Err(PatchProcessError::Unavailable);
         }
         self.sent.lock().unwrap().push((id.into(), message.into()));
-        Ok(self.outcome)
+        Ok(DeliveryResult::status(self.outcome))
     }
 }
 
@@ -162,6 +166,13 @@ async fn database() -> TestPostgres {
             .await
             .unwrap();
     }
+    sqlx::raw_sql(
+        "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) VALUES \
+         (286, now(), 'pending'), (287, now(), 'pending'), (288, now(), 'pending')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     postgres
 }
 
@@ -247,6 +258,43 @@ async fn helix_error_rolls_back_snapshot_then_retry_can_succeed() {
     transport.fail.store(false, Ordering::SeqCst);
     process(&pool, &transport, &event).await.unwrap();
     assert_eq!(transport.sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn observation_snapshot_excludes_late_partner_and_rejects_game_switch() {
+    let db = database().await;
+    let pool = db.pool.clone();
+    sqlx::query("UPDATE twitch_live_state SET last_game='Deadlock' WHERE twitch_user_id='43'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let transport = FakeTransport::new(pool.clone());
+    *transport.streams.lock().unwrap() = vec![
+        HelixStream {
+            game_name: "Other".into(),
+            ..stream("42")
+        },
+        stream("43"),
+    ];
+    let event = patch_event(286);
+    process(&pool, &transport, &event).await.unwrap();
+    assert!(transport.sent.lock().unwrap().is_empty());
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT broadcaster_id, status FROM twitch_patch_announcement_deliveries \
+         ORDER BY broadcaster_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(rows.is_empty());
+    let recipients: Vec<String> = sqlx::query_scalar(
+        "SELECT broadcaster_id FROM twitch_patch_announcement_recipients \
+         WHERE patch_id=286 ORDER BY broadcaster_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(recipients, vec!["42"]);
 }
 
 #[tokio::test]
@@ -358,68 +406,232 @@ async fn rights_reauth_optout_and_expired_events_never_snapshot() {
     assert!(transport.sent.lock().unwrap().is_empty());
 }
 
+async fn run_runtime_role_matrix(pool: &PgPool) {
+    let socket_dir: String = sqlx::query_scalar("SHOW unix_socket_directories")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../ops/systemd/twitch-runtime-roles.sql"
+    );
+    let output = Command::new("/usr/lib/postgresql/16/bin/psql")
+        .args([
+            "-h",
+            &socket_dir,
+            "-U",
+            "uplink_test",
+            "-d",
+            "twitch_analytics",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-f",
+            script,
+        ])
+        .output()
+        .expect("psql must be available for runtime-role integration test");
+    assert!(
+        output.status.success(),
+        "runtime role matrix failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn insert_pending_as_bot(pool: &PgPool, patch_id: i64, observed_at: DateTime<Utc>) -> u64 {
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SET ROLE twitchbot")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let inserted = sqlx::query(
+        "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
+         VALUES ($1, $2, 'pending') ON CONFLICT (patch_id) DO NOTHING",
+    )
+    .bind(patch_id)
+    .bind(observed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap()
+    .rows_affected();
+    sqlx::query("RESET ROLE").execute(&mut *conn).await.unwrap();
+    inserted
+}
+
 #[tokio::test]
-async fn feed_schema_tracks_each_patch_without_numeric_cursor_and_grants_bot() {
+async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_roles() {
     let db = TestPostgres::start().await;
-    sqlx::raw_sql("CREATE ROLE twitchbot NOLOGIN; CREATE ROLE twitchdash NOLOGIN")
+    sqlx::query("CREATE DATABASE twitch_analytics")
         .execute(&db.pool)
         .await
         .unwrap();
+    sqlx::raw_sql("CREATE ROLE postgres SUPERUSER NOLOGIN")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let socket_dir: String = sqlx::query_scalar("SHOW unix_socket_directories")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .connect_with(
+            sqlx::postgres::PgConnectOptions::new()
+                .host(&socket_dir)
+                .username("uplink_test")
+                .database("twitch_analytics"),
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE twitch_streamers_partner_state (
+             twitch_user_id TEXT, twitch_login TEXT, is_partner_active INT,
+             manual_partner_opt_out INT DEFAULT 0);
+         CREATE TABLE twitch_raid_auth (twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN);
+         CREATE TABLE twitch_live_state (
+             twitch_user_id TEXT, last_stream_id TEXT, last_seen_at TEXT, is_live INT, last_game TEXT);
+         INSERT INTO twitch_streamers_partner_state VALUES ('42','early',1,0), ('43','late',1,0);
+         INSERT INTO twitch_raid_auth VALUES
+             ('42','channel:bot',FALSE), ('43','channel:bot',FALSE);
+         INSERT INTO twitch_live_state VALUES
+             ('42','s42',now()::text,1,'Deadlock'), ('43','s43',now()::text,1,'Other');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/20260928120000_patch_announcements.sql"
     ))
-    .execute(&db.pool)
+    .execute(&pool)
     .await
     .unwrap();
-    let granted: Vec<bool> = sqlx::query_scalar(
-        "SELECT has_table_privilege('twitchbot', 'twitch_patch_feed_state', 'INSERT') \
-         UNION ALL SELECT has_column_privilege('twitchbot', 'twitch_patch_feed_observations', 'status', 'UPDATE') \
+    run_runtime_role_matrix(&pool).await;
+
+    let privileges: Vec<bool> = sqlx::query_scalar(
+        "SELECT has_column_privilege('twitchbot', 'twitch_patch_feed_state', 'singleton', 'UPDATE') \
          UNION ALL SELECT NOT has_column_privilege('twitchbot', 'twitch_patch_feed_observations', 'observed_at', 'UPDATE') \
-         UNION ALL SELECT has_table_privilege('twitchdash', 'twitch_patch_feed_observations', 'SELECT')",
+         UNION ALL SELECT has_column_privilege('twitchbot', 'twitch_patch_feed_observations', 'status', 'UPDATE') \
+         UNION ALL SELECT has_table_privilege('twitchbot', 'twitch_patch_announcement_recipients', 'INSERT') \
+         UNION ALL SELECT NOT has_table_privilege('twitchbot', 'twitch_patch_announcement_recipients', 'UPDATE') \
+         UNION ALL SELECT has_table_privilege('twitchdash', 'twitch_patch_announcement_recipients', 'SELECT') \
+         UNION ALL SELECT NOT has_table_privilege('twitchdash', 'twitch_patch_announcement_recipients', 'INSERT') \
+         UNION ALL SELECT NOT has_table_privilege('twitchlegacy', 'twitch_patch_announcement_recipients', 'SELECT')",
     )
-    .fetch_all(&db.pool)
+    .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(granted, vec![true; 4]);
+    assert_eq!(privileges, vec![true; 8]);
+
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SET ROLE twitchbot")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO twitch_patch_feed_state (singleton) VALUES (TRUE)")
-        .execute(&db.pool)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("SELECT singleton FROM twitch_patch_feed_state WHERE singleton FOR UPDATE")
+        .fetch_one(&mut *conn)
         .await
         .unwrap();
     assert!(
         sqlx::query("INSERT INTO twitch_patch_feed_state (singleton) VALUES (FALSE)")
-            .execute(&db.pool)
+            .execute(&mut *conn)
             .await
             .is_err()
     );
-    for (id, status) in [
-        (290_i64, "pending"),
-        (285, "historical"),
-        (289, "expired_timeout"),
-    ] {
-        sqlx::query(
-            "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
-             VALUES ($1, now(), $2)",
-        )
-        .bind(id)
-        .bind(status)
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
+         VALUES (285, now(), 'historical'), (289, now(), 'expired_timeout'), \
+         (290, now(), 'pending')",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
     assert!(sqlx::query(
         "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
          VALUES (291, now(), 'invalid')",
     )
-    .execute(&db.pool)
+    .execute(&mut *conn)
     .await
     .is_err());
     let order: Vec<i64> = sqlx::query_scalar(
         "SELECT patch_id FROM twitch_patch_feed_observations ORDER BY observed_at, patch_id",
     )
-    .fetch_all(&db.pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap();
-    assert_eq!(order.len(), 3);
+    assert_eq!(order, vec![285, 289, 290]);
+    let snapshot: Vec<(String, String)> = sqlx::query_as(
+        "SELECT broadcaster_id, stream_id FROM twitch_patch_announcement_recipients \
+         WHERE patch_id=290",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(snapshot, vec![("42".into(), "s42".into())]);
+    let historical: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM twitch_patch_announcement_recipients WHERE patch_id=285",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(historical, 0);
+    assert!(sqlx::query(
+        "UPDATE twitch_patch_feed_observations SET observed_at=now() WHERE patch_id=290",
+    )
+    .execute(&mut *conn)
+    .await
+    .is_err());
+    sqlx::query("RESET ROLE").execute(&mut *conn).await.unwrap();
+    drop(conn);
+    let first_observed_at = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
+    let second_observed_at = first_observed_at + chrono::Duration::seconds(1);
+    let (first_poll, second_poll) = tokio::join!(
+        insert_pending_as_bot(&pool, 291, first_observed_at),
+        insert_pending_as_bot(&pool, 291, second_observed_at),
+    );
+    assert_eq!(first_poll + second_poll, 1);
+    let saved_observed_at: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT observed_at FROM twitch_patch_feed_observations WHERE patch_id=291",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(saved_observed_at == first_observed_at || saved_observed_at == second_observed_at);
+    let later_poll_at = saved_observed_at + chrono::Duration::seconds(30);
+    assert_eq!(insert_pending_as_bot(&pool, 291, later_poll_at).await, 0);
+    let after_repeat_at: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT observed_at FROM twitch_patch_feed_observations WHERE patch_id=291",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(after_repeat_at, saved_observed_at);
+    let recipients_291: Vec<String> = sqlx::query_scalar(
+        "SELECT broadcaster_id FROM twitch_patch_announcement_recipients \
+         WHERE patch_id=291",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(recipients_291, vec!["42"]);
+    sqlx::raw_sql(
+        "UPDATE twitch_streamers_partner_state SET is_partner_active=1 WHERE twitch_user_id='43'; \
+         UPDATE twitch_live_state SET last_game='Deadlock' WHERE twitch_user_id='43'; \
+         UPDATE twitch_live_state SET last_game='Other' WHERE twitch_user_id='42';",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let recipients: Vec<String> = sqlx::query_scalar(
+        "SELECT broadcaster_id FROM twitch_patch_announcement_recipients \
+         WHERE patch_id=290 ORDER BY broadcaster_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(recipients, vec!["42"]);
 }
 
 #[tokio::test]
