@@ -28,6 +28,7 @@ mod obs_dock;
 mod offline_side_effects;
 mod outreach_shadow_wiring;
 mod partner_lookup;
+mod patch_feed;
 mod partner_recruit;
 mod raid_adapters;
 mod raid_arrival_wiring;
