@@ -47,3 +47,12 @@ Reviewer `51d2621f-acc1-41bf-8310-9a2e0a596744`: A2 (ungewisser POST) und A3 (be
 # Integrationsgrenze: Ablaufzeit und Token-Erneuerung
 
 Bs aktueller Fix-Entwurf prüft die 120-Sekunden-Frist vor `chat.send_source_only_message`; As Token-Erneuerung kann danach warten. Die 45-Sekunden-Reserve reduziert das Risiko, beweist aber kein Verbot eines späten POSTs. D muss die Ereignisfrist im finalen Guard-Callback bis unmittelbar vor den tatsächlichen POST durchreichen und das mit angehaltenem Token-Refresh ohne externen Chat beweisen. Das ist ein offener gemeinsamer Integrationsbefund, keine Aussage über ein bereits fertiggestelltes B-Review.
+
+# Nachprüfung B: Commit ebdaa4ed
+
+Reviewer `c80fdbdf-5749-4d11-8b79-b1680bdd8a85`, gpt-6-sol: fertig N, Fix nötig J. Die echte Wegwerf-Postgres-Probe unter `twitchbot` bestätigte `SELECT ... FOR UPDATE` auf dem Feed-State, atomaren Erstbeobachtungs-Snapshot samt historischem Bootstrap und Rollback sowie die Rollenmatrix. Schreibversuche von `twitchdash` und `twitchlegacy` auf allen fünf Patchtabellen scheiterten mit SQLSTATE `42501`. Drei der fünf B-Befunde sind damit behoben.
+
+1. **B4 verbleibt als gemeinsamer Integrationsblocker:** `tb-internal-api/src/handlers/patch_announcement.rs:269-285` prüft die Frist vor As möglicher asynchroner App-Token-Erneuerung. Der 45-Sekunden-Puffer garantiert keinen rechtzeitigen POST. D muss die Frist durch As finalen Guard-Callback bis unmittelbar vor `.send().await` reichen und mit angehaltenem Refresh nachweisen.
+2. **B5 weiterhin offen:** `tb-internal-api/src/handlers/patch_announcement.rs:324-332,390-403,584-605` fasst konkrete Unsicherheitsgründe zu `ambiguous_http_outcome` zusammen. Schlägt nach dem POST das Status-UPDATE fehl, erscheint der bekannte HTTP-Status/Dropcode nicht strukturiert im Log. Bei äußerem Timeout bleibt der vorab gespeicherte Versuch ohne Unsicherheitsgrund. Der Fix muss die redigierte Diagnose vor dem fehleranfälligen Update loggen und Timeout/Abbruch auch bei ausbleibender Schlusszeile unterscheidbar machen, ohne nochmal zu senden.
+
+Der unabhängige Gesamtlauf meldete 320 bestanden, 4 fehlgeschlagen, 0 ignoriert, während der Fixer 324/0/0 meldete. Drei rote Fälle stammen aus `session_detail`, einer aus `streamers`; eine gleichartige Baseline fehlt. Die 13 gezielten Receiver-Tests bestanden. Keine neuen Code-Kommentare oder gelöschten Tests im Diff. Baseline vor jeder Behauptung über vorbestehende Fehler nachmessen. Fixauftrag `WORKER-B-FOLLOWUP.md`.
