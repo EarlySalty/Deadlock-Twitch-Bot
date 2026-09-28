@@ -12,10 +12,10 @@
 //!
 //! Native bündelt das in zwei Bausteinen:
 //!
-//! - [`TimeoutTrackingChatApi`] — ein [`ChatApi`]-Decorator, der **nur**
-//!   `send_message` instrumentiert: bei einem Bot-Timeout-Drop wird die
-//!   `broadcaster_id` → `login` aufgelöst und `record_timeout` gerufen. Alle
-//!   übrigen 8 Trait-Methoden delegieren unverändert.
+//! - [`TimeoutTrackingChatApi`]: ein [`ChatApi`]-Decorator, der `send_message` und
+//!   `send_source_only_message` instrumentiert: vor Source-only wird nach der
+//!   stabilen `broadcaster_id` die Login-Sperre geprüft; Bot-Timeout-Drops werden
+//!   weiter an den Guard gemeldet. Alle übrigen Trait-Methoden delegieren unverändert.
 //! - [`CombinedSuppression`] — kombiniert die bestehende DB-Suppression
 //!   ([`OutboundSuppressionStore`]) mit dem In-Memory-Guard. Der Promo-Pfad
 //!   prüft so beide Quellen (Python: `_send_promo_message` prüft erst
@@ -112,10 +112,9 @@ pub trait BotBannedChannelHandler: Send + Sync {
 /// [`ChatApi`]-Decorator, der ausgehende Bot-Timeouts an den [`TimeoutGuard`]
 /// meldet.
 ///
-/// Nur [`TimeoutTrackingChatApi::send_message`] ist instrumentiert; alle
-/// anderen Methoden delegieren unverändert an `inner`. Das Original-Ergebnis
-/// wird in jedem Fall unverändert zurückgegeben — die Tracking-Logik ist ein
-/// reiner Seiteneffekt.
+/// `send_message` meldet Bot-Timeout-Drops an den Guard. `send_source_only_message`
+/// prüft nach Login-Auflösung zuerst die Stummschaltung und meldet danach Drops.
+/// Alle anderen Methoden delegieren unverändert an `inner`.
 ///
 /// Port: `moderation.py:1519–1546`.
 pub struct TimeoutTrackingChatApi {
@@ -221,6 +220,13 @@ impl ChatApi for TimeoutTrackingChatApi {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<SendOutcome, String> {
+        let Some(login) = self.resolve_login(broadcaster_id).await else {
+            return Err("source_only_chat_guard_identity_unknown".to_string());
+        };
+        if self.guard.is_muted(&login) {
+            return Err("source_only_chat_muted".to_string());
+        }
+
         self.track_send_outcome(
             broadcaster_id,
             self.inner
@@ -569,10 +575,12 @@ mod tests {
         let api = TimeoutTrackingChatApi::new(inner.clone(), guard, pool);
 
         assert_eq!(
-            api.send_source_only_message("111", "Patch!").await.unwrap(),
-            SendOutcome::Sent
+            api.send_source_only_message("111", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_guard_identity_unknown"
         );
-        assert_eq!(inner.source_only_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(inner.source_only_calls.load(Ordering::SeqCst), 0);
         assert_eq!(inner.send_calls.load(Ordering::SeqCst), 0);
     }
 
@@ -783,6 +791,52 @@ mod db_tests {
             TIMEOUT_MUTE_DAILY_THRESHOLD
         );
         assert_eq!(inner.send_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn source_only_respects_muted_guard_and_allows_unmuted_known_channel() {
+        let pool = pool_or_skip!("tt_source_only_guard_preflight");
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES \
+             ('111', 'mutedlogin'), ('222', 'allowedlogin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let inner = Arc::new(TimedOutApi {
+            send_calls: AtomicUsize::new(0),
+            source_only_calls: AtomicUsize::new(0),
+        });
+        let guard = Arc::new(TimeoutGuard::new());
+        let api = TimeoutTrackingChatApi::new(inner.clone(), Arc::clone(&guard), pool);
+
+        for _ in 0..TIMEOUT_MUTE_DAILY_THRESHOLD {
+            api.send_message("111", "regular chat").await.unwrap();
+        }
+        assert!(guard.is_muted("mutedlogin"));
+        assert_eq!(
+            api.send_source_only_message("111", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_muted"
+        );
+        assert!(matches!(
+            api.send_source_only_message("222", "Patch!").await.unwrap(),
+            SendOutcome::Dropped { ref code, .. } if code == "sender_timedout"
+        ));
+        assert_eq!(
+            api.send_source_only_message("333", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_guard_identity_unknown"
+        );
+
+        assert_eq!(
+            inner.send_calls.load(Ordering::SeqCst),
+            TIMEOUT_MUTE_DAILY_THRESHOLD
+        );
+        assert_eq!(inner.source_only_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

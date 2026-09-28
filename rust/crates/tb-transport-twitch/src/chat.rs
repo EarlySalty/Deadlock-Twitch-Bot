@@ -365,7 +365,10 @@ impl HelixClient {
                 "for_source_only": true,
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|_| HelixError::AmbiguousOutcome {
+                reason: "source_only_chat_send_failed",
+            })?;
 
         let status = resp.status().as_u16();
         if status == 200 {
@@ -386,9 +389,12 @@ impl HelixClient {
             let (code, msg) = item
                 .drop_reason
                 .as_ref()
-                .map(|r| (r.code.clone(), r.message.clone()))
+                .map(|r| (r.code.clone(), redact_announcement_detail(&r.message)))
                 .unwrap_or_else(|| ("unknown".to_string(), String::new()));
-            return Ok(SendOutcome::Dropped { code, message: msg });
+            return Ok(SendOutcome::Dropped {
+                code,
+                message: msg.chars().take(300).collect(),
+            });
         }
         if (200..300).contains(&status) {
             return Err(HelixError::AmbiguousOutcome {
@@ -399,9 +405,10 @@ impl HelixClient {
             self.invalidate_app_token().await;
         }
         let body_text = resp.text().await.unwrap_or_default();
+        let body = redact_announcement_detail(&body_text);
         Ok(SendOutcome::HttpError {
             status,
-            body: body_text.chars().take(300).collect(),
+            body: body.chars().take(300).collect(),
         })
     }
 
@@ -928,7 +935,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_only_200_not_sent_is_drop() {
+    async fn source_only_200_not_sent_redacts_drop_reason() {
         let server = MockServer::start().await;
         let client = mock_client(&server).await;
         Mock::given(method("POST"))
@@ -936,22 +943,51 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [{
                     "is_sent": false,
-                    "drop_reason": {"code": "sender_timedout", "message": "Timed out"}
+                    "drop_reason": {
+                        "code": "sender_timedout",
+                        "message": "Authorization: Bearer fixture-token-123 access_token=credential-fixture-456"
+                    }
                 }]
             })))
             .mount(&server)
             .await;
 
-        assert_eq!(
-            client
-                .send_source_only_chat_message("111", "222", "Patch!")
-                .await
-                .unwrap(),
-            SendOutcome::Dropped {
-                code: "sender_timedout".to_string(),
-                message: "Timed out".to_string()
-            }
-        );
+        let SendOutcome::Dropped { code, message } = client
+            .send_source_only_chat_message("111", "222", "Patch!")
+            .await
+            .unwrap()
+        else {
+            panic!("expected dropped outcome")
+        };
+        assert_eq!(code, "sender_timedout");
+        assert!(!message.contains("fixture-token-123"));
+        assert!(!message.contains("credential-fixture-456"));
+        assert!(message.contains("[redacted:"));
+    }
+
+    #[tokio::test]
+    async fn source_only_http_error_redacts_body_before_truncating() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(403).set_body_string(
+                "Authorization: Bearer fixture-token-123 access_token=credential-fixture-456",
+            ))
+            .mount(&server)
+            .await;
+
+        let SendOutcome::HttpError { status, body } = client
+            .send_source_only_chat_message("111", "222", "Patch!")
+            .await
+            .unwrap()
+        else {
+            panic!("expected HTTP error outcome")
+        };
+        assert_eq!(status, 403);
+        assert!(!body.contains("fixture-token-123"));
+        assert!(!body.contains("credential-fixture-456"));
+        assert!(body.contains("[redacted:"));
     }
 
     #[tokio::test]
@@ -977,6 +1013,67 @@ mod tests {
             }
         );
         server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_post_disconnect_before_response_is_ambiguous_without_retry() {
+        use std::io::{BufRead, Read};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let token_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok",
+                "expires_in": 3600
+            })))
+            .mount(&token_server)
+            .await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let received_count = Arc::clone(&request_count);
+        let server_thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            received_count.fetch_add(1, Ordering::SeqCst);
+            let mut request = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            let mut content_length = 0;
+            loop {
+                line.clear();
+                request.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line
+                    .strip_prefix("content-length:")
+                    .or_else(|| line.strip_prefix("Content-Length:"))
+                {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut body = vec![0; content_length];
+            request.read_exact(&mut body).unwrap();
+        });
+
+        let mut config = HelixConfig::new("cid", "sec");
+        config.helix_base = format!("http://{address}/helix");
+        config.token_url = format!("{}/oauth2/token", token_server.uri());
+        let client = HelixClient::new(config).unwrap();
+
+        assert!(matches!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await,
+            Err(HelixError::AmbiguousOutcome {
+                reason: "source_only_chat_send_failed"
+            })
+        ));
+        server_thread.join().unwrap();
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

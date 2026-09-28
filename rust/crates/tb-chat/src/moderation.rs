@@ -1593,6 +1593,16 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(body_partial_json(
+                serde_json::json!({"message": "Patch uncertain"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string("unreadable"))
+            .expect(1)
+            .mount(&server)
+            .await;
 
         let mut config = tb_transport_twitch::HelixConfig::new("cid", "sec");
         config.helix_base = format!("{}/helix", server.uri());
@@ -1614,6 +1624,12 @@ mod tests {
         assert_eq!(
             api.send_source_only_message("111", "Patch!").await.unwrap(),
             SendOutcome::Sent
+        );
+        assert_eq!(
+            api.send_source_only_message("111", "Patch uncertain")
+                .await
+                .unwrap_err(),
+            "source_only_chat_outcome_unknown: source_only_chat_body_unreadable"
         );
         assert_eq!(
             api.send_source_only_message("other", "Patch!")
