@@ -2,7 +2,7 @@ status: aktiv (2026-09-28)
 
 # Thread-Register (T3)
 
-Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzerauftrag). Benachbart, unabhängig: Patchnotes-Rust-Port `17337791-d5fe-49c8-ad55-2e31a2e016d2` (Projekt Documents). Ein erstes `send` an dessen aktiven Turn wurde von der T3-CLI ohne `--force` abgewiesen; bei `ready` den Website-Vertrag senden, niemals mit `--force` den laufenden Aufbau unterbrechen.
+Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzerauftrag). Benachbart, unabhängig: Patchnotes-Rust-Port `17337791-d5fe-49c8-ad55-2e31a2e016d2` (Projekt Documents). Website-Vertrag und Zuständigkeitsgrenze am 28.09. um 21:08 Uhr per T3 gesendet (Dispatch 200); zuvor lehnte die CLI während laufender Turns mehrere nicht erzwingende Versuche ab.
 
 | Paket | Thread-ID | Modell | Worktree | Branch | Status / letzte Meldung |
 |---|---|---|---|---|---|
