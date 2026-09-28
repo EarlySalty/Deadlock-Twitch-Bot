@@ -11,6 +11,7 @@ use sqlx::{PgPool, Row};
 const BASE_URL: &str = "https://deutsche-deadlock-community.de/patchnotes";
 const INDEX_URL: &str = "https://deutsche-deadlock-community.de/patchnotes/index.json";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PENDING_AGE_SECONDS: i64 = 120;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PatchFeedError {
@@ -57,11 +58,23 @@ trait FeedHttp {
     fn get(&self, url: &str) -> impl Future<Output = Result<FeedResponse, PatchFeedError>> + Send;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingObservation {
+    id: i64,
+    observed_at: DateTime<Utc>,
+}
+
 trait FeedCursor {
-    fn read_or_init(
+    fn observe_index(
         &self,
-        newest_id: i64,
-    ) -> impl Future<Output = Result<(i64, Option<i64>), PatchFeedError>> + Send;
+        ids: Vec<i64>,
+    ) -> impl Future<Output = Result<Vec<PendingObservation>, PatchFeedError>> + Send;
+
+    fn expire_pending(
+        &self,
+        id: i64,
+        status: &'static str,
+    ) -> impl Future<Output = Result<bool, PatchFeedError>> + Send;
 }
 
 impl FeedHttp for PatchFeedClient {
@@ -198,6 +211,11 @@ async fn fetch_article<H: FeedHttp>(
     })
 }
 
+fn pending_is_expired(now: DateTime<Utc>, observed_at: DateTime<Utc>) -> bool {
+    now.signed_duration_since(observed_at)
+        >= chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS)
+}
+
 async fn run_feed<H, S, D, Fut>(
     http: &H,
     store: &S,
@@ -210,22 +228,53 @@ where
     Fut: Future<Output = Result<bool, PatchFeedError>>,
 {
     let entries = fetch_index(http).await?;
-    let newest_id = entries.last().map_or(0, |entry| entry.id);
-    let (cursor, pending) = store.read_or_init(newest_id).await?;
-    if let Some(pending) = pending {
-        if pending > cursor && !entries.iter().any(|entry| entry.id == pending) {
-            return Err(PatchFeedError::InvalidFeed(format!(
-                "Offener Patch {pending} fehlt im Index"
-            )));
-        }
-    }
-    let floor = pending.filter(|id| *id > cursor).unwrap_or(cursor);
+    let ids = entries.iter().map(|entry| entry.id).collect();
+    let entries: std::collections::HashMap<_, _> =
+        entries.into_iter().map(|entry| (entry.id, entry)).collect();
+    let pending = store.observe_index(ids).await?;
     let mut count = 0;
-    for entry in entries
-        .into_iter()
-        .filter(|entry| entry.id > cursor && entry.id >= floor)
-    {
-        let article = fetch_article(http, &entry).await?;
+    for observation in pending {
+        let entry = entries.get(&observation.id);
+        if pending_is_expired(Utc::now(), observation.observed_at) {
+            let status = if entry.is_some() {
+                "expired_timeout"
+            } else {
+                "expired_missing_from_index"
+            };
+            if store.expire_pending(observation.id, status).await? {
+                tracing::warn!(
+                    patch_id = observation.id,
+                    status,
+                    "Patchfeed-Eintrag terminal übersprungen"
+                );
+            }
+            continue;
+        }
+        let Some(entry) = entry else {
+            return Err(PatchFeedError::InvalidFeed(format!(
+                "Offener Patch {} fehlt im Index",
+                observation.id
+            )));
+        };
+        let article = match fetch_article(http, entry).await {
+            Ok(article) => article,
+            Err(error) => {
+                if pending_is_expired(Utc::now(), observation.observed_at) {
+                    if store
+                        .expire_pending(observation.id, "expired_unavailable")
+                        .await?
+                    {
+                        tracing::warn!(
+                            patch_id = observation.id,
+                            status = "expired_unavailable",
+                            "Patchfeed-Eintrag terminal übersprungen"
+                        );
+                    }
+                    continue;
+                }
+                return Err(error);
+            }
+        };
         if deliver(article).await? {
             count += 1;
         }
@@ -233,32 +282,118 @@ where
     Ok(count)
 }
 
-async fn read_progress(
+async fn observe_index(
     pool: &PgPool,
-    newest_id: i64,
-) -> Result<(i64, Option<i64>), PatchFeedError> {
-    sqlx::query(
-        "INSERT INTO twitch_patch_feed_progress (singleton, last_processed_patch_id) \
-         VALUES (TRUE, $1) ON CONFLICT (singleton) DO NOTHING",
+    ids: &[i64],
+) -> Result<Vec<PendingObservation>, PatchFeedError> {
+    let mut tx = pool.begin().await?;
+    let inserted = if ids.is_empty() {
+        false
+    } else {
+        sqlx::query_scalar::<_, bool>(
+            "INSERT INTO twitch_patch_feed_state (singleton, bootstrapped_at) \
+             VALUES (TRUE, NOW()) ON CONFLICT (singleton) DO NOTHING RETURNING singleton",
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(false)
+    };
+    let state = sqlx::query(
+        "SELECT bootstrapped_at FROM twitch_patch_feed_state \
+         WHERE singleton = TRUE FOR UPDATE",
     )
-    .bind(newest_id)
-    .execute(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    if let Some(state) = state {
+        let bootstrapped_at: DateTime<Utc> = state.try_get("bootstrapped_at")?;
+        if inserted {
+            for id in ids {
+                sqlx::query(
+                    "INSERT INTO twitch_patch_feed_observations \
+                     (patch_id, observed_at, status, finalized_at) \
+                     VALUES ($1, $2, 'historical', $2) ON CONFLICT (patch_id) DO NOTHING",
+                )
+                .bind(id)
+                .bind(bootstrapped_at.clone())
+                .execute(&mut *tx)
+                .await?;
+            }
+        } else {
+            for id in ids {
+                sqlx::query(
+                    "INSERT INTO twitch_patch_feed_observations \
+                     (patch_id, observed_at, status, finalized_at) \
+                     VALUES ($1, NOW(), 'pending', NULL) ON CONFLICT (patch_id) DO NOTHING",
+                )
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+    }
+    let pending = sqlx::query(
+        "SELECT patch_id, observed_at FROM twitch_patch_feed_observations \
+         WHERE status = 'pending' ORDER BY observed_at, patch_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(PendingObservation {
+            id: row.try_get("patch_id")?,
+            observed_at: row.try_get("observed_at")?,
+        })
+    })
+    .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    tx.commit().await?;
+    Ok(pending)
+}
+
+async fn expire_pending(
+    pool: &PgPool,
+    id: i64,
+    status: &'static str,
+) -> Result<bool, PatchFeedError> {
+    let mut tx = pool.begin().await?;
     let row = sqlx::query(
-        "SELECT last_processed_patch_id, pending_patch_id \
-         FROM twitch_patch_feed_progress WHERE singleton = TRUE",
+        "SELECT status, observed_at FROM twitch_patch_feed_observations \
+         WHERE patch_id = $1 FOR UPDATE",
     )
-    .fetch_one(pool)
+    .bind(id)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok((
-        row.try_get("last_processed_patch_id")?,
-        row.try_get("pending_patch_id")?,
-    ))
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(false);
+    };
+    let current_status: String = row.try_get("status")?;
+    let observed_at: DateTime<Utc> = row.try_get("observed_at")?;
+    if current_status != "pending" || !pending_is_expired(Utc::now(), observed_at) {
+        tx.commit().await?;
+        return Ok(false);
+    }
+    sqlx::query(
+        "UPDATE twitch_patch_feed_observations \
+         SET status = $2, finalized_at = NOW() WHERE patch_id = $1 AND status = 'pending'",
+    )
+    .bind(id)
+    .bind(status)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 impl FeedCursor for PgPool {
-    async fn read_or_init(&self, newest_id: i64) -> Result<(i64, Option<i64>), PatchFeedError> {
-        read_progress(self, newest_id).await
+    async fn observe_index(
+        &self,
+        ids: Vec<i64>,
+    ) -> Result<Vec<PendingObservation>, PatchFeedError> {
+        observe_index(self, &ids).await
+    }
+
+    async fn expire_pending(&self, id: i64, status: &'static str) -> Result<bool, PatchFeedError> {
+        expire_pending(self, id, status).await
     }
 }
 
@@ -272,74 +407,51 @@ where
     Fut: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
 {
-    let mut claim = pool.begin().await?;
-    let row = sqlx::query(
-        "SELECT last_processed_patch_id, pending_patch_id, pending_observed_at \
-         FROM twitch_patch_feed_progress WHERE singleton = TRUE FOR UPDATE",
-    )
-    .fetch_one(&mut *claim)
-    .await?;
-    let cursor: i64 = row.try_get("last_processed_patch_id")?;
-    let pending: Option<i64> = row.try_get("pending_patch_id")?;
-    if article.id <= cursor {
-        claim.commit().await?;
-        return Ok(false);
-    }
-    if let Some(pending) = pending {
-        if pending != article.id {
-            return Err(PatchFeedError::InvalidFeed(format!(
-                "Patch {pending} wartet noch vor Patch {}",
-                article.id
-            )));
-        }
-        let observed_at: Option<DateTime<Utc>> = row.try_get("pending_observed_at")?;
-        if observed_at.is_none() {
-            return Err(PatchFeedError::InvalidFeed("Beobachtungszeit fehlt".into()));
-        }
-    } else {
-        sqlx::query(
-            "UPDATE twitch_patch_feed_progress \
-             SET pending_patch_id = $1, pending_observed_at = NOW() \
-             WHERE singleton = TRUE",
-        )
-        .bind(article.id)
-        .execute(&mut *claim)
-        .await?;
-    }
-    claim.commit().await?;
-
     let mut delivery = pool.begin().await?;
     let row = sqlx::query(
-        "SELECT last_processed_patch_id, pending_patch_id, pending_observed_at \
-         FROM twitch_patch_feed_progress WHERE singleton = TRUE FOR UPDATE",
+        "SELECT status, observed_at FROM twitch_patch_feed_observations \
+         WHERE patch_id = $1 FOR UPDATE",
     )
-    .fetch_one(&mut *delivery)
+    .bind(article.id)
+    .fetch_optional(&mut *delivery)
     .await?;
-    let cursor: i64 = row.try_get("last_processed_patch_id")?;
-    if article.id <= cursor {
+    let Some(row) = row else {
+        return Err(PatchFeedError::InvalidFeed(format!(
+            "Patch {} hat keine Beobachtungszeile",
+            article.id
+        )));
+    };
+    let status: String = row.try_get("status")?;
+    let observed_at: DateTime<Utc> = row.try_get("observed_at")?;
+    if status != "pending" {
         delivery.commit().await?;
         return Ok(false);
     }
-    let pending: Option<i64> = row.try_get("pending_patch_id")?;
-    if pending != Some(article.id) {
-        return Err(PatchFeedError::InvalidFeed(format!(
-            "Patch {} hat keinen gültigen Claim",
-            article.id
-        )));
+    if pending_is_expired(Utc::now(), observed_at) {
+        sqlx::query(
+            "UPDATE twitch_patch_feed_observations \
+             SET status = 'expired_timeout', finalized_at = NOW() \
+             WHERE patch_id = $1 AND status = 'pending'",
+        )
+        .bind(article.id)
+        .execute(&mut *delivery)
+        .await?;
+        delivery.commit().await?;
+        tracing::warn!(
+            patch_id = article.id,
+            status = "expired_timeout",
+            "Patchfeed-Eintrag terminal übersprungen"
+        );
+        return Ok(false);
     }
-    let observed_at: DateTime<Utc> = row
-        .try_get::<Option<DateTime<Utc>>, _>("pending_observed_at")?
-        .ok_or_else(|| PatchFeedError::InvalidFeed("Beobachtungszeit fehlt".into()))?;
-    let id = article.id;
     callback(article.into_patch_article(observed_at))
         .await
         .map_err(|error| PatchFeedError::Callback(Box::new(error)))?;
     sqlx::query(
-        "UPDATE twitch_patch_feed_progress \
-         SET last_processed_patch_id = $1, pending_patch_id = NULL, pending_observed_at = NULL \
-         WHERE singleton = TRUE",
+        "UPDATE twitch_patch_feed_observations \
+         SET status = 'processed', finalized_at = NOW() WHERE patch_id = $1 AND status = 'pending'",
     )
-    .bind(id)
+    .bind(article.id)
     .execute(&mut *delivery)
     .await?;
     delivery.commit().await?;
@@ -415,35 +527,145 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FakeObservation {
+        observed_at: DateTime<Utc>,
+        status: &'static str,
+    }
+
+    #[derive(Default)]
+    struct FakeState {
+        bootstrapped: bool,
+        observations: HashMap<i64, FakeObservation>,
+    }
+
     #[derive(Default)]
     struct FakeCursor {
-        progress: Mutex<Option<(i64, Option<i64>)>>,
+        state: Mutex<FakeState>,
     }
 
     impl FakeCursor {
         fn existing(cursor: i64, pending: Option<i64>) -> Self {
+            let mut state = FakeState {
+                bootstrapped: true,
+                observations: HashMap::new(),
+            };
+            for id in 1..=cursor {
+                state.observations.insert(
+                    id,
+                    FakeObservation {
+                        observed_at: Utc::now(),
+                        status: "historical",
+                    },
+                );
+            }
+            if let Some(id) = pending {
+                state.observations.insert(
+                    id,
+                    FakeObservation {
+                        observed_at: Utc::now(),
+                        status: "pending",
+                    },
+                );
+            }
             Self {
-                progress: Mutex::new(Some((cursor, pending))),
+                state: Mutex::new(state),
             }
         }
 
-        fn advance(&self, id: i64) {
-            *self.progress.lock().unwrap() = Some((id, None));
+        fn advance(&self, id: i64) -> bool {
+            let mut state = self.state.lock().unwrap();
+            let Some(observation) = state.observations.get_mut(&id) else {
+                return false;
+            };
+            if observation.status != "pending" {
+                return false;
+            }
+            observation.status = "processed";
+            true
         }
 
-        fn set_pending(&self, id: i64) {
-            self.progress.lock().unwrap().as_mut().unwrap().1 = Some(id);
+        fn observed_at(&self, id: i64) -> Option<DateTime<Utc>> {
+            self.state
+                .lock()
+                .unwrap()
+                .observations
+                .get(&id)
+                .map(|observation| observation.observed_at.clone())
         }
 
-        fn current(&self) -> Option<(i64, Option<i64>)> {
-            *self.progress.lock().unwrap()
+        fn set_observed_at(&self, id: i64, observed_at: DateTime<Utc>) {
+            if let Some(observation) = self.state.lock().unwrap().observations.get_mut(&id) {
+                observation.observed_at = observed_at;
+            }
+        }
+
+        fn current_status(&self, id: i64) -> Option<&'static str> {
+            self.state
+                .lock()
+                .unwrap()
+                .observations
+                .get(&id)
+                .map(|observation| observation.status)
         }
     }
 
     impl FeedCursor for FakeCursor {
-        async fn read_or_init(&self, newest_id: i64) -> Result<(i64, Option<i64>), PatchFeedError> {
-            let mut progress = self.progress.lock().unwrap();
-            Ok(*progress.get_or_insert((newest_id, None)))
+        async fn observe_index(
+            &self,
+            ids: Vec<i64>,
+        ) -> Result<Vec<PendingObservation>, PatchFeedError> {
+            let mut state = self.state.lock().unwrap();
+            if !state.bootstrapped && !ids.is_empty() {
+                state.bootstrapped = true;
+                let now = Utc::now();
+                for id in ids {
+                    state.observations.insert(
+                        id,
+                        FakeObservation {
+                            observed_at: now,
+                            status: "historical",
+                        },
+                    );
+                }
+            } else {
+                let now = Utc::now();
+                for id in ids {
+                    state.observations.entry(id).or_insert(FakeObservation {
+                        observed_at: now,
+                        status: "pending",
+                    });
+                }
+            }
+            let mut pending: Vec<_> = state
+                .observations
+                .iter()
+                .filter(|(_, observation)| observation.status == "pending")
+                .map(|(id, observation)| PendingObservation {
+                    id: *id,
+                    observed_at: observation.observed_at.clone(),
+                })
+                .collect();
+            pending.sort_by_key(|observation| (observation.observed_at, observation.id));
+            Ok(pending)
+        }
+
+        async fn expire_pending(
+            &self,
+            id: i64,
+            status: &'static str,
+        ) -> Result<bool, PatchFeedError> {
+            let mut state = self.state.lock().unwrap();
+            let Some(observation) = state.observations.get_mut(&id) else {
+                return Ok(false);
+            };
+            if observation.status != "pending"
+                || !pending_is_expired(Utc::now(), observation.observed_at)
+            {
+                return Ok(false);
+            }
+            observation.status = status;
+            Ok(true)
         }
     }
 
@@ -478,26 +700,34 @@ mod tests {
         run_feed(http, cursor, |article| {
             let sent = Arc::clone(sent);
             async move {
-                cursor.advance(article.id);
-                sent.lock().unwrap().push(article.id);
-                Ok(true)
+                if cursor.advance(article.id) {
+                    sent.lock().unwrap().push(article.id);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
         })
         .await
     }
 
     #[tokio::test]
-    async fn bootstrap_uses_latest_published_id_then_restart_sends_only_newer() {
+    async fn empty_first_index_does_not_bootstrap_then_existing_ids_are_historical() {
         let cursor = FakeCursor::default();
         let sent = Arc::new(Mutex::new(Vec::new()));
-        let first = feed(&[283, 284, 285, 286]);
-        assert_eq!(run(&first, &cursor, &sent).await.unwrap(), 0);
-        assert_eq!(cursor.current(), Some((286, None)));
-        let next = feed(&[287, 285, 286]);
+        let empty = feed(&[]);
+        assert_eq!(run(&empty, &cursor, &sent).await.unwrap(), 0);
+        assert!(!cursor.state.lock().unwrap().bootstrapped);
+
+        let existing = feed(&[283, 284, 285, 286]);
+        assert_eq!(run(&existing, &cursor, &sent).await.unwrap(), 0);
+        assert!(cursor.state.lock().unwrap().bootstrapped);
+        assert!(sent.lock().unwrap().is_empty());
+
+        let next = feed(&[285, 286, 287]);
         assert_eq!(run(&next, &cursor, &sent).await.unwrap(), 1);
         assert_eq!(run(&next, &cursor, &sent).await.unwrap(), 0);
         assert_eq!(&*sent.lock().unwrap(), &[287]);
-        assert_eq!(cursor.current(), Some((287, None)));
     }
 
     #[tokio::test]
@@ -526,16 +756,56 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert_eq!(sent, vec![286]);
-        cursor.set_pending(286);
+        assert_eq!(cursor.current_status(286), Some("pending"));
+        let observed_at = cursor.observed_at(286).unwrap();
         let mut retried = Vec::new();
         run_feed(&http, &cursor, |article| {
-            retried.push(article.id);
-            cursor.advance(article.id);
-            async { Ok(true) }
+            let sent = cursor.advance(article.id);
+            if sent {
+                retried.push(article.id);
+            }
+            async move { Ok(sent) }
         })
         .await
         .unwrap();
         assert_eq!(retried, vec![286, 287]);
+        assert_eq!(cursor.observed_at(286), Some(observed_at));
+    }
+
+    #[tokio::test]
+    async fn concurrent_pollers_only_deliver_each_observation_once() {
+        let cursor = FakeCursor::existing(285, None);
+        let http = feed(&[286]);
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let first = run_feed(&http, &cursor, |article| {
+            let id = article.id;
+            let cursor = &cursor;
+            let sent = Arc::clone(&sent);
+            async move {
+                if cursor.advance(id) {
+                    sent.lock().unwrap().push(id);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+        });
+        let second = run_feed(&http, &cursor, |article| {
+            let id = article.id;
+            let cursor = &cursor;
+            let sent = Arc::clone(&sent);
+            async move {
+                if cursor.advance(id) {
+                    sent.lock().unwrap().push(id);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+        });
+        let (first, second) = tokio::join!(first, second);
+        assert_eq!(first.unwrap() + second.unwrap(), 1);
+        assert_eq!(&*sent.lock().unwrap(), &[286]);
     }
 
     #[tokio::test]
@@ -612,13 +882,13 @@ mod tests {
         assert!(run_feed(&unavailable, &cursor, |_| async { Ok(true) })
             .await
             .is_err());
-        assert_eq!(cursor.current(), None);
+        assert!(!cursor.state.lock().unwrap().bootstrapped);
         let malformed = FakeHttp::default();
         malformed.add(INDEX_URL, "{bad json");
         assert!(run_feed(&malformed, &cursor, |_| async { Ok(true) })
             .await
             .is_err());
-        assert_eq!(cursor.current(), None);
+        assert!(!cursor.state.lock().unwrap().bootstrapped);
         let published = feed(&[286]);
         assert_eq!(
             run_feed(&published, &cursor, |_| async { Ok(true) })
@@ -626,7 +896,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        assert_eq!(cursor.current(), Some((286, None)));
+        assert_eq!(cursor.current_status(286), Some("historical"));
     }
 
     #[tokio::test]
@@ -665,25 +935,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_patch_precedes_late_older_index_item() {
-        let http = feed(&[286, 287, 288]);
-        let cursor = FakeCursor::existing(285, Some(287));
-        let mut sent = Vec::new();
-        run_feed(&http, &cursor, |article| {
-            sent.push(article.id);
-            async { Ok(true) }
-        })
-        .await
-        .unwrap();
-        assert_eq!(sent, vec![287, 288]);
+    async fn late_first_seen_lower_id_is_processed_after_newer_published_id() {
+        let cursor = FakeCursor::existing(285, None);
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let first = feed(&[287, 285]);
+        assert_eq!(run(&first, &cursor, &sent).await.unwrap(), 1);
+        let later = feed(&[286, 287, 285]);
+        assert_eq!(run(&later, &cursor, &sent).await.unwrap(), 1);
+        assert_eq!(&*sent.lock().unwrap(), &[287, 286]);
     }
 
     #[tokio::test]
-    async fn missing_pending_patch_is_not_skipped() {
-        let http = feed(&[287]);
+    async fn expired_missing_pending_is_terminal_then_later_id_proceeds() {
         let cursor = FakeCursor::existing(285, Some(286));
-        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
+        cursor.set_observed_at(286, Utc::now() - chrono::Duration::seconds(121));
+        let http = feed(&[287]);
+        let mut sent = Vec::new();
+        assert_eq!(
+            run_feed(&http, &cursor, |article| {
+                sent.push(article.id);
+                async { Ok(true) }
+            })
             .await
-            .is_err());
+            .unwrap(),
+            1
+        );
+        assert_eq!(cursor.current_status(286), Some("expired_missing_from_index"));
+        assert_eq!(sent, vec![287]);
+    }
+
+    #[tokio::test]
+    async fn expired_unavailable_pending_is_terminal_without_fetch_then_later_id_proceeds() {
+        let cursor = FakeCursor::existing(285, Some(286));
+        cursor.set_observed_at(286, Utc::now() - chrono::Duration::seconds(121));
+        let http = feed(&[286, 287]);
+        let url = article_url(286).unwrap();
+        http.add_response(&url, StatusCode::NOT_FOUND, &url, "");
+        let mut sent = Vec::new();
+        assert_eq!(
+            run_feed(&http, &cursor, |article| {
+                sent.push(article.id);
+                async { Ok(true) }
+            })
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(cursor.current_status(286), Some("expired_timeout"));
+        assert_eq!(sent, vec![287]);
     }
 }
