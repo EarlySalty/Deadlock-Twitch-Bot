@@ -24,7 +24,7 @@
 //! Port: `bot/chat/moderation.py:1519–1546`, `bot/chat/promos.py:1132–1137`,
 //! `bot/chat/timeout_guard.py`.
 
-use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi, SourceOnlyPreSendCheck};
 use crate::moderation::{TimeoutGuard, BOT_TIMEOUT_DROP_CODES};
 use crate::types::SendOutcome;
 use async_trait::async_trait;
@@ -220,6 +220,16 @@ impl ChatApi for TimeoutTrackingChatApi {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<SendOutcome, String> {
+        self.send_source_only_message_guarded(broadcaster_id, message, Box::new(|| Ok(())))
+            .await
+    }
+
+    async fn send_source_only_message_guarded(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        pre_send_check: SourceOnlyPreSendCheck,
+    ) -> Result<SendOutcome, String> {
         let Some(login) = self.resolve_login(broadcaster_id).await else {
             return Err("source_only_chat_guard_identity_unknown".to_string());
         };
@@ -227,10 +237,20 @@ impl ChatApi for TimeoutTrackingChatApi {
             return Err("source_only_chat_muted".to_string());
         }
 
+        let guard = Arc::clone(&self.guard);
+        let check_login = login.clone();
+        let transport_check: SourceOnlyPreSendCheck = Box::new(move || {
+            pre_send_check()?;
+            if guard.is_muted(&check_login) {
+                Err("source_only_chat_muted")
+            } else {
+                Ok(())
+            }
+        });
         self.track_send_outcome(
             broadcaster_id,
             self.inner
-                .send_source_only_message(broadcaster_id, message)
+                .send_source_only_message_guarded(broadcaster_id, message, transport_check)
                 .await,
         )
         .await

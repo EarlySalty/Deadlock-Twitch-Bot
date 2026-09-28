@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi, SourceOnlyPreSendCheck};
 use crate::global_ban_sweep::PartnerRoster;
 use crate::types::SendOutcome;
 
@@ -111,10 +111,20 @@ impl ChatApi for ChannelPolicyChatApi {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<SendOutcome, String> {
+        self.send_source_only_message_guarded(broadcaster_id, message, Box::new(|| Ok(())))
+            .await
+    }
+
+    async fn send_source_only_message_guarded(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        pre_send_check: SourceOnlyPreSendCheck,
+    ) -> Result<SendOutcome, String> {
         self.authorize(broadcaster_id, WriteAction::SendSourceOnlyMessage, None)
             .await?;
         self.inner
-            .send_source_only_message(broadcaster_id, message)
+            .send_source_only_message_guarded(broadcaster_id, message, pre_send_check)
             .await
     }
 

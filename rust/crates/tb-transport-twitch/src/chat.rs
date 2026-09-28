@@ -354,7 +354,21 @@ impl HelixClient {
         sender_id: &str,
         message: &str,
     ) -> Result<SendOutcome, HelixError> {
-        let resp = self
+        self.send_source_only_chat_message_guarded(broadcaster_id, sender_id, message, || Ok(()))
+            .await
+    }
+
+    pub async fn send_source_only_chat_message_guarded<C>(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        pre_send_check: C,
+    ) -> Result<SendOutcome, HelixError>
+    where
+        C: FnOnce() -> Result<(), &'static str> + Send,
+    {
+        let request = self
             .post("/chat/messages")
             .await?
             .header("Content-Type", "application/json")
@@ -363,7 +377,14 @@ impl HelixClient {
                 "sender_id": sender_id,
                 "message": message,
                 "for_source_only": true,
-            }))
+            }));
+        if let Err(code) = pre_send_check() {
+            return Ok(SendOutcome::Dropped {
+                code: code.to_string(),
+                message: String::new(),
+            });
+        }
+        let resp = request
             .send()
             .await
             .map_err(|_| HelixError::AmbiguousOutcome {
@@ -901,6 +922,83 @@ mod tests {
             matches!(result, SendOutcome::Dropped { ref code, .. } if code == "sender_banned"),
             "{result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn source_only_pre_send_check_runs_after_app_token_refresh() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc, Mutex};
+        use wiremock::{Request, Respond};
+
+        struct PausedTokenRefresh {
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl Respond for PausedTokenRefresh {
+            fn respond(&self, _: &Request) -> ResponseTemplate {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "app-tok",
+                    "expires_in": 3600
+                }))
+            }
+        }
+
+        let server = MockServer::start().await;
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(PausedTokenRefresh {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let mut config = HelixConfig::new("cid", "sec");
+        config.helix_base = format!("{}/helix", server.uri());
+        config.token_url = format!("{}/oauth2/token", server.uri());
+        let client = Arc::new(HelixClient::new(config).unwrap());
+        let muted = Arc::new(AtomicBool::new(false));
+        let sending = {
+            let client = Arc::clone(&client);
+            let muted = Arc::clone(&muted);
+            tokio::spawn(async move {
+                client
+                    .send_source_only_chat_message_guarded("111", "222", "Patch!", move || {
+                        if muted.load(Ordering::SeqCst) {
+                            Err("source_only_chat_muted")
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .await
+            })
+        };
+
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+        muted.store(true, Ordering::SeqCst);
+        release_tx.send(()).unwrap();
+
+        assert_eq!(
+            sending.await.unwrap().unwrap(),
+            SendOutcome::Dropped {
+                code: "source_only_chat_muted".to_string(),
+                message: String::new(),
+            }
+        );
+        server.verify().await;
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@
 //!
 //! Port: `bot/chat/moderation.py:1293–1903`, `bot/chat/timeout_guard.py`.
 
-use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi, SourceOnlyPreSendCheck};
 use crate::commands::{AutobanEntry, LastAutobanStore};
 use crate::promos::OutboundSuppressionCheck as PromoSuppressionCheck;
 use crate::suppression_guard::{
@@ -192,6 +192,16 @@ impl ChatApi for HelixChatClient {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<SendOutcome, String> {
+        self.send_source_only_message_guarded(broadcaster_id, message, Box::new(|| Ok(())))
+            .await
+    }
+
+    async fn send_source_only_message_guarded(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        pre_send_check: SourceOnlyPreSendCheck,
+    ) -> Result<SendOutcome, String> {
         let sender_id = self.token_mgr.bot_user_id().await;
         let is_twitch_id = |id: &str| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit());
         if !is_twitch_id(broadcaster_id) || !is_twitch_id(&sender_id) {
@@ -202,7 +212,12 @@ impl ChatApi for HelixChatClient {
         }
         match self
             .helix
-            .send_source_only_chat_message(broadcaster_id, &sender_id, message)
+            .send_source_only_chat_message_guarded(
+                broadcaster_id,
+                &sender_id,
+                message,
+                pre_send_check,
+            )
             .await
         {
             Ok(outcome) => Ok(outcome),

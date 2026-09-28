@@ -20,6 +20,8 @@ pub use tb_transport_twitch::AnnouncementOutcome;
 /// Ban-/Timeout-Ergebnis: kanonisch im Transport definiert.
 pub use tb_transport_twitch::BanOutcome;
 
+pub type SourceOnlyPreSendCheck = Box<dyn FnOnce() -> Result<(), &'static str> + Send + 'static>;
+
 /// Gemeinsamer Command-Antwortweg. Nur eine bestätigte Zustellung ist Erfolg.
 /// Keine Wiederholung mutierender Commands; der Aufrufer entscheidet über Sperren.
 pub async fn send_reply(api: &dyn ChatApi, broadcaster_id: &str, text: &str) -> bool {
@@ -108,6 +110,16 @@ pub trait ChatApi: Send + Sync {
         _message: &str,
     ) -> Result<SendOutcome, String> {
         Err("source_only_chat_not_supported".to_string())
+    }
+
+    async fn send_source_only_message_guarded(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        pre_send_check: SourceOnlyPreSendCheck,
+    ) -> Result<SendOutcome, String> {
+        pre_send_check().map_err(str::to_string)?;
+        self.send_source_only_message(broadcaster_id, message).await
     }
 
     /// `POST /helix/whispers` — braucht `user:manage:whispers` auf dem
