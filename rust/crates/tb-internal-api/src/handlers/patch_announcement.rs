@@ -1,4 +1,10 @@
-use std::{collections::HashSet, error::Error, fmt, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    error::Error,
+    fmt,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{extract::Extension, Json};
 use chrono::{DateTime, Utc};
@@ -162,7 +168,7 @@ fn eligible(candidate: &Candidate, stream: &HelixStream, event: &PatchEvent) -> 
         && DateTime::parse_from_rfc3339(&stream.started_at).is_ok_and(|at| at <= event.detected_at)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct DeliveryResult {
     status: &'static str,
     drop_code: Option<String>,
@@ -322,8 +328,13 @@ fn redact_drop_code(code: &str) -> String {
 }
 
 fn send_error_reason(error: &str) -> &'static str {
-    if error.starts_with("source_only_chat_outcome_unknown:") {
-        "ambiguous_http_outcome"
+    if let Some(reason) = error.strip_prefix("source_only_chat_outcome_unknown:") {
+        match reason.trim() {
+            "source_only_chat_body_unreadable" => "response_body_unreadable",
+            "source_only_chat_result_missing" => "response_result_missing",
+            "source_only_chat_unexpected_success_status" => "unexpected_success_status",
+            _ => "ambiguous_http_outcome",
+        }
     } else if error.starts_with("source_only_chat_transport_failed:") {
         "transport_error"
     } else {
@@ -387,30 +398,126 @@ impl PatchReceiver {
         &self,
         event: &PatchEvent,
     ) -> Result<PatchProcessOutcome, PatchProcessError> {
-        let result = tokio::time::timeout(
+        process_with_timeout(
+            &self.pool,
+            &LiveTransport { receiver: self },
+            event,
             Duration::from_secs(EVENT_TTL_SECONDS as u64),
-            process(&self.pool, &LiveTransport { receiver: self }, event),
         )
         .await
-        .map_err(|_| PatchProcessError::Unavailable)?;
-        if let Err(PatchProcessError::Database { sqlstate }) = &result {
-            tracing::error!(
+    }
+}
+
+async fn process_with_timeout(
+    pool: &PgPool,
+    transport: &dyn Transport,
+    event: &PatchEvent,
+    timeout: Duration,
+) -> Result<PatchProcessOutcome, PatchProcessError> {
+    let attempted = Arc::new(Mutex::new(HashSet::new()));
+    let result = tokio::time::timeout(
+        timeout,
+        process_inner(pool, transport, event, Arc::clone(&attempted)),
+    )
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
                 event_id = %event.event_id,
-                sqlstate = ?sqlstate,
-                "Patch announcement event database operation failed"
+                uncertainty_reason = "receiver_timeout",
+                "Patch announcement event processing timed out"
+            );
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                mark_timed_out_attempts(pool, &event.event_id, &attempted),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    tracing::error!(
+                        event_id = %event.event_id,
+                        uncertainty_reason = "receiver_timeout_cleanup_timed_out",
+                        "Patch announcement timeout cleanup did not finish"
+                    );
+                    return Err(PatchProcessError::Unavailable);
+                }
+            }
+            Err(PatchProcessError::Unavailable)
+        }
+    };
+    if let Err(PatchProcessError::Database { sqlstate }) = &result {
+        tracing::error!(
+            event_id = %event.event_id,
+            sqlstate = ?sqlstate,
+            "Patch announcement event database operation failed"
+        );
+    }
+    result
+}
+
+async fn mark_timed_out_attempts(
+    pool: &PgPool,
+    event_id: &str,
+    attempted: &Mutex<HashSet<(String, String)>>,
+) -> Result<(), PatchProcessError> {
+    let attempts: Vec<_> = attempted
+        .lock()
+        .map_err(|_| PatchProcessError::Unavailable)?
+        .iter()
+        .cloned()
+        .collect();
+    for (broadcaster_id, attempt_token) in attempts {
+        tracing::warn!(
+            event_id,
+            broadcaster_id,
+            outcome = "possible_delivery",
+            uncertainty_reason = "receiver_timeout_cleanup_pending",
+            "Patch announcement attempt may have been delivered before timing out"
+        );
+        let updated = sqlx::query(
+            "UPDATE twitch_patch_announcement_deliveries \
+             SET status='uncertain', uncertainty_reason='receiver_timeout_after_attempt' \
+             WHERE event_id=$1 AND broadcaster_id=$2 AND status='attempted' \
+               AND uncertainty_reason=$3",
+        )
+        .bind(event_id)
+        .bind(&broadcaster_id)
+        .bind(&attempt_token)
+        .execute(pool)
+        .await
+        .map_err(|error| database_error_for(error, event_id, &broadcaster_id))?;
+        if updated.rows_affected() == 1 {
+            tracing::warn!(
+                event_id,
+                broadcaster_id,
+                outcome = "uncertain",
+                uncertainty_reason = "receiver_timeout_after_attempt",
+                "Patch announcement attempt was recorded as uncertain after timeout"
             );
         }
-        result
     }
+    Ok(())
 }
 
 #[derive(Clone)]
 pub struct PatchReceiverExt(pub Option<Arc<PatchReceiver>>);
 
+#[cfg(test)]
 async fn process(
     pool: &PgPool,
     transport: &dyn Transport,
     event: &PatchEvent,
+) -> Result<PatchProcessOutcome, PatchProcessError> {
+    process_inner(pool, transport, event, Arc::new(Mutex::new(HashSet::new()))).await
+}
+
+async fn process_inner(
+    pool: &PgPool,
+    transport: &dyn Transport,
+    event: &PatchEvent,
+    attempted: Arc<Mutex<HashSet<(String, String)>>>,
 ) -> Result<PatchProcessOutcome, PatchProcessError> {
     if !event.validate(Utc::now())? {
         sqlx::query(
@@ -561,13 +668,21 @@ async fn process(
         } else {
             "skipped"
         };
+        let attempt_token = format!("receiver_attempt:{}", uuid::Uuid::new_v4());
+        if status == "attempted" {
+            attempted
+                .lock()
+                .map_err(|_| PatchProcessError::Unavailable)?
+                .insert((id.clone(), attempt_token.clone()));
+        }
         let claimed = sqlx::query(
-            "UPDATE twitch_patch_announcement_deliveries SET status=$3, attempted_at=CASE WHEN $3='attempted' THEN now() ELSE attempted_at END \
+            "UPDATE twitch_patch_announcement_deliveries SET status=$3, attempted_at=CASE WHEN $3='attempted' THEN now() ELSE attempted_at END, uncertainty_reason=CASE WHEN $3='attempted' THEN $4 ELSE NULL END \
              WHERE event_id=$1 AND broadcaster_id=$2 AND status='pending'",
         )
         .bind(&event.event_id)
         .bind(&id)
         .bind(status)
+        .bind(&attempt_token)
         .execute(pool)
         .await
         .map_err(|error| database_error_for(error, &event.event_id, &id))?
@@ -581,20 +696,6 @@ async fn process(
                     return Err(error);
                 }
             };
-            sqlx::query(
-                "UPDATE twitch_patch_announcement_deliveries \
-                 SET status=$3, drop_code=$4, http_status=$5, uncertainty_reason=$6 \
-                 WHERE event_id=$1 AND broadcaster_id=$2 AND status='attempted'",
-            )
-            .bind(&event.event_id)
-            .bind(&id)
-            .bind(outcome.status)
-            .bind(outcome.drop_code.as_deref())
-            .bind(outcome.http_status)
-            .bind(outcome.uncertainty_reason)
-            .execute(pool)
-            .await
-            .map_err(|error| database_error_for(error, &event.event_id, &id))?;
             tracing::info!(
                 event_id=%event.event_id,
                 broadcaster_id=%id,
@@ -604,6 +705,22 @@ async fn process(
                 uncertainty_reason=?outcome.uncertainty_reason,
                 "Patch announcement delivery"
             );
+            sqlx::query(
+                "UPDATE twitch_patch_announcement_deliveries \
+                 SET status=$3, drop_code=$4, http_status=$5, uncertainty_reason=$6 \
+                 WHERE event_id=$1 AND broadcaster_id=$2 AND status='attempted' \
+                   AND uncertainty_reason=$7",
+            )
+            .bind(&event.event_id)
+            .bind(&id)
+            .bind(outcome.status)
+            .bind(outcome.drop_code.as_deref())
+            .bind(outcome.http_status)
+            .bind(outcome.uncertainty_reason)
+            .bind(&attempt_token)
+            .execute(pool)
+            .await
+            .map_err(|error| database_error_for(error, &event.event_id, &id))?;
         }
     }
     let counts = sqlx::query_as::<_, (String, i64)>(
@@ -747,6 +864,24 @@ mod tests {
         ] {
             assert!(!eligible(&candidate, &wrong, &event));
         }
+        assert_eq!(
+            send_error_reason("source_only_chat_outcome_unknown: source_only_chat_body_unreadable"),
+            "response_body_unreadable"
+        );
+        assert_eq!(
+            send_error_reason("source_only_chat_outcome_unknown: source_only_chat_result_missing"),
+            "response_result_missing"
+        );
+        assert_eq!(
+            send_error_reason(
+                "source_only_chat_outcome_unknown: source_only_chat_unexpected_success_status"
+            ),
+            "unexpected_success_status"
+        );
+        assert_eq!(
+            send_error_reason("source_only_chat_outcome_unknown: token=secret"),
+            "ambiguous_http_outcome"
+        );
         assert_eq!(redact_drop_code("sender_timedout"), "sender_timedout");
         assert_eq!(redact_drop_code("token:secret"), "redacted");
         assert_eq!(

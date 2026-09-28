@@ -9,6 +9,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     },
+    time::Duration,
 };
 
 struct FakeTransport {
@@ -22,6 +23,9 @@ struct FakeTransport {
     revoke_before_send: AtomicBool,
     stream_calls: AtomicUsize,
     outcome: &'static str,
+    known_result: Mutex<Option<DeliveryResult>>,
+    send_delay: Duration,
+    send_started: Arc<tokio::sync::Notify>,
 }
 
 impl FakeTransport {
@@ -37,6 +41,9 @@ impl FakeTransport {
             revoke_before_send: AtomicBool::new(false),
             stream_calls: AtomicUsize::new(0),
             outcome: "sent",
+            known_result: Mutex::new(None),
+            send_delay: Duration::ZERO,
+            send_started: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
@@ -99,7 +106,14 @@ impl Transport for FakeTransport {
             return Err(PatchProcessError::Unavailable);
         }
         self.sent.lock().unwrap().push((id.into(), message.into()));
-        Ok(DeliveryResult::status(self.outcome))
+        self.send_started.notify_one();
+        tokio::time::sleep(self.send_delay).await;
+        Ok(self
+            .known_result
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| DeliveryResult::status(self.outcome)))
     }
 }
 
@@ -239,6 +253,106 @@ async fn uncertain_drop_and_crash_after_claim_never_retry() {
     assert!(statuses.contains(&"uncertain".into()));
     assert!(statuses.contains(&"dropped".into()));
     assert!(statuses.contains(&"attempted".into()));
+}
+
+#[tokio::test]
+async fn known_drop_with_final_update_failure_is_terminal_without_retry() {
+    let db = database().await;
+    let pool = db.pool.clone();
+    let transport = FakeTransport::new(pool.clone());
+    *transport.known_result.lock().unwrap() = Some(DeliveryResult {
+        status: "dropped",
+        drop_code: Some("sender_timedout".into()),
+        http_status: None,
+        uncertainty_reason: None,
+    });
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_known_drop_update() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF OLD.status='attempted' AND NEW.status='dropped' THEN \
+         RAISE EXCEPTION 'forced final update failure' USING ERRCODE='23514'; \
+         END IF; RETURN NEW; END $$; \
+         CREATE TRIGGER reject_known_drop_update BEFORE UPDATE ON twitch_patch_announcement_deliveries \
+         FOR EACH ROW EXECUTE FUNCTION reject_known_drop_update();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let event = patch_event(286);
+    assert!(matches!(
+        process(&pool, &transport, &event).await,
+        Err(PatchProcessError::Database { sqlstate: Some(ref code) }) if code == "23514"
+    ));
+    let (status, drop_code): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, drop_code FROM twitch_patch_announcement_deliveries WHERE event_id=$1",
+    )
+    .bind(&event.event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "attempted");
+    assert_eq!(drop_code, None);
+    process(&pool, &transport, &event).await.unwrap();
+    assert_eq!(transport.sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn timeout_after_external_send_marks_only_its_attempt_uncertain() {
+    let db = database().await;
+    let pool = db.pool.clone();
+    let mut transport = FakeTransport::new(pool.clone());
+    transport.send_delay = Duration::from_secs(10);
+    let event = patch_event(286);
+    let processing = process_with_timeout(&pool, &transport, &event, Duration::from_secs(2));
+    tokio::pin!(processing);
+    tokio::select! {
+        _ = transport.send_started.notified() => {}
+        result = &mut processing => panic!("processing ended before the send began: {result:?}"),
+    }
+    sqlx::query(
+        "INSERT INTO twitch_patch_announcement_deliveries \
+         (event_id, broadcaster_id, stream_id, status, attempted_at) \
+         VALUES ($1, '43', 'session-43', 'attempted', now())",
+    )
+    .bind(&event.event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        processing.await,
+        Err(PatchProcessError::Unavailable)
+    ));
+    let (status, reason): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason FROM twitch_patch_announcement_deliveries \
+         WHERE event_id=$1 AND broadcaster_id='42'",
+    )
+    .bind(&event.event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "uncertain");
+    assert_eq!(reason.as_deref(), Some("receiver_timeout_after_attempt"));
+    let other_status: String = sqlx::query_scalar(
+        "SELECT status FROM twitch_patch_announcement_deliveries \
+         WHERE event_id=$1 AND broadcaster_id='43'",
+    )
+    .bind(&event.event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(other_status, "attempted");
+    let other_update = sqlx::query(
+        "UPDATE twitch_patch_announcement_deliveries SET status='sent' \
+         WHERE event_id=$1 AND broadcaster_id='43' AND status='attempted'",
+    )
+    .bind(&event.event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(other_update.rows_affected(), 1);
+    process_with_timeout(&pool, &transport, &event, Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(transport.sent.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
