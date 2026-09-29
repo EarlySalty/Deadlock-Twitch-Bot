@@ -541,8 +541,10 @@ async fn main() {
     // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
     // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).
     if config.challenges.enabled {
-        let central =
-            tb_effort::Engine::readonly_central_from_pool(&pool, &config.challenges.central_database);
+        let central = tb_effort::Engine::readonly_central_from_pool(
+            &pool,
+            &config.challenges.central_database,
+        );
         match central.and_then(|central| {
             tb_effort::Engine::new(
                 pool.clone(),

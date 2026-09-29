@@ -1787,7 +1787,10 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
     use handlers::{obsolete_routes, spa};
 
     Router::new()
-        .route("/twitch/challenges", get(spa::main_domain_spa_shell_gated_handler))
+        .route(
+            "/twitch/challenges",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
         .route(
             "/twitch/dashboard",
             get(spa::main_domain_spa_shell_gated_handler),
@@ -1946,7 +1949,9 @@ pub async fn contest_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool,
     use std::str::FromStr;
     let options = sqlx::postgres::PgConnectOptions::from_str(&config.dsn)?;
     if !options.get_host().starts_with('/') {
-        return Err(sqlx::Error::Configuration("Contest writer requires a local peer socket".into()));
+        return Err(sqlx::Error::Configuration(
+            "Contest writer requires a local peer socket".into(),
+        ));
     }
     let options = options.username("twitchcontest").password("");
     sqlx::postgres::PgPoolOptions::new()
@@ -1959,19 +1964,19 @@ pub async fn contest_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool,
 pub fn build_clip_contest_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
     use handlers::{clip_contest, website};
 
-    let submit_rl =
-        RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_submit", 6, 60);
-    let vote_rl =
-        RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_vote", 20, 60);
-    let login_rl =
-        RateLimitLayerConfig::new(rate_limiter, "clip_contest_discord_login", 10, 60);
+    let submit_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_submit", 6, 60);
+    let vote_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_vote", 20, 60);
+    let login_rl = RateLimitLayerConfig::new(rate_limiter, "clip_contest_discord_login", 10, 60);
 
     Router::new()
         .route("/clips", get(website::clips_page_handler))
         .route("/clips/", get(website::clips_page_handler))
         .route("/clips/api/current", get(clip_contest::current_handler))
         .route("/clips/api/archive", get(clip_contest::archive_handler))
-        .route("/clips/api/admin/submissions", get(clip_contest::admin_submissions_handler))
+        .route(
+            "/clips/api/admin/submissions",
+            get(clip_contest::admin_submissions_handler),
+        )
         .route("/clips/api/session", get(clip_contest::session_handler))
         .route(
             "/clips/api/submit",
@@ -1996,9 +2001,10 @@ pub fn build_clip_contest_router(pool: PgPool, rate_limiter: RateLimiter) -> Rou
         )
         .route(
             "/clips/auth/discord/login",
-            get(clip_contest::discord_login_handler).layer(
-                axum::middleware::from_fn_with_state(login_rl, rate_limit_middleware),
-            ),
+            get(clip_contest::discord_login_handler).layer(axum::middleware::from_fn_with_state(
+                login_rl,
+                rate_limit_middleware,
+            )),
         )
         .route(
             "/clips/auth/discord/callback",
@@ -2052,14 +2058,21 @@ pub fn build_router_with_contest_writer(
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
-    let challenge_engine = tb_config::runtime::settings().ok().and_then(|settings| {
-        let central =
-            tb_effort::Engine::readonly_central_from_pool(&pool, &settings.challenges.central_database).ok()?;
+    let challenge_settings = tb_config::runtime::settings().ok();
+    let central_pool = challenge_settings.as_ref().and_then(|settings| {
+        tb_effort::Engine::readonly_central_from_pool(&pool, &settings.challenges.central_database)
+            .map_err(|error| tracing::error!(%error, "Zentrale Community-Datenbank konnte nicht vorbereitet werden"))
+            .ok().flatten()
+    });
+    let challenge_engine = challenge_settings.and_then(|settings| {
         tb_effort::Engine::new(
             pool.clone(),
             settings.challenges.clone(),
-            central,
+            central_pool.clone(),
             helix.clone(),
+        )
+        .map_err(
+            |error| tracing::error!(%error, "Partner-Challenges konnten nicht vorbereitet werden"),
         )
         .ok()
     });
@@ -2086,7 +2099,10 @@ pub fn build_router_with_contest_writer(
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))
         .merge(build_website_router())
-        .merge(build_clip_contest_router(contest_writer, rate_limiter.clone()))
+        .merge(build_clip_contest_router(
+            contest_writer,
+            rate_limiter.clone(),
+        ))
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),
         ))
@@ -2162,6 +2178,11 @@ pub fn build_router_with_contest_writer(
         tracing::info!("Uplink Multi-Chat: Twitch-Token-Weg aktiv");
     }
 
+    if let Some(central_pool) = central_pool {
+        app = app.layer(Extension(handlers::clip_contest::ContestCentralPool(
+            central_pool,
+        )));
+    }
     app = app.layer(Extension(challenge_engine));
 
     // P2.108: globaler Default-Security-Header-Bundle auf ALLE Antworten

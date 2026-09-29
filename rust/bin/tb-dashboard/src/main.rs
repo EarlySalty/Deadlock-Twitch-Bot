@@ -12,7 +12,6 @@ use std::io::{Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use tb_dashboard_api::build_router_with_helix_and_brain;
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 #[cfg(test)]
@@ -319,7 +318,9 @@ async fn main() {
             // startet keinen Dashboardprozess und benötigt keinen Snapshot.
             let arguments = if arguments.iter().any(|argument| {
                 argument == "--config"
-                    || argument.to_str().is_some_and(|value| value.starts_with("--config="))
+                    || argument
+                        .to_str()
+                        .is_some_and(|value| value.starts_with("--config="))
             }) {
                 tb_config::file::ConfigArguments::parse(arguments.clone())
                     .map_err(|_| "Ungültiger Konfigurationspfad für den Uplink-Migrator.")?
@@ -372,25 +373,29 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_max_level(config.logging.level.tracing_level())
         .init();
-    tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_DASHBOARD_CONFIG_V1");
+    tracing::info!(
+        fingerprint = snapshot.fingerprint(),
+        "TWITCH_DASHBOARD_CONFIG_V1"
+    );
 
     // Nur Uplink migriert hier auf normale Konfiguration und Infisical-FD.
     // Bestehende benachbarte Dashboarddienste behalten ihren eigenen Startvertrag.
-    let configured =
-        match tb_dashboard_api::uplink_config::load_arguments(remaining).await {
-            Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
-            Ok(None) => Ok(()),
-            Err(error) => Err(error),
-        };
+    let configured = match tb_dashboard_api::uplink_config::load_arguments(remaining).await {
+        Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
+        Ok(None) => Ok(()),
+        Err(error) => Err(error),
+    };
     if let Err(error) = configured {
         tracing::error!("{error}");
         std::process::exit(1);
     }
 
-    let settings = snapshot.runtime_settings(&|key| std::env::var(key).ok()).unwrap_or_else(|e| {
-        tracing::error!("Konfigurationsfehler: {e}");
-        std::process::exit(1);
-    });
+    let settings = snapshot
+        .runtime_settings(&|key| std::env::var(key).ok())
+        .unwrap_or_else(|e| {
+            tracing::error!("Konfigurationsfehler: {e}");
+            std::process::exit(1);
+        });
 
     let pool = tb_db::connect(&settings.db).await.unwrap_or_else(|e| {
         tracing::error!("DB-Verbindungsfehler: {e}");
@@ -435,7 +440,8 @@ async fn main() {
     let token = settings.internal_api.token.clone();
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     spawn_affiliate_gutschrift_loop(pool.clone());
-    let contest_writer = tb_dashboard_api::contest_writer_pool(&settings.db).await
+    let contest_writer = tb_dashboard_api::contest_writer_pool(&settings.db)
+        .await
         .unwrap_or_else(|_| {
             tracing::error!("Clip-Wettbewerb: Schreibzugang konnte nicht aufgebaut werden");
             std::process::exit(1);
@@ -454,13 +460,20 @@ async fn main() {
             &config.dashboard.options.brain_client,
             brain_token.as_deref(),
         );
-    let mut app =
-        tb_dashboard_api::build_router_with_contest_writer(pool.clone(), contest_writer, token, pause_loop_helix, brain_runtime);
+    let mut app = tb_dashboard_api::build_router_with_contest_writer(
+        pool.clone(),
+        contest_writer,
+        token,
+        pause_loop_helix,
+        brain_runtime,
+    );
     app = app.layer(axum::Extension(readiness_fingerprint));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));
     }
-    if let Some(profile_cache) = tb_dashboard_api::handlers::partner_profiles::TwitchProfileCache::from_env() {
+    if let Some(profile_cache) =
+        tb_dashboard_api::handlers::partner_profiles::TwitchProfileCache::from_env()
+    {
         app = app.layer(axum::Extension(profile_cache));
     }
 

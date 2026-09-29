@@ -16,7 +16,12 @@ fn local_config() -> Option<serde_json::Value> {
 
 pub fn database_url() -> Option<String> {
     if let Some(config) = local_config() {
-        return Some(config["database_url"].as_str().expect("database_url string").to_owned());
+        return Some(
+            config["database_url"]
+                .as_str()
+                .expect("database_url string")
+                .to_owned(),
+        );
     }
     std::env::var("TB_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("TEST_DATABASE_URL"))
