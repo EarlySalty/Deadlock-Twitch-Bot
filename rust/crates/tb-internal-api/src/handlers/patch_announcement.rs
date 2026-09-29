@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tb_chat::{
-    ChatApi, SendOutcome, api::SourceOnlyPreSendCheck, promos::OutboundSuppressionCheck,
+    api::SourceOnlyPreSendCheck, promos::OutboundSuppressionCheck, ChatApi, SendOutcome,
 };
 use tb_http_core::ApiError;
 use tb_transport_twitch::{HelixClient, HelixStream};
@@ -685,11 +685,20 @@ async fn process_inner(
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|id| *id > 0)
         .ok_or(PatchProcessError::Invalid("invalid article URL"))?;
+    let mut tx = pool.begin().await.map_err(database_error)?;
+    // Match feed expiry's advisory lock without re-locking the callback's row.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('twitch_patch_feed:' || $1::text, 0))",
+    )
+    .bind(patch_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
     let observation = sqlx::query_as::<_, (String, DateTime<Utc>)>(
         "SELECT status, observed_at FROM twitch_patch_feed_observations WHERE patch_id=$1",
     )
     .bind(patch_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(database_error)?;
     let Some((observation_status, observed_at)) = observation else {
@@ -705,7 +714,6 @@ async fn process_inner(
         ));
     }
     event.validate(Utc::now())?;
-    let mut tx = pool.begin().await.map_err(database_error)?;
     let inserted = sqlx::query(
         "INSERT INTO twitch_patch_announcements (event_id, article_url, source_url, detected_at, message) \
          VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",

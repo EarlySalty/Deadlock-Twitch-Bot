@@ -7,9 +7,8 @@ use std::{
     collections::HashSet,
     process::Command,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
@@ -664,12 +663,10 @@ async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
     let db = database().await;
     let pool = db.pool.clone();
     let transport = FakeTransport::new(pool.clone());
-    assert!(
-        authorized_login(&pool, "42", "session-42")
-            .await
-            .unwrap()
-            .is_some()
-    );
+    assert!(authorized_login(&pool, "42", "session-42")
+        .await
+        .unwrap()
+        .is_some());
     let denied = patch_event(286);
     for (scopes, reauth) in [
         ("channel:bot:spoof", false),
@@ -684,12 +681,10 @@ async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(
-            authorized_login(&pool, "42", "session-42")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(authorized_login(&pool, "42", "session-42")
+            .await
+            .unwrap()
+            .is_none());
         process(&pool, &transport, &denied).await.unwrap();
     }
     let (count, status, reason): (i64, String, Option<String>) = sqlx::query_as(
@@ -711,12 +706,10 @@ async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
     .unwrap();
     process(&pool, &transport, &denied).await.unwrap();
     assert!(transport.sent.lock().unwrap().is_empty());
-    assert!(
-        authorized_login(&pool, "44", "session-44")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(authorized_login(&pool, "44", "session-44")
+        .await
+        .unwrap()
+        .is_none());
     let mut expired = patch_event(287);
     expired.detected_at -= chrono::Duration::minutes(3);
     expired.source_url = "https://forums.playdeadlock.com/posts/287/".into();
@@ -1249,15 +1242,13 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .execute(&mut *conn)
     .await
     .unwrap();
-    assert!(
-        sqlx::query(
-            "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
+    assert!(sqlx::query(
+        "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
          VALUES (291, now(), 'invalid')",
-        )
-        .execute(&mut *conn)
-        .await
-        .is_err()
-    );
+    )
+    .execute(&mut *conn)
+    .await
+    .is_err());
     let order: Vec<i64> = sqlx::query_scalar(
         "SELECT patch_id FROM twitch_patch_feed_observations ORDER BY observed_at, patch_id",
     )
@@ -1280,14 +1271,12 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .await
     .unwrap();
     assert_eq!(historical, 0);
-    assert!(
-        sqlx::query(
-            "UPDATE twitch_patch_feed_observations SET observed_at=now() WHERE patch_id=290",
-        )
-        .execute(&mut *conn)
-        .await
-        .is_err()
-    );
+    assert!(sqlx::query(
+        "UPDATE twitch_patch_feed_observations SET observed_at=now() WHERE patch_id=290",
+    )
+    .execute(&mut *conn)
+    .await
+    .is_err());
     sqlx::query("RESET ROLE").execute(&mut *conn).await.unwrap();
     drop(conn);
     let first_observed_at = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();

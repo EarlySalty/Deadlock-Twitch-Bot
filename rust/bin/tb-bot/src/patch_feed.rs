@@ -4,7 +4,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use reqwest::{Client, StatusCode, redirect::Policy};
+use reqwest::{redirect::Policy, Client, StatusCode};
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use tb_internal_api::{PatchEvent, PatchProcessError, PatchReceiver};
@@ -454,6 +454,20 @@ fn delivery_expiry_reason(status: &str) -> &'static str {
     }
 }
 
+// Keep the lock key identical to the receiver's, and acquire it after the row lock.
+async fn lock_patch_observation(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('twitch_patch_feed:' || $1::text, 0))",
+    )
+    .bind(id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn expire_pending_at(
     pool: &PgPool,
     id: i64,
@@ -472,6 +486,7 @@ async fn expire_pending_at(
         tx.commit().await?;
         return Ok(false);
     };
+    lock_patch_observation(&mut tx, id).await?;
     let current_status: String = row.try_get("status")?;
     let observed_at: DateTime<Utc> = row.try_get("observed_at")?;
     if current_status != "pending" || !pending_is_expired(now, observed_at) {
@@ -645,7 +660,7 @@ mod postgres;
 mod tests {
     use std::collections::HashMap;
     use std::process::Command;
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{mpsc, Arc, Mutex};
 
     use super::*;
     use tb_chat::api::{BanOutcome, SourceOnlyPreSendCheck};
@@ -853,6 +868,25 @@ mod tests {
             }))
             .unwrap(),
         );
+    }
+
+    struct PausedStreamResponse {
+        entered: Arc<tokio::sync::Notify>,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl Respond for PausedStreamResponse {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                self.entered.notify_one();
+                release.recv().unwrap();
+            }
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "s42", "user_id": "42", "game_id": "deadlock",
+                    "game_name": "Deadlock", "started_at": "2020-01-01T00:00:00Z"}]
+            }))
+        }
     }
 
     struct PausedChatResponse {
@@ -1235,11 +1269,9 @@ mod tests {
             }]))
             .unwrap(),
         );
-        assert!(
-            run_feed(&http, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
         let http = feed(&[286]);
         let meta_url = format!("{BASE_URL}/patch-286/meta.json");
         http.add_response(
@@ -1248,18 +1280,14 @@ mod tests {
             "https://attacker.example/",
             "",
         );
-        assert!(
-            run_feed(&http, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
         let http = feed(&[286]);
         http.add_response(INDEX_URL, StatusCode::OK, "https://attacker.example/", "[]");
-        assert!(
-            run_feed(&http, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1269,41 +1297,33 @@ mod tests {
         let url = article_url(286).unwrap();
         http.add_response(&url, StatusCode::NOT_FOUND, &url, "");
         let mut sent = Vec::new();
-        assert!(
-            run_feed(&http, &cursor, |article| {
-                sent.push(article.id);
-                async { Ok(true) }
-            })
-            .await
-            .is_err()
-        );
+        assert!(run_feed(&http, &cursor, |article| {
+            sent.push(article.id);
+            async { Ok(true) }
+        })
+        .await
+        .is_err());
         assert!(sent.is_empty());
         let http = feed(&[286, 287]);
         http.responses.lock().unwrap().remove(INDEX_URL);
-        assert!(
-            run_feed(&http, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn failed_first_fetch_does_not_create_baseline() {
         let cursor = FakeCursor::default();
         let unavailable = FakeHttp::default();
-        assert!(
-            run_feed(&unavailable, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&unavailable, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
         assert!(!cursor.state.lock().unwrap().bootstrapped);
         let malformed = FakeHttp::default();
         malformed.add(INDEX_URL, "{bad json");
-        assert!(
-            run_feed(&malformed, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&malformed, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
         assert!(!cursor.state.lock().unwrap().bootstrapped);
         let published = feed(&[286]);
         assert_eq!(
@@ -1345,11 +1365,9 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert!(
-            run_feed(&invalid, &cursor, |_| async { Ok(true) })
-                .await
-                .is_err()
-        );
+        assert!(run_feed(&invalid, &cursor, |_| async { Ok(true) })
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1484,11 +1502,9 @@ mod tests {
             ),
             (403, "expired_unavailable", "feed_expired_unavailable"),
         ] {
-            assert!(
-                expire_pending_at(&bot, id, status, Utc::now())
-                    .await
-                    .unwrap()
-            );
+            assert!(expire_pending_at(&bot, id, status, Utc::now())
+                .await
+                .unwrap());
             let observation: String = sqlx::query_scalar(
                 "SELECT status FROM twitch_patch_feed_observations WHERE patch_id=$1",
             )
@@ -1518,20 +1534,18 @@ mod tests {
                 }
             }
         }
-        assert!(
-            !deliver_article_with_clock(
-                &bot,
-                ValidatedArticle {
-                    id: 405,
-                    url: article_url(405).unwrap(),
-                    source_url: "https://forums.playdeadlock.com/posts/405/".into(),
-                },
-                &mut |_| async { Ok::<_, sqlx::Error>(()) },
-                Utc::now,
-            )
-            .await
-            .unwrap()
-        );
+        assert!(!deliver_article_with_clock(
+            &bot,
+            ValidatedArticle {
+                id: 405,
+                url: article_url(405).unwrap(),
+                source_url: "https://forums.playdeadlock.com/posts/405/".into(),
+            },
+            &mut |_| async { Ok::<_, sqlx::Error>(()) },
+            Utc::now,
+        )
+        .await
+        .unwrap());
         let timed_out: (String, String, Option<String>) = sqlx::query_as(
             "SELECT observation.status, delivery.status, delivery.uncertainty_reason \
              FROM twitch_patch_feed_observations observation \
@@ -1573,11 +1587,9 @@ mod tests {
         .execute(&admin)
         .await
         .unwrap();
-        assert!(
-            expire_pending_at(&bot, 404, "expired_timeout", Utc::now())
-                .await
-                .is_err()
-        );
+        assert!(expire_pending_at(&bot, 404, "expired_timeout", Utc::now())
+            .await
+            .is_err());
         let rollback: (String, String) = sqlx::query_as(
             "SELECT observation.status, delivery.status \
              FROM twitch_patch_feed_observations observation \
@@ -1692,6 +1704,198 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result, ("processed".into(), "sent".into(), None));
+    }
+
+    #[tokio::test]
+    async fn receiver_snapshot_serializes_with_expiry_and_feed_instances() {
+        let (_postgres, admin, bot, peer) = isolated_bot_database().await;
+        let id = 406_i64;
+        let observed_at = Utc::now() - chrono::Duration::seconds(115);
+        sqlx::query("UPDATE twitch_live_state SET last_seen_at=$1 WHERE twitch_user_id='42'")
+            .bind(observed_at.to_rfc3339())
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_feed_observations \
+             (patch_id, observed_at, status) VALUES ($1, $2, 'pending')",
+        )
+        .bind(id)
+        .bind(observed_at)
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_announcement_recipients \
+             (patch_id, broadcaster_id, stream_id) VALUES ($1, '42', 's42') \
+             ON CONFLICT (patch_id, broadcaster_id) DO NOTHING",
+        )
+        .bind(id)
+        .execute(&admin)
+        .await
+        .unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok", "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release_tx, release_rx) = mpsc::channel();
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "42"))
+            .respond_with(PausedStreamResponse {
+                entered: Arc::clone(&entered),
+                release: Mutex::new(Some(release_rx)),
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let mut config = HelixConfig::new("cid", "sec");
+        config.helix_base = format!("{}/helix", server.uri());
+        config.token_url = format!("{}/oauth2/token", server.uri());
+        let helix = HelixClient::new(config).unwrap();
+        let timeout_guard = Arc::new(tb_chat::moderation::TimeoutGuard::new());
+        let receiver = Arc::new(PatchReceiver::new(
+            bot.clone(),
+            helix.clone(),
+            Arc::new(MockEndpointChat {
+                helix: helix.clone(),
+            }),
+            Arc::new(tb_chat::timeout_tracking::CombinedSuppression::new(
+                Arc::new(tb_chat::moderation::OutboundSuppressionStore::new(
+                    bot.clone(),
+                )),
+                timeout_guard,
+            )),
+        ));
+        let event = PatchEvent::from_article(
+            id,
+            article_url(id).unwrap(),
+            format!("https://forums.playdeadlock.com/posts/{id}/"),
+            observed_at,
+        )
+        .unwrap();
+        let processing_receiver = Arc::clone(&receiver);
+        let mut processing = tokio::spawn(async move { processing_receiver.process(&event).await });
+        tokio::select! {
+            _ = entered.notified() => {}
+            result = &mut processing => panic!("receiver ended before stream fetch: {result:?}"),
+        }
+
+        let expiry_pool = peer.clone();
+        let expiry = tokio::spawn(async move {
+            expire_pending_at(
+                &expiry_pool,
+                id,
+                "expired_timeout",
+                observed_at + chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS + 1),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                     WHERE wait_event_type='Lock' AND wait_event='advisory' \
+                       AND query LIKE '%pg_advisory_xact_lock%')",
+                )
+                .fetch_one(&admin)
+                .await
+                .unwrap();
+                if waiting {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("expiry should wait on the receiver transaction lock");
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        release_tx.send(()).unwrap();
+        assert!(processing.await.unwrap().is_ok());
+        assert!(expiry.await.unwrap().unwrap());
+
+        let observation: String = sqlx::query_scalar(
+            "SELECT status FROM twitch_patch_feed_observations WHERE patch_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(observation, "expired_timeout");
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_patch_announcement_deliveries \
+             WHERE status='pending' AND event_id=(SELECT event_id \
+             FROM twitch_patch_announcements WHERE article_url=$1)",
+        )
+        .bind(article_url(id).unwrap())
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(pending, 0);
+        server.verify().await;
+
+        let reverse_id = 407_i64;
+        let reverse_observed_at = Utc::now();
+        sqlx::query(
+            "INSERT INTO twitch_patch_feed_observations \
+             (patch_id, observed_at, status) VALUES ($1, $2, 'pending')",
+        )
+        .bind(reverse_id)
+        .bind(reverse_observed_at)
+        .execute(&admin)
+        .await
+        .unwrap();
+        assert!(expire_pending_at(
+            &bot,
+            reverse_id,
+            "expired_timeout",
+            reverse_observed_at + chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS + 1),
+        )
+        .await
+        .unwrap());
+        let reverse_event = PatchEvent::from_article(
+            reverse_id,
+            article_url(reverse_id).unwrap(),
+            format!("https://forums.playdeadlock.com/posts/{reverse_id}/"),
+            reverse_observed_at,
+        )
+        .unwrap();
+        assert!(receiver.process(&reverse_event).await.is_err());
+
+        let concurrent_id = 408_i64;
+        let concurrent_observed_at = Utc::now();
+        sqlx::query(
+            "INSERT INTO twitch_patch_feed_observations \
+             (patch_id, observed_at, status) VALUES ($1, $2, 'pending')",
+        )
+        .bind(concurrent_id)
+        .bind(concurrent_observed_at)
+        .execute(&admin)
+        .await
+        .unwrap();
+        let expiry_time =
+            concurrent_observed_at + chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS + 1);
+        let (first_expiry, second_expiry) = tokio::join!(
+            expire_pending_at(&bot, concurrent_id, "expired_timeout", expiry_time),
+            expire_pending_at(&peer, concurrent_id, "expired_timeout", expiry_time),
+        );
+        assert_eq!(
+            first_expiry.unwrap() as u8 + second_expiry.unwrap() as u8,
+            1
+        );
     }
 
     #[tokio::test]
@@ -2282,11 +2486,9 @@ mod tests {
             &unavailable_url,
             "",
         );
-        assert!(
-            poll_with_receiver(&unavailable_article, &bot, &receiver)
-                .await
-                .is_err()
-        );
+        assert!(poll_with_receiver(&unavailable_article, &bot, &receiver)
+            .await
+            .is_err());
         let pending_without_announcement: (String, i64) = sqlx::query_as(
             "SELECT o.status, (SELECT count(*) FROM twitch_patch_announcements \
              WHERE article_url='https://deutsche-deadlock-community.de/patchnotes/patch-291/') \
