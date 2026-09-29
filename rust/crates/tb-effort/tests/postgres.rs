@@ -679,7 +679,26 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
     let finished = observed + Duration::minutes(5);
     for (id, steam, result) in [(1i64, "76561197960265801", 1), (2, "76561197960265802", 2)] {
         sqlx::query("INSERT INTO steam.steam_tasks VALUES($1,'GC_GET_MATCH_HISTORY',$2,'DONE',$3,$4)")
-            .bind(id).bind(json!({"steam_id":steam})).bind(json!({"ok":true,"data":{"steam_id64":steam,"matches":[{"match_id":500,"start_time":start.timestamp(),"match_result":result}]}})).bind(finished).execute(&pool).await.unwrap();
+            .bind(id).bind(json!({"steam_id":steam})).bind(json!({"ok":true,"data":{"steam_id64":steam,"matches":[{"match_id":500,"start_time":start.timestamp(),"match_result":result}]}})).bind(finished-Duration::seconds(10)).execute(&pool).await.unwrap();
+    }
+    for task in 0_i64..9 {
+        for (peer, steam) in ["76561197960265801", "76561197960265802"]
+            .into_iter()
+            .enumerate()
+        {
+            let task_id = 3 + task * 2 + peer as i64;
+            let completed_at = finished - Duration::seconds(9 - task);
+            sqlx::query(
+                "INSERT INTO steam.steam_tasks VALUES($1,'GC_GET_MATCH_HISTORY',$2,'DONE',$3,$4)",
+            )
+            .bind(task_id)
+            .bind(json!({"steam_id":steam}))
+            .bind(json!({"ok":true,"data":{"steam_id64":steam,"matches":[]}}))
+            .bind(completed_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
     }
     engine.tick(finished).await.unwrap();
     engine.tick(finished + Duration::seconds(1)).await.unwrap();
@@ -1083,6 +1102,37 @@ async fn missing_category_coverage_blocks_settlement_and_readiness() {
         .await
         .unwrap();
     assert_eq!(assigned, 0);
+
+    let since = DateTime::parse_from_rfc3339("2026-09-27T22:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    sqlx::query("UPDATE partner_effort_program SET started_at=$1 WHERE singleton")
+        .bind(since - Duration::days(10))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM category_collection_runs")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO category_collection_runs(snapshot_at,completed_at,streams,viewers,poll_seconds) SELECT at,at,0,0,300 FROM generate_series($1::timestamptz,$2::timestamptz,INTERVAL '1 day') AS at")
+        .bind(since - Duration::days(10))
+        .bind(since - Duration::days(1))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO category_collection_runs(snapshot_at,completed_at,streams,viewers,poll_seconds) SELECT at,at,0,0,300 FROM generate_series($1::timestamptz,$2::timestamptz,INTERVAL '5 minutes') AS at")
+        .bind(since - Duration::minutes(5))
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    engine.tick(now + Duration::seconds(2)).await.unwrap();
+    assert!(engine
+        .ensure_ready(now + Duration::seconds(2))
+        .await
+        .is_ok());
+
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
         .execute(&admin)

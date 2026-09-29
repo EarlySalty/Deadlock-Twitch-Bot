@@ -439,7 +439,7 @@ impl Engine {
             .collect();
         let mut histories = HashMap::new();
         for steam in ids {
-            let rows: Vec<(Value,Value,DateTime<Utc>)>=sqlx::query_as("SELECT result,payload,finished_at FROM steam.steam_tasks WHERE type='GC_GET_MATCH_HISTORY' AND status='DONE' AND (payload->>'steam_id'=$1 OR payload->>'steam_id64'=$1 OR payload->>'account_id'=$3) AND result IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= $2-INTERVAL '7 days' AND finished_at <= $2 ORDER BY finished_at DESC LIMIT 8")
+            let rows: Vec<(Value,Value,DateTime<Utc>)>=sqlx::query_as("SELECT result,payload,finished_at FROM steam.steam_tasks WHERE type='GC_GET_MATCH_HISTORY' AND status='DONE' AND (payload->>'steam_id'=$1 OR payload->>'steam_id64'=$1 OR payload->>'account_id'=$3) AND result IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= $2-INTERVAL '7 days' AND finished_at <= $2 ORDER BY finished_at DESC")
                 .bind(&steam).bind(now).bind(account_id(&steam)?).fetch_all(self.central()?).await?;
             let mut matches = Vec::new();
             for (value, payload, at) in rows {
