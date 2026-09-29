@@ -3,12 +3,13 @@ use serde_json::Value;
 use crate::correction::correct_transcript;
 use crate::vocab::VocabEntry;
 
-pub const MAX_LINE_CHARS: usize = 42;
+pub const MAX_LINE_CHARS: usize = 28;
 pub const MAX_LINES: usize = 2;
-pub const MIN_CUE_SECS: f64 = 1.0;
-pub const MAX_CUE_SECS: f64 = 4.0;
+pub const MIN_CUE_SECS: f64 = 0.8;
+pub const MAX_CUE_SECS: f64 = 2.5;
+pub const MAX_CUE_WORDS: usize = 5;
 
-const GOLD_PRIMARY: &str = "&H0021B6E6";
+const GOLD_PRIMARY: &str = "&H0059A0C5";
 const BOX_BACK: &str = "&H96000000";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,9 +78,10 @@ pub fn segment_subtitles(segments: &[SubtitleSegment]) -> Vec<Cue> {
             let mut trial = cur.clone();
             trial.push((*word).to_string());
             let overflow_lines = wrap_words(&trial).len() > MAX_LINES;
+            let overflow_words = trial.len() > MAX_CUE_WORDS;
             let overflow_time = !cur.is_empty() && (w_end - cur_start) > MAX_CUE_SECS;
 
-            if !cur.is_empty() && (overflow_lines || overflow_time) {
+            if !cur.is_empty() && (overflow_lines || overflow_words || overflow_time) {
                 cues.push(Cue {
                     start: cur_start,
                     end: cur_end,
@@ -143,42 +145,74 @@ fn ass_time(seconds: f64) -> String {
 }
 
 fn ass_escape(line: &str) -> String {
-    line.replace('\\', "\u{2216}").replace('{', "(").replace('}', ")")
+    line.replace('\\', "\u{2216}")
+        .replace('{', "(")
+        .replace('}', ")")
+        .replace(['\n', '\r'], " ")
 }
 
-/// Baut eine ASS-Datei: Gold-Text auf dunklem Balken, unten mittig.
-pub fn build_ass(cues: &[Cue]) -> String {
+fn hook_lines(title: &str) -> String {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in title.split_whitespace() {
+        if current.chars().count() + word.chars().count() + usize::from(!current.is_empty()) > 22
+            && !current.is_empty()
+        {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+        if lines.len() == 2 {
+            break;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines.into_iter().map(|line| ass_escape(&line)).collect::<Vec<_>>().join("\\N")
+}
+
+pub fn build_branded_ass(cues: &[Cue], title: &str, login: &str, cam_height: i64, duration: f64) -> String {
     let mut out = String::new();
-    out.push_str("[Script Info]\n");
-    out.push_str("ScriptType: v4.00+\n");
-    out.push_str("PlayResX: 1080\n");
-    out.push_str("PlayResY: 1920\n");
-    out.push_str("WrapStyle: 0\n\n");
+    out.push_str("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\n\n");
     out.push_str("[V4+ Styles]\n");
-    out.push_str(
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
-    );
+    out.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
     out.push_str(&format!(
-        "Style: Default,Arial,54,{gold},&H000000FF,&H00101010,{box},-1,0,0,0,100,100,0,0,3,6,0,2,60,60,140,1\n\n",
+        "Style: Default,DejaVu Sans,62,&H00FFFFFF,&H00FFFFFF,&H00000000,{box},-1,0,0,0,100,100,0,0,1,5,2,2,65,180,770,1\nStyle: Hook,DejaVu Sans,64,&H00FFFFFF,&H00FFFFFF,&H00000000,{box},-1,0,0,0,100,100,0,0,3,5,1,8,80,180,0,1\nStyle: Channel,DejaVu Sans,48,{gold},{gold},&H00000000,{box},-1,0,0,0,100,100,0,0,1,4,1,7,48,180,0,1\n\n",
         gold = GOLD_PRIMARY,
         box = BOX_BACK,
     ));
-    out.push_str("[Events]\n");
-    out.push_str("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
-    for cue in cues {
-        let text = cue
-            .lines
-            .iter()
-            .map(|l| ass_escape(l))
-            .collect::<Vec<_>>()
-            .join("\\N");
+    out.push_str("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+    let end = ass_time(duration.max(0.01));
+    if !login.trim().is_empty() {
         out.push_str(&format!(
-            "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n",
-            start = ass_time(cue.start),
-            end = ass_time(cue.end),
+            "Dialogue: 1,0:00:00.00,{end},Channel,,0,0,0,,{{\\pos(48,1420)}}@{}\n",
+            ass_escape(login.trim().trim_start_matches('@'))
+        ));
+    }
+    if !title.trim().is_empty() {
+        let hook_y = (cam_height + 32).clamp(550, 800);
+        out.push_str(&format!(
+            "Dialogue: 2,0:00:00.00,{},Hook,,0,0,0,,{{\\pos(540,{hook_y})}}{}\n",
+            ass_time(duration.clamp(0.01, 2.8)),
+            hook_lines(title),
+        ));
+    }
+    for cue in cues {
+        let text = cue.lines.iter().map(|line| ass_escape(line)).collect::<Vec<_>>().join("\\N");
+        out.push_str(&format!(
+            "Dialogue: 0,{},{},Default,,0,0,0,,{text}\n",
+            ass_time(cue.start),
+            ass_time(cue.end.min(duration).max(cue.start + 0.01)),
         ));
     }
     out
+}
+
+pub fn build_ass(cues: &[Cue]) -> String {
+    build_branded_ass(cues, "", "", 600, 60.0)
 }
 
 /// Baut die fertige ASS-Datei aus rohen STT-Segmenten (JSONB) mit Korrektur.
@@ -238,16 +272,17 @@ mod tests {
     }
 
     #[test]
-    fn ass_hat_gold_stil_und_dunklen_balken() {
+    fn ass_hat_lesbare_untertitel_und_getrennte_markenelemente() {
         let cues = segment_subtitles(&[seg(0.0, 2.0, "haze ist stark")]);
-        let ass = build_ass(&cues);
-        assert!(ass.contains("[Script Info]"), "{ass}");
-        assert!(ass.contains("[V4+ Styles]"));
-        assert!(ass.contains(GOLD_PRIMARY), "Gold-Textfarbe fehlt: {ass}");
-        // BorderStyle 3 = deckender Kasten (der dunkle Balken).
-        assert!(ass.contains(",3,6,0,2,"), "Balken-BorderStyle fehlt: {ass}");
-        assert!(ass.contains(BOX_BACK), "dunkle Balkenfarbe fehlt: {ass}");
-        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:02.00,Default"), "{ass}");
+        let ass = build_branded_ass(&cues, "Wow {Haze} 😎", "earlysalty", 600, 10.0);
+        assert!(ass.contains("Style: Default,DejaVu Sans,62,&H00FFFFFF"));
+        assert!(ass.contains("Style: Channel,DejaVu Sans,48,"));
+        assert!(ass.contains(GOLD_PRIMARY));
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:02.00,Default"));
+        assert!(ass.contains("@earlysalty"));
+        assert!(ass.contains("Wow (Haze) 😎"));
+        assert!(ass.contains("0:00:02.80,Hook"));
+        assert!(ass.contains(BOX_BACK));
     }
 
     #[test]

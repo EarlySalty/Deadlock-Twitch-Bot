@@ -15,7 +15,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(twitch_user_id) = arg_value(&args, "--twitch-user-id") else {
-        eprintln!("Aufruf: render_clips --twitch-user-id <id> --out <verzeichnis> [--clips-dir <verzeichnis>]");
+        eprintln!("Aufruf: render_clips --twitch-user-id <id> --out <verzeichnis> [--clips-dir <verzeichnis>] [--clip-db-ids <id,id>]");
         std::process::exit(2);
     };
     let Some(out_dir) = arg_value(&args, "--out") else {
@@ -24,6 +24,16 @@ async fn main() {
     };
     let clips_dir =
         arg_value(&args, "--clips-dir").unwrap_or_else(|| format!("{out_dir}/_download"));
+    let selected_ids = arg_value(&args, "--clip-db-ids").map(|value| {
+        value
+            .split(',')
+            .map(str::parse::<i64>)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap_or_else(|_| {
+                eprintln!("--clip-db-ids erwartet ganze Zahlen mit Komma getrennt.");
+                std::process::exit(2);
+            })
+    });
 
     let dsn = std::env::var("DEADLOCK_CENTRAL_DSN")
         .or_else(|_| std::env::var("DATABASE_URL"))
@@ -52,6 +62,7 @@ async fn main() {
         &twitch_user_id,
         &out_dir,
         &clips_dir,
+        selected_ids.as_deref(),
     )
     .await;
 

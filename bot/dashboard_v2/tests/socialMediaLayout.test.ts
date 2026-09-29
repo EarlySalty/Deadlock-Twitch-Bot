@@ -26,14 +26,11 @@ test('Zielframe ist 1080x1920', () => {
 
 // Driftschutz: das Default-Layout muss dem Rust-Default entsprechen, sonst
 // zeigt die Vorschau etwas anderes als FFmpeg rendert.
-test('Default-cam_position ist die PiP-Kachel rechts oben', () => {
-  assert.deepEqual(DEFAULT_LAYOUT.cam_position, { x: 712, y: 48, w: 320, h: 320 });
-  assert.deepEqual(DEFAULT_LAYOUT.cam_position, DEFAULT_PIP_TILE);
-  // 1080 - 320 - 48 = 712: gleicher Rand rechts wie oben.
-  assert.equal(
-    TARGET_WIDTH - DEFAULT_LAYOUT.cam_position.w - DEFAULT_LAYOUT.cam_position.x,
-    DEFAULT_LAYOUT.cam_position.y,
-  );
+test('Default-cam_position ist der volle obere Kamerastreifen', () => {
+  assert.equal(DEFAULT_LAYOUT.mode, 'stacked');
+  assert.deepEqual(DEFAULT_LAYOUT.game_crop, { x: 0, y: 0, w: 1920, h: 1080 });
+  assert.deepEqual(DEFAULT_LAYOUT.cam_position, { x: 0, y: 0, w: TARGET_WIDTH, h: 600 });
+  assert.deepEqual(DEFAULT_PIP_TILE, { x: 712, y: 48, w: 320, h: 320 });
 });
 
 test('clampToFrame haelt Boxen im Rahmen und erzwingt eine Mindestgroesse', () => {

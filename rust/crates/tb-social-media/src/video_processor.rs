@@ -13,6 +13,17 @@ use serde_json::Value;
 
 use crate::layout::{StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
 
+const VIDEO_PRESET: &str = "medium";
+const VIDEO_CRF: &str = "18";
+const VIDEO_PROFILE: &str = "high";
+const PIXEL_FORMAT: &str = "yuv420p";
+const AUDIO_BITRATE: &str = "192k";
+const AUDIO_SAMPLE_RATE: &str = "48000";
+const MAX_FPS: &str = "60";
+const BRAND_GOLD: &str = "0xC5A059";
+const LOGO: &[u8] = include_bytes!("../assets/ddc-logo.png");
+const FONT: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
+
 #[derive(Debug, thiserror::Error)]
 pub enum VideoProcessorError {
     #[error("subprocess spawn failed: {0}")]
@@ -55,18 +66,8 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     let top_height = p.h.clamp(2, TARGET_HEIGHT - 2);
     let game_height = TARGET_HEIGHT - top_height;
 
-    // Blur-Rand: das Game-Bild sitzt formatfuellend in der Breite mittig im
-    // Frame, oben und unten fuellt eine vergroesserte, verschwommene Kopie. Kein
-    // Cam-Compositing; cam_enabled ist hier wirkungslos.
-    if mode == "blur_pad" {
-        return format!(
-            "[0:v]crop={gw}:{gh}:{gx}:{gy},setsar=1,split=2[bg][fg];\
-             [bg]scale={tw}:{th}:force_original_aspect_ratio=increase,\
-             crop={tw}:{th},boxblur=20:1,setsar=1[bgb];\
-             [fg]scale={tw}:-2,setsar=1[fgs];\
-             [bgb][fgs]overlay=(W-w)/2:(H-h)/2[vout]",
-            gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, th = TARGET_HEIGHT
-        );
+    if mode == "blur_pad" || !cam_enabled {
+        return build_fallback_filter();
     }
 
     let base_game = format!(
@@ -76,10 +77,6 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
         gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, th = TARGET_HEIGHT
     );
 
-    if !cam_enabled {
-        return base_game.replace("[gamefull]", "[vout]");
-    }
-
     if mode == "stacked" {
         let cam = format!(
             "[0:v]crop={cw}:{ch}:{cx}:{cy},\
@@ -88,12 +85,21 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
             cw = c.w, ch = c.h, cx = c.x, cy = c.y, tw = TARGET_WIDTH, top = top_height
         );
         let game = format!(
-            "[0:v]crop={gw}:{gh}:{gx}:{gy},\
-             scale={tw}:{gh2}:force_original_aspect_ratio=increase,\
-             crop={tw}:{gh2},setsar=1[game]",
-            gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, gh2 = game_height
+            "[0:v]crop={gw}:{gh}:{gx}:{gy},setsar=1,split=2[gbg][gfg];\
+             [gbg]scale={tw}:{area}:force_original_aspect_ratio=increase,\
+             crop={tw}:{area},boxblur=18:2[blur];\
+             [gfg]scale={tw}:{area}:force_original_aspect_ratio=decrease,setsar=1[front];\
+             [blur][front]overlay=(W-w)/2:(H-h)/2[game]",
+            gw = g.w, gh = g.h, gx = g.x, gy = g.y, tw = TARGET_WIDTH, area = game_height,
         );
-        return [cam, game, "[cam][game]vstack=inputs=2[vout]".to_string()].join(";");
+        return [
+            cam,
+            game,
+            format!(
+                "[cam][game]vstack=inputs=2[stack];[stack]drawbox=x=0:y={top_height}:w=iw:h=8:color={BRAND_GOLD}:t=fill[vout]"
+            ),
+        ]
+        .join(";");
     }
 
     // PiP: die Cam landet exakt auf dem Zielrechteck aus cam_position.
@@ -145,24 +151,31 @@ pub fn build_crop_filter(
     format!("crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_width}:{target_height}")
 }
 
-/// Wie ein Clip ins Hochformat gebracht wird. `Compose` traegt das
-/// Streamer-Layout (Facecam-Compositing), `CenterCrop` ist der Fallback ohne
-/// gespeichertes Layout.
+pub fn build_fallback_filter() -> String {
+    format!(
+        "[0:v]setsar=1,split=2[bg][fg];\
+         [bg]scale={tw}:{th}:force_original_aspect_ratio=increase,\
+         crop={tw}:{th},boxblur=20:1[blur];\
+         [fg]scale={tw}:{th}:force_original_aspect_ratio=decrease[front];\
+         [blur][front]overlay=(W-w)/2:(H-h)/2[vout]",
+        tw = TARGET_WIDTH,
+        th = TARGET_HEIGHT,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerticalRender {
     Compose { filter: String, cam_enabled: bool },
-    CenterCrop,
+    BlurPad,
 }
 
-/// Waehlt den Render-Pfad: liegt ein Layout vor, wird komponiert (Overlay/
-/// Stacked), sonst faellt der Render auf Center-Crop zurueck.
 pub fn plan_vertical_render(layout: Option<&StreamerLayout>) -> VerticalRender {
     match layout {
         Some(l) => VerticalRender::Compose {
             filter: build_compose_filter(l, l.mode.trim().to_lowercase().as_str(), l.cam_enabled),
             cam_enabled: l.cam_enabled,
         },
-        None => VerticalRender::CenterCrop,
+        None => VerticalRender::BlurPad,
     }
 }
 
@@ -182,6 +195,57 @@ impl Default for VideoProcessor {
 impl VideoProcessor {
     pub fn new(ffmpeg_path: impl Into<String>, ffprobe_path: impl Into<String>) -> Self {
         Self { ffmpeg: ffmpeg_path.into(), ffprobe: ffprobe_path.into() }
+    }
+
+    pub async fn render_branded(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        max_duration: i64,
+        layout: Option<&StreamerLayout>,
+        ass: &str,
+    ) -> Result<(), VideoProcessorError> {
+        let input = std::fs::canonicalize(input_path)?;
+        let output = if Path::new(output_path).is_absolute() {
+            Path::new(output_path).to_path_buf()
+        } else {
+            std::env::current_dir()?.join(output_path)
+        };
+        let parent = output.parent().ok_or_else(|| VideoProcessorError::OutputMissing(output_path.to_string()))?;
+        tokio::fs::create_dir_all(parent).await?;
+        let assets = output.with_extension(format!("assets-{}", tb_crypto::random_hex_token(8)));
+        tokio::fs::create_dir(&assets).await?;
+        let result = async {
+            tokio::fs::write(assets.join("ddc-logo.png"), LOGO).await?;
+            tokio::fs::write(assets.join("DejaVuSans-Bold.ttf"), FONT).await?;
+            tokio::fs::write(assets.join("overlay.ass"), ass).await?;
+            let base_filter = match plan_vertical_render(layout) {
+                VerticalRender::Compose { filter, .. } => filter,
+                VerticalRender::BlurPad => build_fallback_filter(),
+            };
+            let filter = format!(
+                "{};[1:v]scale=120:120[logo];[vout][logo]overlay=48:300:shortest=1[branded];[branded]ass=overlay.ass:fontsdir=.[final]",
+                base_filter
+            );
+            let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+            cmd.current_dir(&assets)
+                .args(["-hide_banner", "-loglevel", "error", "-i"])
+                .arg(&input)
+                .args(["-loop", "1", "-i", "ddc-logo.png", "-filter_complex", &filter,
+                    "-map", "[final]", "-map", "0:a?", "-t"])
+                .arg(max_duration.max(1).to_string());
+            encode_options(&mut cmd);
+            let result = cmd.arg("-y").arg(&output).output().await?;
+            if !result.status.success() {
+                return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&result.stderr).trim().to_string()));
+            }
+            ensure_output(output.to_str().unwrap_or(output_path))
+        }
+        .await;
+        if let Err(error) = tokio::fs::remove_dir_all(&assets).await {
+            tracing::warn!(%error, path = %assets.display(), "Render-Assets konnten nicht gelöscht werden");
+        }
+        result
     }
 
     /// Liest Breite/Höhe/Dauer via ffprobe.
@@ -220,15 +284,10 @@ impl VideoProcessor {
     ) -> Result<(), VideoProcessorError> {
         let resolved_mode = if mode.trim().is_empty() { layout.mode.clone() } else { mode.to_string() };
         let filter_graph = build_compose_filter(layout, resolved_mode.trim().to_lowercase().as_str(), cam_enabled);
-        let output = tokio::process::Command::new(&self.ffmpeg)
-            .args([
-                "-i", input_path, "-filter_complex", &filter_graph,
-                "-map", "[vout]", "-map", "0:a?",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-c:a", "aac", "-af", "loudnorm", "-movflags", "+faststart", "-y", output_path,
-            ])
-            .output()
-            .await?;
+        let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+        cmd.args(["-i", input_path, "-filter_complex", &filter_graph, "-map", "[vout]", "-map", "0:a?"]);
+        encode_options(&mut cmd);
+        let output = cmd.args(["-y", output_path]).output().await?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(VideoProcessorError::Ffmpeg(if err.is_empty() { "ffmpeg composition failed".to_string() } else { err }));
@@ -251,14 +310,10 @@ impl VideoProcessor {
         } else {
             format!("scale={target_width}:{target_height}")
         };
-        let output = tokio::process::Command::new(&self.ffmpeg)
-            .args([
-                "-i", input_path, "-vf", &filter,
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-y", output_path,
-            ])
-            .output()
-            .await?;
+        let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+        cmd.args(["-i", input_path, "-vf", &filter]);
+        encode_options(&mut cmd);
+        let output = cmd.args(["-y", output_path]).output().await?;
         if !output.status.success() {
             return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&output.stderr).trim().to_string()));
         }
@@ -293,15 +348,11 @@ impl VideoProcessor {
                 .map(|c| c.join(output_path).to_string_lossy().into_owned())
                 .unwrap_or_else(|_| output_path.to_string())
         };
-        let output = tokio::process::Command::new(&self.ffmpeg)
-            .current_dir(&dir)
-            .args([
-                "-i", &input_abs, "-vf", &format!("subtitles={name}"),
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-c:a", "copy", "-movflags", "+faststart", "-y", &output_abs,
-            ])
-            .output()
-            .await?;
+        let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+        cmd.current_dir(&dir)
+            .args(["-i", &input_abs, "-vf", &format!("subtitles={name}")]);
+        encode_options(&mut cmd);
+        let output = cmd.args(["-y", &output_abs]).output().await?;
         if !output.status.success() {
             return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&output.stderr).trim().to_string()));
         }
@@ -389,6 +440,15 @@ fn num_field(stream: &Value, key: &str) -> Option<i64> {
     v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
 }
 
+fn encode_options(cmd: &mut tokio::process::Command) {
+    cmd.args([
+        "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", VIDEO_CRF,
+        "-profile:v", VIDEO_PROFILE, "-pix_fmt", PIXEL_FORMAT, "-fpsmax", MAX_FPS,
+        "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE,
+        "-af", "loudnorm", "-movflags", "+faststart",
+    ]);
+}
+
 fn ensure_output(output_path: &str) -> Result<(), VideoProcessorError> {
     if Path::new(output_path).exists() {
         Ok(())
@@ -400,22 +460,26 @@ fn ensure_output(output_path: &str) -> Result<(), VideoProcessorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{default_streamer_layout, LayoutBox};
+    use crate::layout::{default_streamer_layout, LayoutBox, DEFAULT_PIP_TILE};
+
+    fn pip_layout() -> StreamerLayout {
+        let mut layout = default_streamer_layout();
+        layout.mode = "pip".to_string();
+        layout.game_crop = LayoutBox { x: 0, y: 0, w: 1080, h: 1080 };
+        layout.cam_position = DEFAULT_PIP_TILE;
+        layout
+    }
 
     #[test]
     fn compose_filter_cam_off() {
-        let f = build_compose_filter(&default_streamer_layout(), "pip", false);
-        assert_eq!(
-            f,
-            "[0:v]crop=1080:1080:0:0,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[vout]"
-        );
-        assert!(!f.contains("[gamefull]"));
+        let f = build_compose_filter(&pip_layout(), "pip", false);
+        assert_eq!(f, build_fallback_filter());
     }
 
     #[test]
     fn compose_filter_pip() {
         // Default-cam_position ist die Kachel rechts oben: 320x320 bei (712,48).
-        let f = build_compose_filter(&default_streamer_layout(), "pip", true);
+        let f = build_compose_filter(&pip_layout(), "pip", true);
         let parts: Vec<&str> = f.split(';').collect();
         assert_eq!(parts.len(), 3);
         assert!(parts[0].ends_with("setsar=1[gamefull]"));
@@ -429,7 +493,7 @@ mod tests {
     #[test]
     fn compose_filter_pip_folgt_cam_position() {
         // Frei gesetztes Zielrechteck: Groesse UND Position kommen aus cam_position.
-        let mut layout = default_streamer_layout();
+        let mut layout = pip_layout();
         layout.cam_position = LayoutBox { x: 60, y: 1200, w: 420, h: 560 };
         let f = build_compose_filter(&layout, "pip", true);
         let parts: Vec<&str> = f.split(';').collect();
@@ -447,7 +511,7 @@ mod tests {
     fn compose_filter_pip_clampt_in_den_zielframe() {
         // Defensiv: ein Altlayout, das ueber den Rand ragt, darf keinen
         // ffmpeg-Graphen erzeugen, der ausserhalb des Frames landet.
-        let mut layout = default_streamer_layout();
+        let mut layout = pip_layout();
         layout.cam_position = LayoutBox { x: 900, y: 1800, w: 600, h: 400 };
         let f = build_compose_filter(&layout, "pip", true);
         let parts: Vec<&str> = f.split(';').collect();
@@ -457,7 +521,7 @@ mod tests {
     #[test]
     fn compose_filter_erzwingt_gerade_kantenlaengen() {
         // Ungerade Maße im Filtergraphen lassen libx264 mit yuv420p abbrechen.
-        let mut layout = default_streamer_layout();
+        let mut layout = pip_layout();
         layout.cam_position = LayoutBox { x: 60, y: 1200, w: 421, h: 561 };
         let f = build_compose_filter(&layout, "pip", true);
         assert!(f.contains("scale=420:560:"), "{f}");
@@ -495,19 +559,21 @@ mod tests {
 
     #[test]
     fn compose_filter_stacked() {
-        // Stacked nutzt nur cam_position.h: 320 → game_height = 1600.
         let f = build_compose_filter(&default_streamer_layout(), "stacked", true);
-        let parts: Vec<&str> = f.split(';').collect();
-        assert_eq!(parts.len(), 3);
-        assert_eq!(
-            parts[0],
-            "[0:v]crop=380:380:1500:50,scale=1080:320:force_original_aspect_ratio=increase,crop=1080:320,setsar=1[cam]"
-        );
-        assert_eq!(
-            parts[1],
-            "[0:v]crop=1080:1080:0:0,scale=1080:1600:force_original_aspect_ratio=increase,crop=1080:1600,setsar=1[game]"
-        );
-        assert_eq!(parts[2], "[cam][game]vstack=inputs=2[vout]");
+        assert!(f.contains("scale=1080:600:force_original_aspect_ratio=increase"), "{f}");
+        assert!(f.contains("crop=1920:1080:0:0"), "{f}");
+        assert!(f.contains("scale=1080:1320:force_original_aspect_ratio=decrease"), "{f}");
+        assert!(f.contains("vstack=inputs=2"), "{f}");
+        assert!(f.contains("drawbox=x=0:y=600:w=iw:h=8:color=0xC5A059"), "{f}");
+        assert!(f.ends_with("[vout]"));
+    }
+
+    #[test]
+    fn compose_filter_stacked_nutzt_game_crop() {
+        let mut layout = default_streamer_layout();
+        layout.game_crop = LayoutBox { x: 300, y: 0, w: 1320, h: 1080 };
+        let filter = build_compose_filter(&layout, "stacked", true);
+        assert!(filter.contains("crop=1320:1080:300:0,setsar=1,split=2"), "{filter}");
     }
 
     #[test]
@@ -516,9 +582,11 @@ mod tests {
         // immer oben und ist immer 1080 breit.
         let mut layout = default_streamer_layout();
         layout.cam_position = LayoutBox { x: 333, y: 777, w: 444, h: 320 };
+        let mut same_height = default_streamer_layout();
+        same_height.cam_position.h = 320;
         assert_eq!(
             build_compose_filter(&layout, "stacked", true),
-            build_compose_filter(&default_streamer_layout(), "stacked", true)
+            build_compose_filter(&same_height, "stacked", true)
         );
     }
 

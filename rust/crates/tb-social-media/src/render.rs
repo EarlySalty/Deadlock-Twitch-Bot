@@ -1,9 +1,9 @@
 use sqlx::PgPool;
 
 use crate::enrichment::get_enrichment;
-use crate::layout::{get_clip_stored_layout, StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
-use crate::subtitles::ass_from_segments;
-use crate::video_processor::{plan_vertical_render, VerticalRender, VideoProcessor, VideoProcessorError};
+use crate::layout::get_clip_stored_layout;
+use crate::subtitles::{ass_from_segments, build_branded_ass, correct_segments, segment_subtitles, SubtitleSegment};
+use crate::video_processor::{VideoProcessor, VideoProcessorError};
 use crate::vocab::load_all_vocab;
 
 /// Untertitel-Schalter des Streamers zum Clip. Fehlt die Einstellung, ist der
@@ -36,30 +36,6 @@ pub async fn build_clip_ass(pool: &PgPool, clip_db_id: i64) -> Option<String> {
     ass_from_segments(&enrichment.transcript_segments, &vocab)
 }
 
-async fn render_base(
-    vp: &VideoProcessor,
-    layout: &Option<StreamerLayout>,
-    input_path: &str,
-    output_path: &str,
-    max_duration: i64,
-) -> Result<(), VideoProcessorError> {
-    // Dieselbe Weiche, die der REQ-01-Test bewacht: liegt ein Layout vor, wird
-    // komponiert, sonst Center-Crop.
-    match plan_vertical_render(layout.as_ref()) {
-        VerticalRender::Compose { .. } => {
-            let l = layout.as_ref().expect("Compose impliziert ein Layout");
-            vp.compose_and_trim(input_path, output_path, max_duration, l).await
-        }
-        VerticalRender::CenterCrop => {
-            vp.convert_and_trim(input_path, output_path, max_duration, TARGET_WIDTH, TARGET_HEIGHT)
-                .await
-        }
-    }
-}
-
-/// Rendert einen Clip ins Hochformat: gespeichertes Layout (sonst Center-Crop),
-/// danach eingebrannte Untertitel, falls der Streamer sie anhat und ein
-/// Transkript vorliegt. Zentraler Baustein fuer Upload, Vorschau und Batch.
 pub async fn render_clip_vertical(
     vp: &VideoProcessor,
     pool: &PgPool,
@@ -69,27 +45,48 @@ pub async fn render_clip_vertical(
     max_duration: i64,
 ) -> Result<(), VideoProcessorError> {
     let layout = get_clip_stored_layout(pool, clip_db_id).await;
-
-    let ass = if subtitles_enabled_for_clip(pool, clip_db_id).await {
-        build_clip_ass(pool, clip_db_id).await
-    } else {
-        None
-    };
-
-    match ass {
-        Some(ass_content) => {
-            let base = format!("{output_path}.pre.mp4");
-            render_base(vp, &layout, input_path, &base, max_duration).await?;
-            let ass_path = format!("{output_path}.ass");
-            tokio::fs::write(&ass_path, ass_content).await?;
-            let burned = vp.burn_subtitles(&base, output_path, &ass_path).await;
-            let _ = tokio::fs::remove_file(&base).await;
-            let _ = tokio::fs::remove_file(&ass_path).await;
-            burned?;
+    let (login, clip_title, custom_title): (String, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT streamer_login, clip_title, custom_title FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| VideoProcessorError::Parse(error.to_string()))?;
+    let cues = if subtitles_enabled_for_clip(pool, clip_db_id).await {
+        if let Ok(id) = i32::try_from(clip_db_id) {
+            if let Some(enrichment) = get_enrichment(pool, id).await {
+                let segments: Vec<SubtitleSegment> = enrichment
+                    .transcript_segments
+                    .iter()
+                    .filter_map(SubtitleSegment::from_json)
+                    .collect();
+                let vocab = load_all_vocab(pool).await;
+                segment_subtitles(&correct_segments(&segments, &vocab))
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
         }
-        None => render_base(vp, &layout, input_path, output_path, max_duration).await?,
-    }
-    Ok(())
+    } else {
+        Vec::new()
+    };
+    let source_duration = vp.get_video_info(input_path).await?.duration;
+    let duration = if source_duration > 0.0 { source_duration.min(max_duration as f64) } else { max_duration as f64 };
+    let cam_height = layout
+        .as_ref()
+        .filter(|value| value.cam_enabled && value.mode == "stacked")
+        .map(|value| value.cam_position.clamped_to_target().h)
+        .unwrap_or(600);
+    let ass = build_branded_ass(
+        &cues,
+        custom_title.as_deref().filter(|s| !s.trim().is_empty()).or(clip_title.as_deref()).unwrap_or(""),
+        &login,
+        cam_height,
+        duration,
+    );
+    vp.render_branded(input_path, output_path, max_duration, layout.as_ref(), &ass).await
 }
 
 #[cfg(test)]

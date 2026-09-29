@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::approval::is_clip_approved_for;
@@ -219,15 +220,34 @@ impl UploadTask {
                     .await
                 {
                     Ok(external_id) => {
-                        // TikTok liefert nur eine `publish_id`, also "zur
-                        // Verarbeitung angenommen". Wer das als Erfolg verbucht,
-                        // merkt nie, wenn TikTok den Post danach ablehnt.
                         let external_id = if item.platform == "tiktok" {
                             match self
                                 .warte_auf_tiktok(&item, uploader.as_ref(), &external_id)
                                 .await
                             {
-                                Ok(id) => id,
+                                Ok(TikTokOutcome::Published(id)) => id,
+                                Ok(TikTokOutcome::Inbox(id)) => {
+                                    self.update_upload_status_logged(
+                                        &item,
+                                        "inbox",
+                                        Some(&id),
+                                        None,
+                                        "tiktok_inbox",
+                                    )
+                                    .await;
+                                    return true;
+                                }
+                                Ok(TikTokOutcome::Pending(id)) => {
+                                    self.update_upload_status_logged(
+                                        &item,
+                                        "inbox_pending",
+                                        Some(&id),
+                                        None,
+                                        "tiktok_processing",
+                                    )
+                                    .await;
+                                    return true;
+                                }
                                 Err(e) => {
                                     self.handle_upload_error(&item, &e, "tiktok_publish_failed")
                                         .await;
@@ -396,7 +416,7 @@ impl UploadTask {
         item: &UploadQueueItem,
         uploader: &dyn PlatformUploader,
         publish_id: &str,
-    ) -> Result<String, UploadError> {
+    ) -> Result<TikTokOutcome, UploadError> {
         let start = std::time::Instant::now();
         loop {
             let status = uploader.get_video_status(publish_id).await;
@@ -416,8 +436,9 @@ impl UploadTask {
                             None => v.to_string(),
                         })
                         .unwrap_or_else(|| publish_id.to_string());
-                    return Ok(post_id);
+                    return Ok(TikTokOutcome::Published(post_id));
                 }
+                "SEND_TO_USER_INBOX" => return Ok(TikTokOutcome::Inbox(publish_id.to_string())),
                 "FAILED" => {
                     let grund = status
                         .get("fail_reason")
@@ -437,7 +458,7 @@ impl UploadTask {
                     "TikTok hat den Post im Zeitfenster nicht bestaetigt; \
                      Eintrag bleibt bei der publish_id, kein zweiter Upload"
                 );
-                return Ok(publish_id.to_string());
+                return Ok(TikTokOutcome::Pending(publish_id.to_string()));
             }
             tokio::time::sleep(Self::TIKTOK_BESTAETIGUNG_ABSTAND).await;
         }
@@ -584,6 +605,12 @@ impl UploadTask {
     }
 }
 
+enum TikTokOutcome {
+    Published(String),
+    Inbox(String),
+    Pending(String),
+}
+
 struct Converted {
     path: String,
     title: String,
@@ -655,7 +682,71 @@ impl UploadWorker {
 
     /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
     /// hochladen.
+    async fn refresh_tiktok_inbox(&self) {
+        let rows: Vec<(i64, Option<String>, Option<String>, String)> = match sqlx::query_as(
+            "SELECT q.id, c.streamer_login, c.tiktok_video_id, q.status \
+             FROM twitch_clips_upload_queue q \
+             JOIN twitch_clips_social_media c ON c.id = q.clip_id \
+             WHERE q.platform = 'tiktok' AND q.status IN ('inbox', 'inbox_pending') \
+               AND (q.last_attempt_at IS NULL OR q.last_attempt_at::timestamptz < NOW() - INTERVAL '10 minutes') \
+             ORDER BY q.last_attempt_at ASC NULLS FIRST LIMIT 2",
+        )
+        .fetch_all(&self.task.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "TikTok-Postfachstatus konnte nicht geladen werden");
+                return;
+            }
+        };
+        let mut cache = HashMap::new();
+        for (queue_id, streamer_login, publish_id, previous) in rows {
+            let Some(publish_id) = publish_id else {
+                tracing::warn!(queue_id, "TikTok-Postfachstatus ohne publish_id");
+                continue;
+            };
+            let Some(uploader) = self
+                .resolve_uploader("tiktok", streamer_login.as_deref(), &mut cache)
+                .await
+            else {
+                continue;
+            };
+            let response = uploader.get_video_status(&publish_id).await;
+            let status = response.get("status").and_then(Value::as_str).unwrap_or("");
+            let (next, external_id, reason) = match status {
+                "PUBLISH_COMPLETE" => {
+                    let post_id = response
+                        .get("publicaly_available_post_id")
+                        .and_then(Value::as_array)
+                        .and_then(|ids| ids.first())
+                        .and_then(Value::as_str)
+                        .unwrap_or(&publish_id);
+                    ("completed", Some(post_id), None)
+                }
+                "SEND_TO_USER_INBOX" => ("inbox", Some(publish_id.as_str()), None),
+                "FAILED" => (
+                    "failed",
+                    None,
+                    Some(
+                        response
+                            .get("fail_reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("TikTok hat das Video abgelehnt."),
+                    ),
+                ),
+                _ => (previous.as_str(), Some(publish_id.as_str()), None),
+            };
+            if let Err(error) =
+                update_upload_status(&self.task.pool, queue_id, next, external_id, reason).await
+            {
+                tracing::warn!(%error, queue_id, "TikTok-Postfachstatus konnte nicht gespeichert werden");
+            }
+        }
+    }
+
     pub async fn run_once(&self) {
+        self.refresh_tiktok_inbox().await;
         let scan_limit = (self.max_parallel * 10).max(self.max_parallel) as i64;
         let stale_cutoff = (Utc::now() - chrono::Duration::seconds(STALE_AFTER_SECS)).to_rfc3339();
         let queue = get_upload_queue(
@@ -889,7 +980,38 @@ mod tests {
             Ok("new_vid".to_string())
         }
         async fn get_video_status(&self, _: &str) -> Value {
-            Value::Null
+            serde_json::json!({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": ["new_vid"]})
+        }
+        async fn fetch_video_analytics(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::uploaders::AnalyticsSnapshot, UploadError> {
+            unreachable!()
+        }
+    }
+
+    struct InboxUploader;
+
+    #[async_trait::async_trait]
+    impl PlatformUploader for InboxUploader {
+        fn platform_name(&self) -> &str {
+            "tiktok"
+        }
+        fn validate_video(&self, _: &str) -> Result<(), UploadError> {
+            Ok(())
+        }
+        async fn upload_video(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> Result<String, UploadError> {
+            Ok("publish_123".to_string())
+        }
+        async fn get_video_status(&self, _: &str) -> Value {
+            serde_json::json!({"status": "SEND_TO_USER_INBOX"})
         }
         async fn fetch_video_analytics(
             &self,
@@ -1076,6 +1198,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tiktok_inbox_bleibt_unveroeffentlicht() {
+        let Some(pool) = make_pool("t_sm_upload_inbox").await else {
+            return;
+        };
+        let dir = unique_temp_dir("inbox");
+        let input_path = dir.join("clip.mp4");
+        let converted_path = dir.join("clip_tiktok_vertical.mp4");
+        std::fs::write(&input_path, b"input").unwrap();
+        std::fs::write(&converted_path, b"converted").unwrap();
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, local_file_path) \
+             VALUES ('inbox-1', 'https://clips.test/inbox-1', 'nani', $1) RETURNING id",
+        )
+        .bind(input_path.to_string_lossy().as_ref())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let queue_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'tiktok', 'processing') RETURNING id",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let ok = task(pool.clone())
+            .process(
+                upload_item(
+                    queue_id,
+                    clip,
+                    Some(input_path.to_string_lossy().into_owned()),
+                ),
+                Arc::new(InboxUploader),
+            )
+            .await;
+        assert!(ok);
+        let (status, publish_id, uploaded): (String, Option<String>, Option<bool>) =
+            sqlx::query_as(
+                "SELECT q.status, c.tiktok_video_id, c.uploaded_tiktok \
+             FROM twitch_clips_upload_queue q \
+             JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.id = $1",
+            )
+            .bind(queue_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "inbox");
+        assert_eq!(publish_id.as_deref(), Some("publish_123"));
+        assert_eq!(uploaded, Some(false));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn completed_write_failure_after_success_marks_failed() {
         let Some(pool) = make_completed_write_error_pool("t_sm_upload_completed_write_fail").await
         else {
@@ -1169,13 +1345,12 @@ mod tests {
             )
             .await;
         }
-        let (status, attempts): (String, i32) = sqlx::query_as(
-            "SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1",
-        )
-        .bind(queue_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (status, attempts): (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status, "pending");
         assert_eq!(
             attempts, 0,
@@ -1184,15 +1359,18 @@ mod tests {
 
         // Und danach steht der volle Vorrat fuer echte Stoerungen bereit.
         item.attempts = attempts;
-        task.handle_upload_error(&item, &UploadError::Request("timeout".into()), "test_request")
-            .await;
-        let (status, attempts): (String, i32) = sqlx::query_as(
-            "SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1",
+        task.handle_upload_error(
+            &item,
+            &UploadError::Request("timeout".into()),
+            "test_request",
         )
-        .bind(queue_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        .await;
+        let (status, attempts): (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status, "pending");
         assert_eq!(attempts, 1);
     }
