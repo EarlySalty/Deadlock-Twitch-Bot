@@ -115,7 +115,7 @@ async fn fixture() -> Option<(PgPool, PgPool, String)> {
         .execute(&pool).await.unwrap();
     let migration = include_str!("../../../../../migrations/20260927023000_clip_contest.sql")
         .replace("public.", &format!("{schema}."));
-    sqlx::raw_sql(sqlx::AssertSqlSafe(&migration))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(migration.as_str()))
         .execute(&pool)
         .await
         .unwrap();

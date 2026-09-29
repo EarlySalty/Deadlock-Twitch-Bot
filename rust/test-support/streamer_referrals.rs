@@ -38,7 +38,7 @@ pub async fn schema(pool: &sqlx::PgPool) {
         RETURNS TABLE(streamer_user_id text, streamer_login text, claimed_at text)
         LANGUAGE sql SECURITY INVOKER AS $claims${body}$claims$"
     );
-    sqlx::raw_sql(sqlx::AssertSqlSafe(&function))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(function.as_str()))
         .execute(pool)
         .await
         .expect("production referral query in fixture schema");
