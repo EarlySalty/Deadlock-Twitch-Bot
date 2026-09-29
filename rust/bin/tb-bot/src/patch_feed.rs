@@ -1401,15 +1401,19 @@ mod tests {
                 .unwrap(),
             1
         );
-        let no_stale_delivery: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM twitch_patch_announcement_deliveries \
+        let stale_delivery: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, uncertainty_reason FROM twitch_patch_announcement_deliveries \
              WHERE event_id=(SELECT event_id FROM twitch_patch_announcements \
-             WHERE article_url='https://deutsche-deadlock-community.de/patchnotes/patch-287/')",
+             WHERE article_url='https://deutsche-deadlock-community.de/patchnotes/patch-287/') \
+             AND broadcaster_id='42'",
         )
         .fetch_one(&bot)
         .await
         .unwrap();
-        assert_eq!(no_stale_delivery, 0);
+        assert_eq!(
+            stale_delivery,
+            ("skipped".into(), Some("game_changed".into()))
+        );
 
         Mock::given(method("GET"))
             .and(path("/helix/streams"))

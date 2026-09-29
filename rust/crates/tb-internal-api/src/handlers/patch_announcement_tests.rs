@@ -84,10 +84,14 @@ impl Transport for FakeTransport {
         Ok(result)
     }
 
-    async fn can_send(&self, id: &str, stream_id: &str) -> Result<bool, PatchProcessError> {
+    async fn can_send(
+        &self,
+        id: &str,
+        stream_id: &str,
+    ) -> Result<Option<&'static str>, PatchProcessError> {
         authorized_login(&self.pool, id, stream_id)
             .await
-            .map(|login| login.is_some())
+            .map(|login| login.is_none().then_some("authorization_unavailable"))
     }
 
     async fn send(
@@ -186,12 +190,35 @@ async fn database() -> TestPostgres {
     }
     sqlx::raw_sql(
         "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) VALUES \
-         (286, now(), 'pending'), (287, now(), 'pending'), (288, now(), 'pending')",
+         (286, now(), 'pending'), (287, now(), 'pending'), \
+         (288, now(), 'pending'), (289, now(), 'pending')",
     )
     .execute(&pool)
     .await
     .unwrap();
     postgres
+}
+
+#[tokio::test]
+async fn suppression_database_failure_blocks_patch_send() {
+    let db = database().await;
+    let helix = HelixClient::new(HelixConfig::new("cid", "sec")).unwrap();
+    let receiver = PatchReceiver::new(
+        db.pool.clone(),
+        helix.clone(),
+        Arc::new(MockEndpointChat { helix }),
+        Arc::new(tb_chat::CombinedSuppression::new(
+            Arc::new(tb_chat::OutboundSuppressionStore::new(db.pool.clone())),
+            Arc::new(tb_chat::TimeoutGuard::new()),
+        )),
+    );
+    let transport = LiveTransport {
+        receiver: &receiver,
+    };
+    assert!(matches!(
+        transport.can_send("42", "session-42").await,
+        Err(PatchProcessError::Unavailable)
+    ));
 }
 
 #[tokio::test]
@@ -222,19 +249,137 @@ async fn concurrent_retries_and_source_duplicates_send_exactly_once() {
 }
 
 #[tokio::test]
+async fn expired_event_records_reason_for_each_pending_target() {
+    let db = database().await;
+    let transport = FakeTransport::new(db.pool.clone());
+    let mut event = patch_event(286);
+    event.detected_at -= chrono::Duration::seconds(121);
+    sqlx::query("UPDATE twitch_patch_feed_observations SET observed_at=$2 WHERE patch_id=286")
+        .bind(286_i64)
+        .bind(event.detected_at)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_patch_announcements \
+         (event_id, article_url, source_url, detected_at, message) VALUES ($1,$2,$3,$4,$5)",
+    )
+    .bind(&event.event_id)
+    .bind(&event.article_url)
+    .bind(&event.source_url)
+    .bind(event.detected_at)
+    .bind(&event.message)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_patch_announcement_deliveries \
+         (event_id, broadcaster_id, stream_id) VALUES ($1,'42','session-42'),($1,'43','session-43')",
+    )
+    .bind(&event.event_id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        process_inner(
+            &db.pool,
+            &transport,
+            &event,
+            Arc::new(Mutex::new(HashSet::new()))
+        )
+        .await
+        .unwrap(),
+        PatchProcessOutcome::SkippedExpired
+    ));
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT broadcaster_id, status, uncertainty_reason \
+         FROM twitch_patch_announcement_deliveries WHERE event_id=$1 ORDER BY broadcaster_id",
+    )
+    .bind(&event.event_id)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "42".into(),
+                "skipped".into(),
+                "event_expired_before_claim".into(),
+            ),
+            (
+                "43".into(),
+                "skipped".into(),
+                "event_expired_before_claim".into(),
+            ),
+        ]
+    );
+    assert!(transport.sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn receiver_requires_the_saved_pending_observation_timestamp() {
+    let db = database().await;
+    let transport = FakeTransport::new(db.pool.clone());
+    let event = patch_event(286);
+    assert!(matches!(
+        process_inner(
+            &db.pool,
+            &transport,
+            &event,
+            Arc::new(Mutex::new(HashSet::new()))
+        )
+        .await,
+        Err(PatchProcessError::Invalid(_))
+    ));
+    sqlx::query(
+        "UPDATE twitch_patch_feed_observations \
+         SET observed_at=$2, status='expired_unavailable' WHERE patch_id=286",
+    )
+    .bind(286_i64)
+    .bind(event.detected_at)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        process_inner(
+            &db.pool,
+            &transport,
+            &event,
+            Arc::new(Mutex::new(HashSet::new()))
+        )
+        .await,
+        Err(PatchProcessError::Invalid(_))
+    ));
+    assert!(transport.sent.lock().unwrap().is_empty());
+    let announcements: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_patch_announcements")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(announcements, 0);
+}
+
+#[tokio::test]
 async fn unexpected_success_http_status_is_uncertain_and_never_retried() {
     let db = database().await;
     let pool = db.pool.clone();
     let transport = FakeTransport::new(pool.clone());
-    for (patch_id, status, expected_reason) in [
-        (286, 204, "unexpected_success_status"),
-        (287, 422, "http_error"),
-        (288, 503, "http_error"),
+    for (patch_id, status, body, expected_reason) in [
+        (286, 204, "", "unexpected_success_status"),
+        (287, 422, "", "http_error"),
+        (288, 503, "", "http_error"),
+        (
+            289,
+            200,
+            "response_body_unreadable",
+            "response_body_unreadable",
+        ),
     ] {
         *transport.known_result.lock().unwrap() =
             Some(delivery_result_from_send_outcome(SendOutcome::HttpError {
                 status,
-                body: String::new(),
+                body: body.to_string(),
             }));
         let mut event = patch_event(patch_id);
         event.source_url = format!("https://forums.playdeadlock.com/posts/{patch_id}/");
@@ -253,7 +398,7 @@ async fn unexpected_success_http_status_is_uncertain_and_never_retried() {
         assert_eq!(http_status, Some(status as i16));
         assert_eq!(reason.as_deref(), Some(expected_reason));
     }
-    assert_eq!(transport.sent.lock().unwrap().len(), 3);
+    assert_eq!(transport.sent.lock().unwrap().len(), 4);
 }
 
 #[tokio::test]
@@ -341,6 +486,7 @@ async fn timeout_after_external_send_marks_only_its_attempt_uncertain() {
     let mut transport = FakeTransport::new(pool.clone());
     transport.send_delay = Duration::from_secs(10);
     let event = patch_event(286);
+    approve_observation(&pool, &event).await;
     let processing = process_with_timeout(&pool, &transport, &event, Duration::from_secs(2));
     tokio::pin!(processing);
     tokio::select! {
@@ -432,14 +578,15 @@ async fn observation_snapshot_excludes_late_partner_and_rejects_game_switch() {
     let event = patch_event(286);
     process(&pool, &transport, &event).await.unwrap();
     assert!(transport.sent.lock().unwrap().is_empty());
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT broadcaster_id, status FROM twitch_patch_announcement_deliveries \
+    let (status, reason): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason FROM twitch_patch_announcement_deliveries \
          ORDER BY broadcaster_id",
     )
-    .fetch_all(&pool)
+    .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(rows.is_empty());
+    assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("game_changed"));
     let recipients: Vec<String> = sqlx::query_scalar(
         "SELECT broadcaster_id FROM twitch_patch_announcement_recipients \
          WHERE patch_id=286 ORDER BY broadcaster_id",
@@ -459,12 +606,14 @@ async fn stream_ending_before_send_and_stale_snapshot_are_skipped() {
     let event = patch_event(286);
     process(&pool, &transport, &event).await.unwrap();
     assert!(transport.sent.lock().unwrap().is_empty());
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM twitch_patch_announcement_deliveries")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (status, reason): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason FROM twitch_patch_announcement_deliveries",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("stream_not_live"));
     let mut next = patch_event(287);
     next.source_url = "https://forums.playdeadlock.com/posts/456/".into();
     transport.streams.lock().unwrap().push(stream("42"));
@@ -485,12 +634,14 @@ async fn optout_after_snapshot_is_skipped_and_never_replayed() {
     let event = patch_event(286);
     process(&pool, &transport, &event).await.unwrap();
     assert!(transport.sent.lock().unwrap().is_empty());
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM twitch_patch_announcement_deliveries")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (status, reason): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason FROM twitch_patch_announcement_deliveries",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("authorization_unavailable"));
     sqlx::query(
         "UPDATE twitch_streamers_partner_state SET manual_partner_opt_out=0 \
          WHERE twitch_user_id='42'",
@@ -503,7 +654,7 @@ async fn optout_after_snapshot_is_skipped_and_never_replayed() {
 }
 
 #[tokio::test]
-async fn rights_reauth_optout_and_expired_events_never_snapshot() {
+async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
     let db = database().await;
     let pool = db.pool.clone();
     let transport = FakeTransport::new(pool.clone());
@@ -531,12 +682,16 @@ async fn rights_reauth_optout_and_expired_events_never_snapshot() {
             .is_none());
         process(&pool, &transport, &denied).await.unwrap();
     }
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM twitch_patch_announcement_deliveries")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(count, 0);
+    let (count, status, reason): (i64, String, Option<String>) = sqlx::query_as(
+        "SELECT count(*), min(status), min(uncertainty_reason) \
+         FROM twitch_patch_announcement_deliveries",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("authorization_unavailable"));
     sqlx::query(
         "UPDATE twitch_raid_auth SET scopes='channel:bot', needs_reauth=FALSE \
          WHERE twitch_user_id='42'",
@@ -552,6 +707,7 @@ async fn rights_reauth_optout_and_expired_events_never_snapshot() {
         .is_none());
     let mut expired = patch_event(287);
     expired.detected_at -= chrono::Duration::minutes(3);
+    expired.source_url = "https://forums.playdeadlock.com/posts/287/".into();
     assert!(matches!(
         process(&pool, &transport, &expired).await.unwrap(),
         PatchProcessOutcome::SkippedExpired
@@ -677,6 +833,7 @@ async fn token_refresh_crossing_deadline_skips_without_chat_post_or_retry() {
     chat_config.token_url = format!("{}/oauth2/token", chat_server.uri());
     let event = patch_event(286);
     let detected_at = event.detected_at;
+    approve_observation(&db.pool, &event).await;
     let expired = Arc::new(AtomicBool::new(false));
     let check_expired = Arc::clone(&expired);
     let receiver = PatchReceiver::new(
@@ -953,54 +1110,4 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .await
     .unwrap();
     assert_eq!(recipients, vec!["42"]);
-}
-
-#[tokio::test]
-async fn endpoint_requires_auth_and_wiring_before_any_delivery() {
-    use axum::{
-        body::Body,
-        extract::ConnectInfo,
-        http::{Request, StatusCode},
-        middleware,
-        routing::post,
-        Router,
-    };
-    use tb_http_core::{internal_auth, loopback_only, ExpectedToken};
-    use tower::ServiceExt;
-    let app = Router::new()
-        .route("/patch", post(handler))
-        .layer(middleware::from_fn_with_state(
-            "test-token".to_string(),
-            internal_auth,
-        ))
-        .layer(middleware::from_fn(loopback_only))
-        .layer(Extension(ExpectedToken("test-token".into())));
-    for (token, peer, expected) in [
-        (None, "127.0.0.1:1234", StatusCode::UNAUTHORIZED),
-        (Some("wrong"), "127.0.0.1:1234", StatusCode::UNAUTHORIZED),
-        (Some("test-token"), "192.0.2.5:1234", StatusCode::FORBIDDEN),
-        (
-            Some("test-token"),
-            "127.0.0.1:1234",
-            StatusCode::SERVICE_UNAVAILABLE,
-        ),
-    ] {
-        let mut builder = Request::builder()
-            .uri("/patch")
-            .method("POST")
-            .header("Content-Type", "application/json");
-        if let Some(token) = token {
-            builder = builder.header("X-Internal-Token", token);
-        }
-        let mut request = builder
-            .body(Body::from(serde_json::to_vec(&patch_event(286)).unwrap()))
-            .unwrap();
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()));
-        assert_eq!(
-            app.clone().oneshot(request).await.unwrap().status(),
-            expected
-        );
-    }
 }

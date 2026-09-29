@@ -393,15 +393,19 @@ impl HelixClient {
 
         let status = resp.status().as_u16();
         if status == 200 {
-            let parsed: SendMessageResponse =
-                resp.json()
-                    .await
-                    .map_err(|_| HelixError::AmbiguousOutcome {
-                        reason: "source_only_chat_body_unreadable",
-                    })?;
+            let parsed: SendMessageResponse = match resp.json().await {
+                Ok(parsed) => parsed,
+                Err(_) => {
+                    return Ok(SendOutcome::HttpError {
+                        status,
+                        body: "response_body_unreadable".to_string(),
+                    });
+                }
+            };
             let [item] = parsed.data.as_slice() else {
-                return Err(HelixError::AmbiguousOutcome {
-                    reason: "source_only_chat_result_missing",
+                return Ok(SendOutcome::HttpError {
+                    status,
+                    body: "response_result_missing".to_string(),
                 });
             };
             if item.is_sent {
@@ -1215,12 +1219,21 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            assert!(matches!(
+            let expected_reason = if body == "not-json" {
+                "response_body_unreadable"
+            } else {
+                "response_result_missing"
+            };
+            assert_eq!(
                 client
                     .send_source_only_chat_message("111", "222", "Patch!")
-                    .await,
-                Err(HelixError::AmbiguousOutcome { .. })
-            ));
+                    .await
+                    .unwrap(),
+                SendOutcome::HttpError {
+                    status: 200,
+                    body: expected_reason.to_string(),
+                }
+            );
             server.verify().await;
         }
     }

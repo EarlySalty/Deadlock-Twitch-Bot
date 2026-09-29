@@ -390,6 +390,10 @@ const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 pub trait OutboundSuppressionCheck: Send + Sync {
     /// True = Kanal ist aktuell stumm (Mute-Guard aktiv).
     async fn is_muted(&self, channel_login: &str) -> bool;
+
+    async fn is_muted_checked(&self, channel_login: &str) -> Result<bool, sqlx::Error> {
+        Ok(self.is_muted(channel_login).await)
+    }
 }
 
 /// Schreibseite der Outbound-Suppression — Port von

@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use axum::{extract::Extension, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,12 +13,11 @@ use sqlx::PgPool;
 use tb_chat::{
     api::SourceOnlyPreSendCheck, promos::OutboundSuppressionCheck, ChatApi, SendOutcome,
 };
-use tb_http_core::{ApiError, AuthLevel};
+use tb_http_core::ApiError;
 use tb_transport_twitch::{HelixClient, HelixStream};
 
 const EVENT_TTL_SECONDS: i64 = 120;
 const SNAPSHOT_TTL_SECONDS: i64 = 120;
-const SOURCE_ONLY_SEND_RESERVE_SECONDS: i64 = 45;
 const MESSAGE_PREFIX: &str = "Neuer Deadlock-Patch ist da 🔥 Die Änderungen auf Deutsch: ";
 const ARTICLE_PREFIX: &str = "https://deutsche-deadlock-community.de/patchnotes/patch-";
 
@@ -109,14 +107,6 @@ fn fresh(at: DateTime<Utc>, now: DateTime<Utc>, ttl: i64) -> bool {
     at <= now && now.signed_duration_since(at) <= chrono::Duration::seconds(ttl)
 }
 
-fn source_only_send_window_open(detected_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
-    fresh(
-        detected_at,
-        now,
-        EVENT_TTL_SECONDS - SOURCE_ONLY_SEND_RESERVE_SECONDS,
-    )
-}
-
 type DeadlineClock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
 fn source_only_deadline_guard(
@@ -176,15 +166,6 @@ struct Candidate {
     last_stream_id: String,
 }
 
-fn eligible(candidate: &Candidate, stream: &HelixStream, event: &PatchEvent) -> bool {
-    candidate.twitch_user_id == stream.user_id
-        && candidate.last_stream_id == stream.id
-        && !stream.id.is_empty()
-        && stream.game_name == "Deadlock"
-        && !stream.game_id.is_empty()
-        && DateTime::parse_from_rfc3339(&stream.started_at).is_ok_and(|at| at <= event.detected_at)
-}
-
 #[derive(Clone, Debug)]
 struct DeliveryResult {
     status: &'static str,
@@ -204,16 +185,21 @@ impl DeliveryResult {
     }
 }
 
-fn http_error_result(status: u16) -> DeliveryResult {
+fn http_error_result(status: u16, body: &str) -> DeliveryResult {
+    let uncertainty_reason = if (200..300).contains(&status) {
+        match body {
+            "response_body_unreadable" => "response_body_unreadable",
+            "response_result_missing" => "response_result_missing",
+            _ => "unexpected_success_status",
+        }
+    } else {
+        "http_error"
+    };
     DeliveryResult {
         status: "uncertain",
         drop_code: None,
         http_status: Some(status as i16),
-        uncertainty_reason: Some(if (200..300).contains(&status) {
-            "unexpected_success_status"
-        } else {
-            "http_error"
-        }),
+        uncertainty_reason: Some(uncertainty_reason),
     }
 }
 
@@ -226,14 +212,18 @@ fn delivery_result_from_send_outcome(outcome: SendOutcome) -> DeliveryResult {
             http_status: None,
             uncertainty_reason: None,
         },
-        SendOutcome::HttpError { status, .. } => http_error_result(status),
+        SendOutcome::HttpError { status, body } => http_error_result(status, &body),
     }
 }
 
 #[async_trait::async_trait]
 trait Transport: Send + Sync {
     async fn streams(&self, ids: &[String]) -> Result<Vec<HelixStream>, PatchProcessError>;
-    async fn can_send(&self, id: &str, stream_id: &str) -> Result<bool, PatchProcessError>;
+    async fn can_send(
+        &self,
+        id: &str,
+        stream_id: &str,
+    ) -> Result<Option<&'static str>, PatchProcessError>;
     async fn send(
         &self,
         id: &str,
@@ -301,11 +291,30 @@ impl Transport for LiveTransport<'_> {
             .map_err(|_| PatchProcessError::Unavailable)
     }
 
-    async fn can_send(&self, id: &str, stream_id: &str) -> Result<bool, PatchProcessError> {
+    async fn can_send(
+        &self,
+        id: &str,
+        stream_id: &str,
+    ) -> Result<Option<&'static str>, PatchProcessError> {
         let Some(login) = self.authorized_login(id, stream_id).await? else {
-            return Ok(false);
+            return Ok(Some("authorization_unavailable"));
         };
-        Ok(!self.receiver.suppression.is_muted(&login).await)
+        if self
+            .receiver
+            .suppression
+            .is_muted_checked(&login)
+            .await
+            .map_err(|_| {
+                tracing::error!(
+                    broadcaster_id = id,
+                    "Patch announcement suppression check failed, skipping send"
+                );
+                PatchProcessError::Unavailable
+            })?
+        {
+            return Ok(Some("channel_suppressed"));
+        }
+        Ok(None)
     }
 
     async fn send(
@@ -315,10 +324,10 @@ impl Transport for LiveTransport<'_> {
         message: &str,
         detected_at: DateTime<Utc>,
     ) -> Result<DeliveryResult, PatchProcessError> {
-        if !self.can_send(id, stream_id).await? {
-            return Ok(DeliveryResult::status("skipped"));
+        if let Some(reason) = self.can_send(id, stream_id).await? {
+            return Ok(skip_reason_for_result(reason));
         }
-        if !source_only_send_window_open(detected_at, Utc::now()) {
+        if !fresh(detected_at, Utc::now(), EVENT_TTL_SECONDS) {
             return Ok(DeliveryResult {
                 status: "skipped",
                 drop_code: None,
@@ -385,6 +394,41 @@ fn send_error_reason(error: &str) -> &'static str {
         "transport_error"
     } else {
         "send_error"
+    }
+}
+
+fn candidate_skip_reason(
+    candidate: &Candidate,
+    streams: &[HelixStream],
+    event: &PatchEvent,
+) -> Result<(), &'static str> {
+    let Some(stream) = streams
+        .iter()
+        .find(|stream| stream.user_id == candidate.twitch_user_id)
+    else {
+        return Err("stream_not_live");
+    };
+    if stream.id != candidate.last_stream_id {
+        return Err("stream_changed");
+    }
+    if stream.game_name != "Deadlock" || stream.game_id.is_empty() {
+        return Err("game_changed");
+    }
+    let Ok(started_at) = DateTime::parse_from_rfc3339(&stream.started_at) else {
+        return Err("stream_start_invalid");
+    };
+    if started_at > event.detected_at {
+        return Err("stream_started_after_event");
+    }
+    Ok(())
+}
+
+fn skip_reason_for_result(reason: &'static str) -> DeliveryResult {
+    DeliveryResult {
+        status: "skipped",
+        drop_code: None,
+        http_status: None,
+        uncertainty_reason: Some(reason),
     }
 }
 
@@ -555,8 +599,51 @@ async fn mark_timed_out_attempts(
     Ok(())
 }
 
-#[derive(Clone)]
-pub struct PatchReceiverExt(pub Option<Arc<PatchReceiver>>);
+async fn skip_pending_deliveries(
+    pool: &PgPool,
+    event_id: &str,
+    reason: &'static str,
+) -> Result<(), PatchProcessError> {
+    let skipped = sqlx::query_scalar::<_, String>(
+        "UPDATE twitch_patch_announcement_deliveries \
+         SET status='skipped', uncertainty_reason=$2 \
+         WHERE event_id=$1 AND status='pending' RETURNING broadcaster_id",
+    )
+    .bind(event_id)
+    .bind(reason)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| database_error_for(error, event_id, "batch"))?;
+    for broadcaster_id in skipped {
+        tracing::info!(
+            event_id,
+            broadcaster_id,
+            outcome = "skipped",
+            uncertainty_reason = reason,
+            "Patch announcement recipient skipped"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+async fn approve_observation(pool: &PgPool, event: &PatchEvent) {
+    let patch_id = event
+        .article_url
+        .strip_prefix(ARTICLE_PREFIX)
+        .and_then(|value| value.strip_suffix('/'))
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_patch_feed_observations SET observed_at=$2 \
+         WHERE patch_id=$1 AND status='pending'",
+    )
+    .bind(patch_id)
+    .bind(event.detected_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
 
 #[cfg(test)]
 async fn process(
@@ -564,6 +651,7 @@ async fn process(
     transport: &dyn Transport,
     event: &PatchEvent,
 ) -> Result<PatchProcessOutcome, PatchProcessError> {
+    approve_observation(pool, event).await;
     process_inner(pool, transport, event, Arc::new(Mutex::new(HashSet::new()))).await
 }
 
@@ -573,17 +661,33 @@ async fn process_inner(
     event: &PatchEvent,
     attempted: Arc<Mutex<HashSet<(String, String)>>>,
 ) -> Result<PatchProcessOutcome, PatchProcessError> {
-    if !event.validate(Utc::now())? {
-        sqlx::query(
-            "UPDATE twitch_patch_announcement_deliveries SET status='skipped' \
-             WHERE event_id=$1 AND status='pending'",
-        )
-        .bind(&event.event_id)
-        .execute(pool)
-        .await
-        .map_err(database_error)?;
-        return Ok(PatchProcessOutcome::SkippedExpired);
+    let patch_id = event
+        .article_url
+        .strip_prefix(ARTICLE_PREFIX)
+        .and_then(|value| value.strip_suffix('/'))
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|id| *id > 0)
+        .ok_or(PatchProcessError::Invalid("invalid article URL"))?;
+    let observation = sqlx::query_as::<_, (String, DateTime<Utc>)>(
+        "SELECT status, observed_at FROM twitch_patch_feed_observations WHERE patch_id=$1",
+    )
+    .bind(patch_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(database_error)?;
+    let Some((observation_status, observed_at)) = observation else {
+        return Err(PatchProcessError::Invalid(
+            "patch event lacks an approved observation",
+        ));
+    };
+    if observation_status != "pending"
+        || observed_at.timestamp_micros() != event.detected_at.timestamp_micros()
+    {
+        return Err(PatchProcessError::Invalid(
+            "patch event differs from its approved observation",
+        ));
     }
+    event.validate(Utc::now())?;
     let mut tx = pool.begin().await.map_err(database_error)?;
     let inserted = sqlx::query(
         "INSERT INTO twitch_patch_announcements (event_id, article_url, source_url, detected_at, message) \
@@ -614,6 +718,32 @@ async fn process_inner(
         .fetch_all(&mut *tx)
         .await
         .map_err(database_error)?;
+        if !event.validate(Utc::now())? {
+            for candidate in &candidates {
+                sqlx::query(
+                    "INSERT INTO twitch_patch_announcement_deliveries \
+                     (event_id, broadcaster_id, stream_id, status, uncertainty_reason) \
+                     VALUES ($1,$2,$3,'skipped','event_expired_before_snapshot')",
+                )
+                .bind(&event.event_id)
+                .bind(&candidate.twitch_user_id)
+                .bind(&candidate.last_stream_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| {
+                    database_error_for(error, &event.event_id, &candidate.twitch_user_id)
+                })?;
+                tracing::info!(
+                    event_id = %event.event_id,
+                    broadcaster_id = %candidate.twitch_user_id,
+                    outcome = "skipped",
+                    uncertainty_reason = "event_expired_before_snapshot",
+                    "Patch announcement recipient skipped"
+                );
+            }
+            tx.commit().await.map_err(database_error)?;
+            return Ok(PatchProcessOutcome::SkippedExpired);
+        }
         let ids: Vec<_> = candidates
             .iter()
             .map(|candidate| candidate.twitch_user_id.clone())
@@ -623,40 +753,51 @@ async fn process_inner(
         } else {
             transport.streams(&ids).await?
         };
-        if !event.validate(Utc::now())? {
-            return Ok(PatchProcessOutcome::SkippedExpired);
-        }
-        let mut selected = HashSet::new();
         for candidate in &candidates {
-            for stream in &streams {
-                let current_recipient =
-                    eligible(candidate, stream, event) && !selected.contains(&stream.user_id);
-                let can_send = if current_recipient {
-                    transport
-                        .can_send(&stream.user_id, &stream.id)
-                        .await
-                        .inspect_err(|error| {
-                            log_database_context(error, &event.event_id, &stream.user_id);
-                        })?
-                } else {
-                    false
-                };
-                if current_recipient && can_send {
-                    selected.insert(stream.user_id.clone());
-                    sqlx::query(
-                        "INSERT INTO twitch_patch_announcement_deliveries (event_id, broadcaster_id, stream_id) \
-                         VALUES ($1,$2,$3)",
-                    )
-                    .bind(&event.event_id)
-                    .bind(&stream.user_id)
-                    .bind(&stream.id)
-                    .execute(&mut *tx)
+            let reason = match candidate_skip_reason(candidate, &streams, event) {
+                Err(reason) => Some(reason),
+                Ok(()) => transport
+                    .can_send(&candidate.twitch_user_id, &candidate.last_stream_id)
                     .await
-                    .map_err(|error| database_error_for(error, &event.event_id, &stream.user_id))?;
-                }
+                    .inspect_err(|error| {
+                        log_database_context(error, &event.event_id, &candidate.twitch_user_id);
+                    })?,
+            };
+            let status = if reason.is_some() {
+                "skipped"
+            } else {
+                "pending"
+            };
+            sqlx::query(
+                "INSERT INTO twitch_patch_announcement_deliveries \
+                 (event_id, broadcaster_id, stream_id, status, uncertainty_reason) \
+                 VALUES ($1,$2,$3,$4,$5)",
+            )
+            .bind(&event.event_id)
+            .bind(&candidate.twitch_user_id)
+            .bind(&candidate.last_stream_id)
+            .bind(status)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| {
+                database_error_for(error, &event.event_id, &candidate.twitch_user_id)
+            })?;
+            if let Some(reason) = reason {
+                tracing::info!(
+                    event_id = %event.event_id,
+                    broadcaster_id = %candidate.twitch_user_id,
+                    outcome = "skipped",
+                    uncertainty_reason = reason,
+                    "Patch announcement recipient excluded"
+                );
             }
         }
-        tracing::info!(event_id = %event.event_id, recipients = selected.len(), "Patch announcement snapshot saved");
+        tracing::info!(
+            event_id = %event.event_id,
+            recipients = candidates.len(),
+            "Patch announcement snapshot saved"
+        );
     }
     tx.commit().await.map_err(database_error)?;
     let saved = sqlx::query_as::<_, (String, String, DateTime<Utc>, String)>(
@@ -689,24 +830,20 @@ async fn process_inner(
     .map_err(database_error)?;
     for (id, stream_id) in pending {
         if !fresh(detected_at, Utc::now(), EVENT_TTL_SECONDS) {
-            sqlx::query(
-                "UPDATE twitch_patch_announcement_deliveries SET status='skipped' \
-                 WHERE event_id=$1 AND status='pending'",
-            )
-            .bind(&event.event_id)
-            .execute(pool)
-            .await
-            .map_err(database_error)?;
+            skip_pending_deliveries(pool, &event.event_id, "event_expired_before_claim").await?;
             return Ok(PatchProcessOutcome::SkippedExpired);
         }
         let live = transport.streams(std::slice::from_ref(&id)).await?;
-        let still_live = live.iter().any(|stream| {
-            stream.user_id == id
-                && stream.id == stream_id
-                && stream.game_name == "Deadlock"
-                && !stream.game_id.is_empty()
-        });
-        let can_send = if still_live {
+        let live_stream = live.iter().find(|stream| stream.user_id == id);
+        let stream_reason = match live_stream {
+            None => Some("stream_not_live"),
+            Some(stream) if stream.id != stream_id => Some("stream_changed"),
+            Some(stream) if stream.game_name != "Deadlock" || stream.game_id.is_empty() => {
+                Some("game_changed")
+            }
+            Some(_) => None,
+        };
+        let suppression_reason = if stream_reason.is_none() {
             transport
                 .can_send(&id, &stream_id)
                 .await
@@ -714,10 +851,10 @@ async fn process_inner(
                     log_database_context(error, &event.event_id, &id);
                 })?
         } else {
-            false
+            None
         };
-        let send_budget = source_only_send_window_open(detected_at, Utc::now());
-        let status = if can_send && send_budget {
+        let skip_reason = stream_reason.or(suppression_reason);
+        let status = if skip_reason.is_none() {
             "attempted"
         } else {
             "skipped"
@@ -730,19 +867,29 @@ async fn process_inner(
                 .insert((id.clone(), attempt_token.clone()));
         }
         let claimed = sqlx::query(
-            "UPDATE twitch_patch_announcement_deliveries SET status=$3, attempted_at=CASE WHEN $3='attempted' THEN now() ELSE attempted_at END, uncertainty_reason=CASE WHEN $3='attempted' THEN $4 ELSE NULL END \
+            "UPDATE twitch_patch_announcement_deliveries SET status=$3, attempted_at=CASE WHEN $3='attempted' THEN now() ELSE attempted_at END, uncertainty_reason=CASE WHEN $3='attempted' THEN $4 ELSE $5 END \
              WHERE event_id=$1 AND broadcaster_id=$2 AND status='pending'",
         )
         .bind(&event.event_id)
         .bind(&id)
         .bind(status)
         .bind(&attempt_token)
+        .bind(skip_reason)
         .execute(pool)
         .await
         .map_err(|error| database_error_for(error, &event.event_id, &id))?
         .rows_affected()
             == 1;
-        if claimed && can_send && send_budget {
+        if claimed && status == "skipped" {
+            tracing::info!(
+                event_id = %event.event_id,
+                broadcaster_id = %id,
+                outcome = "skipped",
+                uncertainty_reason = skip_reason,
+                "Patch announcement recipient skipped"
+            );
+        }
+        if claimed && status == "attempted" {
             let outcome = match transport.send(&id, &stream_id, &message, detected_at).await {
                 Ok(outcome) => outcome,
                 Err(error) => {
@@ -788,20 +935,6 @@ async fn process_inner(
     Ok(PatchProcessOutcome::Processed(counts))
 }
 
-pub async fn handler(
-    auth: AuthLevel,
-    receiver: Option<Extension<PatchReceiverExt>>,
-    Json(event): Json<PatchEvent>,
-) -> Result<Json<PatchProcessOutcome>, ApiError> {
-    if !auth.is_privileged() {
-        return Err(ApiError::unauthorized());
-    }
-    let receiver = receiver
-        .and_then(|Extension(ext)| ext.0)
-        .ok_or_else(ApiError::unavailable)?;
-    receiver.process(&event).await.map(Json).map_err(Into::into)
-}
-
 #[cfg(test)]
 #[path = "patch_announcement_tests.rs"]
 mod integration_tests;
@@ -834,19 +967,27 @@ mod tests {
     }
 
     #[test]
-    fn reserves_a_bounded_source_only_send_window_before_event_expiry() {
+    fn allows_sending_until_the_full_event_ttl() {
         let detected_at = DateTime::from_timestamp(1_000, 0).unwrap();
-        assert!(source_only_send_window_open(
+        assert!(fresh(
             detected_at,
-            detected_at + chrono::Duration::seconds(75)
+            detected_at + chrono::Duration::seconds(119),
+            EVENT_TTL_SECONDS
         ));
-        assert!(!source_only_send_window_open(
+        assert!(fresh(
             detected_at,
-            detected_at + chrono::Duration::seconds(76)
+            detected_at + chrono::Duration::seconds(120),
+            EVENT_TTL_SECONDS
         ));
-        assert!(!source_only_send_window_open(
+        assert!(!fresh(
             detected_at,
-            detected_at - chrono::Duration::seconds(1)
+            detected_at + chrono::Duration::seconds(121),
+            EVENT_TTL_SECONDS
+        ));
+        assert!(!fresh(
+            detected_at,
+            detected_at - chrono::Duration::seconds(1),
+            EVENT_TTL_SECONDS
         ));
     }
 
@@ -897,7 +1038,7 @@ mod tests {
             started_at: (event.detected_at - chrono::Duration::hours(1)).to_rfc3339(),
             ..Default::default()
         };
-        assert!(eligible(&candidate, &stream, &event));
+        assert!(candidate_skip_reason(&candidate, std::slice::from_ref(&stream), &event).is_ok());
         for wrong in [
             HelixStream {
                 user_id: "99".into(),
@@ -916,7 +1057,7 @@ mod tests {
                 ..stream.clone()
             },
         ] {
-            assert!(!eligible(&candidate, &wrong, &event));
+            assert!(candidate_skip_reason(&candidate, &[wrong], &event).is_err());
         }
         assert_eq!(
             send_error_reason("source_only_chat_outcome_unknown: source_only_chat_body_unreadable"),

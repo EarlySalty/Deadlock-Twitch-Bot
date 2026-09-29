@@ -367,6 +367,13 @@ impl crate::promos::OutboundSuppressionCheck for CombinedSuppression {
         }
         self.store.is_muted(channel_login).await
     }
+
+    async fn is_muted_checked(&self, channel_login: &str) -> Result<bool, sqlx::Error> {
+        if self.guard.is_muted(channel_login) {
+            return Ok(true);
+        }
+        self.store.is_muted_checked(channel_login).await
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1273,7 +1273,7 @@ async fn main() {
         }
         None => eventsub_hooks,
     };
-    let patch_receiver = match (patch_chat_ports, helix.as_ref().clone()) {
+    match (patch_chat_ports, helix.as_ref().clone()) {
         (Some((chat, suppression)), Some(helix_client)) => {
             let receiver = Arc::new(tb_internal_api::PatchReceiver::new(
                 pool.clone(),
@@ -1306,12 +1306,8 @@ async fn main() {
                 }
                 Err(error) => tracing::error!(%error, "Patchfeed-Client nicht verfügbar"),
             }
-            Some(receiver)
         }
-        _ => {
-            tracing::warn!("Patchfeed-Empfänger nicht verfügbar: ChatAPI oder Helix fehlt");
-            None
-        }
+        _ => tracing::warn!("Patchfeed-Empfänger nicht verfügbar: ChatAPI oder Helix fehlt"),
     };
     // Event-Bus der eigenen OBS-Docks: schreibt jedes dock-taugliche Ereignis
     // nach `obs_dock_events` und meldet es per NOTIFY an das Gateway. Sitzt
@@ -2049,10 +2045,7 @@ async fn main() {
         scam_enforce,
         bulk_reauth,
         legacy_proxy,
-    )
-    .layer(axum::Extension(tb_internal_api::PatchReceiverExt(
-        patch_receiver,
-    )));
+    );
 
     tracing::info!(%runtime_role, port, "Internal-API Runtime-Härtung vor Dienststart bestanden");
 

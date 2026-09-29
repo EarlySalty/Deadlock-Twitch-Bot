@@ -1403,6 +1403,24 @@ impl crate::promos::OutboundSuppressionCheck for OutboundSuppressionStore {
             .await
             .is_some()
     }
+
+    async fn is_muted_checked(&self, channel_login: &str) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM twitch_outbound_chat_suppressions \
+             WHERE target_login=$1 AND source='promo' AND suppressed_until > $2)",
+        )
+        .bind(channel_login)
+        .bind(Utc::now())
+        .fetch_one(&self.pool)
+        .await
+        .inspect_err(|_| {
+            tracing::error!(
+                target_login = channel_login,
+                source = "promo",
+                "Patch announcement suppression check failed"
+            );
+        })
+    }
 }
 
 #[async_trait]
@@ -1643,8 +1661,11 @@ mod tests {
         assert_eq!(
             api.send_source_only_message("111", "Patch uncertain")
                 .await
-                .unwrap_err(),
-            "source_only_chat_outcome_unknown: source_only_chat_body_unreadable"
+                .unwrap(),
+            SendOutcome::HttpError {
+                status: 200,
+                body: "response_body_unreadable".into(),
+            }
         );
         assert_eq!(
             api.send_source_only_message("other", "Patch!")
