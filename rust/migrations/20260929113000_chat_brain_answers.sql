@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.tb_chat_brain_answers (
     question TEXT NOT NULL,
     answer TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL CHECK (status IN ('Pending', 'Answered', 'NoEvidence', 'Fehler')),
+    delivery_status TEXT NOT NULL DEFAULT 'Pending' CHECK (delivery_status IN ('Pending', 'Sent', 'Fehler')),
     duration_ms BIGINT CHECK (duration_ms >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at TIMESTAMPTZ,

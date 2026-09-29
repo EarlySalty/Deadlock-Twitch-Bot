@@ -60,6 +60,7 @@ trait BrainLogPort: Send + Sync {
         status: &str,
         duration_ms: i64,
     ) -> Result<(), String>;
+    async fn delivery(&self, id: i64, sent: bool, duration_ms: i64) -> Result<(), String>;
 }
 
 struct PgBrainLog {
@@ -123,7 +124,8 @@ impl BrainLogPort for PgBrainLog {
     ) -> Result<(), String> {
         let result = sqlx::query(
             "UPDATE public.tb_chat_brain_answers \
-             SET answer = $2, status = $3, duration_ms = $4, finished_at = now() \
+             SET answer = $2, status = $3, duration_ms = $4, finished_at = now(), \
+                 delivery_status = CASE WHEN $3 = 'Fehler' THEN 'Fehler' ELSE 'Pending' END \
              WHERE id = $1 AND status = 'Pending'",
         )
         .bind(id)
@@ -135,6 +137,26 @@ impl BrainLogPort for PgBrainLog {
         .map_err(|error| error.to_string())?;
         if result.rows_affected() != 1 {
             return Err("brain_log_update_missing".to_string());
+        }
+        Ok(())
+    }
+
+    async fn delivery(&self, id: i64, sent: bool, duration_ms: i64) -> Result<(), String> {
+        let result = sqlx::query(
+            "UPDATE public.tb_chat_brain_answers \
+             SET status = CASE WHEN $2 THEN status ELSE 'Fehler' END, \
+                 delivery_status = CASE WHEN $2 THEN 'Sent' ELSE 'Fehler' END, \
+                 duration_ms = $3 \
+             WHERE id = $1 AND status IN ('Answered', 'NoEvidence') AND delivery_status = 'Pending'",
+        )
+        .bind(id)
+        .bind(sent)
+        .bind(duration_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        if result.rows_affected() != 1 {
+            return Err("brain_log_delivery_update_missing".to_string());
         }
         Ok(())
     }
@@ -293,10 +315,30 @@ impl BrainChatService {
             [self.no_evidence_index.fetch_add(1, Ordering::Relaxed) % NO_EVIDENCE_REPLIES.len()]
     }
 
-    async fn finish(&self, id: i64, answer: &str, status: &str, started: Instant) {
-        let duration_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
-        if let Err(error) = self.log.finish(id, answer, status, duration_ms).await {
-            tracing::warn!(%error, log_id = id, "Brain-Chat-Protokoll konnte nicht abgeschlossen werden");
+    async fn finish(&self, id: i64, answer: &str, status: &str, started: Instant) -> bool {
+        for attempt in 0..3 {
+            let duration_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+            match self.log.finish(id, answer, status, duration_ms).await {
+                Ok(()) => return true,
+                Err(error) if attempt == 2 => {
+                    tracing::warn!(%error, log_id = id, "Brain-Chat-Protokoll konnte nicht abgeschlossen werden");
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await,
+            }
+        }
+        false
+    }
+
+    async fn delivery(&self, id: i64, sent: bool, started: Instant) {
+        for attempt in 0..3 {
+            let duration_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+            match self.log.delivery(id, sent, duration_ms).await {
+                Ok(()) => return,
+                Err(error) if attempt == 2 => {
+                    tracing::warn!(%error, log_id = id, "Brain-Chat-Zustellung bleibt ungeklärt");
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await,
+            }
         }
     }
 }
@@ -366,10 +408,14 @@ impl BrainChatPort for BrainChatService {
                 } else {
                     tracing::warn!(?error, channel_id = %record.channel_id, "Brain-Chat-Frage abgelehnt");
                 }
-                self.finish(id, "", "Fehler", started).await;
+                let _ = self.finish(id, "", "Fehler", started).await;
                 return true;
             }
         };
+        if !self.finish(id, &text, status, started).await {
+            tracing::warn!(channel_id = %record.channel_id, message_id = %record.message_id, "Brain-Chat-Antwort ohne Protokoll nicht gesendet");
+            return true;
+        }
         let send = self
             .api
             .send_thread_reply(record.channel_id, record.message_id, &text)
@@ -378,13 +424,7 @@ impl BrainChatPort for BrainChatService {
         if !delivered {
             tracing::warn!(channel_id = %record.channel_id, message_id = %record.message_id, outcome = ?send, "Brain-Chat-Antwort nicht zugestellt");
         }
-        self.finish(
-            id,
-            &text,
-            if delivered { status } else { "Fehler" },
-            started,
-        )
-        .await;
+        self.delivery(id, delivered, started).await;
         true
     }
 }
@@ -539,6 +579,40 @@ fn looks_like_link(token: &str) -> bool {
         })
 }
 
+fn has_substantive_answer(text: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let word =
+            token.trim_matches(|character: char| !character.is_alphanumeric() && character != '＠');
+        if word.is_empty() || word.starts_with('＠') {
+            return false;
+        }
+        !matches!(
+            word.to_lowercase().as_str(),
+            "siehe"
+                | "mehr"
+                | "auf"
+                | "unter"
+                | "bei"
+                | "im"
+                | "in"
+                | "und"
+                | "oder"
+                | "links"
+                | "link"
+                | "hier"
+                | "dort"
+                | "infos"
+                | "informationen"
+                | "weitere"
+                | "weiteres"
+                | "zu"
+                | "zum"
+                | "zur"
+                | "quelle"
+        )
+    })
+}
+
 fn safe_chat_answer(input: &str) -> Option<String> {
     let cleaned = input
         .split_whitespace()
@@ -553,7 +627,7 @@ fn safe_chat_answer(input: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     let text = cleaned.trim();
-    if text.is_empty() {
+    if !has_substantive_answer(text) {
         return None;
     }
     if text.chars().count() <= 450 {
@@ -567,7 +641,8 @@ fn safe_chat_answer(input: &str) -> Option<String> {
                 .next()
                 .is_none_or(char::is_whitespace)
     }) {
-        return Some(prefix[..index + character.len_utf8()].to_string());
+        let answer = &prefix[..index + character.len_utf8()];
+        return has_substantive_answer(answer).then(|| answer.to_string());
     }
     None
 }
@@ -617,8 +692,8 @@ mod tests {
         log.finish(id, "Vier Fähigkeiten.", "Answered", 24)
             .await
             .unwrap();
-        let row: (String, String, i64, bool) = sqlx::query_as(
-            "SELECT question, answer, duration_ms, finished_at IS NOT NULL \
+        let row: (String, String, String, i64, bool) = sqlx::query_as(
+            "SELECT question, answer, delivery_status, duration_ms, finished_at IS NOT NULL \
              FROM public.tb_chat_brain_answers WHERE id = $1",
         )
         .bind(id)
@@ -627,7 +702,43 @@ mod tests {
         .unwrap();
         assert_eq!(
             row,
-            (question.text.into(), "Vier Fähigkeiten.".into(), 24, true)
+            (
+                question.text.into(),
+                "Vier Fähigkeiten.".into(),
+                "Pending".into(),
+                24,
+                true
+            )
+        );
+        log.delivery(id, true, 31).await.unwrap();
+        let sent: (String, String, i64) = sqlx::query_as(
+            "SELECT status, delivery_status, duration_ms FROM public.tb_chat_brain_answers WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(sent, ("Answered".into(), "Sent".into(), 31));
+        let failed = BrainQuestion {
+            message_id: "message-2",
+            user_id: "101",
+            ..question
+        };
+        let failed_id = log.begin(&failed).await.unwrap().unwrap();
+        log.finish(failed_id, "Nicht sicher.", "NoEvidence", 10)
+            .await
+            .unwrap();
+        log.delivery(failed_id, false, 20).await.unwrap();
+        let undelivered: (String, String, String) = sqlx::query_as(
+            "SELECT status, delivery_status, answer FROM public.tb_chat_brain_answers WHERE id = $1",
+        )
+        .bind(failed_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            undelivered,
+            ("Fehler".into(), "Fehler".into(), "Nicht sicher.".into())
         );
         let bot_can_insert: bool = sqlx::query_scalar(
             "SELECT has_table_privilege('twitchbot', 'public.tb_chat_brain_answers', 'INSERT')",
@@ -726,8 +837,9 @@ mod tests {
     fn antwort_entfernt_links_mentions_und_kuerzt_am_satzende() {
         assert_eq!(
             safe_chat_answer("Siehe https://example.com/x und www.example.org @everyone."),
-            Some("Siehe und ＠everyone.".into())
+            None
         );
+        assert_eq!(safe_chat_answer("Ja."), Some("Ja.".into()));
         assert_eq!(
             safe_chat_answer(
                 "Links: example.com:443, 127.0.0.1/path, info@example.org und Warden."
@@ -740,8 +852,9 @@ mod tests {
         );
         assert_eq!(
             safe_chat_answer("Mehr auf bücher.de, 例子.中国 und xn--bcher-kva.de."),
-            Some("Mehr auf und".into())
+            None
         );
+        assert_eq!(safe_chat_answer("Siehe example.com"), None);
         let long = format!("{} Satzende. {}", "A".repeat(250), "B".repeat(240));
         assert_eq!(
             safe_chat_answer(&long),
@@ -828,6 +941,8 @@ mod tests {
     struct FakeLog {
         questions: Mutex<Vec<(String, String)>>,
         results: Mutex<Vec<(String, String, i64)>>,
+        deliveries: Mutex<Vec<(bool, i64)>>,
+        fail_finishes: AtomicUsize,
     }
 
     #[async_trait]
@@ -845,16 +960,33 @@ mod tests {
             status: &str,
             duration_ms: i64,
         ) -> Result<(), String> {
+            if self
+                .fail_finishes
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                    (left > 0).then(|| left - 1)
+                })
+                .is_ok()
+            {
+                return Err("temporary_log_failure".into());
+            }
             self.results
                 .lock()
                 .unwrap()
                 .push((answer.into(), status.into(), duration_ms));
             Ok(())
         }
+
+        async fn delivery(&self, _id: i64, sent: bool, duration_ms: i64) -> Result<(), String> {
+            self.deliveries.lock().unwrap().push((sent, duration_ms));
+            Ok(())
+        }
     }
 
     #[derive(Default)]
-    struct FakeChat(Mutex<Vec<(String, String, String)>>);
+    struct FakeChat {
+        sends: Mutex<Vec<(String, String, String)>>,
+        audit: Option<Arc<FakeLog>>,
+    }
 
     #[async_trait]
     impl ChatApi for FakeChat {
@@ -867,7 +999,13 @@ mod tests {
             parent: &str,
             text: &str,
         ) -> Result<SendOutcome, String> {
-            self.0
+            if let Some(log) = &self.audit {
+                assert_eq!(
+                    log.results.lock().unwrap().len(),
+                    self.sends.lock().unwrap().len() + 1
+                );
+            }
+            self.sends
                 .lock()
                 .unwrap()
                 .push((channel.into(), parent.into(), text.into()));
@@ -932,7 +1070,10 @@ mod tests {
             Err(BrainAdapterError::Backend),
         ]))));
         let log = Arc::new(FakeLog::default());
-        let chat = Arc::new(FakeChat::default());
+        let chat = Arc::new(FakeChat {
+            audit: Some(log.clone()),
+            ..FakeChat::default()
+        });
         let service = BrainChatService {
             answerer: Some(answerer),
             log: log.clone(),
@@ -947,7 +1088,7 @@ mod tests {
         for index in 0..5 {
             assert!(service.maybe_respond(&event(index)).await);
         }
-        let sends = chat.0.lock().unwrap().clone();
+        let sends = chat.sends.lock().unwrap().clone();
         assert_eq!(sends.len(), 4);
         assert_eq!(
             sends[0],
@@ -972,6 +1113,8 @@ mod tests {
             ]
         );
         assert!(records.iter().all(|row| row.2 >= 0));
+        assert_eq!(log.deliveries.lock().unwrap().len(), 4);
+        assert!(log.deliveries.lock().unwrap().iter().all(|row| row.0));
         assert_eq!(log.questions.lock().unwrap().len(), 5);
         assert!(matches!(
             *service.backend_state.lock().unwrap(),
@@ -984,5 +1127,34 @@ mod tests {
         command.message.text = "!status @DeadlockBot".into();
         assert!(!service.maybe_respond(&command).await);
         assert_eq!(log.questions.lock().unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn antwort_bleibt_aus_wenn_audit_nicht_gespeichert_werden_kann() {
+        let answerer = Arc::new(FakeAnswer(Mutex::new(VecDeque::from([Ok(
+            KnowledgeReply::Answered {
+                text: "Vier Fähigkeiten.".into(),
+                sources: vec![],
+            },
+        )]))));
+        let log = Arc::new(FakeLog::default());
+        log.fail_finishes.store(3, Ordering::Relaxed);
+        let chat = Arc::new(FakeChat::default());
+        let service = BrainChatService {
+            answerer: Some(answerer),
+            log: log.clone(),
+            api: chat.clone(),
+            timeout_guard: Arc::new(TimeoutGuard::new()),
+            bot_user_id: "999".into(),
+            bot_login: "deadlockbot".into(),
+            limit: BrainRateLimit::new(BrainChatOptions::default()),
+            backend_state: Mutex::new(BackendState::Unknown),
+            no_evidence_index: AtomicUsize::new(0),
+        };
+        assert!(service.maybe_respond(&event(0)).await);
+        assert!(chat.sends.lock().unwrap().is_empty());
+        assert!(log.results.lock().unwrap().is_empty());
+        assert!(log.deliveries.lock().unwrap().is_empty());
+        assert_eq!(log.fail_finishes.load(Ordering::Relaxed), 0);
     }
 }
