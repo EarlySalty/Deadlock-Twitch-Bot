@@ -2565,3 +2565,7 @@ mod tests {
         assert_eq!(inactivity_flagged_at, None);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
