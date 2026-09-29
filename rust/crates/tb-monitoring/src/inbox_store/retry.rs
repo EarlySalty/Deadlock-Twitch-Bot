@@ -172,8 +172,9 @@ mod tests {
     }
 
     async fn raise_sqlstate(pool: &PgPool, code: &str) -> sqlx::Error {
-        let sql = format!("DO $$ BEGIN RAISE SQLSTATE '{code}'; END $$");
-        match sqlx::query(&sql).execute(pool).await {
+        assert!(code.len() == 5 && code.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()));
+        let sql = format!("DO $ BEGIN RAISE SQLSTATE '{code}'; END $$");
+        match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
             Ok(_) => panic!("RAISE SQLSTATE {code} unexpectedly succeeded"),
             Err(err) => err,
         }

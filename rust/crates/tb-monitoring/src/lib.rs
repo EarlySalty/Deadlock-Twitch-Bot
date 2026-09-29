@@ -102,3 +102,7 @@ pub use subscriptions::{
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
 
 pub mod anonymous_chat;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

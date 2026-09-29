@@ -74,4 +74,5 @@ pub mod trial;
 pub mod category;
 
 #[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
