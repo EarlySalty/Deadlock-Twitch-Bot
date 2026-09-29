@@ -114,3 +114,7 @@ pub fn build_clip_fetch_task(pool: PgPool, helix: Arc<HelixClient>) -> ClipFetch
     let service = Arc::new(ClipFetchService::new(repo, helix_src));
     ClipFetchTask::new(service)
 }
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
