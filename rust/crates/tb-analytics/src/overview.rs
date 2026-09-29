@@ -725,11 +725,11 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, true))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(&schema))
             .execute(&pool)
             .await
             .expect("search_path setzen fehlgeschlagen");
@@ -1217,15 +1217,15 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&pool)
             .await
             .expect("Schema droppen fehlgeschlagen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(&schema))
             .execute(&pool)
             .await
             .expect("search_path setzen fehlgeschlagen");

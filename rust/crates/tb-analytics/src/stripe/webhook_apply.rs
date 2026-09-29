@@ -979,15 +979,15 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(&schema))
             .execute(&pool)
             .await
             .unwrap();
@@ -1473,11 +1473,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -1488,7 +1488,7 @@ mod tests {
             .after_connect(move |conn, _| {
                 let schema = schema_owned.clone();
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {schema}"))
+                    sqlx::query(crate::test_sql::search_path(&schema))
                         .execute(conn)
                         .await
                         .map(|_| ())

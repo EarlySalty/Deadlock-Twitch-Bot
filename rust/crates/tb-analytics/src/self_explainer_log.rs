@@ -120,15 +120,15 @@ mod tests {
             .await
             .expect("connect");
 
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&pool)
             .await
             .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(&schema))
             .execute(&pool)
             .await
             .expect("search_path");

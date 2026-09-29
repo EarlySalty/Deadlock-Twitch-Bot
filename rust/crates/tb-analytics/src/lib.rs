@@ -72,3 +72,6 @@ pub mod telemetry_routes;
 pub mod trial;
 
 pub mod category;
+
+#[cfg(test)]
+mod test_sql;

@@ -25,7 +25,7 @@ impl Fixture {
             .await
             .expect("test database connection");
         let schema = format!("t_adm_http_{}", Utc::now().timestamp_nanos_opt().unwrap());
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -81,7 +81,7 @@ impl Fixture {
     }
     async fn cleanup(self) {
         self.pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {} CASCADE", self.schema))
+        sqlx::query(crate::test_sql::drop_schema(&self.schema, false))
             .execute(&self.admin)
             .await
             .unwrap();
