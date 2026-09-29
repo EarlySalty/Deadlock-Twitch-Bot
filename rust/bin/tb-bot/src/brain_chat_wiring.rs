@@ -613,7 +613,32 @@ fn has_substantive_answer(text: &str) -> bool {
     })
 }
 
+fn strip_markdown_links(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut offset = 0;
+    while let Some(open) = input[offset..].find('[').map(|index| offset + index) {
+        if let Some(label_end) = input[open + 1..].find("](").map(|index| open + 1 + index) {
+            if let Some(close) = input[label_end + 2..]
+                .find(')')
+                .map(|index| label_end + 2 + index)
+            {
+                if looks_like_link(&input[label_end + 2..close]) {
+                    output.push_str(&input[offset..open]);
+                    output.push(' ');
+                    offset = close + 1;
+                    continue;
+                }
+            }
+        }
+        output.push_str(&input[offset..open + 1]);
+        offset = open + 1;
+    }
+    output.push_str(&input[offset..]);
+    output
+}
+
 fn safe_chat_answer(input: &str) -> Option<String> {
+    let input = strip_markdown_links(input);
     let cleaned = input
         .split_whitespace()
         .filter(|token| !looks_like_link(token))
@@ -849,6 +874,11 @@ mod tests {
         assert_eq!(
             safe_chat_answer("Quelle [Guide](https://example.com) [Kurz](example.com) und Warden."),
             Some("Quelle und Warden.".into())
+        );
+        assert_eq!(safe_chat_answer("[The guide](https://example.com)"), None);
+        assert_eq!(
+            safe_chat_answer("[The guide](https://example.com) Warden hat vier Fähigkeiten."),
+            Some("Warden hat vier Fähigkeiten.".into())
         );
         assert_eq!(
             safe_chat_answer("Mehr auf bücher.de, 例子.中国 und xn--bcher-kva.de."),

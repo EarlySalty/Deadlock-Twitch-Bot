@@ -401,11 +401,6 @@ mod tests {
     use crate::promos::OutboundSuppressionCheck;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // -----------------------------------------------------------------------
-    // Mock-ChatApi — liefert ein konfigurierbares send_message-Ergebnis.
-    // Nur send_message zählt; die übrigen 8 Methoden sind Defaults/unimplemented.
-    // -----------------------------------------------------------------------
-
     struct MockApi {
         send_calls: AtomicUsize,
         source_only_calls: AtomicUsize,
@@ -434,6 +429,16 @@ mod tests {
             _m: &str,
         ) -> Result<SendOutcome, String> {
             self.source_only_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.outcome.clone())
+        }
+        async fn send_thread_reply(
+            &self,
+            _b: &str,
+            parent_message_id: &str,
+            _m: &str,
+        ) -> Result<SendOutcome, String> {
+            assert_eq!(parent_message_id, "parent-1");
+            self.send_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.outcome.clone())
         }
         async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
@@ -644,6 +649,35 @@ mod tests {
             "Original-Ergebnis unverändert"
         );
         assert!(!guard.is_muted("egal"), "anderer Code → kein record_timeout");
+    }
+
+    #[tokio::test]
+    async fn decorator_reply_drop_merkt_timeout_und_ban() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT); \
+             INSERT INTO twitch_streamer_identities VALUES ('200', 'kanal');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let guard = Arc::new(TimeoutGuard::new());
+        for (index, code) in ["sender_timedout", "sender_banned"].into_iter().enumerate() {
+            let outcome = SendOutcome::Dropped {
+                code: code.into(),
+                message: String::new(),
+            };
+            let inner = MockApi::with_outcome(outcome.clone());
+            let api = TimeoutTrackingChatApi::new(inner.clone(), guard.clone(), db.pool.clone());
+            assert_eq!(
+                api.send_thread_reply("200", "parent-1", "Antwort")
+                    .await
+                    .unwrap(),
+                outcome
+            );
+            assert_eq!(inner.send_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(guard.is_muted("kanal"), index == 1);
+        }
     }
 }
 
