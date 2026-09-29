@@ -7,10 +7,14 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Mutex,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
+use tb_chat::api::{BanOutcome, SourceOnlyPreSendCheck};
+use tb_transport_twitch::HelixConfig;
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 struct FakeTransport {
     pool: PgPool,
@@ -553,6 +557,174 @@ async fn rights_reauth_optout_and_expired_events_never_snapshot() {
         PatchProcessOutcome::SkippedExpired
     ));
     assert!(transport.sent.lock().unwrap().is_empty());
+}
+
+struct MockEndpointChat {
+    helix: HelixClient,
+}
+
+#[async_trait::async_trait]
+impl ChatApi for MockEndpointChat {
+    async fn send_message(&self, _: &str, _: &str) -> Result<SendOutcome, String> {
+        Err("only guarded source-only sends are supported".into())
+    }
+
+    async fn send_source_only_message_guarded(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        pre_send_check: SourceOnlyPreSendCheck,
+    ) -> Result<SendOutcome, String> {
+        self.helix
+            .send_source_only_chat_message_guarded(broadcaster_id, "777", message, pre_send_check)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+        Err("unsupported".into())
+    }
+
+    async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
+        Err("unsupported".into())
+    }
+
+    async fn timeout_user(&self, _: &str, _: &str, _: u32, _: &str) -> Result<BanOutcome, String> {
+        Err("unsupported".into())
+    }
+
+    async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+        Err("unsupported".into())
+    }
+
+    async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+        Err("unsupported".into())
+    }
+
+    async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
+        Err("unsupported".into())
+    }
+
+    async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
+        Err("unsupported".into())
+    }
+
+    async fn bot_user_id(&self) -> String {
+        "777".into()
+    }
+}
+
+struct PausedTokenRefresh {
+    entered: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Respond for PausedTokenRefresh {
+    fn respond(&self, _: &Request) -> ResponseTemplate {
+        self.entered.send(()).unwrap();
+        self.release.lock().unwrap().recv().unwrap();
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "app-token", "expires_in": 3600
+        }))
+    }
+}
+
+#[tokio::test]
+async fn token_refresh_crossing_deadline_skips_without_chat_post_or_retry() {
+    let db = database().await;
+    let read_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth2/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "read-token", "expires_in": 3600
+        })))
+        .expect(1)
+        .mount(&read_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/helix/streams"))
+        .and(query_param("user_id", "42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"id": "session-42", "user_id": "42", "game_id": "deadlock",
+                "game_name": "Deadlock", "started_at": "2020-01-01T00:00:00Z"}]
+        })))
+        .expect(2)
+        .mount(&read_server)
+        .await;
+    let chat_server = MockServer::start().await;
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    Mock::given(method("POST"))
+        .and(path("/oauth2/token"))
+        .respond_with(PausedTokenRefresh {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        })
+        .expect(1)
+        .mount(&chat_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/helix/chat/messages"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&chat_server)
+        .await;
+    let mut read_config = HelixConfig::new("cid", "sec");
+    read_config.helix_base = format!("{}/helix", read_server.uri());
+    read_config.token_url = format!("{}/oauth2/token", read_server.uri());
+    let mut chat_config = HelixConfig::new("cid", "sec");
+    chat_config.helix_base = format!("{}/helix", chat_server.uri());
+    chat_config.token_url = format!("{}/oauth2/token", chat_server.uri());
+    let event = patch_event(286);
+    let detected_at = event.detected_at;
+    let expired = Arc::new(AtomicBool::new(false));
+    let check_expired = Arc::clone(&expired);
+    let receiver = PatchReceiver::new(
+        db.pool.clone(),
+        HelixClient::new(read_config).unwrap(),
+        Arc::new(MockEndpointChat {
+            helix: HelixClient::new(chat_config).unwrap(),
+        }),
+        Arc::new(tb_chat::promos::NoopSuppressionCheck),
+    )
+    .with_deadline_clock(Arc::new(move || {
+        detected_at
+            + chrono::Duration::seconds(if check_expired.load(Ordering::SeqCst) {
+                EVENT_TTL_SECONDS + 1
+            } else {
+                1
+            })
+    }));
+    let processing = tokio::spawn(async move { receiver.process(&event).await });
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    let (before_release, attempted): (String, bool) = sqlx::query_as(
+        "SELECT status, attempted_at IS NOT NULL FROM twitch_patch_announcement_deliveries \
+         WHERE broadcaster_id='42'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!((before_release.as_str(), attempted), ("attempted", true));
+    expired.store(true, Ordering::SeqCst);
+    release_tx.send(()).unwrap();
+    assert!(matches!(
+        processing.await.unwrap().unwrap(),
+        PatchProcessOutcome::Processed(_)
+    ));
+    let (status, reason, drop_code): (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason, drop_code FROM twitch_patch_announcement_deliveries \
+         WHERE broadcaster_id='42'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("event_expired_before_post"));
+    assert_eq!(drop_code, None);
+    read_server.verify().await;
+    chat_server.verify().await;
 }
 
 async fn run_runtime_role_matrix(pool: &PgPool) {

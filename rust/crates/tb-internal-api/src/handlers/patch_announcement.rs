@@ -11,7 +11,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tb_chat::{promos::OutboundSuppressionCheck, ChatApi, SendOutcome};
+use tb_chat::{
+    api::SourceOnlyPreSendCheck, promos::OutboundSuppressionCheck, ChatApi, SendOutcome,
+};
 use tb_http_core::{ApiError, AuthLevel};
 use tb_transport_twitch::{HelixClient, HelixStream};
 
@@ -113,6 +115,21 @@ fn source_only_send_window_open(detected_at: DateTime<Utc>, now: DateTime<Utc>) 
         now,
         EVENT_TTL_SECONDS - SOURCE_ONLY_SEND_RESERVE_SECONDS,
     )
+}
+
+type DeadlineClock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
+
+fn source_only_deadline_guard(
+    detected_at: DateTime<Utc>,
+    deadline_clock: DeadlineClock,
+) -> SourceOnlyPreSendCheck {
+    Box::new(move || {
+        if deadline_clock() >= detected_at + chrono::Duration::seconds(EVENT_TTL_SECONDS) {
+            Err("event_expired_before_post")
+        } else {
+            Ok(())
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -313,9 +330,24 @@ impl Transport for LiveTransport<'_> {
             match self
                 .receiver
                 .chat
-                .send_source_only_message(id, message)
+                .send_source_only_message_guarded(
+                    id,
+                    message,
+                    source_only_deadline_guard(
+                        detected_at,
+                        Arc::clone(&self.receiver.deadline_clock),
+                    ),
+                )
                 .await
             {
+                Ok(SendOutcome::Dropped { code, .. }) if code == "event_expired_before_post" => {
+                    DeliveryResult {
+                        status: "skipped",
+                        drop_code: None,
+                        http_status: None,
+                        uncertainty_reason: Some("event_expired_before_post"),
+                    }
+                }
                 Ok(outcome) => delivery_result_from_send_outcome(outcome),
                 Err(error) => DeliveryResult {
                     status: "uncertain",
@@ -391,6 +423,7 @@ pub struct PatchReceiver {
     helix: HelixClient,
     chat: Arc<dyn ChatApi>,
     suppression: Arc<dyn OutboundSuppressionCheck>,
+    deadline_clock: DeadlineClock,
 }
 
 impl PatchReceiver {
@@ -405,7 +438,14 @@ impl PatchReceiver {
             helix,
             chat,
             suppression,
+            deadline_clock: Arc::new(Utc::now),
         }
+    }
+
+    #[cfg(test)]
+    fn with_deadline_clock(mut self, deadline_clock: DeadlineClock) -> Self {
+        self.deadline_clock = deadline_clock;
+        self
     }
 
     pub async fn process(

@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
+use tb_internal_api::{PatchEvent, PatchProcessError, PatchReceiver};
 
 const BASE_URL: &str = "https://deutsche-deadlock-community.de/patchnotes";
 const INDEX_URL: &str = "https://deutsche-deadlock-community.de/patchnotes/index.json";
@@ -458,6 +459,38 @@ where
     Ok(true)
 }
 
+async fn poll_patch_feed_with_http<H, F, Fut, E>(
+    http: &H,
+    pool: &PgPool,
+    callback: F,
+) -> Result<usize, PatchFeedError>
+where
+    H: FeedHttp,
+    F: FnMut(PatchArticle) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+    E: Error + Send + Sync + 'static,
+{
+    let callback = tokio::sync::Mutex::new(callback);
+    run_feed(http, pool, |article| async {
+        let mut callback = callback.lock().await;
+        deliver_article(pool, article, &mut *callback).await
+    })
+    .await
+}
+
+pub async fn forward_patch_article(
+    receiver: &PatchReceiver,
+    article: PatchArticle,
+) -> Result<(), PatchProcessError> {
+    let event = PatchEvent::from_article(
+        article.id,
+        article.url,
+        article.source_url,
+        article.observed_at,
+    )?;
+    receiver.process(&event).await.map(|_| ())
+}
+
 pub async fn poll_patch_feed<F, Fut, E>(
     client: &PatchFeedClient,
     pool: &PgPool,
@@ -468,20 +501,233 @@ where
     Fut: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
 {
-    let callback = tokio::sync::Mutex::new(callback);
-    run_feed(client, pool, |article| async {
-        let mut callback = callback.lock().await;
-        deliver_article(pool, article, &mut *callback).await
-    })
-    .await
+    poll_patch_feed_with_http(client, pool, callback).await
 }
+
+#[cfg(test)]
+#[allow(clippy::duplicate_mod)]
+#[path = "../../../test-support/postgres.rs"]
+mod postgres;
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::process::Command;
+    use std::sync::{mpsc, Arc, Mutex};
 
     use super::*;
+    use tb_chat::api::{BanOutcome, SourceOnlyPreSendCheck};
+    use tb_chat::{ChatApi, SendOutcome};
+    use tb_internal_api::PatchReceiver;
+    use tb_transport_twitch::{HelixClient, HelixConfig};
+    use wiremock::matchers::{body_partial_json, header, method, path, query_param};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    use super::postgres::TestPostgres;
+
+    struct MockEndpointChat {
+        helix: HelixClient,
+    }
+
+    #[async_trait::async_trait]
+    impl ChatApi for MockEndpointChat {
+        async fn send_message(&self, _: &str, _: &str) -> Result<SendOutcome, String> {
+            Err("only guarded source-only sends are supported".into())
+        }
+
+        async fn send_source_only_message_guarded(
+            &self,
+            broadcaster_id: &str,
+            message: &str,
+            pre_send_check: SourceOnlyPreSendCheck,
+        ) -> Result<SendOutcome, String> {
+            self.helix
+                .send_source_only_chat_message_guarded(
+                    broadcaster_id,
+                    "777",
+                    message,
+                    pre_send_check,
+                )
+                .await
+                .map_err(|error| error.to_string())
+        }
+
+        async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+            Err("unsupported".into())
+        }
+
+        async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
+            Err("unsupported".into())
+        }
+
+        async fn timeout_user(
+            &self,
+            _: &str,
+            _: &str,
+            _: u32,
+            _: &str,
+        ) -> Result<BanOutcome, String> {
+            Err("unsupported".into())
+        }
+
+        async fn unban_user(&self, _: &str, _: &str) -> Result<bool, String> {
+            Err("unsupported".into())
+        }
+
+        async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
+            Err("unsupported".into())
+        }
+
+        async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
+            Err("unsupported".into())
+        }
+
+        async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
+            Err("unsupported".into())
+        }
+
+        async fn bot_user_id(&self) -> String {
+            "777".into()
+        }
+    }
+
+    async fn isolated_bot_database() -> (TestPostgres, PgPool, PgPool) {
+        let postgres = TestPostgres::start().await;
+        sqlx::query("CREATE ROLE postgres SUPERUSER NOLOGIN")
+            .execute(&postgres.pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE DATABASE twitch_analytics")
+            .execute(&postgres.pool)
+            .await
+            .unwrap();
+        let socket_dir: String = sqlx::query_scalar("SHOW unix_socket_directories")
+            .fetch_one(&postgres.pool)
+            .await
+            .unwrap();
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(
+                sqlx::postgres::PgConnectOptions::new()
+                    .host(&socket_dir)
+                    .username("uplink_test")
+                    .database("twitch_analytics"),
+            )
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_streamers_partner_state (
+                 twitch_user_id TEXT, twitch_login TEXT, is_partner_active INT,
+                 manual_partner_opt_out INT DEFAULT 0);
+             CREATE TABLE twitch_raid_auth (twitch_user_id TEXT, scopes TEXT, needs_reauth BOOLEAN);
+             CREATE TABLE twitch_live_state (
+                 twitch_user_id TEXT, last_stream_id TEXT, last_seen_at TEXT,
+                 is_live INT, last_game TEXT);
+             CREATE TABLE twitch_streamer_identities (
+                 twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT);
+             INSERT INTO twitch_streamer_identities VALUES ('42','renamed'), ('43','later');
+             INSERT INTO twitch_streamers_partner_state VALUES
+                 ('42','renamed',1,0), ('43','later',0,0);
+             INSERT INTO twitch_raid_auth VALUES
+                 ('42','user:read:chat channel:bot',FALSE), ('43','channel:bot',FALSE);
+             INSERT INTO twitch_live_state VALUES
+                 ('42','s42',to_char(now(), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'),1,'Deadlock'),
+                 ('43','s43',to_char(now(), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'),1,'Deadlock');",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::raw_sql(tb_chat::moderation::SUPPRESSION_DDL)
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260928120000_patch_announcements.sql"
+        ))
+        .execute(&admin)
+        .await
+        .unwrap();
+        let output = Command::new("/usr/lib/postgresql/16/bin/psql")
+            .args([
+                "-h",
+                &socket_dir,
+                "-U",
+                "uplink_test",
+                "-d",
+                "twitch_analytics",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-f",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../../ops/systemd/twitch-runtime-roles.sql"
+                ),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "runtime role matrix failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let bot = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(
+                sqlx::postgres::PgConnectOptions::new()
+                    .host(&socket_dir)
+                    .username("twitchbot")
+                    .database("twitch_analytics"),
+            )
+            .await
+            .unwrap();
+        let identity: String = sqlx::query_scalar("SELECT current_user")
+            .fetch_one(&bot)
+            .await
+            .unwrap();
+        assert_eq!(identity, "twitchbot");
+        (postgres, admin, bot)
+    }
+
+    async fn poll_with_receiver(
+        http: &FakeHttp,
+        pool: &PgPool,
+        receiver: &Arc<PatchReceiver>,
+    ) -> Result<usize, PatchFeedError> {
+        poll_patch_feed_with_http(http, pool, |article| {
+            let receiver = Arc::clone(receiver);
+            async move { forward_patch_article(&receiver, article).await }
+        })
+        .await
+    }
+
+    fn distinct_source(http: &FakeHttp, id: i64) {
+        let url = article_url(id).unwrap();
+        let meta_url = format!("{BASE_URL}/patch-{id}/meta.json");
+        http.add(
+            &meta_url,
+            serde_json::to_vec(&serde_json::json!({
+                "id": id,
+                "source_url": format!("https://forums.playdeadlock.com/posts/{id}/"),
+                "urls": { "de": url },
+            }))
+            .unwrap(),
+        );
+    }
+
+    struct PausedChatResponse {
+        entered: Arc<tokio::sync::Notify>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Respond for PausedChatResponse {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            self.entered.notify_one();
+            self.release.lock().unwrap().recv().unwrap();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true, "message_id": "sent-after-abort"}]
+            }))
+        }
+    }
 
     #[derive(Default)]
     struct FakeHttp {
@@ -986,5 +1232,394 @@ mod tests {
         );
         assert_eq!(cursor.current_status(286), Some("expired_timeout"));
         assert_eq!(sent, vec![287]);
+    }
+
+    #[tokio::test]
+    async fn feed_to_source_only_receiver_uses_isolated_postgres_runtime_role() {
+        let (_postgres, admin, bot) = isolated_bot_database().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok", "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "s42", "user_id": "42", "game_id": "deadlock",
+                    "game_name": "Deadlock", "started_at": "2020-01-01T00:00:00Z"}]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "42", "sender_id": "777", "for_source_only": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true, "message_id": "sent-42"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut config = HelixConfig::new("cid", "sec");
+        config.helix_base = format!("{}/helix", server.uri());
+        config.token_url = format!("{}/oauth2/token", server.uri());
+        let helix = HelixClient::new(config).unwrap();
+        let timeout_guard = Arc::new(tb_chat::moderation::TimeoutGuard::new());
+        let tracked: Arc<dyn ChatApi> =
+            Arc::new(tb_chat::timeout_tracking::TimeoutTrackingChatApi::new(
+                Arc::new(MockEndpointChat {
+                    helix: helix.clone(),
+                }),
+                Arc::clone(&timeout_guard),
+                bot.clone(),
+            ));
+        let chat: Arc<dyn ChatApi> = Arc::new(tb_chat::channel_policy::ChannelPolicyChatApi::new(
+            tracked,
+            tb_chat::channel_policy::PolicyContext::Standard(
+                crate::chat_wiring::patch_test_policy_roster(bot.clone()),
+            ),
+        ));
+        let suppression = Arc::new(tb_chat::timeout_tracking::CombinedSuppression::new(
+            Arc::new(tb_chat::moderation::OutboundSuppressionStore::new(
+                bot.clone(),
+            )),
+            timeout_guard,
+        ));
+        let receiver = Arc::new(PatchReceiver::new(bot.clone(), helix, chat, suppression));
+
+        assert_eq!(
+            poll_with_receiver(&feed(&[]), &bot, &receiver)
+                .await
+                .unwrap(),
+            0
+        );
+        let baseline: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_patch_feed_state")
+            .fetch_one(&bot)
+            .await
+            .unwrap();
+        assert_eq!(baseline, 0);
+        assert_eq!(
+            poll_with_receiver(&feed(&[284, 285]), &bot, &receiver)
+                .await
+                .unwrap(),
+            0
+        );
+        let historical: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT patch_id, status FROM twitch_patch_feed_observations ORDER BY patch_id",
+        )
+        .fetch_all(&bot)
+        .await
+        .unwrap();
+        assert_eq!(
+            historical,
+            vec![(284, "historical".into()), (285, "historical".into())]
+        );
+        let no_historical_recipients: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM twitch_patch_announcement_recipients")
+                .fetch_one(&bot)
+                .await
+                .unwrap();
+        assert_eq!(no_historical_recipients, 0);
+
+        let published = feed(&[284, 285, 286]);
+        distinct_source(&published, 286);
+        assert_eq!(
+            poll_with_receiver(&published, &bot, &receiver)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            poll_with_receiver(&published, &bot, &receiver)
+                .await
+                .unwrap(),
+            0
+        );
+        let recipients: Vec<(String, String)> = sqlx::query_as(
+            "SELECT broadcaster_id, stream_id FROM twitch_patch_announcement_recipients \
+             WHERE patch_id=286",
+        )
+        .fetch_all(&bot)
+        .await
+        .unwrap();
+        assert_eq!(recipients, vec![("42".into(), "s42".into())]);
+        let delivered: (String, bool) = sqlx::query_as(
+            "SELECT status, attempted_at IS NOT NULL FROM twitch_patch_announcement_deliveries \
+             WHERE broadcaster_id='42'",
+        )
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+        assert_eq!(delivered, ("sent".into(), true));
+
+        let pending = observe_index(&bot, &[284, 285, 286, 287]).await.unwrap();
+        assert_eq!(
+            pending.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![287]
+        );
+        sqlx::raw_sql(
+            "UPDATE twitch_streamers_partner_state SET is_partner_active=1 \
+             WHERE twitch_user_id='43';
+             UPDATE twitch_live_state SET last_game='Other' WHERE twitch_user_id='42';",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let fixed_recipients: Vec<(String, String)> = sqlx::query_as(
+            "SELECT broadcaster_id, stream_id FROM twitch_patch_announcement_recipients \
+             WHERE patch_id=287",
+        )
+        .fetch_all(&bot)
+        .await
+        .unwrap();
+        assert_eq!(fixed_recipients, vec![("42".into(), "s42".into())]);
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "s42", "user_id": "42", "game_id": "other",
+                    "game_name": "Other", "started_at": "2020-01-01T00:00:00Z"}]
+            })))
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let switched = feed(&[284, 285, 286, 287]);
+        distinct_source(&switched, 286);
+        distinct_source(&switched, 287);
+        assert_eq!(
+            poll_with_receiver(&switched, &bot, &receiver)
+                .await
+                .unwrap(),
+            1
+        );
+        let no_stale_delivery: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_patch_announcement_deliveries \
+             WHERE event_id=(SELECT event_id FROM twitch_patch_announcements \
+             WHERE article_url='https://deutsche-deadlock-community.de/patchnotes/patch-287/')",
+        )
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+        assert_eq!(no_stale_delivery, 0);
+
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "43"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "s43", "user_id": "43", "game_id": "deadlock",
+                    "game_name": "Deadlock", "started_at": "2020-01-01T00:00:00Z"}]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "43", "sender_id": "777", "for_source_only": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true, "message_id": "sent-43"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let late_lower_id = feed(&[283, 284, 285, 286, 287]);
+        for id in [283, 286, 287] {
+            distinct_source(&late_lower_id, id);
+        }
+        assert_eq!(
+            poll_with_receiver(&late_lower_id, &bot, &receiver)
+                .await
+                .unwrap(),
+            1
+        );
+        let lower_id_recipients: Vec<(String, String)> = sqlx::query_as(
+            "SELECT broadcaster_id, stream_id FROM twitch_patch_announcement_recipients \
+             WHERE patch_id=283",
+        )
+        .fetch_all(&bot)
+        .await
+        .unwrap();
+        assert_eq!(lower_id_recipients, vec![("43".into(), "s43".into())]);
+        assert_eq!(
+            poll_with_receiver(&late_lower_id, &bot, &receiver)
+                .await
+                .unwrap(),
+            0
+        );
+
+        sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active=0 WHERE twitch_user_id='43'")
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
+             VALUES (288, now() - interval '121 seconds', 'pending')",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let after_expiry = feed(&[283, 284, 285, 286, 287, 288, 289]);
+        for id in [283, 286, 287, 289] {
+            distinct_source(&after_expiry, id);
+        }
+        assert_eq!(
+            poll_with_receiver(&after_expiry, &bot, &receiver)
+                .await
+                .unwrap(),
+            1
+        );
+        let final_statuses: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT patch_id, status FROM twitch_patch_feed_observations \
+             WHERE patch_id IN (283, 286, 287, 288, 289) ORDER BY patch_id",
+        )
+        .fetch_all(&bot)
+        .await
+        .unwrap();
+        assert_eq!(
+            final_statuses,
+            vec![
+                (283, "processed".into()),
+                (286, "processed".into()),
+                (287, "processed".into()),
+                (288, "expired_timeout".into()),
+                (289, "processed".into()),
+            ]
+        );
+        let unauthorized_update = sqlx::query(
+            "UPDATE twitch_patch_feed_observations SET observed_at=now() WHERE patch_id=288",
+        )
+        .execute(&bot)
+        .await
+        .unwrap_err();
+        assert_eq!(
+            unauthorized_update
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42501")
+        );
+        let rights: Vec<bool> = sqlx::query_scalar(
+            "SELECT has_table_privilege('twitchdash', 'twitch_patch_announcement_recipients', 'SELECT') \
+             UNION ALL SELECT NOT has_table_privilege('twitchdash', 'twitch_patch_announcement_recipients', 'INSERT') \
+             UNION ALL SELECT NOT has_table_privilege('twitchlegacy', 'twitch_patch_announcements', 'SELECT')",
+        )
+        .fetch_all(&admin)
+        .await
+        .unwrap();
+        assert_eq!(rights, vec![true; 3]);
+
+        sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active=1 WHERE twitch_user_id='43'")
+            .execute(&admin)
+            .await
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "43"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "s43", "user_id": "43", "game_id": "deadlock",
+                    "game_name": "Deadlock", "started_at": "2020-01-01T00:00:00Z"}]
+            })))
+            .with_priority(1)
+            .expect(2)
+            .mount(&server)
+            .await;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release_tx, release_rx) = mpsc::channel();
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "43", "sender_id": "777", "for_source_only": true
+            })))
+            .respond_with(PausedChatResponse {
+                entered: Arc::clone(&entered),
+                release: Mutex::new(release_rx),
+            })
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let interrupted = feed(&[283, 284, 285, 286, 287, 288, 289, 290]);
+        for id in [283, 286, 287, 289, 290] {
+            distinct_source(&interrupted, id);
+        }
+        let retry_feed = feed(&[283, 284, 285, 286, 287, 288, 289, 290]);
+        for id in [283, 286, 287, 289, 290] {
+            distinct_source(&retry_feed, id);
+        }
+        let running_bot = bot.clone();
+        let running_receiver = Arc::clone(&receiver);
+        let mut interrupted_poll = tokio::spawn(async move {
+            poll_with_receiver(&interrupted, &running_bot, &running_receiver).await
+        });
+        tokio::select! {
+            _ = entered.notified() => {}
+            result = &mut interrupted_poll => panic!("poll ended before chat send: {result:?}"),
+        }
+        let (attempt_status, attempt_saved): (String, bool) = sqlx::query_as(
+            "SELECT d.status, d.attempted_at IS NOT NULL \
+             FROM twitch_patch_announcement_deliveries d \
+             JOIN twitch_patch_announcements a USING (event_id) \
+             WHERE a.article_url='https://deutsche-deadlock-community.de/patchnotes/patch-290/'",
+        )
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+        assert_eq!(
+            (attempt_status.as_str(), attempt_saved),
+            ("attempted", true)
+        );
+        interrupted_poll.abort();
+        assert!(interrupted_poll.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            poll_with_receiver(&retry_feed, &bot, &receiver)
+                .await
+                .unwrap(),
+            1
+        );
+        let (status, observation): (String, String) = sqlx::query_as(
+            "SELECT d.status, o.status FROM twitch_patch_announcement_deliveries d \
+             JOIN twitch_patch_announcements a USING (event_id) \
+             JOIN twitch_patch_feed_observations o ON o.patch_id=290 \
+             WHERE a.article_url='https://deutsche-deadlock-community.de/patchnotes/patch-290/'",
+        )
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+        assert_eq!(
+            (status.as_str(), observation.as_str()),
+            ("attempted", "processed")
+        );
+        let unavailable_article = feed(&[283, 284, 285, 286, 287, 288, 289, 290, 291]);
+        let unavailable_url = article_url(291).unwrap();
+        unavailable_article.add_response(
+            &unavailable_url,
+            StatusCode::NOT_FOUND,
+            &unavailable_url,
+            "",
+        );
+        assert!(poll_with_receiver(&unavailable_article, &bot, &receiver)
+            .await
+            .is_err());
+        let pending_without_announcement: (String, i64) = sqlx::query_as(
+            "SELECT o.status, (SELECT count(*) FROM twitch_patch_announcements \
+             WHERE article_url='https://deutsche-deadlock-community.de/patchnotes/patch-291/') \
+             FROM twitch_patch_feed_observations o WHERE o.patch_id=291",
+        )
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+        assert_eq!(pending_without_announcement, ("pending".into(), 0));
+        server.verify().await;
     }
 }

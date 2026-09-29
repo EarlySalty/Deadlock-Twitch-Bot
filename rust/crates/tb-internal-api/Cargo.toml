@@ -37,3 +37,4 @@ tb-transport-twitch = { workspace = true }
 tempfile = "3"
 tokio     = { workspace = true }
 tower     = { workspace = true, features = ["util"] }
+wiremock  = { workspace = true }

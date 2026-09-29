@@ -507,6 +507,8 @@ impl ChatApiHandle {
 /// Promo-Loop, Global-Ban-Sweeper).
 pub struct ChatRuntime {
     pub hooks: Arc<dyn EventSubHooks>,
+    patch_api: Arc<dyn ChatApi>,
+    patch_suppression: Arc<dyn tb_chat::promos::OutboundSuppressionCheck>,
     token_manager: Arc<BotTokenManager>,
     promos: Arc<PromoEngine>,
     sweeper: Arc<GlobalBanSweeper>,
@@ -997,6 +999,8 @@ pub async fn build_runtime(
             raid_greeting,
             reaction_learning,
         }),
+        patch_api: api,
+        patch_suppression: suppression,
         token_manager,
         promos,
         sweeper,
@@ -1012,6 +1016,18 @@ pub async fn build_runtime(
 }
 
 impl ChatRuntime {
+    pub fn patch_delivery_ports(
+        &self,
+    ) -> (
+        Arc<dyn ChatApi>,
+        Arc<dyn tb_chat::promos::OutboundSuppressionCheck>,
+    ) {
+        (
+            Arc::clone(&self.patch_api),
+            Arc::clone(&self.patch_suppression),
+        )
+    }
+
     /// Zentraler Bot-User-ID-Wert (P2.57): identisch mit dem `target_id`, den
     /// die inbound `channel.ban`-Telemetrie gegen den Bot prüft.
     pub fn bot_user_id(&self) -> String {
@@ -2710,6 +2726,11 @@ impl DbInviteResolver {
 /// Partner-Roster für den Global-Ban-Sweeper (global_ban_sweep.py Z. 145–197).
 struct DbPartnerRoster {
     pool: PgPool,
+}
+
+#[cfg(test)]
+pub(crate) fn patch_test_policy_roster(pool: PgPool) -> Arc<dyn PartnerRoster> {
+    Arc::new(DbPartnerRoster { pool })
 }
 
 #[async_trait::async_trait]

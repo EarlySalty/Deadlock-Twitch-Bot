@@ -1199,6 +1199,7 @@ async fn main() {
     // startet Token-Loop, Promo-Loop, Global-Ban-Sweeper und den
     // 30-min-Subscription-Reconcile.
     let mut scout_crew_guard = None;
+    let mut patch_chat_ports = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match chat_api_handle {
         Some(handle) => {
             // !clip: Broadcaster-Token-Clip-Port (Fallback: Bot-Token), nur mit
@@ -1267,9 +1268,50 @@ async fn main() {
             // dieselbe Stumm-Zählung wie der ausgehende Send-Pfad.
             telemetry =
                 telemetry.with_bot_timeout_guard(runtime.bot_user_id(), runtime.timeout_guard());
+            patch_chat_ports = Some(runtime.patch_delivery_ports());
             runtime.hooks.clone()
         }
         None => eventsub_hooks,
+    };
+    let patch_receiver = match (patch_chat_ports, helix.as_ref().clone()) {
+        (Some((chat, suppression)), Some(helix_client)) => {
+            let receiver = Arc::new(tb_internal_api::PatchReceiver::new(
+                pool.clone(),
+                helix_client,
+                chat,
+                suppression,
+            ));
+            match patch_feed::PatchFeedClient::new() {
+                Ok(client) => {
+                    let feed_pool = pool.clone();
+                    let feed_receiver = Arc::clone(&receiver);
+                    supervisor.spawn("patch_feed", async move {
+                        let mut tick = tokio::time::interval(Duration::from_secs(30));
+                        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tick.tick().await;
+                            let result =
+                                patch_feed::poll_patch_feed(&client, &feed_pool, |article| {
+                                    let receiver = Arc::clone(&feed_receiver);
+                                    async move {
+                                        patch_feed::forward_patch_article(&receiver, article).await
+                                    }
+                                })
+                                .await;
+                            if let Err(error) = result {
+                                tracing::warn!(%error, "Patchfeed-Poll fehlgeschlagen");
+                            }
+                        }
+                    });
+                }
+                Err(error) => tracing::error!(%error, "Patchfeed-Client nicht verfügbar"),
+            }
+            Some(receiver)
+        }
+        _ => {
+            tracing::warn!("Patchfeed-Empfänger nicht verfügbar: ChatAPI oder Helix fehlt");
+            None
+        }
     };
     // Event-Bus der eigenen OBS-Docks: schreibt jedes dock-taugliche Ereignis
     // nach `obs_dock_events` und meldet es per NOTIFY an das Gateway. Sitzt
@@ -2007,7 +2049,10 @@ async fn main() {
         scam_enforce,
         bulk_reauth,
         legacy_proxy,
-    );
+    )
+    .layer(axum::Extension(tb_internal_api::PatchReceiverExt(
+        patch_receiver,
+    )));
 
     tracing::info!(%runtime_role, port, "Internal-API Runtime-Härtung vor Dienststart bestanden");
 
