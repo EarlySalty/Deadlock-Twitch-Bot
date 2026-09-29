@@ -1,4 +1,4 @@
-status: aktiv · 2026-09-29
+status: erledigt · 2026-09-29
 
 # Register: Clip-Auftrag 2026-09-29 (Paket A)
 
@@ -10,4 +10,4 @@ status: aktiv · 2026-09-29
 
 | Paket | Thread-ID | Modell | Status | Worktree | Branch | letzte Meldung |
 |---|---|---|---|---|---|---|
-| A | 4a9d7d00 | gpt-6-sol | Implementierung und Sichtnachweise fertig, Gate ausstehend | /home/nathanael/.worktrees/tb-clip-social-format | feat/clip-social-format-20260929 | Rust 253/253, Dashboard-Build und Social-Media-Tests grün; 2026-09-29 |
+| A | 4a9d7d00 | gpt-6-sol | fertig, lokales Gate ALLOW | /home/nathanael/.worktrees/tb-clip-social-format | feat/clip-social-format-20260929 | Rust 253/253, Dashboard-Build und Social-Media-Tests grün; Gate ALLOW 2026-09-29 |
