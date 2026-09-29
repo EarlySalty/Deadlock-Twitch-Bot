@@ -181,6 +181,7 @@ struct PatchCache {
     latest: Option<LatestPatch>,
     refreshed_at: Option<Instant>,
     next_attempt: Option<Instant>,
+    pending_observation: Option<Observation>,
 }
 
 enum Fetch {
@@ -275,6 +276,38 @@ impl DeadlockPatches {
 
     async fn ensure_latest(&self) {
         let _refresh = self.refresh.lock().await;
+        let pending_observation = { self.cache().pending_observation.clone() };
+        if let Some(observation) = pending_observation {
+            if let Err(error) = self.ledger.record_pending(&observation).await {
+                tracing::warn!(
+                    ?error,
+                    "DeadlockPatches: Steam-Beobachtung weiterhin nicht speicherbar"
+                );
+                self.defer(FAILURE_BACKOFF);
+                return;
+            }
+            match self.ledger.settle(&observation).await {
+                Ok(Settlement::Confirmed(cooldown)) => {
+                    self.cache().pending_observation = None;
+                    if let Some(cooldown) = cooldown.filter(|c| *c > Utc::now()) {
+                        self.defer(until(cooldown));
+                        return;
+                    }
+                }
+                Ok(_) => {
+                    self.defer(FAILURE_BACKOFF);
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "DeadlockPatches: Steam-Beobachtung weiterhin unbestätigt"
+                    );
+                    self.defer(FAILURE_BACKOFF);
+                    return;
+                }
+            }
+        }
         match self.ledger.settle_pending().await {
             Ok(Settlement::Clear) => {}
             Ok(Settlement::Confirmed(cooldown)) => {
@@ -332,10 +365,13 @@ impl DeadlockPatches {
         }
         let (observation, fetched) = self.fetch_latest_patch(reservation_id).await;
         if let Err(error) = self.ledger.record_pending(&observation).await {
+            self.cache().pending_observation = Some(observation);
             tracing::warn!(
                 ?error,
                 "DeadlockPatches: Steam-Beobachtung konnte nicht aktualisiert werden"
             );
+            self.defer(FAILURE_BACKOFF);
+            return;
         }
         let settled = self.ledger.settle(&observation).await;
         match settled {
@@ -834,7 +870,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fehlende_speicherung_und_beobachtung_erholen_sich_nach_neustart() {
+    async fn fehlende_speicherung_verhindert_verfruehte_beobachtung() {
         let server = MockServer::start().await;
         let dir = tempfile::tempdir().unwrap();
         let pending = dir.path().join("pending.json");
@@ -844,7 +880,7 @@ mod tests {
             &server,
             json!({"reservation_id": 17, "http_status": 503}),
             ResponseTemplate::new(503),
-            1,
+            0,
         )
         .await;
         Mock::given(method("GET"))
@@ -882,6 +918,47 @@ mod tests {
         );
         let saved: Value = serde_json::from_slice(&std::fs::read(&pending).unwrap()).unwrap();
         assert!(saved.get("uncertain_until").is_some());
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn gescheiterte_speicherung_wiederholt_tatsaechlichen_status() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        let staging = pending.with_extension("tmp");
+        mount_reserve(&server, granted(19), 1).await;
+        mount_observe(
+            &server,
+            json!({"reservation_id": 19, "http_status": 503}),
+            observed(None),
+            1,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/news"))
+            .respond_with(move |_: &wiremock::Request| {
+                std::fs::create_dir(&staging).unwrap();
+                ResponseTemplate::new(503)
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        let patches = patches_for(&server, &pending);
+        assert_eq!(patches.get_patch_digest_fragment("meta?").await, "");
+        assert_eq!(
+            patches
+                .cache()
+                .pending_observation
+                .as_ref()
+                .unwrap()
+                .http_status,
+            Some(503)
+        );
+        std::fs::remove_dir(pending.with_extension("tmp")).unwrap();
+        assert_eq!(patches.get_patch_digest_fragment("patch?").await, "");
+        assert!(patches.cache().pending_observation.is_none());
+        assert!(!pending.exists());
         server.verify().await;
     }
 
