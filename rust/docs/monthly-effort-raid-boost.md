@@ -17,8 +17,8 @@ Datenbanktransaktion geschrieben. Ein eindeutiger Saison-Schlüssel verhindert
 Doppelvergaben auch bei konkurrierenden Bot-Instanzen. Die Ergebnis- und
 Abschlusstabellen weisen UPDATE, DELETE und TRUNCATE per Trigger zurück.
 
-Die gespeicherte Nummer 1 erhält zwei Boost-Streams, ohne zusätzliche
-Mindestpunktzahl. Eine Saison ohne aktive Partner wird ebenfalls geschlossen,
+Die gespeicherte Nummer 1 erhält bei einem positiven Punktestand zwei Boost-Streams.
+Eine Saison ohne aktive Partner oder ohne Punkte wird ebenfalls geschlossen,
 hat aber keinen Gewinner und keinen Grant.
 
 ## Stream-Lebenszyklus
@@ -86,16 +86,23 @@ Effort-Engine und kein zweites Event-Ledger an. Der gelesene Quellvertrag ist:
 ```text
 partner_effort_events(
   partner_twitch_user_id, partner_login, event_type,
-  source_id, points, occurred_at
+  id, source_id, points, occurred_at, credited_at
 )
 ```
 
 Die Effort-Engine aus Prompt 2 muss vor dem ersten gewünschten Abschluss
-diesen Vertrag bereitstellen. Fehlt die Quelltabelle, wird der Monat nicht
-voreilig eingefroren. Der Scheduler wiederholt den Versuch am ersten Tag
-alle fünf Minuten; bei einem Neustart an diesem Tag nach 00:05 holt er den
-Abschluss nach. Es gibt bewusst keinen automatischen historischen Backfill
-bei einer erstmaligen Aktivierung mitten im Monat.
+diesen Vertrag bereitstellen. Vor dem Abschluss müssen alle sieben Quellen einen gesunden, nach Monatsende
+verarbeiteten Stand belegen. Der gemeinsame Transaktions-Lock mit der Engine
+verhindert nachträgliche Vormonatsbuchungen. Maßgeblich ist `credited_at`, nicht
+der ursprüngliche Belegzeitpunkt `occurred_at`; die laufende Summe folgt
+`credited_at, id`.
+
+Der Scheduler prüft alle fünf Minuten offene Monate seit dem gespeicherten
+Programmstart. Auch ein Wiederanlauf am zweiten Tag oder später holt sie nach.
+Vor dem Programmstart werden keine historischen Saisonabschlüsse erzeugt.
+Ein verspäteter Grant beginnt erst bei seiner tatsächlichen Vergabe, niemals
+rückwirkend; er läuft von da an 30 Tage. Bereits gespeicherte Abschlüsse dürfen
+einen ausstehenden Score-Refresh unabhängig von der Quellenbereitschaft nachholen.
 
 Gewinner und Grant-Status werden für das Dashboard aus Prompt 3 persistiert.
 `twitchdash` bekommt dafür nur Leserechte. Dieser PR fügt keine öffentliche

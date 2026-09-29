@@ -889,6 +889,36 @@ async fn kategorie_am_streamstart_zaehlt_und_plan_verschiebt_verbrauch_nicht() {
     .await
     .unwrap();
     assert_eq!(remaining, 1);
+
+    // Ein gelöschtes Spiel ist ein echter Wechsel zu einer unbekannten
+    // Kategorie. Die restlichen Minuten dürfen keinen zweiten Slot verbrauchen.
+    let second = start + chrono::Duration::days(1);
+    set_live_session(&pool, 802, "winner", second, "Deadlock").await;
+    assert!(
+        store
+            .reconcile_partner("winner", "winner", second)
+            .await
+            .unwrap()
+            .stream_boost_active
+    );
+    sqlx::query("INSERT INTO twitch_channel_updates(twitch_user_id,recorded_at,game_name) VALUES('winner',$1,NULL)")
+        .bind(second + chrono::Duration::minutes(20)).execute(&pool).await.unwrap();
+    end_session(&pool, 802, "winner", second + chrono::Duration::minutes(60)).await;
+    assert!(
+        !store
+            .reconcile_partner("winner", "winner", second + chrono::Duration::minutes(60))
+            .await
+            .unwrap()
+            .consumed_stream
+    );
+    let remaining: i16 = sqlx::query_scalar(
+        "SELECT streams_remaining FROM twitch_partner_raid_boost_grants WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 1);
     pool.close().await;
 }
 

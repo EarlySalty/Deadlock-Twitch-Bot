@@ -68,7 +68,7 @@ const CHALLENGES_ME = {
   },
   next_goal: {
     missing_points: 260,
-    fastest_route: '6 weitere aktive Einladungen',
+    fastest_route: 'Noch 6 weitere aktive Einladungen',
   },
   achievements: [
     { key: 'recruiter', name: 'Recruiter', progress: 18, tiers: [{ target: 5, unlocked: true }, { target: 25, unlocked: false }, { target: 100, unlocked: false }] },

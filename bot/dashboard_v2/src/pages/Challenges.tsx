@@ -296,7 +296,7 @@ export function Challenges() {
   const nextGoalSentence =
     nextThreshold === null
       ? 'Du hast die aktuelle Maximalstufe erreicht.'
-      : `Noch ${data.next_goal.fastest_route} bis Level ${data.level.level + 1}.`;
+      : `${data.next_goal.fastest_route} bis Level ${data.level.level + 1}.`;
   const badges = achievementBadges(data.achievements);
 
   return (

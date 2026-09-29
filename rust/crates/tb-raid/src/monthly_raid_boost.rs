@@ -150,6 +150,14 @@ impl MonthlyRaidBoostStore {
         sqlx::query("SELECT pg_advisory_xact_lock(713219, 27)")
             .execute(&mut *tx)
             .await?;
+        let closed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_partner_effort_season_closures WHERE season_key=$1)")
+            .bind(&window.key).fetch_one(&mut *tx).await?;
+        if closed {
+            tx.rollback().await?;
+            return Ok(SeasonCloseOutcome::AlreadyClosed {
+                season_key: window.key,
+            });
+        }
 
         let source_exists: Option<String> =
             sqlx::query_scalar("SELECT to_regclass('partner_effort_events')::text")

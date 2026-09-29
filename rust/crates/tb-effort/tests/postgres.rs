@@ -1287,3 +1287,51 @@ async fn insert_contest_submission(pool: &PgPool, submitter: &str) {
     sqlx::query("INSERT INTO twitch_clip_contest_months(contest_month) VALUES('2026-10-01') ON CONFLICT DO NOTHING").execute(pool).await.unwrap();
     sqlx::query("INSERT INTO twitch_clip_contest_submissions(id,contest_month,twitch_clip_id,clip_url,clip_title,broadcaster_twitch_id,broadcaster_login,game_id,clip_created_at,submitter_provider,submitter_user_id,submitter_person_key,submitter_aliases,submitter_display_name,submission_slot) VALUES(1,'2026-10-01','fixture','https://clips.twitch.tv/fixture','Fixture','101','alice','509658','2026-10-20','twitch',$1,$1,ARRAY[$1],'Fixture',1)").bind(submitter).execute(pool).await.unwrap();
 }
+
+#[tokio::test]
+async fn single_connection_tick_and_concurrent_readiness_keep_working() {
+    let (admin, pool, name) = fixture().await;
+    let one = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let now = DateTime::parse_from_rfc3339("2026-10-26T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let engine = Engine::new(
+        one.clone(),
+        Challenges::default(),
+        Some(pool.clone()),
+        Some(idle_helix()),
+    )
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), engine.tick(now))
+        .await
+        .unwrap()
+        .unwrap();
+    // Eine vor dem parallelen Tick begonnene Anfrage akzeptiert dessen neueren
+    // erfolgreichen Quellenstand; die obere Zeitgrenze darf keinen 503 erzeugen.
+    engine
+        .ensure_ready(now - Duration::seconds(1))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE category_collector_status SET details='{\"disk_paused\":true}'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(engine.tick(now + Duration::seconds(1)).await.is_err());
+    assert!(engine
+        .ensure_ready(now + Duration::seconds(1))
+        .await
+        .is_err());
+    one.close().await;
+    pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    admin.close().await;
+}
