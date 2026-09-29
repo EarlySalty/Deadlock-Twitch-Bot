@@ -622,6 +622,7 @@ mod tests {
     #[test]
     fn shape_gatet_discord_felder() {
         let with_discord = TopRow {
+            twitch_user_id: Some("111".into()),
             streamer: "nani".into(),
             avg_viewers: Some(100.0),
             max_viewers: Some(200),
@@ -660,6 +661,7 @@ mod tests {
 
     fn clone_row(r: &TopRow) -> TopRow {
         TopRow {
+            twitch_user_id: r.twitch_user_id.clone(),
             streamer: r.streamer.clone(),
             avg_viewers: r.avg_viewers,
             max_viewers: r.max_viewers,

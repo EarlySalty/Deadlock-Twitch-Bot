@@ -1,6 +1,5 @@
-//! Shared PostgreSQL test configuration. Local runs use a normal JSON file;
-//! existing CI variables remain a compatibility fallback.
-#![allow(dead_code)]
+// Shared PostgreSQL test configuration. Local runs use a normal JSON file;
+// existing CI variables remain a compatibility fallback.
 
 fn local_config() -> Option<serde_json::Value> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -14,6 +13,7 @@ fn local_config() -> Option<serde_json::Value> {
     }
 }
 
+#[allow(dead_code)]
 pub fn database_url() -> Option<String> {
     if let Some(config) = local_config() {
         return Some(
@@ -28,6 +28,7 @@ pub fn database_url() -> Option<String> {
         .ok()
 }
 
+#[allow(dead_code)]
 pub fn required() -> bool {
     local_config()
         .map(|config| config["require_database"].as_bool().unwrap_or(true))

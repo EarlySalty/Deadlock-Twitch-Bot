@@ -19,8 +19,11 @@ use sqlx::Row;
 use tb_config::DbConfig;
 use tb_db::{run_transaction, DbError, IsolationLevel, RetryPolicy};
 
+#[path = "../../../test-support/database.rs"]
+mod test_database;
+
 fn test_dsn() -> Option<String> {
-    std::env::var("TB_TEST_DATABASE_URL").ok()
+    test_database::database_url()
 }
 
 /// Schnelle Politik fürs Testen: 3 Versuche, vernachlässigbarer Backoff.
@@ -44,36 +47,44 @@ async fn connect(dsn: &str) -> sqlx::PgPool {
 
 /// Legt eine eindeutig benannte Zähltabelle an und gibt ihren Namen zurück.
 async fn fresh_counter(pool: &sqlx::PgPool, suffix: &str) -> String {
+    // Identifiers come only from test-owned ASCII suffixes, never input data.
+    assert!(suffix
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || c == b'_'));
     let table = format!("retry_test_{suffix}");
-    sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
         .execute(pool)
         .await
         .expect("drop");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TABLE {table} (id integer PRIMARY KEY, attempts integer NOT NULL DEFAULT 0)"
-    ))
+    )))
     .execute(pool)
     .await
     .expect("create");
-    sqlx::query(&format!("INSERT INTO {table} (id, attempts) VALUES (1, 0)"))
-        .execute(pool)
-        .await
-        .expect("seed");
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO {table} (id, attempts) VALUES (1, 0)"
+    )))
+    .execute(pool)
+    .await
+    .expect("seed");
     table
 }
 
 async fn drop_table(pool: &sqlx::PgPool, table: &str) {
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+    let _ = sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
         .execute(pool)
         .await;
 }
 
 async fn attempts(pool: &sqlx::PgPool, table: &str) -> i32 {
-    sqlx::query(&format!("SELECT attempts FROM {table} WHERE id = 1"))
-        .fetch_one(pool)
-        .await
-        .expect("read attempts")
-        .get("attempts")
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT attempts FROM {table} WHERE id = 1"
+    )))
+    .fetch_one(pool)
+    .await
+    .expect("read attempts")
+    .get("attempts")
 }
 
 #[tokio::test]
@@ -86,24 +97,25 @@ async fn commits_successful_transaction() {
     let table = fresh_counter(&pool, "commit").await;
     let t = table.clone();
 
-    let written: i32 = run_transaction(
-        &pool,
-        IsolationLevel::ReadCommitted,
-        fast_policy(),
-        |tx| {
-            let t = t.clone();
-            Box::pin(async move {
-                sqlx::query(&format!("UPDATE {t} SET attempts = 42 WHERE id = 1"))
-                    .execute(&mut **tx)
-                    .await?;
-                Ok::<_, DbError>(42)
-            })
-        },
-    )
+    let written: i32 = run_transaction(&pool, IsolationLevel::ReadCommitted, fast_policy(), |tx| {
+        let t = t.clone();
+        Box::pin(async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {t} SET attempts = 42 WHERE id = 1"
+            )))
+            .execute(&mut **tx)
+            .await?;
+            Ok::<_, DbError>(42)
+        })
+    })
     .await
     .expect("transaction commits");
     assert_eq!(written, 42);
-    assert_eq!(attempts(&pool, &table).await, 42, "committeter Wert persistiert");
+    assert_eq!(
+        attempts(&pool, &table).await,
+        42,
+        "committeter Wert persistiert"
+    );
 
     drop_table(&pool, &table).await;
 }
@@ -125,36 +137,33 @@ async fn retries_serialization_failure_until_success() {
     // außerhalb der zurückgerollten Transaktion), raised aber bei den ersten zwei
     // Versuchen einen echten 40001. Erst der dritte Versuch committet sauber.
     let pool_for_op = counter;
-    let result = run_transaction(
-        &pool,
-        IsolationLevel::ReadCommitted,
-        fast_policy(),
-        |tx| {
-            let t = t.clone();
-            let counter_pool = pool_for_op.clone();
-            Box::pin(async move {
-                // Zähler außerhalb der TX hochzählen (überlebt den Rollback).
-                let attempt: i32 = sqlx::query(&format!(
-                    "UPDATE {t} SET attempts = attempts + 1 WHERE id = 1 RETURNING attempts"
-                ))
-                .fetch_one(&counter_pool)
-                .await?
-                .get("attempts");
-                if attempt < 3 {
-                    sqlx::query(
-                        "DO $$ BEGIN RAISE EXCEPTION 'forced' USING ERRCODE = '40001'; END $$",
-                    )
+    let result = run_transaction(&pool, IsolationLevel::ReadCommitted, fast_policy(), |tx| {
+        let t = t.clone();
+        let counter_pool = pool_for_op.clone();
+        Box::pin(async move {
+            // Zähler außerhalb der TX hochzählen (überlebt den Rollback).
+            let attempt: i32 = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {t} SET attempts = attempts + 1 WHERE id = 1 RETURNING attempts"
+            )))
+            .fetch_one(&counter_pool)
+            .await?
+            .get("attempts");
+            if attempt < 3 {
+                sqlx::query("DO $$ BEGIN RAISE EXCEPTION 'forced' USING ERRCODE = '40001'; END $$")
                     .execute(&mut **tx)
                     .await?;
-                }
-                Ok::<_, DbError>(attempt)
-            })
-        },
-    )
+            }
+            Ok::<_, DbError>(attempt)
+        })
+    })
     .await
     .expect("retries until commit");
     assert_eq!(result, 3, "muss genau im dritten Versuch erfolgreich sein");
-    assert_eq!(attempts(&pool, &table).await, 3, "genau drei Versuche gezählt");
+    assert_eq!(
+        attempts(&pool, &table).await,
+        3,
+        "genau drei Versuche gezählt"
+    );
 
     drop_table(&pool, &table).await;
 }
@@ -171,29 +180,27 @@ async fn non_retryable_error_propagates_immediately() {
     let t = table.clone();
 
     let pool_for_op = counter;
-    let err = run_transaction(
-        &pool,
-        IsolationLevel::ReadCommitted,
-        fast_policy(),
-        |tx| {
-            let t = t.clone();
-            let counter_pool = pool_for_op.clone();
-            Box::pin(async move {
-                sqlx::query(&format!(
-                    "UPDATE {t} SET attempts = attempts + 1 WHERE id = 1"
-                ))
-                .execute(&counter_pool)
+    let err = run_transaction(&pool, IsolationLevel::ReadCommitted, fast_policy(), |tx| {
+        let t = t.clone();
+        let counter_pool = pool_for_op.clone();
+        Box::pin(async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {t} SET attempts = attempts + 1 WHERE id = 1"
+            )))
+            .execute(&counter_pool)
+            .await?;
+            // 23505 = unique_violation → NICHT retrybar.
+            sqlx::query("DO $$ BEGIN RAISE EXCEPTION 'nope' USING ERRCODE = '23505'; END $$")
+                .execute(&mut **tx)
                 .await?;
-                // 23505 = unique_violation → NICHT retrybar.
-                sqlx::query("DO $$ BEGIN RAISE EXCEPTION 'nope' USING ERRCODE = '23505'; END $$")
-                    .execute(&mut **tx)
-                    .await?;
-                Ok::<_, DbError>(())
-            })
-        },
-    )
+            Ok::<_, DbError>(())
+        })
+    })
     .await;
-    assert!(matches!(err, Err(DbError::Sqlx(_))), "Fehler muss propagieren");
+    assert!(
+        matches!(err, Err(DbError::Sqlx(_))),
+        "Fehler muss propagieren"
+    );
     assert_eq!(
         attempts(&pool, &table).await,
         1,
@@ -215,33 +222,32 @@ async fn exhausted_retries_propagate_last_error() {
     let t = table.clone();
 
     let pool_for_op = counter;
-    let err = run_transaction(
-        &pool,
-        IsolationLevel::ReadCommitted,
-        fast_policy(),
-        |tx| {
-            let t = t.clone();
-            let counter_pool = pool_for_op.clone();
-            Box::pin(async move {
-                sqlx::query(&format!(
-                    "UPDATE {t} SET attempts = attempts + 1 WHERE id = 1"
-                ))
-                .execute(&counter_pool)
+    let err = run_transaction(&pool, IsolationLevel::ReadCommitted, fast_policy(), |tx| {
+        let t = t.clone();
+        let counter_pool = pool_for_op.clone();
+        Box::pin(async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {t} SET attempts = attempts + 1 WHERE id = 1"
+            )))
+            .execute(&counter_pool)
+            .await?;
+            // Immer 40001 → erschöpft alle Versuche.
+            sqlx::query("DO $$ BEGIN RAISE EXCEPTION 'always' USING ERRCODE = '40001'; END $$")
+                .execute(&mut **tx)
                 .await?;
-                // Immer 40001 → erschöpft alle Versuche.
-                sqlx::query("DO $$ BEGIN RAISE EXCEPTION 'always' USING ERRCODE = '40001'; END $$")
-                    .execute(&mut **tx)
-                    .await?;
-                Ok::<_, DbError>(())
-            })
-        },
-    )
+            Ok::<_, DbError>(())
+        })
+    })
     .await;
     assert!(
         matches!(err, Err(DbError::Sqlx(_))),
         "letzter Fehler muss propagieren"
     );
-    assert_eq!(attempts(&pool, &table).await, 3, "genau max_attempts Versuche");
+    assert_eq!(
+        attempts(&pool, &table).await,
+        3,
+        "genau max_attempts Versuche"
+    );
 
     drop_table(&pool, &table).await;
 }

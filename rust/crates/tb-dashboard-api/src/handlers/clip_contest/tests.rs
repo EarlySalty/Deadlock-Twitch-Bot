@@ -92,7 +92,7 @@ async fn fixture() -> Option<(PgPool, PgPool, String)> {
         .filter(char::is_ascii_alphanumeric)
         .collect();
     let schema = format!("clip_contest_{}", suffix.to_ascii_lowercase());
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -115,7 +115,10 @@ async fn fixture() -> Option<(PgPool, PgPool, String)> {
         .execute(&pool).await.unwrap();
     let migration = include_str!("../../../../../migrations/20260927023000_clip_contest.sql")
         .replace("public.", &format!("{schema}."));
-    sqlx::raw_sql(&migration).execute(&pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(&migration))
+        .execute(&pool)
+        .await
+        .unwrap();
     Some((pool, admin, schema))
 }
 
@@ -518,7 +521,7 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
         .unwrap()
         .is_none());
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
@@ -547,7 +550,7 @@ async fn restart_finalizes_fully_missed_empty_months() {
     .unwrap();
     assert_eq!(closed, 3);
     pool.close().await;
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
         .await
         .unwrap();
