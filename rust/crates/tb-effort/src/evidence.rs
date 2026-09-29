@@ -54,7 +54,7 @@ impl Engine {
         let week = berlin_week_start(now);
         let baseline_since = midnight(week - Duration::weeks(4));
         let since: DateTime<Utc> = sqlx::query_scalar(
-            "SELECT LEAST($1,started_at) FROM partner_effort_program WHERE singleton",
+            "SELECT GREATEST($1,started_at) FROM partner_effort_program WHERE singleton",
         )
         .bind(baseline_since)
         .fetch_one(&self.pool)
