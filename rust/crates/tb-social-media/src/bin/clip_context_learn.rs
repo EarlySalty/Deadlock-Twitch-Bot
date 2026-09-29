@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+
 use sqlx::postgres::PgPoolOptions;
 use tb_social_media::clip::helix::HelixClipSource;
 use tb_social_media::clip_context_harvest::{
@@ -58,23 +60,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::var("TWITCH_CLIENT_SECRET")?,
         ))?;
         let source = HelixClipSource::new(Arc::new(client));
-        let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT clip_id FROM twitch_clips_social_media WHERE (vod_id IS NULL OR vod_offset_s IS NULL) AND source_kind='twitch' ORDER BY created_at DESC LIMIT $1",
-        )
-        .bind(limit)
-        .fetch_all(&write_pool)
-        .await?;
+        let mut cursor: Option<(DateTime<Utc>, String)> = None;
         let mut updated = 0;
-        for id in ids {
-            match source.fetch_clip_by_id(&id, "").await {
-                Ok(Some(clip)) if clip.vod_id.is_some() && clip.vod_offset_s.is_some() => {
-                    sqlx::query("UPDATE twitch_clips_social_media SET vod_id=$2,vod_offset_s=$3 WHERE clip_id=$1 AND (vod_id IS NULL OR vod_offset_s IS NULL)")
-                        .bind(&id).bind(clip.vod_id).bind(clip.vod_offset_s)
-                        .execute(&write_pool).await?;
-                    updated += 1;
+        loop {
+            let ids: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+                "SELECT clip_id,created_at FROM twitch_clips_social_media
+                  WHERE (vod_id IS NULL OR vod_offset_s IS NULL) AND source_kind='twitch'
+                    AND ($2::timestamptz IS NULL OR (created_at,clip_id)<($2::timestamptz,$3::text))
+                  ORDER BY created_at DESC,clip_id DESC LIMIT $1",
+            )
+            .bind(limit)
+            .bind(cursor.as_ref().map(|(at, _)| at))
+            .bind(cursor.as_ref().map(|(_, id)| id.as_str()))
+            .fetch_all(&write_pool)
+            .await?;
+            if ids.is_empty() {
+                break;
+            }
+            cursor = ids.last().map(|(id, at)| (*at, id.clone()));
+            for (id, _) in ids {
+                match source.fetch_clip_by_id(&id, "").await {
+                    Ok(Some(clip)) if clip.vod_id.is_some() && clip.vod_offset_s.is_some() => {
+                        sqlx::query("UPDATE twitch_clips_social_media SET vod_id=$2,vod_offset_s=$3,duration_seconds=COALESCE(duration_seconds,$4) WHERE clip_id=$1 AND (vod_id IS NULL OR vod_offset_s IS NULL)")
+                            .bind(&id).bind(clip.vod_id).bind(clip.vod_offset_s).bind(clip.duration_seconds)
+                            .execute(&write_pool).await?;
+                        updated += 1;
+                    }
+                    Ok(_) => println!("backfill_unavailable={id}"),
+                    Err(error) => eprintln!("backfill_error={id}: {error}"),
                 }
-                Ok(_) => println!("backfill_unavailable={id}"),
-                Err(error) => eprintln!("backfill_error={id}: {error}"),
             }
         }
         println!("backfill_updated={updated}");
@@ -82,19 +96,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !learn_only {
-        let clips = load_clips(&read_pool, limit, clip_id.as_deref()).await?;
+        let clips = load_clips(&read_pool, &write_pool, limit, clip_id.as_deref()).await?;
         let stt = available_stt().await;
         println!("candidates={} stt_available={stt}", clips.len());
         for clip in clips {
-            let previous: Option<(String, String)> = sqlx::query_as(
-                "SELECT stt_status,visual_status FROM twitch_clip_context_runs WHERE clip_id=$1",
+            let previous: Option<(String, String, i32, String)> = sqlx::query_as(
+                "SELECT stt_status,visual_status,moment_offset_s,vod_id FROM twitch_clip_context_runs WHERE clip_id=$1",
             )
             .bind(&clip.clip_id)
             .fetch_optional(&write_pool)
             .await?;
             if !force
-                && previous.is_some_and(|(speech, visual)| {
-                    visual == "sampled" && (!stt || speech == "timestamped")
+                && previous.is_some_and(|(speech, visual, moment, vod)| {
+                    visual == "sampled"
+                        && moment == clip.moment_offset_s
+                        && vod == clip.vod_id
+                        && (!stt || speech == "timestamped")
                 })
             {
                 println!("clip={} status=already_stored", clip.clip_id);

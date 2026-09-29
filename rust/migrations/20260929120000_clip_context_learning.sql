@@ -5,8 +5,10 @@ CREATE TABLE IF NOT EXISTS public.twitch_clip_command_events (
     requested_at timestamp with time zone NOT NULL,
     vod_id text,
     vod_offset_s integer,
+    moment_offset_s integer,
     resolution_status text NOT NULL,
-    CHECK ((vod_id IS NULL) = (vod_offset_s IS NULL))
+    CHECK ((vod_id IS NULL) = (vod_offset_s IS NULL)),
+    CHECK (moment_offset_s IS NULL OR (vod_offset_s IS NOT NULL AND moment_offset_s >= vod_offset_s))
 );
 
 CREATE TABLE IF NOT EXISTS public.twitch_clip_context_runs (

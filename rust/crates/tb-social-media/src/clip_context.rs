@@ -62,6 +62,17 @@ pub struct CutProposal {
     pub end_s: i32,
 }
 
+pub fn clip_moment_from_start(vod_offset_s: i32, duration_s: f64) -> Option<i32> {
+    if vod_offset_s < 0 || !duration_s.is_finite() || duration_s < 0.5 {
+        return None;
+    }
+    let duration = duration_s.round();
+    if duration > i32::MAX as f64 {
+        return None;
+    }
+    vod_offset_s.checked_add(duration as i32)
+}
+
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -284,6 +295,14 @@ pub fn learn_template(timelines: &[(i32, Vec<ContextSecond>)]) -> Option<CutTemp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vod_offset_is_clip_start_not_command_moment() {
+        assert_eq!(clip_moment_from_start(3650, 30.0), Some(3680));
+        assert_eq!(clip_moment_from_start(0, 18.4), Some(18));
+        assert_eq!(clip_moment_from_start(3650, f64::NAN), None);
+        assert_eq!(clip_moment_from_start(i32::MAX, 30.0), None);
+    }
 
     #[test]
     fn cuts_before_build_up_and_after_reaction() {

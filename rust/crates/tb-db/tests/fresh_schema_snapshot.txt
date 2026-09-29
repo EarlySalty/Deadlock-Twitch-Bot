@@ -789,6 +789,7 @@ twitch_chatter_rollup|streamer_login|text|NO|
 twitch_chatter_rollup|total_messages|integer|YES|0
 twitch_chatter_rollup|total_sessions|integer|YES|0
 twitch_clip_command_events|clip_id|text|NO|
+twitch_clip_command_events|moment_offset_s|integer|YES|
 twitch_clip_command_events|requested_at|timestamp with time zone|NO|
 twitch_clip_command_events|resolution_status|text|NO|
 twitch_clip_command_events|streamer_login|text|NO|
