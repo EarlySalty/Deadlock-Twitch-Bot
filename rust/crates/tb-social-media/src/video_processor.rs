@@ -326,6 +326,8 @@ impl VideoProcessor {
             .ok_or_else(|| VideoProcessorError::OutputMissing(output_path.to_string()))?;
         tokio::fs::create_dir_all(parent).await?;
         let assets = output.with_extension(format!("assets-{}", tb_crypto::random_hex_token(8)));
+        let render_temp =
+            output.with_extension(format!("tmp-{}.mp4", tb_crypto::random_hex_token(8)));
         tokio::fs::create_dir(&assets).await?;
         let result = async {
             tokio::fs::write(assets.join("ddc-logo.png"), LOGO).await?;
@@ -347,13 +349,18 @@ impl VideoProcessor {
                     "-map", "[final]", "-map", "0:a?", "-t"])
                 .arg(max_duration.max(1).to_string());
             encode_options(&mut cmd);
-            let result = cmd.arg("-y").arg(&output).output().await?;
+            let result = cmd.arg("-y").arg(&render_temp).output().await?;
             if !result.status.success() {
                 return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&result.stderr).trim().to_string()));
             }
-            ensure_output(output.to_str().unwrap_or(output_path))
+            ensure_output(&render_temp.to_string_lossy())?;
+            tokio::fs::rename(&render_temp, &output).await?;
+            Ok(())
         }
         .await;
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&render_temp).await;
+        }
         if let Err(error) = tokio::fs::remove_dir_all(&assets).await {
             tracing::warn!(%error, path = %assets.display(), "Render-Assets konnten nicht gelöscht werden");
         }
@@ -698,6 +705,50 @@ mod tests {
         };
         layout.cam_position = DEFAULT_PIP_TILE;
         layout
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fehlgeschlagener_render_ueberschreibt_keine_fertige_datei() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("tb-render-{}", tb_crypto::random_hex_token(8)));
+        tokio::fs::create_dir(&dir).await.unwrap();
+        let input = dir.join("input.mp4");
+        let output = dir.join("branded.mp4");
+        let ffmpeg = dir.join("ffmpeg-fail");
+        tokio::fs::write(&input, b"source").await.unwrap();
+        tokio::fs::write(&output, b"complete").await.unwrap();
+        tokio::fs::write(
+            &ffmpeg,
+            b"#!/bin/sh\nfor last; do :; done\nprintf partial > \"$last\"\nexit 1\n",
+        )
+        .await
+        .unwrap();
+        std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
+        let result = processor
+            .render_branded(
+                &input.to_string_lossy(),
+                &output.to_string_lossy(),
+                1,
+                None,
+                "",
+            )
+            .await;
+        assert!(matches!(result, Err(VideoProcessorError::Ffmpeg(_))));
+        assert_eq!(tokio::fs::read(&output).await.unwrap(), b"complete");
+        assert_eq!(
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+                .count(),
+            0
+        );
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
