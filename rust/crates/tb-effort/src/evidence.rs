@@ -63,6 +63,9 @@ impl Engine {
             "WITH settings AS (
                 SELECT poll_seconds FROM category_collector_config
                 WHERE singleton AND enabled AND preserve_raw_data
+                    AND EXISTS(SELECT 1 FROM category_collector_status cs WHERE cs.singleton
+                        AND cs.heartbeat_at >= $2 - interval '90 seconds'
+                        AND COALESCE((cs.details->>'disk_paused')::boolean, TRUE) = FALSE)
             ), runs AS (
                 SELECT r.snapshot_at,r.poll_seconds,
                     lag(r.snapshot_at) OVER (ORDER BY r.snapshot_at) AS previous_at,
@@ -101,7 +104,12 @@ impl Engine {
 
     pub(crate) async fn refresh_stream_evidence(&self, now: DateTime<Utc>) -> Result<()> {
         let week = berlin_week_start(now);
-        let since = midnight(week - Duration::weeks(5));
+        let oldest: Option<NaiveDate> = sqlx::query_scalar("SELECT MIN(q.week_start) FROM partner_effort_weekly_quests q WHERE NOT EXISTS(SELECT 1 FROM partner_effort_events e WHERE e.partner_twitch_user_id=q.partner_twitch_user_id AND e.event_type='quest_done' AND e.source_id='quest:' || q.partner_twitch_user_id || ':' || q.week_start::text || ':all_three')")
+            .fetch_one(&self.pool).await?;
+        let first_week = oldest.map_or(week - Duration::weeks(5), |old| {
+            old.min(week - Duration::weeks(5))
+        });
+        let since = midnight(first_week);
         let ids: Vec<_> = self
             .active_partners()
             .await?
@@ -112,7 +120,7 @@ impl Engine {
             .bind(&ids).bind(since).bind(now).fetch_all(&self.pool).await?;
         type Key = (String, String, NaiveDate);
         let previous: Vec<(String, String, NaiveDate, DateTime<Utc>)> = sqlx::query_as("SELECT partner_twitch_user_id,stream_id,week_start,observed_through FROM partner_effort_stream_weeks WHERE partner_twitch_user_id=ANY($1) AND week_start >= $2")
-            .bind(&ids).bind(week - Duration::weeks(5)).fetch_all(&self.pool).await?;
+            .bind(&ids).bind(first_week).fetch_all(&self.pool).await?;
         let observed: BTreeMap<Key, DateTime<Utc>> = previous
             .into_iter()
             .map(|(id, stream, week, through)| ((id, stream, week), through))

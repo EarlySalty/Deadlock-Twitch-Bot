@@ -15,23 +15,22 @@ const API = read('api/challenges.ts');
 test('Challenges nutzt die gemeinsame Dashboard Route und Sidebar', () => {
   assert.match(APP, /path === '\/twitch\/challenges'/);
   assert.match(APP, /<DashboardShell activeRoute="challenges"><Challenges \/><\/DashboardShell>/);
-  assert.match(SIDEBAR, /href: '\/twitch\/challenges', label: 'Challenges'/);
+  assert.match(SIDEBAR, /href: '\/twitch\/challenges', label: 'Rangliste & Erfolge'/);
 });
 
 test('Sidebar zeigt Challenges nur für aktive Partner und Admins', () => {
   assert.match(
     SIDEBAR,
-    /authStatus\?\.authenticated && \(authStatus\.isAdmin \|\| authStatus\.partnerStatus === 'active'\)/,
+    /authStatus\?\.authenticated && authStatus\.twitchUserId && \(authStatus\.isAdmin \|\| authStatus\.partnerStatus === 'active'\)/,
   );
   assert.match(SIDEBAR, /canSeeChallenges/);
 });
 
-test('neue Partner sehen drei Startquests', () => {
-  for (const key of ['active_discord_invite', 'stream_together', 'community_match']) {
-    assert.match(PAGE, new RegExp(`key: '${key}'`));
-  }
-  assert.match(PAGE, /if \(current\.length >= 3\) return current\.slice\(0, 3\);/);
-  assert.match(PAGE, /STARTER_QUESTS\.filter\(quest => !keys\.has\(quest\.key\)\)/);
+test('Wochenaufgaben kommen vollständig aus der Engine ohne erfundene Ergänzungen', () => {
+  assert.doesNotMatch(PAGE, /STARTER_QUESTS/);
+  assert.match(PAGE, /const quests = me.data\?\.quests \?\? \[\];/);
+  assert.match(PAGE, /me.data\?\.next_reset_at/);
+  assert.match(PAGE, /freeze_used_this_month/);
 });
 
 test('Challenges zeigt Ziel, Wochenfortschritt, Erfolge und Werber', () => {

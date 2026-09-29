@@ -1787,6 +1787,7 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
     use handlers::{obsolete_routes, spa};
 
     Router::new()
+        .route("/twitch/challenges", get(spa::main_domain_spa_shell_gated_handler))
         .route(
             "/twitch/dashboard",
             get(spa::main_domain_spa_shell_gated_handler),

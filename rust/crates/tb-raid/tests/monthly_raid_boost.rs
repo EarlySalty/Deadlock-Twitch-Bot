@@ -1,3 +1,5 @@
+#[path = "../../../test-support/database.rs"]
+mod test_database;
 use std::str::FromStr;
 
 use chrono::{TimeZone, Utc};
@@ -6,12 +8,13 @@ use sqlx::PgPool;
 use tb_raid::{MonthlyRaidBoostStore, SeasonCloseOutcome};
 
 async fn pool_or_skip(schema: &str) -> Option<PgPool> {
-    let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
-        Ok(value) => value,
-        Err(_) => {
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return None;
-        }
+    let Some(dsn) = test_database::database_url() else {
+        assert!(
+            !test_database::required(),
+            "isolierte Testdatenbank muss konfiguriert sein"
+        );
+        eprintln!("SKIP: keine isolierte Testdatenbank konfiguriert");
+        return None;
     };
 
     let admin = PgPoolOptions::new()
@@ -19,11 +22,13 @@ async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         .connect(&dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -65,18 +70,25 @@ async fn create_schema(pool: &PgPool) {
             event_type TEXT NOT NULL,
             source_id TEXT NOT NULL,
             points INTEGER NOT NULL,
-            occurred_at TIMESTAMPTZ NOT NULL
+            occurred_at TIMESTAMPTZ NOT NULL,
+            credited_at TIMESTAMPTZ GENERATED ALWAYS AS (occurred_at) STORED
         )",
     )
     .execute(pool)
     .await
     .unwrap();
 
+    sqlx::raw_sql("CREATE TABLE partner_effort_program(singleton boolean PRIMARY KEY,started_at timestamptz); INSERT INTO partner_effort_program VALUES(TRUE,'2026-08-01'); CREATE TABLE partner_effort_source_state(source text PRIMARY KEY,healthy boolean,successful_at timestamptz); INSERT INTO partner_effort_source_state SELECT source,TRUE,'2027-01-01'::timestamptz FROM unnest(ARRAY['invites','referrals','clips','shared_chat','steam_party','engine','category_collection']) source;")
+        .execute(pool).await.unwrap();
+
     // Execute the shipped migration in this test's isolated search_path.
     let migration =
         include_str!("../../../migrations/20260926230500_monthly_effort_raid_boost.sql")
             .replace("public.", "");
-    sqlx::raw_sql(&migration).execute(pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(migration))
+        .execute(pool)
+        .await
+        .unwrap();
 
     sqlx::query(
         "CREATE TABLE twitch_live_state (
@@ -145,6 +157,60 @@ async fn insert_grant(
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn catchup_waits_for_sources_and_uses_credit_month_without_backdating_grants() {
+    let Some(pool) = pool_or_skip("monthly_effort_catchup").await else {
+        return;
+    };
+    create_schema(&pool).await;
+    sqlx::raw_sql("UPDATE partner_effort_program SET started_at='2026-09-20'; INSERT INTO twitch_partners(twitch_user_id,twitch_login) VALUES('101','alice'); ALTER TABLE partner_effort_events ALTER COLUMN credited_at DROP EXPRESSION; INSERT INTO partner_effort_events(partner_twitch_user_id,partner_login,event_type,source_id,points,occurred_at,credited_at) VALUES('101','alice','qualified_invite','late',10,'2026-09-30T21:59:00Z','2026-09-30T22:01:00Z'); UPDATE partner_effort_source_state SET healthy=FALSE WHERE source='invites';")
+        .execute(&pool).await.unwrap();
+    let now = Utc
+        .with_ymd_and_hms(2026, 11, 2, 12, 0, 0)
+        .single()
+        .unwrap();
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    let cutoffs = store.due_season_cutoffs(now).await.unwrap();
+    assert_eq!(cutoffs.len(), 2);
+    assert!(matches!(
+        store.close_season_ending_at(cutoffs[0], now).await.unwrap(),
+        SeasonCloseOutcome::SourceUnavailable { .. }
+    ));
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_effort_season_closures")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query("UPDATE partner_effort_source_state SET healthy=TRUE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.close_season_ending_at(cutoffs[0], now).await.unwrap(),
+        SeasonCloseOutcome::Closed { winner: None, .. }
+    ));
+    assert!(
+        matches!(store.close_season_ending_at(cutoffs[1],now).await.unwrap(), SeasonCloseOutcome::Closed { winner: Some(ref winner), .. } if winner.points==10)
+    );
+    let grant: (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
+        sqlx::query_as("SELECT granted_at,expires_at FROM twitch_partner_raid_boost_grants")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(grant, (now, now + chrono::Duration::days(30)));
+    assert!(matches!(
+        store.close_season_ending_at(cutoffs[1], now).await.unwrap(),
+        SeasonCloseOutcome::AlreadyClosed { .. }
+    ));
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    pool.close().await;
 }
 
 async fn set_live_session(
@@ -464,7 +530,7 @@ async fn kurzer_stream_verbraucht_nicht_und_abgelaufener_grant_startet_nicht() {
 }
 
 #[tokio::test]
-async fn rang_eins_bekommt_den_grant_auch_ohne_zusaetzliche_mindestpunktzahl() {
+async fn monat_ohne_punkte_vergibt_keinen_grant() {
     let Some(pool) = pool_or_skip("monthly_raid_boost_zero_season").await else {
         return;
     };
@@ -491,15 +557,15 @@ async fn rang_eins_bekommt_den_grant_auch_ohne_zusaetzliche_mindestpunktzahl() {
         outcome,
         SeasonCloseOutcome::Closed {
             partners: 2,
-            winner: Some(ref winner),
+            winner: None,
             ..
-        } if winner.twitch_user_id == "alpha" && winner.points == 0
+        }
     ));
     let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partner_raid_boost_grants")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(grants, 1);
+    assert_eq!(grants, 0);
 
     pool.close().await;
 }

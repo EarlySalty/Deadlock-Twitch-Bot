@@ -11,11 +11,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
-    ConnectOptions, PgPool,
-};
-use std::{str::FromStr, sync::Arc, time::Duration};
+use sqlx::{postgres::PgPoolOptions, ConnectOptions, Connection, PgConnection, PgPool};
+use std::{sync::Arc, time::Duration};
 use tb_config::challenges::Challenges;
 use tb_transport_twitch::HelixClient;
 
@@ -104,12 +101,15 @@ impl Engine {
         })
     }
 
-    pub fn readonly_central(dsn: Option<String>) -> Result<Option<PgPool>> {
-        let Some(dsn) = dsn.filter(|s| !s.trim().is_empty()) else {
-            return Ok(None);
-        };
-        let options = PgConnectOptions::from_str(&dsn)
-            .map_err(|_| Error::Config)?
+    pub fn readonly_central_from_pool(pool: &PgPool, database: &str) -> Result<Option<PgPool>> {
+        if database.trim().is_empty() {
+            return Err(Error::Config);
+        }
+        let options = pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .database(database)
             .application_name("twitch-partner-effort-readonly")
             .options([
                 ("default_transaction_read_only", "on"),
@@ -139,7 +139,10 @@ impl Engine {
         if !self.cfg.enabled {
             return Ok(());
         }
-        let mut lock = self.pool.begin().await?;
+        // Der Tick benötigt den Pool für seine Quelltransaktionen. Der globale
+        // Abschluss-Lock darf deshalb auch bei pool_max=1 keinen Slot belegen.
+        let mut lock_connection = PgConnection::connect_with(&self.pool.connect_options()).await?;
+        let mut lock = lock_connection.begin().await?;
         let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(713219, 27)")
             .fetch_one(&mut *lock)
             .await?;
@@ -157,10 +160,10 @@ impl Engine {
         if !self.cfg.enabled {
             return Err(Error::Source("disabled"));
         }
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_source_state WHERE source=ANY($1) AND healthy AND successful_at >= $2 AND successful_at <= $3")
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_source_state WHERE source=ANY($1) AND healthy AND successful_at >= $2")
             .bind(vec!["invites","referrals","clips","shared_chat","steam_party","engine","category_collection"])
             .bind(now-chrono::Duration::seconds(self.cfg.poll_seconds as i64*3+self.cfg.source_timeout_seconds as i64*5))
-            .bind(now).fetch_one(&self.pool).await?;
+            .fetch_one(&self.pool).await?;
         if count != 7 {
             return Err(Error::Source("not_current"));
         }

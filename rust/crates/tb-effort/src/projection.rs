@@ -198,23 +198,30 @@ impl Engine {
             plural: many.into(),
             quest_reward: reward(key),
         };
-        let mut routes = vec![
-            route(
+        let partner = self.partner(id).await?;
+        let mut routes = vec![route(
+            p.streamer_referral,
+            i64::MAX,
+            "geworbener Partner",
+            "geworbene Partner",
+            "",
+        )];
+        if self
+            .invite_available(&partner, berlin_week_start(now))
+            .await?
+        {
+            routes.push(route(
                 p.qualified_invite,
-                i64::MAX,
+                1,
                 "aktive Einladung",
                 "aktive Einladungen",
                 "active_discord_invite",
-            ),
-            route(
-                p.streamer_referral,
-                i64::MAX,
-                "geworbener Partner",
-                "geworbene Partner",
-                "",
-            ),
-        ];
-        if self.helix.is_some() && self.active_partners().await?.len() > 1 {
+            ));
+        }
+        if (end - now).num_minutes() >= 30
+            && self.helix.is_some()
+            && self.active_partners().await?.len() > 1
+        {
             routes.push(route(
                 p.co_stream,
                 i64::MAX,
@@ -295,13 +302,15 @@ impl Engine {
             SELECT twitch_user_id,points,ROW_NUMBER() OVER(ORDER BY points DESC,invites DESC,reached ASC NULLS LAST,twitch_user_id) AS rank,COUNT(*) OVER() AS active_partners FROM scores
         ) SELECT points,rank,active_partners FROM ranked WHERE twitch_user_id=$3"#
         );
-        let (points, rank, active_partners): (i64, i64, i64) = sqlx::query_as(&sql)
-            .bind(start)
-            .bind(end)
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await?;
+        let (points, rank, active_partners): (i64, i64, i64) =
+            sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                .bind(start)
+                .bind(end)
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await?;
         Ok(SeasonResponse {
+            next_reset_at: end,
             month,
             points,
             rank,

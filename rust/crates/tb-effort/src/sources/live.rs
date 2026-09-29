@@ -126,7 +126,7 @@ fn completed_matches(
             continue;
         };
         if start >= confirmed_at
-            || !matches!(m.get("match_result").and_then(Value::as_u64), Some(1 | 2))
+            || !matches!(m.get("match_result").and_then(Value::as_u64), Some(0 | 1))
         {
             continue;
         }
@@ -147,7 +147,16 @@ impl Engine {
             .into_iter()
             .map(|p| p.twitch_user_id)
             .collect();
-        let rows: Vec<Live>=sqlx::query_as("SELECT s.twitch_user_id,s.stream_id,s.started_at,l.last_seen_at FROM twitch_stream_sessions s JOIN twitch_live_state l ON l.twitch_user_id=s.twitch_user_id AND l.active_session_id=s.id WHERE s.twitch_user_id=ANY($1) AND s.ended_at IS NULL AND s.stream_id IS NOT NULL AND l.is_live=1 AND s.started_at <= $2 AND s.started_at >= $2-INTERVAL '48 hours'")
+        let current: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM twitch_live_state WHERE last_seen_at::timestamptz >= $1)",
+        )
+        .bind(now - Duration::seconds(self.cfg.evidence_max_gap_seconds))
+        .fetch_one(&self.pool)
+        .await?;
+        if !ids.is_empty() && !current {
+            return Err(Error::Source("live_state_stale"));
+        }
+        let rows: Vec<Live>=sqlx::query_as("SELECT s.twitch_user_id,s.stream_id,s.started_at,l.last_seen_at FROM twitch_stream_sessions s JOIN twitch_live_state l ON l.twitch_user_id=s.twitch_user_id AND l.active_session_id=s.id WHERE s.twitch_user_id=ANY($1) AND s.ended_at IS NULL AND s.stream_id IS NOT NULL AND l.is_live=1 AND s.started_at <= $2")
             .bind(ids).bind(now).fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
@@ -157,9 +166,8 @@ impl Engine {
                         .as_deref()
                         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
                         .is_some_and(|t| {
-                            t.with_timezone(&Utc) <= now
-                                && t.with_timezone(&Utc)
-                                    >= now - Duration::seconds(self.cfg.evidence_max_gap_seconds)
+                            t.with_timezone(&Utc)
+                                >= now - Duration::seconds(self.cfg.evidence_max_gap_seconds)
                         })
             })
             .collect())

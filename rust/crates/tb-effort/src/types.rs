@@ -56,6 +56,7 @@ pub struct WithUsResponse {
 
 #[derive(Debug, Serialize)]
 pub struct SeasonResponse {
+    pub next_reset_at: DateTime<Utc>,
     pub month: String,
     pub points: i64,
     pub rank: i64,

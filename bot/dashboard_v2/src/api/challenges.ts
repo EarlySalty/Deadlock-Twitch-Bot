@@ -9,6 +9,7 @@ export interface ChallengeQuest {
 }
 
 export interface ChallengeStreak {
+  freeze_used_this_month: boolean;
   current: number;
   longest: number;
 }
@@ -44,6 +45,7 @@ export interface WithUsStats {
 }
 
 export interface ChallengeSeason {
+  next_reset_at: string;
   month: string;
   points: number;
   rank: number;
@@ -51,6 +53,8 @@ export interface ChallengeSeason {
 }
 
 export interface ChallengesMe {
+  twitch_user_id: string;
+  next_reset_at: string;
   generated_at: string;
   timezone: string;
   streamer: string;

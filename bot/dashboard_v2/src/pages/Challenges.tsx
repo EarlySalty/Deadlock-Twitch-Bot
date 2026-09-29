@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   Clock3,
@@ -26,29 +26,6 @@ import { ApiHttpError } from '@/api/httpError';
 
 type LeaderboardTab = 'viewers' | 'effort';
 
-const STARTER_QUESTS: ChallengeQuest[] = [
-  {
-    key: 'active_discord_invite',
-    text: 'Bringe 1 neue aktive Person in den Discord',
-    progress: 0,
-    goal: 1,
-    completed: false,
-  },
-  {
-    key: 'stream_together',
-    text: 'Streame mindestens 30 Minuten per Stream Together mit einem Partner',
-    progress: 0,
-    goal: 1,
-    completed: false,
-  },
-  {
-    key: 'community_match',
-    text: 'Spiele ein Match mit jemandem aus der Community',
-    progress: 0,
-    goal: 1,
-    completed: false,
-  },
-];
 
 const ACHIEVEMENT_CONDITIONS: Record<string, string> = {
   recruiter: 'aktive Leute in den Discord bringen',
@@ -91,7 +68,7 @@ function ProgressBar({
   );
 }
 
-function useMondayCountdown() {
+function useMondayCountdown(nextResetAt?: string) {
   const [, tick] = useState(0);
 
   useEffect(() => {
@@ -99,13 +76,7 @@ function useMondayCountdown() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const now = new Date();
-  const target = new Date(now);
-  const days = (8 - now.getDay()) % 7 || 7;
-  target.setDate(now.getDate() + days);
-  target.setHours(0, 0, 0, 0);
-
-  const remaining = Math.max(0, target.getTime() - now.getTime());
+  const remaining = nextResetAt ? Math.max(0, Date.parse(nextResetAt) - Date.now()) : 0;
   const totalMinutes = Math.floor(remaining / 60_000);
   const dayCount = Math.floor(totalMinutes / 1_440);
   const hours = Math.floor((totalMinutes % 1_440) / 60);
@@ -233,35 +204,46 @@ function LoadingState() {
 }
 
 export function Challenges() {
+  const queryClient = useQueryClient();
   const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('viewers');
   const me = useQuery({
     queryKey: ['challenges', 'me'],
     queryFn: fetchChallengesMe,
     staleTime: 60_000,
+    refetchInterval: 60_000,
   });
   const recruiters = useQuery({
     queryKey: ['challenges', 'viewers'],
     queryFn: fetchChallengeViewers,
     staleTime: 60_000,
+    refetchInterval: 60_000,
   });
   const viewers = useQuery({
     queryKey: ['leaderboard', 'viewers', 10],
     queryFn: () => fetchViewerLeaderboard(10),
     staleTime: 60_000,
+    refetchInterval: 60_000,
   });
   const effort = useQuery({
     queryKey: ['leaderboard', 'effort'],
     queryFn: fetchEffortLeaderboard,
     staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 
-  const countdown = useMondayCountdown();
-  const quests = useMemo(() => {
-    const current = me.data?.quests ?? [];
-    if (current.length >= 3) return current.slice(0, 3);
-    const keys = new Set(current.map(quest => quest.key));
-    return [...current, ...STARTER_QUESTS.filter(quest => !keys.has(quest.key))].slice(0, 3);
-  }, [me.data?.quests]);
+  const countdown = useMondayCountdown(me.data?.next_reset_at);
+  const quests = me.data?.quests ?? [];
+  useEffect(() => {
+    const resets = [me.data?.next_reset_at, me.data?.season.next_reset_at]
+      .filter((value): value is string => Boolean(value))
+      .map(Date.parse).filter(value => value > Date.now());
+    if (!resets.length) return;
+    const timer = window.setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ['challenges'] });
+      void queryClient.invalidateQueries({ queryKey: ['leaderboard'] });
+    }, Math.min(2_147_483_647, Math.min(...resets) - Date.now() + 100));
+    return () => window.clearTimeout(timer);
+  }, [me.data?.next_reset_at, me.data?.season.next_reset_at, queryClient]);
 
   const trackedLeaderboard = viewers.data?.categories.find(category => category.key === 'tracked');
   const viewerRows = trackedLeaderboard?.entries.slice(0, 10) ?? [];
@@ -292,7 +274,7 @@ export function Challenges() {
         <h1 className="mt-4 text-2xl font-bold text-white">
           {status === 401
             ? 'Bitte mit deinem Partnerkonto einloggen'
-            : 'Challenges konnten nicht geladen werden'}
+            : 'Rangliste und Erfolge konnten nicht geladen werden'}
         </h1>
         <p className="mt-2 text-sm text-text-secondary">
           {status === 401
@@ -343,7 +325,7 @@ export function Challenges() {
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-accent">
                 <Snowflake className="h-3.5 w-3.5" />
-                Freeze automatisch
+                {data.streak.freeze_used_this_month ? 'Schutz diesen Monat verbraucht' : 'Ein Schutz pro Monat verfügbar'}
               </span>
             </div>
           }
@@ -461,6 +443,8 @@ export function Challenges() {
                 </div>
               ))}
             </div>
+          ) : recruiters.isError ? (
+            <p className="px-2 py-5 text-sm text-text-secondary">Deine Werber konnten nicht geladen werden. Versuch es gleich noch einmal.</p>
           ) : recruiters.isLoading ? (
             <p className="px-2 py-5 text-sm text-text-secondary">Werber werden geladen.</p>
           ) : (
@@ -472,7 +456,7 @@ export function Challenges() {
       </section>
 
       <section className="space-y-4">
-        <SectionTitle title="Leaderboard" />
+        <SectionTitle title="Rangliste" />
         <div className="panel-card rounded-2xl border border-border p-3 md:p-5">
           <div className="mb-4 flex w-full gap-2 rounded-xl border border-border bg-black/20 p-1.5 sm:w-fit">
             <button

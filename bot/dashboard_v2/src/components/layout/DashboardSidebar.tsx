@@ -99,14 +99,14 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const [avatarFailed, setAvatarFailed] = useState(false);
   const shownAvatar = avatarFailed ? null : avatarUrl;
   const canSeeChallenges = Boolean(
-    authStatus?.authenticated && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
+    authStatus?.authenticated && authStatus.twitchUserId && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
   );
 
   const mainNavItems: SidebarNavItem[] = [
     ...(adminEligible && adminMode ? [{ href: '/analyse?view=category', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
     { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: activeRoute === 'home' },
     ...(canSeeChallenges
-      ? [{ href: '/twitch/challenges', label: 'Challenges', icon: Trophy, active: activeRoute === 'challenges' }]
+      ? [{ href: '/twitch/challenges', label: 'Rangliste & Erfolge', icon: Trophy, active: activeRoute === 'challenges' }]
       : []),
     ...(canAccessAnalyticsDashboard
       ? [

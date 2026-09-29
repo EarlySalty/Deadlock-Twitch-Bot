@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct Challenges {
     pub enabled: bool,
+    pub central_database: String,
     pub poll_seconds: u64,
     pub evidence_max_gap_seconds: i64,
     pub source_timeout_seconds: u64,
@@ -52,6 +53,7 @@ impl Default for Challenges {
     fn default() -> Self {
         Self {
             enabled: true,
+            central_database: "deadlock".into(),
             poll_seconds: 60,
             evidence_max_gap_seconds: 150,
             source_timeout_seconds: 10,

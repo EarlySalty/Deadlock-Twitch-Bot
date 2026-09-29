@@ -20,7 +20,7 @@
 //! Auth: eingeloggt (Partner/Admin/Localhost), wie die übrigen `/api/v2`-Reads.
 
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     response::{IntoResponse, Response},
     Json,
 };
@@ -51,6 +51,7 @@ pub struct LeaderboardQuery {
 /// Eine Rangliste-Zeile aus der Snapshot-Aggregation.
 #[derive(Debug, sqlx::FromRow)]
 struct TopRow {
+    twitch_user_id: Option<String>,
     streamer: String,
     avg_viewers: Option<f64>,
     max_viewers: Option<i64>,
@@ -99,10 +100,10 @@ pub async fn leaderboard_handler(
     // serialisieren — nicht für eingeloggte Partner (Python: localhost-only gate).
     let show_discord = auth.is_privileged();
     let own_login = match &auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.as_str()),
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id.as_str()),
         DashboardAuthLevel::Admin {
             actor: Some(actor), ..
-        } => Some(actor.twitch_login.as_str()),
+        } => Some(actor.twitch_user_id.as_str()),
         DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
     };
     let shape_options = ShapeOptions {
@@ -161,18 +162,33 @@ pub async fn leaderboard_handler(
 pub async fn effort_leaderboard_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    Extension(challenge_engine): Extension<super::challenges::ChallengeEngine>,
 ) -> Response {
     if !auth.is_authenticated() {
         return crate::auth::unauthorized_v2_response();
     }
 
-    let own_login = match &auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => Some(twitch_login.to_lowercase()),
+    let own_id = match &auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => twitch_user_id,
         DashboardAuthLevel::Admin {
             actor: Some(actor), ..
-        } => Some(actor.twitch_login.to_lowercase()),
-        DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
+        } => &actor.twitch_user_id,
+        _ => return crate::auth::unauthorized_v2_response(),
     };
+    let Some(engine) = challenge_engine.0 else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"not_current"})),
+        )
+            .into_response();
+    };
+    if engine.ensure_ready(chrono::Utc::now()).await.is_err() {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"not_current"})),
+        )
+            .into_response();
+    }
 
     let sql = r#"
         WITH bounds AS (
@@ -192,21 +208,24 @@ pub async fn effort_leaderboard_handler(
               AND COALESCE(manual_partner_opt_out,0)=0
               AND COALESCE(trim(technical_pause_reason),'')=''
         ),
+        event_running AS (
+            SELECT e.partner_twitch_user_id,e.event_type,e.credited_at,e.id,
+                SUM(e.points) OVER(PARTITION BY e.partner_twitch_user_id ORDER BY e.credited_at,e.id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)::bigint AS running_points,
+                SUM(e.points) OVER(PARTITION BY e.partner_twitch_user_id)::bigint AS final_points
+            FROM partner_effort_events e CROSS JOIN bounds b
+            WHERE e.credited_at >= b.start_at AND e.credited_at < b.end_at
+        ),
+        monthly AS (
+            SELECT partner_twitch_user_id,MAX(final_points)::bigint AS points,
+                COUNT(*) FILTER(WHERE event_type='qualified_invite')::bigint AS qualified_invites,
+                MIN(credited_at) FILTER(WHERE running_points=final_points) AS score_reached_at
+            FROM event_running GROUP BY partner_twitch_user_id
+        ),
         scores AS (
-            SELECT
-                a.twitch_user_id,
-                a.twitch_login,
-                COALESCE(SUM(e.points),0)::bigint AS points,
-                COUNT(e.id) FILTER (WHERE e.event_type='qualified_invite')::bigint
-                    AS qualified_invites,
-                MAX(e.occurred_at) FILTER (WHERE e.points > 0) AS score_reached_at
-            FROM active a
-            CROSS JOIN bounds b
-            LEFT JOIN partner_effort_events e
-              ON e.partner_twitch_user_id=a.twitch_user_id
-             AND e.occurred_at >= b.start_at
-             AND e.occurred_at < b.end_at
-            GROUP BY a.twitch_user_id, a.twitch_login
+            SELECT a.twitch_user_id,a.twitch_login,COALESCE(m.points,0)::bigint AS points,
+                COALESCE(m.qualified_invites,0)::bigint AS qualified_invites,
+                CASE WHEN COALESCE(m.points,0)=0 THEN b.start_at ELSE m.score_reached_at END AS score_reached_at
+            FROM active a CROSS JOIN bounds b LEFT JOIN monthly m ON m.partner_twitch_user_id=a.twitch_user_id
         ),
         ranked AS (
             SELECT
@@ -221,7 +240,8 @@ pub async fn effort_leaderboard_handler(
                 )::bigint AS rank
             FROM scores
         )
-        SELECT r.twitch_login, r.points, r.rank, b.month_key
+        SELECT r.twitch_user_id, r.twitch_login, r.points, r.rank, b.month_key,
+               EXISTS(SELECT 1 FROM twitch_partner_raid_boost_grants g WHERE g.twitch_user_id=r.twitch_user_id AND g.streams_remaining>0 AND g.granted_at<=now() AND g.expires_at>now()) OR EXISTS(SELECT 1 FROM twitch_partner_raid_boost_streams u JOIN twitch_stream_sessions s ON s.id=u.session_id AND s.twitch_user_id=u.twitch_user_id JOIN twitch_live_state l ON l.twitch_user_id=u.twitch_user_id WHERE u.twitch_user_id=r.twitch_user_id AND u.stream_ended_at IS NULL AND s.ended_at IS NULL AND l.is_live=1 AND l.active_session_id=u.session_id) AS raid_boost
         FROM ranked r
         CROSS JOIN bounds b
         ORDER BY r.rank
@@ -265,14 +285,14 @@ pub async fn effort_leaderboard_handler(
             month = row.try_get("month_key").unwrap_or_default();
         }
 
-        let is_self = own_login
-            .as_deref()
-            .is_some_and(|login| twitch_login.eq_ignore_ascii_case(login));
+        let is_self = row
+            .try_get::<String, _>("twitch_user_id")
+            .is_ok_and(|id| id == *own_id);
         let value = json!({
             "rank": rank,
             "twitch_login": twitch_login,
             "points": points,
-            "raid_boost": rank == 1,
+            "raid_boost": row.try_get::<bool, _>("raid_boost").unwrap_or(false),
             "is_self": is_self,
         });
 
@@ -362,7 +382,7 @@ async fn load_category(pool: &PgPool, tracked: bool) -> Result<Vec<TopRow>, sqlx
                AND {membership}
              GROUP BY s.streamer
         )
-        SELECT a.streamer,
+        SELECT a.streamer, ps.twitch_user_id,
                a.avg_viewers,
                a.max_viewers,
                a.samples,
@@ -446,7 +466,7 @@ fn shape_entries_with_own(
 
     let own_position = own_login.and_then(|login| {
         rows.iter()
-            .position(|row| row.streamer.eq_ignore_ascii_case(login))
+            .position(|row| row.twitch_user_id.as_deref() == Some(login))
             .map(|index| row_json(&rows[index], index + 1, show_discord))
     });
 
@@ -495,6 +515,7 @@ mod tests {
 
     fn row(streamer: &str, avg: f64, peak: i64, samples: i64) -> TopRow {
         TopRow {
+            twitch_user_id: Some(streamer.into()),
             streamer: streamer.into(),
             avg_viewers: Some(avg),
             max_viewers: Some(peak),
@@ -552,7 +573,9 @@ mod tests {
                 } else {
                     format!("kanal_{rank}")
                 };
-                row(&login, f64::from(13 - rank) * 10.0, 100, 20)
+                let mut entry = row(&login, f64::from(13 - rank) * 10.0, 100, 20);
+                entry.twitch_user_id = Some(rank.to_string());
+                entry
             })
             .collect();
 
@@ -566,7 +589,7 @@ mod tests {
                 limit: 10,
                 show_discord: false,
             },
-            Some("MEIN_KANAL"),
+            Some("12"),
         );
 
         assert_eq!(entries.len(), 10);

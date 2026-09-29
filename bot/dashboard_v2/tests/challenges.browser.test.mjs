@@ -49,6 +49,8 @@ const AUTH = {
 };
 
 const CHALLENGES_ME = {
+  twitch_user_id: '123456',
+  next_reset_at: '2026-10-04T22:00:00Z',
   generated_at: '2026-09-27T00:15:00Z',
   timezone: 'Europe/Berlin',
   streamer: 'test_partner',
@@ -57,7 +59,7 @@ const CHALLENGES_ME = {
     { key: 'stream_together', text: 'Streame mindestens 30 Minuten per Stream Together mit einem Partner', progress: 1, goal: 1, completed: true },
     { key: 'community_match', text: 'Spiele ein Match mit jemandem aus der Community', progress: 0, goal: 1, completed: false },
   ],
-  streak: { current: 4, longest: 7 },
+  streak: { current: 4, longest: 7, freeze_used_this_month: false },
   level: {
     level: 4,
     total_points: 740,
@@ -80,6 +82,7 @@ const CHALLENGES_ME = {
     received_raids: 11,
   },
   season: {
+    next_reset_at: '2026-09-30T22:00:00Z',
     month: '2026-09',
     points: 62,
     rank: 14,

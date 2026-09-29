@@ -16,7 +16,7 @@ impl Engine {
     }
 
     pub async fn active_partners(&self) -> Result<Vec<Partner>> {
-        Ok(sqlx::query_as(&format!("SELECT twitch_user_id,lower(twitch_login) AS login FROM twitch_partners WHERE {ACTIVE} ORDER BY twitch_user_id"))
+        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT twitch_user_id,lower(twitch_login) AS login FROM twitch_partners WHERE {ACTIVE} ORDER BY twitch_user_id")))
             .fetch_all(&self.pool).await?)
     }
 
@@ -24,12 +24,12 @@ impl Engine {
         if !valid_id(id) {
             return Err(Error::NotFound);
         }
-        sqlx::query_as(&format!("SELECT twitch_user_id,lower(twitch_login) AS login FROM twitch_partners WHERE twitch_user_id=$1 AND {ACTIVE}"))
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT twitch_user_id,lower(twitch_login) AS login FROM twitch_partners WHERE twitch_user_id=$1 AND {ACTIVE}")))
             .bind(id).fetch_optional(&self.pool).await?.ok_or(Error::NotFound)
     }
 
     pub async fn partner_by_login(&self, login: &str) -> Result<Partner> {
-        sqlx::query_as(&format!("SELECT twitch_user_id,lower(twitch_login) AS login FROM twitch_partners WHERE lower(twitch_login)=lower($1) AND {ACTIVE}"))
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT twitch_user_id,lower(twitch_login) AS login FROM twitch_partners WHERE lower(twitch_login)=lower($1) AND {ACTIVE}")))
             .bind(login).fetch_optional(&self.pool).await?.ok_or(Error::NotFound)
     }
 
@@ -91,7 +91,7 @@ impl Engine {
             .bind(format!("{}:{week}", event.partner_twitch_user_id))
             .execute(&mut **tx)
             .await?;
-        let login: Option<String> = sqlx::query_scalar(&format!("SELECT lower(twitch_login) FROM twitch_partners WHERE twitch_user_id=$1 AND {ACTIVE} FOR SHARE"))
+        let login: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT lower(twitch_login) FROM twitch_partners WHERE twitch_user_id=$1 AND {ACTIVE} FOR SHARE")))
             .bind(&event.partner_twitch_user_id).fetch_optional(&mut **tx).await?;
         let Some(login) = login else {
             return Err(Error::NotFound);

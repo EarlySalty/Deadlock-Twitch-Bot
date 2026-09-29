@@ -126,14 +126,47 @@ impl MonthlyRaidBoostStore {
         &self,
         now: DateTime<Utc>,
     ) -> Result<SeasonCloseOutcome, sqlx::Error> {
-        let window = previous_season_window(now);
+        self.close_season_ending_at(now, now).await
+    }
+
+    /// Offene Monate seit dem Start des Programms, auch nach einem längeren
+    /// Ausfall. Der letzte Monat bleibt für einen ausstehenden Score-Refresh
+    /// enthalten; es werden keine Monate vor dem Programmstart erfunden.
+    pub async fn due_season_cutoffs(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<DateTime<Utc>>, sqlx::Error> {
+        sqlx::query_scalar("SELECT month_end AT TIME ZONE 'Europe/Berlin' FROM partner_effort_program p CROSS JOIN LATERAL generate_series(date_trunc('month',p.started_at AT TIME ZONE 'Europe/Berlin') + interval '1 month', date_trunc('month',$1::timestamptz AT TIME ZONE 'Europe/Berlin'), interval '1 month') month_end WHERE p.singleton AND (month_end AT TIME ZONE 'Europe/Berlin') + interval '5 minutes' <= $1 AND (month_end = date_trunc('month',$1::timestamptz AT TIME ZONE 'Europe/Berlin') OR NOT EXISTS(SELECT 1 FROM twitch_partner_effort_season_closures c WHERE c.season_ended_at = month_end AT TIME ZONE 'Europe/Berlin')) ORDER BY month_end")
+            .bind(now).fetch_all(&self.pool).await
+    }
+
+    pub async fn close_season_ending_at(
+        &self,
+        cutoff: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<SeasonCloseOutcome, sqlx::Error> {
+        let window = previous_season_window(cutoff);
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(713219, 27)")
+            .execute(&mut *tx)
+            .await?;
 
         let source_exists: Option<String> =
             sqlx::query_scalar("SELECT to_regclass('partner_effort_events')::text")
                 .fetch_one(&mut *tx)
                 .await?;
         if source_exists.is_none() {
+            tx.rollback().await?;
+            return Ok(SeasonCloseOutcome::SourceUnavailable {
+                season_key: window.key,
+            });
+        }
+
+        let ready: bool = sqlx::query_scalar("SELECT COUNT(*) = 7 FROM partner_effort_source_state WHERE source=ANY($1) AND healthy AND successful_at >= $2")
+            .bind(vec!["invites", "referrals", "clips", "shared_chat", "steam_party", "engine", "category_collection"])
+            .bind(window.ended_at)
+            .fetch_one(&mut *tx).await?;
+        if !ready {
             tx.rollback().await?;
             return Ok(SeasonCloseOutcome::SourceUnavailable {
                 season_key: window.key,
@@ -181,12 +214,15 @@ impl MonthlyRaidBoostStore {
             .await?;
         }
 
-        let winner = standings.first().map(|standing| SeasonWinner {
-            twitch_user_id: standing.twitch_user_id.clone(),
-            twitch_login: standing.twitch_login.clone(),
-            points: standing.points,
-            qualified_invites: standing.qualified_invites,
-        });
+        let winner = standings
+            .first()
+            .filter(|standing| standing.points > 0)
+            .map(|standing| SeasonWinner {
+                twitch_user_id: standing.twitch_user_id.clone(),
+                twitch_login: standing.twitch_login.clone(),
+                points: standing.points,
+                qualified_invites: standing.qualified_invites,
+            });
 
         if let Some(winner) = &winner {
             sqlx::query(
@@ -414,26 +450,26 @@ async fn load_effort_standings(
         event_running AS (
             SELECT e.partner_twitch_user_id,
                    e.event_type,
-                   e.occurred_at,
-                   e.source_id,
+                   e.credited_at,
+                   e.id,
                    SUM(e.points) OVER (
                        PARTITION BY e.partner_twitch_user_id
-                       ORDER BY e.occurred_at, e.source_id
+                       ORDER BY e.credited_at, e.id
                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                    )::bigint AS running_points,
                    SUM(e.points) OVER (
                        PARTITION BY e.partner_twitch_user_id
                    )::bigint AS final_points
               FROM partner_effort_events e
-             WHERE e.occurred_at >= $1
-               AND e.occurred_at < $2
+             WHERE e.credited_at >= $1
+               AND e.credited_at < $2
         ),
         monthly AS (
             SELECT partner_twitch_user_id AS twitch_user_id,
                    MAX(final_points)::bigint AS points,
                    COUNT(*) FILTER (WHERE event_type = 'qualified_invite')::bigint
                        AS qualified_invites,
-                   MIN(occurred_at) FILTER (WHERE running_points = final_points)
+                   MIN(credited_at) FILTER (WHERE running_points = final_points)
                        AS score_reached_at
               FROM event_running
              GROUP BY partner_twitch_user_id
@@ -597,13 +633,12 @@ async fn deadlock_seconds_for_session(
     ended_at: DateTime<Utc>,
 ) -> Result<i64, sqlx::Error> {
     let updates = sqlx::query_as::<_, GameUpdateRow>(
-        "SELECT recorded_at::text::timestamptz AS recorded_at, game_name
+        "SELECT recorded_at, game_name
            FROM twitch_channel_updates
           WHERE twitch_user_id = $1
-            AND recorded_at::text::timestamptz >= $2
-            AND recorded_at::text::timestamptz < $3
-            AND game_name IS NOT NULL
-          ORDER BY recorded_at::text::timestamptz ASC, id ASC",
+            AND recorded_at >= $2
+            AND recorded_at < $3
+          ORDER BY recorded_at ASC, id ASC",
     )
     .bind(twitch_user_id)
     .bind(session.started_at)
@@ -613,7 +648,7 @@ async fn deadlock_seconds_for_session(
 
     let timeline = updates
         .into_iter()
-        .filter_map(|row| row.game_name.map(|game| (row.recorded_at, game)))
+        .map(|row| (row.recorded_at, row.game_name.unwrap_or_default()))
         .collect::<Vec<_>>();
 
     Ok(deadlock_seconds_for_timeline(

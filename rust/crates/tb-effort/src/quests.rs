@@ -72,7 +72,11 @@ struct Assignment {
 }
 
 impl Engine {
-    async fn invite_available(&self, partner: &Partner, week: NaiveDate) -> Result<bool> {
+    pub(crate) async fn invite_available(
+        &self,
+        partner: &Partner,
+        week: NaiveDate,
+    ) -> Result<bool> {
         let (start, end, _) = berlin_week_bounds(midnight(week));
         let qualified: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM partner_effort_events WHERE partner_twitch_user_id=$1 AND event_type='qualified_invite' AND occurred_at >= $2 AND occurred_at < $3)")
             .bind(&partner.twitch_user_id)
@@ -103,11 +107,26 @@ impl Engine {
         if existing != 0 {
             return Err(Error::Invalid("quest_assignment_count"));
         }
-        let mut available = vec![QuestKind::StreamExtra];
+        let baseline = self
+            .stream_minutes(&partner.twitch_user_id, week - Duration::weeks(4), week)
+            .await?
+            / 4;
+        let current = self
+            .stream_minutes(&partner.twitch_user_id, week, week + Duration::weeks(1))
+            .await?;
+        let (_, end, _) = berlin_week_bounds(now);
+        let remaining_minutes = (end - now).num_minutes();
+        let mut available = Vec::new();
+        if baseline + self.cfg.stream_extra_minutes - current <= remaining_minutes {
+            available.push(QuestKind::StreamExtra);
+        }
         if self.invite_available(partner, week).await? {
             available.push(QuestKind::Invite);
         }
-        if self.helix.is_some() && self.active_partners().await?.len() > 1 {
+        if remaining_minutes >= 30
+            && self.helix.is_some()
+            && self.active_partners().await?.len() > 1
+        {
             available.push(QuestKind::CoStream);
         }
         if self.party_available(&partner.twitch_user_id).await? {
@@ -116,11 +135,10 @@ impl Engine {
         if self.clip_available(partner, now).await? {
             available.push(QuestKind::Clip);
         }
+        if available.is_empty() {
+            return Ok(());
+        }
         let selected = draw(&partner.twitch_user_id, week, &available)?;
-        let baseline = self
-            .stream_minutes(&partner.twitch_user_id, week - Duration::weeks(4), week)
-            .await?
-            / 4;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,713220))")
             .bind(format!("{}:{week}", partner.twitch_user_id))
@@ -171,7 +189,7 @@ impl Engine {
     async fn assignments(&self, id: &str, week: NaiveDate) -> Result<Vec<Assignment>> {
         let rows: Vec<Assignment> = sqlx::query_as("SELECT quest_key,goal,baseline_minutes,reward_points,bonus_points,rules_hash FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2 ORDER BY position")
             .bind(id).bind(week).fetch_all(&self.pool).await?;
-        if rows.is_empty() || rows.len() > 3 {
+        if rows.len() > 3 {
             return Err(Error::Source("quests_not_assigned"));
         }
         Ok(rows)
@@ -233,6 +251,9 @@ impl Engine {
 
     async fn reward_quests(&self, id: &str, week: NaiveDate, now: DateTime<Utc>) -> Result<()> {
         let assignments = self.assignments(id, week).await?;
+        if assignments.is_empty() {
+            return Ok(());
+        }
         let mut done = Vec::new();
         for q in &assignments {
             let (progress, at) = self.quest_progress(id, week, q).await?;

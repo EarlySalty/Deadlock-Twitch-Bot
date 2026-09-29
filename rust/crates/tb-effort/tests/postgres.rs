@@ -4,6 +4,8 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool,
 };
+#[path = "../../../test-support/database.rs"]
+mod test_database;
 use std::str::FromStr;
 use tb_config::challenges::Challenges;
 use tb_effort::{
@@ -19,8 +21,8 @@ fn idle_helix() -> tb_transport_twitch::HelixClient {
 }
 
 async fn fixture() -> (PgPool, PgPool, String) {
-    let dsn = std::env::var("TB_TEST_DATABASE_URL")
-        .expect("TB_TEST_DATABASE_URL must point to the disposable test container");
+    let dsn =
+        test_database::database_url().expect("isolierte Testdatenbank muss konfiguriert sein");
     let options = PgConnectOptions::from_str(&dsn).unwrap();
     let admin = PgPoolOptions::new()
         .max_connections(2)
@@ -32,7 +34,7 @@ async fn fixture() -> (PgPool, PgPool, String) {
         std::process::id(),
         Utc::now().timestamp_subsec_nanos()
     );
-    sqlx::query(&format!("CREATE DATABASE {name}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -58,18 +60,14 @@ async fn fixture() -> (PgPool, PgPool, String) {
         CREATE TABLE core.steam_links(discord_id bigint,steam_id text,verified boolean);
         CREATE TABLE activity.voice_session_log(id bigint PRIMARY KEY,user_id bigint,guild_id bigint,channel_id bigint,started_at timestamptz,ended_at timestamptz);
         CREATE TABLE steam.steam_tasks(id bigint PRIMARY KEY,type text,payload jsonb,status text,result jsonb,finished_at timestamptz);
-        CREATE TABLE twitch_clip_contest_submissions(id bigint PRIMARY KEY,contest_month date,submitter_provider text,submitter_user_id text,broadcaster_twitch_id text);
-        CREATE TABLE twitch_clip_contest_effort_outbox(id bigint PRIMARY KEY,event_type text,source_id text,occurred_at timestamptz,metadata jsonb);
         INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) VALUES('101','alice','active'),('102','bob','active'),('103','inactive','inactive');")
         .execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!("fixtures/qualified_twitch_invites.sql"))
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::raw_sql(include_str!("fixtures/streamer_referral_credits.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query("INSERT INTO category_collector_status(singleton,heartbeat_at,details) VALUES(TRUE,'2026-12-31','{\"disk_paused\":false}') ON CONFLICT(singleton) DO UPDATE SET heartbeat_at=EXCLUDED.heartbeat_at,details=EXCLUDED.details").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_live_state(twitch_user_id,streamer_login,is_live,last_seen_at) VALUES('999','poller-fixture',0,'2026-12-31T00:00:00Z')").execute(&pool).await.unwrap();
     (admin, pool, name)
 }
 
@@ -232,14 +230,9 @@ async fn ledger_caps_sources_streaks_achievements_and_fail_closed() {
         .await;
     }
     insert_referral(&pool, "102", now - Duration::minutes(20)).await;
+    insert_contest_submission(&pool, "101").await;
     sqlx::query(
-        "INSERT INTO twitch_clip_contest_submissions VALUES(1,'2026-10-01','twitch','101','101')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO twitch_clip_contest_effort_outbox VALUES(1,'clip_top3','outbox:top3', $1, $2)",
+        "INSERT INTO twitch_clip_contest_effort_outbox(id,event_type,partner_twitch_user_id,streamer_login,source_id,occurred_at,metadata) VALUES(1,'clip_top3','101','alice','outbox:top3', $1, $2)",
     )
     .bind(now - Duration::minutes(10))
     .bind(json!({"submission_id":1,"rank":2}))
@@ -362,10 +355,12 @@ async fn ledger_caps_sources_streaks_achievements_and_fail_closed() {
         .await
         .is_err());
     assert!(engine.me("101", now).await.is_err());
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -420,10 +415,12 @@ async fn stream_only_quest_does_not_supply_independent_streak_proof() {
             .week_qualified
     );
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -461,10 +458,12 @@ async fn late_confirmation_credits_the_next_berlin_month() {
     .unwrap();
     assert_eq!((occurred, credited), (before, after));
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -563,10 +562,12 @@ async fn shared_chat_collection_is_bounded_and_keeps_completed_partner_evidence(
             .unwrap();
     assert_eq!(observations, 110);
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -677,7 +678,7 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
     .unwrap();
     assert_eq!(count, 0);
     let finished = observed + Duration::minutes(5);
-    for (id, steam, result) in [(1i64, "76561197960265801", 1), (2, "76561197960265802", 2)] {
+    for (id, steam, result) in [(1i64, "76561197960265801", 1), (2, "76561197960265802", 0)] {
         sqlx::query("INSERT INTO steam.steam_tasks VALUES($1,'GC_GET_MATCH_HISTORY',$2,'DONE',$3,$4)")
             .bind(id).bind(json!({"steam_id":steam})).bind(json!({"ok":true,"data":{"steam_id64":steam,"matches":[{"match_id":500,"start_time":start.timestamp(),"match_result":result}]}})).bind(finished-Duration::seconds(10)).execute(&pool).await.unwrap();
     }
@@ -748,10 +749,12 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
     assert_eq!(permanent, 2);
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -825,17 +828,19 @@ async fn verified_discord_peer_without_streamer_profile_confirms_party_match() {
         .bind(finished).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO steam.steam_tasks VALUES(2,'GC_GET_MATCH_HISTORY',$1,'DONE',$2,$3)")
         .bind(json!({"account_id":104,"ranked_only":true}))
-        .bind(json!({"ok":true,"data":{"steam_id64":null,"account_id":104,"matches":[{"match_id":501,"start_time":start.timestamp(),"match_result":2}]}}))
+        .bind(json!({"ok":true,"data":{"steam_id64":null,"account_id":104,"matches":[{"match_id":501,"start_time":start.timestamp(),"match_result":0}]}}))
         .bind(finished).execute(&pool).await.unwrap();
     engine.tick(finished).await.unwrap();
     let scored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_events WHERE event_type='party_play' AND partner_twitch_user_id='101' AND points>0")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(scored, 1);
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -938,10 +943,12 @@ async fn stream_proof_ignores_reach_and_survives_snapshot_retention() {
         .unwrap();
     assert_eq!(repeated, after);
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -981,10 +988,12 @@ async fn unattributed_invite_does_not_block_qualified_source() {
     .unwrap();
     assert_eq!(count, 1);
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -1007,11 +1016,8 @@ async fn technical_pause_defers_source_receipts_until_partner_is_eligible() {
     )
     .await;
     insert_referral(&pool, "901", now - Duration::seconds(1)).await;
-    sqlx::query("INSERT INTO twitch_clip_contest_submissions(id,contest_month,submitter_provider,submitter_user_id,broadcaster_twitch_id) VALUES(1,'2026-10-01','twitch','501','101')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO twitch_clip_contest_effort_outbox(id,event_type,source_id,occurred_at,metadata) VALUES(1,'clip_submitted','clip-901',$1,$2)")
+    insert_contest_submission(&pool, "501").await;
+    sqlx::query("INSERT INTO twitch_clip_contest_effort_outbox(id,event_type,partner_twitch_user_id,streamer_login,source_id,occurred_at,metadata) VALUES(1,'clip_submitted','101','alice','clip-901',$1,$2)")
         .bind(now - Duration::seconds(1))
         .bind(json!({"submission_id":"1"}))
         .execute(&pool)
@@ -1049,10 +1055,12 @@ async fn technical_pause_defers_source_receipts_until_partner_is_eligible() {
         .unwrap();
     assert_eq!(events, 3);
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -1134,10 +1142,12 @@ async fn missing_category_coverage_blocks_settlement_and_readiness() {
         .is_ok());
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -1177,10 +1187,12 @@ async fn invite_quest_requires_a_join_that_can_qualify_during_its_week() {
         .unwrap();
     assert!(next.contains(&"active_discord_invite".into()));
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
 }
 
@@ -1262,9 +1274,16 @@ async fn source_cursors_resume_and_reconcile_late_rows_without_starving_new_even
         .fetch_one(&pool).await.unwrap();
     assert!(large_id);
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
     admin.close().await;
+}
+
+async fn insert_contest_submission(pool: &PgPool, submitter: &str) {
+    sqlx::query("INSERT INTO twitch_clip_contest_months(contest_month) VALUES('2026-10-01') ON CONFLICT DO NOTHING").execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_clip_contest_submissions(id,contest_month,twitch_clip_id,clip_url,clip_title,broadcaster_twitch_id,broadcaster_login,game_id,clip_created_at,submitter_provider,submitter_user_id,submitter_person_key,submitter_aliases,submitter_display_name,submission_slot) VALUES(1,'2026-10-01','fixture','https://clips.twitch.tv/fixture','Fixture','101','alice','509658','2026-10-20','twitch',$1,$1,ARRAY[$1],'Fixture',1)").bind(submitter).execute(pool).await.unwrap();
 }
