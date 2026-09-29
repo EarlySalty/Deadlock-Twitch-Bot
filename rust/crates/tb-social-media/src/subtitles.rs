@@ -115,7 +115,10 @@ pub fn segment_subtitles(segments: &[SubtitleSegment]) -> Vec<Cue> {
 }
 
 /// Wendet die Vokabel-Korrektur auf jeden Segmenttext an, bevor geschnitten wird.
-pub fn correct_segments(segments: &[SubtitleSegment], vocab: &[VocabEntry]) -> Vec<SubtitleSegment> {
+pub fn correct_segments(
+    segments: &[SubtitleSegment],
+    vocab: &[VocabEntry],
+) -> Vec<SubtitleSegment> {
     segments
         .iter()
         .map(|seg| {
@@ -155,32 +158,43 @@ fn hook_lines(title: &str) -> String {
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in title.split_whitespace() {
-        if current.chars().count() + word.chars().count() + usize::from(!current.is_empty()) > 22
-            && !current.is_empty()
-        {
+        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > 18 {
+            if lines.len() == 2 {
+                current.push('…');
+                break;
+            }
             lines.push(std::mem::take(&mut current));
         }
         if !current.is_empty() {
             current.push(' ');
         }
         current.push_str(word);
-        if lines.len() == 2 {
-            break;
-        }
     }
     if !current.is_empty() {
         lines.push(current);
     }
-    lines.into_iter().map(|line| ass_escape(&line)).collect::<Vec<_>>().join("\\N")
+    lines
+        .into_iter()
+        .map(|line| ass_escape(&line))
+        .collect::<Vec<_>>()
+        .join("\\N")
 }
 
-pub fn build_branded_ass(cues: &[Cue], title: &str, login: &str, cam_height: i64, duration: f64) -> String {
+pub fn build_branded_ass(
+    cues: &[Cue],
+    title: &str,
+    login: &str,
+    cam_height: i64,
+    duration: f64,
+) -> String {
     let mut out = String::new();
-    out.push_str("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\n\n");
+    out.push_str(
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\n\n",
+    );
     out.push_str("[V4+ Styles]\n");
     out.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
     out.push_str(&format!(
-        "Style: Default,DejaVu Sans,62,&H00FFFFFF,&H00FFFFFF,&H00000000,{box},-1,0,0,0,100,100,0,0,1,5,2,2,65,180,770,1\nStyle: Hook,DejaVu Sans,64,&H00FFFFFF,&H00FFFFFF,&H00000000,{box},-1,0,0,0,100,100,0,0,3,5,1,8,80,180,0,1\nStyle: Channel,DejaVu Sans,48,{gold},{gold},&H00000000,{box},-1,0,0,0,100,100,0,0,1,4,1,7,48,180,0,1\n\n",
+        "Style: Default,DejaVu Sans,62,&H00FFFFFF,&H00FFFFFF,&H00000000,{box},-1,0,0,0,100,100,0,0,1,5,2,2,65,180,770,1\nStyle: Hook,DejaVu Sans,80,&H00FFFFFF,&H00FFFFFF,&H00000000,{box},-1,0,0,0,100,100,0,0,1,6,2,8,70,70,0,1\nStyle: Channel,DejaVu Sans,48,{gold},{gold},&H00000000,{box},-1,0,0,0,100,100,0,0,1,4,1,7,48,180,0,1\n\n",
         gold = GOLD_PRIMARY,
         box = BOX_BACK,
     ));
@@ -201,7 +215,12 @@ pub fn build_branded_ass(cues: &[Cue], title: &str, login: &str, cam_height: i64
         ));
     }
     for cue in cues {
-        let text = cue.lines.iter().map(|line| ass_escape(line)).collect::<Vec<_>>().join("\\N");
+        let text = cue
+            .lines
+            .iter()
+            .map(|line| ass_escape(line))
+            .collect::<Vec<_>>()
+            .join("\\N");
         out.push_str(&format!(
             "Dialogue: 0,{},{},Default,,0,0,0,,{text}\n",
             ass_time(cue.start),
@@ -217,7 +236,10 @@ pub fn build_ass(cues: &[Cue]) -> String {
 
 /// Baut die fertige ASS-Datei aus rohen STT-Segmenten (JSONB) mit Korrektur.
 pub fn ass_from_segments(segments: &[Value], vocab: &[VocabEntry]) -> Option<String> {
-    let parsed: Vec<SubtitleSegment> = segments.iter().filter_map(SubtitleSegment::from_json).collect();
+    let parsed: Vec<SubtitleSegment> = segments
+        .iter()
+        .filter_map(SubtitleSegment::from_json)
+        .collect();
     if parsed.is_empty() {
         return None;
     }
@@ -249,18 +271,30 @@ mod tests {
             "ein zwei drei vier fuenf sechs sieben acht neun zehn elf zwoelf dreizehn vierzehn fuenfzehn sechzehn siebzehn achtzehn",
         )];
         let cues = segment_subtitles(&segments);
-        assert!(cues.len() >= 2, "langer Abschnitt wird in mehrere Cues geschnitten: {cues:?}");
+        assert!(
+            cues.len() >= 2,
+            "langer Abschnitt wird in mehrere Cues geschnitten: {cues:?}"
+        );
         for c in &cues {
             assert!(c.lines.len() <= MAX_LINES, "hoechstens zwei Zeilen: {c:?}");
             for line in &c.lines {
-                assert!(line.chars().count() <= MAX_LINE_CHARS, "Zeile zu lang: {line}");
+                assert!(
+                    line.chars().count() <= MAX_LINE_CHARS,
+                    "Zeile zu lang: {line}"
+                );
             }
             assert!(c.end > c.start, "Cue hat Dauer: {c:?}");
-            assert!(c.end - c.start <= MAX_CUE_SECS + 1e-6, "Cue nicht laenger als 4s: {c:?}");
+            assert!(
+                c.end - c.start <= MAX_CUE_SECS + 1e-6,
+                "Cue nicht laenger als 4s: {c:?}"
+            );
         }
         // Cues laufen zeitlich vorwaerts.
         for pair in cues.windows(2) {
-            assert!(pair[1].start >= pair[0].start, "Cues in Reihenfolge: {cues:?}");
+            assert!(
+                pair[1].start >= pair[0].start,
+                "Cues in Reihenfolge: {cues:?}"
+            );
         }
     }
 
@@ -268,7 +302,10 @@ mod tests {
     fn kurze_cue_wird_auf_mindestdauer_gezogen() {
         let cues = segment_subtitles(&[seg(0.0, 0.2, "kurz")]);
         assert_eq!(cues.len(), 1);
-        assert!(cues[0].end - cues[0].start >= MIN_CUE_SECS - 1e-6, "{cues:?}");
+        assert!(
+            cues[0].end - cues[0].start >= MIN_CUE_SECS - 1e-6,
+            "{cues:?}"
+        );
     }
 
     #[test]
@@ -277,12 +314,25 @@ mod tests {
         let ass = build_branded_ass(&cues, "Wow {Haze} 😎", "earlysalty", 600, 10.0);
         assert!(ass.contains("Style: Default,DejaVu Sans,62,&H00FFFFFF"));
         assert!(ass.contains("Style: Channel,DejaVu Sans,48,"));
+        assert!(ass.contains("Style: Hook,DejaVu Sans,80,&H00FFFFFF,&H00FFFFFF,&H00000000,"));
+        assert!(ass.contains(",1,6,2,8,70,70,0,1"));
         assert!(ass.contains(GOLD_PRIMARY));
         assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:02.00,Default"));
         assert!(ass.contains("@earlysalty"));
         assert!(ass.contains("Wow (Haze) 😎"));
         assert!(ass.contains("0:00:02.80,Hook"));
         assert!(ass.contains(BOX_BACK));
+    }
+
+    #[test]
+    fn langer_hook_bleibt_in_drei_lesbaren_zeilen() {
+        let title =
+            "Ein langer Clip Titel mit vielen verschiedenen Worten und einem überraschenden Ende";
+        let lines = hook_lines(title);
+        let parts: Vec<&str> = lines.split("\\N").collect();
+        assert_eq!(parts.len(), 3);
+        assert!(parts.iter().all(|line| line.chars().count() <= 19));
+        assert!(parts[2].ends_with('…'));
     }
 
     #[test]
@@ -296,8 +346,13 @@ mod tests {
             weight: 1,
             updated_at: None,
         }];
-        let segments = vec![serde_json::json!({"start_seconds":0.0,"end_seconds":2.0,"text":"haze ist stark"})];
+        let segments = vec![
+            serde_json::json!({"start_seconds":0.0,"end_seconds":2.0,"text":"haze ist stark"}),
+        ];
         let ass = ass_from_segments(&segments, &vocab).unwrap();
-        assert!(ass.contains("Haze ist stark"), "Vokabel-Korrektur greift: {ass}");
+        assert!(
+            ass.contains("Haze ist stark"),
+            "Vokabel-Korrektur greift: {ass}"
+        );
     }
 }
