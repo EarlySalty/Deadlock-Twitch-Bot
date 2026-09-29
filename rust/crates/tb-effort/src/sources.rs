@@ -52,7 +52,7 @@ impl Engine {
         source_id: &str,
         event: Event,
         now: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let points = self.points(&event)?;
         match self
@@ -60,12 +60,20 @@ impl Engine {
             .await
         {
             Ok(_) => {}
-            Err(Error::NotFound) => {}
+            Err(Error::NotFound) => {
+                let paused: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_partners WHERE twitch_user_id=$1 AND COALESCE(trim(technical_pause_reason),'')<>'')")
+                    .bind(&event.partner_twitch_user_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                if paused {
+                    return Ok(false);
+                }
+            }
             Err(error) => return Err(error),
         }
         self.receipt(&mut tx, source, source_id).await?;
         tx.commit().await?;
-        Ok(())
+        Ok(true)
     }
 
     async fn invites(&self, now: DateTime<Utc>) -> Result<()> {
@@ -166,9 +174,10 @@ impl Engine {
     }
 
     async fn clips(&self, now: DateTime<Utc>) -> Result<()> {
+        let mut deferred = Vec::new();
         loop {
-            let rows=sqlx::query("SELECT o.id,o.event_type,o.source_id,o.occurred_at,o.metadata,s.broadcaster_twitch_id FROM twitch_clip_contest_effort_outbox o JOIN twitch_clip_contest_submissions s ON s.id=(o.metadata->>'submission_id')::bigint WHERE o.occurred_at <= $1 AND NOT EXISTS(SELECT 1 FROM partner_effort_source_receipts r WHERE r.source='clips' AND r.source_id=o.id::text) ORDER BY o.occurred_at,o.id LIMIT $2")
-                .bind(now).bind(self.cfg.source_batch_size).fetch_all(&self.pool).await?;
+            let rows=sqlx::query("SELECT o.id,o.event_type,o.source_id,o.occurred_at,o.metadata,s.broadcaster_twitch_id FROM twitch_clip_contest_effort_outbox o JOIN twitch_clip_contest_submissions s ON s.id=(o.metadata->>'submission_id')::bigint WHERE o.occurred_at <= $1 AND NOT EXISTS(SELECT 1 FROM partner_effort_source_receipts r WHERE r.source='clips' AND r.source_id=o.id::text) AND NOT (o.id=ANY($3)) ORDER BY o.occurred_at,o.id LIMIT $2")
+                .bind(now).bind(self.cfg.source_batch_size).bind(&deferred).fetch_all(&self.pool).await?;
             if rows.is_empty() {
                 break;
             }
@@ -188,8 +197,12 @@ impl Engine {
                     viewer_twitch_user_id: None,
                     metadata,
                 };
-                self.consume("clips", &outbox.to_string(), event, now)
-                    .await?;
+                if !self
+                    .consume("clips", &outbox.to_string(), event, now)
+                    .await?
+                {
+                    deferred.push(outbox);
+                }
             }
         }
         Ok(())

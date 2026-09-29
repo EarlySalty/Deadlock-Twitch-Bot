@@ -158,10 +158,10 @@ impl Engine {
             return Err(Error::Source("disabled"));
         }
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_source_state WHERE source=ANY($1) AND healthy AND successful_at >= $2 AND successful_at <= $3")
-            .bind(vec!["invites","referrals","clips","shared_chat","steam_party","engine"])
+            .bind(vec!["invites","referrals","clips","shared_chat","steam_party","engine","category_collection"])
             .bind(now-chrono::Duration::seconds(self.cfg.poll_seconds as i64*3+self.cfg.source_timeout_seconds as i64*5))
             .bind(now).fetch_one(&self.pool).await?;
-        if count != 6 {
+        if count != 7 {
             return Err(Error::Source("not_current"));
         }
         Ok(())

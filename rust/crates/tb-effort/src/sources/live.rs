@@ -2,6 +2,7 @@ use crate::{
     evidence::continuous_seconds, valid_id, Engine, Error, Event, EventKind, Partner, Result,
 };
 use chrono::{DateTime, Duration, Utc};
+use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -173,56 +174,107 @@ impl Engine {
         if live.is_empty() {
             return Ok(());
         }
-        let previous_ok: bool=sqlx::query_scalar("SELECT COALESCE((SELECT healthy FROM partner_effort_source_state WHERE source='shared_chat'),FALSE)").fetch_one(&self.pool).await?;
-        if !previous_ok {
-            sqlx::query("DELETE FROM partner_effort_shared_chat_observations")
+        let active: HashSet<_> = live.iter().map(|p| p.twitch_user_id.clone()).collect();
+        let active = &active;
+        let mut results =
+            stream::iter(live)
+                .map(|partner| async move {
+                    self.shared_chat_partner(helix, &partner, active, now).await
+                })
+                .buffer_unordered(4);
+        let mut failure = None;
+        while let Some(result) = results.next().await {
+            if let Err(error) = result {
+                failure = Some(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    async fn shared_chat_partner(
+        &self,
+        helix: &tb_transport_twitch::HelixClient,
+        partner: &Live,
+        active: &HashSet<String>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let session = helix
+            .get_shared_chat_session(&partner.twitch_user_id)
+            .await
+            .map_err(|_| Error::Source("shared_chat"))?;
+        let Some(session) = session else {
+            sqlx::query("DELETE FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1")
+                .bind(&partner.twitch_user_id)
                 .execute(&self.pool)
                 .await?;
-        }
-        let active: HashSet<_> = live.iter().map(|p| p.twitch_user_id.clone()).collect();
-        for partner in live {
-            let response = helix.get_shared_chat_session(&partner.twitch_user_id).await;
-            if response.is_err() {
-                sqlx::query("DELETE FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1").bind(&partner.twitch_user_id).execute(&self.pool).await?;
-                return Err(Error::Source("shared_chat"));
-            }
-            let session = response.map_err(|_| Error::Source("shared_chat"))?;
-            let Some(session) = session else {
-                sqlx::query("DELETE FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1").bind(&partner.twitch_user_id).execute(&self.pool).await?;
-                continue;
-            };
-            let peers: Vec<_> = session
-                .participants
-                .iter()
-                .filter(|p| {
-                    p.broadcaster_id != partner.twitch_user_id && active.contains(&p.broadcaster_id)
-                })
-                .map(|p| p.broadcaster_id.clone())
-                .collect();
-            sqlx::query("DELETE FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1 AND (stream_id<>$2 OR NOT(other_partner_twitch_user_id=ANY($3)))").bind(&partner.twitch_user_id).bind(&partner.stream_id).bind(&peers).execute(&self.pool).await?;
-            for other in peers {
-                let previous: Option<(String,DateTime<Utc>,DateTime<Utc>,i64)>=sqlx::query_as("SELECT shared_chat_session_id,first_seen_at,last_seen_at,confirmed_seconds FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1 AND stream_id=$2 AND other_partner_twitch_user_id=$3")
-                    .bind(&partner.twitch_user_id).bind(&partner.stream_id).bind(&other).fetch_optional(&self.pool).await?;
-                let (seconds, first) = previous.map_or((0, now), |(s, first, last, seconds)| {
+            return Ok(());
+        };
+        let peers: Vec<_> = session
+            .participants
+            .iter()
+            .filter(|p| {
+                p.broadcaster_id != partner.twitch_user_id && active.contains(&p.broadcaster_id)
+            })
+            .map(|p| p.broadcaster_id.clone())
+            .collect();
+        sqlx::query("DELETE FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1 AND (stream_id<>$2 OR NOT(other_partner_twitch_user_id=ANY($3)))")
+            .bind(&partner.twitch_user_id)
+            .bind(&partner.stream_id)
+            .bind(&peers)
+            .execute(&self.pool)
+            .await?;
+        for other in peers {
+            let previous: Option<(String, DateTime<Utc>, DateTime<Utc>, i64)> = sqlx::query_as("SELECT shared_chat_session_id,first_seen_at,last_seen_at,confirmed_seconds FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id=$1 AND stream_id=$2 AND other_partner_twitch_user_id=$3")
+                .bind(&partner.twitch_user_id)
+                .bind(&partner.stream_id)
+                .bind(&other)
+                .fetch_optional(&self.pool)
+                .await?;
+            let (seconds, first) =
+                previous.map_or((0, now), |(session_id, first, last, seconds)| {
                     let elapsed = continuous_seconds(
                         last,
                         now,
                         seconds,
-                        s == session.session_id,
+                        session_id == session.session_id,
                         self.cfg.evidence_max_gap_seconds,
                     );
                     (elapsed, if elapsed == 0 { now } else { first })
                 });
-                sqlx::query("INSERT INTO partner_effort_shared_chat_observations(partner_twitch_user_id,stream_id,other_partner_twitch_user_id,shared_chat_session_id,first_seen_at,last_seen_at,confirmed_seconds) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(partner_twitch_user_id,stream_id,other_partner_twitch_user_id) DO UPDATE SET shared_chat_session_id=EXCLUDED.shared_chat_session_id,first_seen_at=EXCLUDED.first_seen_at,last_seen_at=EXCLUDED.last_seen_at,confirmed_seconds=EXCLUDED.confirmed_seconds")
-                    .bind(&partner.twitch_user_id).bind(&partner.stream_id).bind(&other).bind(&session.session_id).bind(first).bind(now).bind(seconds).execute(&self.pool).await?;
-                let source = format!("stream:{}:{}", partner.twitch_user_id, partner.stream_id);
-                if seconds >= 1800
-                    && !self
-                        .event_exists(&partner.twitch_user_id, "co_stream", &source)
-                        .await?
-                {
-                    self.append(&Event{partner_twitch_user_id:partner.twitch_user_id.clone(),kind:EventKind::CoStream,source_id:source,occurred_at:now,viewer_twitch_user_id:None,metadata:json!({"stream_id":partner.stream_id,"shared_chat_session_id":session.session_id,"other_partner_twitch_user_id":other,"confirmed_seconds":seconds,"first_seen_at":first})},now).await?;
-                }
+            sqlx::query("INSERT INTO partner_effort_shared_chat_observations(partner_twitch_user_id,stream_id,other_partner_twitch_user_id,shared_chat_session_id,first_seen_at,last_seen_at,confirmed_seconds) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(partner_twitch_user_id,stream_id,other_partner_twitch_user_id) DO UPDATE SET shared_chat_session_id=EXCLUDED.shared_chat_session_id,first_seen_at=EXCLUDED.first_seen_at,last_seen_at=EXCLUDED.last_seen_at,confirmed_seconds=EXCLUDED.confirmed_seconds")
+                .bind(&partner.twitch_user_id)
+                .bind(&partner.stream_id)
+                .bind(&other)
+                .bind(&session.session_id)
+                .bind(first)
+                .bind(now)
+                .bind(seconds)
+                .execute(&self.pool)
+                .await?;
+            let source = format!("stream:{}:{}", partner.twitch_user_id, partner.stream_id);
+            if seconds >= 1800
+                && !self
+                    .event_exists(&partner.twitch_user_id, "co_stream", &source)
+                    .await?
+            {
+                self.append(
+                    &Event {
+                        partner_twitch_user_id: partner.twitch_user_id.clone(),
+                        kind: EventKind::CoStream,
+                        source_id: source,
+                        occurred_at: now,
+                        viewer_twitch_user_id: None,
+                        metadata: json!({
+                            "stream_id": partner.stream_id,
+                            "shared_chat_session_id": session.session_id,
+                            "other_partner_twitch_user_id": other,
+                            "confirmed_seconds": seconds,
+                            "first_seen_at": first
+                        }),
+                    },
+                    now,
+                )
+                .await?;
             }
         }
         Ok(())

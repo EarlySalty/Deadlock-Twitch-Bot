@@ -72,6 +72,27 @@ struct Assignment {
 }
 
 impl Engine {
+    async fn invite_available(&self, partner: &Partner, week: NaiveDate) -> Result<bool> {
+        let (start, end, _) = berlin_week_bounds(midnight(week));
+        let qualified: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM partner_effort_events WHERE partner_twitch_user_id=$1 AND event_type='qualified_invite' AND occurred_at >= $2 AND occurred_at < $3)")
+            .bind(&partner.twitch_user_id)
+            .bind(start)
+            .bind(end)
+            .fetch_one(&self.pool)
+            .await?;
+        if qualified {
+            return Ok(true);
+        }
+        let available: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bot.twitch_invite_joins WHERE guild_id=$1 AND streamer_twitch_user_id=$2 AND ((eligible AND status='pending' AND joined_at + INTERVAL '336 hours' < $3 AND joined_at + INTERVAL '720 hours' >= $4) OR (status='qualified' AND qualified_at >= $4 AND qualified_at < $3)))")
+            .bind(self.cfg.community_guild_id)
+            .bind(&partner.twitch_user_id)
+            .bind(end)
+            .bind(start)
+            .fetch_one(self.central()?)
+            .await?;
+        Ok(available)
+    }
+
     async fn assign(&self, partner: &Partner, now: DateTime<Utc>) -> Result<()> {
         let (_, _, week) = berlin_week_bounds(now);
         let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2")
@@ -82,7 +103,10 @@ impl Engine {
         if existing != 0 {
             return Err(Error::Invalid("quest_assignment_count"));
         }
-        let mut available = vec![QuestKind::Invite, QuestKind::StreamExtra];
+        let mut available = vec![QuestKind::StreamExtra];
+        if self.invite_available(partner, week).await? {
+            available.push(QuestKind::Invite);
+        }
         if self.helix.is_some() && self.active_partners().await?.len() > 1 {
             available.push(QuestKind::CoStream);
         }
@@ -266,6 +290,10 @@ impl Engine {
     }
 
     pub(crate) async fn settle(&self, now: DateTime<Utc>) -> Result<()> {
+        let coverage = self.category_collection_coverage(now).await;
+        self.source_state("category_collection", now, &coverage)
+            .await?;
+        coverage?;
         self.refresh_stream_evidence(now).await?;
         for partner in self.active_partners().await? {
             self.assign(&partner, now).await?;
