@@ -700,16 +700,17 @@ impl UploadWorker {
         let mut cache = HashMap::new();
         for (queue_id, streamer_login, publish_id, previous) in rows {
             let Some(publish_id) = publish_id else {
-                if let Err(error) = update_upload_status(
-                    &self.task.pool,
-                    queue_id,
-                    "failed",
-                    None,
-                    Some("TikTok-Vorgangsnummer fehlt. Bitte prüfe dein Postfach vor einem erneuten Upload."),
+                let next_check = (Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+                if let Err(error) = sqlx::query(
+                    "UPDATE twitch_clips_upload_queue SET last_attempt_at = $1::text::timestamptz, last_error = $2 WHERE id = $3 AND status IN ('inbox', 'inbox_pending')",
                 )
+                .bind(next_check)
+                .bind("Bitte prüfe dein TikTok-Postfach. Der Status dieses Clips konnte nicht bestätigt werden; ein zweiter Upload bleibt gesperrt.")
+                .bind(queue_id)
+                .execute(&self.task.pool)
                 .await
                 {
-                    tracing::warn!(%error, queue_id, "TikTok-Postfachstatus ohne Vorgangsnummer konnte nicht abgeschlossen werden");
+                    tracing::warn!(%error, queue_id, "TikTok-Postfachstatus ohne Vorgangsnummer konnte nicht vertagt werden");
                 }
                 continue;
             };
@@ -1303,13 +1304,16 @@ mod tests {
             Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
         let worker = UploadWorker::new(pool.clone(), CredentialManager::new(pool.clone(), cipher));
         worker.refresh_tiktok_inbox().await;
-        let first: String =
-            sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
-                .bind(queue_ids[0])
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(first, "failed");
+        let (first, reason, delayed): (String, Option<String>, bool) = sqlx::query_as(
+            "SELECT status, last_error, last_attempt_at > NOW() + INTERVAL '23 hours' FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_ids[0])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(first, "inbox");
+        assert!(reason.is_some());
+        assert!(delayed);
         let second_updated: bool = sqlx::query_scalar(
             "SELECT last_attempt_at > NOW() - INTERVAL '1 minute' FROM twitch_clips_upload_queue WHERE id = $1",
         )
