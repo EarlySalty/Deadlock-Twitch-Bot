@@ -55,8 +55,8 @@ pub(crate) fn draw(id: &str, week: NaiveDate, pool: &[QuestKind]) -> Result<Vec<
         .collect();
     ranked.sort_unstable_by_key(|(hash, _)| *hash);
     let selected: Vec<_> = ranked.into_iter().take(3).map(|(_, q)| q).collect();
-    if selected.len() != 3 {
-        return Err(Error::Source("fewer_than_three_achievable_quests"));
+    if selected.is_empty() {
+        return Err(Error::Source("no_achievable_quests"));
     }
     Ok(selected)
 }
@@ -76,11 +76,11 @@ impl Engine {
         let (_, _, week) = berlin_week_bounds(now);
         let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2")
             .bind(&partner.twitch_user_id).bind(week).fetch_one(&self.pool).await?;
-        if existing == 3 {
+        if (1..=3).contains(&existing) {
             return Ok(());
         }
         if existing != 0 {
-            return Err(Error::Invalid("partial_quest_assignment"));
+            return Err(Error::Invalid("quest_assignment_count"));
         }
         let mut available = vec![QuestKind::Invite, QuestKind::StreamExtra];
         if self.helix.is_some() && self.active_partners().await?.len() > 1 {
@@ -147,7 +147,7 @@ impl Engine {
     async fn assignments(&self, id: &str, week: NaiveDate) -> Result<Vec<Assignment>> {
         let rows: Vec<Assignment> = sqlx::query_as("SELECT quest_key,goal,baseline_minutes,reward_points,bonus_points,rules_hash FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2 ORDER BY position")
             .bind(id).bind(week).fetch_all(&self.pool).await?;
-        if rows.len() != 3 {
+        if rows.is_empty() || rows.len() > 3 {
             return Err(Error::Source("quests_not_assigned"));
         }
         Ok(rows)
@@ -235,7 +235,7 @@ impl Engine {
             self.append_tx(&mut tx, &event, q.reward_points, &q.rules_hash, now)
                 .await?;
         }
-        if done.len() == 3 {
+        if done.len() == assignments.len() {
             let source = format!("quest:{id}:{week}:all_three");
             let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM partner_effort_events WHERE partner_twitch_user_id=$1 AND event_type='quest_done' AND source_id=$2)").bind(id).bind(&source).fetch_one(&mut *tx).await?;
             if !exists {
@@ -298,6 +298,7 @@ mod tests {
             draw("1", week, &pool).unwrap()
         );
         assert!(!draw("1", week, &pool).unwrap().contains(&QuestKind::Party));
-        assert!(draw("1", week, &pool[..2]).is_err());
+        assert_eq!(draw("1", week, &pool[..2]).unwrap().len(), 2);
+        assert!(draw("1", week, &[]).is_err());
     }
 }

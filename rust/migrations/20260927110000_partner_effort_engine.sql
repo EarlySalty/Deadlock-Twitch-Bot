@@ -12,6 +12,7 @@ CREATE TABLE partner_effort_events (
     source_id TEXT NOT NULL CHECK (length(source_id) BETWEEN 1 AND 512),
     points INTEGER NOT NULL CHECK (points >= 0),
     occurred_at TIMESTAMPTZ NOT NULL,
+    credited_at TIMESTAMPTZ NOT NULL,
     viewer_twitch_user_id TEXT CHECK (viewer_twitch_user_id ~ '^[0-9]+$'),
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(metadata) = 'object'),
     rules_hash TEXT NOT NULL,
@@ -19,8 +20,8 @@ CREATE TABLE partner_effort_events (
     UNIQUE (partner_twitch_user_id,event_type,source_id),
     CHECK (viewer_twitch_user_id IS NULL OR event_type = 'qualified_invite')
 );
-CREATE INDEX partner_effort_events_time_idx ON partner_effort_events (occurred_at,partner_twitch_user_id);
-CREATE INDEX partner_effort_events_partner_time_idx ON partner_effort_events (partner_twitch_user_id,occurred_at);
+CREATE INDEX partner_effort_events_time_idx ON partner_effort_events (credited_at,partner_twitch_user_id);
+CREATE INDEX partner_effort_events_partner_time_idx ON partner_effort_events (partner_twitch_user_id,credited_at);
 CREATE INDEX partner_effort_events_viewers_idx ON partner_effort_events (partner_twitch_user_id,viewer_twitch_user_id) WHERE event_type='qualified_invite';
 CREATE UNIQUE INDEX partner_effort_events_single_attribution_idx ON partner_effort_events(event_type,source_id) WHERE event_type IN ('qualified_invite','streamer_referral','clip_submitted','clip_top3');
 
@@ -112,7 +113,7 @@ CREATE TABLE partner_effort_source_receipts (
 CREATE TABLE partner_effort_source_cursors (
     source TEXT NOT NULL,
     lane TEXT NOT NULL CHECK (lane IN ('recent','reconcile')),
-    source_id BIGINT NOT NULL DEFAULT 0 CHECK (source_id >= 0),
+    source_id TEXT NOT NULL DEFAULT '',
     occurred_at TIMESTAMPTZ NOT NULL,
     completed_once BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (source,lane)

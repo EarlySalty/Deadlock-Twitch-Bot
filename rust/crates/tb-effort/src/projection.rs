@@ -47,7 +47,7 @@ pub(crate) fn streak_weeks(
 impl Engine {
     pub(crate) async fn refresh_streak(&self, partner: &Partner, now: DateTime<Utc>) -> Result<()> {
         let id = &partner.twitch_user_id;
-        let qualified: Vec<(NaiveDate,bool,bool)> = sqlx::query_as("WITH weeks AS (SELECT week_start FROM partner_effort_stream_weeks WHERE partner_twitch_user_id=$1 UNION SELECT date_trunc('week',occurred_at AT TIME ZONE 'Europe/Berlin')::date FROM partner_effort_events WHERE partner_twitch_user_id=$1) SELECT w.week_start,EXISTS(SELECT 1 FROM partner_effort_stream_weeks s WHERE s.partner_twitch_user_id=$1 AND s.week_start=w.week_start AND deadlock_seconds>=1800) AS streamed,EXISTS(SELECT 1 FROM partner_effort_events e WHERE e.partner_twitch_user_id=$1 AND e.occurred_at>=w.week_start::timestamp AT TIME ZONE 'Europe/Berlin' AND e.occurred_at<(w.week_start+7)::timestamp AT TIME ZONE 'Europe/Berlin') AS effort FROM weeks w WHERE w.week_start <= $2 ORDER BY w.week_start")
+        let qualified: Vec<(NaiveDate,bool,bool)> = sqlx::query_as("WITH weeks AS (SELECT week_start FROM partner_effort_stream_weeks WHERE partner_twitch_user_id=$1 UNION SELECT date_trunc('week',occurred_at AT TIME ZONE 'Europe/Berlin')::date FROM partner_effort_events WHERE partner_twitch_user_id=$1) SELECT w.week_start,EXISTS(SELECT 1 FROM partner_effort_stream_weeks s WHERE s.partner_twitch_user_id=$1 AND s.week_start=w.week_start AND deadlock_seconds>=1800) AS streamed,EXISTS(SELECT 1 FROM partner_effort_events e WHERE e.partner_twitch_user_id=$1 AND e.occurred_at>=w.week_start::timestamp AT TIME ZONE 'Europe/Berlin' AND e.occurred_at<(w.week_start+7)::timestamp AT TIME ZONE 'Europe/Berlin' AND NOT (e.event_type='quest_done' AND e.metadata->>'quest'='stream_above_average')) AS effort FROM weeks w WHERE w.week_start <= $2 ORDER BY w.week_start")
             .bind(id).bind(berlin_week_start(now)).fetch_all(&self.pool).await?;
         let evidence: BTreeMap<_, _> = qualified.iter().map(|(w, s, e)| (*w, (*s, *e))).collect();
         let weeks = qualified.into_iter().map(|(w, s, e)| (w, s && e)).collect();
@@ -274,7 +274,27 @@ impl Engine {
 
     async fn season(&self, id: &str, now: DateTime<Utc>) -> Result<SeasonResponse> {
         let (start, end, month) = berlin_month_bounds(now);
-        let sql=format!("WITH scores AS (SELECT p.twitch_user_id,COALESCE(SUM(e.points),0)::bigint AS points,COUNT(*) FILTER(WHERE e.event_type='qualified_invite') AS invites,MAX(e.occurred_at) FILTER(WHERE e.points>0) AS reached FROM (SELECT twitch_user_id FROM twitch_partners WHERE {ACTIVE}) p LEFT JOIN partner_effort_events e ON e.partner_twitch_user_id=p.twitch_user_id AND e.occurred_at >= $1 AND e.occurred_at < $2 GROUP BY p.twitch_user_id),ranked AS (SELECT twitch_user_id,points,ROW_NUMBER() OVER(ORDER BY points DESC,invites DESC,reached ASC NULLS LAST,twitch_user_id) AS rank,COUNT(*) OVER() AS active_partners FROM scores) SELECT points,rank,active_partners FROM ranked WHERE twitch_user_id=$3");
+        let sql = format!(
+            r#"WITH event_running AS (
+            SELECT e.partner_twitch_user_id,e.event_type,e.credited_at,e.id,
+                SUM(e.points) OVER (PARTITION BY e.partner_twitch_user_id ORDER BY e.credited_at,e.id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)::bigint AS running_points,
+                SUM(e.points) OVER (PARTITION BY e.partner_twitch_user_id)::bigint AS final_points
+            FROM partner_effort_events e WHERE e.credited_at >= $1 AND e.credited_at < $2
+        ), monthly AS (
+            SELECT partner_twitch_user_id AS twitch_user_id,MAX(final_points)::bigint AS points,
+                COUNT(*) FILTER(WHERE event_type='qualified_invite')::bigint AS invites,
+                MIN(credited_at) FILTER(WHERE running_points=final_points) AS reached
+            FROM event_running GROUP BY partner_twitch_user_id
+        ), scores AS (
+            SELECT p.twitch_user_id,COALESCE(m.points,0)::bigint AS points,
+                COALESCE(m.invites,0)::bigint AS invites,
+                CASE WHEN COALESCE(m.points,0)=0 THEN $1 ELSE m.reached END AS reached
+            FROM (SELECT twitch_user_id FROM twitch_partners WHERE {ACTIVE}) p
+            LEFT JOIN monthly m ON m.twitch_user_id=p.twitch_user_id
+        ), ranked AS (
+            SELECT twitch_user_id,points,ROW_NUMBER() OVER(ORDER BY points DESC,invites DESC,reached ASC NULLS LAST,twitch_user_id) AS rank,COUNT(*) OVER() AS active_partners FROM scores
+        ) SELECT points,rank,active_partners FROM ranked WHERE twitch_user_id=$3"#
+        );
         let (points, rank, active_partners): (i64, i64, i64) = sqlx::query_as(&sql)
             .bind(start)
             .bind(end)

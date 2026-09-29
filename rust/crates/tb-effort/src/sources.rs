@@ -76,18 +76,17 @@ impl Engine {
             let count = rows.len();
             let ids: Vec<String> = rows
                 .iter()
-                .map(|row| {
-                    row.try_get::<i64, _>("join_event_id")
-                        .map(|id| id.to_string())
-                })
+                .map(|row| row.try_get::<String, _>("cursor_id"))
                 .collect::<std::result::Result<_, _>>()?;
             let seen = self.seen("invites", &ids).await?;
             for row in rows {
-                let join: i64 = row.try_get("join_event_id")?;
+                let join: String = row.try_get("cursor_id")?;
                 let at: DateTime<Utc> = row.try_get("qualified_at")?;
-                if !seen.contains(&join.to_string()) {
-                    let id: Option<String> = row.try_get("twitch_user_id")?;
-                    let id = id.ok_or(Error::Invalid("invite_streamer_identity"))?;
+                if !seen.contains(&join) {
+                    let id: Option<String> = row.try_get("streamer_twitch_user_id")?;
+                    let id = id
+                        .filter(|id| crate::valid_id(id))
+                        .ok_or(Error::Invalid("invite_streamer_identity"))?;
                     let viewer: Option<String> = row.try_get("inviter_twitch_user_id")?;
                     let event = Event {
                         partner_twitch_user_id: id.clone(),
@@ -95,12 +94,11 @@ impl Engine {
                         source_id: format!("discord-join:{join}"),
                         occurred_at: at,
                         viewer_twitch_user_id: viewer.filter(|v| v != &id),
-                        metadata: json!({"join_event_id":join,"guild_id":row.try_get::<i64,_>("guild_id")?,"discord_user_id":row.try_get::<i64,_>("user_id")?}),
+                        metadata: json!({"join_id":join,"guild_id":row.try_get::<i64,_>("guild_id")?,"discord_user_id":row.try_get::<i64,_>("user_id")?}),
                     };
-                    self.consume("invites", &join.to_string(), event, now)
-                        .await?;
+                    self.consume("invites", &join, event, now).await?;
                 }
-                self.advance_cursor("invites", lane, join, at).await?;
+                self.advance_cursor("invites", lane, &join, at).await?;
             }
             ready &= self
                 .finish_page("invites", lane, count, cursor.completed_once)
@@ -120,33 +118,34 @@ impl Engine {
             let count = rows.len();
             let ids: Vec<String> = rows
                 .iter()
-                .map(|row| {
-                    row.try_get::<i64, _>("join_event_id")
-                        .map(|id| id.to_string())
-                })
+                .map(|row| row.try_get::<String, _>("cursor_id"))
                 .collect::<std::result::Result<_, _>>()?;
             let seen = self.seen("referrals", &ids).await?;
             for row in rows {
-                let join: i64 = row.try_get("join_event_id")?;
+                let referred: String = row.try_get("cursor_id")?;
                 let at: DateTime<Utc> = row.try_get("credited_at")?;
-                if !seen.contains(&join.to_string()) {
-                    let id: String = row.try_get("inviter_twitch_user_id")?;
-                    let referred: String = row.try_get("invited_twitch_user_id")?;
-                    if id == referred {
-                        return Err(Error::Invalid("self_referral"));
+                if !seen.contains(&referred) {
+                    let id: String = row.try_get("streamer_twitch_user_id")?;
+                    let source_id: String = row.try_get("source_id")?;
+                    if !crate::valid_id(&id)
+                        || !crate::valid_id(&referred)
+                        || id == referred
+                        || source_id != format!("streamer_referral:{referred}")
+                    {
+                        return Err(Error::Invalid("referral_identity"));
                     }
                     let event = Event {
                         partner_twitch_user_id: id,
                         kind: EventKind::StreamerReferral,
-                        source_id: format!("referred-partner:{referred}"),
+                        source_id,
                         occurred_at: at,
                         viewer_twitch_user_id: None,
-                        metadata: json!({"join_event_id":join,"referred_twitch_user_id":referred}),
+                        metadata: json!({"referred_twitch_user_id":referred}),
                     };
-                    self.consume("referrals", &join.to_string(), event, now)
-                        .await?;
+                    self.consume("referrals", &referred, event, now).await?;
                 }
-                self.advance_cursor("referrals", lane, join, at).await?;
+                self.advance_cursor("referrals", lane, &referred, at)
+                    .await?;
             }
             ready &= self
                 .finish_page("referrals", lane, count, cursor.completed_once)
