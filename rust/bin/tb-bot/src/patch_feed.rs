@@ -323,7 +323,7 @@ async fn observe_index(
                 sqlx::query(
                     "INSERT INTO twitch_patch_feed_observations \
                      (patch_id, observed_at, status, finalized_at) \
-                     VALUES ($1, NOW(), 'pending', NULL) ON CONFLICT (patch_id) DO NOTHING",
+                     VALUES ($1, statement_timestamp(), 'pending', NULL) ON CONFLICT (patch_id) DO NOTHING",
                 )
                 .bind(id)
                 .execute(&mut *tx)

@@ -6,7 +6,7 @@ status: erledigt (2026-09-29)
 
 Arbeitsbasis: Branch `feat/twitch-patch-integration-20260928`, Startspitze `22699c2430a0ae3c3476e451890a13341ed23b2b`, `origin/main` `cf3d77085ed350554914b14c3d9981d37b95903a`. Die geprüften Spitzen A `b94eab52`, B `2163de98`, C `c61f168c` und Orchestrationsstand `4766b166` waren bereits integriert.
 
-D1: Der privilegierte interne HTTP-Einstieg ist entfernt. Der Website-Feed reicht geprüfte Artikel direkt an denselben `PatchReceiver` weiter. Der Receiver verlangt eine passende Beobachtung mit Status `pending` und identischem `observed_at`.
+D1: Der privilegierte interne HTTP-Einstieg ist entfernt. Der Website-Feed reicht geprüfte Artikel direkt an denselben `PatchReceiver` weiter. Der Receiver verlangt eine passende Beobachtung mit Status `pending` und identischem `observed_at`. Das Feed-Ledger verwendet `statement_timestamp()`, damit die Empfängerprüfung des Insert-Triggers denselben PostgreSQL-Statementzeitpunkt sieht.
 
 D2: Die Patch-Suppression propagiert Datenbankfehler bis zum Sender. Fehler beenden die Prüfung ohne Chat-POST. Die allgemeine Chat-Policy bleibt unverändert.
 
@@ -26,13 +26,14 @@ Alle Cargo-Befehle liefen aus `rust/` mit `PATH="$HOME/.cargo/bin:$PATH" SQLX_OF
 
 - `cargo check -q -p tb-bot -p tb-internal-api -p tb-chat -p tb-transport-twitch --all-targets`: erfolgreich.
 - `cargo clippy -q -p tb-bot -p tb-internal-api -p tb-chat -p tb-transport-twitch --all-targets --all-features`: erfolgreich. Verbleibende Warnungen liegen in unveränderten Modulen.
-- `cargo test -q -p tb-internal-api -p tb-transport-twitch -- --include-ignored --test-threads=2`: 455 bestanden, 0 fehlgeschlagen, 0 ignoriert. Enthält isolierte PostgreSQL-16-Tests einschließlich Runtime-Rollenmatrix.
+- `cargo test -q -p tb-internal-api -p tb-transport-twitch -- --include-ignored --test-threads=2`: 455 bestanden, 0 fehlgeschlagen, 0 ignoriert. Enthält isolierte PostgreSQL-16-Tests der Suppressions- und Ledgerpfade.
 - `cargo test -q -p tb-chat combined_ -- --include-ignored --test-threads=2`: 3 bestanden, 0 fehlgeschlagen, 0 ignoriert, 903 gefiltert.
 - `cargo test -q -p tb-chat source_only -- --include-ignored --test-threads=2`: 6 bestanden, 0 fehlgeschlagen, 0 ignoriert, 900 gefiltert.
 - `cargo test -q -p tb-bot --bin tb-bot -- --include-ignored --test-threads=2`: 301 bestanden, 1 fehlgeschlagen, 0 ignoriert. Der einzige Fehler `regression_silentban_command_wirkt_in_autoban_pipeline_nach_rename` ist der bereits auf der unveränderten Basis reproduzierte Baseline-Fehler. Der Feed-Ende-zu-Ende-Test und die D6-Skip-Diagnose sind grün.
+- `cargo test -q -p tb-bot --bin tb-bot patch_feed::tests::feed_to_source_only_receiver_uses_isolated_postgres_runtime_role -- --include-ignored --test-threads=2`: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert, 301 gefiltert. Isoliertes PostgreSQL 16, echte Patch-Migration und Rollenmatrix, Website und Twitch lokal gemockt.
 - `git diff --check`: erfolgreich. Geänderte Bereiche sind rustfmt-konform. `cargo fmt --all -- --check` bleibt wegen Repository-weitem Formatierungsdrift rot; kein globales Formatieren angewendet.
 
-TESTNACHWEIS[TW-1]: 765 passed, 0 ignored | Baseline: 1 rot
+TESTNACHWEIS[TW-1]: 766 passed, 0 ignored | Baseline: 1 rot
 
 ## Wirkung und Übergabegrenze
 
