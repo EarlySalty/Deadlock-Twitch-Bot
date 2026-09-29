@@ -788,6 +788,48 @@ twitch_chatter_rollup|last_seen_at|timestamp with time zone|NO|
 twitch_chatter_rollup|streamer_login|text|NO|
 twitch_chatter_rollup|total_messages|integer|YES|0
 twitch_chatter_rollup|total_sessions|integer|YES|0
+twitch_clip_command_events|clip_id|text|NO|
+twitch_clip_command_events|requested_at|timestamp with time zone|NO|
+twitch_clip_command_events|resolution_status|text|NO|
+twitch_clip_command_events|streamer_login|text|NO|
+twitch_clip_command_events|twitch_user_id|text|NO|
+twitch_clip_command_events|vod_id|text|YES|
+twitch_clip_command_events|vod_offset_s|integer|YES|
+twitch_clip_context_runs|analyzed_at|timestamp with time zone|NO|now()
+twitch_clip_context_runs|clip_duration_s|double precision|NO|
+twitch_clip_context_runs|clip_id|text|NO|
+twitch_clip_context_runs|clip_url|text|NO|
+twitch_clip_context_runs|moment_offset_s|integer|NO|
+twitch_clip_context_runs|peak_s|integer|YES|
+twitch_clip_context_runs|recommended_end_s|integer|YES|
+twitch_clip_context_runs|recommended_start_s|integer|YES|
+twitch_clip_context_runs|streamer_login|text|NO|
+twitch_clip_context_runs|stt_status|text|NO|
+twitch_clip_context_runs|visual_status|text|NO|
+twitch_clip_context_runs|vod_id|text|NO|
+twitch_clip_context_runs|window_end_s|integer|NO|
+twitch_clip_context_runs|window_start_s|integer|NO|
+twitch_clip_context_seconds|chat_messages|integer|NO|0
+twitch_clip_context_seconds|clip_id|text|NO|
+twitch_clip_context_seconds|death_screen|boolean|YES|
+twitch_clip_context_seconds|exclamation|boolean|YES|
+twitch_clip_context_seconds|kill_feed|text|YES|
+twitch_clip_context_seconds|laughter|boolean|YES|
+twitch_clip_context_seconds|lufs|double precision|YES|
+twitch_clip_context_seconds|objective|boolean|YES|
+twitch_clip_context_seconds|ocr_sampled|boolean|NO|false
+twitch_clip_context_seconds|peak_dbfs|double precision|YES|
+twitch_clip_context_seconds|scene_change|boolean|YES|
+twitch_clip_context_seconds|soul_jump|integer|YES|
+twitch_clip_context_seconds|souls|integer|YES|
+twitch_clip_context_seconds|speech|text|YES|
+twitch_clip_context_seconds|vod_second|integer|NO|
+twitch_clip_cut_templates|lead_seconds|integer|NO|
+twitch_clip_cut_templates|name|text|NO|
+twitch_clip_cut_templates|sample_count|integer|NO|
+twitch_clip_cut_templates|trail_seconds|integer|NO|
+twitch_clip_cut_templates|updated_at|timestamp with time zone|NO|now()
+twitch_clip_cut_templates|weights|jsonb|NO|
 twitch_clip_form_submissions|clip_id|integer|NO|
 twitch_clip_form_submissions|created_at|timestamp with time zone|NO|now()
 twitch_clip_form_submissions|error|text|YES|
