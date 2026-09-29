@@ -8,14 +8,16 @@ use tb_engagement::transcribe::OpenAiTranscriber;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::clip_context::{learn_template, suggest_cut, ContextSecond, CutProposal, CutTemplate};
+use crate::clip_context::{
+    clip_moment_from_start, learn_template, suggest_cut, ContextSecond, CutProposal, CutTemplate,
+};
 
 #[derive(Clone, Debug)]
 pub struct ClipInput {
     pub clip_id: String,
     pub clip_url: String,
     pub streamer_login: String,
-    pub created_at: DateTime<Utc>,
+    pub requested_at: DateTime<Utc>,
     pub vod_id: String,
     pub moment_offset_s: i32,
     pub duration_s: f64,
@@ -430,7 +432,7 @@ async fn apply_chat(
     timeline: &mut [ContextSecond],
 ) -> Result<(), String> {
     let beginning =
-        clip.created_at + chrono::Duration::seconds((start - clip.moment_offset_s) as i64);
+        clip.requested_at + chrono::Duration::seconds((start - clip.moment_offset_s) as i64);
     let ending = beginning + chrono::Duration::seconds(timeline.len() as i64);
     let rows = sqlx::query(
         "SELECT FLOOR(EXTRACT(EPOCH FROM (message_ts - $2::timestamptz)))::integer AS second, COUNT(*)::integer AS total
@@ -636,14 +638,16 @@ pub async fn available_stt() -> bool {
 
 pub async fn load_clips(
     read_pool: &PgPool,
+    write_pool: &PgPool,
     limit: i64,
     clip_id: Option<&str>,
 ) -> Result<Vec<ClipInput>, String> {
     let rows = sqlx::query(
         "SELECT clip_id, clip_url, streamer_login, created_at, vod_id, vod_offset_s,
-                COALESCE(duration_seconds,30)::double precision AS duration_s
+                duration_seconds::double precision AS duration_s
            FROM twitch_clips_social_media
           WHERE vod_id IS NOT NULL AND vod_offset_s IS NOT NULL AND vod_offset_s >= 0
+            AND duration_seconds IS NOT NULL AND duration_seconds >= 0.5
             AND game_id = '2132205352'
             AND created_at > NOW() - INTERVAL '21 days'
             AND ($2::text IS NULL OR clip_id=$2)
@@ -654,19 +658,40 @@ pub async fn load_clips(
     .fetch_all(read_pool)
     .await
     .map_err(|e| e.to_string())?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(ClipInput {
-                clip_id: row.try_get("clip_id").map_err(|e| e.to_string())?,
-                clip_url: row.try_get("clip_url").map_err(|e| e.to_string())?,
-                streamer_login: row.try_get("streamer_login").map_err(|e| e.to_string())?,
-                created_at: row.try_get("created_at").map_err(|e| e.to_string())?,
-                vod_id: row.try_get("vod_id").map_err(|e| e.to_string())?,
-                moment_offset_s: row.try_get("vod_offset_s").map_err(|e| e.to_string())?,
-                duration_s: row.try_get("duration_s").map_err(|e| e.to_string())?,
-            })
-        })
-        .collect()
+    let mut clips = Vec::with_capacity(rows.len());
+    for row in rows {
+        let clip_id: String = row.try_get("clip_id").map_err(|e| e.to_string())?;
+        let vod_id: String = row.try_get("vod_id").map_err(|e| e.to_string())?;
+        let start: i32 = row.try_get("vod_offset_s").map_err(|e| e.to_string())?;
+        let duration_s: f64 = row.try_get("duration_s").map_err(|e| e.to_string())?;
+        let fallback_moment = clip_moment_from_start(start, duration_s)
+            .ok_or_else(|| format!("ungültiger Clip-Zeitbereich: {clip_id}"))?;
+        let event: Option<(DateTime<Utc>, Option<i32>, Option<String>)> = sqlx::query_as(
+            "SELECT requested_at,moment_offset_s,vod_id FROM twitch_clip_command_events WHERE clip_id=$1",
+        )
+        .bind(&clip_id)
+        .fetch_optional(write_pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        let created_at: DateTime<Utc> = row.try_get("created_at").map_err(|e| e.to_string())?;
+        let (requested_at, moment_offset_s) = match event {
+            Some((requested_at, Some(moment), Some(event_vod))) if event_vod == vod_id => {
+                (requested_at, moment)
+            }
+            Some((requested_at, _, _)) => (requested_at, fallback_moment),
+            None => (created_at, fallback_moment),
+        };
+        clips.push(ClipInput {
+            clip_id,
+            clip_url: row.try_get("clip_url").map_err(|e| e.to_string())?,
+            streamer_login: row.try_get("streamer_login").map_err(|e| e.to_string())?,
+            requested_at,
+            vod_id,
+            moment_offset_s,
+            duration_s,
+        });
+    }
+    Ok(clips)
 }
 
 async fn load_timeline(pool: &PgPool, clip_id: &str) -> Result<Vec<ContextSecond>, String> {
@@ -748,6 +773,10 @@ pub async fn learn_and_store(write_pool: &PgPool) -> Result<Option<CutTemplate>,
         .map(|(_, moment, timeline)| (*moment, timeline.clone()))
         .collect();
     let Some(template) = learn_template(&training) else {
+        sqlx::query("DELETE FROM twitch_clip_cut_templates WHERE name='chat_clip_v1'")
+            .execute(write_pool)
+            .await
+            .map_err(|e| e.to_string())?;
         return Ok(None);
     };
     let weights = serde_json::to_value(&template.weights).map_err(|e| e.to_string())?;

@@ -64,6 +64,7 @@ use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
 use tb_social_media::clip::helix::HelixClipSource;
+use tb_social_media::clip_context::clip_moment_from_start;
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 use tb_transport_twitch::HelixClient;
 
@@ -175,7 +176,16 @@ impl ClipPort for ChatClipAdapter {
                             }
                             match source.fetch_clip_by_id(&clip.id, broadcaster_login).await {
                                 Ok(Some(detail))
-                                    if detail.vod_id.is_some() && detail.vod_offset_s.is_some() =>
+                                    if detail.vod_id.is_some()
+                                        && detail
+                                            .vod_offset_s
+                                            .and_then(|start| {
+                                                clip_moment_from_start(
+                                                    start,
+                                                    detail.duration_seconds,
+                                                )
+                                            })
+                                            .is_some() =>
                                 {
                                     resolved = Some(detail);
                                     break;
@@ -190,6 +200,11 @@ impl ClipPort for ChatClipAdapter {
                             .as_ref()
                             .and_then(|detail| detail.vod_id.as_deref());
                         let vod_offset_s = resolved.as_ref().and_then(|detail| detail.vod_offset_s);
+                        let moment_offset_s = resolved.as_ref().and_then(|detail| {
+                            detail.vod_offset_s.and_then(|start| {
+                                clip_moment_from_start(start, detail.duration_seconds)
+                            })
+                        });
                         let status = if resolved.is_some() {
                             "resolved"
                         } else {
@@ -197,8 +212,8 @@ impl ClipPort for ChatClipAdapter {
                         };
                         if let Err(error) = sqlx::query(
                             "INSERT INTO twitch_clip_command_events
-                                (clip_id, streamer_login, twitch_user_id, requested_at, vod_id, vod_offset_s, resolution_status)
-                             VALUES ($1,$2,$3,$4,$5,$6,$7)
+                                (clip_id, streamer_login, twitch_user_id, requested_at, vod_id, vod_offset_s, moment_offset_s, resolution_status)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                              ON CONFLICT (clip_id) DO NOTHING",
                         )
                         .bind(&clip.id)
@@ -207,6 +222,7 @@ impl ClipPort for ChatClipAdapter {
                         .bind(requested_at)
                         .bind(vod_id)
                         .bind(vod_offset_s)
+                        .bind(moment_offset_s)
                         .bind(status)
                         .execute(&self.pool)
                         .await
