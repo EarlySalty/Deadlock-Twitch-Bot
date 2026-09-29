@@ -283,6 +283,13 @@ impl DeadlockPatches {
                     return;
                 }
             }
+            Ok(Settlement::Uncertain(retry_at)) => {
+                tracing::warn!(
+                    "DeadlockPatches: Steam-Antwort vor Neustart unbekannt, Abruf pausiert"
+                );
+                self.defer(until(retry_at));
+                return;
+            }
             Err(error) => {
                 tracing::warn!(
                     ?error,
@@ -337,7 +344,13 @@ impl DeadlockPatches {
                     self.defer(until(cooldown));
                 }
             }
-            Ok(Settlement::Clear) => {}
+            Ok(Settlement::Clear | Settlement::Uncertain(_)) => {
+                tracing::warn!(
+                    "DeadlockPatches: Steam-Beobachtung nicht bestätigt, Abruf pausiert"
+                );
+                self.defer(FAILURE_BACKOFF);
+                return;
+            }
             Err(error) => {
                 tracing::warn!(
                     ?error,
@@ -821,15 +834,113 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn neustart_mit_unbekanntem_request_status_sperrt() {
+    async fn fehlende_speicherung_und_beobachtung_erholen_sich_nach_neustart() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        let staging = pending.with_extension("tmp");
+        mount_reserve(&server, granted(17), 1).await;
+        mount_observe(
+            &server,
+            json!({"reservation_id": 17, "http_status": 503}),
+            ResponseTemplate::new(503),
+            1,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/news"))
+            .respond_with(move |_: &wiremock::Request| {
+                std::fs::create_dir(&staging).unwrap();
+                ResponseTemplate::new(503)
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            patches_for(&server, &pending)
+                .get_patch_digest_fragment("meta?")
+                .await,
+            ""
+        );
+        server.verify().await;
+        server.reset().await;
+        std::fs::remove_dir(pending.with_extension("tmp")).unwrap();
+
+        mount_observe(
+            &server,
+            json!({"reservation_id": 17, "http_status": null}),
+            observed(None),
+            1,
+        )
+        .await;
+        mount_reserve(&server, granted(18), 0).await;
+        assert_eq!(
+            patches_for(&server, &pending)
+                .get_patch_digest_fragment("patch?")
+                .await,
+            ""
+        );
+        let saved: Value = serde_json::from_slice(&std::fs::read(&pending).unwrap()).unwrap();
+        assert!(saved.get("uncertain_until").is_some());
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn neustart_mit_unbekanntem_request_status_haelt_24_stunden_an() {
         let server = MockServer::start().await;
         let dir = tempfile::tempdir().unwrap();
         let pending = dir.path().join("pending.json");
         ledger(&server, &pending).record_dispatch(13).await.unwrap();
+        mount_observe(
+            &server,
+            json!({"reservation_id": 13, "http_status": null}),
+            observed(None),
+            1,
+        )
+        .await;
+        mount_reserve(&server, granted(14), 0).await;
         let patches = patches_for(&server, &pending);
         assert_eq!(patches.get_patch_digest_fragment("meta?").await, "");
-        assert!(server.received_requests().await.unwrap().is_empty());
-        assert!(pending.exists());
+        let saved: Value = serde_json::from_slice(&std::fs::read(&pending).unwrap()).unwrap();
+        assert!(saved.get("uncertain_until").is_some());
+        assert_eq!(
+            patches_for(&server, &pending)
+                .get_patch_digest_fragment("patch?")
+                .await,
+            ""
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn bestaetigte_unbekannte_antwort_wird_nach_ablauf_freigegeben() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("pending.json");
+        std::fs::write(
+            &pending,
+            r#"{"reservation_id":13,"http_status":null,"ready":false,"uncertain_until":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        mount_reserve(&server, granted(16), 1).await;
+        mount_observe(
+            &server,
+            json!({"reservation_id": 16, "http_status": 200}),
+            observed(None),
+            1,
+        )
+        .await;
+        mount_news(
+            &server,
+            ResponseTemplate::new(200).set_body_json(news("Patch danach")),
+            1,
+        )
+        .await;
+        assert!(patches_for(&server, &pending)
+            .get_patch_digest_fragment("meta?")
+            .await
+            .contains("Patch danach"));
+        assert!(!pending.exists());
     }
 
     #[tokio::test]

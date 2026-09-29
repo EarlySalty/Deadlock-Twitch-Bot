@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const LEDGER_BASE_DEFAULT: &str = "http://127.0.0.1:8901";
-pub const PENDING_PATH_DEFAULT: &str = "data/steam_web_api/pending_observation.json";
+pub const PENDING_PATH_DEFAULT: &str =
+    "/var/lib/deadlock-twitch-bot/data/steam_web_api/pending_observation.json";
 const TOKEN_HEADER: &str = "X-Internal-Token";
 const TOKEN_CHAIN: [&str; 4] = [
     "SERVERSYNC_INTERNAL_TOKEN",
@@ -15,6 +16,7 @@ const TOKEN_CHAIN: [&str; 4] = [
     "TWITCH_INTERNAL_API_TOKEN",
 ];
 const LEDGER_TIMEOUT: Duration = Duration::from_secs(5);
+const UNKNOWN_OUTCOME_BACKOFF: chrono::Duration = chrono::Duration::hours(24);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reservation {
@@ -26,6 +28,7 @@ pub enum Reservation {
 pub enum Settlement {
     Clear,
     Confirmed(Option<DateTime<Utc>>),
+    Uncertain(DateTime<Utc>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +38,6 @@ pub enum LedgerError {
     Malformed,
     PendingUnreadable,
     PendingUnwritable,
-    PendingUnconfirmed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,8 @@ struct PendingObservation {
     #[serde(flatten)]
     observation: Observation,
     ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uncertain_until: Option<DateTime<Utc>>,
 }
 
 pub struct SteamWebApiLedger {
@@ -236,38 +240,35 @@ impl SteamWebApiLedger {
         }
     }
 
-    async fn read_pending(&self) -> Result<Option<Observation>, LedgerError> {
+    async fn read_pending(&self) -> Result<Option<PendingObservation>, LedgerError> {
         match tokio::fs::read(&self.pending_path).await {
-            Ok(bytes) => {
-                let pending: PendingObservation =
-                    serde_json::from_slice(&bytes).map_err(|_| LedgerError::PendingUnreadable)?;
-                if !pending.ready {
-                    return Err(LedgerError::PendingUnconfirmed);
-                }
-                Ok(Some(pending.observation))
-            }
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|_| LedgerError::PendingUnreadable),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(_) => Err(LedgerError::PendingUnreadable),
         }
     }
 
     pub async fn record_dispatch(&self, reservation_id: i64) -> Result<(), LedgerError> {
-        self.write_pending(&Observation::dispatched(reservation_id), false)
+        self.write_pending(&Observation::dispatched(reservation_id), false, None)
             .await
     }
 
     pub async fn record_pending(&self, observation: &Observation) -> Result<(), LedgerError> {
-        self.write_pending(observation, true).await
+        self.write_pending(observation, true, None).await
     }
 
     async fn write_pending(
         &self,
         observation: &Observation,
         ready: bool,
+        uncertain_until: Option<DateTime<Utc>>,
     ) -> Result<(), LedgerError> {
         let bytes = serde_json::to_vec(&PendingObservation {
             observation: observation.clone(),
             ready,
+            uncertain_until,
         })
         .map_err(|_| LedgerError::PendingUnwritable)?;
         if let Some(dir) = self
@@ -290,7 +291,38 @@ impl SteamWebApiLedger {
 
     pub async fn settle_pending(&self) -> Result<Settlement, LedgerError> {
         match self.read_pending().await? {
-            Some(observation) => self.settle(&observation).await,
+            Some(PendingObservation {
+                observation,
+                ready: true,
+                uncertain_until: None,
+            }) => self.settle(&observation).await,
+            Some(PendingObservation {
+                ready: false,
+                uncertain_until: Some(until),
+                ..
+            }) => {
+                if until > Utc::now() {
+                    return Ok(Settlement::Uncertain(until));
+                }
+                match tokio::fs::remove_file(&self.pending_path).await {
+                    Ok(()) => Ok(Settlement::Clear),
+                    Err(_) => Err(LedgerError::PendingUnwritable),
+                }
+            }
+            Some(PendingObservation {
+                observation,
+                ready: false,
+                uncertain_until: None,
+            }) if observation.http_status.is_none() && observation.retry_after.is_none() => {
+                let Settlement::Confirmed(cooldown) = self.observe(&observation).await? else {
+                    return Err(LedgerError::Malformed);
+                };
+                let until = Utc::now() + UNKNOWN_OUTCOME_BACKOFF;
+                let until = cooldown.map_or(until, |cooldown| until.max(cooldown));
+                self.write_pending(&observation, false, Some(until)).await?;
+                Ok(Settlement::Uncertain(until))
+            }
+            Some(_) => Err(LedgerError::PendingUnreadable),
             None => Ok(Settlement::Clear),
         }
     }
