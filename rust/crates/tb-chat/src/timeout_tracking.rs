@@ -215,6 +215,21 @@ impl ChatApi for TimeoutTrackingChatApi {
         .await
     }
 
+    async fn send_thread_reply(
+        &self,
+        broadcaster_id: &str,
+        parent_message_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.track_send_outcome(
+            broadcaster_id,
+            self.inner
+                .send_thread_reply(broadcaster_id, parent_message_id, message)
+                .await,
+        )
+        .await
+    }
+
     async fn send_source_only_message(
         &self,
         broadcaster_id: &str,

@@ -128,6 +128,19 @@ impl ChatApi for ChannelPolicyChatApi {
             .await
     }
 
+    async fn send_thread_reply(
+        &self,
+        broadcaster_id: &str,
+        parent_message_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.authorize(broadcaster_id, WriteAction::SendMessage, None)
+            .await?;
+        self.inner
+            .send_thread_reply(broadcaster_id, parent_message_id, message)
+            .await
+    }
+
     async fn send_whisper(&self, to_user_id: &str, message: &str) -> Result<bool, String> {
         self.authorize(to_user_id, WriteAction::SendWhisper, Some(to_user_id))
             .await?;

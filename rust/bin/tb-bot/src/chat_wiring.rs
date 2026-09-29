@@ -640,6 +640,9 @@ pub struct ChatRuntimePorts {
     pub invite_relay: Option<BrokerRelay>,
     pub invite_channel_id: u64,
     pub golive_tips_enabled: bool,
+    pub brain_client: tb_config::dashboard_options::BrainClientOptions,
+    pub brain_chat: tb_config::operations::BrainChatOptions,
+    pub brain_service_token: String,
     pub chat_persist_all_games: bool,
     pub lfg_pitch_enabled: bool,
     pub review_log_directory: std::path::PathBuf,
@@ -666,6 +669,9 @@ pub async fn build_runtime(
         invite_relay,
         invite_channel_id,
         golive_tips_enabled,
+        brain_client,
+        brain_chat,
+        brain_service_token,
         chat_persist_all_games,
         lfg_pitch_enabled,
         review_log_directory,
@@ -878,6 +884,17 @@ pub async fn build_runtime(
     let lfg_judge: Arc<dyn tb_chat::lfg_pitch::LfgJudge> = Arc::new(LlmLfgJudge::new(
         EngagementLlmClient::new(None, None, None, None),
     ));
+    let brain_chat_port =
+        crate::brain_chat_wiring::build(crate::brain_chat_wiring::BrainChatBuild {
+            client: &brain_client,
+            options: &brain_chat,
+            token: &brain_service_token,
+            bot_login: &token_manager.bot_login().await,
+            bot_user_id: &bot_user_id,
+            api: Arc::clone(&api),
+            timeout_guard: Arc::clone(&timeout_guard),
+            pool: pool.clone(),
+        });
     let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
@@ -898,6 +915,7 @@ pub async fn build_runtime(
         ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
         moderation,
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+        brain_chat: brain_chat_port,
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
         standard_replies: Arc::new(tb_chat::StandardReplies::new(
@@ -3300,6 +3318,7 @@ mod chat_notification_tests {
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(tb_chat::StandardReplies::new(
                 Arc::clone(&api_trait),
@@ -4033,7 +4052,7 @@ mod db_tests {
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
-mod invite_test_postgres;
+pub(crate) mod invite_test_postgres;
 
 #[cfg(test)]
 mod invite_offline_tests {

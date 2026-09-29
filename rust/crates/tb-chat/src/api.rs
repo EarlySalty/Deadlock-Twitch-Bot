@@ -122,6 +122,15 @@ pub trait ChatApi: Send + Sync {
         self.send_source_only_message(broadcaster_id, message).await
     }
 
+    async fn send_thread_reply(
+        &self,
+        _broadcaster_id: &str,
+        _parent_message_id: &str,
+        _message: &str,
+    ) -> Result<SendOutcome, String> {
+        Err("thread_reply_not_supported".to_string())
+    }
+
     /// `POST /helix/whispers` — braucht `user:manage:whispers` auf dem
     /// Bot-User-Token.
     async fn send_whisper(&self, _to_user_id: &str, _message: &str) -> Result<bool, String> {
@@ -170,25 +179,14 @@ pub trait ChatApi: Send + Sync {
     ) -> Result<BanOutcome, String>;
 
     /// `DELETE /helix/moderation/bans`.
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String>;
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String>;
 
     /// `DELETE /helix/moderation/chat` — einzelne Nachricht löschen.
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String>;
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String>;
 
     /// `GET /helix/users?id=` → `created_at` (Account-Alter für Spam-/
     /// Scam-Eskalatoren). None = User nicht gefunden.
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String>;
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String>;
 
     /// `GET /helix/users?login=` → user_id.
     async fn resolve_user_id(&self, login: &str) -> Result<Option<String>, String>;

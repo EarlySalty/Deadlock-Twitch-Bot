@@ -26,13 +26,18 @@ pub struct BrainClientOptions {
 }
 
 impl BrainClientOptions {
-    fn validate(&self) -> Result<(), FileError> {
+    pub(crate) fn validate_for(
+        &self,
+        endpoint_field: &'static str,
+        scopes_field: &'static str,
+        timeout_field: &'static str,
+    ) -> Result<(), FileError> {
         if self.mode != BrainClientMode::Legacy {
             let endpoint = self
                 .endpoint
                 .as_deref()
-                .ok_or_else(|| FileError::invalid("dashboard.options.brain_client.endpoint"))?;
-            crate::global::public_url(endpoint, "dashboard.options.brain_client.endpoint", true)?;
+                .ok_or_else(|| FileError::invalid(endpoint_field))?;
+            crate::global::public_url(endpoint, endpoint_field, true)?;
             if self.public_scopes.is_empty()
                 || self.public_scopes.len() > 32
                 || self.public_scopes.iter().any(|scope| {
@@ -43,20 +48,24 @@ impl BrainClientOptions {
                         })
                 })
             {
-                return Err(FileError::invalid(
-                    "dashboard.options.brain_client.public_scopes",
-                ));
+                return Err(FileError::invalid(scopes_field));
             }
         }
         if self
             .timeout_ms
             .is_some_and(|timeout| !(1..=60_000).contains(&timeout))
         {
-            return Err(FileError::invalid(
-                "dashboard.options.brain_client.timeout_ms",
-            ));
+            return Err(FileError::invalid(timeout_field));
         }
         Ok(())
+    }
+
+    fn validate(&self) -> Result<(), FileError> {
+        self.validate_for(
+            "dashboard.options.brain_client.endpoint",
+            "dashboard.options.brain_client.public_scopes",
+            "dashboard.options.brain_client.timeout_ms",
+        )
     }
 }
 
