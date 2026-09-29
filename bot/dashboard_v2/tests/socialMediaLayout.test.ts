@@ -12,10 +12,25 @@ import {
   clampCamPositionToTarget,
   clampToFrame,
   normalizeStoredCamPosition,
+  stackedGameCrop,
   toEvenSize,
   withBandHeight,
 } from '../src/utils/socialMediaLayout';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
+
+test('Stacked-Gameplay füllt den Restframe ohne Facecam im Quellcrop', () => {
+  const full = { x: 0, y: 0, w: 1920, h: 1080 };
+  assert.deepEqual(stackedGameCrop(full, { x: 41, y: 237, w: 303, h: 336 }, 1320), {
+    x: 519, y: 0, w: 882, h: 1080,
+  });
+  assert.deepEqual(stackedGameCrop({ x: 400, y: 0, w: 1000, h: 1080 }, { x: 41, y: 237, w: 303, h: 336 }, 1320), {
+    x: 459, y: 0, w: 882, h: 1080,
+  });
+  const cam = { x: 700, y: 0, w: 350, h: 500 };
+  const crop = stackedGameCrop(full, cam, 1320);
+  assert.ok(crop.x + crop.w <= cam.x || crop.x >= cam.x + cam.w || crop.y + crop.h <= cam.y || crop.y >= cam.y + cam.h);
+  assert.ok(Math.abs(crop.x + crop.w / 2 - 960) < 200);
+});
 
 // Der Zielframe ist der Vertrag zwischen Editor und Renderer
 // (rust/crates/tb-social-media/src/layout.rs: TARGET_WIDTH/TARGET_HEIGHT).

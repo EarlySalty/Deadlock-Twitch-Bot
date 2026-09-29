@@ -17,6 +17,7 @@ import {
   clampToFrame,
   formatBox,
   normalizeStoredCamPosition,
+  stackedGameCrop,
   withBandHeight,
 } from '@/utils/socialMediaLayout';
 
@@ -462,43 +463,12 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const gameHoehe = isStacked && camEnabled ? TARGET_HEIGHT - bandHeight : TARGET_HEIGHT;
   const gameOben = isStacked && camEnabled ? (bandHeight / TARGET_HEIGHT) * 100 : 0;
 
-  const gameAspect = layout.game_crop.w / layout.game_crop.h;
-  const gameVordergrundBreite = Math.min(TARGET_WIDTH, gameHoehe * gameAspect);
-  const gameVordergrundHoehe = gameVordergrundBreite / gameAspect;
-  const gameFlaeche = bildUrl && isStacked && camEnabled ? (
-    <>
-      <div className="absolute inset-0 overflow-hidden" style={{ filter: 'blur(18px)', transform: 'scale(1.2)' }}>
-        <AusschnittBild
-          bildUrl={bildUrl}
-          quelle={layout.source}
-          crop={layout.game_crop}
-          zielBreite={TARGET_WIDTH}
-          zielHoehe={gameHoehe}
-        />
-      </div>
-      <div
-        className="absolute overflow-hidden"
-        style={{
-          width: `${gameVordergrundBreite / TARGET_WIDTH * 100}%`,
-          height: `${gameVordergrundHoehe / gameHoehe * 100}%`,
-          left: `${(TARGET_WIDTH - gameVordergrundBreite) / TARGET_WIDTH * 50}%`,
-          top: `${(gameHoehe - gameVordergrundHoehe) / gameHoehe * 50}%`,
-        }}
-      >
-        <AusschnittBild
-          bildUrl={bildUrl}
-          quelle={layout.source}
-          crop={layout.game_crop}
-          zielBreite={gameVordergrundBreite}
-          zielHoehe={gameVordergrundHoehe}
-        />
-      </div>
-    </>
-  ) : bildUrl ? (
+  const gameCrop = isStacked && camEnabled ? stackedGameCrop(layout.game_crop, layout.cam_crop, gameHoehe) : layout.game_crop;
+  const gameFlaeche = bildUrl ? (
     <AusschnittBild
       bildUrl={bildUrl}
       quelle={layout.source}
-      crop={layout.game_crop}
+      crop={gameCrop}
       zielBreite={TARGET_WIDTH}
       zielHoehe={gameHoehe}
     />

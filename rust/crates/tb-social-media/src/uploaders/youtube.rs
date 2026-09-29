@@ -1032,7 +1032,10 @@ mod tests {
     }
 
     async fn temp_video() -> String {
-        let p = std::env::temp_dir().join("tb_youtube_test_clip.mp4");
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p =
+            std::env::temp_dir().join(format!("tb_youtube_test_{}_{}.mp4", std::process::id(), id));
         tokio::fs::write(&p, b"fake-video-bytes").await.unwrap();
         p.to_string_lossy().into_owned()
     }
