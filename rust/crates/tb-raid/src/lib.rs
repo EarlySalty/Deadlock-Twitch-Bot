@@ -194,3 +194,7 @@ pub use token_refresher::{
 };
 pub use token_store::{RaidAuthStore, RaidTokens};
 pub use util::parse_iso_utc;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

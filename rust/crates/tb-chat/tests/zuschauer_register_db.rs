@@ -1,3 +1,6 @@
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -30,11 +33,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(&schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(&schema, false))
         .execute(&admin)
         .await
         .unwrap();
@@ -214,7 +217,7 @@ async fn gate_lehnt_partner_streamer_raid_denylist_blacklist_outreach_ab() {
         let now = Utc::now();
         insert_register(&pool, uid, 0.2, now, now).await;
         seed_live_session(&pool, "somechannel", now - Duration::hours(2)).await;
-        sqlx::query(insert_sql).bind(uid).execute(&pool).await.unwrap();
+        sqlx::query(*insert_sql).bind(uid).execute(&pool).await.unwrap();
         let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
         let ev = event("somechannel", uid, "kandidat", false);
         assert_eq!(

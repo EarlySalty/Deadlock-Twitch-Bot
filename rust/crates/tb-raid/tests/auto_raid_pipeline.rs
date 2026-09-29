@@ -2,6 +2,9 @@
 //! Pending/Strikes/Blacklist. Echte Stores gegen den Test-Container,
 //! Stub-RaidApi mit per-Ziel-Verhalten, Stub-Fallback-Streams.
 
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -42,11 +45,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(&schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(&schema, false))
         .execute(&admin)
         .await
         .unwrap();

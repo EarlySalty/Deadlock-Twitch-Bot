@@ -368,11 +368,11 @@ mod tests {
 
     async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         let admin = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&admin)
             .await
             .unwrap();

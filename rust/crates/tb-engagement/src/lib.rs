@@ -44,3 +44,7 @@ pub mod style_examples;
 pub mod threads;
 pub mod transcribe;
 pub mod types;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

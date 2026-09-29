@@ -4,6 +4,9 @@
 //! Voraussetzung: `TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:<port>/postgres` (siehe `rust/scripts/test_db.sh up`)
 //! Prod-Schema: `twitch_outbound_chat_suppressions.suppressed_until = timestamp with time zone`.
 
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 
 use chrono::{Duration, Utc};
@@ -33,11 +36,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(&schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(&schema, false))
         .execute(&admin)
         .await
         .unwrap();
