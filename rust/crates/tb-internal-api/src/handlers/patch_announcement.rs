@@ -686,7 +686,6 @@ async fn process_inner(
         .filter(|id| *id > 0)
         .ok_or(PatchProcessError::Invalid("invalid article URL"))?;
     let mut tx = pool.begin().await.map_err(database_error)?;
-    // Match feed expiry's advisory lock without re-locking the callback's row.
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtextextended('twitch_patch_feed:' || $1::text, 0))",
     )
