@@ -62,7 +62,13 @@ impl Engine {
         let samples: Vec<Sample> = sqlx::query_as("SELECT user_id,stream_id,started_at,snapshot_at,sample_seconds FROM category_stream_snapshots WHERE user_id=ANY($1) AND snapshot_at >= $2 AND snapshot_at <= $3 ORDER BY user_id,stream_id,snapshot_at")
             .bind(&ids).bind(since).bind(now).fetch_all(&self.pool).await?;
         type Key = (String, String, NaiveDate);
-        let mut intervals: BTreeMap<Key, Vec<Interval>> = BTreeMap::new();
+        let previous: Vec<(String, String, NaiveDate, DateTime<Utc>)> = sqlx::query_as("SELECT partner_twitch_user_id,stream_id,week_start,observed_through FROM partner_effort_stream_weeks WHERE partner_twitch_user_id=ANY($1) AND week_start >= $2")
+            .bind(&ids).bind(week - Duration::weeks(5)).fetch_all(&self.pool).await?;
+        let observed: BTreeMap<Key, DateTime<Utc>> = previous
+            .into_iter()
+            .map(|(id, stream, week, through)| ((id, stream, week), through))
+            .collect();
+        let mut intervals: BTreeMap<Key, (Vec<Interval>, DateTime<Utc>)> = BTreeMap::new();
         for sample in samples {
             if !sample.sample_seconds.is_finite()
                 || sample.sample_seconds <= 0.0
@@ -80,17 +86,22 @@ impl Engine {
             while a < b {
                 let week = berlin_week_start(a);
                 let end = b.min(midnight(week + Duration::weeks(1)));
-                intervals
-                    .entry((sample.user_id.clone(), sample.stream_id.clone(), week))
-                    .or_default()
-                    .push((a, end));
+                let key = (sample.user_id.clone(), sample.stream_id.clone(), week);
+                let start = observed.get(&key).map_or(a, |through| a.max(*through));
+                if start < end {
+                    let entry = intervals
+                        .entry(key)
+                        .or_insert_with(|| (Vec::new(), sample.snapshot_at));
+                    entry.0.push((start, end));
+                    entry.1 = entry.1.max(sample.snapshot_at);
+                }
                 a = end;
             }
         }
         let mut tx = self.pool.begin().await?;
-        for ((id, stream, week), spans) in intervals {
-            sqlx::query("INSERT INTO partner_effort_stream_weeks(partner_twitch_user_id,stream_id,week_start,deadlock_seconds,observed_through) VALUES($1,$2,$3,$4,$5) ON CONFLICT(partner_twitch_user_id,stream_id,week_start) DO UPDATE SET deadlock_seconds=GREATEST(partner_effort_stream_weeks.deadlock_seconds,EXCLUDED.deadlock_seconds),observed_through=EXCLUDED.observed_through")
-                .bind(id).bind(stream).bind(week).bind(union_seconds(spans)).bind(now).execute(&mut *tx).await?;
+        for ((id, stream, week), (spans, through)) in intervals {
+            sqlx::query("INSERT INTO partner_effort_stream_weeks(partner_twitch_user_id,stream_id,week_start,deadlock_seconds,observed_through) VALUES($1,$2,$3,$4,$5) ON CONFLICT(partner_twitch_user_id,stream_id,week_start) DO UPDATE SET deadlock_seconds=partner_effort_stream_weeks.deadlock_seconds+EXCLUDED.deadlock_seconds,observed_through=GREATEST(partner_effort_stream_weeks.observed_through,EXCLUDED.observed_through)")
+                .bind(id).bind(stream).bind(week).bind(union_seconds(spans)).bind(through).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())

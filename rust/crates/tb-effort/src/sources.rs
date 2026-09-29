@@ -84,16 +84,24 @@ impl Engine {
                 let at: DateTime<Utc> = row.try_get("qualified_at")?;
                 if !seen.contains(&join) {
                     let id: Option<String> = row.try_get("streamer_twitch_user_id")?;
-                    let id = id
-                        .filter(|id| crate::valid_id(id))
-                        .ok_or(Error::Invalid("invite_streamer_identity"))?;
+                    let Some(id) = id.filter(|id| crate::valid_id(id)) else {
+                        let mut tx = self.pool.begin().await?;
+                        self.receipt(&mut tx, "invites", &join).await?;
+                        tx.commit().await?;
+                        tracing::warn!(join_id = %join, "qualified invite has no valid streamer ID");
+                        self.advance_cursor("invites", lane, &join, at).await?;
+                        continue;
+                    };
                     let viewer: Option<String> = row.try_get("inviter_twitch_user_id")?;
+                    if viewer.as_deref().is_some_and(|v| !crate::valid_id(v)) {
+                        tracing::warn!(join_id = %join, "qualified invite has an invalid inviter ID");
+                    }
                     let event = Event {
                         partner_twitch_user_id: id.clone(),
                         kind: EventKind::QualifiedInvite,
                         source_id: format!("discord-join:{join}"),
                         occurred_at: at,
-                        viewer_twitch_user_id: viewer.filter(|v| v != &id),
+                        viewer_twitch_user_id: viewer.filter(|v| v != &id && crate::valid_id(v)),
                         metadata: json!({"join_id":join,"guild_id":row.try_get::<i64,_>("guild_id")?,"discord_user_id":row.try_get::<i64,_>("user_id")?}),
                     };
                     self.consume("invites", &join, event, now).await?;

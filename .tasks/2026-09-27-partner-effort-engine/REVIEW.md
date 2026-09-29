@@ -25,3 +25,9 @@ Der PR darf in diesem Auftrag nicht gemergt oder deployt werden.
 7. `store.rs`, `projection.rs`: `credited_at` bestimmt den Berlin-Monat, `occurred_at` bewahrt den Quellzeitpunkt. Das Oktober/November-Beispiel ist getestet. Der Monatsabschluss- und Raid-Vertrag für #996 steht in `docs/partner-effort-engine.md`; #996 muss Filter, Gleichstand und gemeinsamen Advisory-Lock übernehmen.
 
 Die eigenständige Review-Runde und das Merge bleiben nach der vorgegebenen Fix-Runde bei einem anderen Thread.
+
+## Nachprüfung des lokalen Gates
+
+Die beiden BLOCKING-Befunde aus dem ersten Gate-Lauf sind mit PostgreSQL-Regressionen korrigiert: Eine qualifizierte Einladung ohne zuordenbare Twitch-ID blockiert den Quellencursor nicht mehr und erhält keine unbelegten Punkte; eine ungültige optionale Werber-ID verhindert die gültige Partnergutschrift nicht. Beim Stream-Beleg wird nach der Löschung alter Roh-Snapshots neu belegte Zeit zum gesicherten Wochenstand addiert, bei wiederholter Verarbeitung jedoch nicht erneut gezählt.
+
+Die zwei als NIT bezeichneten Hinweise bleiben außerhalb der sieben beauftragten Befunde: `consume` quittiert Ereignisse während einer Partnerpause endgültig; historische offene Wochen werden bei jedem Lauf erneut geprüft. Beide benötigen einen gesonderten Auftrag und wurden hier nicht stillschweigend als behoben gewertet.

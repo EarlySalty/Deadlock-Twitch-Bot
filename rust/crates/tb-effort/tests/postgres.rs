@@ -770,6 +770,15 @@ async fn stream_proof_ignores_reach_and_survives_snapshot_retention() {
         engine.me("102", now).await.unwrap().level.total_points,
         bob.level.total_points
     );
+    let before: i64 = sqlx::query_scalar("SELECT deadlock_seconds FROM partner_effort_stream_weeks WHERE partner_twitch_user_id='102' AND stream_id='long'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, 2400);
+    sqlx::query("DELETE FROM category_stream_snapshots")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM category_collection_runs")
         .execute(&pool)
         .await
@@ -780,6 +789,66 @@ async fn stream_proof_ignores_reach_and_survives_snapshot_retention() {
         engine.me("102", now).await.unwrap().level.total_points,
         bob.level.total_points
     );
+    let next = now + Duration::minutes(3);
+    sqlx::query("INSERT INTO category_collection_runs(snapshot_at,completed_at,streams,viewers,poll_seconds) VALUES($1,$1,1,0,60)")
+        .bind(next).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO category_stream_snapshots(snapshot_at,stream_id,user_id,user_login,viewer_count,title,language,started_at,is_mature,sample_seconds) VALUES($1,'long','102','bob',0,'Deadlock','de',$2,FALSE,60)")
+        .bind(next).bind(start).execute(&pool).await.unwrap();
+    engine.tick(next).await.unwrap();
+    let after: i64 = sqlx::query_scalar("SELECT deadlock_seconds FROM partner_effort_stream_weeks WHERE partner_twitch_user_id='102' AND stream_id='long'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before + 60);
+    engine.tick(next + Duration::seconds(1)).await.unwrap();
+    let repeated: i64 = sqlx::query_scalar("SELECT deadlock_seconds FROM partner_effort_stream_weeks WHERE partner_twitch_user_id='102' AND stream_id='long'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(repeated, after);
+    pool.close().await;
+    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn unattributed_invite_does_not_block_qualified_source() {
+    let (admin, pool, name) = fixture().await;
+    let cfg = Challenges::default();
+    let now = DateTime::parse_from_rfc3339("2026-10-26T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for (join, streamer, inviter) in [
+        (301i64, None, Some("501")),
+        (302i64, Some("101"), Some("not-a-twitch-id")),
+    ] {
+        sqlx::query("INSERT INTO bot.twitch_invite_joins(join_id,guild_id,user_id,streamer_login,streamer_twitch_user_id,inviter_twitch_user_id,invite_code,joined_at,eligible) VALUES($1,$2,$3,'alice',$4,$5,$6,$7,TRUE)")
+            .bind(join).bind(cfg.community_guild_id).bind(1000+join).bind(streamer)
+            .bind(inviter).bind(format!("invite:{join}"))
+            .bind(now-Duration::days(15)).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE bot.twitch_invite_joins SET status='qualified',qualified_at=$2 WHERE join_id=$1")
+            .bind(join).bind(now-Duration::minutes(1)).execute(&pool).await.unwrap();
+    }
+    let engine = Engine::new(pool.clone(), cfg, Some(pool.clone()), Some(idle_helix())).unwrap();
+    engine.tick(now).await.unwrap();
+    engine.ensure_ready(now).await.unwrap();
+    let receipts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_source_receipts WHERE source='invites' AND source_id IN ('301','302')")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(receipts, 2);
+    let events: Vec<(String, Option<String>)> = sqlx::query_as("SELECT source_id,viewer_twitch_user_id FROM partner_effort_events WHERE event_type='qualified_invite'")
+        .fetch_all(&pool).await.unwrap();
+    assert_eq!(events, vec![("discord-join:302".into(), None)]);
+    engine.tick(now + Duration::seconds(1)).await.unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM partner_effort_events WHERE event_type='qualified_invite'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
     pool.close().await;
     sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
         .execute(&admin)
