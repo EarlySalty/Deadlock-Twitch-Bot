@@ -1941,6 +1941,20 @@ pub fn build_website_router() -> Router {
 
 /// Öffentlicher monatlicher Clip-Wettbewerb. Lesen ist öffentlich, Schreiben
 /// nutzt die bestehenden Dashboard-/Discord-Sitzungen und eigene enge Rate-Limits.
+pub async fn contest_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool, sqlx::Error> {
+    use std::str::FromStr;
+    let options = sqlx::postgres::PgConnectOptions::from_str(&config.dsn)?;
+    if !options.get_host().starts_with('/') {
+        return Err(sqlx::Error::Configuration("Contest writer requires a local peer socket".into()));
+    }
+    let options = options.username("twitchcontest").password("");
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(config.pool_max.clamp(1, 4))
+        .acquire_timeout(config.acquire_timeout.min(config.connect_timeout))
+        .connect_with(options)
+        .await
+}
+
 pub fn build_clip_contest_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
     use handlers::{clip_contest, website};
 
@@ -2018,6 +2032,17 @@ pub fn build_router_with_helix_and_brain(
     helix: Option<HelixClient>,
     brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
 ) -> Router {
+    build_router_with_contest_writer(pool.clone(), pool, token, helix, brain_runtime)
+}
+
+/// Production entrypoint: contest writes use a separate, narrowly scoped role.
+pub fn build_router_with_contest_writer(
+    pool: PgPool,
+    contest_writer: PgPool,
+    token: String,
+    helix: Option<HelixClient>,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
     // P2.86/133/138/140: gemeinsamer Rate-Limiter (atomares Sliding-Window auf
     // dashboard_sessions). Der Fernet-Key wird aus der Env gelesen (gleiche
     // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
@@ -2060,7 +2085,7 @@ pub fn build_router_with_helix_and_brain(
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))
         .merge(build_website_router())
-        .merge(build_clip_contest_router(pool.clone(), rate_limiter.clone()))
+        .merge(build_clip_contest_router(contest_writer, rate_limiter.clone()))
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),
         ))

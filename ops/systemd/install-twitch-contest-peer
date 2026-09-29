@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Root-only, idempotent peer identity for the narrowly scoped contest writer.
+set -euo pipefail
+if [[ $EUID -ne 0 ]]; then
+    echo "Dieser Installationsschritt braucht root." >&2
+    exit 1
+fi
+
+exec 9>/run/lock/twitch-contest-peer.lock
+flock -n 9 || exit 75
+hba=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SHOW hba_file')
+ident=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SHOW ident_file')
+[[ -f "$hba" && -f "$ident" && ! -L "$hba" && ! -L "$ident" ]]
+backup_dir=$(mktemp -d /var/backups/twitch-contest-peer.XXXXXXXX)
+cp -p -- "$hba" "$backup_dir/pg_hba.conf"
+cp -p -- "$ident" "$backup_dir/pg_ident.conf"
+changed=0
+rollback() {
+    local result=$?
+    if [[ $result -ne 0 && $changed -eq 1 ]]; then
+        cp -p -- "$backup_dir/pg_hba.conf" "$hba"
+        cp -p -- "$backup_dir/pg_ident.conf" "$ident"
+        runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SELECT pg_reload_conf()' >/dev/null
+        echo "Contest-Peer-Konfiguration zurückgesetzt; Sicherung: $backup_dir" >&2
+    fi
+    exit "$result"
+}
+trap rollback EXIT
+
+install_line() {
+    local file=$1 line=$2 temporary
+    if ! rg --fixed-strings --line-regexp --quiet "$line" "$file"; then
+        temporary=$(mktemp "${file}.contest.XXXXXXXX")
+        { printf '%s\n' "$line"; cat -- "$file"; } > "$temporary"
+        chmod --reference="$file" "$temporary"
+        chown --reference="$file" "$temporary"
+        changed=1
+        mv -- "$temporary" "$file"
+    fi
+}
+# No role membership: an injected SQL statement in the reader pool cannot
+# become twitchcontest. Only a new local connection from OS user twitchdash can.
+install_line "$ident" 'twitch_contest_writer twitchdash twitchcontest'
+install_line "$hba" 'local twitch_analytics twitchcontest peer map=twitch_contest_writer'
+errors=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc \
+    "SELECT count(*) FROM (SELECT error FROM pg_hba_file_rules UNION ALL SELECT error FROM pg_ident_file_mappings) rules WHERE error IS NOT NULL")
+[[ "$errors" == 0 ]]
+reloaded=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SELECT pg_reload_conf()')
+[[ "$reloaded" == t ]]
+printf 'Contest-Peer-Konfiguration geprüft; Sicherung: %s\n' "$backup_dir"

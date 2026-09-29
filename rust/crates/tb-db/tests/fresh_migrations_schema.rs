@@ -10,6 +10,9 @@ use std::{
 
 use sqlx::postgres::PgPoolOptions;
 
+#[path = "../../../test-support/database.rs"]
+mod test_database;
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 // Daily category partitions inherit the checked parent schema. Their date-based
 // physical names vary by test day and are covered by the partition lifecycle test.
@@ -20,9 +23,7 @@ const SCHEMA_SNAPSHOT: &str = include_str!("fresh_schema_snapshot.txt");
 /// restlichen Workspace; ohne diesen Namen ueberspringt der Test still und
 /// meldet grün, obwohl er nie gelaufen ist.
 fn test_dsn() -> Option<String> {
-    std::env::var("TB_TEST_DATABASE_URL")
-        .or_else(|_| std::env::var("TEST_DATABASE_URL"))
-        .ok()
+    test_database::database_url()
 }
 
 async fn fresh_schema_lines(pool: &sqlx::PgPool) -> BTreeSet<String> {

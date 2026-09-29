@@ -134,8 +134,7 @@ BEGIN
                 ON public.twitch_clips_social_media TO %I', service_role);
             EXECUTE format('GRANT UPDATE (layout_override_json) ON public.twitch_clips_social_media TO %I', service_role);
             FOREACH sequence_name IN ARRAY ARRAY[
-                pg_get_serial_sequence('public.twitch_clips_social_media', 'id'),
-                pg_get_serial_sequence('public.twitch_streamers', 'id')
+                pg_get_serial_sequence('public.twitch_clips_social_media', 'id')
             ] LOOP
                 IF sequence_name IS NOT NULL THEN
                     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO %I', sequence_name, service_role);

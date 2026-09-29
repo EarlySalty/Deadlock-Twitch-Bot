@@ -435,7 +435,12 @@ async fn main() {
     let token = settings.internal_api.token.clone();
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     spawn_affiliate_gutschrift_loop(pool.clone());
-    spawn_clip_contest_finalize_loop(pool.clone());
+    let contest_writer = tb_dashboard_api::contest_writer_pool(&settings.db).await
+        .unwrap_or_else(|_| {
+            tracing::error!("Clip-Wettbewerb: Schreibzugang konnte nicht aufgebaut werden");
+            std::process::exit(1);
+        });
+    spawn_clip_contest_finalize_loop(contest_writer.clone());
     let pause_loop_helix = pause_loop_helix_client_from_env();
     let brain_token = if config.dashboard.options.brain_client.mode
         == tb_config::dashboard_options::BrainClientMode::Legacy
@@ -450,7 +455,7 @@ async fn main() {
             brain_token.as_deref(),
         );
     let mut app =
-        build_router_with_helix_and_brain(pool.clone(), token, pause_loop_helix, brain_runtime);
+        tb_dashboard_api::build_router_with_contest_writer(pool.clone(), contest_writer, token, pause_loop_helix, brain_runtime);
     app = app.layer(axum::Extension(readiness_fingerprint));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));

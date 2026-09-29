@@ -1562,6 +1562,30 @@ twitch_partners|technical_pause_reason|text|YES|
 twitch_partners|twitch_login|text|NO|
 twitch_partners|twitch_user_id|text|NO|
 twitch_partners|verified|boolean|NO|false
+twitch_patch_announcement_deliveries|attempted_at|timestamp with time zone|YES|
+twitch_patch_announcement_deliveries|broadcaster_id|text|NO|
+twitch_patch_announcement_deliveries|drop_code|text|YES|
+twitch_patch_announcement_deliveries|event_id|text|NO|
+twitch_patch_announcement_deliveries|http_status|smallint|YES|
+twitch_patch_announcement_deliveries|status|text|NO|'pending'::text
+twitch_patch_announcement_deliveries|stream_id|text|NO|
+twitch_patch_announcement_deliveries|uncertainty_reason|text|YES|
+twitch_patch_announcement_recipients|broadcaster_id|text|NO|
+twitch_patch_announcement_recipients|patch_id|bigint|NO|
+twitch_patch_announcement_recipients|stream_id|text|NO|
+twitch_patch_announcements|article_url|text|NO|
+twitch_patch_announcements|created_at|timestamp with time zone|NO|now()
+twitch_patch_announcements|detected_at|timestamp with time zone|NO|
+twitch_patch_announcements|event_id|text|NO|
+twitch_patch_announcements|message|text|NO|
+twitch_patch_announcements|source_url|text|NO|
+twitch_patch_feed_observations|finalized_at|timestamp with time zone|YES|
+twitch_patch_feed_observations|observed_at|timestamp with time zone|NO|
+twitch_patch_feed_observations|patch_id|bigint|NO|
+twitch_patch_feed_observations|status|text|NO|
+twitch_patch_feed_state|bootstrapped_at|timestamp with time zone|YES|
+twitch_patch_feed_state|last_successful_index_at|timestamp with time zone|NO|
+twitch_patch_feed_state|singleton|boolean|NO|true
 twitch_player_steam_accounts|is_primary|boolean|NO|false
 twitch_player_steam_accounts|linked_at|timestamp with time zone|NO|now()
 twitch_player_steam_accounts|steam_id64|bigint|NO|

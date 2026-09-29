@@ -199,6 +199,9 @@ chmod -R go-w "$dest"
 # bricht den Deploy wegen `set -e` ab statt einen halbfertigen Release zu starten.
 systemctl start deadlock-twitch-migrate.service
 
+# Separate local writer identity; no membership in the read-only dashboard role.
+/bin/bash "$dest/ops/systemd/install-twitch-contest-peer"
+
 for target in "${restart_targets[@]}"; do
   case "$target" in
     twitch-dashboard)

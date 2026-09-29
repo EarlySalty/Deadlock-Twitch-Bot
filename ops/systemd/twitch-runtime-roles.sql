@@ -282,3 +282,12 @@ BEGIN
 END
 $patch_announcement_roles$;
 
+-- Reapply the integrated feature permissions after the broad legacy matrix.
+-- The migration owns this single definition so deploy cannot widen it again.
+DO $partner_challenge_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_partner_challenge_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_partner_challenge_roles();
+    END IF;
+END
+$partner_challenge_roles$;
