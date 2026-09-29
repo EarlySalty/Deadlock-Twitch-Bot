@@ -6,7 +6,7 @@ status: erledigt (2026-09-29)
 
 Arbeitsbasis: Branch `feat/twitch-patch-integration-20260928`, Startspitze `22699c2430a0ae3c3476e451890a13341ed23b2b`, `origin/main` `cf3d77085ed350554914b14c3d9981d37b95903a`. Die geprüften Spitzen A `b94eab52`, B `2163de98`, C `c61f168c` und Orchestrationsstand `4766b166` waren bereits integriert.
 
-D1: Der privilegierte interne HTTP-Einstieg ist entfernt. Der Website-Feed reicht geprüfte Artikel direkt an denselben `PatchReceiver` weiter. Der Receiver verlangt eine passende Beobachtung mit Status `pending` und identischem `observed_at`. Das Feed-Ledger verwendet `statement_timestamp()`, damit die Empfängerprüfung des Insert-Triggers denselben PostgreSQL-Statementzeitpunkt sieht.
+D1: Der privilegierte interne HTTP-Einstieg ist entfernt. Der Website-Feed reicht geprüfte Artikel direkt an denselben `PatchReceiver` weiter. Der Receiver verlangt eine passende Beobachtung mit Status `pending` und identischem `observed_at`. Das Feed-Ledger nutzt eine wiederholbare `REPEATABLE READ`-Transaktion; `statement_timestamp()` wird beim ersten Snapshot-Read erfasst, sodass Beobachtungszeit und Empfängertrigger denselben PostgreSQL-Snapshot verwenden.
 
 D2: Die Patch-Suppression propagiert Datenbankfehler bis zum Sender. Fehler beenden die Prüfung ohne Chat-POST. Die allgemeine Chat-Policy bleibt unverändert.
 

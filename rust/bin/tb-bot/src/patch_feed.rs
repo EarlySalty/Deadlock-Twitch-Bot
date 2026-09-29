@@ -20,6 +20,8 @@ pub enum PatchFeedError {
     Http(#[from] reqwest::Error),
     #[error("Patchfeed-Datenbankfehler: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("Patchfeed-Datenbanktransaktion fehlgeschlagen: {0}")]
+    DatabaseTransaction(#[from] tb_db::DbError),
     #[error("Ungültiger Patchfeed: {0}")]
     InvalidFeed(String),
     #[error("Patch-Ankündigung fehlgeschlagen: {0}")]
@@ -286,66 +288,77 @@ async fn observe_index(
     pool: &PgPool,
     ids: &[i64],
 ) -> Result<Vec<PendingObservation>, PatchFeedError> {
-    let mut tx = pool.begin().await?;
-    let inserted = if ids.is_empty() {
-        false
-    } else {
-        sqlx::query_scalar::<_, bool>(
-            "INSERT INTO twitch_patch_feed_state (singleton, bootstrapped_at) \
-             VALUES (TRUE, NOW()) ON CONFLICT (singleton) DO NOTHING RETURNING singleton",
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        .unwrap_or(false)
-    };
-    let state = sqlx::query(
-        "SELECT bootstrapped_at FROM twitch_patch_feed_state \
-         WHERE singleton = TRUE FOR UPDATE",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(state) = state {
-        let bootstrapped_at: DateTime<Utc> = state.try_get("bootstrapped_at")?;
-        if inserted {
-            for id in ids {
-                sqlx::query(
-                    "INSERT INTO twitch_patch_feed_observations \
-                     (patch_id, observed_at, status, finalized_at) \
-                     VALUES ($1, $2, 'historical', $2) ON CONFLICT (patch_id) DO NOTHING",
+    let ids = ids.to_vec();
+    let pending = tb_db::repeatable_read_transaction(pool, |tx| {
+        let ids = ids.clone();
+        Box::pin(async move {
+            let observed_at =
+                sqlx::query_scalar::<_, DateTime<Utc>>("SELECT statement_timestamp()")
+                    .fetch_one(&mut **tx)
+                    .await?;
+            let inserted = if ids.is_empty() {
+                false
+            } else {
+                sqlx::query_scalar::<_, bool>(
+                    "INSERT INTO twitch_patch_feed_state (singleton, bootstrapped_at) \
+                     VALUES (TRUE, NOW()) ON CONFLICT (singleton) DO NOTHING RETURNING singleton",
                 )
-                .bind(id)
-                .bind(bootstrapped_at)
-                .execute(&mut *tx)
-                .await?;
+                .fetch_optional(&mut **tx)
+                .await?
+                .unwrap_or(false)
+            };
+            let state = sqlx::query(
+                "SELECT bootstrapped_at FROM twitch_patch_feed_state \
+                 WHERE singleton = TRUE FOR UPDATE",
+            )
+            .fetch_optional(&mut **tx)
+            .await?;
+            if let Some(state) = state {
+                let bootstrapped_at: DateTime<Utc> = state.try_get("bootstrapped_at")?;
+                if inserted {
+                    for id in ids {
+                        sqlx::query(
+                            "INSERT INTO twitch_patch_feed_observations \
+                             (patch_id, observed_at, status, finalized_at) \
+                             VALUES ($1, $2, 'historical', $2) ON CONFLICT (patch_id) DO NOTHING",
+                        )
+                        .bind(id)
+                        .bind(bootstrapped_at)
+                        .execute(&mut **tx)
+                        .await?;
+                    }
+                } else {
+                    for id in ids {
+                        sqlx::query(
+                            "INSERT INTO twitch_patch_feed_observations \
+                             (patch_id, observed_at, status, finalized_at) \
+                             VALUES ($1, $2, 'pending', NULL) ON CONFLICT (patch_id) DO NOTHING",
+                        )
+                        .bind(id)
+                        .bind(observed_at)
+                        .execute(&mut **tx)
+                        .await?;
+                    }
+                }
             }
-        } else {
-            for id in ids {
-                sqlx::query(
-                    "INSERT INTO twitch_patch_feed_observations \
-                     (patch_id, observed_at, status, finalized_at) \
-                     VALUES ($1, statement_timestamp(), 'pending', NULL) ON CONFLICT (patch_id) DO NOTHING",
-                )
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-    }
-    let pending = sqlx::query(
-        "SELECT patch_id, observed_at FROM twitch_patch_feed_observations \
-         WHERE status = 'pending' ORDER BY observed_at, patch_id",
-    )
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(|row| {
-        Ok(PendingObservation {
-            id: row.try_get("patch_id")?,
-            observed_at: row.try_get("observed_at")?,
+            let pending = sqlx::query(
+                "SELECT patch_id, observed_at FROM twitch_patch_feed_observations \
+                 WHERE status = 'pending' ORDER BY observed_at, patch_id",
+            )
+            .fetch_all(&mut **tx)
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(PendingObservation {
+                    id: row.try_get("patch_id")?,
+                    observed_at: row.try_get("observed_at")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+            Ok::<_, tb_db::DbError>(pending)
         })
     })
-    .collect::<Result<Vec<_>, sqlx::Error>>()?;
-    tx.commit().await?;
+    .await?;
     Ok(pending)
 }
 
