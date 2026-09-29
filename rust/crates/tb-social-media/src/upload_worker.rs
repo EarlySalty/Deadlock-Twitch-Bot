@@ -116,9 +116,8 @@ fn max_duration_for(platform: &str) -> i64 {
     }
 }
 
-/// Ausgabepfad der vertikalen Variante (mirror `input.replace(".mp4", ...)`).
 fn vertical_output_path(input_path: &str, platform: &str) -> String {
-    input_path.replace(".mp4", &format!("_{platform}_vertical.mp4"))
+    input_path.replace(".mp4", &format!("_{platform}_branded_v1.mp4"))
 }
 
 /// Parst die Queue-Hashtags (JSON-Array-String) in eine Liste.
@@ -590,8 +589,6 @@ impl UploadTask {
         if Path::new(&output_path).exists() {
             return Ok(output_path);
         }
-        // Zentraler Render-Baustein: gespeichertes Layout (sonst Center-Crop) und
-        // eingebrannte Untertitel, falls der Streamer sie anhat.
         render_clip_vertical(
             &self.video_processor,
             &self.pool,
@@ -916,6 +913,10 @@ mod tests {
         assert_eq!(max_duration_for("instagram"), 90);
         assert_eq!(
             vertical_output_path("data/clips/5.mp4", "tiktok"),
+            "data/clips/5_tiktok_branded_v1.mp4"
+        );
+        assert_ne!(
+            vertical_output_path("data/clips/5.mp4", "tiktok"),
             "data/clips/5_tiktok_vertical.mp4"
         );
         assert_eq!(
@@ -1204,7 +1205,7 @@ mod tests {
         };
         let dir = unique_temp_dir("inbox");
         let input_path = dir.join("clip.mp4");
-        let converted_path = dir.join("clip_tiktok_vertical.mp4");
+        let converted_path = dir.join("clip_tiktok_branded_v1.mp4");
         std::fs::write(&input_path, b"input").unwrap();
         std::fs::write(&converted_path, b"converted").unwrap();
         let clip: i64 = sqlx::query_scalar(
@@ -1259,7 +1260,7 @@ mod tests {
         };
         let dir = unique_temp_dir("completed_write_fail");
         let input_path = dir.join("clip.mp4");
-        let converted_path = dir.join("clip_tiktok_vertical.mp4");
+        let converted_path = dir.join("clip_tiktok_branded_v1.mp4");
         std::fs::write(&input_path, b"input").unwrap();
         std::fs::write(&converted_path, b"converted").unwrap();
         let input_path_s = input_path.to_string_lossy().into_owned();
