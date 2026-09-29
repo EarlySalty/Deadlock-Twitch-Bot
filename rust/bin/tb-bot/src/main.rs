@@ -12,9 +12,10 @@ include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
 
 mod ad_manager_wiring;
 mod auto_raid;
+mod brain_chat_wiring;
+mod category_followers;
 mod chat_typen_wiring;
 mod chat_wiring;
-mod category_followers;
 mod chatters_wiring;
 mod confirm_resolver;
 mod crew_archive;
@@ -89,8 +90,13 @@ fn ist_ausfuehrbar(pfad: &std::path::Path) -> bool {
 fn yt_dlp_path(snapshot: &tb_config::BotConfigSnapshot) -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let configured = snapshot.settings().bot.yt_dlp_binary.as_ref().map(|path|
-        snapshot.resolve(path).expect("yt-dlp-Pfad wurde beim Konfigurationsstart geprüft").to_string_lossy().into_owned());
+    let configured = snapshot.settings().bot.yt_dlp_binary.as_ref().map(|path| {
+        snapshot
+            .resolve(path)
+            .expect("yt-dlp-Pfad wurde beim Konfigurationsstart geprüft")
+            .to_string_lossy()
+            .into_owned()
+    });
     let pfad = resolve_yt_dlp_path(configured, &cwd, home.as_deref());
     // Ohne diese Zeile beginnt die nächste Fehlersuche wieder bei "welcher Pfad
     // war es eigentlich" — das Symptom hier war genau ein toter Pfad.
@@ -445,9 +451,12 @@ async fn main() {
         });
     let config = snapshot.settings();
     let runtime_role = tb_internal_api::enforce_internal_api_runtime(
-        Some(&config.bot.runtime_role), config.internal_api.port,
-        config.bot.runtime_enforce, config.bot.legacy_internal_api_port,
-    ).unwrap_or_else(|error| {
+        Some(&config.bot.runtime_role),
+        config.internal_api.port,
+        config.bot.runtime_enforce,
+        config.bot.legacy_internal_api_port,
+    )
+    .unwrap_or_else(|error| {
         eprintln!("Internal-API Runtime-Härtung verletzt: {error}");
         std::process::exit(2);
     });
@@ -465,10 +474,12 @@ async fn main() {
     tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_BOT_CONFIG_V1");
     let supervisor = task_supervisor::TaskSupervisor::start();
 
-    let settings = snapshot.runtime_settings(&|key| std::env::var(key).ok()).unwrap_or_else(|e| {
-        tracing::error!("Konfigurationsfehler: {e}");
-        std::process::exit(1);
-    });
+    let settings = snapshot
+        .runtime_settings(&|key| std::env::var(key).ok())
+        .unwrap_or_else(|e| {
+            tracing::error!("Konfigurationsfehler: {e}");
+            std::process::exit(1);
+        });
 
     let pool = tb_db::connect(&settings.db).await.unwrap_or_else(|e| {
         tracing::error!("DB-Verbindungsfehler: {e}");
@@ -534,13 +545,20 @@ async fn main() {
     // Quelle (P1.7) braucht den Bot-Token mit `moderator:read:followers`, und die
     // OAuth-Followup-Begrüßung den nativen Send statt des Python-Umwegs (8779).
     // Es gibt nur DIESEN einen BotTokenManager (kein zweiter Refresher).
-    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone(), pool.clone(), config.bot.chat_enabled).await;
+    let chat_api_handle = chat_wiring::try_build_api(
+        helix.as_ref().clone(),
+        pool.clone(),
+        config.bot.chat_enabled,
+    )
+    .await;
     let smalltalk_loop = smalltalk_loop_wiring::start(
         &supervisor,
         pool.clone(),
         &settings.broker,
         helix.as_ref().clone(),
-        chat_api_handle.as_ref().map(|handle| handle.bot_token_manager()),
+        chat_api_handle
+            .as_ref()
+            .map(|handle| handle.bot_token_manager()),
         &config.bot,
     );
     // Bot-User-ID früh sichern: `chat_api_handle` wird weiter unten beim
@@ -616,8 +634,11 @@ async fn main() {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
     let callback_url = Some(config.twitch.eventsub_callback_url.clone());
-    let bot_ban_handler =
-        token_lifecycle_wiring::build_bot_ban_handler(pool.clone(), &settings.broker, &config.discord.token_lifecycle);
+    let bot_ban_handler = token_lifecycle_wiring::build_bot_ban_handler(
+        pool.clone(),
+        &settings.broker,
+        &config.discord.token_lifecycle,
+    );
     let mut bot_ban_status_probe: Option<Arc<dyn tb_raid::BotBanStatusProbe>> = None;
     let subscription_manager: Option<Arc<SubscriptionManager>> =
         match (webhook_secret, callback_url, helix.as_ref().clone()) {
@@ -734,10 +755,16 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
-    if let (Some(client), Some(manager)) = (helix.as_ref().clone(), chatters_bot_token_manager.clone()) {
-        supervisor.spawn("category_public_followers", crate::category_followers::run(pool.clone(), client, manager));
+    if let (Some(client), Some(manager)) =
+        (helix.as_ref().clone(), chatters_bot_token_manager.clone())
+    {
+        supervisor.spawn(
+            "category_public_followers",
+            crate::category_followers::run(pool.clone(), client, manager),
+        );
     }
-    let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone(), config.bot.irc_lurker_enabled);
+    let irc_lurker_tracker =
+        irc_lurker_wiring::build_irc_lurker(pool.clone(), config.bot.irc_lurker_enabled);
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
         chat_api_handle.as_ref().map(|h| {
             let probe = irc_lurker_tracker.as_ref().map(|tracker| {
@@ -760,13 +787,10 @@ async fn main() {
                     tb_raid::alias_store::AliasStore::new(pool.clone()),
                 ));
             Arc::new(
-                raid_greeting::RaidGreetingMonitor::new(
-                    h.raid_api(),
-                    probe,
-                )
-                .with_live_probe(live_probe)
-                .with_courtesy(courtesy)
-                .with_aliases(aliases),
+                raid_greeting::RaidGreetingMonitor::new(h.raid_api(), probe)
+                    .with_live_probe(live_probe)
+                    .with_courtesy(courtesy)
+                    .with_aliases(aliases),
             )
         });
 
@@ -1230,11 +1254,18 @@ async fn main() {
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     golive_tips_enabled: config.bot.golive_tips_enabled,
+                    brain_client: config.bot.brain_client.clone(),
+                    brain_chat: config.bot.brain_chat.clone(),
+                    brain_service_token: settings.internal_api.token.clone(),
                     chat_persist_all_games: config.bot.chat_persist_all_games,
                     lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
-                    invite_channel_id: config.twitch.notify_channel_id.parse()
+                    invite_channel_id: config
+                        .twitch
+                        .notify_channel_id
+                        .parse()
                         .expect("notify_channel_id wurde beim Konfigurationsstart geprüft"),
-                    review_log_directory: snapshot.resolve(&config.bot.chat_review_log_directory)
+                    review_log_directory: snapshot
+                        .resolve(&config.bot.chat_review_log_directory)
                         .expect("Reviewpfad wurde beim Konfigurationsstart geprüft"),
                     review_relay: BrokerRelay::new(&settings.broker).ok(),
                     member_relay: BrokerRelay::new(&settings.broker).ok(),
@@ -1304,7 +1335,8 @@ async fn main() {
         Arc::new(tb_monitoring::epoch_clock),
     ));
     let inbox = InboxRuntime::new(
-        tb_monitoring::ProcessingInboxStore::new(pool.clone()).with_retry_config(&config.database.retry),
+        tb_monitoring::ProcessingInboxStore::new(pool.clone())
+            .with_retry_config(&config.database.retry),
         handler,
     )
     .start();
@@ -1566,7 +1598,10 @@ async fn main() {
             yt_dlp_path(snapshot).to_string_lossy().into_owned(),
             "data/clips",
         );
-        supervisor.spawn("social_clip_preview_worker", async move { preview.run().await });
+        supervisor.spawn(
+            "social_clip_preview_worker",
+            async move { preview.run().await },
+        );
 
         // Enrichment: LLM-Dispatcher (Consent aus Settings) plus lokaler
         // STT-Transcriber (ops/stt-server, loopback). Liegt eine lokale
@@ -1661,10 +1696,11 @@ async fn main() {
     let _poll_stop = if poll_enabled {
         match helix.as_ref().clone() {
             Some(helix_client) => {
-                let notify_channel_id: i64 = config.twitch.notify_channel_id.parse().unwrap_or_else(|_| {
-                    tracing::error!("Geprüfte Discord-Ziel-ID konnte nicht übernommen werden.");
-                    std::process::exit(2);
-                });
+                let notify_channel_id: i64 =
+                    config.twitch.notify_channel_id.parse().unwrap_or_else(|_| {
+                        tracing::error!("Geprüfte Discord-Ziel-ID konnte nicht übernommen werden.");
+                        std::process::exit(2);
+                    });
                 let sink: Arc<dyn AnnouncementSink> = if notify_channel_id > 0 {
                     match BrokerRelay::new(&settings.broker) {
                         Ok(relay) => {
@@ -1830,8 +1866,10 @@ async fn main() {
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
     if let Ok(sl_relay) = BrokerRelay::new(&settings.broker) {
-        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_config(snapshot)
-            .expect("Streamer-Link-Pfad wurde beim Konfigurationsstart geprüft"));
+        let sl_config = Arc::new(
+            streamer_link::StreamerLinkConfig::from_config(snapshot)
+                .expect("Streamer-Link-Pfad wurde beim Konfigurationsstart geprüft"),
+        );
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
@@ -1893,11 +1931,10 @@ async fn main() {
 
     let addr = SocketAddr::new(config.internal_api.host, port);
     let token = settings.internal_api.token.clone();
-    let legacy_proxy = config.bot.legacy_proxy_base_url.clone()
-        .map(|url| {
-            tracing::info!("Legacy-Fallback aktiv: unbekannte interne-API-Routen → {url}");
-            Arc::new(tb_internal_api::LegacyProxy::new(url))
-        });
+    let legacy_proxy = config.bot.legacy_proxy_base_url.clone().map(|url| {
+        tracing::info!("Legacy-Fallback aktiv: unbekannte interne-API-Routen → {url}");
+        Arc::new(tb_internal_api::LegacyProxy::new(url))
+    });
     // EventSub-Sektion von GET /stats: Live-`current`-Snapshot aus dem nativen
     // SubscriptionManager (Webhook-Modus). Ohne Manager (kein Helix) → None,
     // dann bleibt nur der DB-Capacity-Block (wie bisher).
@@ -1912,7 +1949,10 @@ async fn main() {
     // Frischer Relay aus der Broker-Config; ohne Relay loggt der Port nur einen
     // Hinweis (best-effort, wie Python `sync_streamer_role`).
     let discord_role: Option<Arc<dyn tb_internal_api::DiscordRolePort>> = Some(Arc::new(
-        oauth_followups::BrokerDiscordDirectory::from_config(BrokerRelay::new(&settings.broker).ok(), &config.discord.oauth_followup),
+        oauth_followups::BrokerDiscordDirectory::from_config(
+            BrokerRelay::new(&settings.broker).ok(),
+            &config.discord.oauth_followup,
+        ),
     )
         as Arc<dyn tb_internal_api::DiscordRolePort>);
     // Bot-Token-Bridge (F3): Owner-Chat-Action sendet über den live rotierten
@@ -2063,7 +2103,12 @@ fn build_telemetry_sub_auth(
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<(Arc<TokenProvider>, RaidAuthStore)> {
     let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let redirect_uri = tb_config::runtime::settings().ok()?.bot.raid_redirect_uri.trim().to_string();
+    let redirect_uri = tb_config::runtime::settings()
+        .ok()?
+        .bot
+        .raid_redirect_uri
+        .trim()
+        .to_string();
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
     let refresher = RaidTokenRefresher::new(
         pool.clone(),
@@ -2141,7 +2186,12 @@ fn build_moderator_token_provider(
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<Arc<TokenProvider>> {
     let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let redirect_uri = tb_config::runtime::settings().ok()?.bot.raid_redirect_uri.trim().to_string();
+    let redirect_uri = tb_config::runtime::settings()
+        .ok()?
+        .bot
+        .raid_redirect_uri
+        .trim()
+        .to_string();
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
     let refresher = RaidTokenRefresher::new(
         pool.clone(),

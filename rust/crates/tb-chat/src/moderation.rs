@@ -153,6 +153,41 @@ impl HelixChatClient {
     ) -> Self {
         Self { helix, token_mgr }
     }
+
+    async fn send_with_parent(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        parent_message_id: Option<&str>,
+    ) -> Result<SendOutcome, String> {
+        let sender_id = self.token_mgr.bot_user_id().await;
+        for attempt in 0..2usize {
+            let token = self.token_mgr.get_valid_token(attempt > 0).await?;
+            let result = match parent_message_id {
+                Some(parent) => {
+                    self.helix
+                        .send_chat_reply(broadcaster_id, &sender_id, message, parent, &token)
+                        .await
+                }
+                None => {
+                    self.helix
+                        .send_chat_message(broadcaster_id, &sender_id, message, &token)
+                        .await
+                }
+            };
+            match result {
+                Ok(SendOutcome::HttpError { status: 401, body }) if attempt == 0 => {
+                    debug!("send_message 401, force_refresh + retry (body: {body})");
+                }
+                Ok(outcome) => return Ok(outcome),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Ok(SendOutcome::HttpError {
+            status: 401,
+            body: "nach force_refresh noch 401".to_string(),
+        })
+    }
 }
 
 #[async_trait]
@@ -164,27 +199,20 @@ impl ChatApi for HelixChatClient {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<SendOutcome, String> {
-        let sender_id = self.token_mgr.bot_user_id().await;
-        for attempt in 0..2usize {
-            let force = attempt > 0;
-            let token = self.token_mgr.get_valid_token(force).await?;
-            match self
-                .helix
-                .send_chat_message(broadcaster_id, &sender_id, message, &token)
-                .await
-            {
-                Ok(SendOutcome::HttpError { status: 401, body }) if attempt == 0 => {
-                    debug!("send_message 401, force_refresh + retry (body: {body})");
-                    continue;
-                }
-                Ok(outcome) => return Ok(outcome),
-                Err(e) => return Err(e.to_string()),
-            }
+        self.send_with_parent(broadcaster_id, message, None).await
+    }
+
+    async fn send_thread_reply(
+        &self,
+        broadcaster_id: &str,
+        parent_message_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        if parent_message_id.is_empty() {
+            return Err("missing_parent_message_id".to_string());
         }
-        Ok(SendOutcome::HttpError {
-            status: 401,
-            body: "nach force_refresh noch 401".to_string(),
-        })
+        self.send_with_parent(broadcaster_id, message, Some(parent_message_id))
+            .await
     }
 
     /// Sendet Whisper — 2-Attempt: 401 → force_refresh → retry.

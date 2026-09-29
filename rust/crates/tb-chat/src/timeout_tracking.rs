@@ -12,10 +12,8 @@
 //!
 //! Native bündelt das in zwei Bausteinen:
 //!
-//! - [`TimeoutTrackingChatApi`] — ein [`ChatApi`]-Decorator, der **nur**
-//!   `send_message` instrumentiert: bei einem Bot-Timeout-Drop wird die
-//!   `broadcaster_id` → `login` aufgelöst und `record_timeout` gerufen. Alle
-//!   übrigen 8 Trait-Methoden delegieren unverändert.
+//! - [`TimeoutTrackingChatApi`] erkennt Bot-Timeout-Drops im ausgehenden
+//!   Chat-Sendepfad und meldet sie an den Guard.
 //! - [`CombinedSuppression`] — kombiniert die bestehende DB-Suppression
 //!   ([`OutboundSuppressionStore`]) mit dem In-Memory-Guard. Der Promo-Pfad
 //!   prüft so beide Quellen (Python: `_send_promo_message` prüft erst
@@ -64,7 +62,10 @@ pub fn bot_banned_reason(outcome: &SendOutcome) -> Option<String> {
             Some(reason_with_detail("chat_bot_banned_in_channel", message))
         }
         SendOutcome::HttpError { status, body } if looks_like_bot_banned_error(*status, body) => {
-            Some(reason_with_detail(&format!("chat_bot_banned_in_channel_http_{status}"), body))
+            Some(reason_with_detail(
+                &format!("chat_bot_banned_in_channel_http_{status}"),
+                body,
+            ))
         }
         _ => None,
     }
@@ -112,10 +113,7 @@ pub trait BotBannedChannelHandler: Send + Sync {
 /// [`ChatApi`]-Decorator, der ausgehende Bot-Timeouts an den [`TimeoutGuard`]
 /// meldet.
 ///
-/// Nur [`TimeoutTrackingChatApi::send_message`] ist instrumentiert; alle
-/// anderen Methoden delegieren unverändert an `inner`. Das Original-Ergebnis
-/// wird in jedem Fall unverändert zurückgegeben — die Tracking-Logik ist ein
-/// reiner Seiteneffekt.
+/// Das Original-Ergebnis wird in jedem Fall unverändert zurückgegeben.
 ///
 /// Port: `moderation.py:1519–1546`.
 pub struct TimeoutTrackingChatApi {
@@ -161,22 +159,9 @@ impl TimeoutTrackingChatApi {
         .flatten();
         login.filter(|l| !l.trim().is_empty())
     }
-}
 
-#[async_trait]
-impl ChatApi for TimeoutTrackingChatApi {
-    /// Sendet die Nachricht über `inner` und meldet einen Bot-Timeout-Drop an
-    /// den Guard. Das Original-Ergebnis bleibt unverändert.
-    async fn send_message(
-        &self,
-        broadcaster_id: &str,
-        message: &str,
-    ) -> Result<SendOutcome, String> {
-        let result = self.inner.send_message(broadcaster_id, message).await;
-
-        // Nur im seltenen Bot-Timeout-Drop-Fall die DB für die id→login-Auflösung
-        // bemühen (moderation.py:1535–1538).
-        if let Ok(outcome) = &result {
+    async fn track_result(&self, broadcaster_id: &str, result: &Result<SendOutcome, String>) {
+        if let Ok(outcome) = result {
             let timeout_drop = is_bot_timeout_drop(outcome).is_some();
             let bot_ban_reason = bot_banned_reason(outcome);
             if timeout_drop || bot_ban_reason.is_some() {
@@ -204,7 +189,34 @@ impl ChatApi for TimeoutTrackingChatApi {
                 }
             }
         }
+    }
+}
 
+#[async_trait]
+impl ChatApi for TimeoutTrackingChatApi {
+    /// Sendet die Nachricht über `inner` und meldet einen Bot-Timeout-Drop an
+    /// den Guard. Das Original-Ergebnis bleibt unverändert.
+    async fn send_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        let result = self.inner.send_message(broadcaster_id, message).await;
+        self.track_result(broadcaster_id, &result).await;
+        result
+    }
+
+    async fn send_thread_reply(
+        &self,
+        broadcaster_id: &str,
+        parent_message_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        let result = self
+            .inner
+            .send_thread_reply(broadcaster_id, parent_message_id, message)
+            .await;
+        self.track_result(broadcaster_id, &result).await;
         result
     }
 
@@ -236,7 +248,9 @@ impl ChatApi for TimeoutTrackingChatApi {
         target_user_id: &str,
         reason: &str,
     ) -> Result<BanOutcome, String> {
-        self.inner.ban_user(broadcaster_id, target_user_id, reason).await
+        self.inner
+            .ban_user(broadcaster_id, target_user_id, reason)
+            .await
     }
 
     async fn timeout_user(
@@ -251,26 +265,15 @@ impl ChatApi for TimeoutTrackingChatApi {
             .await
     }
 
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String> {
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String> {
         self.inner.unban_user(broadcaster_id, target_user_id).await
     }
 
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String> {
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String> {
         self.inner.delete_message(broadcaster_id, message_id).await
     }
 
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String> {
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
         self.inner.user_created_at(user_id).await
     }
 
@@ -546,7 +549,10 @@ mod tests {
             matches!(out, SendOutcome::Dropped { ref code, .. } if code == "channel_settings"),
             "Original-Ergebnis unverändert"
         );
-        assert!(!guard.is_muted("egal"), "anderer Code → kein record_timeout");
+        assert!(
+            !guard.is_muted("egal"),
+            "anderer Code → kein record_timeout"
+        );
     }
 }
 

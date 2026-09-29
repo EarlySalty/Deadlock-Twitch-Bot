@@ -40,6 +40,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::Utc;
 use dashmap::DashMap;
 use sqlx::PgPool;
@@ -671,6 +672,11 @@ impl MentionResolver for PgHelixMentionResolver {
 // ChatPipeline
 // ---------------------------------------------------------------------------
 
+#[async_trait]
+pub trait BrainChatPort: Send + Sync {
+    async fn maybe_respond(&self, event: &ChatMessageEvent) -> bool;
+}
+
 /// Alle Bausteine der Pipeline — gebündelt, damit der Konstruktor lesbar bleibt.
 #[derive(Clone)]
 pub struct ChatPipelineParts {
@@ -686,6 +692,7 @@ pub struct ChatPipelineParts {
     pub ai_reviewer: Arc<SpamAiReviewer>,
     pub moderation: Arc<ModerationEngine>,
     pub sus_invite: Arc<SusInviteCheck>,
+    pub brain_chat: Option<Arc<dyn BrainChatPort>>,
     pub fun: Arc<FunResponses>,
     pub standard_replies: Arc<StandardReplies>,
     pub invite_question: Arc<InviteQuestionResponder>,
@@ -983,6 +990,7 @@ impl ChatPipeline {
         // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
         // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
         // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
+        let mut scam_punished = false;
         if mod_settings.scam_pitch_enabled {
             let scam_pitch = Arc::clone(&p.scam_pitch);
             let event_for_step = event.clone();
@@ -994,6 +1002,7 @@ impl ChatPipeline {
                 .unwrap_or(PitchDecision::None);
             match &pitch {
                 PitchDecision::StrongTimeout { text, duration } => {
+                    scam_punished = true;
                     debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
                     let api = Arc::clone(&p.api);
                     let alerter = Arc::clone(&p.alerter);
@@ -1072,9 +1081,19 @@ impl ChatPipeline {
         }
 
         // Schritt 8: Sus-Discord-Invite (Z. 1741–1743)
-        if mod_settings.sus_invite_enabled {
+        let invite_punished = if mod_settings.sus_invite_enabled {
             self.handle_sus_invite(event, &channel_login, &chatter_login)
-                .await;
+                .await
+        } else {
+            false
+        };
+
+        if !scam_punished && !invite_punished {
+            if let Some(brain_chat) = &p.brain_chat {
+                if brain_chat.maybe_respond(event).await {
+                    return false;
+                }
+            }
         }
 
         // Schritt 8b: Feste Antworten ohne KI (Gruß kanalweit, Release-Frage
@@ -1156,7 +1175,7 @@ impl ChatPipeline {
         event: &ChatMessageEvent,
         channel_login: &str,
         chatter_login: &str,
-    ) {
+    ) -> bool {
         let p = &self.parts;
         let sus_invite = Arc::clone(&p.sus_invite);
         let event_for_step = event.clone();
@@ -1166,7 +1185,7 @@ impl ChatPipeline {
         })
         .await
         .flatten() else {
-            return;
+            return false;
         };
 
         p.review_log.record(
@@ -1227,6 +1246,7 @@ impl ChatPipeline {
                 "Sus-Invite-Enforcement entschieden"
             ),
         }
+        true
     }
 
     /// Deadlock-live Chat-Detektoren, die selbst entscheiden, ob sie antworten.
@@ -2489,6 +2509,7 @@ mod tests {
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
@@ -2773,6 +2794,7 @@ mod tests {
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(
@@ -3598,6 +3620,7 @@ mod tests {
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
             standard_replies: Arc::new(StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
             invite_question: Arc::new(crate::invite_question::InviteQuestionResponder::new(

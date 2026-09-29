@@ -131,7 +131,8 @@ struct AnnouncementSecretPatterns {
 fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
     static PATTERNS: OnceLock<AnnouncementSecretPatterns> = OnceLock::new();
     PATTERNS.get_or_init(|| {
-        const KEYS: &str = r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
+        const KEYS: &str =
+            r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
         let compile = |p: &str| Regex::new(p).unwrap_or_else(|_| Regex::new(r"$.^").unwrap());
         AnnouncementSecretPatterns {
             header: compile(r"(?i)\b(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,;}]+)"),
@@ -150,22 +151,24 @@ fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
 
 fn redact_announcement_detail(raw: &str) -> String {
     let p = announcement_secret_patterns();
-    let s = p
-        .header
-        .replace_all(raw, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .bearer
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .quoted_kv
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p.header.replace_all(raw, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.bearer.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.quoted_kv.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
     let s = p.kv.replace_all(&s, |c: &regex::Captures| {
         format!("{}{}{}", &c[1], &c[2], mask_secret(&c[3]))
     });
-    let s = p
-        .query
-        .replace_all(&s, |c: &regex::Captures| format!("{}={}", &c[1], mask_secret(&c[2])));
-    p.jwt.replace_all(&s, mask_secret("[jwt]").as_str()).into_owned()
+    let s = p.query.replace_all(&s, |c: &regex::Captures| {
+        format!("{}={}", &c[1], mask_secret(&c[2]))
+    });
+    p.jwt
+        .replace_all(&s, mask_secret("[jwt]").as_str())
+        .into_owned()
 }
 
 /// Drop-Reason aus der Helix-Antwort auf `POST /chat/messages`.
@@ -296,12 +299,45 @@ impl HelixClient {
         message: &str,
         user_token: &str,
     ) -> Result<SendOutcome, HelixError> {
+        self.send_chat_message_with_parent(broadcaster_id, sender_id, message, user_token, None)
+            .await
+    }
+
+    pub async fn send_chat_reply(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        reply_parent_message_id: &str,
+        user_token: &str,
+    ) -> Result<SendOutcome, HelixError> {
+        self.send_chat_message_with_parent(
+            broadcaster_id,
+            sender_id,
+            message,
+            user_token,
+            Some(reply_parent_message_id),
+        )
+        .await
+    }
+
+    async fn send_chat_message_with_parent(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        user_token: &str,
+        reply_parent_message_id: Option<&str>,
+    ) -> Result<SendOutcome, HelixError> {
         let url = format!("{}/chat/messages", self.helix_config().helix_base);
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "broadcaster_id": broadcaster_id,
             "sender_id": sender_id,
             "message": message,
         });
+        if let Some(parent) = reply_parent_message_id {
+            body["reply_parent_message_id"] = parent.into();
+        }
         let resp = self
             .http_client()
             .post(&url)
@@ -728,7 +764,7 @@ pub fn parse_created_at(s: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
     use crate::client::{HelixClient, HelixConfig};
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Baut einen HelixClient gegen einen MockServer (ohne App-Token-Präfetch).
@@ -765,6 +801,31 @@ mod tests {
             .await;
         let result = client
             .send_chat_message("111", "bot1", "Hallo!", "bot-tok")
+            .await
+            .unwrap();
+        assert_eq!(result, SendOutcome::Sent);
+    }
+
+    #[tokio::test]
+    async fn send_chat_reply_sets_parent_message_id() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(body_json(serde_json::json!({
+                "broadcaster_id": "111",
+                "sender_id": "bot1",
+                "message": "Antwort",
+                "reply_parent_message_id": "question-123"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"message_id": "reply-123", "is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = client
+            .send_chat_reply("111", "bot1", "Antwort", "question-123", "bot-tok")
             .await
             .unwrap();
         assert_eq!(result, SendOutcome::Sent);
@@ -854,12 +915,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -871,12 +930,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .send_announcement("111", "bot1", "msg", "blue", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .send_announcement("111", "bot1", "msg", "blue", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -888,12 +945,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(
-            !client
-                .send_announcement("111", "bot1", "msg", "purple", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(!client
+            .send_announcement("111", "bot1", "msg", "purple", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1104,12 +1159,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .delete_chat_message("111", "bot1", "msg-abc", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .delete_chat_message("111", "bot1", "msg-abc", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1121,12 +1174,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(
-            !client
-                .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
-                .await
-                .unwrap()
-        );
+        assert!(!client
+            .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
+            .await
+            .unwrap());
     }
 
     // -----------------------------------------------------------------------
@@ -1149,10 +1200,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let users = client
-            .get_users_created_at(&["123"], "tok")
-            .await
-            .unwrap();
+        let users = client.get_users_created_at(&["123"], "tok").await.unwrap();
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].login, "testuser");
         let dt = parse_created_at(&users[0].created_at);
@@ -1199,10 +1247,7 @@ mod tests {
         let client = mock_client(&server).await;
         Mock::given(method("GET"))
             .and(path("/helix/users"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data": []})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
             .mount(&server)
             .await;
         let user = client.get_user_by_login("nobody", "tok").await.unwrap();
