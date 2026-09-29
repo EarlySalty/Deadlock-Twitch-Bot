@@ -734,7 +734,8 @@ async fn kandidaten_schema_und_runtime_rechte_passen_zum_release() {
         .filter(|line| !line.trim_start().starts_with('\\'))
         .collect::<Vec<_>>()
         .join("\n");
-    sqlx::raw_sql(&roles_sql).execute(&pool).await.unwrap();
+    // The statement consists exclusively of the checked-in role migration.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(&roles_sql)).execute(&pool).await.unwrap();
     for role in ["twitchbot", "twitchdash", "twitchlegacy"] {
         for privilege in ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"] {
             let allowed: bool = sqlx::query_scalar(
