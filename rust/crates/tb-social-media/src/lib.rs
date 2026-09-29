@@ -54,6 +54,8 @@ pub mod approval_worker;
 pub mod batch;
 pub mod clip;
 pub mod clip_analytics;
+pub mod clip_context;
+pub mod clip_context_harvest;
 pub mod clip_manager;
 pub mod clip_prep_worker;
 pub mod clip_queue;

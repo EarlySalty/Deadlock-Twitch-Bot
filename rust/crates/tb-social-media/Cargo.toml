@@ -24,6 +24,10 @@ regex             = { workspace = true }
 async-trait       = { workspace = true }
 
 [[bin]]
+name = "clip_context_learn"
+path = "src/bin/clip_context_learn.rs"
+
+[[bin]]
 name = "korpus_ernte"
 path = "src/bin/korpus_ernte.rs"
 

@@ -63,6 +63,7 @@ use tb_engagement::types::IncomingMessage;
 use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
+use tb_social_media::clip::helix::HelixClipSource;
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 use tb_transport_twitch::HelixClient;
 
@@ -120,15 +121,13 @@ struct ChatClipAdapter {
     helix: Arc<HelixClient>,
     token_provider: Arc<TokenProvider>,
     bot_token: Arc<BotTokenManager>,
+    pool: PgPool,
 }
 
 #[async_trait::async_trait]
 impl ClipPort for ChatClipAdapter {
-    async fn create_clip(
-        &self,
-        broadcaster_user_id: &str,
-        _broadcaster_login: &str,
-    ) -> ClipOutcome {
+    async fn create_clip(&self, broadcaster_user_id: &str, broadcaster_login: &str) -> ClipOutcome {
+        let requested_at = chrono::Utc::now();
         // Ungated + Auto-Refresh: Streamer mit deaktivierten Raids dürfen clippen,
         // und ein abgelaufener Token wird erneuert statt 401 zu produzieren.
         let access_token = match self
@@ -167,6 +166,54 @@ impl ClipPort for ChatClipAdapter {
                 if url.is_empty() {
                     ClipOutcome::Failed
                 } else {
+                    if !clip.id.is_empty() {
+                        let source = HelixClipSource::new(self.helix.clone());
+                        let mut resolved = None;
+                        for attempt in 0..4 {
+                            if attempt > 0 {
+                                tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                            }
+                            match source.fetch_clip_by_id(&clip.id, broadcaster_login).await {
+                                Ok(Some(detail))
+                                    if detail.vod_id.is_some() && detail.vod_offset_s.is_some() =>
+                                {
+                                    resolved = Some(detail);
+                                    break;
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    tracing::warn!(%error, clip_id = %clip.id, "!clip: VOD-Daten nicht abrufbar")
+                                }
+                            }
+                        }
+                        let vod_id = resolved
+                            .as_ref()
+                            .and_then(|detail| detail.vod_id.as_deref());
+                        let vod_offset_s = resolved.as_ref().and_then(|detail| detail.vod_offset_s);
+                        let status = if resolved.is_some() {
+                            "resolved"
+                        } else {
+                            "unavailable"
+                        };
+                        if let Err(error) = sqlx::query(
+                            "INSERT INTO twitch_clip_command_events
+                                (clip_id, streamer_login, twitch_user_id, requested_at, vod_id, vod_offset_s, resolution_status)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7)
+                             ON CONFLICT (clip_id) DO NOTHING",
+                        )
+                        .bind(&clip.id)
+                        .bind(broadcaster_login)
+                        .bind(broadcaster_user_id)
+                        .bind(requested_at)
+                        .bind(vod_id)
+                        .bind(vod_offset_s)
+                        .bind(status)
+                        .execute(&self.pool)
+                        .await
+                        {
+                            tracing::error!(%error, clip_id = %clip.id, "!clip: Zeitpunkt konnte nicht gespeichert werden");
+                        }
+                    }
                     ClipOutcome::Created { url }
                 }
             }
@@ -211,7 +258,7 @@ pub fn build_clip_port(
         blacklist.clone(),
     );
     let token_provider = Arc::new(TokenProvider::new(
-        RaidAuthStore::new(pool, cipher),
+        RaidAuthStore::new(pool.clone(), cipher),
         refresher,
         blacklist,
     ));
@@ -219,6 +266,7 @@ pub fn build_clip_port(
         helix,
         token_provider,
         bot_token,
+        pool,
     }))
 }
 
