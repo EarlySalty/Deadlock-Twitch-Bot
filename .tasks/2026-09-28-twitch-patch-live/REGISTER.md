@@ -29,6 +29,6 @@ Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzer
 | C Fix nach Review | `ff5e7f5c-b402-4e24-a11d-950c8519cd54` | gpt-6-luna | derselbe C-Worktree | `feat/twitch-patch-feed-20260928` | Commits `228d0585`, `c61f168c` gepusht; check/fmt und 12 Tests bestanden, gesettelt |
 | C unabhängige Nachprüfung | `62036f18-bf3e-4462-9efc-bb04f046a6cb` | gpt-6-astra | lesend im C-Worktree | kein eigener Branch | drei C-Befunde behoben, fertig J/Fix nötig N; gesettelt, gemeinsamer PostgreSQL-Nachweis offen |
 | D Integration | `c754a2e9-6d6d-415f-90a2-24a2d9a969d3` | gpt-6-sol | `/home/nathanael/.worktrees/twitch-patch-integration-20260928` | `feat/twitch-patch-integration-20260928` | Commit `22699c24` gepusht, sauber; kombinierte Kompilation und isolierter PostgreSQL-Test unter `twitchbot` gemeldet, volle `tb-chat`-Suite nicht abgeschlossen; unabhängiges Review läuft |
-| D unabhängiges Gesamtreview | `53c2ed14-8ad6-4bd0-8fa3-b0f9b9fa08f2` | gpt-6-astra | lesend im D-Worktree | kein eigener Branch | Runde 1 läuft gegen `22699c24`, kein Produktivzugriff |
+| D unabhängiges Gesamtreview | `53c2ed14-8ad6-4bd0-8fa3-b0f9b9fa08f2` | gpt-6-astra | lesend im D-Worktree | kein eigener Branch | Runde 1 fertig N, Fix nötig J; sechs Befunde D1 bis D6 in `REVIEW.md`, keine Edits oder Produktivzugriffe |
 
 Orchestrations-Artefakte: `/home/nathanael/.worktrees/twitch-patch-orchestration-20260928/.tasks/2026-09-28-twitch-patch-live/` auf Branch `feat/patch-twitch-orchestration-20260928`, Basis `992e265961048ee72d03a483673c92ef3c49e715`.
