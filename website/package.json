@@ -24,7 +24,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "typescript": "~6.0.3",
     "vite": "^8.3.1",
-    "vite-prerender-plugin": "^0.5.13"
+    "vite-prerender-plugin": "^0.5.14"
   },
   "overrides": {
     "picomatch": "^4.0.4",
