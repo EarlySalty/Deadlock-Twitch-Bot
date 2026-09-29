@@ -5,7 +5,9 @@ use std::time::Duration;
 use chrono::Utc;
 use sqlx::PgPool;
 
-use crate::clip_prep_worker::{download_atomic, register_local_file, ClipDownloader, YtDlpDownloader};
+use crate::clip_prep_worker::{
+    download_atomic, register_local_file, ClipDownloader, YtDlpDownloader, DEFAULT_CLIPS_DIR,
+};
 use crate::render::render_clip_vertical;
 use crate::video_processor::VideoProcessor;
 
@@ -53,8 +55,28 @@ pub async fn get_preview(pool: &PgPool, clip_db_id: i64) -> Option<PreviewStatus
     Some(PreviewStatus {
         status: row.preview_status,
         error: row.preview_error,
-        path: row.preview_path,
+        path: row
+            .preview_path
+            .map(|path| resolve_preview_path(clip_db_id, path)),
     })
+}
+
+fn resolve_preview_path(clip_db_id: i64, path: String) -> String {
+    if Path::new(&path).exists() {
+        return path;
+    }
+    let expected = format!("{clip_db_id}_preview.mp4");
+    let stored = Path::new(&path);
+    if stored
+        .file_name()
+        .is_some_and(|name| name == expected.as_str())
+        && stored
+            .parent()
+            .is_some_and(|parent| parent.ends_with("data/clips"))
+    {
+        return format!("{DEFAULT_CLIPS_DIR}/{expected}");
+    }
+    path
 }
 
 async fn finish_ready(pool: &PgPool, clip_db_id: i64, path: &str) -> Result<(), sqlx::Error> {
@@ -183,10 +205,7 @@ impl PreviewWorker {
         .await
         {
             Ok(()) => {
-                let abs = std::fs::canonicalize(&output)
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or(output);
-                if let Err(e) = finish_ready(&self.pool, job.clip_db_id, &abs).await {
+                if let Err(e) = finish_ready(&self.pool, job.clip_db_id, &output).await {
                     tracing::warn!(%e, clip_db_id = job.clip_db_id, "Vorschau: Ready-Status nicht gespeichert");
                 }
             }
@@ -220,12 +239,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_url TEXT, streamer_login TEXT, local_file_path TEXT, preview_path TEXT, preview_status TEXT, preview_error TEXT, preview_updated_at TIMESTAMPTZ)",
         )
@@ -233,6 +268,16 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[test]
+    fn alter_release_pfad_zeigt_auf_den_aktuellen_clips_mount() {
+        let old = "/opt/deadlock/twitch/releases/obsolete/data/clips/42_preview.mp4";
+        assert_eq!(
+            resolve_preview_path(42, old.to_string()),
+            "data/clips/42_preview.mp4"
+        );
+        assert_eq!(resolve_preview_path(43, old.to_string()), old);
     }
 
     #[tokio::test]
@@ -244,18 +289,26 @@ mod tests {
 
         // Angestossen -> pending.
         request_preview(&pool, id).await.unwrap();
-        assert_eq!(get_preview(&pool, id).await.unwrap().status.as_deref(), Some(PREVIEW_PENDING));
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_PENDING)
+        );
 
         // Vom Worker beansprucht -> rendering.
         let jobs = claim_pending(&pool, 5).await;
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].clip_db_id, id);
-        assert_eq!(get_preview(&pool, id).await.unwrap().status.as_deref(), Some(PREVIEW_RENDERING));
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_RENDERING)
+        );
         // Ein zweiter Claim findet nichts mehr.
         assert!(claim_pending(&pool, 5).await.is_empty());
 
         // Fertig -> ready + Pfad.
-        finish_ready(&pool, id, "/clips/1_preview.mp4").await.unwrap();
+        finish_ready(&pool, id, "/clips/1_preview.mp4")
+            .await
+            .unwrap();
         let st = get_preview(&pool, id).await.unwrap();
         assert_eq!(st.status.as_deref(), Some(PREVIEW_READY));
         assert_eq!(st.path.as_deref(), Some("/clips/1_preview.mp4"));

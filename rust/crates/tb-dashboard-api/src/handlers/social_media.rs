@@ -1909,10 +1909,9 @@ async fn load_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<Option<ClipRow>
 /// Stand einer Plattform-Zeile in `twitch_clips_upload_queue`.
 #[derive(Debug, Default, Clone)]
 struct UploadQueueEntry {
-    /// Geplanter Termin (`scheduled_at`), RFC-3339.
     scheduled_at: Option<String>,
-    /// Letzter Fehlergrund (`last_error`) aus `update_upload_status`.
     last_error: Option<String>,
+    status: Option<String>,
 }
 
 /// Queue-Stand einer Clip-Seite: Clip-ID → Plattform → Zeile.
@@ -1930,7 +1929,7 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
         return info;
     }
     let rows = sqlx::query(
-        "SELECT clip_id, platform, scheduled_at, last_error \
+        "SELECT clip_id, platform, scheduled_at, last_error, status \
          FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) ORDER BY id ASC",
     )
     .bind(clip_ids)
@@ -1965,6 +1964,7 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
             UploadQueueEntry {
                 scheduled_at,
                 last_error,
+                status: r.try_get::<Option<String>, _>("status").unwrap_or(None),
             },
         );
     }
@@ -2094,6 +2094,7 @@ async fn serialize_clip_record_with(
         // in den Zeitplan-Modi keinen Termin.
         "scheduled_at": platform_value_map(queue, |e| e.scheduled_at.as_deref()),
         "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
+        "upload_states": platform_value_map(queue, |e| e.status.as_deref()),
     })
 }
 

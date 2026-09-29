@@ -59,24 +59,36 @@ pub async fn render_all_for_user(
     twitch_user_id: &str,
     out_dir: &str,
     clips_dir: &str,
+    selected_ids: Option<&[i64]>,
 ) -> BatchResult {
-    let clips = select_clips_for_user(pool, twitch_user_id).await;
+    let mut clips = select_clips_for_user(pool, twitch_user_id).await;
+    if let Some(ids) = selected_ids {
+        clips.retain(|clip| ids.contains(&clip.clip_db_id));
+    }
     let _ = tokio::fs::create_dir_all(out_dir).await;
     let _ = tokio::fs::create_dir_all(clips_dir).await;
-    let mut result = BatchResult { rendered: Vec::new(), failed: Vec::new() };
+    let mut result = BatchResult {
+        rendered: Vec::new(),
+        failed: Vec::new(),
+    };
 
     for clip in clips {
         let input = match ensure_local(&clip, downloader.as_ref(), clips_dir).await {
             Ok(path) => path,
             Err(e) => {
-                result.failed.push((clip.clip_id.clone(), format!("download: {e}")));
+                result
+                    .failed
+                    .push((clip.clip_id.clone(), format!("download: {e}")));
                 continue;
             }
         };
         let output = format!("{out_dir}/{}.mp4", clip.clip_id);
-        match render_clip_vertical(vp, pool, clip.clip_db_id, &input, &output, BATCH_MAX_SECS).await {
+        match render_clip_vertical(vp, pool, clip.clip_db_id, &input, &output, BATCH_MAX_SECS).await
+        {
             Ok(()) => result.rendered.push(output),
-            Err(e) => result.failed.push((clip.clip_id.clone(), format!("render: {e}"))),
+            Err(e) => result
+                .failed
+                .push((clip.clip_id.clone(), format!("render: {e}"))),
         }
     }
     result
@@ -105,12 +117,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT, twitch_user_id TEXT, local_file_path TEXT, discarded_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW())")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -128,7 +156,11 @@ mod tests {
 
         let clips = select_clips_for_user(&pool, "1186925760").await;
         let ids: Vec<&str> = clips.iter().map(|c| c.clip_id.as_str()).collect();
-        assert_eq!(clips.len(), 2, "genau die zwei aktiven Clips des Nutzers: {ids:?}");
+        assert_eq!(
+            clips.len(),
+            2,
+            "genau die zwei aktiven Clips des Nutzers: {ids:?}"
+        );
         assert!(ids.contains(&"a") && ids.contains(&"b"));
         assert!(!ids.contains(&"z"), "Fremd-Clip nicht enthalten");
         assert!(!ids.contains(&"d"), "verworfener Clip nicht enthalten");

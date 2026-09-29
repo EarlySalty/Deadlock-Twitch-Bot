@@ -598,7 +598,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 [
                   { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false },
                   { mode: 'pip', title: 'Facecam & Gameplay', cam: true },
-                  { mode: 'stacked', title: 'Split Screen', cam: true },
+                  { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true },
                 ] as const
               ).map((preset) => (
                 <button
@@ -612,6 +612,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                       ...layoutForEditor,
                       mode: preset.mode,
                       cam_enabled: preset.cam,
+                      cam_position: preset.mode === 'stacked'
+                        ? { ...layoutForEditor.cam_position, h: DEFAULT_LAYOUT.cam_position.h }
+                        : layoutForEditor.cam_position,
                     });
                   }}
                 >
@@ -2191,7 +2194,7 @@ function ClipCard({
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
   const canDecide = queueStage(clip) === 'review';
   const termine = PLATTFORMEN.flatMap((platform) =>
-    clip.scheduled_at?.[platform] && !clip.platform_status[platform]
+    clip.scheduled_at?.[platform] && !clip.platform_status[platform] && !['inbox', 'inbox_pending'].includes(clip.upload_states?.[platform] ?? '')
       ? [{ platform, zeit: clip.scheduled_at[platform] as string }]
       : [],
   );
@@ -2201,6 +2204,8 @@ function ClipCard({
   const uploadFehler = PLATTFORMEN.flatMap((platform) =>
     clip.upload_errors?.[platform] ? [{ platform, text: clip.upload_errors[platform] }] : [],
   );
+  const tiktokInbox = clip.upload_states?.tiktok === 'inbox';
+  const tiktokPending = clip.upload_states?.tiktok === 'inbox_pending';
   const initialPlatforms = clip.approval?.approved_platforms?.length
     ? clip.approval.approved_platforms
     : defaultPlatforms;
@@ -2365,12 +2370,24 @@ function ClipCard({
               ))}
             </div>
           )}
+          {tiktokInbox && (
+            <p role="status" className="text-sm text-accent">
+              {t('TikTok: Der Clip liegt in deinem Postfach. Öffne TikTok, bearbeite ihn und veröffentliche ihn dort.')}
+            </p>
+          )}
+          {tiktokPending && (
+            <p role="status" className="text-sm text-text-secondary">
+              {t('TikTok verarbeitet den Clip. Sobald er im Postfach liegt, kannst du ihn in der App veröffentlichen.')}
+            </p>
+          )}
           {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}
-          {uploadFehler.length > 0 && queueStage(clip) === 'failed' && (
-            <div className="break-words text-sm text-danger">
+          {uploadFehler.length > 0 && (
+            <div role="alert" className="break-words text-sm text-danger">
               {uploadFehler.map(({ platform, text }) => (
                 <p key={platform}>
-                  {PLATFORM_LABELS[platform]}: {text}
+                  {PLATFORM_LABELS[platform]}: {platform === 'tiktok' && text?.includes('unaudited_client_can_only_post_to_private_accounts')
+                    ? t('TikTok hat den direkten Post abgelehnt. Neue Clips gehen jetzt in dein TikTok-Postfach, wo du sie selbst veröffentlichen kannst.')
+                    : text}
                 </p>
               ))}
             </div>

@@ -86,6 +86,19 @@ where
         return Err(QueueError::InvalidPlatform(platform.to_string()));
     }
     let tags = hashtags_json(hashtags);
+    if platform == "tiktok" {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM twitch_clips_upload_queue \
+             WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(pool)
+        .await?
+        {
+            return Ok(id);
+        }
+    }
 
     // 1) Pending wiederverwenden.
     if let Some(id) = sqlx::query_scalar!(
@@ -301,6 +314,27 @@ pub async fn update_upload_status(
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     match status {
+        "inbox" | "inbox_pending" => {
+            let mut tx = pool.begin().await?;
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = $1, last_error = NULL, last_attempt_at = $2::text::timestamptz WHERE id = $3",
+            )
+            .bind(status)
+            .bind(&now)
+            .bind(queue_id)
+            .execute(&mut *tx)
+            .await?;
+            if let Some(publish_id) = external_video_id {
+                sqlx::query(
+                    "UPDATE twitch_clips_social_media SET tiktok_video_id = $1 WHERE id = (SELECT clip_id FROM twitch_clips_upload_queue WHERE id = $2 AND platform = 'tiktok')",
+                )
+                .bind(publish_id)
+                .bind(queue_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+        }
         "completed" => {
             let mut tx = pool.begin().await?;
             let queue_row = sqlx::query!(
@@ -409,6 +443,32 @@ mod tests {
 
     async fn seed_clip(pool: &PgPool) -> i64 {
         sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('c1', 'https://clips.test/c1', 'nani', 'T') RETURNING id").fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn tiktok_postfach_erzeugt_keinen_zweiten_upload() {
+        let Some(pool) = make_pool("t_sm_queue_inbox").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        let queue_id = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
+        update_upload_status(&pool, queue_id, "inbox", Some("publish_123"), None)
+            .await
+            .unwrap();
+        let next_id = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
+        assert_eq!(next_id, queue_id);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'tiktok'",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]

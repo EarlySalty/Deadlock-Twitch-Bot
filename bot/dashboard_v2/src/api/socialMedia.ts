@@ -157,6 +157,7 @@ export type PlattformTermine = Partial<Record<SocialPlatform, string | null>>;
 export interface ClipPostingInfo {
   upload_errors?: PlattformFehler | null;
   scheduled_at?: PlattformTermine | null;
+  upload_states?: Partial<Record<SocialPlatform, string | null>> | null;
 }
 
 export type SocialClipMitPosting = SocialClip & ClipPostingInfo;
