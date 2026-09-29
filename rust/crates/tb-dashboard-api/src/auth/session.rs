@@ -2569,7 +2569,7 @@ mod integration_tests {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let schema = test_schema_name("auth_session");
         let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin_pool)
             .await
             .ok()?;
@@ -3521,10 +3521,12 @@ print(f.encrypt(payload.encode()).decode(), end='')
         // unqualifizierten Table-Refs in fetch_session_payload landen so im Schema.
         let schema = format!("fp_test_{}", unix_now());
         let admin_pool = sqlx::PgPool::connect(&url).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
-            .execute(&admin_pool)
-            .await
-            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE SCHEMA IF NOT EXISTS {schema}"
+        )))
+        .execute(&admin_pool)
+        .await
+        .unwrap();
 
         let opts: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
         let opts = opts.options([("search_path", schema.as_str())]);
@@ -3534,7 +3536,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .await
             .unwrap();
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"CREATE TABLE {schema}.dashboard_sessions (
                 session_id   TEXT NOT NULL PRIMARY KEY,
                 session_type TEXT NOT NULL,
@@ -3542,7 +3544,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
                 created_at   DOUBLE PRECISION NOT NULL,
                 expires_at   DOUBLE PRECISION NOT NULL
             )"#
-        ))
+        )))
         .execute(&pool)
         .await
         .unwrap();
@@ -3554,9 +3556,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
             now + 3600.0
         );
         let fernet_bytes = make_test_fernet_payload(&json_str);
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {schema}.dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at) VALUES ($1,$2,$3,$4,$5)"
-        ))
+        )))
         .bind(session_lookup_key(&session_id))
         .bind("discord_admin")
         .bind(fernet_bytes)
@@ -3584,7 +3586,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert!(!fp.verify("203.0.113.7", "wrong-fp"));
 
         drop(pool);
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin_pool)
             .await
             .ok();

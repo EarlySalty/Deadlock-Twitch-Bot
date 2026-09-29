@@ -372,7 +372,9 @@ pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
             USE_CASE_OPUS,
             LEDGER_PURPOSE_OPUS,
             // Die Premium-Reportstufe lässt die zentrale Standardtemperatur stehen.
-            tb_llm::Request::prompt(prompt).max_tokens(6000).timeout_secs(240),
+            tb_llm::Request::prompt(prompt)
+                .max_tokens(6000)
+                .timeout_secs(240),
         ),
     };
     let response = tb_llm::complete(use_case, request.ledger_purpose(purpose))
@@ -1112,7 +1114,7 @@ pub async fn comparison_payload(pool: &PgPool, session: &ReportSession) -> serde
 /// `None` → `_as_int` → 0). Für die Zeitfenster-Events (follows etc.).
 async fn safe_count_between(
     pool: &PgPool,
-    sql: &str,
+    sql: &'static str,
     user_id: &str,
     start: &str,
     end: &str,
@@ -1322,14 +1324,14 @@ pub fn raw_chat_payload(messages: &[ChatMessageRow]) -> serde_json::Value {
 /// 1:1 durch (wie Pythons raw row dict); `order_col` bestimmt die Reihenfolge.
 async fn raw_rows_by_session(
     pool: &PgPool,
-    inner_sql: &str,
-    order_col: &str,
+    inner_sql: &'static str,
+    order_col: &'static str,
     session_id: i64,
 ) -> serde_json::Value {
     let sql = format!(
         "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.{order_col}), '[]'::jsonb) FROM ({inner_sql}) t"
     );
-    sqlx::query_scalar::<_, serde_json::Value>(&sql)
+    sqlx::query_scalar::<_, serde_json::Value>(sqlx::AssertSqlSafe(sql))
         .bind(session_id)
         .fetch_one(pool)
         .await
@@ -1340,8 +1342,8 @@ async fn raw_rows_by_session(
 /// twitch_user_id + start/end als `::timestamptz`).
 async fn raw_rows_between(
     pool: &PgPool,
-    inner_sql: &str,
-    order_col: &str,
+    inner_sql: &'static str,
+    order_col: &'static str,
     user_id: &str,
     start: &str,
     end: &str,
@@ -1349,7 +1351,7 @@ async fn raw_rows_between(
     let sql = format!(
         "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.{order_col}), '[]'::jsonb) FROM ({inner_sql}) t"
     );
-    sqlx::query_scalar::<_, serde_json::Value>(&sql)
+    sqlx::query_scalar::<_, serde_json::Value>(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
         .bind(start)
         .bind(end)

@@ -277,12 +277,12 @@ pub async fn list_reports(
     streamer_login: Option<&str>,
     limit: i64,
 ) -> Vec<SocialMediaReportRecord> {
-    let rows: Vec<ReportRow> = sqlx::query_as(&format!(
+    let rows: Vec<ReportRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {REPORT_COLUMNS} FROM social_media_reports \
           WHERE ($1::text IS NULL OR kind = $1) \
             AND ($2::text IS NULL OR LOWER(COALESCE(streamer_login, '')) = LOWER($2)) \
           ORDER BY period_end DESC, created_at DESC, id DESC LIMIT $3"
-    ))
+    )))
     .bind(kind)
     .bind(streamer_login)
     .bind(limit.clamp(1, 100))
@@ -300,12 +300,12 @@ pub async fn get_existing_report(
     period_end: &str,
     streamer_login: Option<&str>,
 ) -> Option<SocialMediaReportRecord> {
-    let row: Option<ReportRow> = sqlx::query_as(&format!(
+    let row: Option<ReportRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {REPORT_COLUMNS} FROM social_media_reports \
           WHERE kind = $1 AND period_start = $2::timestamptz AND period_end = $3::timestamptz \
             AND (streamer_login = $4 OR (streamer_login IS NULL AND $4::text IS NULL)) \
           ORDER BY created_at DESC, id DESC LIMIT 1"
-    ))
+    )))
     .bind(kind)
     .bind(period_start)
     .bind(period_end)
@@ -327,10 +327,10 @@ pub async fn insert_report(
     content_md: &str,
     model: Option<&str>,
 ) -> Result<SocialMediaReportRecord, sqlx::Error> {
-    let row: ReportRow = sqlx::query_as(&format!(
+    let row: ReportRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "INSERT INTO social_media_reports (kind, streamer_login, period_start, period_end, content_md, model) \
          VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6) RETURNING {REPORT_COLUMNS}"
-    ))
+    )))
     .bind(kind)
     .bind(streamer_login)
     .bind(period_start)

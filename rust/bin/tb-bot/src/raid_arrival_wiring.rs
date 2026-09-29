@@ -1505,11 +1505,13 @@ mod recruitment_stop_tests {
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .ok()?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;
@@ -1523,7 +1525,10 @@ mod recruitment_stop_tests {
             .await
             .ok()?;
         for ddl in ddls {
-            sqlx::query(ddl).execute(&pool).await.ok()?;
+            sqlx::query(sqlx::AssertSqlSafe(*ddl))
+                .execute(&pool)
+                .await
+                .ok()?;
         }
         Some(pool)
     }
@@ -1656,18 +1661,21 @@ mod tests {
     use tb_raid::PendingRaid;
 
     async fn setup(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -1690,7 +1698,7 @@ mod tests {
             "CREATE TABLE twitch_raid_arrival_tracking (id SERIAL PRIMARY KEY, detected_at TIMESTAMPTZ DEFAULT NOW(), last_signal_at TIMESTAMPTZ, from_broadcaster_id TEXT, from_broadcaster_login TEXT, to_broadcaster_id TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, classification TEXT, confirmation_signals TEXT, primary_signal TEXT, correlation_status TEXT, correlation_detail TEXT, source_resolution TEXT, raid_history_id BIGINT, raid_history_executed_at TIMESTAMPTZ, unraid_seen BOOLEAN, last_unraid_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_partner_raid_score_tracking (id SERIAL PRIMARY KEY, raid_history_id BIGINT, from_broadcaster_id TEXT, from_broadcaster_login TEXT, to_broadcaster_id TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, confirmed_at TEXT, target_session_id INTEGER, target_stream_started_at TEXT, score_last_computed_at TEXT, final_score DOUBLE PRECISION, base_score DOUBLE PRECISION, duration_score DOUBLE PRECISION, time_pattern_score DOUBLE PRECISION, new_partner_multiplier DOUBLE PRECISION, raid_boost_multiplier DOUBLE PRECISION, today_received_raids INTEGER, was_deadlock_at_raid INTEGER, deadlock_continued_until TEXT, deadlock_continued_sec INTEGER, resolved_at TEXT, resolution_reason TEXT, raid_history_executed_at TIMESTAMPTZ, readiness_score DOUBLE PRECISION, fairness_score DOUBLE PRECISION)",
         ] {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(*ddl)).execute(&pool).await.unwrap();
         }
         pool
     }

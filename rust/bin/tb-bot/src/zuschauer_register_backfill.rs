@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use tb_chat::zuschauer_register::{
-    score, MemberIndex, MemberLite, PRIOR_COMMUNITY, PRIOR_PARTNER,
-};
+use tb_chat::zuschauer_register::{score, MemberIndex, MemberLite, PRIOR_COMMUNITY, PRIOR_PARTNER};
 use tb_config::Settings;
 use tb_transport_discord::BrokerRelay;
 
@@ -320,7 +318,9 @@ async fn run(
         batch
             .sigs
             .push(serde_json::to_string(&signals).unwrap_or_else(|_| "{}".to_string()));
-        batch.fpcs.push(row.first_partner_channel.unwrap_or_default());
+        batch
+            .fpcs
+            .push(row.first_partner_channel.unwrap_or_default());
         batch
             .fsas
             .push(row.first_seen.map(|t| t.to_rfc3339()).unwrap_or_default());
@@ -362,11 +362,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -501,10 +503,17 @@ mod tests {
         assert_eq!(verteilung.stufe_neuling, 3, "u_low, u_alias, u_offchan");
         assert_eq!(verteilung.stufe_mittel, 0);
         assert_eq!(verteilung.stufe_hoch, 1, "u_comm ueber dach_lock-Prior");
-        assert_eq!(verteilung.stufe_sehr_hoch, 2, "u_new Namenstreffer, hard1 hart");
+        assert_eq!(
+            verteilung.stufe_sehr_hoch, 2,
+            "u_new Namenstreffer, hard1 hart"
+        );
         assert_eq!(unaufloesbar, 1, "ghost ist nicht aufloesbar");
 
-        assert_eq!(register_count(&pool).await, 0, "Trockenlauf schreibt nichts");
+        assert_eq!(
+            register_count(&pool).await,
+            0,
+            "Trockenlauf schreibt nichts"
+        );
     }
 
     #[tokio::test]
@@ -548,7 +557,11 @@ mod tests {
 
         let leerer_index = MemberIndex::build(&[]);
         run(&pool, &leerer_index, false).await.unwrap();
-        assert_eq!(register_count(&pool).await, 6, "zweiter Lauf legt nichts doppelt an");
+        assert_eq!(
+            register_count(&pool).await,
+            6,
+            "zweiter Lauf legt nichts doppelt an"
+        );
 
         let first_seen_2: DateTime<Utc> = sqlx::query_scalar(
             "SELECT first_seen_at FROM twitch_zuschauer_register WHERE twitch_user_id = 'u_new'",
@@ -579,6 +592,9 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(offchan_seen.is_none(), "ohne Partnerkanal kein erstes Auftauchen");
+        assert!(
+            offchan_seen.is_none(),
+            "ohne Partnerkanal kein erstes Auftauchen"
+        );
     }
 }

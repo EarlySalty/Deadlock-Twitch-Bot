@@ -85,11 +85,23 @@ pub async fn viewer_overlap_handler(
     let c2_bots: Vec<String> = ((n + 3)..=(2 * n + 2)).map(|i| format!("${i}")).collect();
     let rollup_bots_a: Vec<String> = (3..=(n + 2)).map(|i| format!("${i}")).collect();
 
-    let c1_clause = format!("(c1.chatter_login NOT IN ({}) AND LOWER(c1.chatter_login) !~ '^justinfan[0-9]+$')", c1_bots.join(", "));
-    let c2_clause = format!("(c2.chatter_login NOT IN ({}) AND LOWER(c2.chatter_login) !~ '^justinfan[0-9]+$')", c2_bots.join(", "));
+    let c1_clause = format!(
+        "(c1.chatter_login NOT IN ({}) AND LOWER(c1.chatter_login) !~ '^justinfan[0-9]+$')",
+        c1_bots.join(", ")
+    );
+    let c2_clause = format!(
+        "(c2.chatter_login NOT IN ({}) AND LOWER(c2.chatter_login) !~ '^justinfan[0-9]+$')",
+        c2_bots.join(", ")
+    );
     // In totals_b CTE: gleiche Positionen wie c2_bots, aber Alias `cr`.
-    let cr_clause = format!("(cr.chatter_login NOT IN ({}) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$')", c2_bots.join(", "));
-    let rollup_clause_a = format!("(chatter_login NOT IN ({}) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$')", rollup_bots_a.join(", "));
+    let cr_clause = format!(
+        "(cr.chatter_login NOT IN ({}) AND LOWER(cr.chatter_login) !~ '^justinfan[0-9]+$')",
+        c2_bots.join(", ")
+    );
+    let rollup_clause_a = format!(
+        "(chatter_login NOT IN ({}) AND LOWER(chatter_login) !~ '^justinfan[0-9]+$')",
+        rollup_bots_a.join(", ")
+    );
 
     let limit_pos = 2 * n + 3;
     let sql = format!(
@@ -129,7 +141,7 @@ pub async fn viewer_overlap_handler(
     );
 
     // Bindings aufbauen
-    let mut total_a_q = sqlx::query(&total_a_sql).bind(&streamer);
+    let mut total_a_q = sqlx::query(sqlx::AssertSqlSafe(total_a_sql)).bind(&streamer);
     for bot in KNOWN_CHAT_BOTS {
         total_a_q = total_a_q.bind(*bot);
     }
@@ -143,7 +155,9 @@ pub async fn viewer_overlap_handler(
         .max(1);
 
     // Overlap-Query
-    let mut overlap_q = sqlx::query(&sql).bind(&streamer).bind(&streamer);
+    let mut overlap_q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(&streamer)
+        .bind(&streamer);
     for bot in KNOWN_CHAT_BOTS {
         overlap_q = overlap_q.bind(*bot);
     } // c1 bots
@@ -944,11 +958,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -1005,11 +1021,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -1047,11 +1065,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

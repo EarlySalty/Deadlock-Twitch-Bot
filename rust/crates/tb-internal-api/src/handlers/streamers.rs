@@ -314,7 +314,11 @@ pub struct AnalyticsDaysQuery {
 /// `pub`, damit jede zweite Oberfläche (MCP-Connector) dieselbe Antwort bekommt
 /// wie `GET /streamers` und nicht ihren eigenen Default mitbringt.
 pub fn target_game_name() -> Result<String, tb_config::file::FileError> {
-    Ok(tb_config::runtime::settings()?.twitch.target_game.trim().to_string())
+    Ok(tb_config::runtime::settings()?
+        .twitch
+        .target_game
+        .trim()
+        .to_string())
 }
 
 /// `GET /internal/twitch/v1/streamers`
@@ -1221,13 +1225,14 @@ async fn archive_handler_inner(
 /// Allowlist schlägt die Prüfung via None ∉ Allowlist als 403 durch (deny-by-default,
 /// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
 fn enforce_discord_action_scope(scope: &tb_config::discord::RaidOAuth) -> Result<(), ApiError> {
-    use super::telemetry_routes::{enforce_scope_allowlist, configured_allowlist};
+    use super::telemetry_routes::{configured_allowlist, enforce_scope_allowlist};
     for (ids, key) in [
         (&scope.allowed_guild_ids, "guild_id"),
         (&scope.allowed_channel_ids, "channel_id"),
         (&scope.allowed_role_ids, "role_id"),
     ] {
-        enforce_scope_allowlist(None, &configured_allowlist(ids), key).map_err(|_| ApiError::forbidden())?;
+        enforce_scope_allowlist(None, &configured_allowlist(ids), key)
+            .map_err(|_| ApiError::forbidden())?;
     }
     Ok(())
 }
@@ -1251,7 +1256,9 @@ pub async fn discord_flag_handler(
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
-    let Some(scope) = scope else { return ApiError::internal().into_response(); };
+    let Some(scope) = scope else {
+        return ApiError::internal().into_response();
+    };
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
         discord_flag_handler_inner(&pool, &raw_login, &payload, &scope)
     })
@@ -1343,7 +1350,9 @@ pub async fn discord_profile_handler(
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
-    let Some(scope) = scope else { return ApiError::internal().into_response(); };
+    let Some(scope) = scope else {
+        return ApiError::internal().into_response();
+    };
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
         discord_profile_handler_inner(
             &pool,
@@ -1693,16 +1702,18 @@ mod tests {
             .await
             .expect("DB-Verbindung");
 
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
 
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");
@@ -1857,7 +1868,10 @@ mod tests {
         Router::new()
             .route(&format!("{base}/streamers"), get(list_handler))
             .route(&format!("{base}/streamers"), post(add_handler))
-            .route(&format!("{base}/streamers/{{login}}"), delete(remove_handler))
+            .route(
+                &format!("{base}/streamers/{{login}}"),
+                delete(remove_handler),
+            )
             .route(
                 &format!("{base}/streamers/{{login}}/verify"),
                 post(verify_handler),

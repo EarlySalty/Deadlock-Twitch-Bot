@@ -126,10 +126,10 @@ pub async fn upsert_chatter_seen(pool: &PgPool, channel: &str, nick: &str, now: 
         }
     };
     // dyn: wiederverwendeter INSERT-Grundkörper mit variierendem ON-CONFLICT-Zweig.
-    match sqlx::query(&format!(
+    match sqlx::query(sqlx::AssertSqlSafe(format!(
         "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) \
          DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at"
-    ))
+    )))
     .bind(session_id)
     .bind(channel)
     .bind(&nick)
@@ -224,9 +224,9 @@ pub async fn upsert_names_batch(
             }
         } else {
             // dyn: gleicher INSERT-Grundkörper wie JOIN-Pfad, aber DO NOTHING statt UPDATE.
-            match sqlx::query(&format!(
+            match sqlx::query(sqlx::AssertSqlSafe(format!(
                 "{INSERT_CHATTER} ON CONFLICT (session_id, chatter_login) DO NOTHING"
-            ))
+            )))
             .bind(session_id)
             .bind(channel)
             .bind(&nick)

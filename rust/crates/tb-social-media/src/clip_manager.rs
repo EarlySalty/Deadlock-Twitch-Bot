@@ -248,10 +248,10 @@ pub async fn batch_upload_all_new(
             "instagram" => "uploaded_instagram",
             _ => continue,
         };
-        let clips: Vec<PendingClipRow> = sqlx::query_as(&format!(
+        let clips: Vec<PendingClipRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT id, clip_title, streamer_login, game_name, custom_description, hashtags \
              FROM twitch_clips_social_media WHERE streamer_login = $1 AND {col} = FALSE ORDER BY created_at DESC"
-        ))
+        )))
         .bind(streamer_login)
         .fetch_all(pool)
         .await

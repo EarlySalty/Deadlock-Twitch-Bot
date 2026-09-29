@@ -112,13 +112,16 @@ pub async fn category_leaderboard_handler(
     };
 
     let rows_res = if exclude_external {
-        sqlx::query(&sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(since)
             .bind(EXTERNAL_REACH_AVG_THRESHOLD)
             .fetch_all(&pool)
             .await
     } else {
-        sqlx::query(&sql).bind(since).fetch_all(&pool).await
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(since)
+            .fetch_all(&pool)
+            .await
     };
 
     let rows = match rows_res {

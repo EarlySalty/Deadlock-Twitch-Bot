@@ -759,9 +759,18 @@ impl TbRaidOAuthImpl {
         config: &tb_config::discord::RaidOAuth,
     ) -> Self {
         // None lässt den bisherigen Guard aus; Some([]) sperrt vollständig.
-        let allowed_guild_ids = config.allowed_guild_ids.as_ref().map(|ids| ids.iter().copied().collect());
-        let allowed_channel_ids = config.allowed_channel_ids.as_ref().map(|ids| ids.iter().copied().collect());
-        let allowed_role_ids = config.allowed_role_ids.as_ref().map(|ids| ids.iter().copied().collect());
+        let allowed_guild_ids = config
+            .allowed_guild_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect());
+        let allowed_channel_ids = config
+            .allowed_channel_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect());
+        let allowed_role_ids = config
+            .allowed_role_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect());
         let success_redirect_url = config.success_redirect_url.clone();
         Self {
             pool,
@@ -1344,8 +1353,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             tb_raid::scope_profiles::normalize_scope_profile(&state_info.scope_profile);
         let title_only_flow =
             normalized_scope_profile == tb_raid::scope_profiles::TITLE_SCOPE_PROFILE;
-        let uplink_flow =
-            normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
+        let uplink_flow = normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
         let activates_raid_features = !title_only_flow && !uplink_flow;
         let new_auth = tb_raid::auth_writer::NewAuth {
             twitch_user_id: twitch_user_id.clone(),
@@ -1925,15 +1933,17 @@ mod db_tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path setzen");
@@ -2127,7 +2137,7 @@ mod db_tests {
                     "public.twitch_raid_requirements_dm_dedupe",
                     "twitch_raid_requirements_dm_dedupe",
                 );
-        sqlx::raw_sql(&requirements_migration)
+        sqlx::raw_sql(sqlx::AssertSqlSafe(requirements_migration))
             .execute(pool)
             .await
             .expect("Migration twitch_raid_requirements_dm_dedupe");

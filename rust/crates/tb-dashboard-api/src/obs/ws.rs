@@ -153,7 +153,9 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self(
-            WebSocketUpgrade::from_request_parts(parts, state).await.ok(),
+            WebSocketUpgrade::from_request_parts(parts, state)
+                .await
+                .ok(),
         ))
     }
 }
@@ -1028,8 +1030,12 @@ mod tests {
 
     #[test]
     fn nur_der_ping_gilt_als_client_rahmen() {
-        assert!(ist_ping(&Message::Text(r#"{"typ":"ping"}"#.to_string().into())));
-        assert!(!ist_ping(&Message::Text(r#"{"typ":"chat"}"#.to_string().into())));
+        assert!(ist_ping(&Message::Text(
+            r#"{"typ":"ping"}"#.to_string().into()
+        )));
+        assert!(!ist_ping(&Message::Text(
+            r#"{"typ":"chat"}"#.to_string().into()
+        )));
         assert!(!ist_ping(&Message::Text("kein json".to_string().into())));
         assert!(!ist_ping(&Message::Binary(vec![1, 2, 3].into())));
         assert!(!ist_ping(&Message::Pong(Vec::new().into())));
@@ -1212,11 +1218,13 @@ mod socket_tests {
             .connect(dsn)
             .await
             .expect("Test-DB erreichbar");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&aufbau)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&aufbau)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&aufbau)
             .await
             .expect("Schema anlegen");
@@ -1228,7 +1236,7 @@ mod socket_tests {
             .after_connect(move |conn, _| {
                 let name = name.clone();
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {name}"))
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {name}")))
                         .execute(conn)
                         .await?;
                     Ok(())

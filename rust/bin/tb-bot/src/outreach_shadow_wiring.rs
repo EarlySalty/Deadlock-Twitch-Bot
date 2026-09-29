@@ -79,7 +79,9 @@ struct OutreachConfig {
 
 impl OutreachConfig {
     fn from_config(config: &tb_config::operations::BotOperations) -> Self {
-        Self { enabled: config.outreach_shadow_enabled }
+        Self {
+            enabled: config.outreach_shadow_enabled,
+        }
     }
 
     #[cfg(test)]
@@ -237,10 +239,16 @@ pub fn start(
     let Some(discord) = configured_discord else {
         return inactive_runtime(supervisor, store, "discord_unavailable");
     };
-    let snapshot = tb_config::runtime::active()
-        .expect("Outreach startet nach der Betriebskonfiguration");
-    let yt_dlp = operating.outreach_yt_dlp_binary.as_ref()
-        .map(|path| snapshot.resolve(path).expect("Outreachpfad wurde beim Konfigurationsstart geprüft"))
+    let snapshot =
+        tb_config::runtime::active().expect("Outreach startet nach der Betriebskonfiguration");
+    let yt_dlp = operating
+        .outreach_yt_dlp_binary
+        .as_ref()
+        .map(|path| {
+            snapshot
+                .resolve(path)
+                .expect("Outreachpfad wurde beim Konfigurationsstart geprüft")
+        })
         .unwrap_or_else(|| crate::yt_dlp_path(snapshot));
     let capturer = MemoryAudioCapturer::new(
         yt_dlp.to_string_lossy().into_owned(),

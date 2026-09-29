@@ -212,11 +212,13 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -303,10 +305,12 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
         admin.close().await;
     }
 
@@ -352,7 +356,9 @@ mod tests {
         let response = remove_handler(
             DashboardAuthLevel::None,
             State(lazy_pool()),
-            Json(RemoveRequest { tag: "german".into() }),
+            Json(RemoveRequest {
+                tag: "german".into(),
+            }),
         )
         .await;
         let (status, _) = body_json(response).await;
@@ -535,7 +541,9 @@ mod tests {
         let response = remove_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Json(RemoveRequest { tag: "German".into() }),
+            Json(RemoveRequest {
+                tag: "German".into(),
+            }),
         )
         .await;
         let (status, body) = body_json(response).await;
@@ -545,7 +553,9 @@ mod tests {
         let response = remove_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Json(RemoveRequest { tag: "german".into() }),
+            Json(RemoveRequest {
+                tag: "german".into(),
+            }),
         )
         .await;
         let (status, body) = body_json(response).await;

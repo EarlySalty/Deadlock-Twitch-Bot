@@ -199,9 +199,9 @@ impl PlatformConnectionStore {
         E: sqlx::PgExecutor<'e>,
     {
         let sperre = if sperren { " FOR UPDATE" } else { "" };
-        let zeile: Option<Zeile> = sqlx::query_as(&format!(
+        let zeile: Option<Zeile> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "{SELECT_ZEILE} WHERE streamer_id = $1 AND platform = $2{sperre}"
-        ))
+        )))
         .bind(streamer_id)
         .bind(platform)
         .fetch_optional(exec)

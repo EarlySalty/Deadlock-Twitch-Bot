@@ -210,7 +210,7 @@ pub async fn get_upload_queue(
     sql.push_str(" ORDER BY q.priority DESC, q.created_at ASC LIMIT ");
     sql.push_str(&limit.max(0).to_string());
 
-    let mut query = sqlx::query(&sql).bind(status);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(status);
     if let Some(p) = platform {
         query = query.bind(p);
     }

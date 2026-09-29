@@ -116,7 +116,11 @@ async fn resolve_channel_user_id(
                     "failed to resolve streamer",
                 )
             })?;
-            match row.and_then(|r| r.0).map(|id| id.trim().to_string()).filter(|id| !id.is_empty()) {
+            match row
+                .and_then(|r| r.0)
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+            {
                 Some(id) => Ok(id),
                 None => Err(error_response(
                     StatusCode::NOT_FOUND,
@@ -224,11 +228,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -354,10 +360,12 @@ mod tests {
         let Some(pool) = make_pool("t_moderation_admin").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_partners (twitch_login, twitch_user_id) VALUES ('nani', '555')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id) VALUES ('nani', '555')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let (status, _) = body_of(
             post_handler(

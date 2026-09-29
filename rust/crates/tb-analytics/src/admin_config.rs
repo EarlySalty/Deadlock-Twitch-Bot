@@ -211,7 +211,9 @@ pub async fn load_streamer_config_snapshots(
             COUNT(*) FILTER (WHERE silent_raid = 1) AS silent_raid \
          FROM twitch_partners WHERE {where_clause}"
     );
-    let row: (i64, i64, i64, i64, i64) = sqlx::query_as(&sql).fetch_one(pool).await?;
+    let row: (i64, i64, i64, i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .fetch_one(pool)
+        .await?;
     Ok(ConfigSnapshots {
         scope: scope.to_string(),
         total: row.0,

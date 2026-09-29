@@ -72,17 +72,17 @@ pub async fn get_global_templates(pool: &PgPool, category: Option<&str>) -> Vec<
                 created_at::text, created_by FROM clip_templates_global";
     let rows = match category {
         Some(cat) => {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "{base} WHERE category = $1 ORDER BY usage_count DESC, template_name ASC"
-            ))
+            )))
             .bind(cat)
             .fetch_all(pool)
             .await
         }
         None => {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "{base} ORDER BY usage_count DESC, template_name ASC"
-            ))
+            )))
             .fetch_all(pool)
             .await
         }
@@ -312,11 +312,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

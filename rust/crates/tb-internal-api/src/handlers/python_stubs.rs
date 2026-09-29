@@ -157,12 +157,15 @@ pub async fn eventsub_requeue_handler(
     State(pool): State<PgPool>,
     body: Option<Json<RequeueBody>>,
 ) -> impl IntoResponse {
-    let retry = tb_config::runtime::settings().ok().map(|cfg| &cfg.database.retry);
+    let retry = tb_config::runtime::settings()
+        .ok()
+        .map(|cfg| &cfg.database.retry);
     requeue_with_retry(State(pool), body, retry).await
 }
 
 async fn requeue_with_retry(
-    State(pool): State<PgPool>, body: Option<Json<RequeueBody>>,
+    State(pool): State<PgPool>,
+    body: Option<Json<RequeueBody>>,
     retry: Option<&tb_config::reliability::TransactionRetry>,
 ) -> impl IntoResponse {
     let work_id = body
@@ -180,7 +183,10 @@ async fn requeue_with_retry(
         );
     }
     let Some(retry) = retry else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "configuration_unavailable"})));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "configuration_unavailable"})),
+        );
     };
     match ProcessingInboxStore::new(pool)
         .with_retry_config(retry)
@@ -278,14 +284,27 @@ pub async fn chat_action_handler(
     Extension(ChatActionExt(port)): Extension<ChatActionExt>,
     body: Option<Json<ChatActionBody>>,
 ) -> impl IntoResponse {
-    let owner = tb_config::runtime::settings().ok().map(|cfg| cfg.discord.internal.owner_id.as_str());
-    chat_action_with_owner(auth, headers, Path(login), Extension(ChatActionExt(port)), body, owner).await
+    let owner = tb_config::runtime::settings()
+        .ok()
+        .map(|cfg| cfg.discord.internal.owner_id.as_str());
+    chat_action_with_owner(
+        auth,
+        headers,
+        Path(login),
+        Extension(ChatActionExt(port)),
+        body,
+        owner,
+    )
+    .await
 }
 
 async fn chat_action_with_owner(
-    auth: AuthLevel, headers: HeaderMap, Path(login): Path<String>,
+    auth: AuthLevel,
+    headers: HeaderMap,
+    Path(login): Path<String>,
     Extension(ChatActionExt(port)): Extension<ChatActionExt>,
-    body: Option<Json<ChatActionBody>>, owner: Option<&str>,
+    body: Option<Json<ChatActionBody>>,
+    owner: Option<&str>,
 ) -> impl IntoResponse {
     if !auth.is_privileged() {
         return (
@@ -388,10 +407,7 @@ async fn chat_action_with_owner(
             if let Some(detail) = detail {
                 body["detail"] = serde_json::json!(detail);
             }
-            (
-                StatusCode::OK,
-                Json(body),
-            )
+            (StatusCode::OK, Json(body))
         }
     }
 }
@@ -448,15 +464,17 @@ mod eventsub_requeue_tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("drop schema");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("create schema");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");

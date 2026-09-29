@@ -119,9 +119,9 @@ const SETTINGS_COLS: &str = "channel_login, enabled, steam_id, persona_override,
                              enabled_at, enabled_by, updated_at";
 
 async fn load_one(pool: &PgPool, channel: &str) -> Result<Vec<Value>, sqlx::Error> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {SETTINGS_COLS} FROM twitch_engagement_settings WHERE channel_login = $1"
-    ))
+    )))
     .bind(channel)
     .fetch_optional(pool)
     .await?;
@@ -129,9 +129,9 @@ async fn load_one(pool: &PgPool, channel: &str) -> Result<Vec<Value>, sqlx::Erro
 }
 
 async fn load_all(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {SETTINGS_COLS} FROM twitch_engagement_settings ORDER BY channel_login"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     Ok(rows.iter().map(serialize_settings).collect())
@@ -712,11 +712,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

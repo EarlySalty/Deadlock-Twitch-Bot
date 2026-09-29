@@ -1051,11 +1051,13 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("Test-DB erreichbar");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&aufbau)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&aufbau)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&aufbau)
             .await
             .unwrap();
@@ -1065,7 +1067,7 @@ mod tests {
             .max_connections(2)
             .after_connect(move |conn, _| {
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {schema}"))
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
                         .execute(conn)
                         .await?;
                     Ok(())
@@ -1104,7 +1106,7 @@ mod tests {
         // geblieben und haette den Rest verschluckt.
         assert_eq!(bus.wasserstand.load(Ordering::SeqCst), anzahl);
 
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&pool)
             .await
             .ok();
@@ -1130,11 +1132,13 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("Test-DB erreichbar");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&aufbau)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&aufbau)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&aufbau)
             .await
             .unwrap();
@@ -1144,7 +1148,7 @@ mod tests {
             .max_connections(2)
             .after_connect(move |conn, _| {
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {schema}"))
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
                         .execute(conn)
                         .await?;
                     Ok(())
@@ -1188,7 +1192,7 @@ mod tests {
             "die uebersprungene id muss nachkommen, geholt: {geholt:?}"
         );
 
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&pool)
             .await
             .ok();

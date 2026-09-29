@@ -81,7 +81,10 @@ impl DiscordShadowReviewSink {
 
 #[async_trait]
 impl ShadowReviewSink for DiscordShadowReviewSink {
-    async fn forward_for_review(&self, items: &[ShadowReviewItem]) -> Result<(), ShadowReviewError> {
+    async fn forward_for_review(
+        &self,
+        items: &[ShadowReviewItem],
+    ) -> Result<(), ShadowReviewError> {
         for item in items {
             let payload = SendRichMessage {
                 channel_id: self.channel_id,
@@ -109,9 +112,7 @@ pub fn spawn_shadow_review_scheduler(
     channel_id: Option<i64>,
 ) {
     let Some(channel_id) = channel_id else {
-        tracing::info!(
-            "Shadow-Review-Scheduler aus — kein Kanal in der Betriebskonfiguration"
-        );
+        tracing::info!("Shadow-Review-Scheduler aus — kein Kanal in der Betriebskonfiguration");
         return;
     };
     let relay = match BrokerRelay::new(broker) {
@@ -132,7 +133,10 @@ pub fn spawn_shadow_review_scheduler(
             tick.tick().await;
             match forward_pending_reviews(&pool, sink.as_ref(), BATCH_LIMIT).await {
                 Ok(forwarded) if forwarded > 0 => {
-                    tracing::info!(forwarded, "Shadow-Review: Antworten zum Review weitergeleitet")
+                    tracing::info!(
+                        forwarded,
+                        "Shadow-Review: Antworten zum Review weitergeleitet"
+                    )
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Shadow-Review-Lauf fehlgeschlagen: {e}"),

@@ -2709,7 +2709,7 @@ impl PromoEngine {
             historical_bot_clause = historical_bot_clause,
             current_bot_clause = current_bot_clause,
         );
-        let mut query = sqlx::query_as::<_, (String,)>(&sql)
+        let mut query = sqlx::query_as::<_, (String,)>(sqlx::AssertSqlSafe(sql))
             .bind(broadcaster_id)
             .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
             .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
@@ -6089,7 +6089,9 @@ mod db_tests {
         seed_deadlock_candidate(&pool, "kandidatlogin", "u-pk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "dieser text darf nie erzeugt werden",
+        )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_partner_pitch_gen(gen.clone());
 
@@ -6114,7 +6116,10 @@ mod db_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(count, 0, "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log");
+        assert_eq!(
+            count, 0,
+            "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log"
+        );
     }
 
     #[tokio::test]
@@ -6163,7 +6168,9 @@ mod db_tests {
         seed_deadlock_candidate(&pool, "ledgerlogin", "u-lk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "dieser text darf nie erzeugt werden",
+        )));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_partner_pitch_gen(gen.clone())
@@ -6180,11 +6187,15 @@ mod db_tests {
 
         assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(api.message_count().await, 0);
-        let ledger_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(ledger_count, 0, "kein kalter Streamer-Outreach-Ledger-Eintrag");
+        let ledger_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            ledger_count, 0,
+            "kein kalter Streamer-Outreach-Ledger-Eintrag"
+        );
         assert!(sink.cards.lock().await.is_empty(), "keine Review-Karte");
     }
 

@@ -45,11 +45,11 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
-    ChatPipelineParts, ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper,
-    GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
-    LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster,
-    PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
+    ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
+    InviteQuestionInviteUrlPort, InviteQuestionResponder, LfgPitchResponder,
+    LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster, PgHelixMentionResolver,
+    PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -75,24 +75,30 @@ use crate::task_supervisor::TaskSupervisor;
 const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 fn knowledge_dir() -> Result<PathBuf, String> {
-    let snapshot = tb_config::runtime::active()
-        .ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
-    snapshot.resolve(&snapshot.settings().knowledge.directory).map_err(|e| e.to_string())
+    let snapshot =
+        tb_config::runtime::active().ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
+    snapshot
+        .resolve(&snapshot.settings().knowledge.directory)
+        .map_err(|e| e.to_string())
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
-    KB.get_or_init(|| match knowledge_dir().and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string())) {
-        Ok(kb) => {
-            tracing::info!(
-                "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
-                kb.len()
-            );
-            kb
-        }
-        Err(error) => {
-            tracing::warn!(%error, "go-live-tipp: Wissensbasis nicht geladen");
-            KnowledgeBase::default()
+    KB.get_or_init(|| {
+        match knowledge_dir()
+            .and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string()))
+        {
+            Ok(kb) => {
+                tracing::info!(
+                    "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
+                    kb.len()
+                );
+                kb
+            }
+            Err(error) => {
+                tracing::warn!(%error, "go-live-tipp: Wissensbasis nicht geladen");
+                KnowledgeBase::default()
+            }
         }
     })
 }
@@ -492,7 +498,10 @@ impl ChatApiHandle {
     /// Raid greetings remain limited to authorized partners; no blanket bypass.
     pub fn raid_api(&self) -> Arc<dyn ChatApi> {
         let roster: Arc<dyn PartnerRoster> = self.roster.clone();
-        Arc::new(ChannelPolicyChatApi::new(Arc::clone(&self.api), PolicyContext::Raid(roster)))
+        Arc::new(ChannelPolicyChatApi::new(
+            Arc::clone(&self.api),
+            PolicyContext::Raid(roster),
+        ))
     }
 
     /// Live rotierter Bot-User-Token-Manager — vom `!clip`-Fallback genutzt,
@@ -533,11 +542,13 @@ pub struct ChatRuntime {
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
 /// `None` = Chat bleibt aus (Python bedient weiter).
-pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool, enabled: bool) -> Option<ChatApiHandle> {
+pub async fn try_build_api(
+    helix: Option<HelixClient>,
+    pool: PgPool,
+    enabled: bool,
+) -> Option<ChatApiHandle> {
     if !enabled {
-        tracing::info!(
-            "Nativer Chat laut Betriebskonfiguration deaktiviert"
-        );
+        tracing::info!("Nativer Chat laut Betriebskonfiguration deaktiviert");
         return None;
     }
 
@@ -801,7 +812,10 @@ pub async fn build_runtime(
             pool: pool.clone(),
         }),
         Arc::clone(&discord_link),
-        Arc::new(DbInvitePort { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
+        Arc::new(DbInvitePort {
+            pool: pool.clone(),
+            fallback: discord_chat.promo_invite.clone(),
+        }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
     )
@@ -843,7 +857,9 @@ pub async fn build_runtime(
         api: Arc::clone(&api),
     });
     let alerter = Arc::new(ModAlerter::with_endpoint_and_channel_id(
-        http.clone(), "http://localhost:8899/changelog", discord_chat.moderation_alert_channel_id,
+        http.clone(),
+        "http://localhost:8899/changelog",
+        discord_chat.moderation_alert_channel_id,
     ));
     let scout_crew_guard = Arc::new(CrewGuard::new(
         true,
@@ -862,7 +878,10 @@ pub async fn build_runtime(
         api: Arc::clone(&api),
         pool: pool.clone(),
         classifier: Arc::new(ChannelClassifier::new(pool.clone())),
-        tracker: Arc::new(ChatterTracker::with_persist_all_games(pool.clone(), chat_persist_all_games)),
+        tracker: Arc::new(ChatterTracker::with_persist_all_games(
+            pool.clone(),
+            chat_persist_all_games,
+        )),
         global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
         scam_pitch: Arc::new(ScamPitchDetector::new(
             Arc::clone(&api),
@@ -882,7 +901,10 @@ pub async fn build_runtime(
         )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
+            Arc::new(DbInviteUrlWithFallback {
+                pool: pool.clone(),
+                fallback: discord_chat.promo_invite.clone(),
+            }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
@@ -904,7 +926,10 @@ pub async fn build_runtime(
         lfg_pitch: Arc::new({
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
-                Arc::new(DbInviteUrlWithFallback { pool: pool.clone(), fallback: discord_chat.promo_invite.clone() }),
+                Arc::new(DbInviteUrlWithFallback {
+                    pool: pool.clone(),
+                    fallback: discord_chat.promo_invite.clone(),
+                }),
                 Arc::clone(&lfg_judge),
                 lfg_pitch_enabled,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
@@ -965,11 +990,8 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    let engagement_irc_reader = EngagementIrcReader::new(
-        pool.clone(),
-        Arc::clone(&engagement),
-        stealth.clone(),
-    );
+    let engagement_irc_reader =
+        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone());
     supervisor.spawn("engagement_irc_reader", async move {
         engagement_irc_reader.run().await;
         future::pending::<()>().await;
@@ -2095,8 +2117,10 @@ impl tb_chat::pitch_bewertung::ReaktionsQuelle for BrokerReaktionsQuelle {
     async fn reaktionen(
         &self,
         message_id: &str,
-    ) -> Result<Option<Vec<tb_chat::pitch_bewertung::Reaktion>>, tb_chat::pitch_bewertung::ReaktionsFehler>
-    {
+    ) -> Result<
+        Option<Vec<tb_chat::pitch_bewertung::Reaktion>>,
+        tb_chat::pitch_bewertung::ReaktionsFehler,
+    > {
         match self
             .relay
             .get_message_reactions(&self.channel_id.to_string(), message_id)
@@ -2210,9 +2234,8 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         if let Some(hint) = candidate_hint {
             displays.push(neutralize_pitch_field(hint));
         }
-        displays.push(
-            "Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string(),
-        );
+        displays
+            .push("Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string());
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
             content: None,
@@ -2378,7 +2401,7 @@ async fn toggle_partner_flag(
          ) \
          RETURNING {flag}"
     );
-    let new_value: Option<i32> = sqlx::query_scalar(&sql)
+    let new_value: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(broadcaster_id)
         .fetch_optional(pool)
         .await
@@ -2541,10 +2564,7 @@ impl InviteResolver for DbInviteResolver {
         if let Some(url) = self.create_and_store_streamer_invite(channel_login).await {
             return (url, true);
         }
-        (
-            promo_invite_fallback(self.fallback.as_deref()),
-            false,
-        )
+        (promo_invite_fallback(self.fallback.as_deref()), false)
     }
 }
 
@@ -3289,11 +3309,13 @@ mod chat_notification_tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -3705,11 +3727,13 @@ mod db_tests {
             .connect(&url)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -3993,7 +4017,10 @@ mod invite_offline_tests {
             .execute(&pool)
             .await
             .unwrap();
-        let port = DbInvitePort { pool: pool.clone(), fallback: None };
+        let port = DbInvitePort {
+            pool: pool.clone(),
+            fallback: None,
+        };
         for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
             sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
                 .bind(live)
@@ -4186,7 +4213,10 @@ mod voice_identity_tests {
             .await
             .unwrap();
 
-        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(555));
+        assert_eq!(
+            eligible_voice_streamer_id(pool, "123").await.unwrap(),
+            Some(555)
+        );
         assert_eq!(eligible_voice_streamer_id(pool, "999").await.unwrap(), None);
 
         sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
@@ -4238,7 +4268,10 @@ mod voice_identity_tests {
             .execute(pool)
             .await
             .unwrap();
-        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(555));
+        assert_eq!(
+            eligible_voice_streamer_id(pool, "123").await.unwrap(),
+            Some(555)
+        );
         sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
             .execute(pool)
             .await
@@ -4255,7 +4288,10 @@ mod voice_identity_tests {
                 .execute(pool)
                 .await
                 .unwrap();
-            assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(555));
+            assert_eq!(
+                eligible_voice_streamer_id(pool, "123").await.unwrap(),
+                Some(555)
+            );
             sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
                 .execute(pool)
                 .await
@@ -4270,7 +4306,10 @@ mod voice_identity_tests {
             .execute(pool)
             .await
             .unwrap();
-        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), Some(u64::MAX));
+        assert_eq!(
+            eligible_voice_streamer_id(pool, "123").await.unwrap(),
+            Some(u64::MAX)
+        );
         for discord_id in ["+555", "18446744073709551616", "kein-discord-id"] {
             sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = $1 WHERE twitch_user_id = '123'")
                 .bind(discord_id)

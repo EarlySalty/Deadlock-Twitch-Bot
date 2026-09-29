@@ -499,7 +499,7 @@ pub async fn viewer_count_timeline_handler(
          GROUP BY 1 ORDER BY 1"
     );
 
-    match sqlx::query(&query)
+    match sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(since)
         .bind(streamer)
         .fetch_all(&pool)
@@ -564,11 +564,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

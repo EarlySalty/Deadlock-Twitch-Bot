@@ -255,8 +255,11 @@ impl TwitchProfileCache {
                         .unwrap_or_default()
                         .trim()
                         .to_string();
-                    snapshot.banner_url =
-                        user.offline_image_url.unwrap_or_default().trim().to_string();
+                    snapshot.banner_url = user
+                        .offline_image_url
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
                 }
             }
             Err(error) => {
@@ -293,15 +296,14 @@ impl TwitchProfileCache {
                         let ends_at = DateTime::parse_from_rfc3339(&segment.end_time)
                             .ok()?
                             .with_timezone(&Utc);
-                        (ends_at > now && starts_at < schedule_until && ends_at > starts_at).then_some(
-                            TwitchScheduleProfile {
+                        (ends_at > now && starts_at < schedule_until && ends_at > starts_at)
+                            .then_some(TwitchScheduleProfile {
                                 id: segment.id,
                                 title: segment.title.trim().to_string(),
                                 starts_at,
                                 ends_at,
                                 is_recurring: segment.is_recurring,
-                            },
-                        )
+                            })
                     })
                     .collect();
                 snapshot.schedule.sort_by_key(|segment| segment.starts_at);
@@ -521,7 +523,7 @@ fn validate(update: &mut Update) -> Result<(), &'static str> {
 }
 
 async fn load(pool: &PgPool, login: &str) -> Result<Option<Record>, sqlx::Error> {
-    sqlx::query_as::<_, Record>(&format!(
+    sqlx::query_as::<_, Record>(sqlx::AssertSqlSafe(format!(
         r#"
         SELECT p.twitch_user_id, lower(p.twitch_login) AS login, ({ACTIVE}) AS active,
           COALESCE(d.published,false) AS published, COALESCE(d.revision,0) AS revision,
@@ -532,7 +534,7 @@ async fn load(pool: &PgPool, login: &str) -> Result<Option<Record>, sqlx::Error>
         LEFT JOIN twitch_live_state l USING(twitch_user_id)
         WHERE lower(p.twitch_login)=$1 LIMIT 1
     "#
-    ))
+    )))
     .bind(login)
     .fetch_optional(pool)
     .await
@@ -558,15 +560,18 @@ fn owner(auth: &DashboardAuthLevel, params: &OwnerParams) -> Result<(String, Str
     Ok((login, id))
 }
 fn owner_response(record: Record, twitch: Option<TwitchProfileSnapshot>) -> Response {
-    no_store(Json(json!({
-        "login": record.login,
-        "public_path": format!("/streamer/{}", record.login),
-        "active": record.active,
-        "published": record.published,
-        "revision": record.revision,
-        "profile": record.content.0,
-        "twitch": twitch,
-    })).into_response())
+    no_store(
+        Json(json!({
+            "login": record.login,
+            "public_path": format!("/streamer/{}", record.login),
+            "active": record.active,
+            "published": record.published,
+            "revision": record.revision,
+            "profile": record.content.0,
+            "twitch": twitch,
+        }))
+        .into_response(),
+    )
 }
 
 async fn twitch_snapshot(
@@ -652,7 +657,7 @@ pub async fn put_handler(
     }
     // One atomic compare-and-swap, including every calendar entry. No partial
     // saves, no last-write-wins race between tabs, no user-controlled SQL.
-    let revision = sqlx::query_scalar::<_, i64>(&format!(
+    let revision = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
         r#"
         INSERT INTO twitch_partner_profiles (twitch_user_id,published,content)
         SELECT p.twitch_user_id,$2,$3 FROM twitch_partners p
@@ -663,7 +668,7 @@ pub async fn put_handler(
         WHERE twitch_partner_profiles.revision=$4
         RETURNING revision
     "#
-    ))
+    )))
     .bind(&record.twitch_user_id)
     .bind(update.published)
     .bind(SqlJson(&update.profile))
@@ -680,7 +685,7 @@ pub async fn put_handler(
             };
             let twitch = twitch_snapshot(cache, &saved, Utc::now(), false).await;
             owner_response(saved, Some(twitch))
-        },
+        }
         Ok(None) => error(
             StatusCode::CONFLICT,
             "Der Profil- oder Partnerstatus wurde geändert. Bitte neu laden.",
@@ -689,7 +694,7 @@ pub async fn put_handler(
     }
 }
 async fn directory(pool: &PgPool) -> Result<Vec<DirectoryEntry>, sqlx::Error> {
-    sqlx::query_as::<_, DirectoryEntry>(&format!("SELECT lower(p.twitch_login) AS login, COALESCE(d.content->>'headline','') AS headline FROM twitch_partners p JOIN twitch_partner_profiles d USING(twitch_user_id) WHERE {ACTIVE} AND d.published AND NOT(lower(p.twitch_login)=ANY($1)) ORDER BY lower(p.twitch_login) LIMIT 500"))
+    sqlx::query_as::<_, DirectoryEntry>(sqlx::AssertSqlSafe(format!("SELECT lower(p.twitch_login) AS login, COALESCE(d.content->>'headline','') AS headline FROM twitch_partners p JOIN twitch_partner_profiles d USING(twitch_user_id) WHERE {ACTIVE} AND d.published AND NOT(lower(p.twitch_login)=ANY($1)) ORDER BY lower(p.twitch_login) LIMIT 500")))
         .bind(RESERVED_PROFILE_LOGINS).fetch_all(pool).await
 }
 pub async fn directory_handler(State(pool): State<PgPool>) -> Response {

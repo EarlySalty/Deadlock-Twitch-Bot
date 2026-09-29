@@ -10,7 +10,7 @@
 //!   Spam-Urteil): übernimmt die Originalnachricht der Spam-Row als Safe-Pattern,
 //!   auditert die Korrektur und entfernt die falsche Spam-Row atomar.
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{extract::State, response::IntoResponse, Json};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -406,10 +406,10 @@ pub async fn correct_handler(
 #[cfg(test)]
 mod tests {
     use super::{
-        SpamCorrectRequest, SpamSafeFeedbackRequest, correct_handler, normalize_pattern,
-        normalize_pattern_type, normalize_safe_feedback, safe_handler,
+        correct_handler, normalize_pattern, normalize_pattern_type, normalize_safe_feedback,
+        safe_handler, SpamCorrectRequest, SpamSafeFeedbackRequest,
     };
-    use axum::{Json, extract::State, response::IntoResponse};
+    use axum::{extract::State, response::IntoResponse, Json};
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
@@ -459,11 +459,13 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("DB-Verbindung");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .expect("Schema löschen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .expect("Schema löschen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .expect("Schema anlegen");
@@ -567,11 +569,13 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("DB-Verbindung");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .expect("Schema löschen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .expect("Schema löschen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .expect("Schema anlegen");

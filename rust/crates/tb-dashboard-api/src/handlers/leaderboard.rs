@@ -219,7 +219,9 @@ async fn load_category(pool: &PgPool, tracked: bool) -> Result<Vec<TopRow>, sqlx
         "#,
     );
 
-    sqlx::query_as::<_, TopRow>(&sql).fetch_all(pool).await
+    sqlx::query_as::<_, TopRow>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
 }
 
 /// Filtert (min_samples/min_avg), sortiert und kürzt auf `limit` Einträge,
@@ -429,11 +431,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -472,7 +476,7 @@ mod tests {
             ("twitch_stats_tracked", "nani", 200),
             ("twitch_stats_category", "rando", 40),
         ] {
-            sqlx::query(&format!("INSERT INTO {tbl} (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, $2, $3, FALSE)"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO {tbl} (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, $2, $3, FALSE)")))
                 .bind(&now).bind(streamer).bind(vc).execute(&pool).await.unwrap();
         }
         // Alte Zeile (>30 Tage) wird ausgefenstert.

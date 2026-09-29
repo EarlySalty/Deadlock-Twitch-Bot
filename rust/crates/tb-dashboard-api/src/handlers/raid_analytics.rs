@@ -97,7 +97,9 @@ async fn recalculate_raid_chat_metrics(
         poll_seconds = CHATTERS_POLL_INTERVAL_SECONDS,
     );
 
-    let q = sqlx::query(&ret_sql).bind(&payload).bind(&bots);
+    let q = sqlx::query(sqlx::AssertSqlSafe(ret_sql))
+        .bind(&payload)
+        .bind(&bots);
     // extra binds für die NOT IN — aber hier nutzen wir != ALL($2) statt dynamische Placeholders
     // Hinweis: = ALL(array) ist das sqlx-idiom, kein extra bind nötig
     let _ = &bot_not_in_sc; // unused — Array-Approach braucht keinen dynamischen Clause
@@ -931,11 +933,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

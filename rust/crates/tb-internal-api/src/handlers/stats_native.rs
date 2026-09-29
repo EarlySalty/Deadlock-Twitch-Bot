@@ -24,13 +24,13 @@
 //! Alle `AVG()`-Spalten werden per `CAST(... AS DOUBLE PRECISION)` erzwungen.
 
 use axum::{
-    Extension, Json,
     extract::{Query, State},
     response::IntoResponse,
+    Extension, Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tb_domain::normalize_twitch_login;
@@ -433,7 +433,7 @@ async fn fetch_top(
     let start = hf.start();
     let end = hf.end();
     let sql = build_top_sql(table, is_tracked, false);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(mode)
         .bind(mode)
         .bind(start)
@@ -465,7 +465,7 @@ async fn fetch_hourly(
     let start = hf.start();
     let end = hf.end();
     let sql = build_hourly_sql(table, is_tracked, false);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(mode)
         .bind(mode)
         .bind(start)
@@ -496,7 +496,7 @@ async fn fetch_weekday(
     let start = hf.start();
     let end = hf.end();
     let sql = build_weekday_sql(table, is_tracked, false);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(mode)
         .bind(mode)
         .bind(start)
@@ -528,7 +528,7 @@ async fn fetch_user_top(
     let start = hf.start();
     let end = hf.end();
     let sql = build_top_sql(table, is_tracked, true);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(login)
         .bind(mode)
         .bind(mode)
@@ -562,7 +562,7 @@ async fn fetch_user_hourly(
     let start = hf.start();
     let end = hf.end();
     let sql = build_hourly_sql(table, is_tracked, true);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(login)
         .bind(mode)
         .bind(mode)
@@ -595,7 +595,7 @@ async fn fetch_user_weekday(
     let start = hf.start();
     let end = hf.end();
     let sql = build_weekday_sql(table, is_tracked, true);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(login)
         .bind(mode)
         .bind(mode)
@@ -1609,16 +1609,16 @@ async fn compute_extended_stats(pool: &PgPool) -> Result<Value, BoxError> {
                AND last_seen_at >= NOW() - INTERVAL '{interval}'"
         )
     };
-    let active_7: i64 = sqlx::query_scalar(&count_since("7 days"))
+    let active_7: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(count_since("7 days")))
         .fetch_one(pool)
         .await?;
-    let returning_7: i64 = sqlx::query_scalar(&returning_since("7 days"))
+    let returning_7: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(returning_since("7 days")))
         .fetch_one(pool)
         .await?;
-    let active_30: i64 = sqlx::query_scalar(&count_since("30 days"))
+    let active_30: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(count_since("30 days")))
         .fetch_one(pool)
         .await?;
-    let returning_30: i64 = sqlx::query_scalar(&returning_since("30 days"))
+    let returning_30: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(returning_since("30 days")))
         .fetch_one(pool)
         .await?;
 
@@ -2052,11 +2052,13 @@ mod tests {
                 .connect(dsn)
                 .await
                 .expect("connect setup");
-            sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-                .execute(&setup)
-                .await
-                .expect("drop schema");
-            sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE"
+            )))
+            .execute(&setup)
+            .await
+            .expect("drop schema");
+            sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
                 .execute(&setup)
                 .await
                 .expect("create schema");
@@ -2070,7 +2072,7 @@ mod tests {
             .after_connect(move |conn, _meta| {
                 let s = schema_owned.clone();
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {s}"))
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {s}")))
                         .execute(&mut *conn)
                         .await
                         .map(|_| ())

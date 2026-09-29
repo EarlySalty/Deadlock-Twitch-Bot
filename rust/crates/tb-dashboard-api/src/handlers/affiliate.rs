@@ -902,11 +902,12 @@ async fn claim_streamer_at(
         FOR UPDATE
         "#
     );
-    let existing_claim: Option<(String, String, bool)> = sqlx::query_as(&existing_sql)
-        .bind(&now)
-        .bind(&streamer_login)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let existing_claim: Option<(String, String, bool)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(existing_sql))
+            .bind(&now)
+            .bind(&streamer_login)
+            .fetch_optional(&mut *tx)
+            .await?;
     if let Some((_existing_affiliate, _claimed_at, reservation_fresh)) = existing_claim {
         if partner_active || reservation_fresh {
             tx.commit().await?;
@@ -1382,11 +1383,13 @@ mod tests {
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .ok()?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;
@@ -2428,7 +2431,9 @@ mod tests {
         insert_claim(&pool, "aff_old", "stale_slot", &old_claimed_at).await;
         for login in ["aff_one", "missing"] {
             assert_eq!(
-                claim_streamer(&pool, login, "fresh_streamer").await.unwrap(),
+                claim_streamer(&pool, login, "fresh_streamer")
+                    .await
+                    .unwrap(),
                 ClaimStatus::AffiliateInactive
             );
             assert_eq!(
@@ -2492,16 +2497,20 @@ mod tests {
             .await
             .unwrap();
         let other_pool = pool.clone();
-        let mut claim = tokio::spawn(async move {
-            claim_streamer(&other_pool, "aff_one", "fresh_streamer").await
-        });
+        let mut claim =
+            tokio::spawn(
+                async move { claim_streamer(&other_pool, "aff_one", "fresh_streamer").await },
+            );
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(100), &mut claim)
                 .await
                 .is_err()
         );
         deactivation.commit().await.unwrap();
-        assert_eq!(claim.await.unwrap().unwrap(), ClaimStatus::AffiliateInactive);
+        assert_eq!(
+            claim.await.unwrap().unwrap(),
+            ClaimStatus::AffiliateInactive
+        );
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_streamer_claims")
             .fetch_one(&pool)
             .await

@@ -1,10 +1,10 @@
 //! Handler für `GET /twitch/api/admin/system/database`.
 
+use crate::auth::level::DashboardAuthLevel;
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::Serialize;
 use sqlx::PgPool;
 use tb_analytics::system_database::database_stats;
-use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 const TRACKED_TABLES: &[&str] = &[
@@ -91,9 +91,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -108,15 +106,17 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");

@@ -167,22 +167,22 @@ pub async fn stream_report_handler(
     if variant == "ab" || variant == "all" {
         let rows_result = match session_id {
             Some(sid) => {
-                sqlx::query_as::<_, ReportRow>(&format!(
+                sqlx::query_as::<_, ReportRow>(sqlx::AssertSqlSafe(format!(
                     "{REPORT_SELECT} WHERE session_id = $1 AND streamer_login = $2 \
                  AND COALESCE(report_variant, 'compact') IN ('compact', 'full') \
                  ORDER BY generated_at DESC"
-                ))
+                )))
                 .bind(sid)
                 .bind(&streamer)
                 .fetch_all(&pool)
                 .await
             }
             None => {
-                sqlx::query_as::<_, ReportRow>(&format!(
+                sqlx::query_as::<_, ReportRow>(sqlx::AssertSqlSafe(format!(
                     "{REPORT_SELECT} WHERE streamer_login = $1 \
                  AND COALESCE(report_variant, 'compact') IN ('compact', 'full') \
                  ORDER BY generated_at DESC"
-                ))
+                )))
                 .bind(&streamer)
                 .fetch_all(&pool)
                 .await
@@ -218,11 +218,11 @@ pub async fn stream_report_handler(
     // ── Einzel-Variante (compact|full): neuester Report ───────────────────────
     let row_result = match session_id {
         Some(sid) => {
-            sqlx::query_as::<_, ReportRow>(&format!(
+            sqlx::query_as::<_, ReportRow>(sqlx::AssertSqlSafe(format!(
                 "{REPORT_SELECT} WHERE session_id = $1 AND streamer_login = $2 \
              AND COALESCE(report_variant, 'compact') = $3 \
              ORDER BY generated_at DESC LIMIT 1"
-            ))
+            )))
             .bind(sid)
             .bind(&streamer)
             .bind(&variant)
@@ -230,11 +230,11 @@ pub async fn stream_report_handler(
             .await
         }
         None => {
-            sqlx::query_as::<_, ReportRow>(&format!(
+            sqlx::query_as::<_, ReportRow>(sqlx::AssertSqlSafe(format!(
                 "{REPORT_SELECT} WHERE streamer_login = $1 \
              AND COALESCE(report_variant, 'compact') = $2 \
              ORDER BY generated_at DESC LIMIT 1"
-            ))
+            )))
             .bind(&streamer)
             .bind(&variant)
             .fetch_optional(&pool)
@@ -692,15 +692,17 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();

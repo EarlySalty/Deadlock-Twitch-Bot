@@ -436,7 +436,7 @@ pub async fn raw_storage_bytes(pool: &PgPool) -> Result<i64, sqlx::Error> {
     .await
 }
 
-async fn json_query(pool: &PgPool, sql: &str, days: i32) -> Result<Value, sqlx::Error> {
+async fn json_query(pool: &PgPool, sql: &'static str, days: i32) -> Result<Value, sqlx::Error> {
     let text: String = sqlx::query_scalar(sql).bind(days).fetch_one(pool).await?;
     serde_json::from_str(&text).map_err(|e| sqlx::Error::Protocol(e.to_string()))
 }

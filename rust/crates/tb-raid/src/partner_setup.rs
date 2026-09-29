@@ -513,28 +513,32 @@ async fn normalize_related_tables(
     ];
     for (idx, sql) in statements.iter().enumerate() {
         let savepoint = format!("partner_setup_norm_{idx}");
-        sqlx::query(&format!("SAVEPOINT {savepoint}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {savepoint}")))
             .execute(&mut **tx)
             .await?;
-        let result = sqlx::query(sql)
+        let result = sqlx::query(*sql)
             .bind(twitch_login)
             .bind(twitch_user_id)
             .execute(&mut **tx)
             .await;
         match result {
             Ok(_) => {
-                sqlx::query(&format!("RELEASE SAVEPOINT {savepoint}"))
-                    .execute(&mut **tx)
-                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "RELEASE SAVEPOINT {savepoint}"
+                )))
+                .execute(&mut **tx)
+                .await?;
             }
             Err(e) => {
                 tracing::warn!(
                     statement = idx,
                     "normalize_related_tables: Statement fehlgeschlagen (übersprungen): {e}"
                 );
-                sqlx::query(&format!("ROLLBACK TO SAVEPOINT {savepoint}"))
-                    .execute(&mut **tx)
-                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "ROLLBACK TO SAVEPOINT {savepoint}"
+                )))
+                .execute(&mut **tx)
+                .await?;
             }
         }
     }

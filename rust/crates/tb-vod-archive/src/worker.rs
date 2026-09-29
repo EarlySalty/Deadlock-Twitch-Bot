@@ -1011,11 +1011,13 @@ mod tests {
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -1042,7 +1044,7 @@ mod tests {
              last_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
              UNIQUE (vod_id, part_index))",
         ] {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(ddl)).execute(&pool).await.unwrap();
         }
         Some(pool)
     }
