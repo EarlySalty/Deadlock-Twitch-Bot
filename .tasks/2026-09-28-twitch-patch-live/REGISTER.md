@@ -33,6 +33,6 @@ Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd` (Projekt Documents, Nutzer
 | D Fix nach Review | `88b6ff3c-fe1f-462e-8794-b708858384f6` | gpt-6-luna | `/home/nathanael/.worktrees/twitch-patch-integration-20260928` | `feat/twitch-patch-integration-20260928` | Fixspitze `0724ee78` sauber gepusht; Check/Clippy/isoliertes PostgreSQL und Selbstreview gemeldet, unabhängige Nachprüfung offen |
 | D unabhängige Nachprüfung | `b514ff2e-7c89-4dd7-8ab5-d797fdb05c56` | gpt-6-sol | lesend im D-Worktree | kein eigener Branch | Runde 2: D1 bis D5 behoben, D6 lokale Ablehnung vor POST falsch als ungewiss protokolliert; gesettelt |
 | D6 Nachbesserung und Feed-Bump-up | `82b283dc-7d30-4ed6-8c97-f36a89c959c3` | gpt-6-luna | derselbe D-Worktree | `feat/twitch-patch-integration-20260928` | Fix `23671d47` sauber gepusht, 39 gezielte Tests, Check/Clippy; unabhängige Nachprüfung offen |
-| D6/E1/E2 unabhängige Nachprüfung | `12438192-e252-4e72-acc0-4e07b1092e96` | gpt-6-sol | lesend im D-Worktree | kein eigener Branch | Runde 3 läuft gegen `23671d47`, Auftrag `REVIEW-FEED-RECOVERY.md` |
+| D6/E1/E2 unabhängige Nachprüfung | `12438192-e252-4e72-acc0-4e07b1092e96` | gpt-6-sol | lesend im D-Worktree | kein eigener Branch | Runde 3: D6/E1 behoben, E2-Race mit isoliertem PostgreSQL bestätigt; Fix nötig |
 
 Orchestrations-Artefakte: `/home/nathanael/.worktrees/twitch-patch-orchestration-20260928/.tasks/2026-09-28-twitch-patch-live/` auf Branch `feat/patch-twitch-orchestration-20260928`, Basis `992e265961048ee72d03a483673c92ef3c49e715`.
