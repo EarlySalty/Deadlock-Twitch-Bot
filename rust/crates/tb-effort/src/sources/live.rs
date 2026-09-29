@@ -15,9 +15,19 @@ struct Live {
 
 #[derive(Clone)]
 struct Link {
-    twitch: String,
+    twitch: Option<String>,
     discord: i64,
     steam: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct IdentityLink {
+    twitch: String,
+    discord: String,
+    enabled: Option<bool>,
+    steam: Option<i64>,
+    on_discord: Option<i32>,
+    active: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -48,23 +58,54 @@ struct CompletedMatch {
     confirmed_at: DateTime<Utc>,
 }
 
+fn json_id(value: &Value) -> Option<String> {
+    value
+        .as_u64()
+        .map(|n| n.to_string())
+        .or_else(|| value.as_str().map(str::to_owned))
+}
+
+fn account_id(steam: &str) -> Result<String> {
+    let steam = steam
+        .parse::<u64>()
+        .map_err(|_| Error::Invalid("steam_id"))?;
+    let account = steam
+        .checked_sub(76_561_197_960_265_728)
+        .and_then(|id| u32::try_from(id).ok())
+        .filter(|id| *id > 0)
+        .ok_or(Error::Invalid("steam_id"))?;
+    Ok(account.to_string())
+}
+
 fn completed_matches(
     result: &Value,
+    payload: &Value,
     confirmed_at: DateTime<Utc>,
     expected_steam: &str,
 ) -> Result<Vec<CompletedMatch>> {
+    let expected_account = account_id(expected_steam)?;
     let data = result
         .get("data")
         .ok_or(Error::Invalid("match_history_envelope"))?;
-    let owner = data
-        .get("steam_id64")
-        .and_then(|v| {
-            v.as_u64()
-                .map(|v| v.to_string())
-                .or_else(|| v.as_str().map(str::to_owned))
-        })
-        .ok_or(Error::Invalid("match_history_owner"))?;
-    if result.get("ok").and_then(Value::as_bool) != Some(true) || owner != expected_steam {
+    let claimed_steam = ["steam_id", "steam_id64"]
+        .into_iter()
+        .filter_map(|key| payload.get(key).and_then(json_id))
+        .collect::<Vec<_>>();
+    let claimed_account = payload.get("account_id").and_then(json_id);
+    let result_steam = data.get("steam_id64").and_then(json_id);
+    let result_account = data.get("account_id").and_then(json_id);
+    if result.get("ok").and_then(Value::as_bool) != Some(true)
+        || (claimed_steam.is_empty() && claimed_account.is_none())
+        || (result_steam.is_none() && result_account.is_none())
+        || claimed_steam.iter().any(|id| id != expected_steam)
+        || claimed_account
+            .as_ref()
+            .is_some_and(|id| id != &expected_account)
+        || result_steam.as_ref().is_some_and(|id| id != expected_steam)
+        || result_account
+            .as_ref()
+            .is_some_and(|id| id != &expected_account)
+    {
         return Err(Error::Invalid("match_history_owner"));
     }
     let matches = data
@@ -192,38 +233,62 @@ impl Engine {
     }
 
     async fn links(&self) -> Result<Vec<Link>> {
-        let identities: Vec<(String,String,Option<bool>,Option<i64>)>=sqlx::query_as("SELECT i.twitch_user_id,i.discord_user_id,l.lookup_enabled,l.steam_id64 FROM twitch_streamer_identities i LEFT JOIN twitch_player_steam_links l ON l.twitch_user_id=i.twitch_user_id WHERE NULLIF(trim(i.discord_user_id),'') IS NOT NULL AND (i.is_on_discord=1 OR EXISTS(SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id=i.twitch_user_id AND p.status='active' AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL AND COALESCE(p.manual_partner_opt_out,0)=0 AND COALESCE(trim(p.technical_pause_reason),'')=''))").fetch_all(&self.pool).await?;
+        let identities: Vec<IdentityLink>=sqlx::query_as("SELECT i.twitch_user_id AS twitch,i.discord_user_id AS discord,l.lookup_enabled AS enabled,l.steam_id64 AS steam,i.is_on_discord AS on_discord,EXISTS(SELECT 1 FROM twitch_partners p WHERE p.twitch_user_id=i.twitch_user_id AND p.status='active' AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL AND COALESCE(p.manual_partner_opt_out,0)=0 AND COALESCE(trim(p.technical_pause_reason),'')='') AS active FROM twitch_streamer_identities i LEFT JOIN twitch_player_steam_links l ON l.twitch_user_id=i.twitch_user_id WHERE NULLIF(trim(i.discord_user_id),'') IS NOT NULL").fetch_all(&self.pool).await?;
         let mut by_discord: HashMap<i64, Vec<(String, Option<i64>)>> = HashMap::new();
-        for (twitch, discord, enabled, steam) in identities {
-            if enabled == Some(false) || (enabled == Some(true) && steam.is_none()) {
-                continue;
-            }
+        let mut excluded = HashSet::new();
+        for IdentityLink {
+            twitch,
+            discord,
+            enabled,
+            steam,
+            on_discord,
+            active,
+        } in identities
+        {
             if !valid_id(&twitch) {
                 return Err(Error::Invalid("twitch_link"));
             }
             let discord = discord
                 .parse::<i64>()
                 .map_err(|_| Error::Invalid("discord_link"))?;
-            by_discord.entry(discord).or_default().push((twitch, steam));
+            if (on_discord != Some(1) && !active)
+                || enabled == Some(false)
+                || (enabled == Some(true) && steam.is_none())
+            {
+                excluded.insert(discord);
+            } else {
+                by_discord.entry(discord).or_default().push((twitch, steam));
+            }
         }
         if by_discord.is_empty() {
             return Ok(Vec::new());
         }
-        let ids: Vec<_> = by_discord.keys().copied().collect();
-        let rows: Vec<(i64,String)>=sqlx::query_as("SELECT discord_id,steam_id FROM core.steam_links WHERE discord_id=ANY($1) AND verified=TRUE AND steam_id<>''")
-            .bind(ids).fetch_all(self.central()?).await?;
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT discord_id,steam_id FROM core.steam_links WHERE verified=TRUE AND steam_id<>''",
+        )
+        .fetch_all(self.central()?)
+        .await?;
         let mut result = Vec::new();
         for (discord, steam) in rows {
+            if excluded.contains(&discord) {
+                continue;
+            }
             if let Some(twitches) = by_discord.get(&discord) {
                 for (twitch, selected) in twitches {
                     if selected.is_none_or(|s| s.to_string() == steam) {
                         result.push(Link {
-                            twitch: twitch.clone(),
+                            twitch: Some(twitch.clone()),
                             discord,
                             steam: steam.clone(),
                         });
                     }
                 }
+            } else {
+                result.push(Link {
+                    twitch: None,
+                    discord,
+                    steam,
+                });
             }
         }
         Ok(result)
@@ -232,9 +297,11 @@ impl Engine {
     pub(crate) async fn party_available(&self, id: &str) -> Result<bool> {
         let links = self.links().await?;
         Ok(links.iter().any(|own| {
-            own.twitch == id
+            own.twitch.as_deref() == Some(id)
                 && links.iter().any(|other| {
-                    other.twitch != id && other.discord != own.discord && other.steam != own.steam
+                    other.twitch != own.twitch
+                        && other.discord != own.discord
+                        && other.steam != own.steam
                 })
         }))
     }
@@ -258,7 +325,10 @@ impl Engine {
             let rows: Vec<Presence>=sqlx::query_as("SELECT pm.party_id,pm.steam_id,pm.seen_at,p.deadlock_minutes,p.deadlock_updated_at FROM voice.deadlock_party_members pm JOIN activity.live_player_state p ON p.steam_id=pm.steam_id WHERE pm.steam_id=ANY($1) AND pm.seen_at >= $2 AND pm.seen_at <= $3 AND p.deadlock_updated_at >= $2 AND p.deadlock_updated_at <= $3 AND p.in_deadlock_now=TRUE AND p.in_match_now_strict=TRUE")
                 .bind(ids).bind(now-Duration::seconds(self.cfg.evidence_max_gap_seconds)).bind(now).fetch_all(self.central()?).await?;
             for partner in &live {
-                for own in links.iter().filter(|l| l.twitch == partner.twitch_user_id) {
+                for own in links
+                    .iter()
+                    .filter(|l| l.twitch.as_deref() == Some(partner.twitch_user_id.as_str()))
+                {
                     for p in rows
                         .iter()
                         .filter(|p| p.steam_id == own.steam && !p.party_id.is_empty())
@@ -317,11 +387,11 @@ impl Engine {
             .collect();
         let mut histories = HashMap::new();
         for steam in ids {
-            let rows: Vec<(Value,DateTime<Utc>)>=sqlx::query_as("SELECT result,finished_at FROM steam.steam_tasks WHERE type='GC_GET_MATCH_HISTORY' AND status='DONE' AND payload->>'steam_id'=$1 AND result IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= $2-INTERVAL '7 days' AND finished_at <= $2 ORDER BY finished_at DESC LIMIT 8")
-                .bind(&steam).bind(now).fetch_all(self.central()?).await?;
+            let rows: Vec<(Value,Value,DateTime<Utc>)>=sqlx::query_as("SELECT result,payload,finished_at FROM steam.steam_tasks WHERE type='GC_GET_MATCH_HISTORY' AND status='DONE' AND (payload->>'steam_id'=$1 OR payload->>'steam_id64'=$1 OR payload->>'account_id'=$3) AND result IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= $2-INTERVAL '7 days' AND finished_at <= $2 ORDER BY finished_at DESC LIMIT 8")
+                .bind(&steam).bind(now).bind(account_id(&steam)?).fetch_all(self.central()?).await?;
             let mut matches = Vec::new();
-            for (value, at) in rows {
-                matches.extend(completed_matches(&value, at, &steam)?);
+            for (value, payload, at) in rows {
+                matches.extend(completed_matches(&value, &payload, at, &steam)?);
             }
             histories.insert(steam, matches);
         }
@@ -366,8 +436,40 @@ mod tests {
     #[test]
     fn history_requires_owner_and_final_result() {
         let now = DateTime::from_timestamp(1000, 0).unwrap();
-        let result = json!({"ok":true,"data":{"steam_id64":"100","matches":[{"match_id":1,"start_time":500,"match_result":1},{"match_id":2,"start_time":600,"match_result":null}]}});
-        assert_eq!(completed_matches(&result, now, "100").unwrap().len(), 1);
-        assert!(completed_matches(&result, now, "101").is_err());
+        let steam = "76561197960265828";
+        let result = json!({"ok":true,"data":{"steam_id64":steam,"account_id":100,"matches":[{"match_id":1,"start_time":500,"match_result":1},{"match_id":2,"start_time":600,"match_result":null}]}});
+        let direct = json!({"steam_id":steam});
+        let ranked = json!({"account_id":100,"ranked_only":true});
+        assert_eq!(
+            completed_matches(&result, &direct, now, steam)
+                .unwrap()
+                .len(),
+            1
+        );
+        let account_result = json!({"ok":true,"data":{"steam_id64":null,"account_id":100,"matches":[{"match_id":1,"start_time":500,"match_result":1}]}});
+        assert_eq!(
+            completed_matches(&account_result, &ranked, now, steam)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            completed_matches(&account_result, &json!({"account_id":101}), now, steam).is_err()
+        );
+        assert!(completed_matches(
+            &result,
+            &json!({"steam_id":steam,"account_id":101}),
+            now,
+            steam
+        )
+        .is_err());
+        assert!(completed_matches(
+            &json!({"ok":true,"data":{"account_id":101,"matches":[]}}),
+            &ranked,
+            now,
+            steam
+        )
+        .is_err());
+        assert!(completed_matches(&result, &direct, now, "76561197960265829").is_err());
     }
 }

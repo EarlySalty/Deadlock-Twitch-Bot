@@ -40,3 +40,16 @@ Kein Merge, kein Deploy, kein produktiver Datenbankeingriff und kein Neustart vo
 ## GitHub-Review-Korrekturen
 
 Die drei konkreten Review-Fundstellen wurden direkt behoben: persistierte begrenzte Quellenscans mit separatem Pfad für neue Bestätigungen und zyklischem historischem Abgleich; Löschung temporärer Party-Belege nach sieben Tagen; fehlender Helix-Client macht die Quelle auch ohne laufenden Stream ungesund und entfernt Stream Together aus dem erreichbaren Aufgabenpool. Regressionstests prüfen Fortsetzung nach Engine-Neustart, neue Ereignisse während des Backfills, verspätete ältere IDs in beiden Quellen, die Aufbewahrungsgrenze sowie den Fehlerzustand im Leerlauf.
+
+## Fix-Runde vom 29. September 2026
+
+Sieben Review-Befunde aus https://github.com/EarlySalty/Deadlock-Twitch-Bot/pull/997#issuecomment-5881532663 wurden auf dem rebasten PR-Branch bearbeitet. Die Quellverträge für #999 und Deadlock-Bots #466 sowie der Monatsabschlussvertrag für #996 stehen in `docs/partner-effort-engine.md` und in `REVIEW.md`. Die Empfehlungs-Testmigration ist bytegleich mit dem Stand von #999, SHA-256 `b77b09a09b18f5bcd99da686fe2875cc7acf793ae35912c7e6fb04fcfd15c285`; Tabelle und Trigger des Discord-Tests entsprechen dem Stand von #466.
+
+| Prüfung | Ergebnis |
+|---|---|
+| `cargo test --locked -j2 -p tb-effort --all-targets --quiet -- --test-threads=1` mit `TB_TEST_DATABASE_URL` auf isoliertem TimescaleDB 2.17.2/Postgres 16 | 8 Unit-Tests, 7 echte PostgreSQL-Integrationstests bestanden, 0 ignoriert |
+| `cargo test --locked -j2 -p tb-db --all-targets --quiet -- --test-threads=1` auf eigener Wegwerf-Datenbank | 36 Tests bestanden, 0 ignoriert, darunter frische Migrationen und Schema-Snapshot |
+| `cargo fmt --check -p tb-effort` und `cargo clippy --locked -j2 -p tb-effort -p tb-db --all-targets -- -D warnings` | Exit 0 |
+| Lesende Abfrage von `_sqlx_migrations` in `twitch_analytics` | Versionen `20260927010000` und `20260927110000` noch nicht angewandt |
+
+Ein erster Testversuch scheiterte an der automatisch auf 12 GB Shared Buffers abgestimmten Wegwerf-Datenbank; der nächste Lauf nutzte einen auf 128 MB begrenzten eigenen Container. Fachliche Regressionen im ersten lauffähigen Testlauf wurden korrigiert und die vollständigen Suites anschließend grün ausgeführt. Es gab keinen produktiven Schreibzugriff, keinen Merge und keinen Deploy.

@@ -121,9 +121,9 @@ impl Engine {
                 awarded = 0;
             }
         }
-        let inserted = sqlx::query("INSERT INTO partner_effort_events(partner_twitch_user_id,partner_login,event_type,source_id,points,occurred_at,viewer_twitch_user_id,metadata,rules_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING")
+        let inserted = sqlx::query("INSERT INTO partner_effort_events(partner_twitch_user_id,partner_login,event_type,source_id,points,occurred_at,credited_at,viewer_twitch_user_id,metadata,rules_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING")
             .bind(&event.partner_twitch_user_id).bind(login).bind(event.kind.key()).bind(&event.source_id)
-            .bind(awarded).bind(event.occurred_at).bind(&event.viewer_twitch_user_id).bind(&event.metadata).bind(rules_hash)
+            .bind(awarded).bind(event.occurred_at).bind(now).bind(&event.viewer_twitch_user_id).bind(&event.metadata).bind(rules_hash)
             .execute(&mut **tx).await?.rows_affected() == 1;
         if !inserted {
             return Err(Error::Invalid("source_attributed_to_another_partner"));

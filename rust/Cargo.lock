@@ -3483,7 +3483,7 @@ dependencies = [
  "tb-config",
  "tb-db",
  "tb-transport-twitch",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "wiremock",

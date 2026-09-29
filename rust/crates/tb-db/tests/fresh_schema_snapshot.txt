@@ -316,6 +316,7 @@ partner_effort_achievements|earned_at|timestamp with time zone|NO|
 partner_effort_achievements|partner_twitch_user_id|text|NO|
 partner_effort_achievements|target|bigint|NO|
 partner_effort_events|created_at|timestamp with time zone|NO|now()
+partner_effort_events|credited_at|timestamp with time zone|NO|
 partner_effort_events|event_type|text|NO|
 partner_effort_events|id|bigint|NO|nextval('partner_effort_events_id_seq'::regclass)
 partner_effort_events|metadata|jsonb|NO|'{}'::jsonb
@@ -348,7 +349,7 @@ partner_effort_shared_chat_observations|stream_id|text|NO|
 partner_effort_source_cursors|completed_once|boolean|NO|false
 partner_effort_source_cursors|lane|text|NO|
 partner_effort_source_cursors|occurred_at|timestamp with time zone|NO|
-partner_effort_source_cursors|source_id|bigint|NO|0
+partner_effort_source_cursors|source_id|text|NO|''::text
 partner_effort_source_cursors|source|text|NO|
 partner_effort_source_receipts|received_at|timestamp with time zone|NO|now()
 partner_effort_source_receipts|source_id|text|NO|
