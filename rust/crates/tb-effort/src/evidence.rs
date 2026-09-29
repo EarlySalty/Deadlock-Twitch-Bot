@@ -50,6 +50,55 @@ struct Sample {
 }
 
 impl Engine {
+    pub(crate) async fn category_collection_coverage(&self, now: DateTime<Utc>) -> Result<()> {
+        let week = berlin_week_start(now);
+        let baseline_since = midnight(week - Duration::weeks(4));
+        let since: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT LEAST($1,started_at) FROM partner_effort_program WHERE singleton",
+        )
+        .bind(baseline_since)
+        .fetch_one(&self.pool)
+        .await?;
+        let covered: bool = sqlx::query_scalar(
+            "WITH settings AS (
+                SELECT poll_seconds FROM category_collector_config
+                WHERE singleton AND enabled AND preserve_raw_data
+            ), runs AS (
+                SELECT r.snapshot_at,r.poll_seconds,
+                    lag(r.snapshot_at) OVER (ORDER BY r.snapshot_at) AS previous_at,
+                    lag(r.poll_seconds) OVER (ORDER BY r.snapshot_at) AS previous_poll_seconds
+                FROM category_collection_runs r CROSS JOIN settings s
+                WHERE r.snapshot_at >= $1 - make_interval(secs => 2 * s.poll_seconds)
+                    AND r.snapshot_at <= $2
+            ), coverage AS (
+                SELECT
+                    max(snapshot_at) FILTER (WHERE snapshot_at <= $1) AS before_start,
+                    max(snapshot_at) AS latest,
+                    bool_and(snapshot_at - previous_at <= make_interval(
+                        secs => 2 * GREATEST(poll_seconds, previous_poll_seconds)
+                    )) FILTER (WHERE previous_at IS NOT NULL AND snapshot_at > $1) AS gaps_ok
+                FROM runs
+            )
+            SELECT COALESCE(
+                coverage.before_start >= $1 - make_interval(secs => 2 * settings.poll_seconds)
+                AND coverage.latest >= $2 - make_interval(secs => 3 * settings.poll_seconds)
+                AND COALESCE(coverage.gaps_ok, TRUE),
+                FALSE
+            )
+            FROM coverage
+            LEFT JOIN settings ON TRUE",
+        )
+        .bind(since)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        if covered {
+            Ok(())
+        } else {
+            Err(crate::Error::Source("category_collection_incomplete"))
+        }
+    }
+
     pub(crate) async fn refresh_stream_evidence(&self, now: DateTime<Utc>) -> Result<()> {
         let week = berlin_week_start(now);
         let since = midnight(week - Duration::weeks(5));

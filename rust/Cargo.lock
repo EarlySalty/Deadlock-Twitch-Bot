@@ -3475,6 +3475,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "futures-util",
  "hex",
  "serde",
  "serde_json",
