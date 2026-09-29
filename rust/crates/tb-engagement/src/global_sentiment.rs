@@ -195,10 +195,14 @@ mod tests {
     async fn rebuild_und_fragment_e2e() {
         let Some(pool) = make_pool("t_eng_sentiment").await else { return };
         // 8 User-Msgs über mehrere Channels.
-        let mut q = String::from("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ");
-        let vals: Vec<String> = (0..8).map(|i| format!("('ch{i}','user','nachricht ueber meta {i}')")).collect();
-        q.push_str(&vals.join(","));
-        sqlx::query(&q).execute(&pool).await.unwrap();
+        for i in 0..8 {
+            sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ($1, 'user', $2)")
+                .bind(format!("ch{i}"))
+                .bind(format!("nachricht ueber meta {i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))

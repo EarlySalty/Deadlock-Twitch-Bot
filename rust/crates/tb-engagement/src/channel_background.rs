@@ -217,10 +217,14 @@ mod tests {
     async fn rebuild_und_fragment_e2e() {
         let Some(pool) = make_pool("t_eng_chbg").await else { return };
         // 15 User-Msgs (jeweils > 3 Zeichen).
-        let mut q = String::from("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ");
-        let vals: Vec<String> = (0..15).map(|i| format!("('nani','user','nachricht nummer {i}')")).collect();
-        q.push_str(&vals.join(","));
-        sqlx::query(&q).execute(&pool).await.unwrap();
+        for i in 0..15 {
+            sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ($1, 'user', $2)")
+                .bind("nani")
+                .bind(format!("nachricht nummer {i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
