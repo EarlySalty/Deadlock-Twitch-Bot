@@ -700,13 +700,34 @@ impl UploadWorker {
         let mut cache = HashMap::new();
         for (queue_id, streamer_login, publish_id, previous) in rows {
             let Some(publish_id) = publish_id else {
-                tracing::warn!(queue_id, "TikTok-Postfachstatus ohne publish_id");
+                if let Err(error) = update_upload_status(
+                    &self.task.pool,
+                    queue_id,
+                    "failed",
+                    None,
+                    Some("TikTok-Vorgangsnummer fehlt. Bitte prüfe dein Postfach vor einem erneuten Upload."),
+                )
+                .await
+                {
+                    tracing::warn!(%error, queue_id, "TikTok-Postfachstatus ohne Vorgangsnummer konnte nicht abgeschlossen werden");
+                }
                 continue;
             };
             let Some(uploader) = self
                 .resolve_uploader("tiktok", streamer_login.as_deref(), &mut cache)
                 .await
             else {
+                if let Err(error) = update_upload_status(
+                    &self.task.pool,
+                    queue_id,
+                    &previous,
+                    Some(&publish_id),
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(%error, queue_id, "TikTok-Postfachstatus ohne Zugang konnte nicht vertagt werden");
+                }
                 continue;
             };
             let response = uploader.get_video_status(&publish_id).await;
@@ -1051,7 +1072,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
@@ -1250,6 +1271,62 @@ mod tests {
         assert_eq!(publish_id.as_deref(), Some("publish_123"));
         assert_eq!(uploaded, Some(false));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tiktok_postfach_prueft_weitere_clips_trotz_defekter_eintraege() {
+        let Some(pool) = make_pool("t_sm_upload_inbox_fairness").await else {
+            return;
+        };
+        let mut queue_ids = Vec::new();
+        for (index, age) in ["3 hours", "2 hours", "1 hour"].iter().enumerate() {
+            let publish_id = (index > 0).then(|| format!("publish_{index}"));
+            let clip: i64 = sqlx::query_scalar(
+                "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, tiktok_video_id) VALUES ($1, 'https://clips.test/poll', 'nani', $2) RETURNING id",
+            )
+            .bind(format!("poll-{index}"))
+            .bind(publish_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let queue_id: i64 = sqlx::query_scalar(
+                "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, last_attempt_at) VALUES ($1, 'tiktok', 'inbox', NOW() - $2::interval) RETURNING id",
+            )
+            .bind(clip)
+            .bind(age)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            queue_ids.push(queue_id);
+        }
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        let worker = UploadWorker::new(pool.clone(), CredentialManager::new(pool.clone(), cipher));
+        worker.refresh_tiktok_inbox().await;
+        let first: String =
+            sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_ids[0])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(first, "failed");
+        let second_updated: bool = sqlx::query_scalar(
+            "SELECT last_attempt_at > NOW() - INTERVAL '1 minute' FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_ids[1])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(second_updated);
+        worker.refresh_tiktok_inbox().await;
+        let third_updated: bool = sqlx::query_scalar(
+            "SELECT last_attempt_at > NOW() - INTERVAL '1 minute' FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(queue_ids[2])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(third_updated);
     }
 
     #[tokio::test]
