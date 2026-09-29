@@ -11,4 +11,4 @@ status: aktiv | 2026-09-29
 
 1. `rust/crates/tb-engagement/src/steam_web_api.rs:244`: Bei fehlgeschlagener Statusspeicherung wurde der tatsächliche Status trotzdem an den Dienst gesendet. Eine verlorene Antwort darauf konnte nach Neustart zu einem widersprüchlichen Nachtrag und dauerhafter Sperre führen. Behoben: Status zuerst speichern, bei Schreibfehler den bekannten Status im laufenden Prozess halten und später mit derselben Reservierung nachtragen. Nach Neustart ohne gespeicherten Antwortstatus meldet der Bot den unbekannten Status, ohne vorher eine abweichende Beobachtung gesendet zu haben. Die 24-Stunden-Pause bleibt über Neustarts erhalten. Tests decken beide Wiederherstellungswege ab.
 
-Runde 3: ausstehend.
+Runde 3: ALLOW. Das lokale Gate bestätigt die Wiederherstellung der offenen Reservierung. Unabhängiges Paket-Review und Produktivfreigabe stehen noch aus.
