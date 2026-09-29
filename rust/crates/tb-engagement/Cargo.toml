@@ -15,8 +15,9 @@ sqlx       = { workspace = true, features = ["uuid"] }
 thiserror  = { workspace = true }
 tracing    = { workspace = true }
 rand       = { workspace = true }
-tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs"] }
+tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs", "sync"] }
 uuid       = { workspace = true }
+url        = { workspace = true }
 tb-crypto  = { workspace = true }
 tb-llm     = { workspace = true }
 tb-analytics = { workspace = true }

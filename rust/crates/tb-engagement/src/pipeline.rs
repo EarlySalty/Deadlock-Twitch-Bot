@@ -641,7 +641,15 @@ mod tests {
             llm,
             DeadlockWiki::with_bases("http://127.0.0.1:1", "http://127.0.0.1:1/api"),
             DeadlockStats::with_base("http://127.0.0.1:1"),
-            DeadlockPatches::with_url("http://127.0.0.1:1/news"),
+            DeadlockPatches::with_endpoints(
+                "http://127.0.0.1:1/news",
+                crate::steam_web_api::SteamWebApiLedger::new(
+                    "http://127.0.0.1:1",
+                    None,
+                    "twitch_test",
+                    "/nonexistent/steam_pending.json",
+                ),
+            ),
         )
     }
 

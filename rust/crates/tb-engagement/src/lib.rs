@@ -37,6 +37,7 @@ pub mod sender_auth;
 pub mod shadow_review;
 pub mod smalltalk_loop_store;
 pub mod soul_store;
+pub mod steam_web_api;
 pub mod stealth_sender;
 pub mod stream_state;
 pub mod stream_transcripts;

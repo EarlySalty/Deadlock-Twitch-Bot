@@ -1,0 +1,15 @@
+status: aktiv | 2026-09-29
+
+# C2: Steam-Web-API-Aufrufe im Twitch-Bot an das gemeinsame Kontingent anschließen
+
+Intent-Thread `cfd69910-1da3-40d4-9eea-dae269019e41`. Du bist der einzige Thread für dieses Paket, keine Unter-Threads oder Unter-Agenten spawnen. Eigener Worktree `/home/nathanael/.worktrees/twitch-steam-ledger-20260929`, Branch `feat/steam-ledger-twitch-20260929` auf aktuellem `origin/main`. Gesamtauftrag: `/home/nathanael/.worktrees/patch-steam-rust-20260928/.tasks/2026-09-28-steam-peak-rust/AUFTRAG.md`. Verbindlicher, unabhängig abgenommener Reserve/Observe-Vertrag: `/home/nathanael/.worktrees/bots-steam-ledger-20260928/.tasks/2026-09-28-steam-webapi-ledger/VERTRAG.md`, HEAD `fbcffa40`, noch nicht produktiv geschaltet.
+
+## Arbeitsgrenze
+
+Zuerst `code-suche` und Graphify für den ganzen aktuellen Twitch-Bot: alle produktiven Requests an Steam Web API finden; danach nur gefundene Fundstellen lesen. Bekannter Einstiegspunkt im älteren Stand: `rust/crates/tb-engagement/src/deadlock_patches.rs:196-212`, direkter GetNewsForApp-Abruf mit sechsstündigem Erfolgscache. Bestehende zentrale HTTP-/Secret-/Konfig-Bausteine und bestehendes Cache-Verhalten erhalten. Nur eigener Repo-Worktree, keine Änderungen an Patchnotes, Python oder fremden Arbeitsbäumen. Keine Code-Kommentare schreiben. Keine Produktivmigration, kein Deploy, kein Service-Neustart, keine neuen öffentlichen Routen und kein Live-Steam-Stresstest.
+
+## Verhalten und Prüfpunkt
+
+Nur ein Cache-Miss, der tatsächlich einen Steam-Web-API-Request auslösen würde, braucht vorher `POST /steam-web-api/reserve` mit einer gültigen `caller`-Kennung und `caller_class:standard`. Bei Ablehnung und bei internen API-/Auth-Fehlern **keine** ungezählte Anfrage. Nach jedem gesendeten Request `observe` mit tatsächlichem Upstream-HTTP-Status, 429-`Retry-After` oder `http_status:null` bei Transportfehler. Verlorene Observe-Antwort mit derselben Reservierungs-ID erneut versuchen und weitere Web-API-Aufrufe bis zur bestätigten Beobachtung sperren, auch nach Neustart. 429-Cooldown und `retry_at` respektieren, kein alternativer Host oder API-Bypass. Beim Fehler einen schon gecachten letzten Patch nicht als neu oder erfolgreich aktualisiert ausgeben; negative Antworten sollen keine schnelle Request-Schleife erzeugen. Authentifizierung nur über vorhandenes Infisical-Secret und internen Zugang. Keine ENV-Dateien, keine normalen ENV-Config-Werte, keine Secrets im Log oder Commit. Prüfe den tatsächlichen Netzpfad des Bot-Prozesses nach `127.0.0.1:8901`, weil nur Loopback erlaubt ist.
+
+Geeignete vorhandene Rust-Tests fortführen, für die kritischen Cache-/Budget-/429-/Beobachtungsfälle verifizieren, `cargo fmt`, `cargo clippy`, `cargo test` passend ausführen. Danach `gate_hook.py --review` als eigene Prüfung, echte Befunde beheben, nur eigene Dateien adden, eigenen Branch committen und pushen. Kein Merge auf main. **Freigabepunkt:** Das Paket wird unabhängig reviewt; keine Live-Aktivierung vor A und allen Verbrauchern im kontrollierten Cutover. Bericht: Inventar `pfad:zeile`, Prüfresultate, Commit-SHA, Risiken, `fertig J/N`.
