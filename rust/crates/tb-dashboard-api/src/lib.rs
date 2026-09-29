@@ -2054,7 +2054,7 @@ pub fn build_router_with_contest_writer(
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
     let challenge_engine = tb_config::runtime::settings().ok().and_then(|settings| {
         let central =
-            tb_effort::Engine::readonly_central(std::env::var("DEADLOCK_CENTRAL_DSN").ok()).ok()?;
+            tb_effort::Engine::readonly_central_from_pool(&pool, &settings.challenges.central_database).ok()?;
         tb_effort::Engine::new(
             pool.clone(),
             settings.challenges.clone(),

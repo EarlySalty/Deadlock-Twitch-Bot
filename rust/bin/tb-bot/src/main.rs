@@ -542,7 +542,7 @@ async fn main() {
     // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).
     if config.challenges.enabled {
         let central =
-            tb_effort::Engine::readonly_central(std::env::var("DEADLOCK_CENTRAL_DSN").ok());
+            tb_effort::Engine::readonly_central_from_pool(&pool, &config.challenges.central_database);
         match central.and_then(|central| {
             tb_effort::Engine::new(
                 pool.clone(),
