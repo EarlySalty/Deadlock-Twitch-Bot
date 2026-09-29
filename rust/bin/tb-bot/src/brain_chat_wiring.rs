@@ -19,6 +19,8 @@ const NO_EVIDENCE_REPLIES: [&str; 3] = [
     "Das kann ich nicht sicher belegen. Im Discord kann dir jemand weiterhelfen.",
     "Dazu habe ich keine verlässliche Antwort. Frag am besten im Discord nach.",
 ];
+const UNUSABLE_REPLY: &str =
+    "Die Antwort kann ich hier nicht sicher wiedergeben. Frag bitte im Discord nach.";
 
 #[async_trait]
 trait BrainAnswerPort: Send + Sync {
@@ -59,6 +61,7 @@ trait BrainLogPort: Send + Sync {
         answer: &str,
         status: &str,
         duration_ms: i64,
+        send_expected: bool,
     ) -> Result<(), String>;
     async fn delivery(&self, id: i64, sent: bool, duration_ms: i64) -> Result<(), String>;
 }
@@ -121,17 +124,19 @@ impl BrainLogPort for PgBrainLog {
         answer: &str,
         status: &str,
         duration_ms: i64,
+        send_expected: bool,
     ) -> Result<(), String> {
         let result = sqlx::query(
             "UPDATE public.tb_chat_brain_answers \
              SET answer = $2, status = $3, duration_ms = $4, finished_at = now(), \
-                 delivery_status = CASE WHEN $3 = 'Fehler' THEN 'Fehler' ELSE 'Pending' END \
+                 delivery_status = CASE WHEN $5 THEN 'Pending' ELSE 'Fehler' END \
              WHERE id = $1 AND status = 'Pending'",
         )
         .bind(id)
         .bind(answer)
         .bind(status)
         .bind(duration_ms)
+        .bind(send_expected)
         .execute(&self.pool)
         .await
         .map_err(|error| error.to_string())?;
@@ -147,7 +152,7 @@ impl BrainLogPort for PgBrainLog {
              SET status = CASE WHEN $2 THEN status ELSE 'Fehler' END, \
                  delivery_status = CASE WHEN $2 THEN 'Sent' ELSE 'Fehler' END, \
                  duration_ms = $3 \
-             WHERE id = $1 AND status IN ('Answered', 'NoEvidence') AND delivery_status = 'Pending'",
+             WHERE id = $1 AND status IN ('Answered', 'NoEvidence', 'Fehler') AND delivery_status = 'Pending'",
         )
         .bind(id)
         .bind(sent)
@@ -315,10 +320,21 @@ impl BrainChatService {
             [self.no_evidence_index.fetch_add(1, Ordering::Relaxed) % NO_EVIDENCE_REPLIES.len()]
     }
 
-    async fn finish(&self, id: i64, answer: &str, status: &str, started: Instant) -> bool {
+    async fn finish(
+        &self,
+        id: i64,
+        answer: &str,
+        status: &str,
+        send_expected: bool,
+        started: Instant,
+    ) -> bool {
         for attempt in 0..3 {
             let duration_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
-            match self.log.finish(id, answer, status, duration_ms).await {
+            match self
+                .log
+                .finish(id, answer, status, duration_ms, send_expected)
+                .await
+            {
                 Ok(()) => return true,
                 Err(error) if attempt == 2 => {
                     tracing::warn!(%error, log_id = id, "Brain-Chat-Protokoll konnte nicht abgeschlossen werden");
@@ -395,7 +411,7 @@ impl BrainChatPort for BrainChatService {
                 self.backend_state(BackendState::Available);
                 match safe_chat_answer(&text) {
                     Some(text) => (text, "Answered"),
-                    None => (self.no_evidence_reply().to_string(), "NoEvidence"),
+                    None => (UNUSABLE_REPLY.to_string(), "Fehler"),
                 }
             }
             Ok(KnowledgeReply::NoEvidence) => {
@@ -408,11 +424,11 @@ impl BrainChatPort for BrainChatService {
                 } else {
                     tracing::warn!(?error, channel_id = %record.channel_id, "Brain-Chat-Frage abgelehnt");
                 }
-                let _ = self.finish(id, "", "Fehler", started).await;
+                let _ = self.finish(id, "", "Fehler", false, started).await;
                 return true;
             }
         };
-        if !self.finish(id, &text, status, started).await {
+        if !self.finish(id, &text, status, true, started).await {
             tracing::warn!(channel_id = %record.channel_id, message_id = %record.message_id, "Brain-Chat-Antwort ohne Protokoll nicht gesendet");
             return true;
         }
@@ -714,7 +730,7 @@ mod tests {
         .await
         .unwrap();
         assert!(log.begin(&question).await.unwrap().is_none());
-        log.finish(id, "Vier Fähigkeiten.", "Answered", 24)
+        log.finish(id, "Vier Fähigkeiten.", "Answered", 24, true)
             .await
             .unwrap();
         let row: (String, String, String, i64, bool) = sqlx::query_as(
@@ -750,7 +766,7 @@ mod tests {
             ..question
         };
         let failed_id = log.begin(&failed).await.unwrap().unwrap();
-        log.finish(failed_id, "Nicht sicher.", "NoEvidence", 10)
+        log.finish(failed_id, "Nicht sicher.", "NoEvidence", 10, true)
             .await
             .unwrap();
         log.delivery(failed_id, false, 20).await.unwrap();
@@ -765,6 +781,41 @@ mod tests {
             undelivered,
             ("Fehler".into(), "Fehler".into(), "Nicht sicher.".into())
         );
+        let unusable = BrainQuestion {
+            message_id: "message-3",
+            user_id: "102",
+            ..question
+        };
+        let unusable_id = log.begin(&unusable).await.unwrap().unwrap();
+        log.finish(unusable_id, UNUSABLE_REPLY, "Fehler", 10, true)
+            .await
+            .unwrap();
+        log.delivery(unusable_id, true, 20).await.unwrap();
+        let unusable_row: (String, String) = sqlx::query_as(
+            "SELECT status, delivery_status FROM public.tb_chat_brain_answers WHERE id = $1",
+        )
+        .bind(unusable_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(unusable_row, ("Fehler".into(), "Sent".into()));
+        let backend_error = BrainQuestion {
+            message_id: "message-4",
+            user_id: "103",
+            ..question
+        };
+        let backend_id = log.begin(&backend_error).await.unwrap().unwrap();
+        log.finish(backend_id, "", "Fehler", 10, false)
+            .await
+            .unwrap();
+        let backend_row: (String, String) = sqlx::query_as(
+            "SELECT status, delivery_status FROM public.tb_chat_brain_answers WHERE id = $1",
+        )
+        .bind(backend_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(backend_row, ("Fehler".into(), "Fehler".into()));
         let bot_can_insert: bool = sqlx::query_scalar(
             "SELECT has_table_privilege('twitchbot', 'public.tb_chat_brain_answers', 'INSERT')",
         )
@@ -989,6 +1040,7 @@ mod tests {
             answer: &str,
             status: &str,
             duration_ms: i64,
+            _send_expected: bool,
         ) -> Result<(), String> {
             if self
                 .fail_finishes
@@ -1094,6 +1146,14 @@ mod tests {
                 text: "Vier Fähigkeiten. https://example.com @everyone".into(),
                 sources: vec![],
             }),
+            Ok(KnowledgeReply::Answered {
+                text: "[The guide](https://example.com)".into(),
+                sources: vec![],
+            }),
+            Ok(KnowledgeReply::Answered {
+                text: "A".repeat(460),
+                sources: vec![],
+            }),
             Ok(KnowledgeReply::NoEvidence),
             Ok(KnowledgeReply::NoEvidence),
             Ok(KnowledgeReply::NoEvidence),
@@ -1115,11 +1175,11 @@ mod tests {
             backend_state: Mutex::new(BackendState::Unknown),
             no_evidence_index: AtomicUsize::new(0),
         };
-        for index in 0..5 {
+        for index in 0..7 {
             assert!(service.maybe_respond(&event(index)).await);
         }
         let sends = chat.sends.lock().unwrap().clone();
-        assert_eq!(sends.len(), 4);
+        assert_eq!(sends.len(), 6);
         assert_eq!(
             sends[0],
             (
@@ -1128,14 +1188,18 @@ mod tests {
                 "Vier Fähigkeiten. ＠everyone".into()
             )
         );
-        assert_eq!(sends[1].2, NO_EVIDENCE_REPLIES[0]);
-        assert_eq!(sends[2].2, NO_EVIDENCE_REPLIES[1]);
-        assert_eq!(sends[3].2, NO_EVIDENCE_REPLIES[2]);
+        assert_eq!(sends[1].2, UNUSABLE_REPLY);
+        assert_eq!(sends[2].2, UNUSABLE_REPLY);
+        assert_eq!(sends[3].2, NO_EVIDENCE_REPLIES[0]);
+        assert_eq!(sends[4].2, NO_EVIDENCE_REPLIES[1]);
+        assert_eq!(sends[5].2, NO_EVIDENCE_REPLIES[2]);
         let records = log.results.lock().unwrap().clone();
         assert_eq!(
             records.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
             [
                 "Answered",
+                "Fehler",
+                "Fehler",
                 "NoEvidence",
                 "NoEvidence",
                 "NoEvidence",
@@ -1143,20 +1207,20 @@ mod tests {
             ]
         );
         assert!(records.iter().all(|row| row.2 >= 0));
-        assert_eq!(log.deliveries.lock().unwrap().len(), 4);
+        assert_eq!(log.deliveries.lock().unwrap().len(), 6);
         assert!(log.deliveries.lock().unwrap().iter().all(|row| row.0));
-        assert_eq!(log.questions.lock().unwrap().len(), 5);
+        assert_eq!(log.questions.lock().unwrap().len(), 7);
         assert!(matches!(
             *service.backend_state.lock().unwrap(),
             BackendState::Unavailable
         ));
-        let mut self_message = event(6);
+        let mut self_message = event(8);
         self_message.chatter_user_id = "999".into();
         assert!(!service.maybe_respond(&self_message).await);
-        let mut command = event(7);
+        let mut command = event(9);
         command.message.text = "!status @DeadlockBot".into();
         assert!(!service.maybe_respond(&command).await);
-        assert_eq!(log.questions.lock().unwrap().len(), 5);
+        assert_eq!(log.questions.lock().unwrap().len(), 7);
     }
 
     #[tokio::test]
