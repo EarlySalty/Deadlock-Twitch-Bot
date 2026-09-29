@@ -19,6 +19,10 @@ fn test_dsn() -> Option<String> {
 /// Frische Datenbank mit allen Migrationen. Ein eigenes Schema reicht nicht:
 /// ältere Migrationen greifen fest auf `public` zu und scheitern sonst.
 async fn migrated_pool(db_name: &str) -> Option<PgPool> {
+    assert!(!db_name.is_empty());
+    assert!(db_name
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
     let dsn = test_dsn()?;
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -26,11 +30,13 @@ async fn migrated_pool(db_name: &str) -> Option<PgPool> {
         .connect(&dsn)
         .await
         .expect("admin connect");
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE DATABASE {db_name}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -162,7 +168,12 @@ async fn lookup_loest_login_zur_stabilen_id_auf() {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
 
-    let treffer: (Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+    let treffer: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
         "SELECT tb_twitch_user_id('CoolysDL'), tb_twitch_user_id('derechtecoolys'),
                 tb_twitch_user_id('recycelt'), tb_twitch_user_id('  ')",
     )

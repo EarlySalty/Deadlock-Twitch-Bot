@@ -152,7 +152,11 @@ struct Upcoming {
     recurring: bool,
 }
 
-fn upcoming_items(p: &Content, twitch: &TwitchProfileSnapshot, now: DateTime<Utc>) -> Vec<Upcoming> {
+fn upcoming_items(
+    p: &Content,
+    twitch: &TwitchProfileSnapshot,
+    now: DateTime<Utc>,
+) -> Vec<Upcoming> {
     let mut items: Vec<Upcoming> = p
         .events
         .iter()
@@ -345,9 +349,15 @@ pub(super) fn page(
     body.push_str("</nav>");
 
     body.push_str("<div class=\"intro-grid\"><section class=\"panel about-panel\"><p class=\"eyebrow\">Das bin ich</p><h2>Über meinen Stream</h2>");
-    let _ = write!(body, "<p class=\"multiline about-copy\">{}</p>", escape(about));
+    let _ = write!(
+        body,
+        "<p class=\"multiline about-copy\">{}</p>",
+        escape(about)
+    );
     if !p.preferred_times.is_empty() {
-        body.push_str("<div class=\"meta-block\"><span>Typische Zeiten</span><div class=\"profile-tags\">");
+        body.push_str(
+            "<div class=\"meta-block\"><span>Typische Zeiten</span><div class=\"profile-tags\">",
+        );
         for value in &p.preferred_times {
             let _ = write!(
                 body,
@@ -537,7 +547,10 @@ pub(super) fn page(
         }
         let hidden = planned_events.len() + observed_sessions.len() - shown;
         if hidden > 0 {
-            let _ = write!(body, "<span class=\"calendar-more\">+{hidden} weitere</span>");
+            let _ = write!(
+                body,
+                "<span class=\"calendar-more\">+{hidden} weitere</span>"
+            );
         }
         body.push_str("</div>");
         day = day.succ_opt().unwrap();

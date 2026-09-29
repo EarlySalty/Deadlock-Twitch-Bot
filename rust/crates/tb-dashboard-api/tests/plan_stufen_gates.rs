@@ -104,11 +104,13 @@ async fn pool(schema: &str) -> Option<PgPool> {
         .connect(&dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -122,7 +124,10 @@ async fn pool(schema: &str) -> Option<PgPool> {
         .await
         .unwrap();
     for ddl in DDL {
-        sqlx::query(ddl).execute(&pool).await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(*ddl))
+            .execute(&pool)
+            .await
+            .unwrap();
     }
     Some(pool)
 }

@@ -191,9 +191,9 @@ pub async fn list_vocab(
 /// Einzelnen Eintrag nach (normalisiertem) Term.
 pub async fn get_vocab_entry(pool: &PgPool, term: &str) -> Option<VocabEntry> {
     let normalized = normalize_term(term).ok()?;
-    let row: Option<Row> = sqlx::query_as(&format!(
+    let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {SELECT_COLS} FROM deadlock_vocab WHERE term = $1 LIMIT 1"
-    ))
+    )))
     .bind(&normalized)
     .fetch_optional(pool)
     .await
@@ -291,9 +291,9 @@ pub async fn delete_vocab_entry(pool: &PgPool, term: &str) -> Result<bool, Vocab
 /// Alle Einträge (sortiert weight DESC, canonical ASC). Fehler → leer (Python
 /// `load_all_vocab_safe`).
 pub async fn load_all_vocab(pool: &PgPool) -> Vec<VocabEntry> {
-    let rows: Vec<Row> = sqlx::query_as(&format!(
+    let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {SELECT_COLS} FROM deadlock_vocab ORDER BY weight DESC, canonical ASC"
-    ))
+    )))
     .fetch_all(pool)
     .await
     .unwrap_or_default();

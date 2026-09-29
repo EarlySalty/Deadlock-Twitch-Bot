@@ -182,7 +182,9 @@ fn normalize_tracking_token(
     Ok(Some(text))
 }
 
-pub(crate) fn configured_allowlist(ids: &Option<Vec<i64>>) -> Option<std::collections::HashSet<i64>> {
+pub(crate) fn configured_allowlist(
+    ids: &Option<Vec<i64>>,
+) -> Option<std::collections::HashSet<i64>> {
     ids.as_ref().map(|values| values.iter().copied().collect())
 }
 
@@ -232,13 +234,23 @@ pub async fn live_active_announcements_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !auth.is_privileged() { return Err(ApiError::unauthorized()); }
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
     let cfg = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
-    let channel_id = cfg.twitch.notify_channel_id.parse().map_err(|_| ApiError::internal())?;
+    let channel_id = cfg
+        .twitch
+        .notify_channel_id
+        .parse()
+        .map_err(|_| ApiError::internal())?;
     live_announcements_with_channel(auth, State(pool), channel_id).await
 }
 
-async fn live_announcements_with_channel(auth: AuthLevel, State(pool): State<PgPool>, channel_id: i64) -> Result<impl IntoResponse, ApiError> {
+async fn live_announcements_with_channel(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    channel_id: i64,
+) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
@@ -311,15 +323,30 @@ pub async fn live_link_click_handler(
     Extension(idem): Extension<IdempotencyState>,
     Json(raw_payload): Json<Value>,
 ) -> Result<Response, ApiError> {
-    if !auth.is_privileged() { return Err(ApiError::unauthorized()); }
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
     let cfg = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
-    link_click_with_config(auth, headers, OriginalUri(uri), State(pool), Extension(idem), Json(raw_payload), &cfg.discord.raid_oauth).await
+    link_click_with_config(
+        auth,
+        headers,
+        OriginalUri(uri),
+        State(pool),
+        Extension(idem),
+        Json(raw_payload),
+        &cfg.discord.raid_oauth,
+    )
+    .await
 }
 
 async fn link_click_with_config(
-    auth: AuthLevel, headers: HeaderMap, OriginalUri(uri): OriginalUri,
-    State(pool): State<PgPool>, Extension(idem): Extension<IdempotencyState>,
-    Json(raw_payload): Json<Value>, scope: &tb_config::discord::RaidOAuth,
+    auth: AuthLevel,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    State(pool): State<PgPool>,
+    Extension(idem): Extension<IdempotencyState>,
+    Json(raw_payload): Json<Value>,
+    scope: &tb_config::discord::RaidOAuth,
 ) -> Result<Response, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
@@ -366,7 +393,11 @@ async fn link_click_with_config(
 
 /// Geschäftslogik von `POST /live/link-click` — Validierung, Scope-Guard,
 /// INSERT. Gibt den Erfolgs-Body `{"ok": true}` zurück.
-async fn process_link_click(pool: &PgPool, body: LinkClickRequest, scope: &tb_config::discord::RaidOAuth) -> Result<Value, ApiError> {
+async fn process_link_click(
+    pool: &PgPool,
+    body: LinkClickRequest,
+    scope: &tb_config::discord::RaidOAuth,
+) -> Result<Value, ApiError> {
     // ── Validation (Parität zu telemetry.py + policy.py) ─────────────────────
 
     let streamer_login = normalize_twitch_login(body.streamer_login.as_deref().unwrap_or(""))
@@ -595,15 +626,17 @@ mod tests {
             .await
             .expect("connect");
 
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");
@@ -659,11 +692,26 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct TestPolicy { channel_id: i64, scope: tb_config::discord::RaidOAuth }
-    async fn test_announcements(auth: AuthLevel, state: State<PgPool>, Extension(policy): Extension<TestPolicy>) -> Result<impl IntoResponse, ApiError> {
+    struct TestPolicy {
+        channel_id: i64,
+        scope: tb_config::discord::RaidOAuth,
+    }
+    async fn test_announcements(
+        auth: AuthLevel,
+        state: State<PgPool>,
+        Extension(policy): Extension<TestPolicy>,
+    ) -> Result<impl IntoResponse, ApiError> {
         live_announcements_with_channel(auth, state, policy.channel_id).await
     }
-    async fn test_link_click(auth: AuthLevel, headers: HeaderMap, uri: OriginalUri, state: State<PgPool>, idem: Extension<IdempotencyState>, Extension(policy): Extension<TestPolicy>, body: Json<Value>) -> Result<Response, ApiError> {
+    async fn test_link_click(
+        auth: AuthLevel,
+        headers: HeaderMap,
+        uri: OriginalUri,
+        state: State<PgPool>,
+        idem: Extension<IdempotencyState>,
+        Extension(policy): Extension<TestPolicy>,
+        body: Json<Value>,
+    ) -> Result<Response, ApiError> {
         link_click_with_config(auth, headers, uri, state, idem, body, &policy.scope).await
     }
     fn make_router(pool: PgPool, token: &str) -> Router {
@@ -676,10 +724,7 @@ mod tests {
                 &format!("{base}/live/active-announcements"),
                 get(test_announcements),
             )
-            .route(
-                &format!("{base}/live/link-click"),
-                post(test_link_click),
-            )
+            .route(&format!("{base}/live/link-click"), post(test_link_click))
             .with_state(pool)
             .layer(Extension(IdempotencyState::new()))
             .layer(Extension(policy))
@@ -780,9 +825,15 @@ mod tests {
     async fn live_active_announcements_liefert_status_mit_standard_button_label() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_ann_standard_label").await;
-        let app = make_router_with_policy(pool.clone(), "secret", TestPolicy { channel_id: 123456789, ..Default::default() });
+        let app = make_router_with_policy(
+            pool.clone(),
+            "secret",
+            TestPolicy {
+                channel_id: 123456789,
+                ..Default::default()
+            },
+        );
         let base = INTERNAL_API_BASE_PATH;
-
 
         sqlx::query(
             "INSERT INTO twitch_live_state (twitch_user_id, streamer_login, last_discord_message_id, last_tracking_token) VALUES ($1,$2,$3,$4)"
@@ -808,7 +859,6 @@ mod tests {
         assert_eq!(arr[0]["tracking_token"], "tok_lbl");
         assert_eq!(arr[0]["button_label"], "Auf Twitch ansehen");
         assert_eq!(arr[0]["channel_id"], 123456789_i64);
-
     }
 
     // ── Live Link Click ───────────────────────────────────────────────────────
@@ -905,7 +955,17 @@ mod tests {
     #[tokio::test]
     async fn link_click_guild_id_ausserhalb_allowlist_403() {
         let dsn = db_dsn_or_skip!();
-        let app = make_router_with_policy(make_pool(&dsn, "test_h_lc_403").await, "secret", TestPolicy { scope: tb_config::discord::RaidOAuth { allowed_guild_ids: Some(vec![999]), ..Default::default() }, ..Default::default() });
+        let app = make_router_with_policy(
+            make_pool(&dsn, "test_h_lc_403").await,
+            "secret",
+            TestPolicy {
+                scope: tb_config::discord::RaidOAuth {
+                    allowed_guild_ids: Some(vec![999]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
         let base = INTERNAL_API_BASE_PATH;
 
         // Allowlist: nur guild 999, aber Request sendet 111
@@ -931,7 +991,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
     }
 
     #[tokio::test]
@@ -940,7 +999,6 @@ mod tests {
         let pool = make_pool(&dsn, "test_h_lc_refcode").await;
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
-
 
         let body = r#"{
             "streamer_login": "streamer_x",
@@ -982,7 +1040,6 @@ mod tests {
         let pool = make_pool(&dsn, "test_h_lc_idem").await;
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
-
 
         let body = r#"{
             "streamer_login": "idem_streamer",
@@ -1122,15 +1179,17 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("drop schema");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("create schema");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");
@@ -1157,15 +1216,17 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("drop schema");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("create schema");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");

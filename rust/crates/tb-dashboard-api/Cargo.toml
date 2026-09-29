@@ -20,6 +20,7 @@ zeroize      = { workspace = true }
 filedescriptor = "0.8.3"
 nix = { version = "0.31", default-features = false, features = ["fs"] }
 sqlx         = { workspace = true }
+sqlx08       = { package = "sqlx", version = "=0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls", "chrono"] }
 tracing      = { workspace = true }
 chrono       = { workspace = true }
 chrono-tz    = { workspace = true }

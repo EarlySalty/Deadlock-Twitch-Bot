@@ -47,14 +47,13 @@ pub async fn run_uplink_migrations(pool: &PgPool) -> Result<(), DbError> {
             "Uplink-Release-Migrationen fehlen.".into(),
         ));
     }
-    Migrator {
-        migrations: std::borrow::Cow::Owned(migrations),
-        ignore_missing: true,
-        locking: MIGRATOR.locking,
-        no_tx: MIGRATOR.no_tx,
-    }
-    .run(pool)
-    .await?;
+    let mut migrator = Migrator::with_migrations(migrations);
+    migrator.ignore_missing = true;
+    migrator.locking = MIGRATOR.locking;
+    migrator.no_tx = MIGRATOR.no_tx;
+    migrator.table_name = MIGRATOR.table_name.clone();
+    migrator.create_schemas = MIGRATOR.create_schemas.clone();
+    migrator.run(pool).await?;
     Ok(())
 }
 
@@ -70,12 +69,12 @@ pub const SCHEMA_OWNER_MARKER_VERSION: i32 = 1;
 /// Konflikte und halbfertige Läufe bleiben fatal.
 pub async fn run_migrations(pool: &PgPool) -> Result<(), DbError> {
     report_applied_but_missing(pool).await;
-    let migrator = Migrator {
-        migrations: MIGRATOR.migrations.clone(),
-        ignore_missing: true,
-        locking: MIGRATOR.locking,
-        no_tx: MIGRATOR.no_tx,
-    };
+    let mut migrator = Migrator::with_migrations(MIGRATOR.migrations.clone().into_owned());
+    migrator.ignore_missing = true;
+    migrator.locking = MIGRATOR.locking;
+    migrator.no_tx = MIGRATOR.no_tx;
+    migrator.table_name = MIGRATOR.table_name.clone();
+    migrator.create_schemas = MIGRATOR.create_schemas.clone();
     migrator.run(pool).await?;
     ensure_schema_owner_marker(pool).await?;
     Ok(())

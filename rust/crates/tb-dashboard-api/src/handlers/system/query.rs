@@ -167,20 +167,22 @@ async fn run_readonly(
     // Prepared extended-protocol statements reject stacked SQL. A non-held,
     // forward-only cursor bounds the fetch itself, instead of collecting every
     // row and truncating afterward. No untrusted SQL enters the FETCH command.
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "DECLARE tb_admin_readonly NO SCROLL CURSOR FOR {sql}"
-    ))
+    )))
     .persistent(false)
     .execute(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
     // A cursor can expose different column shapes on each request. Do not cache
     // the prepared FETCH statement across unrelated admin queries.
-    let rows = sqlx::query(&format!("FETCH FORWARD {MAX_ROWS} FROM tb_admin_readonly"))
-        .persistent(false)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "FETCH FORWARD {MAX_ROWS} FROM tb_admin_readonly"
+    )))
+    .persistent(false)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
 
     if let Err(error) = tx.rollback().await {
         tracing::warn!(%error, "system-query Readonly-Transaktion Rollback fehlgeschlagen");
@@ -324,11 +326,13 @@ mod tests {
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .ok()?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;

@@ -1073,8 +1073,14 @@ mod tests {
             html.contains("/twitch/api/market_data"),
             "page must fetch market_data"
         );
-        assert!(html.contains("function renderMarket"), "page must render data");
-        assert!(html.contains(MR_TITLE), "page must carry the final German title");
+        assert!(
+            html.contains("function renderMarket"),
+            "page must render data"
+        );
+        assert!(
+            html.contains(MR_TITLE),
+            "page must carry the final German title"
+        );
         assert!(html.contains("<html"), "must be HTML");
     }
 
@@ -1210,15 +1216,17 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();

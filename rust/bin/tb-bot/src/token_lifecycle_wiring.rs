@@ -68,8 +68,15 @@ pub(crate) struct BrokerTokenLifecycleNotifier {
 }
 
 impl BrokerTokenLifecycleNotifier {
-    fn from_config(relay: Option<BrokerRelay>, config: &tb_config::discord::TokenLifecycle) -> Self {
-        Self { relay, guild_id: config.guild_id, role_id: config.streamer_role_id }
+    fn from_config(
+        relay: Option<BrokerRelay>,
+        config: &tb_config::discord::TokenLifecycle,
+    ) -> Self {
+        Self {
+            relay,
+            guild_id: config.guild_id,
+            role_id: config.streamer_role_id,
+        }
     }
 }
 
@@ -204,12 +211,18 @@ pub fn spawn_token_lifecycle_schedulers(
     bot_ban_status_probe: Option<Arc<dyn BotBanStatusProbe>>,
 ) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
-        Ok(relay) => (BrokerTokenLifecycleNotifier::from_config(Some(relay), options), true),
+        Ok(relay) => (
+            BrokerTokenLifecycleNotifier::from_config(Some(relay), options),
+            true,
+        ),
         Err(e) => {
             tracing::warn!(
                 "Token-Lifecycle-Scheduler ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {e}"
             );
-            (BrokerTokenLifecycleNotifier::from_config(None, options), false)
+            (
+                BrokerTokenLifecycleNotifier::from_config(None, options),
+                false,
+            )
         }
     };
     let mut reactor = TokenLifecycleReactor::new(pool, notifier);

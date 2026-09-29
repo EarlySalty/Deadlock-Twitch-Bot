@@ -522,9 +522,9 @@ pub async fn category_comparison_handler(
     // Rang exakt wie Python (api_performance.py:1016): category_total -
     // int(avg_percentile/100 * category_total) — inkl. Integer-Trunkierung, damit
     // der Rang auch bei Zwischenwerten (your_avg strikt zwischen zwei Peers) stimmt.
-    let category_rank = avg_percentile.filter(|_| category_total > 0).map(|p| {
-        (category_total as i64) - ((p as f64 / 100.0 * category_total as f64) as i64)
-    });
+    let category_rank = avg_percentile
+        .filter(|_| category_total > 0)
+        .map(|p| (category_total as i64) - ((p as f64 / 100.0 * category_total as f64) as i64));
 
     // ── Peer group (no threshold — same as Python _get_peer_group_stats) ─────
     let my_avg_for_tier = if your_avg > 0.0 {
@@ -720,11 +720,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

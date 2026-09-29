@@ -597,7 +597,7 @@ impl OAuthManager {
                 enc_version = EXCLUDED.enc_version, enc_kid = EXCLUDED.enc_kid, \
                 enabled = 1, last_refreshed_at = CURRENT_TIMESTAMP"
         );
-        sqlx::query(&sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(platform)
             .bind(streamer_login)
             .bind(access_enc)

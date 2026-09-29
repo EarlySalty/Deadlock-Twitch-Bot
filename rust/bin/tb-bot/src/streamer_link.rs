@@ -39,7 +39,9 @@ pub struct StreamerLinkConfig {
 }
 
 impl StreamerLinkConfig {
-    pub fn from_config(snapshot: &tb_config::BotConfigSnapshot) -> Result<Self, tb_config::file::FileError> {
+    pub fn from_config(
+        snapshot: &tb_config::BotConfigSnapshot,
+    ) -> Result<Self, tb_config::file::FileError> {
         let config = &snapshot.settings().discord.streamer_link;
         Ok(Self {
             notify_channel_id: config.notify_channel_id,

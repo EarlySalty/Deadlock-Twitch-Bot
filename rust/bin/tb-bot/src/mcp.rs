@@ -29,9 +29,9 @@
 //! ist ein Produktivdienst, ein belegter Debug-Port darf ihn nicht kosten.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 #[cfg(test)]
 use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 

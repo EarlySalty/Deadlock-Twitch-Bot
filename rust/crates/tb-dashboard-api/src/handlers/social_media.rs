@@ -61,13 +61,13 @@ use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
 };
-use tb_social_media::preview::{get_preview, request_preview, PREVIEW_READY};
 use tb_social_media::posting_plan::{
     berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
     load_streamer_settings, save_category_setting, save_platform_schedule, save_streamer_settings,
     verfuegbare_clips, ApprovalMode, CategoryOption, PlatformSchedule, PoolForecast,
     StreamerSettings, PLATFORMS,
 };
+use tb_social_media::preview::{get_preview, request_preview, PREVIEW_READY};
 use tb_social_media::rendering::{render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::retention::mark_clip_discarded;
@@ -1890,9 +1890,9 @@ fn row_to_clip(r: &PgRow) -> Result<ClipRow, sqlx::Error> {
 }
 
 async fn load_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<Option<ClipRow>, sqlx::Error> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE id = $1 LIMIT 1"
-    ))
+    )))
     .bind(clip_db_id)
     .fetch_optional(pool)
     .await
@@ -3826,7 +3826,11 @@ pub async fn preview_request_handler(
         Err(e) => return e,
     };
     if request_preview(&pool, child).await.is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db" })),
+        )
+            .into_response();
     }
     Json(json!({ "clip_db_id": clip_db_id, "status": "pending" })).into_response()
 }
@@ -3881,11 +3885,18 @@ pub async fn preview_file_handler(
         Ok(b) => b,
         Err(_) => return preview_not_ready(),
     };
-    serve_mp4_range(bytes, headers.get(header::RANGE).and_then(|v| v.to_str().ok()))
+    serve_mp4_range(
+        bytes,
+        headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+    )
 }
 
 fn preview_not_ready() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "preview_not_ready" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "preview_not_ready" })),
+    )
+        .into_response()
 }
 
 fn parse_range(range: &str, len: u64) -> Option<(u64, u64)> {
@@ -4164,11 +4175,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

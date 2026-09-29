@@ -113,7 +113,7 @@ pub async fn overview_metrics(
         FROM sessions s
         "#
     );
-    sqlx::query_as::<_, OverviewMetricsRow>(&sql)
+    sqlx::query_as::<_, OverviewMetricsRow>(sqlx::AssertSqlSafe(sql))
         .bind(since)
         .bind(streamer_login)
         .bind(until)
@@ -136,11 +136,11 @@ pub async fn overview_session_count(
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2)){GEISTER_FILTER}
         "#
     );
-    let count: i64 = sqlx::query_scalar(&sql)
-    .bind(since)
-    .bind(streamer_login)
-    .fetch_one(pool)
-    .await?;
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(since)
+        .bind(streamer_login)
+        .fetch_one(pool)
+        .await?;
     Ok(count)
 }
 
@@ -605,7 +605,7 @@ pub async fn overview_sessions(
         ORDER BY bs.started_at::text::TIMESTAMPTZ DESC
         "#
     );
-    let raws: Vec<SessionRaw> = sqlx::query_as(&sql)
+    let raws: Vec<SessionRaw> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(since)
         .bind(streamer_login)
         .bind(limit)

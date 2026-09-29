@@ -22,13 +22,13 @@
 //! einer dedizierten Existenzprüfung (s. `follower_delta_exists`).
 
 use axum::{
-    Json,
     extract::{Path, Query, State},
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
@@ -1005,17 +1005,17 @@ pub async fn streamer_analytics_native_handler(
 mod tests {
     use super::*;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::get,
+        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
+    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
 
     // ── Timestamp-Helfer-Tests ─────────────────────────────────────────────────
@@ -1067,11 +1067,13 @@ mod tests {
             .connect(dsn)
             .await
             .expect("admin connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .expect("Schema anlegen");
@@ -1723,11 +1725,9 @@ mod tests {
         };
         let insights = generate_insights(&metrics, &[]);
         assert!(insights.iter().any(|i| i.title == "Niedrige Retention"));
-        assert!(
-            insights
-                .iter()
-                .any(|i| i.title == "Niedrige Chat-Aktivität")
-        );
+        assert!(insights
+            .iter()
+            .any(|i| i.title == "Niedrige Chat-Aktivität"));
     }
 
     #[test]
@@ -1749,11 +1749,9 @@ mod tests {
         };
         let insights = generate_insights(&metrics, &[]);
         assert!(insights.iter().any(|i| i.title == "Exzellente Retention"));
-        assert!(
-            insights
-                .iter()
-                .any(|i| i.title == "Starke Follower-Conversion")
-        );
+        assert!(insights
+            .iter()
+            .any(|i| i.title == "Starke Follower-Conversion"));
         assert!(insights.iter().any(|i| i.title == "Sehr aktive Community"));
     }
 

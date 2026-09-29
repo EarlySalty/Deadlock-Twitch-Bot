@@ -243,7 +243,7 @@ mod tests {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let schema = crate::auth::session::test_schema_name("chatter_verlauf");
         let admin = PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;

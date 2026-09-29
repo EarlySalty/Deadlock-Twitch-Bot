@@ -11,7 +11,7 @@ use dbrain_reasoner::{
 };
 use serde::Serialize;
 use serde_json::json;
-use sqlx::{
+use sqlx08::{
     postgres::{PgConnectOptions, PgPoolOptions},
     ConnectOptions, PgPool,
 };

@@ -123,7 +123,7 @@ pub(crate) async fn live_send_allowed(
              AND (c.last_observed_at IS NULL OR c.last_observed_at <= $1 - INTERVAL '24 hours')
          )"
     );
-    sqlx::query_scalar(&sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(now)
         .bind(Some(user_id))
         .bind(login)

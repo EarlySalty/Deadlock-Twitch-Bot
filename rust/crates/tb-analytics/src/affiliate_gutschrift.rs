@@ -652,7 +652,10 @@ pub async fn list_for_affiliate(
          WHERE affiliate_twitch_login = $1 \
          ORDER BY period_year DESC, period_month DESC, id DESC"
     );
-    let rows = sqlx::query(&sql).bind(&login).fetch_all(pool).await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(&login)
+        .fetch_all(pool)
+        .await?;
     rows.into_iter()
         .map(StoredGutschriftRow::from_row)
         .map(|row| row.map(|row| row_to_metadata(&row, false)))
@@ -671,7 +674,7 @@ pub async fn get_pdf(
          FROM affiliate_gutschriften \
          WHERE id::bigint = $1 AND affiliate_twitch_login = $2"
     );
-    let row = match sqlx::query(&sql)
+    let row = match sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(gutschrift_id)
         .bind(&login)
         .fetch_optional(pool)
@@ -1243,7 +1246,7 @@ async fn load_existing(
          FROM affiliate_gutschriften \
          WHERE affiliate_twitch_login = $1 AND period_year = $2 AND period_month = $3"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(affiliate_login)
         .bind(year)
         .bind(month)
@@ -1259,7 +1262,7 @@ async fn load_by_id(
     let sql = format!(
         "SELECT {SELECT_GUTSCHRIFT_COLUMNS} FROM affiliate_gutschriften WHERE id::bigint = $1"
     );
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?

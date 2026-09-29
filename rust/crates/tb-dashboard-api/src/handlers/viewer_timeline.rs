@@ -202,7 +202,9 @@ pub async fn viewer_timeline_handler(
            ORDER BY viewer_login, start_min"#
     );
 
-    let mut span_q = sqlx::query(&span_sql).bind(session_id).bind(session_start);
+    let mut span_q = sqlx::query(sqlx::AssertSqlSafe(span_sql))
+        .bind(session_id)
+        .bind(session_start);
     for bot in &span_bots {
         span_q = span_q.bind(bot);
     }
@@ -254,7 +256,9 @@ pub async fn viewer_timeline_handler(
            WHERE session_id = $1 AND LOWER(streamer_login) = $2
              AND {msg_bot_clause}"#
     );
-    let mut msg_q = sqlx::query(&msg_sql).bind(session_id).bind(&streamer);
+    let mut msg_q = sqlx::query(sqlx::AssertSqlSafe(msg_sql))
+        .bind(session_id)
+        .bind(&streamer);
     for bot in &msg_bots {
         msg_q = msg_q.bind(bot);
     }
@@ -289,7 +293,9 @@ pub async fn viewer_timeline_handler(
              AND {prof_bot_clause}
            GROUP BY LOWER(sc.chatter_login)"#
     );
-    let mut prof_q = sqlx::query(&prof_sql).bind(&streamer).bind(&viewer_logins);
+    let mut prof_q = sqlx::query(sqlx::AssertSqlSafe(prof_sql))
+        .bind(&streamer)
+        .bind(&viewer_logins);
     for bot in &prof_bots {
         prof_q = prof_q.bind(bot);
     }
@@ -557,15 +563,17 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();
@@ -603,15 +611,17 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();

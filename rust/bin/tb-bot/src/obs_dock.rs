@@ -228,10 +228,12 @@ impl ObsDockSink for PgObsDockSink {
         // zugesichert, und ein stillschweigend verschlucktes NOTIFY waere genau
         // der Fehler, den niemand findet. Faellt es aus, ist die Zeile trotzdem
         // da und das Dock holt sie beim naechsten Verbinden ueber `seit=`.
-        sqlx::query(&format!("SELECT pg_notify('{NOTIFY_KANAL}', $1)"))
-            .bind(notify_nutzlast(&channel_id, id))
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT pg_notify('{NOTIFY_KANAL}', $1)"
+        )))
+        .bind(notify_nutzlast(&channel_id, id))
+        .execute(&self.pool)
+        .await?;
 
         Ok(Some(id))
     }
@@ -1513,11 +1515,13 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("Verbindung zur Test-Datenbank");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -1532,17 +1536,22 @@ mod tests {
             .await
             .unwrap();
         for anweisung in migration_anweisungen(MIGRATION) {
-            sqlx::query(&anweisung).execute(&pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(anweisung))
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         Some((pool, dsn))
     }
 
     /// Raeumt das Testschema wieder ab.
     async fn schema_abraeumen(pool: PgPool, schema: &str) {
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
         pool.close().await;
     }
 

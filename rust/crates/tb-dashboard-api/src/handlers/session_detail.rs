@@ -162,7 +162,10 @@ pub async fn session_detail_handler(
         let placeholders: Vec<String> = (2..=(KNOWN_CHAT_BOTS.len() + 1))
             .map(|i| format!("${i}"))
             .collect();
-        format!("(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')", placeholders.join(", "))
+        format!(
+            "(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')",
+            placeholders.join(", ")
+        )
     };
 
     let chatter_stats_sql = format!(
@@ -187,7 +190,7 @@ pub async fn session_detail_handler(
              AND {bot_in_clause_chatter_stats}"#
     );
 
-    let mut cs_query = sqlx::query(&chatter_stats_sql).bind(session_id);
+    let mut cs_query = sqlx::query(sqlx::AssertSqlSafe(chatter_stats_sql)).bind(session_id);
     for bot in KNOWN_CHAT_BOTS {
         cs_query = cs_query.bind(*bot);
     }
@@ -226,14 +229,17 @@ pub async fn session_detail_handler(
         let placeholders: Vec<String> = (2..=(KNOWN_CHAT_BOTS.len() + 1))
             .map(|i| format!("${i}"))
             .collect();
-        format!("(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')", placeholders.join(", "))
+        format!(
+            "(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')",
+            placeholders.join(", ")
+        )
     };
     let top_sql = format!(
         r#"SELECT chatter_login, messages FROM twitch_session_chatters sc
            WHERE sc.session_id = $1 AND {top_chatters_in_clause}
            ORDER BY messages DESC LIMIT 20"#
     );
-    let mut top_query = sqlx::query(&top_sql).bind(session_id);
+    let mut top_query = sqlx::query(sqlx::AssertSqlSafe(top_sql)).bind(session_id);
     for bot in KNOWN_CHAT_BOTS {
         top_query = top_query.bind(*bot);
     }

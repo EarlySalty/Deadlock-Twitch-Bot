@@ -845,11 +845,11 @@ async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -
         "instagram" => "uploaded_instagram",
         _ => return true,
     };
-    let row: Option<(Option<bool>, bool)> = sqlx::query_as(&format!(
+    let row: Option<(Option<bool>, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {column}, EXISTS(SELECT 1 FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status <> 'failed') \
          FROM twitch_clips_social_media WHERE id = $3 LIMIT 1"
-    ))
+    )))
     .bind(clip_db_id as i64)
     .bind(platform)
     .bind(clip_db_id as i64)

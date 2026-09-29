@@ -23,10 +23,11 @@ async fn fixture() -> TestPostgres {
     .unwrap();
     let old = Utc::now() - Duration::days(1000);
     let day = old.date_naive();
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE TABLE category_chat_messages_p{} PARTITION OF category_chat_messages FOR VALUES FROM ('{day} 00:00:00+00') TO ('{} 00:00:00+00')",
         day.format("%Y%m%d"), day.succ_opt().unwrap()
-    )).execute(&db.pool).await.unwrap();
+    )))
+        .execute(&db.pool).await.unwrap();
     for (id, at) in [("archive", old), ("recent", Utc::now())] {
         let line = format!("@room-id=100;user-id=200;id={id};tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Diese Nachricht bleibt für die spätere Auswertung im Archiv erhalten.", at.timestamp_millis());
         let row = category::raw_message(&line, at, "100", "de").unwrap();
@@ -432,7 +433,10 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
         .filter(|line| !line.starts_with('\\'))
         .collect::<Vec<_>>()
         .join("\n");
-    sqlx::raw_sql(&matrix).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(matrix))
+        .execute(&db.pool)
+        .await
+        .unwrap();
     for role in ["twitchbot", "twitchdash", "twitchlegacy"] {
         let can_read: bool =
             sqlx::query_scalar("SELECT has_table_privilege($1,'category_chat_messages','SELECT')")
@@ -517,9 +521,9 @@ async fn targeted_removal_has_bounded_index_work_in_a_large_archive() {
         .execute(&mut *connection)
         .await
         .unwrap();
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "PREPARE archive_redact_plan(text,text,text,timestamptz) AS {body}"
-    ))
+    )))
     .execute(&mut *connection)
     .await
     .unwrap();

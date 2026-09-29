@@ -499,7 +499,9 @@ ORDER BY
         where = where_clause,
     );
 
-    sqlx::query_as(&sql).fetch_all(pool).await
+    sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
 }
 
 /// Holt Detail-Row für einen einzelnen Streamer (case-insensitive Login-Suche).
@@ -540,7 +542,10 @@ LIMIT 1"#,
         cte_oauth = CTE_PARTNER_OAUTH,
     );
 
-    sqlx::query_as(&sql).bind(login).fetch_optional(pool).await
+    sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(login)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Findet den Twitch-Login zu einer Discord-User-ID (kanonische Lookup-Quelle).

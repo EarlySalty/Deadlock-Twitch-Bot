@@ -6,7 +6,9 @@ use chrono::Utc;
 use tb_chat::ChatApi;
 use tb_raid::flip_unraid::{pending_within_flip_window, FlipOutcome, FlipRepeatTracker};
 #[cfg(test)]
-use tb_raid::flip_unraid::{FLIP_PAUSE_DEFAULT_SECS, FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS};
+use tb_raid::flip_unraid::{
+    FLIP_PAUSE_DEFAULT_SECS, FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS,
+};
 use tb_raid::pending_raids::PendingRaidStore;
 use tb_raid::token_provider::TokenProvider;
 use tb_raid::ManualRaidSuppression;

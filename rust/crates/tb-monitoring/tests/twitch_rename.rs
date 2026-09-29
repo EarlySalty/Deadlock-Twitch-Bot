@@ -110,9 +110,9 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         ("twitch_partner_raid_scores", "twitch_login"),
         ("twitch_streamer_identities", "twitch_login"),
     ] {
-        let old_count: i64 = sqlx::query_scalar(&format!(
+        let old_count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*) FROM {table} WHERE LOWER({column}) = 'old_login'"
-        ))
+        )))
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -133,7 +133,10 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
     .await
     .unwrap();
     assert_eq!(open_old, 0, "offene Session wurde nicht umbenannt");
-    assert_eq!(closed_old, 1, "geschlossene Session bleibt Betriebshistorie");
+    assert_eq!(
+        closed_old, 1,
+        "geschlossene Session bleibt Betriebshistorie"
+    );
 
     let settings: Vec<(String, bool)> = sqlx::query_as(
         "SELECT channel_login, enabled FROM twitch_engagement_settings ORDER BY channel_login",
@@ -165,7 +168,10 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         invites,
         vec![
             ("new_login".to_string(), "old-code".to_string()),
-            ("stale:unbekannt:new_login".to_string(), "new-code".to_string()),
+            (
+                "stale:unbekannt:new_login".to_string(),
+                "new-code".to_string()
+            ),
         ]
     );
     let health: Vec<(String, String)> = sqlx::query_as(
@@ -179,7 +185,10 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         health,
         vec![
             ("new_login".to_string(), "alt".to_string()),
-            ("stale:unbekannt:new_login".to_string(), "neu gewinnt".to_string()),
+            (
+                "stale:unbekannt:new_login".to_string(),
+                "neu gewinnt".to_string()
+            ),
         ]
     );
     // Und die ID steht wirklich in der Zeile, nicht nur der neue Name.
@@ -211,7 +220,10 @@ async fn upsert_monitored_aktualisiert_bekannte_user_id_und_alle_betriebstabelle
         profile,
         vec![
             ("new_login".to_string(), "alt".to_string()),
-            ("stale:unbekannt:new_login".to_string(), "neu gewinnt".to_string()),
+            (
+                "stale:unbekannt:new_login".to_string(),
+                "neu gewinnt".to_string()
+            ),
         ]
     );
 
@@ -311,7 +323,10 @@ async fn veraltete_fremde_einladung_gibt_den_login_frei_und_warnt() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    let warnings: Vec<_> = logs.lines().filter(|line| line.contains(" WARN ")).collect();
+    let warnings: Vec<_> = logs
+        .lines()
+        .filter(|line| line.contains(" WARN "))
+        .collect();
     assert_eq!(
         (
             rows,
@@ -358,27 +373,28 @@ async fn rename_schreibt_alias_historie_ohne_fruehere_logins_zu_verlieren() {
     rename_streamer_login(&pool, "520300019", "old_login", "new_login")
         .await
         .unwrap();
-    let after_first: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT login, is_current FROM twitch_login_aliases ORDER BY login",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let after_first: Vec<(String, bool)> =
+        sqlx::query_as("SELECT login, is_current FROM twitch_login_aliases ORDER BY login")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
 
     rename_streamer_login(&pool, "520300019", "new_login", "third_login")
         .await
         .unwrap();
-    let after_second: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT login, is_current FROM twitch_login_aliases ORDER BY login",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let after_second: Vec<(String, bool)> =
+        sqlx::query_as("SELECT login, is_current FROM twitch_login_aliases ORDER BY login")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(
         (after_first, after_second),
         (
-            vec![("new_login".to_string(), true), ("old_login".to_string(), false)],
+            vec![
+                ("new_login".to_string(), true),
+                ("old_login".to_string(), false)
+            ],
             vec![
                 ("new_login".to_string(), false),
                 ("old_login".to_string(), false),
@@ -424,11 +440,12 @@ async fn rename_behaelt_eigene_zeile_und_raeumt_veraltete_fremdzeile() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let fremder_login: String =
-        sqlx::query_scalar("SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '999'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let fremder_login: String = sqlx::query_scalar(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = '999'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     assert_eq!(
         (
@@ -601,7 +618,9 @@ async fn rename_streamer_login_rollt_bei_spaetem_db_fehler_alles_zurueck() {
     let error = rename_streamer_login(&pool, "520300019", "old_login", "new_login")
         .await
         .expect_err("später DB-Fehler muss den gesamten Rename abbrechen");
-    assert!(error.to_string().contains("simulierter später Schreibfehler"));
+    assert!(error
+        .to_string()
+        .contains("simulierter später Schreibfehler"));
 
     for (table, column) in [
         ("twitch_streamers", "twitch_login"),
@@ -610,13 +629,16 @@ async fn rename_streamer_login_rollt_bei_spaetem_db_fehler_alles_zurueck() {
         ("twitch_stream_sessions", "streamer_login"),
         ("twitch_raw_chat_ingest_health", "streamer_login"),
     ] {
-        let login: String = sqlx::query_scalar(&format!(
+        let login: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT {column} FROM {table} WHERE LOWER({column}) = 'old_login' LIMIT 1"
-        ))
+        )))
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(login, "old_login", "{table}.{column} wurde nicht zurückgerollt");
+        assert_eq!(
+            login, "old_login",
+            "{table}.{column} wurde nicht zurückgerollt"
+        );
     }
 }
 
@@ -668,7 +690,10 @@ async fn eigene_zeile_unter_dem_neuen_login_bricht_den_rename_nicht_ab() {
             live_login.as_str(),
             settings,
             cooldowns,
-            report.counts.for_table("twitch_engagement_settings").skipped,
+            report
+                .counts
+                .for_table("twitch_engagement_settings")
+                .skipped,
             report.counts.for_table("twitch_promo_cooldowns").skipped,
             logs.contains("Twitch-Rename übersprungen"),
         ),

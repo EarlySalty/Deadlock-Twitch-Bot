@@ -401,7 +401,9 @@ async fn laengster_zuschauer_session(
            ORDER BY ticks DESC, login ASC
            LIMIT $2"#
     );
-    let mut q = sqlx::query(&sql).bind(session_id).bind(TOP_N);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(session_id)
+        .bind(TOP_N);
     for login in ausgeschlossen {
         q = q.bind(login);
     }
@@ -434,7 +436,9 @@ async fn laengster_zuschauer_gesamt(
            ORDER BY ticks DESC, login ASC
            LIMIT $2"#
     );
-    let mut q = sqlx::query(&sql).bind(streamer_login).bind(TOP_N);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(streamer_login)
+        .bind(TOP_N);
     for login in ausgeschlossen {
         q = q.bind(login);
     }
@@ -474,7 +478,9 @@ async fn top_chatter_session(
            ORDER BY nachrichten DESC, login ASC
            LIMIT $2"#
     );
-    let mut q = sqlx::query(&sql).bind(session_id).bind(TOP_N);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(session_id)
+        .bind(TOP_N);
     for login in ausgeschlossen {
         q = q.bind(login);
     }
@@ -498,7 +504,9 @@ async fn top_chatter_gesamt(
            ORDER BY nachrichten DESC, login ASC
            LIMIT $2"#
     );
-    let mut q = sqlx::query(&sql).bind(streamer_login).bind(TOP_N);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(streamer_login)
+        .bind(TOP_N);
     for login in ausgeschlossen {
         q = q.bind(login);
     }
@@ -535,7 +543,9 @@ async fn haeufigster_zuschauer_gesamt(
            ORDER BY sessions DESC, login ASC
            LIMIT $2"#
     );
-    let mut q = sqlx::query(&sql).bind(streamer_login).bind(TOP_N);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(streamer_login)
+        .bind(TOP_N);
     for login in ausgeschlossen {
         q = q.bind(login);
     }
@@ -568,7 +578,7 @@ async fn lurker_session(
            FROM twitch_session_chatters
            WHERE session_id = $1 AND {bedingung}"#
     );
-    let mut q = sqlx::query(&sql).bind(session_id);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(session_id);
     for login in ausgeschlossen {
         q = q.bind(login);
     }
@@ -605,7 +615,7 @@ async fn lurker_gesamt(
            FROM je_session
            WHERE anwesend > 0"#
     );
-    let mut q = sqlx::query(&sql).bind(streamer_login);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(streamer_login);
     for login in ausgeschlossen {
         q = q.bind(login);
     }

@@ -22,8 +22,8 @@ use sqlx::PgPool;
 use tb_http_core::ApiError;
 
 use tb_analytics::admin_config::{
-    bulk_update_partner_flags, load_raid_history, load_streamer_config_snapshots, parse_admin_scope,
-    PartnerFlagUpdate,
+    bulk_update_partner_flags, load_raid_history, load_streamer_config_snapshots,
+    parse_admin_scope, PartnerFlagUpdate,
 };
 use tb_analytics::promo_mode::{evaluate_global_promo_mode, load_global_promo_mode};
 
@@ -54,8 +54,12 @@ fn normalize_admin_bool(value: Option<&Value>) -> Option<bool> {
 fn parse_object_body(body: &[u8]) -> Result<Value, ApiError> {
     match serde_json::from_slice::<Value>(body) {
         Ok(v @ Value::Object(_)) => Ok(v),
-        Ok(_) => Err(ApiError::bad_request_with_body(json!({ "error": "invalid_payload" }))),
-        Err(_) => Err(ApiError::bad_request_with_body(json!({ "error": "invalid_json" }))),
+        Ok(_) => Err(ApiError::bad_request_with_body(
+            json!({ "error": "invalid_payload" }),
+        )),
+        Err(_) => Err(ApiError::bad_request_with_body(
+            json!({ "error": "invalid_json" }),
+        )),
     }
 }
 
@@ -102,7 +106,9 @@ pub async fn config_overview_handler(
 
     let promo_config = load_global_promo_mode(&pool).await.map_err(db_error)?;
     let evaluation = evaluate_global_promo_mode(&promo_config.to_json(), None);
-    let snaps = load_streamer_config_snapshots(&pool, &scope).await.map_err(db_error)?;
+    let snaps = load_streamer_config_snapshots(&pool, &scope)
+        .await
+        .map_err(db_error)?;
     let history = load_raid_history(&pool).await.map_err(db_error)?;
     let mut raids = snaps.raid_snapshot();
     raids["history"] = json!(history);
@@ -133,7 +139,8 @@ pub async fn config_raids_handler(
 
     let raid_bot_enabled = normalize_admin_bool(payload.get("raid_bot_enabled"));
     let live_ping_enabled = normalize_admin_bool(payload.get("live_ping_enabled"));
-    let (Some(raid_bot_enabled), Some(live_ping_enabled)) = (raid_bot_enabled, live_ping_enabled) else {
+    let (Some(raid_bot_enabled), Some(live_ping_enabled)) = (raid_bot_enabled, live_ping_enabled)
+    else {
         return Err(ApiError::bad_request_with_body(json!({
             "error": "validation_failed",
             "validation": [
@@ -154,7 +161,9 @@ pub async fn config_raids_handler(
     )
     .await
     .map_err(db_error)?;
-    let snaps = load_streamer_config_snapshots(&pool, &scope).await.map_err(db_error)?;
+    let snaps = load_streamer_config_snapshots(&pool, &scope)
+        .await
+        .map_err(db_error)?;
 
     let mut raids = snaps.raid_snapshot();
     raids["raidBotEnabled"] = json!(raid_bot_enabled);
@@ -206,7 +215,9 @@ pub async fn config_chat_handler(
     )
     .await
     .map_err(db_error)?;
-    let snaps = load_streamer_config_snapshots(&pool, &scope).await.map_err(db_error)?;
+    let snaps = load_streamer_config_snapshots(&pool, &scope)
+        .await
+        .map_err(db_error)?;
 
     let mut chat = snaps.chat_snapshot();
     chat["silentBan"] = json!(silent_ban);
@@ -252,12 +263,30 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, status TEXT, \
              raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, \
@@ -286,7 +315,12 @@ mod tests {
         .unwrap();
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('a', 'a', 'active')")
             .execute(&pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../../../../migrations/20260912204500_community_announcements.sql")).execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20260912204500_community_announcements.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("CREATE TABLE twitch_promo_timer_settings (singleton boolean PRIMARY KEY, settings jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())")
             .execute(&pool).await.unwrap();
         Some(pool)
@@ -296,7 +330,10 @@ mod tests {
         let resp = r.into_response();
         let status = resp.status();
         let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     #[tokio::test]
@@ -317,11 +354,22 @@ mod tests {
             return;
         };
         // fehlende bools → validation_failed.
-        let (s, _) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(r#"{"scope":"active"}"#)).await).await;
+        let (s, _) = body_json(
+            config_raids_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Bytes::from(r#"{"scope":"active"}"#),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         // ungültiger scope → invalid_scope.
         let body = r#"{"raid_bot_enabled":true,"live_ping_enabled":true,"scope":"bogus"}"#;
-        let (s, j) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool), Bytes::from(body)).await).await;
+        let (s, j) = body_json(
+            config_raids_handler(DashboardAuthLevel::admin(), State(pool), Bytes::from(body)).await,
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_scope");
     }
@@ -332,7 +380,15 @@ mod tests {
             return;
         };
         let body = r#"{"raid_bot_enabled":true,"live_ping_enabled":false,"scope":"active"}"#;
-        let (s, j) = body_json(config_raids_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(body)).await).await;
+        let (s, j) = body_json(
+            config_raids_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Bytes::from(body),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["ok"], true);
         assert_eq!(j["updatedCount"], 1);
@@ -340,8 +396,12 @@ mod tests {
         assert_eq!(j["raids"]["livePingEnabled"], false);
         assert_eq!(j["raids"]["raidBotEnabledCount"], 1);
         // DB: aktiver Partner hat raid_bot_enabled=1.
-        let v: i32 = sqlx::query_scalar("SELECT raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='a'")
-            .fetch_one(&pool).await.unwrap();
+        let v: i32 = sqlx::query_scalar(
+            "SELECT raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(v, 1);
     }
 
@@ -359,7 +419,12 @@ mod tests {
         .await
         .unwrap();
         // scope=None → active. Das Testschema bildet die Migration bereits ab.
-        let r = config_overview_handler(DashboardAuthLevel::admin(), State(pool.clone()), Query(OverviewQuery { scope: None })).await;
+        let r = config_overview_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(OverviewQuery { scope: None }),
+        )
+        .await;
         let (s, j) = body_json(r).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["promo"]["status"], "standard"); // Default ohne gesetzten Modus
@@ -373,9 +438,27 @@ mod tests {
         assert!(j["csrf_token"].is_null());
 
         // unauth → auth_required, bad scope → 400.
-        let (s, _) = body_json(config_overview_handler(DashboardAuthLevel::None, State(pool.clone()), Query(OverviewQuery { scope: None })).await).await;
+        let (s, _) = body_json(
+            config_overview_handler(
+                DashboardAuthLevel::None,
+                State(pool.clone()),
+                Query(OverviewQuery { scope: None }),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
-        let (s, j) = body_json(config_overview_handler(DashboardAuthLevel::admin(), State(pool), Query(OverviewQuery { scope: Some("bogus".into()) })).await).await;
+        let (s, j) = body_json(
+            config_overview_handler(
+                DashboardAuthLevel::admin(),
+                State(pool),
+                Query(OverviewQuery {
+                    scope: Some("bogus".into()),
+                }),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], "invalid_scope");
     }
@@ -386,12 +469,23 @@ mod tests {
             return;
         };
         let body = r#"{"silent_ban":true,"silent_raid":true,"scope":"active"}"#;
-        let (s, j) = body_json(config_chat_handler(DashboardAuthLevel::admin(), State(pool.clone()), Bytes::from(body)).await).await;
+        let (s, j) = body_json(
+            config_chat_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Bytes::from(body),
+            )
+            .await,
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["chat"]["silentBan"], true);
         assert_eq!(j["chat"]["allSilentRaid"], true);
-        let v: i32 = sqlx::query_scalar("SELECT silent_ban FROM twitch_partners WHERE twitch_user_id='a'")
-            .fetch_one(&pool).await.unwrap();
+        let v: i32 =
+            sqlx::query_scalar("SELECT silent_ban FROM twitch_partners WHERE twitch_user_id='a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(v, 1);
     }
 }
@@ -467,17 +561,19 @@ mod promo_timer_tests {
         use tower::ServiceExt;
         let router = crate::build_admin_config_router(db.pool.clone(), String::new());
         let response = router
-            .oneshot(axum::http::Request::builder()
-                .method("POST")
-                .uri("/twitch/api/admin/config/promo-timers")
-                .header("host", "dashboard.example.com")
-                .header("origin", "https://foreign.example.com")
-                .header("content-type", "application/json")
-                .header("x-csrf-token", "synthetic-test-token")
-                .body(axum::body::Body::from(
-                    serde_json::to_vec(&clientbody).unwrap(),
-                ))
-                .unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/twitch/api/admin/config/promo-timers")
+                    .header("host", "dashboard.example.com")
+                    .header("origin", "https://foreign.example.com")
+                    .header("content-type", "application/json")
+                    .header("x-csrf-token", "synthetic-test-token")
+                    .body(axum::body::Body::from(
+                        serde_json::to_vec(&clientbody).unwrap(),
+                    ))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);

@@ -150,11 +150,13 @@ async fn public_profile_prefers_twitch_avatar_and_caps_busy_calendar_days() {
         display_name: "Alice".into(),
         description: "Twitch Bio".into(),
         profile_image_url: avatar.into(),
-        banner_url: "https://static-cdn.jtvnw.net/jtv_user_pictures/alice-channel_offline_image.png".into(),
+        banner_url:
+            "https://static-cdn.jtvnw.net/jtv_user_pictures/alice-channel_offline_image.png".into(),
         live: Some(TwitchLiveProfile {
             title: "Ranked mit der Community".into(),
             game_name: "Deadlock".into(),
-            thumbnail_url: "https://static-cdn.jtvnw.net/previews-ttv/live_user_alice-960x540.jpg".into(),
+            thumbnail_url: "https://static-cdn.jtvnw.net/previews-ttv/live_user_alice-960x540.jpg"
+                .into(),
         }),
         clips: vec![TwitchClipProfile {
             id: "clip1".into(),
@@ -351,9 +353,9 @@ async fn every_disconnect_flag_hides_all_public_surfaces_without_erasing_content
         "technical_pause_reason='bot_banned'",
         "technical_pause_reason='token_error'",
     ] {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE twitch_partners SET {change} WHERE twitch_user_id='1'"
-        ))
+        )))
         .execute(&db.pool)
         .await
         .unwrap();

@@ -116,7 +116,7 @@ pub async fn collect_ai_context(
 
     // 1. Overview-KPIs.
     let ov: OverviewRow =
-        sqlx::query_as(&format!(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*)::bigint, \
                     ROUND((SUM(duration_seconds) / 3600.0)::numeric, 1)::float8, \
                     ROUND(AVG(avg_viewers)::numeric, 1)::float8, \
@@ -127,14 +127,14 @@ pub async fn collect_ai_context(
                     ROUND(AVG(COALESCE(unique_chatters, 0))::numeric, 0)::float8 \
                FROM twitch_stream_sessions \
               WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf}"
-        ))
+        )))
         .bind(streamer)
         .bind(since)
         .fetch_one(pool)
         .await?;
 
     // 2. Letzte 20 Sessions.
-    let sessions: Vec<SessionRow> = sqlx::query_as(&format!(
+    let sessions: Vec<SessionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT started_at::date, stream_title, \
                     ROUND((duration_seconds / 3600.0)::numeric, 2)::float8, \
                     ROUND(avg_viewers::numeric, 1)::float8, peak_viewers, \
@@ -144,50 +144,48 @@ pub async fn collect_ai_context(
                FROM twitch_stream_sessions \
               WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
               ORDER BY started_at DESC LIMIT 20"
-    ))
+    )))
     .bind(streamer)
     .bind(since)
     .fetch_all(pool)
     .await?;
 
     // 3. Wochentags-Performance.
-    let weekday: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(&format!(
+    let weekday: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT EXTRACT(DOW FROM started_at)::int, COUNT(*)::bigint, \
                 ROUND(AVG(avg_viewers)::numeric, 1)::float8, ROUND(AVG(peak_viewers)::numeric, 1)::float8 \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
           GROUP BY 1 ORDER BY AVG(avg_viewers) DESC"
-    ))
+    )))
     .bind(streamer)
     .bind(since)
     .fetch_all(pool)
     .await?;
 
     // 4./5. Beste/schlechteste 5 Sessions.
-    let best: Vec<RankedSessionRow> =
-        sqlx::query_as(&format!(
-            "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
+    let best: Vec<RankedSessionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
                 ROUND((retention_10m * 100)::numeric, 1)::float8, started_at::date \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
           ORDER BY avg_viewers DESC NULLS LAST LIMIT 5"
-        ))
-        .bind(streamer)
-        .bind(since)
-        .fetch_all(pool)
-        .await?;
-    let worst: Vec<RankedSessionRow> =
-        sqlx::query_as(&format!(
-            "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
+    )))
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    let worst: Vec<RankedSessionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT COALESCE(stream_title, ''), avg_viewers::float8, peak_viewers, \
                 ROUND((retention_10m * 100)::numeric, 1)::float8, started_at::date \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
           ORDER BY avg_viewers ASC NULLS LAST LIMIT 5"
-        ))
-        .bind(streamer)
-        .bind(since)
-        .fetch_all(pool)
-        .await?;
+    )))
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
 
     // 6. Game-Breakdown aus exp_sessions (best-effort; Tabelle evtl. fehlend).
     let game_gf = if game_filter == "deadlock" {
@@ -195,29 +193,28 @@ pub async fn collect_ai_context(
     } else {
         ""
     };
-    let game_rows: Vec<GameRow> =
-        sqlx::query_as(&format!(
-            "SELECT COALESCE(game_name, 'Unbekannt'), COUNT(*)::bigint, \
+    let game_rows: Vec<GameRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT COALESCE(game_name, 'Unbekannt'), COUNT(*)::bigint, \
                 ROUND(AVG(avg_viewers)::numeric, 1)::float8, MAX(peak_viewers), \
                 ROUND(AVG(duration_min)::numeric, 1)::float8 \
            FROM exp_sessions \
           WHERE LOWER(streamer) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{game_gf} \
           GROUP BY game_name ORDER BY AVG(avg_viewers) DESC LIMIT 10"
-        ))
-        .bind(streamer)
-        .bind(&since_iso)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    )))
+    .bind(streamer)
+    .bind(&since_iso)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     // 7. Wöchentlicher Follower-Trend.
-    let trend: Vec<(NaiveDate, i64, Option<i64>)> = sqlx::query_as(&format!(
+    let trend: Vec<(NaiveDate, i64, Option<i64>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT DATE_TRUNC('week', started_at)::date, COUNT(*)::bigint, \
                 SUM(CASE WHEN follower_delta > 0 THEN follower_delta ELSE 0 END)::bigint \
            FROM twitch_stream_sessions \
           WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL{gf} \
           GROUP BY 1 ORDER BY 1"
-    ))
+    )))
     .bind(streamer)
     .bind(since)
     .fetch_all(pool)

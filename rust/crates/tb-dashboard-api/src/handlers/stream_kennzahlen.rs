@@ -273,7 +273,7 @@ mod tests {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let schema = crate::auth::session::test_schema_name("stream_kennzahlen");
         let admin = PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;
@@ -360,9 +360,7 @@ mod tests {
         if let Some(t) = token {
             headers.insert(INTERNAL_TOKEN_HEADER, t.parse().unwrap());
         }
-        let connect = OptionalConnectInfo(
-            von.map(|ip| ConnectInfo(SocketAddr::from((ip, 40000)))),
-        );
+        let connect = OptionalConnectInfo(von.map(|ip| ConnectInfo(SocketAddr::from((ip, 40000)))));
         let antwort = internal_stream_kennzahlen_handler(
             State(pool.clone()),
             connect,
@@ -416,7 +414,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["session_id"], 0);
         assert_eq!(body["zuschauer"]["jetzt"], 0);
-        assert!(body["top_chatter"]["session"].as_array().unwrap().is_empty());
+        assert!(body["top_chatter"]["session"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

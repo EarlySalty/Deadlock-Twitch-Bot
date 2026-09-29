@@ -38,8 +38,15 @@ pub struct BrokerDiscordDirectory {
 }
 
 impl BrokerDiscordDirectory {
-    pub fn from_config(relay: Option<BrokerRelay>, config: &tb_config::discord::OAuthFollowup) -> Self {
-        Self { relay, guild_id: Some(config.guild_id), role_id: config.streamer_role_id }
+    pub fn from_config(
+        relay: Option<BrokerRelay>,
+        config: &tb_config::discord::OAuthFollowup,
+    ) -> Self {
+        Self {
+            relay,
+            guild_id: Some(config.guild_id),
+            role_id: config.streamer_role_id,
+        }
     }
 
     /// Rollen-Entzug mit Ausgang. Meldet, ob die Rolle wirklich weg ist —
@@ -170,7 +177,9 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
         // Ausgang hier bewusst verworfen: dieser Pfad (Deautorisierung) ist
         // best-effort und hat keinen Aufrufer, der ihn melden könnte. Wer den
         // Ausgang braucht, nutzt `revoke_streamer_role_detailed`.
-        let _ = self.revoke_streamer_role_detailed(discord_user_id, reason).await;
+        let _ = self
+            .revoke_streamer_role_detailed(discord_user_id, reason)
+            .await;
     }
 }
 
@@ -182,11 +191,7 @@ impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
         <Self as DiscordDirectoryPort>::grant_streamer_role(self, discord_user_id, reason).await
     }
 
-    async fn revoke_streamer_role(
-        &self,
-        discord_user_id: &str,
-        reason: &str,
-    ) -> RoleRevokeOutcome {
+    async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) -> RoleRevokeOutcome {
         self.revoke_streamer_role_detailed(discord_user_id, reason)
             .await
     }
@@ -253,9 +258,8 @@ impl ModeratorInstallPort for HelixModeratorInstaller {
                 Err(error)
             }
             Err(e) => {
-                let error = format!(
-                    "Error adding bot as moderator in channel {broadcaster_id}: {e}"
-                );
+                let error =
+                    format!("Error adding bot as moderator in channel {broadcaster_id}: {e}");
                 tracing::error!("{error}");
                 Err(error)
             }
@@ -301,7 +305,12 @@ impl LegacyChatGreeter {
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())?;
-        let base_url = tb_config::runtime::settings().ok()?.bot.legacy_greeter_base_url.trim_end_matches('/').to_string();
+        let base_url = tb_config::runtime::settings()
+            .ok()?
+            .bot
+            .legacy_greeter_base_url
+            .trim_end_matches('/')
+            .to_string();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -409,8 +418,13 @@ impl SignupTagEnforcePort for AnalyticsSignupTagBlock {
         twitch_login: &str,
         tags: &[String],
     ) -> Result<(), sqlx::Error> {
-        tb_analytics::partner_signup_tag_block::enforce(&self.pool, twitch_user_id, twitch_login, tags)
-            .await?;
+        tb_analytics::partner_signup_tag_block::enforce(
+            &self.pool,
+            twitch_user_id,
+            twitch_login,
+            tags,
+        )
+        .await?;
         Ok(())
     }
 }
@@ -453,7 +467,10 @@ pub fn build_partner_setup_service(
     Some(Arc::new(
         PartnerSetupService::new(
             pool.clone(),
-            Arc::new(BrokerDiscordDirectory::from_config(relay, &config.discord.oauth_followup)),
+            Arc::new(BrokerDiscordDirectory::from_config(
+                relay,
+                &config.discord.oauth_followup,
+            )),
             Arc::new(HelixModeratorInstaller::new(helix)),
             greeter,
             bot_user_id,
@@ -472,7 +489,10 @@ mod tests {
     /// Konfiguration muss deshalb immer einen tragen.
     #[test]
     fn from_config_hat_immer_eine_guild() {
-        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
+        let directory = BrokerDiscordDirectory::from_config(
+            None,
+            &tb_config::discord::OAuthFollowup::default(),
+        );
         assert!(
             directory.guild_id.is_some(),
             "ohne Guild-Kandidat wird jeder Rollen-Entzug stumm übersprungen"
@@ -482,7 +502,10 @@ mod tests {
     /// Ohne Relay ist der Entzug nicht „erledigt", sondern übersprungen.
     #[tokio::test]
     async fn ohne_relay_wird_der_entzug_als_uebersprungen_gemeldet() {
-        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
+        let directory = BrokerDiscordDirectory::from_config(
+            None,
+            &tb_config::discord::OAuthFollowup::default(),
+        );
         let outcome = directory
             .revoke_streamer_role_detailed("12345", "test")
             .await;
@@ -498,7 +521,10 @@ mod tests {
     /// Ausgang — der Handler darf nicht an einer zweiten Wahrheit hängen.
     #[tokio::test]
     async fn trait_weg_liefert_denselben_ausgang() {
-        let directory = BrokerDiscordDirectory::from_config(None, &tb_config::discord::OAuthFollowup::default());
+        let directory = BrokerDiscordDirectory::from_config(
+            None,
+            &tb_config::discord::OAuthFollowup::default(),
+        );
         let via_trait =
             tb_internal_api::DiscordRolePort::revoke_streamer_role(&directory, "12345", "test")
                 .await;

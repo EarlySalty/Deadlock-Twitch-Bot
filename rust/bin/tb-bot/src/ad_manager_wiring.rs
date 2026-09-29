@@ -230,18 +230,20 @@ async fn process_channel(
                 .await?;
             let recent = store.quiet_messages(session, now, 1).await?;
             // Missing presence is unknown, not a safe advertising window.
-            let steam_match_state =
-                match store.steam_match_summary(&channel.twitch_user_id, now).await {
-                    Ok(summary) => summary.state,
-                    Err(error) => {
-                        tracing::debug!(
-                            %error,
-                            login = %channel.twitch_login,
-                            "Werbemanager: Steam-Match-Status nicht lesbar; automatische Werbestarts bleiben gesperrt"
-                        );
-                        None
-                    }
-                };
+            let steam_match_state = match store
+                .steam_match_summary(&channel.twitch_user_id, now)
+                .await
+            {
+                Ok(summary) => summary.state,
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        login = %channel.twitch_login,
+                        "Werbemanager: Steam-Match-Status nicht lesbar; automatische Werbestarts bleiben gesperrt"
+                    );
+                    None
+                }
+            };
             let timing = match steam_match_state.as_ref() {
                 Some(state) => {
                     store

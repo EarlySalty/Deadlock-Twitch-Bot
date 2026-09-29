@@ -178,7 +178,7 @@ async fn window_count(
     offset_min: i32,
 ) -> Result<i32, sqlx::Error> {
     // dyn: Bot-Filter erzeugt eine variable NOT-IN-Placeholderliste.
-    let count: i64 = sqlx::query_scalar(&format!(
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id)) \
          FROM twitch_session_chatters \
          WHERE session_id = $1 \
@@ -191,7 +191,7 @@ async fn window_count(
         offset_min = offset_min,
         poll_seconds = CHATTERS_POLL_INTERVAL_SECONDS,
         bot = bot_not_in_clause("chatter_login", 3),
-    ))
+    )))
     .bind(target_session_id)
     .bind(executed_at)
     .bind_bots()
@@ -216,7 +216,7 @@ async fn count_known_from_raider(
     raid: &RaidRow,
 ) -> Result<i32, sqlx::Error> {
     // dyn: Bot-Filter erzeugt eine variable NOT-IN-Placeholderliste.
-    let count: i64 = sqlx::query_scalar(&format!(
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(DISTINCT sc.chatter_login) \
          FROM twitch_session_chatters sc \
          JOIN twitch_chatter_rollup r \
@@ -226,7 +226,7 @@ async fn count_known_from_raider(
            AND sc.last_seen_at >= $2 \
            {bot}",
         bot = bot_not_in_clause("sc.chatter_login", 4),
-    ))
+    )))
     .bind(target_session_id)
     .bind(raid.executed_at)
     .bind(&raid.from_login)
@@ -245,7 +245,7 @@ async fn count_new_to_target(
     raid: &RaidRow,
 ) -> Result<i32, sqlx::Error> {
     // dyn: Bot-Filter erzeugt eine variable NOT-IN-Placeholderliste.
-    let count: i64 = sqlx::query_scalar(&format!(
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) \
          FROM twitch_session_chatters sc \
          WHERE sc.session_id = $1 \
@@ -258,7 +258,7 @@ async fn count_new_to_target(
            ) \
            {bot}",
         bot = bot_not_in_clause("sc.chatter_login", 4),
-    ))
+    )))
     .bind(target_session_id)
     .bind(raid.executed_at)
     .bind(&raid.to_login)
@@ -277,7 +277,7 @@ async fn count_new_chatters(
     target_session_id: i64,
     raid: &RaidRow,
 ) -> Result<i32, sqlx::Error> {
-    let count: i64 = sqlx::query_scalar(&format!(
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) \
          FROM twitch_session_chatters sc \
          WHERE sc.session_id = $1 \
@@ -291,7 +291,7 @@ async fn count_new_chatters(
            ) \
            {bot}",
         bot = bot_not_in_clause("sc.chatter_login", 4),
-    ))
+    )))
     .bind(target_session_id)
     .bind(raid.executed_at)
     .bind(&raid.to_login)

@@ -37,11 +37,13 @@ async fn migrated_pool(db_name: &str) -> Option<PgPool> {
         .connect(&dsn)
         .await
         .expect("admin connect");
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE DATABASE {db_name}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
         .execute(&admin)
         .await
         .unwrap();
@@ -127,14 +129,16 @@ async fn backfill_loest_kanaele_auf_und_laesst_mehrdeutiges_offen() {
     .await
     .ok();
 
-    sqlx::raw_sql(BACKFILL).execute(&pool).await.expect("Backfill erneut anwenden");
+    sqlx::raw_sql(BACKFILL)
+        .execute(&pool)
+        .await
+        .expect("Backfill erneut anwenden");
 
-    let sessions: Vec<(i64, Option<String>)> = sqlx::query_as(
-        "SELECT id, twitch_user_id FROM twitch_stream_sessions ORDER BY id",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let sessions: Vec<(i64, Option<String>)> =
+        sqlx::query_as("SELECT id, twitch_user_id FROM twitch_stream_sessions ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(
         sessions,
         vec![
@@ -187,18 +191,27 @@ async fn backfill_stolpert_nicht_ueber_verwaiste_raid_retention_zeilen() {
             (id, executed_at, from_broadcaster_login, from_broadcaster_id,
              to_broadcaster_login, to_broadcaster_id)
          VALUES (9001, NOW(), 'derechtecoolys', '520300019', 'ziel', '777')",
-    ).execute(&pool).await.unwrap();
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO twitch_raid_retention
             (raid_id, executed_at, from_broadcaster_login, to_broadcaster_login, viewer_count_sent)
          SELECT 9001, executed_at, 'derechtecoolys', 'ziel', 5
            FROM twitch_raid_history WHERE id = 9001",
-    ).execute(&pool).await.unwrap();
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO twitch_raid_retention
             (raid_id, executed_at, from_broadcaster_login, to_broadcaster_login, viewer_count_sent)
          VALUES (9999, NOW(), 'verwaist', 'auchverwaist', 3)",
-    ).execute(&pool).await.unwrap();
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "ALTER TABLE twitch_raid_retention ADD CONSTRAINT twitch_raid_retention_raid_history_ref_fkey
            FOREIGN KEY (raid_id, executed_at) REFERENCES twitch_raid_history(id, executed_at)

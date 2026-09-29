@@ -117,7 +117,7 @@ async fn category_storage_deletions_rollups_preservation_and_report() {
 
     let day = (now - Duration::days(100)).date_naive();
     let name = format!("category_chat_messages_p{}", day.format("%Y%m%d"));
-    sqlx::raw_sql(&format!("CREATE TABLE {name} PARTITION OF category_chat_messages FOR VALUES FROM ('{day} 00:00:00+00') TO ('{} 00:00:00+00'); INSERT INTO category_chat_dirty VALUES('{day} 00:00:00+00','old','de');",day.succ_opt().unwrap())).execute(pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE TABLE {name} PARTITION OF category_chat_messages FOR VALUES FROM ('{day} 00:00:00+00') TO ('{} 00:00:00+00'); INSERT INTO category_chat_dirty VALUES('{day} 00:00:00+00','old','de');",day.succ_opt().unwrap()))).execute(pool).await.unwrap();
     category::flush_rollups(pool, 100).await.unwrap();
     for days in [1, 90, 91, 1000] {
         let dropped: i32 =

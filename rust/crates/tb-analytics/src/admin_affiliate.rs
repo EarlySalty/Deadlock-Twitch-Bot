@@ -227,7 +227,7 @@ pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
          FROM affiliate_accounts a \
          LEFT JOIN affiliate_pii pii ON pii.twitch_login = a.twitch_login {LIST_CLAIM_COMM_JOINS}"
     );
-    match sqlx::query_as::<_, ListRow>(&full_sql)
+    match sqlx::query_as::<_, ListRow>(sqlx::AssertSqlSafe(full_sql))
         .fetch_all(pool)
         .await
     {
@@ -242,7 +242,7 @@ pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
                 claim_stats.last_claim_at, 'unknown', 0::bigint \
          FROM affiliate_accounts a {LIST_CLAIM_COMM_JOINS}"
     );
-    match sqlx::query_as::<_, ListRow>(&no_pii_sql)
+    match sqlx::query_as::<_, ListRow>(sqlx::AssertSqlSafe(no_pii_sql))
         .fetch_all(pool)
         .await
     {
@@ -447,7 +447,7 @@ pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::E
          JOIN affiliate_accounts a ON a.twitch_login = g.affiliate_twitch_login \
          LEFT JOIN affiliate_pii pii ON pii.twitch_login = g.affiliate_twitch_login {GUTSCHRIFT_ORDER}"
     );
-    let rows = match sqlx::query_as::<_, GutschriftRow>(&full_sql)
+    let rows = match sqlx::query_as::<_, GutschriftRow>(sqlx::AssertSqlSafe(full_sql))
         .fetch_all(pool)
         .await
     {
@@ -459,7 +459,7 @@ pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::E
                  FROM affiliate_gutschriften g \
                  JOIN affiliate_accounts a ON a.twitch_login = g.affiliate_twitch_login {GUTSCHRIFT_ORDER}"
             );
-            match sqlx::query_as::<_, GutschriftRow>(&no_pii_sql)
+            match sqlx::query_as::<_, GutschriftRow>(sqlx::AssertSqlSafe(no_pii_sql))
                 .fetch_all(pool)
                 .await
             {
@@ -567,7 +567,7 @@ pub async fn load_gutschriften_for_login(
                 NULL::text AS ust_status, 0::bigint AS has_pii \
          FROM affiliate_gutschriften g WHERE g.affiliate_twitch_login = $1 {GUTSCHRIFT_ORDER}"
     );
-    let documents = match sqlx::query_as::<_, GutschriftRow>(&list_sql)
+    let documents = match sqlx::query_as::<_, GutschriftRow>(sqlx::AssertSqlSafe(list_sql))
         .bind(login)
         .fetch_all(pool)
         .await

@@ -115,7 +115,10 @@ struct SmalltalkConfig {
 
 impl SmalltalkConfig {
     fn from_config(config: &tb_config::operations::BotOperations) -> Self {
-        Self { enabled: config.smalltalk_loop_enabled, live_send: config.smalltalk_loop_live_send }
+        Self {
+            enabled: config.smalltalk_loop_enabled,
+            live_send: config.smalltalk_loop_live_send,
+        }
     }
 
     #[cfg(test)]

@@ -126,7 +126,10 @@ pub async fn follower_funnel_handler(
         let ph: Vec<String> = (3..=(KNOWN_CHAT_BOTS.len() + 2))
             .map(|i| format!("${i}"))
             .collect();
-        format!("(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')", ph.join(", "))
+        format!(
+            "(sc.chatter_login NOT IN ({}) AND LOWER(sc.chatter_login) !~ '^justinfan[0-9]+$')",
+            ph.join(", ")
+        )
     };
     let chatter_sql = format!(
         r#"SELECT
@@ -144,7 +147,9 @@ pub async fn follower_funnel_handler(
              AND s.ended_at IS NOT NULL
              AND {bot_clause}"#
     );
-    let mut cq = sqlx::query(&chatter_sql).bind(since).bind(&streamer);
+    let mut cq = sqlx::query(sqlx::AssertSqlSafe(chatter_sql))
+        .bind(since)
+        .bind(&streamer);
     for bot in KNOWN_CHAT_BOTS {
         cq = cq.bind(*bot);
     }
@@ -319,11 +324,13 @@ mod idor_tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
