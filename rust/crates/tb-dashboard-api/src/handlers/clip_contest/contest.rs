@@ -1,10 +1,7 @@
 //! Transactional contest rules. All writes to one month use the same lock.
 use super::*;
 
-const ACTIVE_PARTNER_SQL: &str = "SELECT twitch_login FROM twitch_partners
-        WHERE twitch_user_id=$1 AND departnered_at IS NULL AND admin_archived_at IS NULL
-        AND COALESCE(status,'')='active' AND COALESCE(manual_partner_opt_out,0)=0
-        AND COALESCE(technical_pause_reason,'')='' ORDER BY id DESC LIMIT 1 FOR SHARE";
+const ACTIVE_PARTNER_SQL: &str = "SELECT twitch_login FROM twitch_clip_contest_active_partner($1)";
 
 #[derive(Deserialize, Default)]
 pub struct CurrentQuery {
@@ -185,7 +182,11 @@ async fn finalize_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
         .await?;
     let current = contest_clock(now).month;
     sqlx::query(
-        "INSERT INTO twitch_clip_contest_months (contest_month) VALUES ($1) ON CONFLICT DO NOTHING",
+        "INSERT INTO twitch_clip_contest_months (contest_month)
+         SELECT month::date FROM generate_series(
+             COALESCE((SELECT MIN(contest_month) FROM twitch_clip_contest_months), $1::date),
+             $1::date, INTERVAL '1 month') AS month
+         ON CONFLICT DO NOTHING",
     )
     .bind(current)
     .execute(pool)
@@ -365,14 +366,15 @@ pub async fn session_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     state: Option<Extension<DashboardAuthState>>,
+    central: Option<Extension<ContestCentralPool>>,
     headers: HeaderMap,
 ) -> Response {
     let clock = contest_clock(Utc::now());
     let identity = submit_identity(&pool, &headers, &auth, state.as_ref().map(|e| &e.0)).await;
     let discord = identity.as_ref().filter(|i| i.provider == "discord");
-    let eligibility = match discord {
-        Some(i) => discord_eligibility(&i.user_id).await.ok(),
-        None => None,
+    let eligibility = match (discord, central) {
+        (Some(i), Some(central)) => discord_eligibility(&central.0 .0, &i.user_id).await.ok(),
+        _ => None,
     };
     let votes_used = if let Some(i) = discord {
         match sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM twitch_clip_contest_votes WHERE contest_month=$1 AND voter_discord_id=$2")
@@ -423,6 +425,7 @@ async fn persist_submission(
     clip: &HelixClip,
     channel: &str,
     clip_db_id: i64,
+    valid_until: DateTime<Utc>,
 ) -> Result<i64, Response> {
     let used: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM twitch_clip_contest_submissions WHERE contest_month=$1
@@ -444,18 +447,20 @@ async fn persist_submission(
         (contest_month,clip_db_id,twitch_clip_id,clip_url,clip_title,clip_thumbnail_url,
         broadcaster_twitch_id,broadcaster_login,broadcaster_name,creator_twitch_id,game_id,clip_created_at,
         submitter_provider,submitter_user_id,submitter_person_key,submitter_aliases,submitter_display_name,submission_slot)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,LOWER($8),$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        SELECT $1,$2,$3,$4,$5,$6,$7,LOWER($8),$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+        WHERE clock_timestamp() < $19
         ON CONFLICT (contest_month,twitch_clip_id) DO NOTHING RETURNING id,submitted_at")
         .bind(month).bind(clip_db_id).bind(&clip.clip_id).bind(&clip.url).bind(&clip.title).bind(&clip.thumbnail_url)
         .bind(&clip.broadcaster_id).bind(channel).bind(&clip.broadcaster_name).bind(&clip.creator_id)
         .bind(&clip.game_id).bind(clip.created_at).bind(identity.provider).bind(&identity.user_id)
         .bind(&identity.person_key).bind(&identity.aliases).bind(&identity.display_name).bind((used+1) as i16)
+        .bind(valid_until)
         .fetch_optional(&mut **tx).await.map_err(|_| unavailable())?;
     let (id, submitted_at) = row.ok_or_else(|| {
         json_error(
             StatusCode::CONFLICT,
-            "clip_already_submitted",
-            "Dieser Clip ist in diesem Monat bereits eingereicht.",
+            "submission_not_saved",
+            "Die Einreichungsfrist ist abgelaufen oder dieser Clip ist bereits eingereicht.",
         )
     })?;
     emit_effort_event(
@@ -639,8 +644,16 @@ pub async fn submit_handler(
             "Die Einreichungsphase ist gerade zu Ende gegangen.",
         );
     }
-    let id = match persist_submission(&mut tx, clock.month, &identity, &clip, &channel, clip_db_id)
-        .await
+    let id = match persist_submission(
+        &mut tx,
+        clock.month,
+        &identity,
+        &clip,
+        &channel,
+        clip_db_id,
+        clock.phase_ends_at,
+    )
+    .await
     {
         Ok(id) => id,
         Err(response) => return response,
@@ -657,6 +670,7 @@ async fn persist_vote(
     discord_id: &str,
     aliases: &[String],
     id: i64,
+    valid_until: DateTime<Utc>,
 ) -> Result<i64, Response> {
     let row = sqlx::query("SELECT * FROM twitch_clip_contest_submissions WHERE id=$1 AND contest_month=$2 AND hidden_at IS NULL")
         .bind(id).bind(month).fetch_optional(&mut **tx).await.map_err(|_| unavailable())?
@@ -686,14 +700,24 @@ async fn persist_vote(
             "Du hast deine fünf Stimmen für diesen Monat bereits vergeben.",
         ));
     }
-    sqlx::query("INSERT INTO twitch_clip_contest_votes (submission_id,voter_discord_id,contest_month,vote_slot) VALUES ($1,$2,$3,$4)")
-        .bind(id).bind(discord_id).bind(month).bind((used+1) as i16).execute(&mut **tx).await.map_err(|_| unavailable())?;
+    let written = sqlx::query("INSERT INTO twitch_clip_contest_votes (submission_id,voter_discord_id,contest_month,vote_slot)
+        SELECT $1,$2,$3,$4 WHERE clock_timestamp() < $5")
+        .bind(id).bind(discord_id).bind(month).bind((used+1) as i16).bind(valid_until)
+        .execute(&mut **tx).await.map_err(|_| unavailable())?;
+    if written.rows_affected() == 0 {
+        return Err(json_error(
+            StatusCode::CONFLICT,
+            "voting_closed",
+            "Die Abstimmung ist beendet.",
+        ));
+    }
     Ok(used + 1)
 }
 
 pub async fn vote_handler(
     State(pool): State<PgPool>,
     state: Option<Extension<DashboardAuthState>>,
+    central: Option<Extension<ContestCentralPool>>,
     headers: HeaderMap,
     Json(body): Json<VoteBody>,
 ) -> Response {
@@ -719,7 +743,10 @@ pub async fn vote_handler(
             "Zum Abstimmen musst du mit Discord angemeldet sein.",
         );
     };
-    let eligibility = match discord_eligibility(&discord.user_id).await {
+    let Some(central) = central else {
+        return unavailable();
+    };
+    let eligibility = match discord_eligibility(&central.0 .0, &discord.user_id).await {
         Ok(e) => e,
         Err(response) => return response,
     };
@@ -751,6 +778,7 @@ pub async fn vote_handler(
         &discord.user_id,
         &aliases,
         body.submission_id,
+        clock.phase_ends_at,
     )
     .await
     {
@@ -801,6 +829,8 @@ pub async fn admin_submissions_handler(
 pub async fn hide_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    state: Option<Extension<DashboardAuthState>>,
+    admin_session: Option<Extension<crate::auth::level::AuthenticatedAdminSessionId>>,
     headers: HeaderMap,
     Json(body): Json<HideBody>,
 ) -> Response {
@@ -818,18 +848,33 @@ pub async fn hide_handler(
             "Diese Anfrage wurde abgelehnt.",
         );
     }
-    if body.reason.chars().count() > 500 {
+    if body.reason.trim().is_empty() || body.reason.chars().count() > 500 {
         return json_error(
             StatusCode::BAD_REQUEST,
-            "reason_too_long",
-            "Die Begründung darf höchstens 500 Zeichen haben.",
+            "invalid_reason",
+            "Bitte gib eine Begründung mit höchstens 500 Zeichen an.",
         );
     }
-    let actor = match auth {
-        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+    let discord_actor = match (state, admin_session) {
+        (Some(state), Some(session)) => match state.load_admin_session_user_id(&session.0 .0).await
+        {
+            Ok(Some(id)) => Some(format!("discord:{id}")),
+            _ => return unavailable(),
+        },
+        _ => None,
+    };
+    let actor = match (discord_actor, auth) {
+        (Some(actor), _) => actor,
+        (None, DashboardAuthLevel::Admin { actor: Some(actor) }) => {
             format!("twitch:{}", actor.twitch_user_id)
         }
-        _ => "authenticated-admin".into(),
+        _ => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "admin_identity_required",
+                "Bitte melde dich für diese Aktion persönlich an.",
+            )
+        }
     };
     let month: NaiveDate = match sqlx::query_scalar(
         "SELECT contest_month FROM twitch_clip_contest_submissions WHERE id=$1",

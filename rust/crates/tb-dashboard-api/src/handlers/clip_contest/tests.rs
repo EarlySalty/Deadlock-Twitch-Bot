@@ -1,5 +1,14 @@
 use super::*;
 use base64::Engine;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use std::str::FromStr;
+
+mod test_database {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/database.rs"
+    ));
+}
 
 fn instant(raw: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(raw)
@@ -70,11 +79,11 @@ fn write_origin_is_required_and_cross_site_is_rejected() {
 }
 
 async fn fixture() -> Option<(PgPool, PgPool, String)> {
-    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+    if !test_database::required() {
         eprintln!("clip contest PostgreSQL test not run: TB_TEST_REQUIRE_DB=1 required");
         return None;
     }
-    let dsn = std::env::var("TB_TEST_DATABASE_URL").expect("disposable test DSN required");
+    let dsn = test_database::database_url().expect("disposable test DSN required");
     let admin = PgPool::connect(&dsn)
         .await
         .expect("test PostgreSQL must be reachable");
@@ -178,19 +187,35 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
             identity(&format!("10{n}"))
         };
         ids.push(
-            persist_submission(&mut tx, month, &owner, &clip(n), "testchannel", shared)
-                .await
-                .unwrap(),
+            persist_submission(
+                &mut tx,
+                month,
+                &owner,
+                &clip(n),
+                "testchannel",
+                shared,
+                Utc::now() + Duration::days(1),
+            )
+            .await
+            .unwrap(),
         );
         tx.commit().await.unwrap();
     }
     let mut tx = pool.begin().await.unwrap();
     lock_month(&mut tx, month).await.unwrap();
     assert_eq!(
-        persist_submission(&mut tx, month, &identity("100"), &clip(9), "testchannel", 1)
-            .await
-            .unwrap_err()
-            .status(),
+        persist_submission(
+            &mut tx,
+            month,
+            &identity("100"),
+            &clip(9),
+            "testchannel",
+            1,
+            Utc::now() + Duration::days(1)
+        )
+        .await
+        .unwrap_err()
+        .status(),
         StatusCode::TOO_MANY_REQUESTS
     );
     tx.rollback().await.unwrap();
@@ -211,28 +236,91 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
     let mut tx = pool.begin().await.unwrap();
     lock_month(&mut tx, month).await.unwrap();
     assert_eq!(
-        persist_vote(&mut tx, month, "100", &linked.aliases, ids[0])
-            .await
-            .unwrap_err()
-            .status(),
+        persist_vote(
+            &mut tx,
+            month,
+            "100",
+            &linked.aliases,
+            ids[0],
+            Utc::now() + Duration::days(1)
+        )
+        .await
+        .unwrap_err()
+        .status(),
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        persist_vote(&mut tx, month, "700", &["twitch:900".into()], ids[0])
-            .await
-            .unwrap_err()
-            .status(),
+        persist_vote(
+            &mut tx,
+            month,
+            "700",
+            &["twitch:900".into()],
+            ids[0],
+            Utc::now() + Duration::days(1)
+        )
+        .await
+        .unwrap_err()
+        .status(),
         StatusCode::FORBIDDEN
     );
     tx.rollback().await.unwrap();
     // Eight parallel attempts, but only five committed votes for the same account.
+    let mut expired_tx = pool.begin().await.unwrap();
+    lock_month(&mut expired_tx, month).await.unwrap();
+    let expired = Utc::now() - Duration::seconds(1);
+    assert_eq!(
+        persist_vote(
+            &mut expired_tx,
+            month,
+            "850",
+            &["discord:850".into()],
+            ids[0],
+            expired
+        )
+        .await
+        .unwrap_err()
+        .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        persist_submission(
+            &mut expired_tx,
+            month,
+            &identity("999"),
+            &clip(99),
+            "testchannel",
+            1,
+            expired
+        )
+        .await
+        .unwrap_err()
+        .status(),
+        StatusCode::CONFLICT
+    );
+    expired_tx.commit().await.unwrap();
+    let late_votes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_clip_contest_votes WHERE voter_discord_id='850'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(late_votes, 0);
     let mut tasks = tokio::task::JoinSet::new();
     for id in ids.iter().copied() {
         let pool = pool.clone();
         tasks.spawn(async move {
             let mut tx = pool.begin().await.unwrap();
             lock_month(&mut tx, month).await.unwrap();
-            match persist_vote(&mut tx, month, "800", &["discord:800".into()], id).await {
+            match persist_vote(
+                &mut tx,
+                month,
+                "800",
+                &["discord:800".into()],
+                id,
+                Utc::now() + Duration::days(1),
+            )
+            .await
+            {
                 Ok(_) => {
                     tx.commit().await.unwrap();
                     true
@@ -257,10 +345,17 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
     let mut tx = pool.begin().await.unwrap();
     lock_month(&mut tx, month).await.unwrap();
     assert_eq!(
-        persist_vote(&mut tx, month, "800", &["discord:800".into()], voted)
-            .await
-            .unwrap_err()
-            .status(),
+        persist_vote(
+            &mut tx,
+            month,
+            "800",
+            &["discord:800".into()],
+            voted,
+            Utc::now() + Duration::days(1)
+        )
+        .await
+        .unwrap_err()
+        .status(),
         StatusCode::CONFLICT
     );
     tx.rollback().await.unwrap();
@@ -430,6 +525,34 @@ async fn postgres_quotas_identity_audit_finalization_and_session_isolation() {
     admin.close().await;
 }
 
+#[tokio::test]
+async fn restart_finalizes_fully_missed_empty_months() {
+    let Some((pool, admin, schema)) = fixture().await else {
+        return;
+    };
+    let current = contest_clock(Utc::now()).month;
+    let first = current.checked_sub_months(chrono::Months::new(3)).unwrap();
+    sqlx::query("INSERT INTO twitch_clip_contest_months (contest_month) VALUES ($1)")
+        .bind(first)
+        .execute(&pool)
+        .await
+        .unwrap();
+    finalize_pending(&pool).await.unwrap();
+    finalize_pending(&pool).await.unwrap();
+    let closed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_clip_contest_months WHERE finalized_at IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(closed, 3);
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
 #[test]
 fn discord_age_membership_and_live_rejoin_boundaries() {
     let now = instant("2026-09-25T12:00:00Z");
@@ -440,6 +563,15 @@ fn discord_age_membership_and_live_rejoin_boundaries() {
     let joined = Some(now - Duration::days(7));
     let synced = Some(now - Duration::hours(1));
     let eligible = membership_eligibility_at(&id, now, joined, true, synced, None).unwrap();
+    assert!(membership_eligibility_at(
+        &id,
+        now,
+        joined,
+        true,
+        None,
+        Some(("join".into(), now - Duration::days(20)))
+    )
+    .is_err());
     assert!(eligible.account_age_ok && eligible.member_age_ok);
     let young = snowflake(now - Duration::days(30) + Duration::milliseconds(1));
     assert!(

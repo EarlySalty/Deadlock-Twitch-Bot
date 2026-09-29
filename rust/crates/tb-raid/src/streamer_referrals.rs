@@ -13,23 +13,9 @@ pub async fn credit_first_activation(
         .execute(&mut **tx)
         .await?;
     let claims: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT a.twitch_user_id, p.twitch_login, c.claimed_at
-         FROM affiliate_streamer_claims c
-         JOIN affiliate_accounts a ON a.twitch_login = c.affiliate_twitch_login
-         JOIN twitch_partners p ON p.twitch_user_id = a.twitch_user_id
-         WHERE LOWER(c.claimed_streamer_login) = LOWER($1)
-             AND a.is_active <> 0 AND a.twitch_user_id <> $2
-             AND p.status = 'active' AND p.admin_archived_at IS NULL
-             AND p.departnered_at IS NULL AND COALESCE(p.manual_partner_opt_out, 0) = 0
-             AND EXISTS (
-                 SELECT 1 FROM twitch_partners target WHERE target.twitch_user_id = $2
-                     AND target.status = 'active' AND target.admin_archived_at IS NULL
-                     AND target.departnered_at IS NULL
-                     AND COALESCE(target.manual_partner_opt_out, 0) = 0
-             )
-         FOR SHARE OF c, a, p",
+        "SELECT streamer_user_id, streamer_login, claimed_at
+         FROM twitch_referral_claim_candidates($1)",
     )
-    .bind(referred_login)
     .bind(referred_user_id)
     .fetch_all(&mut **tx)
     .await?;

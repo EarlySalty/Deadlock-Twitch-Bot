@@ -2442,18 +2442,17 @@ impl DiscordLinkPort for DbDiscordLink {
         streamer_login: &str,
         inviter_twitch_user_id: &str,
     ) -> Result<Option<String>, String> {
-        let fallback = self.discord_invite(broadcaster_id).await?;
         let Some(relay) = &self.relay else {
-            return Ok(fallback);
+            return self.discord_invite(broadcaster_id).await;
         };
         match relay
             .personal_invite(streamer_login, broadcaster_id, inviter_twitch_user_id)
             .await
         {
             Ok(invite) => Ok(Some(invite.invite_url)),
-            Err(_) => {
-                tracing::debug!("Persönlicher Discord-Link nicht verfügbar; verwende Kanallink");
-                Ok(fallback)
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Persönlicher Discord-Link nicht verfügbar; verwende Kanallink");
+                self.discord_invite(broadcaster_id).await
             }
         }
     }

@@ -51,7 +51,7 @@ Punktehöhe und Wochenlimits bleiben Aufgabe dieser Engine. Der Wettbewerb rechn
 
 Eine Migration: `20260927023000_clip_contest.sql`. Sie erweitert nur den Wettbewerbsbereich und die gezielten Schreibrechte, die das bestehende Clip-Repository benötigt. Kein CREATE-Recht für Dienstrollen, keine Ausführung gegen Produktionsdaten in diesem Auftrag. Der Schema-Snapshot ergänzt die tatsächlich auf einer Scratch-Datenbank gelesenen neuen Spalten.
 
-Der vorhandene Infisical-RAM-Lader muss `DEADLOCK_CENTRAL_READONLY_DSN` enthalten. Die Verbindung erzwingt read-only Transaktionen, kurze Timeouts und einen kleinen Pool. Es gibt keinen Rückfall auf schreibende zentrale Zugangsdaten. Twitch verwendet den bereits aufgebauten Helix-Client; der Discord-Broker den vorhandenen internen Token. Neue Klartext-Secrets oder ENV-Konfiguration werden nicht angelegt.
+Die Mitgliedschaft nutzt denselben zentralen Lesepool wie die Partner-Challenges. Die bestehende lokale Datenbankidentität verbindet sich mit der zentralen Datenbank aus der normalen Konfiguration; ein zusätzlicher DSN oder Secret-Speicher ist nicht nötig. Ein fehlender oder älter als 26 Stunden alter Mitgliederabgleich erlaubt keine Stimme, auch wenn ein altes Join-Ereignis vorhanden ist. Twitch verwendet den bereits aufgebauten Helix-Client; der Discord-Broker den vorhandenen internen Token.
 
 Zum späteren Freischalten gehören Twitch- und Caddy-PR zusammen. Die Caddy-Änderung enthält ausschließlich explizite `/clips`-Pfade in `@public_twitch`. Die Assets bleiben Teil des bestehenden Website-Builds unter `/streamer/assets/`; Marken-Assets kommen von `/brand/`.
 

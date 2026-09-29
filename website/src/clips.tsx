@@ -69,15 +69,30 @@ function App() {
   const [archiveError, setArchiveError] = useState('')
   const [busy, setBusy] = useState(false)
   const generation = useRef(0)
+  const loadedClips = useRef(24)
+  const loadedMonths = useRef(24)
 
   const load = useCallback(async () => {
     const request = ++generation.current
     const [c, s] = await Promise.all([api<Current>('/clips/api/current'), api<Session>('/clips/api/session')])
+    while (c.next_offset !== null && c.submissions.length < loadedClips.current) {
+      const next = await api<Current>(`/clips/api/current?offset=${c.next_offset}`)
+      if (next.month !== c.month) return
+      c.submissions.push(...next.submissions)
+      c.next_offset = next.next_offset
+    }
     if (request !== generation.current) return
     setCurrent(c); setSession(s); setLoadError('')
     try {
       const a = await api<Archive>('/clips/api/archive')
-      if (request === generation.current) { setArchive(a); setArchiveError('') }
+      while (a.next_before && a.months.length < loadedMonths.current) {
+        const next = await api<Archive>(`/clips/api/archive?before=${encodeURIComponent(a.next_before)}`)
+        a.months.push(...next.months)
+        a.next_before = next.next_before
+      }
+      if (request === generation.current) {
+        setArchive(a); setArchiveError('')
+      }
     } catch (error) { setArchiveError(message(error)) }
     if (s.is_admin) {
       const moderation = await api<{ submissions: Clip[] }>('/clips/api/admin/submissions')
@@ -115,14 +130,17 @@ function App() {
     await action('/clips/api/submit', { clip_url: url }, 'Clip eingereicht.')
   }
   const hide = async (id: number, hideClip: boolean) => {
-    if (!window.confirm(hideClip ? 'Clip ausblenden? Die Stimmen bleiben erhalten.' : 'Clip wieder anzeigen? Abgeschlossene Plätze bleiben unverändert.')) return
-    await action('/clips/api/admin/hide', { submission_id: id, hidden: hideClip }, hideClip ? 'Clip ausgeblendet. Stimmen bleiben erhalten.' : 'Clip wieder sichtbar.')
+    const reason = window.prompt(hideClip ? 'Warum soll der Clip ausgeblendet werden? Die Stimmen bleiben erhalten.' : 'Warum soll der Clip wieder angezeigt werden? Abgeschlossene Plätze bleiben unverändert.')?.trim()
+    if (!reason) return
+    if (reason.length > 500) { setNotice('Die Begründung darf höchstens 500 Zeichen haben.'); return }
+    await action('/clips/api/admin/hide', { submission_id: id, hidden: hideClip, reason }, hideClip ? 'Clip ausgeblendet. Stimmen bleiben erhalten.' : 'Clip wieder sichtbar.')
   }
   const loadMore = async () => {
     if (!current || current.next_offset === null) return
     setBusy(true)
     try {
       const next = await api<Current>(`/clips/api/current?offset=${current.next_offset}`)
+      loadedClips.current = current.submissions.length + next.submissions.length
       setCurrent(previous => previous?.month === next.month ? {
         ...next, submissions: [...new Map([...previous.submissions, ...next.submissions].map(clip => [clip.id, clip])).values()],
       } : next)
@@ -134,6 +152,7 @@ function App() {
     setBusy(true)
     try {
       const next = await api<Archive>(`/clips/api/archive?before=${encodeURIComponent(archive.next_before)}`)
+      loadedMonths.current = archive.months.length + next.months.length
       setArchive(previous => ({ months: [...previous.months, ...next.months], next_before: next.next_before }))
     } catch (error) { setArchiveError(message(error)) }
     finally { setBusy(false) }

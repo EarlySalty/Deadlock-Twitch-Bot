@@ -84,7 +84,7 @@ try {
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  page.on('dialog', dialog => dialog.accept())
+  page.on('dialog', dialog => dialog.accept(dialog.type() === 'prompt' ? 'Nach Prüfung durch die Moderation.' : undefined))
   // External playback is deliberately isolated; no third-party requests or real votes.
   await page.route('https://clips.twitch.tv/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Test-Player</title><body style="background:#111;color:#ddd;font:16px sans-serif">Twitch-Player im Browsertest</body>' }))
   await page.goto(`${origin}/clips`)

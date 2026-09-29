@@ -4,7 +4,7 @@
 //! Discord über den lokalen dl-web OAuth-Broker.
 //! Twitch über die bestehende Dashboard-Session.
 
-use std::{collections::BTreeMap, str::FromStr, time::Duration as StdDuration};
+use std::{collections::BTreeMap, time::Duration as StdDuration};
 
 use axum::{
     extract::{Extension, Query, State},
@@ -16,12 +16,8 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions, PgRow},
-    ConnectOptions, PgPool, Postgres, Row, Transaction,
-};
+use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use tb_social_media::{clip::model::ClipRecord, ClipRepository};
-use tokio::sync::OnceCell;
 
 use crate::{
     auth::{
@@ -41,13 +37,13 @@ const MAX_SUBMISSIONS_PER_MONTH: i64 = 3;
 const MAX_VOTES_PER_MONTH: i64 = 5;
 const MAX_CLIP_AGE_DAYS: i64 = 60;
 const COMMUNITY_GUILD_ID: i64 = 1_289_721_245_281_292_288;
-const DISCORD_BROKER_BASE: &str = "http://127.0.0.1:8766";
 const BROKER_INITIATE_PATH: &str = "/internal/v1/discord/initiate";
 const BROKER_CONSUME_PATH: &str = "/internal/v1/discord/consume-result";
-const BROKER_TOKEN_HEADER: &str = "X-Internal-Token";
 const DEADLOCK_GAME_ID_FALLBACK: &str = "2132205352";
 
-static CENTRAL_POOL: OnceCell<PgPool> = OnceCell::const_new();
+/// Existing central read pool, shared with the partner challenge sources.
+#[derive(Clone)]
+pub struct ContestCentralPool(pub PgPool);
 
 #[derive(Debug, Clone)]
 struct DiscordIdentity {
@@ -534,45 +530,6 @@ async fn deadlock_game_id(pool: &PgPool) -> Result<String, Response> {
     .unwrap_or_else(|| DEADLOCK_GAME_ID_FALLBACK.to_string()))
 }
 
-async fn central_pool() -> Result<PgPool, Response> {
-    CENTRAL_POOL
-        .get_or_try_init(|| async {
-            // Existing Infisical in-memory configuration, read-only only.
-            let dsn = uplink_config::platform_value("DEADLOCK_CENTRAL_READONLY_DSN")
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(unavailable)?;
-            let options = PgConnectOptions::from_str(&dsn)
-                .map_err(|_| {
-                    json_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "community_check_unavailable",
-                        "Die Discord-Mitgliedschaft kann gerade nicht geprüft werden.",
-                    )
-                })?
-                .application_name("twitch-clip-contest")
-                .options([
-                    ("default_transaction_read_only", "on"),
-                    ("statement_timeout", "5000"),
-                ])
-                .disable_statement_logging();
-            PgPoolOptions::new()
-                .max_connections(3)
-                .acquire_timeout(StdDuration::from_secs(5))
-                .idle_timeout(StdDuration::from_secs(60))
-                .connect_with(options)
-                .await
-                .map_err(|_| {
-                    json_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "community_check_unavailable",
-                        "Die Discord-Mitgliedschaft kann gerade nicht geprüft werden.",
-                    )
-                })
-        })
-        .await
-        .cloned()
-}
-
 fn discord_account_created_at(discord_id: &str) -> Option<DateTime<Utc>> {
     const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
     let id = discord_id.parse::<u64>().ok()?;
@@ -589,7 +546,7 @@ fn membership_eligibility_at(
     latest: Option<(String, DateTime<Utc>)>,
 ) -> Result<DiscordEligibility, Response> {
     // The directory is refreshed daily. Never trust an indefinitely stale census.
-    if synced_at.is_some_and(|at| at < now - Duration::hours(26) || at > now) {
+    if synced_at.is_none_or(|at| at < now - Duration::hours(26) || at > now) {
         return Err(json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "community_check_unavailable",
@@ -617,9 +574,11 @@ fn membership_eligibility_at(
     })
 }
 
-async fn discord_eligibility(discord_id: &str) -> Result<DiscordEligibility, Response> {
+async fn discord_eligibility(
+    pool: &PgPool,
+    discord_id: &str,
+) -> Result<DiscordEligibility, Response> {
     let id = discord_id.parse::<i64>().map_err(|_| unavailable())?;
-    let pool = central_pool().await?;
     let row = sqlx::query("SELECT d.joined_at, d.present, d.synced_at, d.is_bot,
         e.event_type, e.occurred_at
         FROM (SELECT 1) AS anchor
@@ -627,7 +586,7 @@ async fn discord_eligibility(discord_id: &str) -> Result<DiscordEligibility, Res
         LEFT JOIN LATERAL (SELECT event_type, occurred_at FROM activity.member_events
             WHERE guild_id=$1 AND user_id=$2 AND event_type IN ('join','leave') AND occurred_at IS NOT NULL
             ORDER BY occurred_at DESC, id DESC LIMIT 1) e ON TRUE")
-        .bind(COMMUNITY_GUILD_ID).bind(id).fetch_one(&pool).await.map_err(|_| unavailable())?;
+        .bind(COMMUNITY_GUILD_ID).bind(id).fetch_one(pool).await.map_err(|_| unavailable())?;
     let kind: Option<String> = row.try_get("event_type").map_err(|_| unavailable())?;
     let occurred: Option<DateTime<Utc>> = row.try_get("occurred_at").map_err(|_| unavailable())?;
     let present: Option<bool> = row.try_get("present").map_err(|_| unavailable())?;
@@ -660,26 +619,7 @@ fn broker_token() -> Option<String> {
 }
 
 async fn broker_post(path: &str, token: &str, payload: &Value) -> Option<Value> {
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(4))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .ok()?;
-    let response = client
-        .post(format!(
-            "{}{}",
-            DISCORD_BROKER_BASE.trim_end_matches('/'),
-            path
-        ))
-        .header(BROKER_TOKEN_HEADER, token)
-        .json(payload)
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    response.json::<Value>().await.ok()
+    crate::handlers::discord_link::broker_post(path, token, payload).await
 }
 
 pub async fn discord_login_handler(headers: HeaderMap) -> Response {
@@ -692,7 +632,7 @@ pub async fn discord_login_handler(headers: HeaderMap) -> Response {
     };
     let payload = json!({
         "scope": "identify",
-        "redirect_after": "/clips/auth/discord/callback",
+        "redirect_after": "https://deutsche-deadlock-community.de/clips/auth/discord/callback",
         "requesting_service": "twitch-clip-contest",
         "metadata": {
             "clip_contest": true,
@@ -844,7 +784,10 @@ pub async fn discord_callback_handler(
     response
 }
 
-pub async fn logout_handler(State(pool): State<PgPool>, headers: HeaderMap) -> Response {
+pub async fn logout_handler(
+    state: Option<Extension<DashboardAuthState>>,
+    headers: HeaderMap,
+) -> Response {
     if !valid_write_origin(&headers) {
         return json_error(
             StatusCode::FORBIDDEN,
@@ -853,9 +796,12 @@ pub async fn logout_handler(State(pool): State<PgPool>, headers: HeaderMap) -> R
         );
     }
     if let Some(raw) = cookie_values(&headers, SESSION_COOKIE).into_iter().next() {
+        let Some(state) = state else {
+            return unavailable();
+        };
         let result = sqlx::query("DELETE FROM dashboard_sessions WHERE session_type = 'clip_contest' AND session_id = $1")
             .bind(session_lookup_key(raw))
-            .execute(&pool)
+            .execute(state.pool())
             .await;
         if result.is_err() {
             return unavailable();

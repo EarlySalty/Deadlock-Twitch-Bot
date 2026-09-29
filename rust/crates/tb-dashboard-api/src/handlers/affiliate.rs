@@ -465,7 +465,19 @@ pub async fn claim_handler(
     // werden, aktive Partner nur innerhalb der Nachfrist; frische oder bereits
     // konvertierte Claims blockieren, abgelaufene Nicht-Partner-Reservierungen
     // sind überschreibbar.
-    match claim_streamer(&pool, &twitch_login, &streamer_login).await {
+    let streamer_user_id = match verified_claim_target(&streamer_login).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    match claim_streamer_verified_at(
+        &pool,
+        &twitch_login,
+        &streamer_login,
+        Some(&streamer_user_id),
+        Utc::now(),
+    )
+    .await
+    {
         Ok(ClaimStatus::Ok) => {
             Json(json!({ "ok": true, "claimed": streamer_login })).into_response()
         }
@@ -825,6 +837,51 @@ enum ClaimStatus {
     AlreadyClaimed,
 }
 
+async fn verified_claim_target(login: &str) -> Result<String, Response> {
+    let client = crate::uplink_config::runtime()
+        .ok()
+        .and_then(|runtime| runtime.helix.as_ref())
+        .ok_or_else(|| json_error(StatusCode::SERVICE_UNAVAILABLE, "twitch_unavailable"))?;
+    let request = client
+        .get("/users")
+        .await
+        .map_err(|_| json_error(StatusCode::SERVICE_UNAVAILABLE, "twitch_unavailable"))?;
+    let response = request
+        .query(&[("login", login)])
+        .send()
+        .await
+        .map_err(|_| json_error(StatusCode::SERVICE_UNAVAILABLE, "twitch_unavailable"))?;
+    if !response.status().is_success() {
+        return Err(json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "twitch_unavailable",
+        ));
+    }
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|_| json_error(StatusCode::SERVICE_UNAVAILABLE, "twitch_unavailable"))?;
+    body.get("data")
+        .and_then(Value::as_array)
+        .and_then(|users| {
+            users.iter().find(|user| {
+                user.get("login")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(login))
+            })
+        })
+        .and_then(|user| user.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| {
+            !id.is_empty()
+                && id.bytes().all(|c| c.is_ascii_digit())
+                && id.parse::<u64>().is_ok_and(|value| value > 0)
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| json_error(StatusCode::UNPROCESSABLE_ENTITY, "streamer_not_found"))
+}
+
+#[cfg(test)]
 async fn claim_streamer(
     pool: &PgPool,
     twitch_login: &str,
@@ -833,10 +890,21 @@ async fn claim_streamer(
     claim_streamer_at(pool, twitch_login, streamer_login, chrono::Utc::now()).await
 }
 
+#[cfg(test)]
 async fn claim_streamer_at(
     pool: &PgPool,
     twitch_login: &str,
     streamer_login: &str,
+    now_dt: DateTime<Utc>,
+) -> Result<ClaimStatus, sqlx::Error> {
+    claim_streamer_verified_at(pool, twitch_login, streamer_login, None, now_dt).await
+}
+
+async fn claim_streamer_verified_at(
+    pool: &PgPool,
+    twitch_login: &str,
+    streamer_login: &str,
+    streamer_user_id: Option<&str>,
     now_dt: DateTime<Utc>,
 ) -> Result<ClaimStatus, sqlx::Error> {
     let twitch_login = twitch_login.trim().to_lowercase();
@@ -949,13 +1017,14 @@ async fn claim_streamer_at(
     let insert = sqlx::query(
         r#"
         INSERT INTO affiliate_streamer_claims
-            (affiliate_twitch_login, claimed_streamer_login, claimed_at)
-        VALUES ($1, $2, $3)
+            (affiliate_twitch_login, claimed_streamer_login, claimed_at, claimed_streamer_user_id)
+        VALUES ($1, $2, $3, $4)
         "#,
     )
     .bind(&twitch_login)
     .bind(&streamer_login)
     .bind(&now)
+    .bind(streamer_user_id)
     .execute(&mut *tx)
     .await;
     match insert {
@@ -1377,7 +1446,13 @@ mod tests {
     }
 
     async fn pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        mod test_database {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/database.rs"
+            ));
+        }
+        let dsn = test_database::database_url()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -1480,6 +1555,7 @@ mod tests {
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 affiliate_twitch_login TEXT NOT NULL,
                 claimed_streamer_login TEXT NOT NULL UNIQUE,
+                claimed_streamer_user_id TEXT,
                 claimed_at TEXT NOT NULL
             )
             "#,

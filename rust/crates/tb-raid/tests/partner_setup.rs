@@ -17,10 +17,17 @@ use tb_raid::partner_setup::{
     ModeratorInstallPort, PartnerSetupError, PartnerSetupService, PromotePartnerArgs,
 };
 
+mod test_database {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/database.rs"
+    ));
+}
+
 macro_rules! pool_or_skip {
     ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+        let Some(dsn) = test_database::database_url() else {
+            if test_database::required() {
                 panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
             }
             eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");

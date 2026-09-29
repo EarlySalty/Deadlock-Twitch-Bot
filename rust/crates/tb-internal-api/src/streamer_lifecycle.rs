@@ -132,8 +132,8 @@ pub async fn load_active_partner(
 
 /// Upsert in `twitch_streamer_identities` — nur wenn eine `twitch_user_id`
 /// vorliegt (Python no-opt ohne user_id). Discord-Felder werden mitgeführt.
-async fn upsert_streamer_identity(
-    pool: &PgPool,
+async fn upsert_streamer_identity<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
     twitch_user_id: Option<&str>,
     twitch_login: &str,
     discord_user_id: Option<&str>,
@@ -165,7 +165,7 @@ async fn upsert_streamer_identity(
         is_on_discord,
         now
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -491,16 +491,6 @@ pub async fn promote_streamer_to_partner(
         return Ok(PromoteOutcome::Blocked(Box::new(entry)));
     }
 
-    upsert_streamer_identity(
-        pool,
-        Some(normalized_user_id),
-        &normalized_login,
-        discord_user_id,
-        discord_display_name,
-        is_on_discord,
-    )
-    .await?;
-
     let activation_time = chrono::Utc::now();
     let partnered_at = activation_time.to_rfc3339();
     let mut tx = pool.begin().await?;
@@ -508,6 +498,33 @@ pub async fn promote_streamer_to_partner(
         .bind(normalized_user_id)
         .execute(&mut *tx)
         .await?;
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext(LOWER($1))::bigint)")
+        .bind(&normalized_login)
+        .execute(&mut *tx)
+        .await?;
+    let conflicting_identity: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM twitch_partners WHERE LOWER(twitch_login) = LOWER($1)
+         AND twitch_user_id IS DISTINCT FROM $2)",
+    )
+    .bind(&normalized_login)
+    .bind(normalized_user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if conflicting_identity {
+        return Err(sqlx::Error::Protocol(
+            "Partner-Login gehört zu einer anderen Twitch-ID".into(),
+        ));
+    }
+    upsert_streamer_identity(
+        &mut *tx,
+        Some(normalized_user_id),
+        &normalized_login,
+        discord_user_id,
+        discord_display_name,
+        is_on_discord,
+    )
+    .await?;
 
     // Bestehenden Partner-Datensatz (egal welcher Status) reaktivieren …
     let updated = sqlx::query!(
@@ -523,7 +540,7 @@ pub async fn promote_streamer_to_partner(
             status = $5
         WHERE id = (
             SELECT id FROM twitch_partners
-             WHERE LOWER(twitch_login) = LOWER($1) OR twitch_user_id = $2
+             WHERE twitch_user_id = $2
              ORDER BY (COALESCE(status,'') = 'active') DESC, id DESC
              LIMIT 1
         )
@@ -1101,13 +1118,19 @@ pub async fn clear_live_state(pool: &PgPool, login: &str) -> Result<(), sqlx::Er
 mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
+    mod test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
 
     macro_rules! db_dsn_or_skip {
         () => {
-            match std::env::var("TB_TEST_DATABASE_URL").ok() {
+            match test_database::database_url() {
                 Some(d) => d,
                 None => {
-                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                    if test_database::required() {
                         panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
