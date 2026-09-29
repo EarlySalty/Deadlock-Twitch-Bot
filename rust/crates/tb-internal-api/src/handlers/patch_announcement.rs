@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tb_chat::{
-    api::SourceOnlyPreSendCheck, promos::OutboundSuppressionCheck, ChatApi, SendOutcome,
+    ChatApi, SendOutcome, api::SourceOnlyPreSendCheck, promos::OutboundSuppressionCheck,
 };
 use tb_http_core::ApiError;
 use tb_transport_twitch::{HelixClient, HelixStream};
@@ -203,15 +203,29 @@ fn http_error_result(status: u16, body: &str) -> DeliveryResult {
     }
 }
 
+fn local_pre_post_rejection_reason(reason: &str) -> Option<&'static str> {
+    match reason {
+        "channel_policy_denied" => Some("channel_policy_denied"),
+        "source_only_chat_muted" => Some("source_only_chat_muted"),
+        _ => None,
+    }
+}
+
 fn delivery_result_from_send_outcome(outcome: SendOutcome) -> DeliveryResult {
     match outcome {
         SendOutcome::Sent => DeliveryResult::status("sent"),
-        SendOutcome::Dropped { code, .. } => DeliveryResult {
-            status: "dropped",
-            drop_code: Some(redact_drop_code(&code)),
-            http_status: None,
-            uncertainty_reason: None,
-        },
+        SendOutcome::Dropped { code, .. } => {
+            if let Some(reason) = local_pre_post_rejection_reason(&code) {
+                skip_reason_for_result(reason)
+            } else {
+                DeliveryResult {
+                    status: "dropped",
+                    drop_code: Some(redact_drop_code(&code)),
+                    http_status: None,
+                    uncertainty_reason: None,
+                }
+            }
+        }
         SendOutcome::HttpError { status, body } => http_error_result(status, &body),
     }
 }
@@ -358,11 +372,14 @@ impl Transport for LiveTransport<'_> {
                     }
                 }
                 Ok(outcome) => delivery_result_from_send_outcome(outcome),
-                Err(error) => DeliveryResult {
-                    status: "uncertain",
-                    drop_code: None,
-                    http_status: None,
-                    uncertainty_reason: Some(send_error_reason(&error)),
+                Err(error) => match local_pre_post_rejection_reason(&error) {
+                    Some(reason) => skip_reason_for_result(reason),
+                    None => DeliveryResult {
+                        status: "uncertain",
+                        drop_code: None,
+                        http_status: None,
+                        uncertainty_reason: Some(send_error_reason(&error)),
+                    },
                 },
             },
         )
@@ -437,7 +454,7 @@ fn database_error(error: sqlx::Error) -> PatchProcessError {
         .as_database_error()
         .and_then(|database| database.code())
         .map(|code| code.into_owned());
-    tracing::error!(sqlstate = ?sqlstate, "Patch announcement persistence failed");
+    tracing::error!(error = %error, sqlstate = ?sqlstate, "Patch announcement persistence failed");
     PatchProcessError::Database { sqlstate }
 }
 
@@ -1083,5 +1100,38 @@ mod tests {
             send_error_reason("source_only_chat_outcome_unknown: xyz"),
             "ambiguous_http_outcome"
         );
+    }
+
+    #[test]
+    fn known_local_pre_post_rejections_are_skipped_without_guessing() {
+        let policy_result = local_pre_post_rejection_reason("channel_policy_denied")
+            .map(skip_reason_for_result)
+            .unwrap();
+        assert_eq!(policy_result.status, "skipped");
+        assert_eq!(
+            policy_result.uncertainty_reason,
+            Some("channel_policy_denied")
+        );
+        assert_eq!(policy_result.drop_code, None);
+
+        let muted_result = delivery_result_from_send_outcome(SendOutcome::Dropped {
+            code: "source_only_chat_muted".into(),
+            message: String::new(),
+        });
+        assert_eq!(muted_result.status, "skipped");
+        assert_eq!(
+            muted_result.uncertainty_reason,
+            Some("source_only_chat_muted")
+        );
+        assert_eq!(muted_result.drop_code, None);
+
+        let real_transport_error = send_error_reason("source_only_chat_transport_failed: redacted");
+        assert_eq!(real_transport_error, "transport_error");
+        let lookalike = delivery_result_from_send_outcome(SendOutcome::Dropped {
+            code: "source_only_chat_muted_with_suffix".into(),
+            message: String::new(),
+        });
+        assert_eq!(lookalike.status, "dropped");
+        assert_eq!(lookalike.uncertainty_reason, None);
     }
 }

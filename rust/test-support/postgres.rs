@@ -83,7 +83,7 @@ impl TestPostgres {
                     "-c",
                     "shared_buffers=16MB",
                     "-c",
-                    "max_connections=12",
+                    "max_connections=32",
                     "-c",
                     "fsync=off",
                 ])

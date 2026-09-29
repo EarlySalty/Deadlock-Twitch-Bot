@@ -4,7 +4,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use reqwest::{redirect::Policy, Client, StatusCode};
+use reqwest::{Client, StatusCode, redirect::Policy};
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use tb_internal_api::{PatchEvent, PatchProcessError, PatchReceiver};
@@ -77,6 +77,7 @@ trait FeedCursor {
         &self,
         id: i64,
         status: &'static str,
+        now: DateTime<Utc>,
     ) -> impl Future<Output = Result<bool, PatchFeedError>> + Send;
 }
 
@@ -218,16 +219,28 @@ fn pending_is_expired(now: DateTime<Utc>, observed_at: DateTime<Utc>) -> bool {
     now.signed_duration_since(observed_at) >= chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS)
 }
 
-async fn run_feed<H, S, D, Fut>(
+async fn run_feed<H, S, D, Fut>(http: &H, store: &S, deliver: D) -> Result<usize, PatchFeedError>
+where
+    H: FeedHttp,
+    S: FeedCursor,
+    D: FnMut(ValidatedArticle) -> Fut,
+    Fut: Future<Output = Result<bool, PatchFeedError>>,
+{
+    run_feed_with_clock(http, store, deliver, Utc::now).await
+}
+
+async fn run_feed_with_clock<H, S, D, Fut, C>(
     http: &H,
     store: &S,
     mut deliver: D,
+    now: C,
 ) -> Result<usize, PatchFeedError>
 where
     H: FeedHttp,
     S: FeedCursor,
     D: FnMut(ValidatedArticle) -> Fut,
     Fut: Future<Output = Result<bool, PatchFeedError>>,
+    C: Fn() -> DateTime<Utc> + Copy,
 {
     let entries = fetch_index(http).await?;
     let ids = entries.iter().map(|entry| entry.id).collect();
@@ -237,13 +250,17 @@ where
     let mut count = 0;
     for observation in pending {
         let entry = entries.get(&observation.id);
-        if pending_is_expired(Utc::now(), observation.observed_at) {
+        let observed_now = now();
+        if pending_is_expired(observed_now, observation.observed_at) {
             let status = if entry.is_some() {
                 "expired_timeout"
             } else {
                 "expired_missing_from_index"
             };
-            if store.expire_pending(observation.id, status).await? {
+            if store
+                .expire_pending(observation.id, status, observed_now)
+                .await?
+            {
                 tracing::warn!(
                     patch_id = observation.id,
                     status,
@@ -261,9 +278,10 @@ where
         let article = match fetch_article(http, entry).await {
             Ok(article) => article,
             Err(error) => {
-                if pending_is_expired(Utc::now(), observation.observed_at) {
+                let observed_now = now();
+                if pending_is_expired(observed_now, observation.observed_at) {
                     if store
-                        .expire_pending(observation.id, "expired_unavailable")
+                        .expire_pending(observation.id, "expired_unavailable", observed_now)
                         .await?
                     {
                         tracing::warn!(
@@ -296,51 +314,84 @@ async fn observe_index(
                 sqlx::query_scalar::<_, DateTime<Utc>>("SELECT statement_timestamp()")
                     .fetch_one(&mut **tx)
                     .await?;
-            let inserted = if ids.is_empty() {
-                false
-            } else {
-                sqlx::query_scalar::<_, bool>(
-                    "INSERT INTO twitch_patch_feed_state (singleton, bootstrapped_at) \
-                     VALUES (TRUE, NOW()) ON CONFLICT (singleton) DO NOTHING RETURNING singleton",
-                )
-                .fetch_optional(&mut **tx)
-                .await?
-                .unwrap_or(false)
-            };
-            let state = sqlx::query(
-                "SELECT bootstrapped_at FROM twitch_patch_feed_state \
-                 WHERE singleton = TRUE FOR UPDATE",
+            let inserted = sqlx::query_scalar::<_, bool>(
+                "INSERT INTO twitch_patch_feed_state \
+                 (singleton, bootstrapped_at, last_successful_index_at) \
+                 VALUES (TRUE, NULL, $1) ON CONFLICT (singleton) DO NOTHING \
+                 RETURNING singleton",
             )
+            .bind(observed_at)
             .fetch_optional(&mut **tx)
+            .await?
+            .unwrap_or(false);
+            let state = sqlx::query(
+                "SELECT bootstrapped_at, last_successful_index_at \
+                 FROM twitch_patch_feed_state WHERE singleton = TRUE FOR UPDATE",
+            )
+            .fetch_one(&mut **tx)
             .await?;
-            if let Some(state) = state {
-                let bootstrapped_at: DateTime<Utc> = state.try_get("bootstrapped_at")?;
-                if inserted {
-                    for id in ids {
-                        sqlx::query(
-                            "INSERT INTO twitch_patch_feed_observations \
-                             (patch_id, observed_at, status, finalized_at) \
-                             VALUES ($1, $2, 'historical', $2) ON CONFLICT (patch_id) DO NOTHING",
-                        )
-                        .bind(id)
-                        .bind(bootstrapped_at)
-                        .execute(&mut **tx)
-                        .await?;
-                    }
-                } else {
-                    for id in ids {
-                        sqlx::query(
-                            "INSERT INTO twitch_patch_feed_observations \
-                             (patch_id, observed_at, status, finalized_at) \
-                             VALUES ($1, $2, 'pending', NULL) ON CONFLICT (patch_id) DO NOTHING",
-                        )
-                        .bind(id)
-                        .bind(observed_at)
-                        .execute(&mut **tx)
-                        .await?;
-                    }
+            let bootstrapped_at: Option<DateTime<Utc>> = state.try_get("bootstrapped_at")?;
+            let last_successful_index_at: DateTime<Utc> =
+                state.try_get("last_successful_index_at")?;
+            let outage_gap = !inserted
+                && observed_at.signed_duration_since(last_successful_index_at)
+                    >= chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS);
+
+            if bootstrapped_at.is_none() && !ids.is_empty() && !outage_gap {
+                sqlx::query(
+                    "UPDATE twitch_patch_feed_state SET bootstrapped_at = $1 \
+                     WHERE singleton = TRUE AND bootstrapped_at IS NULL",
+                )
+                .bind(observed_at)
+                .execute(&mut **tx)
+                .await?;
+                for id in ids {
+                    sqlx::query(
+                        "INSERT INTO twitch_patch_feed_observations \
+                         (patch_id, observed_at, status, finalized_at) \
+                         VALUES ($1, $2, 'historical', $2) ON CONFLICT (patch_id) DO NOTHING",
+                    )
+                    .bind(id)
+                    .bind(observed_at)
+                    .execute(&mut **tx)
+                    .await?;
+                }
+            } else {
+                if bootstrapped_at.is_none() && !ids.is_empty() {
+                    sqlx::query(
+                        "UPDATE twitch_patch_feed_state SET bootstrapped_at = $1 \
+                         WHERE singleton = TRUE AND bootstrapped_at IS NULL",
+                    )
+                    .bind(observed_at)
+                    .execute(&mut **tx)
+                    .await?;
+                }
+                for id in ids {
+                    let (status, finalized_at) = if outage_gap {
+                        ("missed_during_outage", Some(observed_at))
+                    } else {
+                        ("pending", None)
+                    };
+                    sqlx::query(
+                        "INSERT INTO twitch_patch_feed_observations \
+                         (patch_id, observed_at, status, finalized_at) \
+                         VALUES ($1, $2, $3, $4) ON CONFLICT (patch_id) DO NOTHING",
+                    )
+                    .bind(id)
+                    .bind(observed_at)
+                    .bind(status)
+                    .bind(finalized_at)
+                    .execute(&mut **tx)
+                    .await?;
                 }
             }
+            sqlx::query(
+                "UPDATE twitch_patch_feed_state SET last_successful_index_at = $1 \
+                 WHERE singleton = TRUE",
+            )
+            .bind(observed_at)
+            .execute(&mut **tx)
+            .await?;
             let pending = sqlx::query(
                 "SELECT patch_id, observed_at FROM twitch_patch_feed_observations \
                  WHERE status = 'pending' ORDER BY observed_at, patch_id",
@@ -362,10 +413,52 @@ async fn observe_index(
     Ok(pending)
 }
 
-async fn expire_pending(
+async fn close_pending_deliveries(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    url: &str,
+    reason: &'static str,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    sqlx::query_as::<_, (String, String)>(
+        "UPDATE twitch_patch_announcement_deliveries AS delivery \
+         SET status = 'skipped', uncertainty_reason = $2 \
+         FROM twitch_patch_announcements AS announcement \
+         WHERE announcement.event_id = delivery.event_id \
+           AND announcement.article_url = $1 AND delivery.status = 'pending' \
+         RETURNING delivery.event_id, delivery.broadcaster_id",
+    )
+    .bind(url)
+    .bind(reason)
+    .fetch_all(&mut **tx)
+    .await
+}
+
+fn log_closed_deliveries(patch_id: i64, reason: &'static str, deliveries: Vec<(String, String)>) {
+    for (event_id, broadcaster_id) in deliveries {
+        tracing::info!(
+            patch_id,
+            event_id,
+            broadcaster_id,
+            outcome = "skipped",
+            uncertainty_reason = reason,
+            "Patch announcement delivery expired"
+        );
+    }
+}
+
+fn delivery_expiry_reason(status: &str) -> &'static str {
+    match status {
+        "expired_timeout" => "feed_expired_timeout",
+        "expired_missing_from_index" => "feed_expired_missing_from_index",
+        "expired_unavailable" => "feed_expired_unavailable",
+        _ => "feed_expired",
+    }
+}
+
+async fn expire_pending_at(
     pool: &PgPool,
     id: i64,
     status: &'static str,
+    now: DateTime<Utc>,
 ) -> Result<bool, PatchFeedError> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
@@ -381,7 +474,7 @@ async fn expire_pending(
     };
     let current_status: String = row.try_get("status")?;
     let observed_at: DateTime<Utc> = row.try_get("observed_at")?;
-    if current_status != "pending" || !pending_is_expired(Utc::now(), observed_at) {
+    if current_status != "pending" || !pending_is_expired(now, observed_at) {
         tx.commit().await?;
         return Ok(false);
     }
@@ -393,7 +486,10 @@ async fn expire_pending(
     .bind(status)
     .execute(&mut *tx)
     .await?;
+    let reason = delivery_expiry_reason(status);
+    let deliveries = close_pending_deliveries(&mut tx, &article_url(id)?, reason).await?;
     tx.commit().await?;
+    log_closed_deliveries(id, reason, deliveries);
     Ok(true)
 }
 
@@ -405,8 +501,13 @@ impl FeedCursor for PgPool {
         observe_index(self, &ids).await
     }
 
-    async fn expire_pending(&self, id: i64, status: &'static str) -> Result<bool, PatchFeedError> {
-        expire_pending(self, id, status).await
+    async fn expire_pending(
+        &self,
+        id: i64,
+        status: &'static str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, PatchFeedError> {
+        expire_pending_at(self, id, status, now).await
     }
 }
 
@@ -419,6 +520,21 @@ where
     F: FnMut(PatchArticle) -> Fut,
     Fut: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
+{
+    deliver_article_with_clock(pool, article, callback, Utc::now).await
+}
+
+async fn deliver_article_with_clock<F, Fut, E, C>(
+    pool: &PgPool,
+    article: ValidatedArticle,
+    callback: &mut F,
+    now: C,
+) -> Result<bool, PatchFeedError>
+where
+    F: FnMut(PatchArticle) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+    E: Error + Send + Sync + 'static,
+    C: Fn() -> DateTime<Utc> + Copy,
 {
     let mut delivery = pool.begin().await?;
     let row = sqlx::query(
@@ -440,7 +556,7 @@ where
         delivery.commit().await?;
         return Ok(false);
     }
-    if pending_is_expired(Utc::now(), observed_at) {
+    if pending_is_expired(now(), observed_at) {
         sqlx::query(
             "UPDATE twitch_patch_feed_observations \
              SET status = 'expired_timeout', finalized_at = NOW() \
@@ -449,7 +565,10 @@ where
         .bind(article.id)
         .execute(&mut *delivery)
         .await?;
+        let reason = delivery_expiry_reason("expired_timeout");
+        let closed = close_pending_deliveries(&mut delivery, &article.url, reason).await?;
         delivery.commit().await?;
+        log_closed_deliveries(article.id, reason, closed);
         tracing::warn!(
             patch_id = article.id,
             status = "expired_timeout",
@@ -526,7 +645,7 @@ mod postgres;
 mod tests {
     use std::collections::HashMap;
     use std::process::Command;
-    use std::sync::{mpsc, Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
 
     use super::*;
     use tb_chat::api::{BanOutcome, SourceOnlyPreSendCheck};
@@ -604,7 +723,7 @@ mod tests {
         }
     }
 
-    async fn isolated_bot_database() -> (TestPostgres, PgPool, PgPool) {
+    async fn isolated_bot_database() -> (TestPostgres, PgPool, PgPool, PgPool) {
         let postgres = TestPostgres::start().await;
         sqlx::query("CREATE ROLE postgres SUPERUSER NOLOGIN")
             .execute(&postgres.pool)
@@ -618,6 +737,7 @@ mod tests {
             .fetch_one(&postgres.pool)
             .await
             .unwrap();
+        postgres.pool.close().await;
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(3)
             .connect_with(
@@ -684,7 +804,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let bot = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(10)
             .connect_with(
                 sqlx::postgres::PgConnectOptions::new()
                     .host(&socket_dir)
@@ -698,7 +818,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(identity, "twitchbot");
-        (postgres, admin, bot)
+        let peer = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .connect_lazy_with(
+                sqlx::postgres::PgConnectOptions::new()
+                    .host(&socket_dir)
+                    .username("twitchbot")
+                    .database("twitch_analytics"),
+            );
+        (postgres, admin, bot, peer)
     }
 
     async fn poll_with_receiver(
@@ -795,6 +923,7 @@ mod tests {
     #[derive(Default)]
     struct FakeState {
         bootstrapped: bool,
+        last_successful_index_at: Option<DateTime<Utc>>,
         observations: HashMap<i64, FakeObservation>,
     }
 
@@ -805,15 +934,17 @@ mod tests {
 
     impl FakeCursor {
         fn existing(cursor: i64, pending: Option<i64>) -> Self {
+            let now = Utc::now();
             let mut state = FakeState {
                 bootstrapped: true,
+                last_successful_index_at: Some(now),
                 observations: HashMap::new(),
             };
             for id in 1..=cursor {
                 state.observations.insert(
                     id,
                     FakeObservation {
-                        observed_at: Utc::now(),
+                        observed_at: now,
                         status: "historical",
                     },
                 );
@@ -822,7 +953,7 @@ mod tests {
                 state.observations.insert(
                     id,
                     FakeObservation {
-                        observed_at: Utc::now(),
+                        observed_at: now,
                         status: "pending",
                     },
                 );
@@ -875,9 +1006,13 @@ mod tests {
             ids: Vec<i64>,
         ) -> Result<Vec<PendingObservation>, PatchFeedError> {
             let mut state = self.state.lock().unwrap();
-            if !state.bootstrapped && !ids.is_empty() {
+            let now = Utc::now();
+            let outage_gap = state.last_successful_index_at.is_some_and(|previous| {
+                now.signed_duration_since(previous)
+                    >= chrono::Duration::seconds(MAX_PENDING_AGE_SECONDS)
+            });
+            if !state.bootstrapped && !ids.is_empty() && !outage_gap {
                 state.bootstrapped = true;
-                let now = Utc::now();
                 for id in ids {
                     state.observations.insert(
                         id,
@@ -888,14 +1023,22 @@ mod tests {
                     );
                 }
             } else {
-                let now = Utc::now();
+                if !state.bootstrapped && !ids.is_empty() {
+                    state.bootstrapped = true;
+                }
+                let status = if outage_gap {
+                    "missed_during_outage"
+                } else {
+                    "pending"
+                };
                 for id in ids {
                     state.observations.entry(id).or_insert(FakeObservation {
                         observed_at: now,
-                        status: "pending",
+                        status,
                     });
                 }
             }
+            state.last_successful_index_at = Some(now);
             let mut pending: Vec<_> = state
                 .observations
                 .iter()
@@ -913,13 +1056,13 @@ mod tests {
             &self,
             id: i64,
             status: &'static str,
+            now: DateTime<Utc>,
         ) -> Result<bool, PatchFeedError> {
             let mut state = self.state.lock().unwrap();
             let Some(observation) = state.observations.get_mut(&id) else {
                 return Ok(false);
             };
-            if observation.status != "pending"
-                || !pending_is_expired(Utc::now(), observation.observed_at)
+            if observation.status != "pending" || !pending_is_expired(now, observation.observed_at)
             {
                 return Ok(false);
             }
@@ -1092,9 +1235,11 @@ mod tests {
             }]))
             .unwrap(),
         );
-        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&http, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
         let http = feed(&[286]);
         let meta_url = format!("{BASE_URL}/patch-286/meta.json");
         http.add_response(
@@ -1103,14 +1248,18 @@ mod tests {
             "https://attacker.example/",
             "",
         );
-        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&http, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
         let http = feed(&[286]);
         http.add_response(INDEX_URL, StatusCode::OK, "https://attacker.example/", "[]");
-        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&http, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1120,33 +1269,41 @@ mod tests {
         let url = article_url(286).unwrap();
         http.add_response(&url, StatusCode::NOT_FOUND, &url, "");
         let mut sent = Vec::new();
-        assert!(run_feed(&http, &cursor, |article| {
-            sent.push(article.id);
-            async { Ok(true) }
-        })
-        .await
-        .is_err());
+        assert!(
+            run_feed(&http, &cursor, |article| {
+                sent.push(article.id);
+                async { Ok(true) }
+            })
+            .await
+            .is_err()
+        );
         assert!(sent.is_empty());
         let http = feed(&[286, 287]);
         http.responses.lock().unwrap().remove(INDEX_URL);
-        assert!(run_feed(&http, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&http, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn failed_first_fetch_does_not_create_baseline() {
         let cursor = FakeCursor::default();
         let unavailable = FakeHttp::default();
-        assert!(run_feed(&unavailable, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&unavailable, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
         assert!(!cursor.state.lock().unwrap().bootstrapped);
         let malformed = FakeHttp::default();
         malformed.add(INDEX_URL, "{bad json");
-        assert!(run_feed(&malformed, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&malformed, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
         assert!(!cursor.state.lock().unwrap().bootstrapped);
         let published = feed(&[286]);
         assert_eq!(
@@ -1188,9 +1345,11 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert!(run_feed(&invalid, &cursor, |_| async { Ok(true) })
-            .await
-            .is_err());
+        assert!(
+            run_feed(&invalid, &cursor, |_| async { Ok(true) })
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1248,8 +1407,491 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_observations_close_only_pending_deliveries_atomically() {
+        let (_postgres, admin, bot, _peer) = isolated_bot_database().await;
+        type DeliverySnapshot = (String, String, Option<DateTime<Utc>>, Option<String>);
+        for id in [401_i64, 402, 403, 404, 405] {
+            sqlx::query(
+                "INSERT INTO twitch_patch_feed_observations \
+                 (patch_id, observed_at, status) \
+                 VALUES ($1, now()-interval '121 seconds', 'pending')",
+            )
+            .bind(id)
+            .execute(&admin)
+            .await
+            .unwrap();
+            let url = article_url(id).unwrap();
+            let event_id = format!("patch-{id}");
+            sqlx::query(
+                "INSERT INTO twitch_patch_announcements \
+                 (event_id, article_url, source_url, detected_at, message) \
+                 VALUES ($1, $2, $3, now(), 'test')",
+            )
+            .bind(&event_id)
+            .bind(&url)
+            .bind(format!("https://forums.playdeadlock.com/posts/{id}/"))
+            .execute(&admin)
+            .await
+            .unwrap();
+            for (broadcaster, status) in [
+                ("pending", "pending"),
+                ("attempted", "attempted"),
+                ("sent", "sent"),
+                ("uncertain", "uncertain"),
+                ("dropped", "dropped"),
+            ] {
+                sqlx::query(
+                    "INSERT INTO twitch_patch_announcement_deliveries \
+                     (event_id, broadcaster_id, stream_id, status, attempted_at, \
+                      drop_code, http_status, uncertainty_reason) \
+                     VALUES ($1, $2, 'stream', $3, $4, $5, $6, $7)",
+                )
+                .bind(&event_id)
+                .bind(broadcaster)
+                .bind(status)
+                .bind((status != "pending").then(Utc::now))
+                .bind((status == "dropped").then_some("moderated"))
+                .bind((status == "sent").then_some(200_i16))
+                .bind((status != "pending").then_some("existing-result"))
+                .execute(&admin)
+                .await
+                .unwrap();
+            }
+        }
+        sqlx::query(
+            "INSERT INTO twitch_patch_announcements \
+             (event_id, article_url, source_url, detected_at, message) \
+             VALUES ('unrelated', $1, 'https://forums.playdeadlock.com/posts/999/', now(), 'test')",
+        )
+        .bind(article_url(999).unwrap())
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_announcement_deliveries \
+             (event_id, broadcaster_id, stream_id) VALUES ('unrelated', 'pending', 'stream')",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+
+        for (id, status, reason) in [
+            (401, "expired_timeout", "feed_expired_timeout"),
+            (
+                402,
+                "expired_missing_from_index",
+                "feed_expired_missing_from_index",
+            ),
+            (403, "expired_unavailable", "feed_expired_unavailable"),
+        ] {
+            assert!(
+                expire_pending_at(&bot, id, status, Utc::now())
+                    .await
+                    .unwrap()
+            );
+            let observation: String = sqlx::query_scalar(
+                "SELECT status FROM twitch_patch_feed_observations WHERE patch_id=$1",
+            )
+            .bind(id)
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+            assert_eq!(observation, status);
+            let deliveries: Vec<DeliverySnapshot> = sqlx::query_as(
+                "SELECT broadcaster_id, status, attempted_at, uncertainty_reason \
+                     FROM twitch_patch_announcement_deliveries WHERE event_id=$1 \
+                     ORDER BY broadcaster_id",
+            )
+            .bind(format!("patch-{id}"))
+            .fetch_all(&admin)
+            .await
+            .unwrap();
+            for (broadcaster, delivery_status, attempted_at, uncertainty_reason) in deliveries {
+                if broadcaster == "pending" {
+                    assert_eq!(delivery_status, "skipped");
+                    assert_eq!(uncertainty_reason.as_deref(), Some(reason));
+                    assert_eq!(attempted_at, None);
+                } else {
+                    assert_eq!(delivery_status, broadcaster);
+                    assert!(attempted_at.is_some());
+                    assert_eq!(uncertainty_reason.as_deref(), Some("existing-result"));
+                }
+            }
+        }
+        assert!(
+            !deliver_article_with_clock(
+                &bot,
+                ValidatedArticle {
+                    id: 405,
+                    url: article_url(405).unwrap(),
+                    source_url: "https://forums.playdeadlock.com/posts/405/".into(),
+                },
+                &mut |_| async { Ok::<_, sqlx::Error>(()) },
+                Utc::now,
+            )
+            .await
+            .unwrap()
+        );
+        let timed_out: (String, String, Option<String>) = sqlx::query_as(
+            "SELECT observation.status, delivery.status, delivery.uncertainty_reason \
+             FROM twitch_patch_feed_observations observation \
+             JOIN twitch_patch_announcements announcement ON announcement.article_url=$1 \
+             JOIN twitch_patch_announcement_deliveries delivery \
+               ON delivery.event_id=announcement.event_id AND delivery.broadcaster_id='pending' \
+             WHERE observation.patch_id=405",
+        )
+        .bind(article_url(405).unwrap())
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(
+            timed_out,
+            (
+                "expired_timeout".into(),
+                "skipped".into(),
+                Some("feed_expired_timeout".into())
+            )
+        );
+        let unrelated: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, uncertainty_reason FROM twitch_patch_announcement_deliveries \
+             WHERE event_id='unrelated' AND broadcaster_id='pending'",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(unrelated, ("pending".into(), None));
+
+        sqlx::raw_sql(
+            "CREATE FUNCTION reject_patch_delivery_expiry() RETURNS trigger \
+             LANGUAGE plpgsql AS $$ BEGIN \
+             IF OLD.event_id = 'patch-404' THEN RAISE EXCEPTION 'injected expiry failure'; END IF; \
+             RETURN NEW; END $$; \
+             CREATE TRIGGER reject_patch_delivery_expiry BEFORE UPDATE \
+             ON twitch_patch_announcement_deliveries FOR EACH ROW \
+             EXECUTE FUNCTION reject_patch_delivery_expiry()",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        assert!(
+            expire_pending_at(&bot, 404, "expired_timeout", Utc::now())
+                .await
+                .is_err()
+        );
+        let rollback: (String, String) = sqlx::query_as(
+            "SELECT observation.status, delivery.status \
+             FROM twitch_patch_feed_observations observation \
+             JOIN twitch_patch_announcements announcement \
+               ON announcement.article_url=$1 \
+             JOIN twitch_patch_announcement_deliveries delivery \
+               ON delivery.event_id=announcement.event_id AND delivery.broadcaster_id='pending' \
+             WHERE observation.patch_id=404",
+        )
+        .bind(article_url(404).unwrap())
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(rollback, ("pending".into(), "pending".into()));
+    }
+
+    #[tokio::test]
+    async fn receiver_commit_wins_race_with_feed_expiry() {
+        let (_postgres, admin, bot, _peer) = isolated_bot_database().await;
+        let id = 405;
+        let url = article_url(id).unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_feed_observations \
+             (patch_id, observed_at, status) \
+             VALUES ($1, now(), 'pending')",
+        )
+        .bind(id)
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_announcements \
+             (event_id, article_url, source_url, detected_at, message) \
+             VALUES ('patch-405', $1, 'https://forums.playdeadlock.com/posts/405/', now(), 'test')",
+        )
+        .bind(&url)
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_patch_announcement_deliveries \
+             (event_id, broadcaster_id, stream_id) VALUES ('patch-405', '42', 'stream')",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let callback_admin = admin.clone();
+        let callback_entered = Arc::clone(&entered);
+        let mut release_rx = Some(release_rx);
+        let article = ValidatedArticle {
+            id,
+            url: url.clone(),
+            source_url: "https://forums.playdeadlock.com/posts/405/".into(),
+        };
+        let delivery_pool = bot.clone();
+        let mut delivery = tokio::spawn(async move {
+            deliver_article_with_clock(
+                &delivery_pool,
+                article,
+                &mut |_| {
+                    let admin = callback_admin.clone();
+                    let entered = Arc::clone(&callback_entered);
+                    let release = release_rx.take().unwrap();
+                    async move {
+                        entered.notify_one();
+                        release.await.unwrap();
+                        sqlx::query(
+                            "UPDATE twitch_patch_announcement_deliveries \
+                             SET status='sent' WHERE event_id='patch-405' AND broadcaster_id='42'",
+                        )
+                        .execute(&admin)
+                        .await?;
+                        Ok::<_, sqlx::Error>(())
+                    }
+                },
+                Utc::now,
+            )
+            .await
+        });
+        tokio::select! {
+            _ = entered.notified() => {}
+            result = &mut delivery => panic!("receiver ended before callback: {result:?}"),
+        }
+        let expiry_pool = bot.clone();
+        let expiry = tokio::spawn(async move {
+            expire_pending_at(
+                &expiry_pool,
+                id,
+                "expired_timeout",
+                Utc::now() + chrono::Duration::seconds(121),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(!expiry.is_finished());
+        release_tx.send(()).unwrap();
+        assert!(delivery.await.unwrap().unwrap());
+        assert!(!expiry.await.unwrap().unwrap());
+        let result: (String, String, Option<String>) = sqlx::query_as(
+            "SELECT observation.status, delivery.status, delivery.uncertainty_reason \
+             FROM twitch_patch_feed_observations observation \
+             JOIN twitch_patch_announcements announcement ON announcement.article_url=$1 \
+             JOIN twitch_patch_announcement_deliveries delivery \
+               ON delivery.event_id=announcement.event_id AND delivery.broadcaster_id='42' \
+             WHERE observation.patch_id=405",
+        )
+        .bind(url)
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(result, ("processed".into(), "sent".into(), None));
+    }
+
+    #[tokio::test]
+    async fn feed_outage_is_atomic_across_bot_pools_and_healthy_lower_ids_still_progress() {
+        let (_postgres, admin, bot, peer) = isolated_bot_database().await;
+        let (first_bootstrap, second_bootstrap) =
+            tokio::join!(observe_index(&bot, &[302]), observe_index(&peer, &[302]),);
+        assert!(first_bootstrap.unwrap().is_empty());
+        assert!(second_bootstrap.unwrap().is_empty());
+        let bootstrap: (Option<DateTime<Utc>>, String) = sqlx::query_as(
+            "SELECT bootstrapped_at, status FROM twitch_patch_feed_state \
+             CROSS JOIN twitch_patch_feed_observations WHERE patch_id=302",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert!(bootstrap.0.is_some());
+        assert_eq!(bootstrap.1, "historical");
+
+        sqlx::raw_sql(
+            "UPDATE twitch_patch_feed_observations SET status='pending', finalized_at=NULL, \
+             observed_at=now()-interval '60 seconds' WHERE patch_id=302; \
+             UPDATE twitch_patch_feed_state SET last_successful_index_at=now()-interval '3 hours'",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let original_observed_at: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT observed_at FROM twitch_patch_feed_observations WHERE patch_id=302",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        let (first_poll, second_poll) = tokio::join!(
+            observe_index(&bot, &[300, 302]),
+            observe_index(&peer, &[300, 302]),
+        );
+        assert_eq!(
+            first_poll
+                .unwrap()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            vec![302]
+        );
+        assert_eq!(
+            second_poll
+                .unwrap()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            vec![302]
+        );
+        let outage_rows: Vec<(i64, String, Option<DateTime<Utc>>)> = sqlx::query_as(
+            "SELECT patch_id, status, finalized_at FROM twitch_patch_feed_observations \
+             WHERE patch_id IN (300,302) ORDER BY patch_id",
+        )
+        .fetch_all(&admin)
+        .await
+        .unwrap();
+        assert_eq!(outage_rows[0].0, 300);
+        assert_eq!(outage_rows[0].1, "missed_during_outage");
+        assert!(outage_rows[0].2.is_some());
+        assert_eq!(outage_rows[1].0, 302);
+        assert_eq!(outage_rows[1].1, "pending");
+        assert_eq!(outage_rows[1].2, None);
+        let preserved_observed_at: DateTime<Utc> = sqlx::query_scalar(
+            "SELECT observed_at FROM twitch_patch_feed_observations WHERE patch_id=302",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(preserved_observed_at, original_observed_at);
+        let missed_recipients: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_patch_announcement_recipients WHERE patch_id=300",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(missed_recipients, 0);
+
+        sqlx::query(
+            "UPDATE twitch_patch_feed_state SET last_successful_index_at=now()-interval '30 seconds'",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let healthy = observe_index(&peer, &[299, 300, 302]).await.unwrap();
+        assert_eq!(
+            healthy.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![302, 299]
+        );
+        let later_lower_id: String = sqlx::query_scalar(
+            "SELECT status FROM twitch_patch_feed_observations WHERE patch_id=299",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(later_lower_id, "pending");
+
+        sqlx::query(
+            "UPDATE twitch_patch_feed_observations SET observed_at=now()-interval '121 seconds' \
+             WHERE patch_id IN (299,302)",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE twitch_patch_feed_state SET last_successful_index_at=now()-interval '3 hours'",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let outage_http = FakeHttp::default();
+        outage_http.add(
+            INDEX_URL,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 298,
+                "url": article_url(298).unwrap(),
+            }]))
+            .unwrap(),
+        );
+        let mut delivered = false;
+        assert_eq!(
+            run_feed(&outage_http, &bot, |_| {
+                delivered = true;
+                async { Ok(true) }
+            })
+            .await
+            .unwrap(),
+            0
+        );
+        assert!(!delivered);
+        let missed: String = sqlx::query_scalar(
+            "SELECT status FROM twitch_patch_feed_observations WHERE patch_id=298",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(missed, "missed_during_outage");
+    }
+
+    #[tokio::test]
+    async fn first_nonempty_index_after_outage_is_missed_then_healthy_index_is_pending() {
+        let (_postgres, admin, bot, _peer) = isolated_bot_database().await;
+        assert!(observe_index(&bot, &[]).await.unwrap().is_empty());
+        sqlx::query(
+            "UPDATE twitch_patch_feed_state SET last_successful_index_at=now()-interval '3 hours'",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let outage_http = FakeHttp::default();
+        outage_http.add(
+            INDEX_URL,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 298,
+                "url": article_url(298).unwrap(),
+            }]))
+            .unwrap(),
+        );
+        assert_eq!(
+            run_feed(&outage_http, &bot, |_| async { Ok(true) })
+                .await
+                .unwrap(),
+            0
+        );
+        let outage_state: (Option<DateTime<Utc>>, String) = sqlx::query_as(
+            "SELECT bootstrapped_at, status FROM twitch_patch_feed_state \
+             CROSS JOIN twitch_patch_feed_observations WHERE patch_id=298",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert!(outage_state.0.is_some());
+        assert_eq!(outage_state.1, "missed_during_outage");
+
+        sqlx::query(
+            "UPDATE twitch_patch_feed_state SET last_successful_index_at=now()-interval '30 seconds'",
+        )
+        .execute(&admin)
+        .await
+        .unwrap();
+        let healthy = observe_index(&bot, &[297, 298]).await.unwrap();
+        assert_eq!(
+            healthy.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![297]
+        );
+        let next_status: String = sqlx::query_scalar(
+            "SELECT status FROM twitch_patch_feed_observations WHERE patch_id=297",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        assert_eq!(next_status, "pending");
+    }
+
+    #[tokio::test]
     async fn feed_to_source_only_receiver_uses_isolated_postgres_runtime_role() {
-        let (_postgres, admin, bot) = isolated_bot_database().await;
+        let (_postgres, admin, bot, _peer) = isolated_bot_database().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth2/token"))
@@ -1314,11 +1956,12 @@ mod tests {
                 .unwrap(),
             0
         );
-        let baseline: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_patch_feed_state")
-            .fetch_one(&bot)
-            .await
-            .unwrap();
-        assert_eq!(baseline, 0);
+        let baseline: (i64, Option<DateTime<Utc>>) =
+            sqlx::query_as("SELECT count(*), min(bootstrapped_at) FROM twitch_patch_feed_state")
+                .fetch_one(&bot)
+                .await
+                .unwrap();
+        assert_eq!(baseline, (1, None));
         assert_eq!(
             poll_with_receiver(&feed(&[284, 285]), &bot, &receiver)
                 .await
@@ -1550,6 +2193,20 @@ mod tests {
             .expect(2)
             .mount(&server)
             .await;
+        sqlx::query(
+            "UPDATE twitch_live_state SET last_seen_at=to_char(now(), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
+             WHERE twitch_user_id='43'",
+        )
+            .execute(&admin)
+            .await
+            .unwrap();
+        let last_seen: String = sqlx::query_scalar(
+            "SELECT last_seen_at FROM twitch_live_state WHERE twitch_user_id='43'",
+        )
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+        let _last_seen = DateTime::parse_from_rfc3339(&last_seen).unwrap();
         let entered = Arc::new(tokio::sync::Notify::new());
         let (release_tx, release_rx) = mpsc::channel();
         Mock::given(method("POST"))
@@ -1625,9 +2282,11 @@ mod tests {
             &unavailable_url,
             "",
         );
-        assert!(poll_with_receiver(&unavailable_article, &bot, &receiver)
-            .await
-            .is_err());
+        assert!(
+            poll_with_receiver(&unavailable_article, &bot, &receiver)
+                .await
+                .is_err()
+        );
         let pending_without_announcement: (String, i64) = sqlx::query_as(
             "SELECT o.status, (SELECT count(*) FROM twitch_patch_announcements \
              WHERE article_url='https://deutsche-deadlock-community.de/patchnotes/patch-291/') \

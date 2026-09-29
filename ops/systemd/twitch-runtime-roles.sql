@@ -264,7 +264,8 @@ BEGIN
     IF to_regclass('public.twitch_patch_feed_state') IS NOT NULL THEN
         REVOKE ALL ON public.twitch_patch_feed_state FROM twitchbot, twitchdash, twitchlegacy;
         GRANT SELECT, INSERT ON public.twitch_patch_feed_state TO twitchbot;
-        GRANT UPDATE (singleton) ON public.twitch_patch_feed_state TO twitchbot;
+        GRANT UPDATE (singleton, bootstrapped_at, last_successful_index_at)
+            ON public.twitch_patch_feed_state TO twitchbot;
         GRANT SELECT ON public.twitch_patch_feed_state TO twitchdash;
     END IF;
     IF to_regclass('public.twitch_patch_feed_observations') IS NOT NULL THEN

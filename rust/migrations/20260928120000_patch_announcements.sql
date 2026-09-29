@@ -22,7 +22,8 @@ CREATE TABLE twitch_patch_announcement_deliveries (
 
 CREATE TABLE twitch_patch_feed_state (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-    bootstrapped_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    bootstrapped_at TIMESTAMPTZ,
+    last_successful_index_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE twitch_patch_feed_observations (
@@ -30,7 +31,7 @@ CREATE TABLE twitch_patch_feed_observations (
     observed_at TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL CHECK (status IN (
         'historical', 'pending', 'processed', 'expired_timeout',
-        'expired_missing_from_index', 'expired_unavailable'
+        'expired_missing_from_index', 'expired_unavailable', 'missed_during_outage'
     )),
     finalized_at TIMESTAMPTZ
 );
@@ -105,7 +106,8 @@ DO $$ BEGIN
         GRANT UPDATE (status, attempted_at, drop_code, http_status, uncertainty_reason)
             ON twitch_patch_announcement_deliveries TO twitchbot;
         GRANT SELECT, INSERT ON twitch_patch_feed_state TO twitchbot;
-        GRANT UPDATE (singleton) ON twitch_patch_feed_state TO twitchbot;
+        GRANT UPDATE (singleton, bootstrapped_at, last_successful_index_at)
+            ON twitch_patch_feed_state TO twitchbot;
         GRANT SELECT, INSERT ON twitch_patch_feed_observations TO twitchbot;
         GRANT UPDATE (status, finalized_at) ON twitch_patch_feed_observations TO twitchbot;
         GRANT SELECT, INSERT ON twitch_patch_announcement_recipients TO twitchbot;

@@ -4,14 +4,20 @@ use super::*;
 mod postgres;
 use postgres::TestPostgres;
 use std::{
+    collections::HashSet,
     process::Command,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
     time::Duration,
 };
 use tb_chat::api::{BanOutcome, SourceOnlyPreSendCheck};
+use tb_chat::channel_policy::{ChannelPolicyChatApi, PolicyContext};
+use tb_chat::global_ban_sweep::PartnerRoster;
+use tb_chat::moderation::TimeoutGuard;
+use tb_chat::timeout_tracking::TimeoutTrackingChatApi;
 use tb_transport_twitch::HelixConfig;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -658,10 +664,12 @@ async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
     let db = database().await;
     let pool = db.pool.clone();
     let transport = FakeTransport::new(pool.clone());
-    assert!(authorized_login(&pool, "42", "session-42")
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        authorized_login(&pool, "42", "session-42")
+            .await
+            .unwrap()
+            .is_some()
+    );
     let denied = patch_event(286);
     for (scopes, reauth) in [
         ("channel:bot:spoof", false),
@@ -676,10 +684,12 @@ async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(authorized_login(&pool, "42", "session-42")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            authorized_login(&pool, "42", "session-42")
+                .await
+                .unwrap()
+                .is_none()
+        );
         process(&pool, &transport, &denied).await.unwrap();
     }
     let (count, status, reason): (i64, String, Option<String>) = sqlx::query_as(
@@ -701,10 +711,12 @@ async fn rights_reauth_optout_and_expired_events_record_terminal_skips() {
     .unwrap();
     process(&pool, &transport, &denied).await.unwrap();
     assert!(transport.sent.lock().unwrap().is_empty());
-    assert!(authorized_login(&pool, "44", "session-44")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        authorized_login(&pool, "44", "session-44")
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut expired = patch_event(287);
     expired.detected_at -= chrono::Duration::minutes(3);
     expired.source_url = "https://forums.playdeadlock.com/posts/287/".into();
@@ -768,6 +780,213 @@ impl ChatApi for MockEndpointChat {
     async fn bot_user_id(&self) -> String {
         "777".into()
     }
+}
+
+struct PatchTestRoster {
+    allowed: bool,
+}
+
+#[async_trait::async_trait]
+impl PartnerRoster for PatchTestRoster {
+    async fn all_active_partners(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    async fn valid_auth_ids(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
+    async fn live_broadcaster_ids(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
+    async fn is_operational_partner_channel(&self, _: &str) -> bool {
+        self.allowed
+    }
+
+    async fn global_ban_enforcement_enabled(&self, _: &str) -> bool {
+        true
+    }
+
+    async fn streamer_global_ban_enabled(&self, _: &str) -> bool {
+        true
+    }
+}
+
+async fn patch_read_server() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth2/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "read-token", "expires_in": 3600
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/helix/streams"))
+        .and(query_param("user_id", "42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"id": "session-42", "user_id": "42", "game_id": "deadlock",
+                "game_name": "Deadlock", "started_at": "2020-01-01T00:00:00Z"}]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn prepare_timeout_identity(pool: &PgPool) {
+    sqlx::raw_sql(
+        "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT); \
+         INSERT INTO twitch_streamer_identities VALUES ('42', 'renamed');",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn patch_chat_chain(
+    pool: PgPool,
+    chat_helix: HelixClient,
+    allowed: bool,
+    guard: Arc<TimeoutGuard>,
+) -> Arc<dyn ChatApi> {
+    let tracking = Arc::new(TimeoutTrackingChatApi::new(
+        Arc::new(MockEndpointChat { helix: chat_helix }),
+        guard,
+        pool,
+    ));
+    Arc::new(ChannelPolicyChatApi::new(
+        tracking,
+        PolicyContext::Standard(Arc::new(PatchTestRoster { allowed })),
+    ))
+}
+
+#[tokio::test]
+async fn channel_policy_rejection_is_stored_as_skipped_without_chat_post() {
+    let db = database().await;
+    prepare_timeout_identity(&db.pool).await;
+    let read_server = patch_read_server().await;
+    let chat_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth2/token"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&chat_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/helix/chat/messages"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&chat_server)
+        .await;
+    let mut read_config = HelixConfig::new("cid", "sec");
+    read_config.helix_base = format!("{}/helix", read_server.uri());
+    read_config.token_url = format!("{}/oauth2/token", read_server.uri());
+    let mut chat_config = HelixConfig::new("cid", "sec");
+    chat_config.helix_base = format!("{}/helix", chat_server.uri());
+    chat_config.token_url = format!("{}/oauth2/token", chat_server.uri());
+    let event = patch_event(286);
+    approve_observation(&db.pool, &event).await;
+    let receiver = PatchReceiver::new(
+        db.pool.clone(),
+        HelixClient::new(read_config).unwrap(),
+        patch_chat_chain(
+            db.pool.clone(),
+            HelixClient::new(chat_config).unwrap(),
+            false,
+            Arc::new(TimeoutGuard::new()),
+        ),
+        Arc::new(tb_chat::promos::NoopSuppressionCheck),
+    );
+
+    assert!(matches!(
+        receiver.process(&event).await.unwrap(),
+        PatchProcessOutcome::Processed(_)
+    ));
+    let (status, reason, drop_code): (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason, drop_code FROM twitch_patch_announcement_deliveries \
+         WHERE broadcaster_id='42'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("channel_policy_denied"));
+    assert_eq!(drop_code, None);
+    read_server.verify().await;
+    chat_server.verify().await;
+}
+
+#[tokio::test]
+async fn final_timeout_mute_is_stored_as_skipped_without_chat_post() {
+    let db = database().await;
+    prepare_timeout_identity(&db.pool).await;
+    let read_server = patch_read_server().await;
+    let chat_server = MockServer::start().await;
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    Mock::given(method("POST"))
+        .and(path("/oauth2/token"))
+        .respond_with(PausedTokenRefresh {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        })
+        .expect(1)
+        .mount(&chat_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/helix/chat/messages"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&chat_server)
+        .await;
+    let mut read_config = HelixConfig::new("cid", "sec");
+    read_config.helix_base = format!("{}/helix", read_server.uri());
+    read_config.token_url = format!("{}/oauth2/token", read_server.uri());
+    let mut chat_config = HelixConfig::new("cid", "sec");
+    chat_config.helix_base = format!("{}/helix", chat_server.uri());
+    chat_config.token_url = format!("{}/oauth2/token", chat_server.uri());
+    let event = patch_event(286);
+    approve_observation(&db.pool, &event).await;
+    let guard = Arc::new(TimeoutGuard::new());
+    let receiver = PatchReceiver::new(
+        db.pool.clone(),
+        HelixClient::new(read_config).unwrap(),
+        patch_chat_chain(
+            db.pool.clone(),
+            HelixClient::new(chat_config).unwrap(),
+            true,
+            Arc::clone(&guard),
+        ),
+        Arc::new(tb_chat::promos::NoopSuppressionCheck),
+    );
+    let processing = tokio::spawn(async move { receiver.process(&event).await });
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    guard.record_timeout("renamed");
+    guard.record_timeout("renamed");
+    assert!(guard.is_muted("renamed"));
+    release_tx.send(()).unwrap();
+
+    assert!(matches!(
+        processing.await.unwrap().unwrap(),
+        PatchProcessOutcome::Processed(_)
+    ));
+    let (status, reason, drop_code): (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT status, uncertainty_reason, drop_code FROM twitch_patch_announcement_deliveries \
+         WHERE broadcaster_id='42'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "skipped");
+    assert_eq!(reason.as_deref(), Some("source_only_chat_muted"));
+    assert_eq!(drop_code, None);
+    read_server.verify().await;
+    chat_server.verify().await;
 }
 
 struct PausedTokenRefresh {
@@ -986,6 +1205,7 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
 
     let privileges: Vec<bool> = sqlx::query_scalar(
         "SELECT has_column_privilege('twitchbot', 'twitch_patch_feed_state', 'singleton', 'UPDATE') \
+         UNION ALL SELECT has_column_privilege('twitchbot', 'twitch_patch_feed_state', 'last_successful_index_at', 'UPDATE') \
          UNION ALL SELECT NOT has_column_privilege('twitchbot', 'twitch_patch_feed_observations', 'observed_at', 'UPDATE') \
          UNION ALL SELECT has_column_privilege('twitchbot', 'twitch_patch_feed_observations', 'status', 'UPDATE') \
          UNION ALL SELECT has_table_privilege('twitchbot', 'twitch_patch_announcement_recipients', 'INSERT') \
@@ -997,17 +1217,20 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(privileges, vec![true; 8]);
+    assert_eq!(privileges, vec![true; 9]);
 
     let mut conn = pool.acquire().await.unwrap();
     sqlx::query("SET ROLE twitchbot")
         .execute(&mut *conn)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO twitch_patch_feed_state (singleton) VALUES (TRUE)")
-        .execute(&mut *conn)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_patch_feed_state (singleton, last_successful_index_at) \
+         VALUES (TRUE, now())",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
     sqlx::query("SELECT singleton FROM twitch_patch_feed_state WHERE singleton FOR UPDATE")
         .fetch_one(&mut *conn)
         .await
@@ -1026,13 +1249,15 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .execute(&mut *conn)
     .await
     .unwrap();
-    assert!(sqlx::query(
-        "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
+    assert!(
+        sqlx::query(
+            "INSERT INTO twitch_patch_feed_observations (patch_id, observed_at, status) \
          VALUES (291, now(), 'invalid')",
-    )
-    .execute(&mut *conn)
-    .await
-    .is_err());
+        )
+        .execute(&mut *conn)
+        .await
+        .is_err()
+    );
     let order: Vec<i64> = sqlx::query_scalar(
         "SELECT patch_id FROM twitch_patch_feed_observations ORDER BY observed_at, patch_id",
     )
@@ -1055,12 +1280,14 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .await
     .unwrap();
     assert_eq!(historical, 0);
-    assert!(sqlx::query(
-        "UPDATE twitch_patch_feed_observations SET observed_at=now() WHERE patch_id=290",
-    )
-    .execute(&mut *conn)
-    .await
-    .is_err());
+    assert!(
+        sqlx::query(
+            "UPDATE twitch_patch_feed_observations SET observed_at=now() WHERE patch_id=290",
+        )
+        .execute(&mut *conn)
+        .await
+        .is_err()
+    );
     sqlx::query("RESET ROLE").execute(&mut *conn).await.unwrap();
     drop(conn);
     let first_observed_at = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
