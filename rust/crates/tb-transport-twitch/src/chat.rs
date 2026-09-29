@@ -418,8 +418,9 @@ impl HelixClient {
             });
         }
         if (200..300).contains(&status) {
-            return Err(HelixError::AmbiguousOutcome {
-                reason: "source_only_chat_unexpected_success_status",
+            return Ok(SendOutcome::HttpError {
+                status,
+                body: String::new(),
             });
         }
         if status == 401 {
@@ -1175,12 +1176,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_only_204_retains_status_without_claiming_delivery_or_retrying() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::HttpError {
+                status: 204,
+                body: String::new(),
+            }
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn source_only_ambiguous_success_never_claims_delivery() {
         for (status, body) in [
             (200, "not-json"),
             (200, r#"{"data":[]}"#),
             (200, r#"{"data":[{"is_sent":true},{"is_sent":true}]}"#),
-            (204, ""),
         ] {
             let server = MockServer::start().await;
             let client = mock_client(&server).await;
