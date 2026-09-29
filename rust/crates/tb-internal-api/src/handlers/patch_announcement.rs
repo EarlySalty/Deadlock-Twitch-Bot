@@ -187,6 +187,32 @@ impl DeliveryResult {
     }
 }
 
+fn http_error_result(status: u16) -> DeliveryResult {
+    DeliveryResult {
+        status: "uncertain",
+        drop_code: None,
+        http_status: Some(status as i16),
+        uncertainty_reason: Some(if (200..300).contains(&status) {
+            "unexpected_success_status"
+        } else {
+            "http_error"
+        }),
+    }
+}
+
+fn delivery_result_from_send_outcome(outcome: SendOutcome) -> DeliveryResult {
+    match outcome {
+        SendOutcome::Sent => DeliveryResult::status("sent"),
+        SendOutcome::Dropped { code, .. } => DeliveryResult {
+            status: "dropped",
+            drop_code: Some(redact_drop_code(&code)),
+            http_status: None,
+            uncertainty_reason: None,
+        },
+        SendOutcome::HttpError { status, .. } => http_error_result(status),
+    }
+}
+
 #[async_trait::async_trait]
 trait Transport: Send + Sync {
     async fn streams(&self, ids: &[String]) -> Result<Vec<HelixStream>, PatchProcessError>;
@@ -290,19 +316,7 @@ impl Transport for LiveTransport<'_> {
                 .send_source_only_message(id, message)
                 .await
             {
-                Ok(SendOutcome::Sent) => DeliveryResult::status("sent"),
-                Ok(SendOutcome::Dropped { code, .. }) => DeliveryResult {
-                    status: "dropped",
-                    drop_code: Some(redact_drop_code(&code)),
-                    http_status: None,
-                    uncertainty_reason: None,
-                },
-                Ok(SendOutcome::HttpError { status, .. }) => DeliveryResult {
-                    status: "uncertain",
-                    drop_code: None,
-                    http_status: Some(status as i16),
-                    uncertainty_reason: Some("http_error"),
-                },
+                Ok(outcome) => delivery_result_from_send_outcome(outcome),
                 Err(error) => DeliveryResult {
                     status: "uncertain",
                     drop_code: None,

@@ -218,6 +218,41 @@ async fn concurrent_retries_and_source_duplicates_send_exactly_once() {
 }
 
 #[tokio::test]
+async fn unexpected_success_http_status_is_uncertain_and_never_retried() {
+    let db = database().await;
+    let pool = db.pool.clone();
+    let transport = FakeTransport::new(pool.clone());
+    for (patch_id, status, expected_reason) in [
+        (286, 204, "unexpected_success_status"),
+        (287, 422, "http_error"),
+        (288, 503, "http_error"),
+    ] {
+        *transport.known_result.lock().unwrap() =
+            Some(delivery_result_from_send_outcome(SendOutcome::HttpError {
+                status,
+                body: String::new(),
+            }));
+        let mut event = patch_event(patch_id);
+        event.source_url = format!("https://forums.playdeadlock.com/posts/{patch_id}/");
+        process(&pool, &transport, &event).await.unwrap();
+        process(&pool, &transport, &event).await.unwrap();
+        let (delivery_status, http_status, reason): (String, Option<i16>, Option<String>) =
+            sqlx::query_as(
+                "SELECT status, http_status, uncertainty_reason \
+                 FROM twitch_patch_announcement_deliveries WHERE event_id=$1",
+            )
+            .bind(&event.event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(delivery_status, "uncertain");
+        assert_eq!(http_status, Some(status as i16));
+        assert_eq!(reason.as_deref(), Some(expected_reason));
+    }
+    assert_eq!(transport.sent.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn uncertain_drop_and_crash_after_claim_never_retry() {
     let db = database().await;
     let pool = db.pool.clone();
