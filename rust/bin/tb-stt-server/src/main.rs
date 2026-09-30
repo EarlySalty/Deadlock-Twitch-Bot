@@ -7,6 +7,8 @@ use std::{
     time::Instant,
 };
 
+mod recovery;
+
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},
     http::StatusCode,
@@ -153,15 +155,18 @@ impl IntoResponse for ApiError {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let arguments = ConfigArguments::parse(env::args_os().skip(1))
-        .map_err(|error| error.to_string())?;
-    if !arguments.remaining.is_empty() {
-        return Err("Der STT-Start akzeptiert ausschließlich --config mit absolutem Dateipfad.".into());
-    }
+    let arguments =
+        ConfigArguments::parse(env::args_os().skip(1)).map_err(|error| error.to_string())?;
+    let recovery_state = recovery::parse_arguments(&arguments.remaining)?;
     let snapshot = BotConfigSnapshot::load(&arguments.path).map_err(|error| error.to_string())?;
     tracing_subscriber::fmt()
         .with_max_level(snapshot.settings().logging.level.tracing_level())
         .init();
+
+    if let Some(state_path) = recovery_state {
+        recovery::run(&snapshot.settings().stt, &state_path).await?;
+        return Ok(());
+    }
 
     let config = Config::from_snapshot(&snapshot)?;
     info!(

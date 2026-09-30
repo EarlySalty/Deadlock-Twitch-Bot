@@ -53,6 +53,28 @@ curl -fsS http://127.0.0.1:8791/health
 Der Dienst hat keine Authentifizierung und bindet deshalb standardmäßig nur an
 `127.0.0.1`.
 
+## Healthcheck und begrenzte Wiederherstellung
+
+`deadlock-stt-recovery.timer` startet alle fünf Minuten einen kurzen Healthcheck
+im vorhandenen Rust-Binary. Er fragt nur `GET /health` am Loopback-Endpunkt aus
+der normalen Bot-Konfiguration ab; Modell und Inferenz werden nicht geladen.
+Eine Wiederherstellung erfolgt ausschließlich bei einer weiterhin aktivierten
+und aktiven Haupt-Unit. Der feste Aufruf nutzt `try-restart`, startet also keine
+administrativ gestoppte Unit. Ein persistenter Status in der systemd-
+StateDirectory begrenzt Wiederholungen mit wachsendem Abstand bis höchstens
+sechs Stunden. Wiederholte Recoverymeldungen werden höchstens einmal pro Tag
+und zweimal innerhalb sieben Tagen protokolliert; die Zahl unterdrückter
+Wiederholungen steht in der nächsten Meldung.
+
+Installation neben der Haupt-Unit:
+
+```bash
+cp ops/stt-server/deadlock-stt-recovery.service ~/.config/systemd/user/
+cp ops/stt-server/deadlock-stt-recovery.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now deadlock-stt-recovery.timer
+```
+
 ## Konfiguration
 
 | Variable | Default | Bedeutung |

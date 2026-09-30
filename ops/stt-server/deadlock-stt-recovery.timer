@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic health check for the local STT server
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=deadlock-stt-recovery.service
+
+[Install]
+WantedBy=timers.target
