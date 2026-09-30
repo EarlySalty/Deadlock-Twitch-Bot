@@ -64,7 +64,11 @@ administrativ gestoppte Unit. Ein persistenter Status in der systemd-
 StateDirectory begrenzt Wiederholungen mit wachsendem Abstand bis höchstens
 sechs Stunden. Wiederholte Recoverymeldungen werden höchstens einmal pro Tag
 und zweimal innerhalb sieben Tagen protokolliert; die Zahl unterdrückter
-Wiederholungen steht in der nächsten Meldung.
+Wiederholungen steht in der nächsten Meldung. Jede neue aktive Startgeneration
+bekommt zuerst 15 Minuten Startup-Karenz. Die Zeit beginnt bei der ersten
+ungesunden Probe dieser von systemd gemeldeten Startgeneration; ein Neustart
+setzt sie zurück. Dadurch kann die Recovery nach einem gemeldeten Neustart bis
+zu 15 Minuten zusätzlich warten.
 
 Installation neben der Haupt-Unit:
 
