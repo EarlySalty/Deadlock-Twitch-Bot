@@ -394,7 +394,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             {setTitleStatus === 'error' && <p className="text-xs text-error">Twitch hat das Setzen des Titels gerade nicht bestätigt.</p>}
             {result.auto_set_status === 'set' && <p className="text-xs text-success">Dieser Titel wurde automatisch auf Twitch übernommen.</p>}
 
-            {feedbackState === 'disliked' && neverWordList(neverWords).length < 40 && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === (neverWordList(editableTitle)[0] ?? '').toLowerCase()) && (
+            {canEditSettings && feedbackState === 'disliked' && neverWordList(neverWords).length < 40 && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === (neverWordList(editableTitle)[0] ?? '').toLowerCase()) && (
               <button
                 type="button"
                 onClick={() => addNeverWord(editableTitle)}
@@ -404,7 +404,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               </button>
             )}
 
-            {feedbackState === 'disliked' && neverWordList(neverWords).length >= 40 && (
+            {canEditSettings && feedbackState === 'disliked' && neverWordList(neverWords).length >= 40 && (
               <p className="text-xs text-text-secondary">Deine Liste enthält bereits 40 Einträge. Entferne dort einen Eintrag, bevor du eine weitere Formulierung übernimmst.</p>
             )}
 
