@@ -137,9 +137,8 @@ pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
     }
 }
 
-/// Parameter, die an die SPA weitergereicht werden. Mehr braucht der Umweg
-/// nicht: `oauth_callback_handler` setzt genau diese beiden.
-const WEITERGEREICHTE_PARAMETER: [&str; 2] = ["oauth_success", "oauth_error"];
+/// Status und das bereits im OAuth-State validierte Kanalziel der Rückkehr.
+const WEITERGEREICHTE_PARAMETER: [&str; 3] = ["oauth_success", "oauth_error", "twitch_user_id"];
 
 /// Laengstens so lang darf ein weitergereichter Wert sein. Plattformnamen und
 /// Fehlerkuerzel bleiben weit darunter.
@@ -166,6 +165,9 @@ fn weitergereichte_query(uri: &Uri) -> Option<String> {
                 return None;
             }
             if wert.is_empty() || wert.len() > MAX_PARAMETER_LAENGE {
+                return None;
+            }
+            if schluessel == "twitch_user_id" && !wert.bytes().all(|b| b.is_ascii_digit()) {
                 return None;
             }
             if !wert
@@ -3590,6 +3592,19 @@ fn dashboard_url(key: &str, value: &str) -> String {
     format!("/social-media?{key}={value}")
 }
 
+fn oauth_success_dashboard_url(platform: &str, twitch_user_id: Option<&str>) -> String {
+    let mut url = dashboard_url("oauth_success", platform);
+    // Dieser Wert kommt ausschließlich aus dem verbrauchten, validierten State,
+    // niemals aus einem freien Callback-Queryparameter.
+    if let Some(id) = twitch_user_id.filter(|id| {
+        !id.is_empty() && id.len() <= MAX_PARAMETER_LAENGE && id.bytes().all(|b| b.is_ascii_digit())
+    }) {
+        url.push_str("&twitch_user_id=");
+        url.push_str(id);
+    }
+    url
+}
+
 /// 302-Redirect (Python `web.HTTPFound`).
 fn redirect_found(url: &str) -> Response {
     (
@@ -3710,7 +3725,10 @@ pub async fn oauth_callback_handler(
             } else {
                 "unknown".to_string()
             };
-            redirect_found(&dashboard_url("oauth_success", &platform))
+            redirect_found(&oauth_success_dashboard_url(
+                &platform,
+                result.twitch_user_id.as_deref(),
+            ))
         }
         Err(OAuthError::StateInvalid | OAuthError::RedirectMismatch) => {
             redirect_found(&dashboard_url("oauth_error", "invalid_callback"))
@@ -4198,6 +4216,19 @@ mod tests {
             ziel("/social-media?oauth_success=youtube").await,
             "/social-media-admin?oauth_success=youtube"
         );
+        let return_url = oauth_success_dashboard_url("youtube", Some("42"));
+        assert_eq!(
+            ziel(&return_url).await,
+            "/social-media-admin?oauth_success=youtube&twitch_user_id=42"
+        );
+        assert_eq!(
+            oauth_success_dashboard_url("youtube", None),
+            "/social-media?oauth_success=youtube"
+        );
+        assert_eq!(
+            oauth_success_dashboard_url("youtube", Some("42&next=foreign")),
+            "/social-media?oauth_success=youtube"
+        );
         assert_eq!(
             ziel("/social-media?oauth_error=token_exchange_failed").await,
             "/social-media-admin?oauth_error=token_exchange_failed"
@@ -4224,6 +4255,12 @@ mod tests {
             Some("oauth_success=tiktok".to_string())
         );
         assert_eq!(q("/x?a=1&b=2"), None);
+        assert_eq!(
+            q("/x?oauth_success=youtube&twitch_user_id=42"),
+            Some("oauth_success=youtube&twitch_user_id=42".into())
+        );
+        assert_eq!(q("/x?twitch_user_id=nani"), None);
+        assert_eq!(q("/x?twitch_user_id=42%26next%3Devil"), None);
         assert_eq!(q("/x"), None);
         assert_eq!(q("/x?"), None);
         // Werte ausserhalb der erwarteten Form fallen weg.

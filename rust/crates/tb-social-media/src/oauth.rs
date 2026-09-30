@@ -84,6 +84,7 @@ struct ExchangedTokens {
 pub struct CallbackResult {
     pub platform: String,
     pub streamer_login: Option<String>,
+    pub twitch_user_id: Option<String>,
 }
 
 /// OAuth-Manager: Authorize-URLs + Callback-Exchange + verschlüsselter Persist.
@@ -208,6 +209,7 @@ impl OAuthManager {
         Ok(CallbackResult {
             platform,
             streamer_login,
+            twitch_user_id,
         })
     }
 
@@ -1464,7 +1466,8 @@ mod tests {
             result,
             CallbackResult {
                 platform: "youtube".to_string(),
-                streamer_login: Some("nani".to_string())
+                streamer_login: Some("nani".to_string()),
+                twitch_user_id: Some("42".to_string()),
             }
         );
 
@@ -1567,6 +1570,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.streamer_login.as_deref(), Some("renamed_a"));
+        assert_eq!(result.twitch_user_id.as_deref(), Some("42"));
         let stored: (String, String) = sqlx::query_as("SELECT streamer_login, twitch_user_id FROM social_media_platform_auth WHERE platform = 'youtube'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(stored, ("renamed_a".into(), "42".into()));

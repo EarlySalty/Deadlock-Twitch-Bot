@@ -7,7 +7,7 @@
 //! PiP/Stacked, vom Dashboard-Compose genutzt). Die Filtergraph-Erzeugung ist
 //! rein und getestet; die ffmpeg/ffprobe-Aufrufe sind dünne Subprocess-Wrapper.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -23,6 +23,20 @@ const MAX_FPS: &str = "60";
 const BRAND_GOLD: &str = "0xC5A059";
 const LOGO: &[u8] = include_bytes!("../assets/ddc-logo.png");
 const FONT: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
+
+// Wie TemporaryMedia im bestehenden Kontextpfad: nur das exklusiv angelegte
+// eigene Verzeichnis gehört diesem Render und wird auch bei Future-Drop entfernt.
+struct BrandedRenderDirectory(PathBuf);
+
+impl Drop for BrandedRenderDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(%error, path = %self.0.display(), "Render-Assets konnten nicht gelöscht werden");
+            }
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum VideoProcessorError {
@@ -329,9 +343,11 @@ impl VideoProcessor {
             .ok_or_else(|| VideoProcessorError::OutputMissing(output_path.to_string()))?;
         tokio::fs::create_dir_all(parent).await?;
         let assets = output.with_extension(format!("assets-{}", tb_crypto::random_hex_token(8)));
-        let render_temp =
-            output.with_extension(format!("tmp-{}.mp4", tb_crypto::random_hex_token(8)));
-        tokio::fs::create_dir(&assets).await?;
+        // Kein await zwischen exklusiver Anlage und Besitzübergabe an den Guard.
+        std::fs::create_dir(&assets)?;
+        let owned_assets = BrandedRenderDirectory(assets);
+        let assets = &owned_assets.0;
+        let render_temp = assets.join("render.mp4");
         let result = async {
             tokio::fs::write(assets.join("ddc-logo.png"), LOGO).await?;
             tokio::fs::write(assets.join("DejaVuSans-Bold.ttf"), FONT).await?;
@@ -345,7 +361,8 @@ impl VideoProcessor {
                 base_filter
             );
             let mut cmd = tokio::process::Command::new(&self.ffmpeg);
-            cmd.current_dir(&assets)
+            cmd.kill_on_drop(true)
+                .current_dir(assets)
                 .args(["-hide_banner", "-loglevel", "error", "-i"])
                 .arg(&input)
                 .args(["-loop", "1", "-i", "ddc-logo.png", "-filter_complex", &filter,
@@ -361,12 +378,6 @@ impl VideoProcessor {
             Ok(())
         }
         .await;
-        if result.is_err() {
-            let _ = tokio::fs::remove_file(&render_temp).await;
-        }
-        if let Err(error) = tokio::fs::remove_dir_all(&assets).await {
-            tracing::warn!(%error, path = %assets.display(), "Render-Assets konnten nicht gelöscht werden");
-        }
         result
     }
 
@@ -747,11 +758,93 @@ mod tests {
             std::fs::read_dir(&dir)
                 .unwrap()
                 .filter_map(Result::ok)
-                .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+                .filter(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name.contains(".tmp-") || name.contains(".assets-")
+                })
                 .count(),
             0
         );
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn abgebrochener_render_beendet_eigenen_ffmpeg_und_entfernt_tempdateien() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.mp4");
+        let output = dir.path().join("branded.mp4");
+        let untouched = dir.path().join("unrelated.txt");
+        let ffmpeg = dir.path().join("ffmpeg-observed");
+        let fixture = tokio::process::Command::new("/usr/bin/ffmpeg")
+            .kill_on_drop(true)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x64:r=10",
+                "-t",
+                "0.2",
+                "-c:v",
+                "libx264",
+                "-threads",
+                "1",
+                "-y",
+            ])
+            .arg(&input)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            fixture.status.success(),
+            "Lokale FFmpeg-Quelle muss erzeugt werden"
+        );
+        std::fs::write(&output, b"complete").unwrap();
+        std::fs::write(&untouched, b"untouched").unwrap();
+        // exec erhält die protokollierte PID. Der echte FFmpeg-Prozess liest
+        // diese kleine lokale Datei in Echtzeit, bis sein Render abgebrochen wird.
+        std::fs::write(&ffmpeg, b"#!/bin/sh\nprintf '%s' \"$$\" > ../render-child.pid\nexec /usr/bin/ffmpeg -re -stream_loop -1 \"$@\"\n").unwrap();
+        std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
+        let input_path = input.to_string_lossy();
+        let output_path = output.to_string_lossy();
+        let ass = crate::subtitles::build_ass(&[]);
+        let mut render =
+            Box::pin(processor.render_branded(&input_path, &output_path, 300, None, &ass));
+        let (pid, assets) = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                tokio::select! {
+                    result = &mut render => panic!("Render muss bis zum Abbruch laufen: {result:?}"),
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+                let Some(pid) = std::fs::read_to_string(dir.path().join("render-child.pid")).ok().and_then(|s| s.parse::<u32>().ok()) else { continue; };
+                if !std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| exe.file_name().is_some_and(|name| name == "ffmpeg")) { continue; }
+                if let Some(assets) = std::fs::read_dir(dir.path()).unwrap().flatten().map(|entry| entry.path()).find(|path| path.join("render.mp4").exists()) {
+                    break (pid, assets);
+                }
+            }
+        }).await.expect("Echter FFmpeg hat seine eigene temporäre Ausgabe geöffnet");
+        drop(render);
+        assert!(
+            !assets.exists(),
+            "Eigene Assets und Teilvideo sind nach Drop entfernt"
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while Path::new(&format!("/proc/{pid}")).exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Eigener FFmpeg-Prozess wurde beendet und geerntet");
+        assert_eq!(std::fs::read(&output).unwrap(), b"complete");
+        assert_eq!(std::fs::read(&untouched).unwrap(), b"untouched");
     }
 
     #[test]
