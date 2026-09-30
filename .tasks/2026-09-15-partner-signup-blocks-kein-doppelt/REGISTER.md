@@ -13,6 +13,8 @@ Thread-Register (T3)
 | Review 1 | 1fe16430 | opus48 | /home/nathanael/.worktrees/tb-partner-signup-blocks-kein-doppelt | feat/partner-signup-blocks-kein-doppelt | gestoppt (weekly limit sofort, settled 00:33; nicht wieder aufnehmen) |
 | Review 1b | 3793e72d | grok-4.6 | /home/nathanael/.worktrees/tb-partner-signup-blocks-kein-doppelt | feat/partner-signup-blocks-kein-doppelt | fertig (REVIEW.md Mängel: keine, session ready 00:39:51; origin/main 58fb2447; Merge beim Orchestrator) |
 
+Merge 00:52 UTC: Gate zweimal ohne Urteil (opus48/fable weekly limit bis 22:00 Europe/Berlin, astra gesperrt). origin/main bleibt `58fb2447`. Klon `/home/nathanael/repos/tb-merge-partner-signup-blocks-20260915` auf origin/main, Merge nicht ausgeführt. Admin-SPA `npm run build` im Worktree grün (`index-DNAKMM4h.js`). Push nach main nur aus Nutzershell.
+
 Wache 00:42 UTC: Review 1b `3793e72d` session ready, `REVIEW.md` **Mängel: keine**. origin/main bleibt `58fb2447`. PID 3770503 grok stdio idle (Turn fertig, cwd Worktree). Intent `162dee5c` geweckt. Scheduler gelöscht. Diese Wache merget nicht.
 
 Letzte Wache 00:19 UTC: Worker 2 PID 3721714 grok agent stdio, Turn running, PartnerSignupBlocks.tsx angefasst (ConfirmTypedDialog noch da). HEAD weiter 58fb2447, kein Commit.
