@@ -146,6 +146,15 @@ mod pb_recap_tests {
         .execute(pool)
         .await
         .unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_chat_messages (
+                streamer_login TEXT NOT NULL,
+                message_ts TIMESTAMPTZ NOT NULL
+            )"#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     #[test]
@@ -243,6 +252,45 @@ mod pb_recap_tests {
         assert_eq!(
             got["unique_chatters"],
             json!({ "current": 1, "previous": 2, "pct": -50.0 })
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_stats_liefert_fuenf_minuten_buckets_und_summe() {
+        let Some(pool) = pool_or_skip("t_internal_home_chat_series").await else {
+            return;
+        };
+        create_tables(&pool).await;
+        sqlx::query(
+            r#"INSERT INTO twitch_chat_messages (streamer_login, message_ts)
+               VALUES
+                ('CHATTER', '2026-03-01T10:00:30Z'),
+                ('chatter', '2026-03-01T10:04:59Z'),
+                ('chatter', '2026-03-01T10:05:01Z'),
+                ('chatter', '2026-03-01T10:12:00Z')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (total, points) = chat_stream_stats_block(
+            &pool,
+            "chatter",
+            "2026-03-01T10:00:00Z",
+            "2026-03-01T10:15:00Z",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(total, 4);
+        assert_eq!(
+            points,
+            vec![
+                json!({ "t_seconds": 0, "messages": 2 }),
+                json!({ "t_seconds": 300, "messages": 1 }),
+                json!({ "t_seconds": 600, "messages": 1 }),
+                json!({ "t_seconds": 900, "messages": 0 }),
+            ]
         );
     }
 
@@ -1390,47 +1438,78 @@ pub(crate) async fn last_stream_summary(
     let started_at = ls.get("started_at").and_then(Value::as_str).unwrap_or("");
     let ended_at = ls.get("ended_at").and_then(Value::as_str).unwrap_or("");
 
-    let chat_count: Option<i64> = if resolved_login.is_empty() {
+    let chat_stats = if resolved_login.is_empty() {
         None
     } else {
-        chat_count_block(pool, resolved_login, started_at, ended_at).await
+        chat_stream_stats_block(pool, resolved_login, started_at, ended_at).await
+    };
+    let (chat_count, chat_series) = match chat_stats {
+        Some((count, series)) => (Some(count), Some(series)),
+        None => (None, None),
     };
 
     let mut obj = ls.clone();
     if let Some(map) = obj.as_object_mut() {
         map.insert("chat_messages".to_string(), json!(chat_count));
+        map.insert("chat_series".to_string(), json!(chat_series));
     }
     obj
 }
 
-async fn chat_count_block(
+async fn chat_stream_stats_block(
     pool: &PgPool,
     resolved_login: &str,
     started_at: &str,
     ended_at: &str,
-) -> Option<i64> {
-    // Python bindet started_at/ended_at als String-Timestamps an message_ts.
+) -> Option<(i64, Vec<Value>)> {
     let started_dt = parse_iso(started_at)?;
     let ended_dt = parse_iso(ended_at)?;
     let sql = r#"
-        SELECT COUNT(*) AS c FROM twitch_chat_messages
-        WHERE LOWER(streamer_login) = LOWER($1)
-          AND message_ts >= $2 AND message_ts <= $3
+        WITH buckets AS (
+            SELECT generate_series(
+                $2::timestamptz,
+                $3::timestamptz,
+                interval '5 minutes'
+            ) AS bucket
+        )
+        SELECT
+            EXTRACT(EPOCH FROM (bucket - $2::timestamptz))::bigint AS t_seconds,
+            COUNT(m.message_ts)::bigint AS messages
+        FROM buckets
+        LEFT JOIN twitch_chat_messages m
+          ON LOWER(m.streamer_login) = LOWER($1)
+         AND m.message_ts >= bucket
+         AND m.message_ts < bucket + interval '5 minutes'
+         AND m.message_ts <= $3::timestamptz
+        GROUP BY bucket
+        ORDER BY bucket
     "#;
-    match sqlx::query(sql)
+
+    let rows = match sqlx::query(sql)
         .bind(resolved_login)
         .bind(started_dt)
         .bind(ended_dt)
-        .fetch_optional(pool)
+        .fetch_all(pool)
         .await
     {
-        Ok(Some(row)) => Some(row.try_get::<i64, _>("c").unwrap_or(0)),
-        Ok(None) => None,
+        Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!("internal-home chat-count query: {e}");
-            None
+            tracing::warn!("internal-home chat-series query: {e}");
+            return None;
         }
+    };
+
+    let mut total = 0_i64;
+    let mut points = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let messages = read_i64(row, "messages");
+        total += messages;
+        points.push(json!({
+            "t_seconds": read_i64(row, "t_seconds"),
+            "messages": messages,
+        }));
     }
+    Some((total, points))
 }
 
 fn parse_iso(text: &str) -> Option<DateTime<Utc>> {
