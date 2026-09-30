@@ -38,6 +38,35 @@ install_line() {
         mv -- "$temporary" "$file"
     fi
 }
+install_local_peer_before_reject() {
+    local file=$1 database=$2 role=$3 rule="local $2 $3 peer" temporary
+    if awk -v database="$database" -v role="$role" '
+        $1 == "local" && $2 == database && $3 == role && $4 == "peer" { peer = NR }
+        $1 == "local" && $2 == "all" && $3 == role && $4 == "reject" && reject == 0 { reject = NR }
+        END { exit !(peer > 0 && reject > 0 && peer < reject) }
+    ' "$file"; then
+        return
+    fi
+    temporary=$(mktemp "${file}.twitch-peer.XXXXXXXX")
+    if ! awk -v database="$database" -v role="$role" -v rule="$rule" '
+        $1 == "local" && $2 == database && $3 == role && $4 == "peer" { next }
+        $1 == "local" && $2 == "all" && $3 == role && $4 == "reject" && !inserted {
+            print rule
+            inserted = 1
+        }
+        { print }
+        END { if (!inserted) exit 1 }
+    ' "$file" > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    chmod --reference="$file" "$temporary"
+    chown --reference="$file" "$temporary"
+    changed=1
+    mv -- "$temporary" "$file"
+}
+install_local_peer_before_reject "$hba" deadlock twitchbot
+install_local_peer_before_reject "$hba" deadlock twitchdash
 # No role membership: an injected SQL statement in the reader pool cannot
 # become twitchcontest. Only a new local connection from OS user twitchdash can.
 install_line "$ident" 'twitch_contest_writer twitchdash twitchcontest'

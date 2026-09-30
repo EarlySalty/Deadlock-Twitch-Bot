@@ -46,6 +46,12 @@ BEGIN
         GRANT SELECT ON public.category_channels TO twitchbot;
         GRANT UPDATE(followers_total,followers_checked_at,followers_http_status) ON public.category_channels TO twitchbot;
     END IF;
+    FOREACH table_name IN ARRAY ARRAY['category_collection_runs','category_stream_snapshots','category_collector_status']
+    LOOP
+        IF to_regclass(format('public.%I',table_name)) IS NOT NULL THEN
+            EXECUTE format('GRANT SELECT ON TABLE public.%I TO twitchbot',table_name);
+        END IF;
+    END LOOP;
     -- Archive tables are append-only for the service. Targeted Twitch removal
     -- events use the separately constrained function, never generic DELETE.
     IF to_regclass('public.category_chat_messages') IS NOT NULL THEN
