@@ -672,14 +672,19 @@ fn strip_markdown_links(input: &str) -> String {
 }
 
 fn safe_chat_answer(input: &str) -> Option<String> {
-    let input = strip_markdown_links(input);
+    // Erst normalisieren: Nach der Linkprüfung entfernte Steuerzeichen könnten
+    // sonst aus einem ungültigen Token wieder eine gültige Domain machen.
+    let normalized = input
+        .chars()
+        .filter(|character| !character.is_control() || character.is_whitespace())
+        .collect::<String>();
+    let input = strip_markdown_links(&normalized);
     let cleaned = input
         .split_whitespace()
         .filter(|token| !looks_like_link(token))
         .map(|token| {
             token
                 .chars()
-                .filter(|character| !character.is_control())
                 .map(|character| if character == '@' { '＠' } else { character })
                 .collect::<String>()
         })
@@ -954,6 +959,22 @@ mod tests {
             None
         );
         assert_eq!(safe_chat_answer("Siehe example.com"), None);
+        for control in ['\0', '\u{0007}', '\u{001b}', '\u{007f}', '\u{0080}'] {
+            assert_eq!(
+                safe_chat_answer(&format!("Siehe example{control}.com")),
+                None
+            );
+            assert_eq!(
+                safe_chat_answer(&format!(
+                    "[Der Guide](example{control}.com) Warden hat vier Fähigkeiten."
+                )),
+                Some("Warden hat vier Fähigkeiten.".into())
+            );
+        }
+        assert_eq!(
+            safe_chat_answer("Warden\n hat\t vier Fähig\0keiten."),
+            Some("Warden hat vier Fähigkeiten.".into())
+        );
         let long = format!("{} Satzende. {}", "A".repeat(250), "B".repeat(240));
         assert_eq!(
             safe_chat_answer(&long),
