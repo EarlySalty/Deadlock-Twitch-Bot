@@ -369,7 +369,7 @@ pub fn sanitize_title_result(
             continue;
         }
         let final_title = format!("{body}{suffix}");
-        if is_slop_variant(&final_title)
+        if is_slop_variant(body)
             || matches_never_words(&final_title, never_words)
             || !seen.insert(final_title.to_lowercase())
         {

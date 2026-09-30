@@ -115,6 +115,21 @@ fn review_slop_schreibvarianten_werden_abgewiesen() {
 }
 
 #[test]
+fn review_bestaetigte_logins_sind_keine_generierten_slop_phrasen() {
+    let co = ["road_to_ruin", "mal_schauen"];
+    let actual = result("Runden", &["Wände halten"], &co, &[]);
+    assert_eq!(actual.primary, "Runden mit @road_to_ruin und @mal_schauen");
+    assert_eq!(
+        actual.alternatives,
+        ["Wände halten mit @road_to_ruin und @mal_schauen"]
+    );
+    assert!(result("mal schauen", &[], &co, &[]).primary.is_empty());
+    assert!(result("Runden", &[], &co, &["mal_schauen"])
+        .primary
+        .is_empty());
+}
+
+#[test]
 fn review_verbote_ohne_grosskleinschreibung() {
     let actual = result("CRINGE heute", &["Wände halten"], &[], &["cringe"]);
     assert_eq!(actual.primary, "Wände halten");
