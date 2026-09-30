@@ -6,87 +6,184 @@
       {
         "ordinal": 0,
         "name": "twitch_user_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "twitch_user_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "streamer_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "streamer_login"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "last_stream_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_stream_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "last_started_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_started_at"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "last_title",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_title"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "last_game_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_game_id"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "last_discord_message_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_discord_message_id"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "last_notified_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_notified_at"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "is_live",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "is_live"
+          }
+        }
       },
       {
         "ordinal": 9,
         "name": "last_seen_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_seen_at"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "last_game",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_game"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "last_viewer_count",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_viewer_count"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "last_tracking_token",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_tracking_token"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "active_session_id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "active_session_id"
+          }
+        }
       },
       {
         "ordinal": 14,
         "name": "had_deadlock_in_session",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "had_deadlock_in_session"
+          }
+        }
       },
       {
         "ordinal": 15,
         "name": "last_deadlock_seen_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_deadlock_seen_at"
+          }
+        }
       },
       {
         "ordinal": 16,
         "name": "partner_raid_bot_enabled!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       }
     ],
     "parameters": {

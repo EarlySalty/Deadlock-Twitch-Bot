@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "category!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_scam_guard_verdicts",
+            "name": "category"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "reasoning!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_scam_guard_verdicts",
+            "name": "reasoning"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "transcript_snapshot!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_scam_guard_verdicts",
+            "name": "transcript_snapshot"
+          }
+        }
       }
     ],
     "parameters": {

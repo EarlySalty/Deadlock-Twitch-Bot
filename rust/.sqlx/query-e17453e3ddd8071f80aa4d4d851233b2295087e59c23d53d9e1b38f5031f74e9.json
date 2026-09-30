@@ -6,27 +6,57 @@
       {
         "ordinal": 0,
         "name": "strengths",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "title_generator_insights",
+            "name": "strengths"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "weaknesses",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "title_generator_insights",
+            "name": "weaknesses"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "patterns",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "title_generator_insights",
+            "name": "patterns"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "recommendations",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "title_generator_insights",
+            "name": "recommendations"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "generated_at?",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "title_generator_insights",
+            "name": "generated_at"
+          }
+        }
       }
     ],
     "parameters": {

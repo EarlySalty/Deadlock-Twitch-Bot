@@ -6,42 +6,90 @@
       {
         "ordinal": 0,
         "name": "platform!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "platform"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "streamer_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "streamer_login"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "access_token_enc!",
-        "type_info": "Bytea"
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "access_token_enc"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "refresh_token_enc",
-        "type_info": "Bytea"
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "refresh_token_enc"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "client_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "client_id"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "client_secret_enc",
-        "type_info": "Bytea"
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "client_secret_enc"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "token_expires_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "token_expires_at"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "enc_version",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "enc_version"
+          }
+        }
       }
     ],
     "parameters": {

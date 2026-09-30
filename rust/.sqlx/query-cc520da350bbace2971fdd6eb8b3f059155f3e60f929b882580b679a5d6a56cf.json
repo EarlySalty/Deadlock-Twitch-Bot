@@ -6,67 +6,105 @@
       {
         "ordinal": 0,
         "name": "clip_id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_analytics",
+            "name": "clip_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "platform!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_analytics",
+            "name": "platform"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "bucket!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "views!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "likes!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "comments!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "shares!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "watch_time_seconds",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_analytics",
+            "name": "watch_time_seconds"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "ctr?",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "eng?",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_analytics",
+            "name": "engagement_rate"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "provider",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_analytics",
+            "name": "provider"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "synced",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 12,
         "name": "next_pull",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

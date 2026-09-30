@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "message_ts!",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_chat_messages",
+            "name": "message_ts"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "content!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_chat_messages",
+            "name": "content"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "chatter_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_chat_messages",
+            "name": "chatter_login"
+          }
+        }
       }
     ],
     "parameters": {

@@ -6,27 +6,52 @@
       {
         "ordinal": 0,
         "name": "platform",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "platform"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "auto_post",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "auto_post"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "posts_per_week",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "posts_per_week"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "max_posts_per_day",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "max_posts_per_day"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "post_times?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

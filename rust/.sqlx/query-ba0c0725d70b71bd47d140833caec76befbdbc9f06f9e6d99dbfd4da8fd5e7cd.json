@@ -6,32 +6,68 @@
       {
         "ordinal": 0,
         "name": "channel_login!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_stream_transcripts",
+            "name": "channel_login"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "started_at!",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_stream_transcripts",
+            "name": "started_at"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "ended_at!",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_stream_transcripts",
+            "name": "ended_at"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "text!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_stream_transcripts",
+            "name": "text"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "engine!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_stream_transcripts",
+            "name": "engine"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "model",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_stream_transcripts",
+            "name": "model"
+          }
+        }
       }
     ],
     "parameters": {

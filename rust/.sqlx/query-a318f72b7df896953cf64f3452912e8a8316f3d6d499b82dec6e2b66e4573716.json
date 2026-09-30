@@ -6,42 +6,70 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "streamer_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "streamer_login"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "template_name",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "template_name"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "description_template!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "hashtags",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "hashtags"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "is_default!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "created_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "updated_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

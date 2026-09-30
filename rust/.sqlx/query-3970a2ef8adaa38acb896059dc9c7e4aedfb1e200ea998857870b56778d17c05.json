@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "is_partner_active!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_streamers_partner_state",
+            "name": "is_partner_active"
+          }
+        }
       }
     ],
     "parameters": {

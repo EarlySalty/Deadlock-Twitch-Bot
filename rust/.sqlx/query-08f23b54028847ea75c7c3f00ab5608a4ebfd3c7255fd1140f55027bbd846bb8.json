@@ -6,17 +6,30 @@
       {
         "ordinal": 0,
         "name": "winner?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_report_ab_votes",
+            "name": "winner"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "comment",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_report_ab_votes",
+            "name": "comment"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "updated_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

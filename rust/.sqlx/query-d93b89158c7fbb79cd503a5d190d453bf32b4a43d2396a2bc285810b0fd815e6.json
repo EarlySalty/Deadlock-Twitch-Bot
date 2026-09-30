@@ -6,92 +6,180 @@
       {
         "ordinal": 0,
         "name": "id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "date?",
-        "type_info": "Date"
+        "type_info": "Date",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "start_time?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "duration_seconds",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "duration_seconds"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "start_viewers",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "start_viewers"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "peak_viewers",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "peak_viewers"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "end_viewers",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "end_viewers"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "avg_viewers",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "avg_viewers"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "retention_5m",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "retention_5m"
+          }
+        }
       },
       {
         "ordinal": 9,
         "name": "retention_10m",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "retention_10m"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "retention_20m",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "retention_20m"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "dropoff_pct",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "dropoff_pct"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "unique_chatters",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "unique_chatters"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "first_time_chatters",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "first_time_chatters"
+          }
+        }
       },
       {
         "ordinal": 14,
         "name": "returning_chatters",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "returning_chatters"
+          }
+        }
       },
       {
         "ordinal": 15,
         "name": "followers_start!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 16,
         "name": "followers_end!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 17,
         "name": "stream_title",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "stream_title"
+          }
+        }
       }
     ],
     "parameters": {

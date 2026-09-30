@@ -6,22 +6,46 @@
       {
         "ordinal": 0,
         "name": "recorded_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_channel_updates",
+            "name": "recorded_at"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "title",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_channel_updates",
+            "name": "title"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "game_name",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_channel_updates",
+            "name": "game_name"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "language",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_channel_updates",
+            "name": "language"
+          }
+        }
       }
     ],
     "parameters": {

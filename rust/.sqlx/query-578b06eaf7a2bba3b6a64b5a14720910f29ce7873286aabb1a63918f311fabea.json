@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "payload_enc",
-        "type_info": "Bytea"
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "dashboard_sessions",
+            "name": "payload_enc"
+          }
+        }
       }
     ],
     "parameters": {

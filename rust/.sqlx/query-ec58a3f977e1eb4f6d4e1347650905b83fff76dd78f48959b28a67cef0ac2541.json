@@ -6,72 +6,151 @@
       {
         "ordinal": 0,
         "name": "id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "require_discord_link?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "require_discord_link"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "last_description?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "last_description"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "last_link_ok?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "last_link_ok"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "added_by?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "added_by"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "last_link_checked_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "last_link_checked_at"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "manual_partner_opt_out?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "manual_partner_opt_out"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "raid_bot_enabled?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "raid_bot_enabled"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "silent_ban?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "silent_ban"
+          }
+        }
       },
       {
         "ordinal": 9,
         "name": "silent_raid?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "silent_raid"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "live_ping_role_id?",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "live_ping_role_id"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "live_ping_enabled?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 12,
         "name": "partnered_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "partnered_at"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "technical_pause_reason?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "technical_pause_reason"
+          }
+        }
       }
     ],
     "parameters": {

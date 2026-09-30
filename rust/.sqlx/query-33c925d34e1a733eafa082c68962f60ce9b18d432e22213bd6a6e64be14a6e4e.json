@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "approval_mode",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_settings",
+            "name": "approval_mode"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "timezone",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_settings",
+            "name": "timezone"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "subtitles_enabled",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_settings",
+            "name": "subtitles_enabled"
+          }
+        }
       }
     ],
     "parameters": {

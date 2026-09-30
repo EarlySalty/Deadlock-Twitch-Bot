@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "last_game",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_game"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "last_title",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_title"
+          }
+        }
       }
     ],
     "parameters": {

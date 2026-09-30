@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "channel_login!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_learn_channels",
+            "name": "channel_login"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "last_seen_at!",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_learn_channels",
+            "name": "last_seen_at"
+          }
+        }
       }
     ],
     "parameters": {

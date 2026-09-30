@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "admin_archived_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "admin_archived_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "total_sessions?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_chatter_rollup",
+            "name": "total_sessions"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "total_messages?",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_chatter_rollup",
+            "name": "total_messages"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "first_seen_at?",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_chatter_rollup",
+            "name": "first_seen_at"
+          }
+        }
       }
     ],
     "parameters": {

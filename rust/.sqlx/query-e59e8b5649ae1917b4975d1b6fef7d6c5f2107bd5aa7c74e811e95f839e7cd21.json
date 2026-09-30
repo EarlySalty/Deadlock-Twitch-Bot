@@ -6,42 +6,85 @@
       {
         "ordinal": 0,
         "name": "twitch_user_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "twitch_user_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "twitch_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "twitch_login"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "discord_user_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "discord_user_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "community_probability",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "community_probability"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "signals!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "first_partner_channel",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "first_partner_channel"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "first_seen_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "first_seen_at"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "computed_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_zuschauer_register",
+            "name": "computed_at"
+          }
+        }
       }
     ],
     "parameters": {

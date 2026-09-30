@@ -6,17 +6,30 @@
       {
         "ordinal": 0,
         "name": "trial_ever_granted",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "streamer_plans",
+            "name": "trial_ever_granted"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "manual_plan_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "streamer_plans",
+            "name": "manual_plan_id"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "hours_since",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
