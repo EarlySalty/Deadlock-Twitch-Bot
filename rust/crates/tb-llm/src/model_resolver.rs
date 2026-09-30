@@ -228,7 +228,6 @@ struct VerifiedModel {
 struct RefreshState {
     next_attempt: Option<Instant>,
     rejected: HashMap<String, Instant>,
-    cache_loaded: bool,
 }
 
 pub struct ModelResolver {
@@ -237,6 +236,7 @@ pub struct ModelResolver {
     inference_url: String,
     client: reqwest::Client,
     current: RwLock<Option<VerifiedModel>>,
+    persistent_cache: RwLock<Option<String>>,
     refresh: Mutex<RefreshState>,
 }
 
@@ -256,6 +256,7 @@ impl ModelResolver {
             inference_url: inference.to_owned(),
             client,
             current: RwLock::new(None),
+            persistent_cache: RwLock::new(None),
             refresh: Mutex::new(RefreshState::default()),
         })
     }
@@ -321,16 +322,17 @@ impl ModelResolver {
                 Vec::new()
             }
         };
-        if !state.cache_loaded {
-            state.cache_loaded = true;
-            if let Some(pool) = pool {
-                if let Some(model) = self.load_from_db(pool).await {
-                    entries.push(ModelEntry {
-                        id: model,
-                        created: None,
-                    });
-                }
-            }
+        if let Some(model) = self
+            .persistent_cache
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .filter(|model| self.policy.allows(model))
+        {
+            entries.push(ModelEntry {
+                id: model,
+                created: None,
+            });
         }
         entries.push(ModelEntry {
             id: self.policy.bootstrap_model.clone(),
@@ -367,6 +369,7 @@ impl ModelResolver {
                                 self.policy.retry_seconds
                             }),
                     );
+                    drop(state);
                     if let Some(pool) = pool {
                         self.save_to_db(pool, &entry).await;
                     }
@@ -552,6 +555,17 @@ impl ModelResolver {
             .filter(|model| self.policy.allows(model))
     }
 
+    /// Cache-Hydrierung läuft außerhalb des Single-Flight-Locks. Eine
+    /// unerreichbare Datenbank darf aufrufende Inferenzen nicht aufhalten.
+    async fn warm_persistent_cache(&self, pool: &PgPool) {
+        if let Some(model) = self.load_from_db(pool).await {
+            *self
+                .persistent_cache
+                .write()
+                .unwrap_or_else(|p| p.into_inner()) = Some(model);
+        }
+    }
+
     async fn save_to_db(&self, pool: &PgPool, entry: &ModelEntry) {
         let query = sqlx::query(
             "INSERT INTO llm_model_cache (provider, family, model, model_created, resolved_at) \
@@ -630,6 +644,7 @@ pub async fn run_refresh_loop(pool: PgPool) {
         tracing::warn!("Modellrefresh ohne Fireworks-Schlüssel nicht gestartet");
         return;
     };
+    resolver.warm_persistent_cache(&pool).await;
     let deadline = Duration::from_secs(
         resolver.policy.catalog_timeout_seconds
             + resolver.policy.probe_timeout_seconds * MAX_PROBES as u64
