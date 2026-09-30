@@ -1217,6 +1217,13 @@ async fn unreachable_quest_pool_is_partner_local_before_berlin_week_rollover() {
     let sunday = DateTime::parse_from_rfc3339("2026-09-27T23:59:30+02:00")
         .unwrap()
         .with_timezone(&Utc);
+    // This historical week predates the real migration clock. Keep the program
+    // start inside the fixture's recorded collector history, before this tick.
+    sqlx::query("UPDATE partner_effort_program SET started_at=$1 WHERE singleton")
+        .bind(sunday - Duration::days(7))
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) \
          VALUES('104','latecomer','active')",
