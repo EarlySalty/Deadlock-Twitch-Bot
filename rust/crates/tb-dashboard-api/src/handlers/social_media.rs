@@ -186,6 +186,7 @@ fn weitergereichte_query(uri: &Uri) -> Option<String> {
 /// `?streamer=` (für scope-gefilterte Endpoints).
 #[derive(Debug, Deserialize)]
 pub struct StreamerQuery {
+    pub twitch_user_id: Option<String>,
     pub streamer: Option<String>,
 }
 
@@ -759,18 +760,6 @@ fn normalize_safe_slug(raw: Option<&str>, field: &str) -> Result<String, Respons
     slug_message(raw, field).map_err(|m| (StatusCode::BAD_REQUEST, m).into_response())
 }
 
-async fn ensure_streamer_exists(pool: &PgPool, slug: &str) -> bool {
-    sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some()
-}
-
 async fn clip_exists(pool: &PgPool, clip_db_id: i64) -> bool {
     sqlx::query_scalar::<_, i32>("SELECT 1 FROM twitch_clips_social_media WHERE id = $1 LIMIT 1")
         .bind(clip_db_id)
@@ -1078,6 +1067,7 @@ pub async fn upload_clip_handler(
 /// `?streamer_login=` für die Layout-GET-Route und den Zeitplan.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StreamerLoginQuery {
+    pub twitch_user_id: Option<String>,
     pub streamer_login: Option<String>,
 }
 
@@ -1087,20 +1077,10 @@ pub async fn streamer_layout_get_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerLoginQuery>,
 ) -> Response {
-    if let Err(e) = require_sm_access(&auth, &pool, q.streamer_login.as_deref()).await {
-        return e;
-    }
-    let slug = match normalize_safe_slug(q.streamer_login.as_deref(), "streamer_login") {
-        Ok(s) => s.to_lowercase(),
-        Err(e) => return e,
+    let slug = match required_streamer_scope(&auth, &pool, q.twitch_user_id.as_deref()).await {
+        Ok(slug) => slug,
+        Err(error) => return error,
     };
-    if !ensure_streamer_exists(&pool, &slug).await {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown_streamer" })),
-        )
-            .into_response();
-    }
     let stored = get_streamer_layout(&pool, &slug).await;
     let layout = stored.clone().unwrap_or_else(default_streamer_layout);
     let (updated_at, updated_by) = if stored.is_some() {
@@ -1134,29 +1114,16 @@ pub async fn streamer_layout_put_handler(
     State(pool): State<PgPool>,
     Json(payload): Json<Value>,
 ) -> Response {
-    if let Err(e) = require_sm_access(
+    let slug = match required_streamer_scope(
         &auth,
         &pool,
-        payload.get("streamer_login").and_then(Value::as_str),
+        payload.get("twitch_user_id").and_then(Value::as_str),
     )
     .await
     {
-        return e;
-    }
-    let slug = match normalize_safe_slug(
-        payload.get("streamer_login").and_then(Value::as_str),
-        "streamer_login",
-    ) {
-        Ok(s) => s.to_lowercase(),
-        Err(e) => return e,
+        Ok(slug) => slug,
+        Err(error) => return error,
     };
-    if !ensure_streamer_exists(&pool, &slug).await {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown_streamer" })),
-        )
-            .into_response();
-    }
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
     if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &slug).await {
         return guard_response;
@@ -1465,6 +1432,7 @@ fn build_clip_fetch_service(pool: PgPool, limit: u32) -> Option<ClipFetchService
 /// POST-Body von `…/api/fetch-clips`.
 #[derive(Debug, Deserialize)]
 pub struct FetchClipsBody {
+    pub twitch_user_id: Option<String>,
     pub streamer: Option<String>,
     pub limit: Option<i64>,
     #[allow(dead_code)] // days wird vom Rust-Helix-Fetcher (Recent-Window) nicht genutzt
@@ -1477,15 +1445,19 @@ pub async fn fetch_clips_handler(
     State(pool): State<PgPool>,
     Json(body): Json<FetchClipsBody>,
 ) -> Response {
-    if let Err(e) = require_auth(&auth) {
-        return e;
+    if let Err(error) = require_sm_access(&auth, &pool, None).await {
+        return error;
     }
-    // required=true: Admin muss streamer angeben.
-    let scope = match resolve_streamer_scope(&auth, body.streamer.as_deref(), true) {
-        Ok(s) => s,
-        Err(e) => return e,
+    let (streamer, twitch_user_id) = match crate::auth::streamer_scope::resolve_clip_upload_target(
+        &pool,
+        &auth,
+        body.twitch_user_id.as_deref(),
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(error) => return error,
     };
-    let streamer = scope.unwrap_or_default();
     let mut limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
 
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
@@ -1505,7 +1477,9 @@ pub async fn fetch_clips_handler(
     let Some(service) = build_clip_fetch_service(pool.clone(), limit) else {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "twitch_api_unavailable", "message": "Clip-Fetch ist derzeit nicht verfügbar." }))).into_response();
     };
-    let result = service.fetch_for_streamer(&streamer).await;
+    let result = service
+        .fetch_for_broadcaster(&twitch_user_id, &streamer)
+        .await;
     let clips_found = result.clips_found.max(0);
     // Nach dem Fetch neu zaehlen: der Stand von vorhin ist bereits verbraucht,
     // und das Dashboard soll nicht die alte Zahl anzeigen.
@@ -1869,10 +1843,11 @@ pub async fn platforms_status_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), true) {
-        Ok(s) => s,
-        Err(e) => return e,
+    let target = match required_platform_scope(&auth, &pool, &q).await {
+        Ok(target) => target,
+        Err(error) => return error,
     };
+    let scope = target.as_ref().map(|(login, _)| login.clone());
     let Some(cred_mgr) = build_credential_manager(pool) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1882,7 +1857,9 @@ pub async fn platforms_status_handler(
     };
     let db_scope = credential_scope(scope.as_deref());
     let has_scope = db_scope.is_some();
-    let statuses = cred_mgr.get_all_platforms_status(db_scope).await;
+    let statuses = cred_mgr
+        .get_all_platforms_status(target.as_ref().map(|(_, id)| id.as_str()))
+        .await;
     let platforms: Vec<Value> = statuses
         .iter()
         .map(|s| platform_status_json(s, has_scope))
@@ -2727,6 +2704,7 @@ pub async fn clip_analytics_get_handler(
 /// `?kind=&streamer=&limit=` für die Report-Liste.
 #[derive(Debug, Deserialize)]
 pub struct ReportsQuery {
+    pub twitch_user_id: Option<String>,
     pub kind: Option<String>,
     pub streamer: Option<String>,
     pub limit: Option<String>,
@@ -2754,17 +2732,6 @@ pub async fn reports_run_handler(
         .unwrap_or("")
         .trim()
         .to_lowercase();
-    let streamer = payload
-        .get("streamer")
-        .and_then(Value::as_str)
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
-    // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
-    if let Some(ref login) = streamer {
-        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
-            return guard_response;
-        }
-    }
     if !matches!(kind.as_str(), "streamer" | "cross") {
         return (
             StatusCode::BAD_REQUEST,
@@ -2772,17 +2739,24 @@ pub async fn reports_run_handler(
         )
             .into_response();
     }
-    if kind == "streamer" && streamer.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "streamer_required" })),
+    let target = if kind == "streamer" {
+        match crate::auth::streamer_scope::resolve_clip_upload_target(
+            &pool,
+            &auth,
+            payload.get("twitch_user_id").and_then(Value::as_str),
         )
-            .into_response();
-    }
+        .await
+        {
+            Ok(target) => Some(target),
+            Err(error) => return error,
+        }
+    } else {
+        None
+    };
     let writer = SocialMediaReportWriter::new(pool.clone());
-    let result = if kind == "streamer" {
+    let result = if let Some((login, id)) = target {
         writer
-            .write_streamer_report(streamer.as_deref().unwrap_or(""), None, None, true)
+            .write_streamer_report(&id, &login, None, None, true)
             .await
     } else {
         writer.write_cross_report(None, None, true).await
@@ -2820,11 +2794,20 @@ pub async fn reports_list_handler(
                 .into_response();
         }
     }
-    let streamer = q
-        .streamer
-        .as_deref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty());
+    let target = if q.twitch_user_id.is_some() || q.streamer.is_some() {
+        match crate::auth::streamer_scope::resolve_clip_upload_target(
+            &pool,
+            &auth,
+            q.twitch_user_id.as_deref(),
+        )
+        .await
+        {
+            Ok(target) => Some(target),
+            Err(error) => return error,
+        }
+    } else {
+        None
+    };
     let limit = match q.limit.as_deref().unwrap_or("20").parse::<i64>() {
         Ok(n) => n.clamp(1, 20),
         Err(_) => {
@@ -2835,11 +2818,16 @@ pub async fn reports_list_handler(
                 .into_response()
         }
     };
-    let items: Vec<Value> = list_reports(&pool, kind.as_deref(), streamer.as_deref(), limit)
-        .await
-        .iter()
-        .map(report_record_json)
-        .collect();
+    let items: Vec<Value> = list_reports(
+        &pool,
+        kind.as_deref(),
+        target.as_ref().map(|(_, id)| id.as_str()),
+        limit,
+    )
+    .await
+    .iter()
+    .map(report_record_json)
+    .collect();
     Json(json!({ "items": items })).into_response()
 }
 
@@ -3167,7 +3155,7 @@ pub async fn posting_plan_get_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerLoginQuery>,
 ) -> Response {
-    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+    let slug = match required_streamer_scope(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(value) => value,
         Err(e) => return e,
     };
@@ -3185,7 +3173,7 @@ pub async fn posting_plan_put_handler(
     Query(q): Query<StreamerLoginQuery>,
     body: String,
 ) -> Response {
-    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+    let slug = match required_streamer_scope(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(value) => value,
         Err(e) => return e,
     };
@@ -3286,7 +3274,7 @@ pub async fn posting_plan_platform_put_handler(
     Query(q): Query<StreamerLoginQuery>,
     body: String,
 ) -> Response {
-    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+    let slug = match required_streamer_scope(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(value) => value,
         Err(e) => return e,
     };
@@ -3400,7 +3388,7 @@ pub async fn posting_plan_category_put_handler(
     Query(q): Query<StreamerLoginQuery>,
     body: String,
 ) -> Response {
-    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+    let slug = match required_streamer_scope(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(value) => value,
         Err(e) => return e,
     };
@@ -3449,25 +3437,37 @@ pub async fn posting_plan_category_put_handler(
 async fn required_streamer_scope(
     auth: &DashboardAuthLevel,
     pool: &PgPool,
-    requested: Option<&str>,
+    requested_twitch_user_id: Option<&str>,
 ) -> Result<String, Response> {
-    let scope = require_sm_access(auth, pool, requested).await?;
-    let Some(login) = scope else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "streamer_login is required" })),
-        )
-            .into_response());
-    };
-    let slug = normalize_safe_slug(Some(&login), "streamer_login")?.to_lowercase();
-    if !ensure_streamer_exists(pool, &slug).await {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown_streamer" })),
-        )
-            .into_response());
+    require_sm_access(auth, pool, None).await?;
+    let (login, _) = crate::auth::streamer_scope::resolve_clip_upload_target(
+        pool,
+        auth,
+        requested_twitch_user_id,
+    )
+    .await?;
+    Ok(login)
+}
+
+/// Der bestehende globale Zugang bleibt eine ausdrückliche Admin-Auswahl.
+/// Alle kanalgebundenen Plattformaktionen verwenden dieselbe ID-Autorität.
+async fn required_platform_scope(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    query: &StreamerQuery,
+) -> Result<Option<(String, String)>, Response> {
+    if query.streamer.as_deref() == Some(GLOBAL_SCOPE_MARKER) && query.twitch_user_id.is_none() {
+        require_admin(auth)?;
+        return Ok(None);
     }
-    Ok(slug)
+    require_sm_access(auth, pool, None).await?;
+    crate::auth::streamer_scope::resolve_clip_upload_target(
+        pool,
+        auth,
+        query.twitch_user_id.as_deref(),
+    )
+    .await
+    .map(Some)
 }
 
 fn vod_archive_json(s: &VodArchiveSettings) -> Value {
@@ -3500,7 +3500,7 @@ pub async fn vod_archive_get_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerLoginQuery>,
 ) -> Response {
-    let slug = match required_streamer_scope(&auth, &pool, q.streamer_login.as_deref()).await {
+    let slug = match required_streamer_scope(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -3531,7 +3531,7 @@ pub async fn vod_archive_put_handler(
     let slug = match required_streamer_scope(
         &auth,
         &pool,
-        payload.get("streamer_login").and_then(Value::as_str),
+        payload.get("twitch_user_id").and_then(Value::as_str),
     )
     .await
     {
@@ -3620,10 +3620,11 @@ pub async fn oauth_start_handler(
     Path(platform): Path<String>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
-        Ok(s) => s,
-        Err(e) => return e,
+    let target = match required_platform_scope(&auth, &pool, &q).await {
+        Ok(target) => target,
+        Err(error) => return error,
     };
+    let scope = target.as_ref().map(|(login, _)| login.clone());
     let scope = credential_scope(scope.as_deref()).map(str::to_string);
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung.
     if let Some(ref login) = scope {
@@ -3643,7 +3644,11 @@ pub async fn oauth_start_handler(
         platform
     );
     match mgr
-        .generate_auth_url(&platform, scope.as_deref(), &redirect_uri)
+        .generate_auth_url(
+            &platform,
+            target.as_ref().map(|(_, id)| id.as_str()),
+            &redirect_uri,
+        )
         .await
     {
         Ok(auth_url) => redirect_found(&auth_url),
@@ -3731,10 +3736,11 @@ pub async fn oauth_disconnect_handler(
     Path(platform): Path<String>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), true) {
-        Ok(s) => s,
-        Err(e) => return e,
+    let target = match required_platform_scope(&auth, &pool, &q).await {
+        Ok(target) => target,
+        Err(error) => return error,
     };
+    let scope = target.as_ref().map(|(login, _)| login.clone());
     let db_scope = credential_scope(scope.as_deref());
     // Partner-Freigabe-Guard: nach Scope-Auflösung, vor Wirkung. Der
     // Sammel-Marker gehört keinem Kanal, für ihn greift nur die Admin-Prüfung
@@ -3753,10 +3759,10 @@ pub async fn oauth_disconnect_handler(
     }
     let result = sqlx::query(
         "UPDATE social_media_platform_auth SET enabled = 0 \
-         WHERE platform = $1 AND (streamer_login = $2 OR (streamer_login IS NULL AND $2::text IS NULL))",
+         WHERE platform = $1 AND (twitch_user_id = $2 OR (streamer_login IS NULL AND $2::text IS NULL))",
     )
     .bind(&platform)
-    .bind(db_scope)
+    .bind(target.as_ref().map(|(_, id)| id.as_str()))
     .execute(&pool)
     .await;
     match result {
@@ -3774,7 +3780,7 @@ pub async fn oauth_disconnect_handler(
 /// Request-Body für PUT /social-media/api/access.
 #[derive(Debug, Deserialize)]
 pub struct PartnerAccessPutBody {
-    streamer_login: String,
+    twitch_user_id: String,
     granted: bool,
 }
 
@@ -3803,7 +3809,7 @@ pub async fn partner_access_get_handler(
 
 /// PUT /social-media/api/access — Freigabe für einen Streamer setzen/entfernen.
 ///
-/// Admin-only. Body: `{ "streamer_login": "...", "granted": true/false }`.
+/// Admin-only. Body: `{ "twitch_user_id": "...", "granted": true/false }`.
 pub async fn partner_access_put_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -3812,19 +3818,19 @@ pub async fn partner_access_put_handler(
     if let Err(e) = require_admin(&auth) {
         return e;
     }
-    let login = body.streamer_login.trim().to_lowercase();
-    if login.is_empty() {
+    let twitch_user_id = body.twitch_user_id.as_str();
+    if twitch_user_id.is_empty() || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "streamer_login is required" })),
+            Json(json!({ "error": "valid twitch_user_id is required" })),
         )
             .into_response();
     }
     let actor = editor_user_id(&auth);
-    match set_partner_access(&pool, &login, body.granted, actor.as_deref()).await {
+    match set_partner_access(&pool, twitch_user_id, body.granted, actor.as_deref()).await {
         Ok(entry) => Json(json!({ "item": entry })).into_response(),
         Err(e) => {
-            tracing::error!(error = %e, login = %login, "partner_access_put: DB-Fehler");
+            tracing::error!(error = %e, twitch_user_id, "partner_access_put: DB-Fehler");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "db_error" })),
@@ -4298,8 +4304,8 @@ mod tests {
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE twitch_clip_form_submissions (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (clip_id, form_key))",
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
-            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
-            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
+            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, twitch_user_id TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1)",
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
@@ -4509,7 +4515,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('earlysalty', '1')",
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('earlysalty', '42')",
         )
         .execute(&pool)
         .await
@@ -4519,6 +4525,7 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: None,
                 streamer_login: Some("earlysalty".into()),
             }),
         )
@@ -4543,6 +4550,7 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: None,
                 streamer_login: Some("earlysalty".into()),
             }),
         )
@@ -4554,6 +4562,7 @@ mod tests {
             sm_partner("ismile_e"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: Some("99".into()),
                 streamer_login: Some("ismile_e".into()),
             }),
         )
@@ -4566,6 +4575,7 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: None,
                 streamer_login: Some("earlysalty".into()),
             }),
             "{\"approval_mode\":\"full_auto\"}".to_string(),
@@ -4577,12 +4587,18 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: None,
                 streamer_login: Some("ismile_e".into()),
             }),
             "{\"approval_mode\":\"full_auto\"}".to_string(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "fremder Zeitplan");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "Fremde Auswahl bleibt beim Session-Kanal"
+        );
+        assert_eq!(body_json(resp).await["streamer_login"], "earlysalty");
     }
 
     #[tokio::test]
@@ -4756,7 +4772,10 @@ mod tests {
         let resp = apply_template_handler(
             partner("nani"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(ApplyTemplateBody {
                 clip_id: Some(json!(clip)),
                 template_id: Some(json!(tpl)),
@@ -4777,7 +4796,10 @@ mod tests {
         let resp = apply_template_handler(
             partner("nani"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(ApplyTemplateBody {
                 clip_id: Some(json!(clip)),
                 template_id: Some(json!(tpl)),
@@ -4793,7 +4815,10 @@ mod tests {
         let resp = apply_template_handler(
             partner("nani"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(ApplyTemplateBody {
                 clip_id: None,
                 template_id: Some(json!(tpl)),
@@ -4808,7 +4833,10 @@ mod tests {
         let resp = apply_template_handler(
             partner("other"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(ApplyTemplateBody {
                 clip_id: Some(json!(clip)),
                 template_id: Some(json!(tpl)),
@@ -4860,7 +4888,10 @@ mod tests {
         let resp = templates_streamer_handler(
             partner("nani"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -4874,7 +4905,10 @@ mod tests {
         let resp = templates_streamer_handler(
             partner("nani"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
         )
         .await;
         let v = body_json(resp).await;
@@ -4920,6 +4954,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: Some("1".into()),
                 streamer_login: Some("nani".into()),
             }),
         )
@@ -4933,7 +4968,7 @@ mod tests {
         let resp = streamer_layout_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Json(json!({ "streamer_login": "nani", "layout": valid_layout(), "mode": "stacked", "cam_enabled": false })),
+            Json(json!({ "twitch_user_id": "1", "streamer_login": "nani", "layout": valid_layout(), "mode": "stacked", "cam_enabled": false })),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -4944,6 +4979,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: Some("1".into()),
                 streamer_login: Some("nani".into()),
             }),
         )
@@ -4958,6 +4994,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: Some("999".into()),
                 streamer_login: Some("ghost".into()),
             }),
         )
@@ -4968,6 +5005,7 @@ mod tests {
             partner("nani"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: Some("1".into()),
                 streamer_login: Some("nani".into()),
             }),
         )
@@ -4977,7 +5015,7 @@ mod tests {
         let resp = streamer_layout_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Json(json!({ "streamer_login": "nani" })),
+            Json(json!({ "twitch_user_id": "1", "streamer_login": "nani" })),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -4989,7 +5027,7 @@ mod tests {
         let resp = streamer_layout_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Json(json!({ "streamer_login": "nani", "layout": zu_breit })),
+            Json(json!({ "twitch_user_id": "1", "streamer_login": "nani", "layout": zu_breit })),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -5005,7 +5043,7 @@ mod tests {
         let resp = streamer_layout_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Json(json!({ "streamer_login": "nani", "layout": hoch, "mode": "stacked" })),
+            Json(json!({ "twitch_user_id": "1", "streamer_login": "nani", "layout": hoch, "mode": "stacked" })),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -5205,7 +5243,10 @@ mod tests {
         let resp = platforms_status_handler(
             DashboardAuthLevel::None,
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -5294,7 +5335,10 @@ mod tests {
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(queue_body(clip, json!(["tiktok"]))),
         )
         .await;
@@ -5308,7 +5352,10 @@ mod tests {
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(queue_body(clip, json!("all"))),
         )
         .await;
@@ -5318,7 +5365,10 @@ mod tests {
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(queue_body(clip, json!(["snapchat"]))),
         )
         .await;
@@ -5328,7 +5378,10 @@ mod tests {
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(QueueUploadBody {
                 clip_id: None,
                 platforms: json!(["tiktok"]),
@@ -5348,7 +5401,10 @@ mod tests {
         let resp = queue_upload_handler(
             partner("other"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(queue_body(clip, json!(["tiktok"]))),
         )
         .await;
@@ -5370,7 +5426,10 @@ mod tests {
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(body),
         )
         .await;
@@ -5404,6 +5463,84 @@ mod tests {
             status: status.map(String::from),
             streamer: None,
         }
+    }
+
+    #[tokio::test]
+    async fn selected_channel_actions_keep_id_with_stale_login_and_foreign_partner_query() {
+        let Some(pool) = make_pool("t_dash_sm_selected_actions").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('renamed_a', '42'), ('reused_login', '99')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('renamed_a', '42', TRUE)")
+            .execute(&pool).await.unwrap();
+        let layout = default_streamer_layout();
+        let response = streamer_layout_put_handler(DashboardAuthLevel::admin(), State(pool.clone()),
+            Json(json!({"twitch_user_id":"42", "streamer_login":"reused_login", "layout": layout.to_override_json()}))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["streamer_login"], "renamed_a");
+        let response = posting_plan_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                twitch_user_id: Some("42".into()),
+                streamer_login: Some("reused_login".into()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["streamer_login"], "renamed_a");
+        let response = vod_archive_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            json!({"twitch_user_id":"42", "streamer_login":"reused_login", "enabled":true})
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["streamer_login"], "renamed_a");
+        let response = vod_archive_get_handler(
+            sm_partner("renamed_a"),
+            State(pool.clone()),
+            Query(StreamerLoginQuery {
+                twitch_user_id: Some("99".into()),
+                streamer_login: Some("reused_login".into()),
+            }),
+        )
+        .await;
+        assert_eq!(body_json(response).await["streamer_login"], "renamed_a");
+        let response = partner_access_put_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Json(PartnerAccessPutBody {
+                twitch_user_id: "42".into(),
+                granted: false,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["item"]["twitch_user_id"], "42");
+        assert!(required_platform_scope(
+            &DashboardAuthLevel::admin(),
+            &pool,
+            &StreamerQuery {
+                twitch_user_id: None,
+                streamer: Some("reused_login".into())
+            }
+        )
+        .await
+        .is_err());
+        let selected = required_platform_scope(
+            &DashboardAuthLevel::admin(),
+            &pool,
+            &StreamerQuery {
+                twitch_user_id: Some("42".into()),
+                streamer: Some("reused_login".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected, Some(("renamed_a".into(), "42".into())));
     }
 
     #[tokio::test]
@@ -5634,6 +5771,7 @@ mod tests {
 
         // Zeitplan lesen: Defaults aus der Kadenz-Recherche, Freigabe manuell.
         let nani = Query(StreamerLoginQuery {
+            twitch_user_id: None,
             streamer_login: Some("nani".into()),
         });
         let resp = posting_plan_get_handler(
@@ -5801,14 +5939,25 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_vod").await else {
             return;
         };
-        for login in ["earlysalty", "nani"] {
-            sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
-                .bind(login)
-                .execute(&pool)
-                .await
-                .unwrap();
+        for (login, id) in [("earlysalty", "42"), ("nani", "99")] {
+            sqlx::query(
+                "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)",
+            )
+            .bind(login)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
         }
         let frage = |login: &str| StreamerLoginQuery {
+            twitch_user_id: Some(
+                match login {
+                    "earlysalty" => "42",
+                    "nani" => "99",
+                    _ => "999",
+                }
+                .into(),
+            ),
             streamer_login: Some(login.to_string()),
         };
 
@@ -5829,7 +5978,7 @@ mod tests {
         let resp = vod_archive_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"unlisted\"}".into(),
+            "{\"twitch_user_id\":\"42\",\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"unlisted\"}".into(),
         )
         .await;
         let v = body_json(resp).await;
@@ -5849,7 +5998,8 @@ mod tests {
         let resp = vod_archive_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"streamer_login\":\"earlysalty\",\"enabled\":false}".into(),
+            "{\"twitch_user_id\":\"42\",\"streamer_login\":\"earlysalty\",\"enabled\":false}"
+                .into(),
         )
         .await;
         let v = body_json(resp).await;
@@ -5860,7 +6010,7 @@ mod tests {
         let resp = vod_archive_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"weltweit\"}".into(),
+            "{\"twitch_user_id\":\"42\",\"streamer_login\":\"earlysalty\",\"enabled\":true,\"privacy\":\"weltweit\"}".into(),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -5913,12 +6063,15 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_vod_partner").await else {
             return;
         };
-        for login in ["earlysalty", "nani"] {
-            sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
-                .bind(login)
-                .execute(&pool)
-                .await
-                .unwrap();
+        for (login, id) in [("ismile_e", "99"), ("nani", "42")] {
+            sqlx::query(
+                "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)",
+            )
+            .bind(login)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
         }
         sqlx::query(
             "INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)",
@@ -5936,19 +6089,21 @@ mod tests {
         .await;
         assert_eq!(body_json(resp).await["enabled"], true);
 
-        // Fremder Kanal: 403, und der fremde Schalter bleibt aus.
+        // Fremde Ziel-ID ändert nur den Session-Kanal; der fremde Schalter bleibt aus.
         let resp = vod_archive_put_handler(
             sm_partner("nani"),
             State(pool.clone()),
-            "{\"streamer_login\":\"earlysalty\",\"enabled\":true}".into(),
+            "{\"twitch_user_id\":\"99\",\"streamer_login\":\"ismile_e\",\"enabled\":true}".into(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["streamer_login"], "nani");
         let resp = vod_archive_get_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(StreamerLoginQuery {
-                streamer_login: Some("earlysalty".to_string()),
+                twitch_user_id: Some("99".into()),
+                streamer_login: Some("ismile_e".to_string()),
             }),
         )
         .await;
@@ -5960,6 +6115,7 @@ mod tests {
             sm_partner("nani"),
             State(pool.clone()),
             Query(StreamerLoginQuery {
+                twitch_user_id: None,
                 streamer_login: None,
             }),
         )
@@ -5971,9 +6127,10 @@ mod tests {
         // Ein nicht freigeschalteter Partner kommt gar nicht erst durch.
         assert_eq!(
             vod_archive_put_handler(
-                sm_partner("earlysalty"),
+                sm_partner("ismile_e"),
                 State(pool.clone()),
-                "{\"streamer_login\":\"earlysalty\",\"enabled\":true}".into()
+                "{\"twitch_user_id\":\"99\",\"streamer_login\":\"ismile_e\",\"enabled\":true}"
+                    .into()
             )
             .await
             .status(),
@@ -6021,6 +6178,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ReportsQuery {
+                twitch_user_id: None,
                 kind: None,
                 streamer: None,
                 limit: None,
@@ -6033,6 +6191,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ReportsQuery {
+                twitch_user_id: None,
                 kind: Some("bogus".into()),
                 streamer: None,
                 limit: None,
@@ -6045,6 +6204,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ReportsQuery {
+                twitch_user_id: None,
                 kind: None,
                 streamer: None,
                 limit: Some("x".into()),
@@ -6069,6 +6229,7 @@ mod tests {
                 partner("nani"),
                 State(pool.clone()),
                 Query(ReportsQuery {
+                    twitch_user_id: None,
                     kind: None,
                     streamer: None,
                     limit: None
@@ -6195,11 +6356,18 @@ mod tests {
         };
         std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell)
 
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // kind=streamer → erzeugt einen Streamer-Report (No-Data-Fallback).
         let resp = reports_run_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            "{\"kind\":\"streamer\",\"streamer\":\"nani\"}".into(),
+            "{\"kind\":\"streamer\",\"twitch_user_id\":\"42\",\"streamer\":\"nani\"}".into(),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -6260,13 +6428,23 @@ mod tests {
             return;
         };
 
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // start: ungültige Plattform → 400.
         assert_eq!(
             oauth_start_handler(
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Path("snapchat".into()),
-                Query(StreamerQuery { streamer: None })
+                Query(StreamerQuery {
+                    twitch_user_id: Some("42".into()),
+                    streamer: None
+                })
             )
             .await
             .status(),
@@ -6278,7 +6456,10 @@ mod tests {
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Path("tiktok".into()),
-                Query(StreamerQuery { streamer: None })
+                Query(StreamerQuery {
+                    twitch_user_id: Some("42".into()),
+                    streamer: None
+                })
             )
             .await
             .status(),
@@ -6290,7 +6471,10 @@ mod tests {
                 DashboardAuthLevel::None,
                 State(pool.clone()),
                 Path("tiktok".into()),
-                Query(StreamerQuery { streamer: None })
+                Query(StreamerQuery {
+                    twitch_user_id: Some("42".into()),
+                    streamer: None
+                })
             )
             .await
             .status(),
@@ -6302,6 +6486,7 @@ mod tests {
                 State(pool.clone()),
                 Path("tiktok".into()),
                 Query(StreamerQuery {
+                    twitch_user_id: Some("42".into()),
                     streamer: Some("other".into())
                 })
             )
@@ -6340,12 +6525,13 @@ mod tests {
         );
 
         // disconnect: setzt enabled=0 (kein Cipher nötig).
-        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, enabled) VALUES ('tiktok', 'nani', 1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, enabled) VALUES ('tiktok', 'nani', '42', 1)").execute(&pool).await.unwrap();
         let resp = oauth_disconnect_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("tiktok".into()),
             Query(StreamerQuery {
+                twitch_user_id: Some("42".into()),
                 streamer: Some("nani".into()),
             }),
         )
@@ -6360,7 +6546,10 @@ mod tests {
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Path("snap".into()),
-                Query(StreamerQuery { streamer: None })
+                Query(StreamerQuery {
+                    twitch_user_id: Some("42".into()),
+                    streamer: None
+                })
             )
             .await
             .status(),
@@ -6388,7 +6577,10 @@ mod tests {
         let resp = mark_uploaded_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(mark_body(Some(clip), json!(["tiktok"]))),
         )
         .await;
@@ -6408,7 +6600,10 @@ mod tests {
             mark_uploaded_handler(
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
-                Query(StreamerQuery { streamer: None }),
+                Query(StreamerQuery {
+                    twitch_user_id: None,
+                    streamer: None
+                }),
                 Json(mark_body(None, json!(["tiktok"])))
             )
             .await
@@ -6419,7 +6614,10 @@ mod tests {
             mark_uploaded_handler(
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
-                Query(StreamerQuery { streamer: None }),
+                Query(StreamerQuery {
+                    twitch_user_id: None,
+                    streamer: None
+                }),
                 Json(mark_body(Some(clip), json!([])))
             )
             .await
@@ -6431,7 +6629,10 @@ mod tests {
             mark_uploaded_handler(
                 partner("other"),
                 State(pool.clone()),
-                Query(StreamerQuery { streamer: None }),
+                Query(StreamerQuery {
+                    twitch_user_id: None,
+                    streamer: None
+                }),
                 Json(mark_body(Some(clip), json!(["tiktok"])))
             )
             .await
@@ -6680,7 +6881,10 @@ mod tests {
         let resp = batch_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(BatchUploadBody {
                 streamer: Some("nani".into()),
                 platforms: json!(["tiktok"]),
@@ -6697,7 +6901,10 @@ mod tests {
         let resp = batch_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(BatchUploadBody {
                 streamer: Some("nani".into()),
                 platforms: json!([]),
@@ -6710,7 +6917,10 @@ mod tests {
         let resp = batch_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(BatchUploadBody {
                 streamer: None,
                 platforms: json!(["tiktok"]),
@@ -6723,7 +6933,10 @@ mod tests {
         let resp = batch_upload_handler(
             partner("nani"),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(BatchUploadBody {
                 streamer: Some("other".into()),
                 platforms: json!(["tiktok"]),
@@ -6745,6 +6958,7 @@ mod tests {
                 DashboardAuthLevel::None,
                 State(pool.clone()),
                 Json(FetchClipsBody {
+                    twitch_user_id: None,
                     streamer: Some("nani".into()),
                     limit: None,
                     days: None
@@ -6760,6 +6974,7 @@ mod tests {
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Json(FetchClipsBody {
+                    twitch_user_id: None,
                     streamer: None,
                     limit: None,
                     days: None
@@ -6775,6 +6990,7 @@ mod tests {
                 partner("nani"),
                 State(pool.clone()),
                 Json(FetchClipsBody {
+                    twitch_user_id: None,
                     streamer: Some("other".into()),
                     limit: None,
                     days: None
@@ -6795,8 +7011,8 @@ mod tests {
             return;
         };
         sqlx::query(
-            "INSERT INTO social_media_platform_auth (platform, streamer_login, enabled) \
-             VALUES ('youtube', NULL, 1), ('youtube', 'earlysalty', 1), ('youtube', 'ismile_e', 1)",
+            "INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, enabled) \
+             VALUES ('youtube', NULL, NULL, 1), ('youtube', 'earlysalty', '42', 1), ('youtube', 'ismile_e', '99', 1)",
         )
         .execute(&pool)
         .await
@@ -6806,27 +7022,33 @@ mod tests {
             .await
             .unwrap();
 
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('earlysalty', '42'), ('ismile_e', '99')").execute(&pool).await.unwrap();
+
         // Ohne Parameter: 400 statt stillem Griff zur Sammelverbindung.
         let resp = oauth_disconnect_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Path("youtube".to_string()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        // Fremder Kanal: 403.
+        // Fremde Ziel-ID wird auf die eigene Session begrenzt.
         let resp = oauth_disconnect_handler(
             sm_partner("earlysalty"),
             State(pool.clone()),
             Path("youtube".to_string()),
             Query(StreamerQuery {
+                twitch_user_id: Some("99".into()),
                 streamer: Some("ismile_e".to_string()),
             }),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::OK);
 
         // Beide Abweisungen duerfen nichts angefasst haben.
         let aktiv: i64 =
@@ -6834,7 +7056,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(aktiv, 3, "abgewiesene Anfragen duerfen nicht wirken");
+        assert_eq!(aktiv, 2, "Fremde ID trennt nur die eigene Verbindung");
 
         // Eigener Kanal: trifft genau die kanalgebundene Zeile.
         let resp = oauth_disconnect_handler(
@@ -6842,6 +7064,7 @@ mod tests {
             State(pool.clone()),
             Path("youtube".to_string()),
             Query(StreamerQuery {
+                twitch_user_id: None,
                 streamer: Some("EarlySalty".to_string()),
             }),
         )
@@ -6869,6 +7092,7 @@ mod tests {
             State(pool.clone()),
             Path("youtube".to_string()),
             Query(StreamerQuery {
+                twitch_user_id: None,
                 streamer: Some(GLOBAL_SCOPE_MARKER.to_string()),
             }),
         )
@@ -6888,6 +7112,7 @@ mod tests {
             State(pool.clone()),
             Path("youtube".to_string()),
             Query(StreamerQuery {
+                twitch_user_id: None,
                 streamer: Some(GLOBAL_SCOPE_MARKER.to_string()),
             }),
         )
@@ -6903,7 +7128,10 @@ mod tests {
         let resp = platforms_status_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -6912,6 +7140,7 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(StreamerQuery {
+                twitch_user_id: None,
                 streamer: Some("ismile_e".to_string()),
             }),
         )
@@ -6921,7 +7150,10 @@ mod tests {
         let resp = platforms_status_handler(
             DashboardAuthLevel::None,
             State(pool.clone()),
-            Query(StreamerQuery { streamer: None }),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

@@ -141,8 +141,8 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabPr
   });
 
   const reportsQuery = useQuery({
-    queryKey: ['social-media', 'reports', streamer],
-    queryFn: () => fetchReports({ streamer, limit: 12 }),
+    queryKey: ['social-media', 'reports', twitchUserId],
+    queryFn: () => fetchReports({ twitch_user_id: twitchUserId, limit: 12 }),
     enabled: !!streamer && isAdmin,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -151,7 +151,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabPr
   });
 
   const streamerReportMutation = useMutation({
-    mutationFn: () => runReport({ kind: 'streamer', streamer }),
+    mutationFn: () => runReport({ kind: 'streamer', twitch_user_id: twitchUserId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'reports'] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'analytics'] });

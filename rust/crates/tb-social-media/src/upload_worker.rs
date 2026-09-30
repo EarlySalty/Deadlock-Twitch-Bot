@@ -724,12 +724,21 @@ impl UploadWorker {
     async fn resolve_uploader(
         &self,
         platform: &str,
-        streamer_login: Option<&str>,
+        clip_db_id: i64,
         cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
     ) -> Option<Arc<dyn PlatformUploader>> {
+        let twitch_user_id = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(&self.task.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()?;
         let creds = self
             .credentials
-            .get_credentials(platform, streamer_login)
+            .get_credentials_for_id(platform, Some(&twitch_user_id))
             .await?;
         let key = (platform.to_string(), creds.id);
         if let Some(cached) = cache.get(&key) {
@@ -743,8 +752,8 @@ impl UploadWorker {
     /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
     /// hochladen.
     async fn refresh_tiktok_inbox(&self) {
-        let rows: Vec<(i64, Option<String>, Option<String>, String)> = match sqlx::query_as(
-            "SELECT q.id, c.streamer_login, q.tiktok_publish_id, q.status \
+        let rows: Vec<(i64, i64, Option<String>, String)> = match sqlx::query_as(
+            "SELECT q.id, c.id, q.tiktok_publish_id, q.status \
              FROM twitch_clips_upload_queue q \
              JOIN twitch_clips_social_media c ON c.id = q.clip_id \
              WHERE q.platform = 'tiktok' AND q.status IN ('inbox', 'inbox_pending') \
@@ -761,7 +770,7 @@ impl UploadWorker {
             }
         };
         let mut cache = HashMap::new();
-        for (queue_id, streamer_login, publish_id, previous) in rows {
+        for (queue_id, clip_db_id, publish_id, previous) in rows {
             let Some(publish_id) = publish_id else {
                 let next_check = (Utc::now() + chrono::Duration::days(1)).to_rfc3339();
                 if let Err(error) = sqlx::query(
@@ -778,7 +787,7 @@ impl UploadWorker {
                 continue;
             };
             let Some(uploader) = self
-                .resolve_uploader("tiktok", streamer_login.as_deref(), &mut cache)
+                .resolve_uploader("tiktok", clip_db_id, &mut cache)
                 .await
             else {
                 if let Err(error) = update_upload_status(
@@ -846,7 +855,7 @@ impl UploadWorker {
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
             if let Some(uploader) = self
-                .resolve_uploader(&item.platform, item.streamer_login.as_deref(), &mut cache)
+                .resolve_uploader(&item.platform, item.clip_db_id, &mut cache)
                 .await
             {
                 batch.push((item, uploader));
@@ -1209,8 +1218,8 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {

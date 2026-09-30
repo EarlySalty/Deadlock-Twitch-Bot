@@ -51,7 +51,7 @@ function planeFelder(plan: PostingPlan): Record<string, string | number | boolea
 /** Der bestehende Vertrag besitzt mehrere Schreibendpunkte. Fortschritte werden
  * einzeln bestätigt; bei Teilfehlern bleiben Entwurf und Serverstand getrennt. */
 export function PostingPlanDraft({
-  streamer,
+  twitchUserId,
   plan,
   loading,
   loadError,
@@ -59,6 +59,7 @@ export function PostingPlanDraft({
   children,
 }: {
   streamer: string;
+  twitchUserId?: string;
   plan: PostingPlan | null;
   loading: boolean;
   loadError: unknown;
@@ -154,7 +155,7 @@ export function PostingPlanDraft({
       if (effective.timezone !== base.timezone) settings.timezone = effective.timezone;
       if (effective.subtitles_enabled !== base.subtitles_enabled)
         settings.subtitles_enabled = effective.subtitles_enabled;
-      if (Object.keys(settings).length) accept(await savePostingPlanSettings(streamer, settings));
+      if (Object.keys(settings).length) accept(await savePostingPlanSettings(twitchUserId, settings));
     };
     const schreibeZiele = async () => {
       // Erst die einzelnen Ziele. Jeder Aufruf enthält die betroffene
@@ -171,14 +172,14 @@ export function PostingPlanDraft({
         if (JSON.stringify(target.post_times) !== JSON.stringify(current.post_times))
           payload.post_times = target.post_times;
         if (Object.keys(payload).length)
-          accept(await savePlatformSchedule(streamer, target.platform, payload));
+          accept(await savePlatformSchedule(twitchUserId, target.platform, payload));
       }
       for (const target of effective.categories) {
         if (
           base.categories.find((c) => c.category_key === target.category_key)?.auto_post !==
           target.auto_post
         ) {
-          accept(await saveCategoryAutoPost(streamer, target.category_key, target.auto_post));
+          accept(await saveCategoryAutoPost(twitchUserId, target.category_key, target.auto_post));
         }
       }
     };
@@ -199,7 +200,7 @@ export function PostingPlanDraft({
       // in den erneuten Schreibaufruf. Berührt der Fremde ein Entwurfsfeld,
       // greift stattdessen der Konflikt-Pfad.
       try {
-        onSaved(await fetchPostingPlan(streamer));
+        onSaved(await fetchPostingPlan(twitchUserId));
       } catch {
         setNeedsRefresh(true);
       }
@@ -218,7 +219,7 @@ export function PostingPlanDraft({
     saveLock.current = true;
     setBusy(true);
     try {
-      const current = await fetchPostingPlan(streamer);
+      const current = await fetchPostingPlan(twitchUserId);
       onSaved(current);
       setNeedsRefresh(false);
       setMessage(null);

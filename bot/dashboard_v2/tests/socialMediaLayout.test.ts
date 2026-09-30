@@ -32,6 +32,12 @@ test('Stacked-Gameplay füllt den Restframe ohne Facecam im Quellcrop', () => {
   assert.ok(Math.abs(crop.x + crop.w / 2 - 960) < 200);
 });
 
+test('Stacked-Gleichstand bevorzugt links wie der Rust-Renderer', () => {
+  assert.deepEqual(stackedGameCrop({ x: 0, y: 0, w: 1920, h: 1080 }, { x: 900, y: 0, w: 120, h: 1080 }, 1320), {
+    x: 10, y: 0, w: 882, h: 1080,
+  });
+});
+
 // Der Zielframe ist der Vertrag zwischen Editor und Renderer
 // (rust/crates/tb-social-media/src/layout.rs: TARGET_WIDTH/TARGET_HEIGHT).
 test('Zielframe ist 1080x1920', () => {

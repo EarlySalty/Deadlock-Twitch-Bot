@@ -304,7 +304,10 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
         let resp = social_media::batch_upload_handler(
             partner(login),
             State(pool.clone()),
-            Query(social_media::StreamerQuery { streamer: None }),
+            Query(social_media::StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(serde_json::from_value(json!({ "platforms": ["tiktok"] })).unwrap()),
         )
         .await;
@@ -336,7 +339,10 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
         let resp = social_media::queue_upload_handler(
             partner(login),
             State(pool.clone()),
-            Query(social_media::StreamerQuery { streamer: None }),
+            Query(social_media::StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
             Json(serde_json::from_value(body.clone()).unwrap()),
         )
         .await;

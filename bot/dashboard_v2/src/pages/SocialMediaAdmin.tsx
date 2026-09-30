@@ -37,7 +37,7 @@ export function SocialMediaAdminDashboard() {
 
   // Was diese Session darf: Admin sieht alles, Partner nur nach Freigabe.
   const { data: access, isLoading: loadingAccess } = useQuery({
-    queryKey: ['social-media-access'],
+    queryKey: ['social-media-access', authStatus?.twitchUserId],
     queryFn: fetchMyAccess,
     staleTime: 60 * 1000,
     retry: false,
@@ -55,15 +55,15 @@ export function SocialMediaAdminDashboard() {
   });
 
   const accessMutation = useMutation({
-    mutationFn: ({ login, granted }: { login: string; granted: boolean }) =>
-      setPartnerAccess(login, granted),
+    mutationFn: ({ twitchUserId, granted }: { twitchUserId: string; granted: boolean }) =>
+      setPartnerAccess(twitchUserId, granted),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media-access-list'] });
     },
   });
 
   const selectedGranted = accessList.some(
-    (entry) => entry.streamer_login.toLowerCase() === streamer && entry.granted,
+    (entry) => entry.twitch_user_id === selectedChannel?.twitchUserId && entry.granted,
   );
 
   const isDemoShell = resolveEffectiveDemoMode({
@@ -172,7 +172,7 @@ export function SocialMediaAdminDashboard() {
               <button
                 type="button"
                 onClick={() =>
-                  accessMutation.mutate({ login: streamer, granted: !selectedGranted })
+                  selectedChannel?.twitchUserId && accessMutation.mutate({ twitchUserId: selectedChannel.twitchUserId, granted: !selectedGranted })
                 }
                 disabled={accessMutation.isPending}
                 title={
@@ -210,6 +210,7 @@ export function SocialMediaAdminDashboard() {
                 ))}
               </select>
             )}
+            {accessMutation.isError && <p role="alert" className="text-sm text-ui-danger-soft">{t('Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.')}</p>}
             <AuthBadge />
           </div>
         </div>
@@ -231,7 +232,7 @@ export function SocialMediaAdminDashboard() {
               {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
-            <SocialMedia key={access.streamer ?? authStatus?.twitchLogin ?? ''} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} />
+            <SocialMedia key={authStatus?.twitchUserId ?? ''} twitchUserId={authStatus?.twitchUserId ?? undefined} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />

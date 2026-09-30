@@ -83,6 +83,7 @@ const EN: Record<string, string> = {
   "Post stoppen": "Stop post",
   "Transkript & Metadaten": "Transcript & metadata",
   "Aufbewahrung": "Retention",
+  "Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.": "Access could not be changed. Please check the selected channel.",
   "Änderungen gespeichert.": "Changes saved.",
   "Teilweise gespeichert. Dein Entwurf bleibt erhalten.": "Partially saved. Your draft has been kept.",
   "Speichern fehlgeschlagen. Dein Entwurf bleibt erhalten.": "Save failed. Your draft has been kept.",

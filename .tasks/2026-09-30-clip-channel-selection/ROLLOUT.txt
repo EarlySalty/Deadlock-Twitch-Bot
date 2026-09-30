@@ -2,12 +2,16 @@ Alte Social-Media-Freigaben nach Migration 20260930040000
 
 Bestehende Freigaben behalten absichtlich eine NULL-Twitch-ID und gewähren damit
 keinen Partnerzugang. Namen werden niemals automatisch zu Identitäten rückgefüllt.
+Die Verwaltung zeigt nur Freigaben derselben tatsächlichen Twitch-ID als aktiv.
 
-Der Betreiber prüft den aktuellen tatsächlichen Twitch-Account in der vorhandenen
-Streamer-Liste und erteilt dessen Freigabe im bestehenden Social-Media-Adminbereich
-erneut. Wenn dort eine alte Freigabe noch als aktiv erscheint: zuerst entziehen,
-dann bewusst neu freigeben. Der vorhandene Writer speichert die ID des aktuellen
-Streamer-Datensatzes; kein direkter SQL-Namensbackfill. Anschließend mit der echten
-Partner-Session dieses Accounts prüfen, dass dessen eigene Clips erreichbar sind.
-Nicht bestätigte Altfreigaben bleiben geschlossen. Dies ist eine notwendige
-Rollout-Aktion, kein bereits durchgeführter produktiver Regrant.
+Der Betreiber wählt den bestätigten tatsächlichen Twitch-Account in der vorhandenen
+Streamer-Liste und erteilt dessen Freigabe im Social-Media-Adminbereich bewusst neu.
+Auswahl, API und Writer tragen diese ID unverändert durch. Der Writer liest einen
+aktuellen Anzeigenamen nur anhand dieser ID für den bestehenden Tabellen-Fremdschlüssel.
+Kollidiert dieser Name mit einer anderen bekannten Grant-ID, schlägt die Änderung
+sichtbar fehl; die fremde ID wird weder ersetzt noch entzogen. NULL-Altfreigaben
+dürfen erst durch diese ausdrücklich ausgewählte ID gebunden werden.
+
+Anschließend mit der echten Partner-Session dieses Accounts prüfen, dass dessen
+eigene Clips erreichbar sind. Nicht bestätigte Altfreigaben bleiben geschlossen.
+Dies ist eine notwendige Rollout-Aktion, kein bereits durchgeführter produktiver Regrant.

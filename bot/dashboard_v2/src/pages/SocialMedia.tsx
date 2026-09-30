@@ -182,9 +182,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   const [showAnalytics, setShowAnalytics] = useState(false);
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
-    queryKey: ['social-media', 'streamer-layout', streamer],
-    queryFn: () => fetchStreamerLayout(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'streamer-layout', twitchUserId],
+    queryFn: () => fetchStreamerLayout(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -198,7 +198,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
         (page) => fetchClips({ status: 'all', twitch_user_id: twitchUserId, page, page_size: 100 }, signal),
         signal,
       ),
-    enabled: !!streamer,
+    enabled: !!twitchUserId,
     staleTime: 30 * 1000,
     refetchOnWindowFocus: false,
     retry: (failureCount, err) => !(err instanceof SocialMediaForbiddenError) && failureCount < 2,
@@ -212,7 +212,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     queryFn: () =>
       fetchClips({ status: 'all', twitch_user_id: twitchUserId, page: 1, page_size: 12 }),
     // Vorschauclips werden nur im fokussierten Layout-Bereich gebraucht.
-    enabled: !!streamer && activeView === 'layout',
+    enabled: !!twitchUserId && activeView === 'layout',
     staleTime: 5 * 60 * 1000,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -234,9 +234,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   );
 
   const postingPlanQuery = useQuery<PostingPlan, Error>({
-    queryKey: ['social-media', 'posting-plan', streamer],
-    queryFn: () => fetchPostingPlan(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'posting-plan', twitchUserId],
+    queryFn: () => fetchPostingPlan(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -244,9 +244,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   });
 
   const vodArchiveQuery = useQuery<VodArchiveSettings, Error>({
-    queryKey: ['social-media', 'vod-archive-settings', streamer],
-    queryFn: () => fetchVodArchiveSettings(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'vod-archive-settings', twitchUserId],
+    queryFn: () => fetchVodArchiveSettings(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -272,11 +272,11 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   }, [layoutQuery.data]);
 
   const saveLayoutMutation = useMutation({
-    mutationFn: (layout: LayoutPayload) => saveStreamerLayout({ streamer_login: streamer, layout }),
+    mutationFn: (layout: LayoutPayload) => saveStreamerLayout({ twitch_user_id: twitchUserId, layout }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'streamer-layout', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'streamer-layout', twitchUserId] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -284,7 +284,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     mutationFn: (file: File) => uploadClip({ file, twitch_user_id: twitchUserId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -292,7 +292,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     mutationFn: (clipDbId: number) => discardClip(clipDbId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -301,14 +301,14 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
       setClipLayoutOverride(clipDbId, layout),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
   // Alle drei Zeitplan-Aufrufe liefern den kompletten Plan zurueck. Wir setzen
   // ihn direkt in den Cache, damit der neu berechnete Termin und die
   // Vorratsrechnung ohne zweite Abfrage sofort stehen.
-  const planKey = ['social-media', 'posting-plan', streamer];
+  const planKey = ['social-media', 'posting-plan', twitchUserId];
   const uebernehmePlan = (plan: PostingPlan) => {
     queryClient.setQueryData(planKey, plan);
   };
@@ -316,9 +316,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   // Ohne Kanal zeigt und kappt das Backend die globale Sammelverbindung. Beides
   // waere hier falsch: die Karte gehoert zum gewaehlten Kanal.
   const platformStatusQuery = useQuery({
-    queryKey: ['social-media', 'platform-status', streamer],
-    queryFn: () => fetchPlatformStatus(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'platform-status', twitchUserId],
+    queryFn: () => fetchPlatformStatus(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -326,18 +326,18 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   });
 
   const disconnectMutation = useMutation({
-    mutationFn: (platform: string) => disconnectPlatform(platform, streamer),
+    mutationFn: (platform: string) => disconnectPlatform(platform, twitchUserId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', twitchUserId] });
     },
   });
 
   /** Nachschub aus Twitch holen, der einzige Ausweg aus der Vorratswarnung. */
   const clipsHolenMutation = useMutation({
-    mutationFn: () => fetchTwitchClips(streamer),
+    mutationFn: () => fetchTwitchClips(twitchUserId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -346,16 +346,16 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     mutationFn: (clipDbId: number) => cancelScheduledPost(clipDbId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
   const vodArchiveMutation = useMutation({
     mutationFn: (payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) =>
-      saveVodArchiveSettings(streamer, payload),
+      saveVodArchiveSettings(twitchUserId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['social-media', 'vod-archive-settings', streamer],
+        queryKey: ['social-media', 'vod-archive-settings', twitchUserId],
       });
     },
   });
@@ -372,7 +372,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     }) => decideClipApproval({ clipDbId, decision, platforms }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
     // Kein window.alert mit roher Backend-Meldung. Der Fehler geht ueber
     // `clipFehler` als Zeile in den Fuss der betroffenen Clip-Karte, genau wie
@@ -488,7 +488,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
       >
         {activeView === 'plan' ? (
           <PostingPlanDraft
-            key={streamer}
+            twitchUserId={twitchUserId}
+            key={twitchUserId}
             streamer={streamer}
             plan={postingPlanQuery.data ?? null}
             loading={postingPlanQuery.isLoading}
@@ -643,6 +644,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
         ) : activeView === 'konten' ? (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <PlatformConnectionsCard
+              twitchUserId={twitchUserId}
               streamer={streamer}
               platforms={platformStatusQuery.data?.platforms ?? []}
               isLoading={platformStatusQuery.isLoading}
@@ -1876,6 +1878,7 @@ function leseOauthRueckmeldung(): OauthRueckmeldung {
 
 function PlatformConnectionsCard({
   streamer,
+  twitchUserId,
   platforms,
   isLoading,
   ladeFehler,
@@ -1884,6 +1887,7 @@ function PlatformConnectionsCard({
   error,
 }: {
   streamer: string;
+  twitchUserId?: string;
   platforms: PlatformStatus[];
   isLoading: boolean;
   /** Fehler des Status-Abrufs: dann ist unbekannt, was verbunden ist. */
@@ -2011,7 +2015,7 @@ function PlatformConnectionsCard({
                 </button>
               ) : (
                 <a
-                  href={oauthStartUrl(platform, streamer)}
+                  href={oauthStartUrl(platform, twitchUserId)}
                   className="shrink-0 rounded-lg border border-ui-accent-strong/25 bg-ui-accent-strong/12 px-3 py-1.5 text-sm font-medium text-ui-accent-ink transition-colors hover:bg-ui-accent-strong/18"
                 >
                   {abgelaufen ? t('Neu verbinden') : t('Verbinden')}

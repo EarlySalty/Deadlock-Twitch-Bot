@@ -118,6 +118,9 @@ fn stacked_game_crop(layout: &StreamerLayout, game_height: i64) -> LayoutBox {
     ];
     regions
         .into_iter()
+        // max_by behält bei Gleichstand den letzten Kandidaten. Rückwärts
+        // gewinnt wie in der Vorschau der erste: links, rechts, oben, unten.
+        .rev()
         .filter_map(|region| fit_stacked_region(region, center_x, center_y, game_height))
         .filter(|crop| !crops_overlap(*crop, cam))
         .max_by(|a, b| {
@@ -896,6 +899,21 @@ mod tests {
         };
         let filter = build_compose_filter(&layout, "stacked", true);
         assert!(filter.contains("crop=882:1080:459:0"), "{filter}");
+    }
+
+    #[test]
+    fn compose_filter_stacked_gleichstand_bevorzugt_wie_vorschau_links() {
+        let mut layout = default_streamer_layout();
+        layout.cam_crop = LayoutBox {
+            x: 900,
+            y: 0,
+            w: 120,
+            h: 1080,
+        };
+        let crop = stacked_game_crop(&layout, 1320);
+        assert_eq!((crop.x, crop.y, crop.w, crop.h), (10, 0, 882, 1080));
+        let filter = build_compose_filter(&layout, "stacked", true);
+        assert!(filter.contains("crop=882:1080:10:0"), "{filter}");
     }
 
     #[test]
