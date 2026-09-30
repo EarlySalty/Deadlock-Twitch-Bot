@@ -198,3 +198,7 @@ pub use util::parse_iso_utc;
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+
+#[cfg(test)]
+#[path = "../../../test-support/database.rs"]
+mod test_database;

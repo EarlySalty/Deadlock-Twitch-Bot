@@ -378,7 +378,7 @@ mod tests {
     /// Muster: schema-pro-Test (wie in `tb-monitoring/tests/hermetic.rs`).
     /// Parallele Tests kollidieren nicht, da jedes Schema einmalig benannt ist.
     async fn setup_db(schema: &str) -> sqlx::PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+        let url = crate::test_database::database_url().expect(
             "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
         );
 

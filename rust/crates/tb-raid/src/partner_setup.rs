@@ -1378,7 +1378,7 @@ mod tests {
     }
 
     async fn testpool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = crate::test_database::database_url()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

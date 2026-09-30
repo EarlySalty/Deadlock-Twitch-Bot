@@ -639,8 +639,7 @@ mod tests {
     }
 
     fn test_db_url() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL")
-            .ok()
+        crate::test_database::database_url()
             .filter(|v| !v.trim().is_empty())
     }
 

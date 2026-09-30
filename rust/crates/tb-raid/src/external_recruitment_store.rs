@@ -345,7 +345,7 @@ mod tests {
     /// jeder Test isoliert über eigenes Schema + search_path.
     async fn setup_db(schema: &str) -> PgPool {
         let url =
-            std::env::var("TB_TEST_DATABASE_URL").expect("TB_TEST_DATABASE_URL muss gesetzt sein");
+            crate::test_database::database_url().expect("TB_TEST_DATABASE_URL muss gesetzt sein");
         let admin = sqlx::PgPool::connect(&url)
             .await
             .expect("Test-DB-Verbindung fehlgeschlagen");
@@ -427,7 +427,7 @@ mod tests {
 
     macro_rules! skip_without_db {
         () => {
-            if std::env::var("TB_TEST_DATABASE_URL").is_err() {
+            if crate::test_database::database_url().is_none() {
                 eprintln!(
                     "SKIP: TB_TEST_DATABASE_URL nicht gesetzt — `rust/scripts/test_db.sh up`"
                 );

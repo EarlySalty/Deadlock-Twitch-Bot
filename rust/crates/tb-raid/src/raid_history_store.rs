@@ -175,7 +175,7 @@ mod tests {
     /// Legt ein frisches Schema + Tabelle an; gibt einen Pool zurück, der
     /// `search_path` auf dieses Schema setzt.
     async fn setup_db(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
+        let url = crate::test_database::database_url()
             .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
 
         let admin = sqlx::PgPool::connect(&url)
@@ -223,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_recent_reference_picks_latest_successful() {
-        if std::env::var("TB_TEST_DATABASE_URL").is_err() {
+        if crate::test_database::database_url().is_none() {
             eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
             return;
         }
