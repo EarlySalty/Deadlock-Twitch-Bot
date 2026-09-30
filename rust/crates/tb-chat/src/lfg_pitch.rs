@@ -1,6 +1,7 @@
 //! LFG-Mitspieler-Pitch: billiger Regex-Vorfilter vor dem KI-Judge.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,8 +22,19 @@ const LFG_PITCH_CHANNEL_COOLDOWN: Duration = Duration::from_secs(120);
 const LFG_PITCH_USER_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 const LFG_PITCH_JUDGE_COOLDOWN: Duration = Duration::from_secs(30);
 
-pub const LFG_PITCH_REPLY: &str =
-    "@{chatter} Schau gerne mal in unsere Community rein: {invite} da findest du jederzeit passende Mitspieler :)";
+pub const LFG_PITCH_REPLIES: [&str; 4] = [
+    "@{chatter} Solo Queue hat dich genug geärgert, im Discord laufen Voice-Lanes für gemeinsame Runden :) {invite}",
+    "@{chatter} Fehlt nur noch der Rest vom Stack, im Discord hängen Mitspieler und Voice-Lanes schon rum :) {invite}",
+    "@{chatter} Bevor die Solo Queue wieder würfelt: im Discord sind Mitspieler und Voice-Lanes für Deadlock :) {invite}",
+    "@{chatter} Wenn gerade Leute zum Zocken fehlen, im Discord warten Voice-Lanes auf den nächsten Stack :) {invite}",
+];
+pub const LFG_PITCH_REPLY: &str = LFG_PITCH_REPLIES[0];
+static LFG_PITCH_REPLY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn next_lfg_pitch_reply() -> &'static str {
+    LFG_PITCH_REPLIES
+        [LFG_PITCH_REPLY_INDEX.fetch_add(1, Ordering::Relaxed) % LFG_PITCH_REPLIES.len()]
+}
 
 const LFG_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein vorsichtiger deutschsprachiger Twitch-Chat-Moderator für einen Deadlock-Stream.
 
@@ -848,7 +860,7 @@ impl LfgPitchResponder {
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let message = LFG_PITCH_REPLY
+        let message = next_lfg_pitch_reply()
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &message).await

@@ -511,8 +511,7 @@ mod tests {
         for kontext in [vec![], vec!["altgediente"]] {
             let resolver = StubResolver::new(&kontext);
             for roh in ["auto", "", "unbekannt", "AUTO"] {
-                let state =
-                    build_state_info(&resolver, "altgediente", roh, None, None, None).await;
+                let state = build_state_info(&resolver, "altgediente", roh, None, None, None).await;
                 assert_ne!(state.scope_profile, "uplink", "Profil {roh}");
                 assert!(
                     state.scope_profile == "base" || state.scope_profile == "dashboard_reauth",

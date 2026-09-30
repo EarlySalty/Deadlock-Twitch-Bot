@@ -56,9 +56,9 @@ include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
 
 mod ad_manager_wiring;
 mod auto_raid;
+mod category_followers;
 mod chat_typen_wiring;
 mod chat_wiring;
-mod category_followers;
 mod chatters_wiring;
 mod confirm_resolver;
 mod crew_archive;
@@ -690,7 +690,9 @@ async fn main() {
         pool.clone(),
         &settings.broker,
         helix.as_ref().clone(),
-        chat_api_handle.as_ref().map(|handle| handle.bot_token_manager()),
+        chat_api_handle
+            .as_ref()
+            .map(|handle| handle.bot_token_manager()),
     );
     // Bot-User-ID früh sichern: `chat_api_handle` wird weiter unten beim
     // Pipeline-Aufbau konsumiert, der Trenn-Endpoint der internen API braucht
@@ -885,8 +887,13 @@ async fn main() {
     // da `chat_api_handle` weiter unten beim Pipeline-Aufbau konsumiert wird.
     let chatters_bot_token_manager: Option<Arc<tb_chat::token::BotTokenManager>> =
         chat_api_handle.as_ref().map(|h| h.bot_token_manager());
-    if let (Some(client), Some(manager)) = (helix.as_ref().clone(), chatters_bot_token_manager.clone()) {
-        supervisor.spawn("category_public_followers", crate::category_followers::run(pool.clone(), client, manager));
+    if let (Some(client), Some(manager)) =
+        (helix.as_ref().clone(), chatters_bot_token_manager.clone())
+    {
+        supervisor.spawn(
+            "category_public_followers",
+            crate::category_followers::run(pool.clone(), client, manager),
+        );
     }
     let irc_lurker_tracker = irc_lurker_wiring::build_irc_lurker(pool.clone());
     let raid_greeting_monitor: Option<Arc<raid_greeting::RaidGreetingMonitor>> =
@@ -911,13 +918,10 @@ async fn main() {
                     tb_raid::alias_store::AliasStore::new(pool.clone()),
                 ));
             Arc::new(
-                raid_greeting::RaidGreetingMonitor::new(
-                    h.raid_api(),
-                    probe,
-                )
-                .with_live_probe(live_probe)
-                .with_courtesy(courtesy)
-                .with_aliases(aliases),
+                raid_greeting::RaidGreetingMonitor::new(h.raid_api(), probe)
+                    .with_live_probe(live_probe)
+                    .with_courtesy(courtesy)
+                    .with_aliases(aliases),
             )
         });
 
@@ -953,6 +957,8 @@ async fn main() {
             remote_base,
         )))
     });
+    let raid_dank_promos: Arc<std::sync::OnceLock<Arc<tb_chat::promos::PromoEngine>>> =
+        Arc::new(std::sync::OnceLock::new());
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
@@ -1292,7 +1298,8 @@ async fn main() {
                 pool.clone(),
                 pending,
                 RaidArrivalRuntime::new(sink).with_observability(raid_observability.clone()),
-            );
+            )
+            .with_raid_dank_promos(Arc::clone(&raid_dank_promos));
             let blacklist_guard = BlacklistRaidGuard::new(
                 RaidBlacklistStore::new(pool.clone()),
                 token_provider,
@@ -1398,6 +1405,7 @@ async fn main() {
                 supervisor.clone(),
             )
             .await;
+            let _ = raid_dank_promos.set(runtime.promo_engine());
             scout_crew_guard = Some(runtime.scout_crew_guard());
             runtime.start_background(
                 subscription_manager.clone(),
@@ -1714,7 +1722,10 @@ async fn main() {
             yt_dlp_path().to_string_lossy().into_owned(),
             "data/clips",
         );
-        supervisor.spawn("social_clip_preview_worker", async move { preview.run().await });
+        supervisor.spawn(
+            "social_clip_preview_worker",
+            async move { preview.run().await },
+        );
 
         // Enrichment: LLM-Dispatcher (Consent aus Settings) plus lokaler
         // STT-Transcriber (ops/stt-server, loopback). Liegt eine lokale

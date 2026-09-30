@@ -7,10 +7,14 @@ import { DeDateTimeInput, isoLocalToDe } from '@/components/shared/DeDateTimeInp
 import { TextPreview } from '@/components/shared/TextPreview';
 import { Toast } from '@/components/shared/Toast';
 import { useConfigOverview, usePromoConfigMutation } from '@/hooks/useAdmin';
+<<<<<<< Updated upstream
 import { berlinLocalInputToUtcIso, berlinNowLocalInput, utcIsoToBerlinLocalInput } from '@/utils/berlinTime';
 import { coerceRecord, formatDateTime } from '@/utils/formatters';
 import { PromoTimers } from './PromoTimers';
 import { CommunityAnnouncementsEditor } from './CommunityAnnouncements';
+=======
+import { coerceRecord, formatDateTime } from '@/utils/formatters';
+>>>>>>> Stashed changes
 
 type ToastState = {
   open: boolean;
@@ -23,6 +27,7 @@ type PromoDraft = {
   body: string;
   startsAt: string;
   endsAt: string;
+<<<<<<< Updated upstream
   color: AnnouncementColor;
 };
 
@@ -39,6 +44,10 @@ function readColor(record: Record<string, unknown>): AnnouncementColor {
   return announcementColors.find(color => color.value === record.announcement_color)?.value ?? 'purple';
 }
 
+=======
+};
+
+>>>>>>> Stashed changes
 function readStr(record: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
     const value = record[key];
@@ -81,10 +90,23 @@ function readBool(record: Record<string, unknown>, ...keys: string[]): boolean {
   return false;
 }
 
+<<<<<<< Updated upstream
+=======
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toISOString().slice(0, 16);
+  } catch {
+    return '';
+  }
+}
+
+>>>>>>> Stashed changes
 function draftFromConfig(record: Record<string, unknown>): PromoDraft {
   return {
     enabled: readBool(record, 'is_enabled', 'enabled'),
     body: readStr(record, 'custom_message', 'message', 'promo_message'),
+<<<<<<< Updated upstream
     startsAt: utcIsoToBerlinLocalInput(readNullableStr(record, 'starts_at', 'startsAt')),
     endsAt: utcIsoToBerlinLocalInput(readNullableStr(record, 'ends_at', 'endsAt')),
     color: readColor(record),
@@ -105,6 +127,18 @@ export default function AnnouncementsPage() {
   const promoMutation = usePromoConfigMutation();
   const [draft, setDraft] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '', color: 'purple' });
   const [saved, setSaved] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '', color: 'purple' });
+=======
+    startsAt: isoToLocalInput(readNullableStr(record, 'starts_at', 'startsAt')),
+    endsAt: isoToLocalInput(readNullableStr(record, 'ends_at', 'endsAt')),
+  };
+}
+
+export default function AnnouncementsPage() {
+  const query = useConfigOverview();
+  const promoMutation = usePromoConfigMutation();
+  const [draft, setDraft] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '' });
+  const [saved, setSaved] = useState<PromoDraft>({ enabled: false, body: '', startsAt: '', endsAt: '' });
+>>>>>>> Stashed changes
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [lastSavedBy, setLastSavedBy] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
@@ -114,8 +148,12 @@ export default function AnnouncementsPage() {
     draft.enabled !== saved.enabled ||
     draft.body !== saved.body ||
     draft.startsAt !== saved.startsAt ||
+<<<<<<< Updated upstream
     draft.endsAt !== saved.endsAt ||
     draft.color !== saved.color;
+=======
+    draft.endsAt !== saved.endsAt;
+>>>>>>> Stashed changes
 
   useEffect(() => {
     if (!query.data) {
@@ -135,6 +173,7 @@ export default function AnnouncementsPage() {
 
   async function handleSave() {
     try {
+<<<<<<< Updated upstream
       const colorOnly = draft.color !== saved.color &&
         draft.enabled === saved.enabled && draft.body === saved.body &&
         draft.startsAt === saved.startsAt && draft.endsAt === saved.endsAt;
@@ -145,6 +184,14 @@ export default function AnnouncementsPage() {
         ends_at: draft.endsAt ? berlinLocalInputToUtcIso(draft.endsAt) : null,
         is_enabled: draft.enabled,
         announcement_color: draft.color,
+=======
+      const payload = {
+        mode: 'custom_event',
+        custom_message: draft.body,
+        starts_at: draft.startsAt || null,
+        ends_at: draft.endsAt || null,
+        is_enabled: draft.enabled,
+>>>>>>> Stashed changes
       };
       const response = coerceRecord(await promoMutation.mutateAsync(payload));
       const next = draftFromConfig(response);
@@ -153,12 +200,20 @@ export default function AnnouncementsPage() {
       setLastSavedAt(readNullableStr(response, 'updated_at', 'updatedAt'));
       setLastSavedBy(readNullableStr(response, 'updated_by', 'updatedBy') || null);
       setInitialized(true);
+<<<<<<< Updated upstream
       setToast({ open: true, tone: 'success', message: 'Globale Ankündigung gespeichert.' });
+=======
+      setToast({ open: true, tone: 'success', message: 'Announcement gespeichert.' });
+>>>>>>> Stashed changes
     } catch (error) {
       setToast({
         open: true,
         tone: 'error',
+<<<<<<< Updated upstream
         message: error instanceof Error ? error.message : 'Globale Ankündigung konnte nicht gespeichert werden.',
+=======
+        message: error instanceof Error ? error.message : 'Announcement konnte nicht gespeichert werden.',
+>>>>>>> Stashed changes
       });
     }
   }
@@ -180,8 +235,13 @@ export default function AnnouncementsPage() {
   return (
     <section className="space-y-6">
       <PageHeader
+<<<<<<< Updated upstream
         title="Ankündigungen"
         description="Community-Werbung und Timer einstellen. Globale Ankündigungen und eigene Texte für dach_lock verwalten."
+=======
+        title="Announcements"
+        description="Globaler Announcement-Text mit Aktivierung und Zeitfenster (UTC) für den Bot."
+>>>>>>> Stashed changes
         primaryAction={
           <button
             className="admin-button admin-button-secondary"
@@ -195,10 +255,17 @@ export default function AnnouncementsPage() {
       />
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+<<<<<<< Updated upstream
         <Section title="Globale Event-Ankündigung" hint="Text, Aktivierung und Zeitfenster gelten für alle Kanäle. Eigene Texte für dach_lock verwaltest du darunter.">
           <fieldset disabled={promoMutation.isPending} className="min-w-0 space-y-4">
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <span className="text-sm font-medium text-white">Globale Ankündigung aktiv</span>
+=======
+        <Section title="Editor" hint="Text, Aktivierung und Zeitfenster für den globalen Announcement-Modus.">
+          <div className="space-y-4">
+            <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
+              <span className="text-sm font-medium text-white">Announcement aktiv</span>
+>>>>>>> Stashed changes
               <input
                 type="checkbox"
                 checked={draft.enabled}
@@ -206,6 +273,7 @@ export default function AnnouncementsPage() {
               />
             </label>
 
+<<<<<<< Updated upstream
             <fieldset className="min-w-0">
               <legend className="mb-2 text-sm font-medium text-white">Ankündigungsfarbe</legend>
               <div className="flex flex-wrap gap-2">
@@ -226,18 +294,30 @@ export default function AnnouncementsPage() {
 
             <label className="block space-y-2">
               <span className="text-sm font-medium text-white">Text</span>
+=======
+            <label className="block space-y-2">
+              <span className="text-sm font-medium text-white">Body</span>
+>>>>>>> Stashed changes
               <textarea
                 rows={18}
                 value={draft.body}
                 onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))}
                 className="admin-input min-h-[22rem] resize-y font-mono text-sm leading-6"
+<<<<<<< Updated upstream
                 placeholder="Event-Ankündigung eingeben"
+=======
+                placeholder="Event-Announcement eingeben"
+>>>>>>> Stashed changes
               />
             </label>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
+<<<<<<< Updated upstream
                 <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary">Start (Ortszeit)</span>
+=======
+                <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary">Start (UTC)</span>
+>>>>>>> Stashed changes
                 <DeDateTimeInput
                   value={draft.startsAt}
                   onChange={(next) => setDraft((current) => ({ ...current, startsAt: next }))}
@@ -245,7 +325,11 @@ export default function AnnouncementsPage() {
                 <span className="text-xs text-text-secondary">{draft.startsAt ? '' : 'Leer = ab sofort'}</span>
               </label>
               <label className="flex flex-col gap-1">
+<<<<<<< Updated upstream
                 <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary">Ende (Ortszeit)</span>
+=======
+                <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary">Ende (UTC)</span>
+>>>>>>> Stashed changes
                 <DeDateTimeInput
                   value={draft.endsAt}
                   onChange={(next) => setDraft((current) => ({ ...current, endsAt: next }))}
@@ -253,6 +337,7 @@ export default function AnnouncementsPage() {
                 <span className="text-xs text-text-secondary">{draft.endsAt ? '' : 'Leer = kein Ende'}</span>
               </label>
             </div>
+<<<<<<< Updated upstream
           </fieldset>
         </Section>
 
@@ -271,6 +356,24 @@ export default function AnnouncementsPage() {
               <p className="mt-1 text-text-secondary">
                 Zeitfenster: {draft.startsAt ? isoLocalToDe(draft.startsAt) : 'ab sofort'} bis{' '}
                 {draft.endsAt ? isoLocalToDe(draft.endsAt) : 'unbegrenzt'} (Ortszeit)
+=======
+          </div>
+        </Section>
+
+        <Section title="Preview" hint="Sichere Text-Vorschau ohne HTML-Ausfuehrung.">
+          <div className="space-y-4">
+            <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5">
+              <TextPreview value={draft.body} emptyMessage="Noch kein Announcement-Text vorhanden." />
+            </div>
+            <div className="rounded-[1.5rem] border border-white/10 bg-bg/35 p-5 text-sm text-white">
+              <p>
+                Status:{' '}
+                <span className="font-semibold">{draft.enabled ? 'aktiv' : 'inaktiv'}</span>
+              </p>
+              <p className="mt-1 text-text-secondary">
+                Zeitfenster (UTC): {draft.startsAt ? isoLocalToDe(draft.startsAt) : 'ab sofort'} bis{' '}
+                {draft.endsAt ? isoLocalToDe(draft.endsAt) : 'unbegrenzt'}
+>>>>>>> Stashed changes
               </p>
             </div>
           </div>

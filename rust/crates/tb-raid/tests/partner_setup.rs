@@ -1086,7 +1086,10 @@ async fn signup_block_legt_keine_partner_zeile_an() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    assert!(result.signup_block.is_some(), "Block muss durchgereicht werden");
+    assert!(
+        result.signup_block.is_some(),
+        "Block muss durchgereicht werden"
+    );
     assert_eq!(result.hard_pause_reason.as_deref(), Some("signup_blocked"));
     assert!(!result.reactivated);
     assert_eq!(

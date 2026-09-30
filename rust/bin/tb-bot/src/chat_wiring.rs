@@ -497,7 +497,10 @@ impl ChatApiHandle {
     /// Raid greetings remain limited to authorized partners; no blanket bypass.
     pub fn raid_api(&self) -> Arc<dyn ChatApi> {
         let roster: Arc<dyn PartnerRoster> = self.roster.clone();
-        Arc::new(ChannelPolicyChatApi::new(Arc::clone(&self.api), PolicyContext::Raid(roster)))
+        Arc::new(ChannelPolicyChatApi::new(
+            Arc::clone(&self.api),
+            PolicyContext::Raid(roster),
+        ))
     }
 
     /// Live rotierter Bot-User-Token-Manager — vom `!clip`-Fallback genutzt,
@@ -948,11 +951,8 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    let engagement_irc_reader = EngagementIrcReader::new(
-        pool.clone(),
-        Arc::clone(&engagement),
-        stealth.clone(),
-    );
+    let engagement_irc_reader =
+        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone());
     supervisor.spawn("engagement_irc_reader", async move {
         engagement_irc_reader.run().await;
         future::pending::<()>().await;
@@ -1016,6 +1016,10 @@ impl ChatRuntime {
 
     pub fn scout_crew_guard(&self) -> Arc<CrewGuard> {
         Arc::clone(&self.scout_crew_guard)
+    }
+
+    pub fn promo_engine(&self) -> Arc<PromoEngine> {
+        Arc::clone(&self.promos)
     }
 
     /// Startet alle Hintergrund-Loops: Token-Refresh (30 min), Promo-Loop
@@ -2083,8 +2087,10 @@ impl tb_chat::pitch_bewertung::ReaktionsQuelle for BrokerReaktionsQuelle {
     async fn reaktionen(
         &self,
         message_id: &str,
-    ) -> Result<Option<Vec<tb_chat::pitch_bewertung::Reaktion>>, tb_chat::pitch_bewertung::ReaktionsFehler>
-    {
+    ) -> Result<
+        Option<Vec<tb_chat::pitch_bewertung::Reaktion>>,
+        tb_chat::pitch_bewertung::ReaktionsFehler,
+    > {
         match self
             .relay
             .get_message_reactions(&self.channel_id.to_string(), message_id)
@@ -2184,6 +2190,7 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         let title = match kind {
             PitchCardKind::Anlass => "Anlass-Pitch",
             PitchCardKind::Partner => "Partner-Pitch",
+            PitchCardKind::RaidDank => "Raid-Dank",
         };
         let mut displays = vec![
             format!(
@@ -2198,9 +2205,8 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         if let Some(hint) = candidate_hint {
             displays.push(neutralize_pitch_field(hint));
         }
-        displays.push(
-            "Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string(),
-        );
+        displays
+            .push("Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string());
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
             content: None,
@@ -2452,10 +2458,22 @@ impl InvitePort for DbInvitePort {
             return Ok(None);
         };
 
-        Ok(Some(format!(
-            "@{chatter_login} Wenn du einen Zugang benötigst, schau gerne auf unserem Discord \
-             vorbei, dort bekommst du eine Einladung und Hilfe beim Einstieg :) {invite_url}"
-        )))
+        static INVITE_LINE_INDEX: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        const INVITE_LINES: [&str; 4] = [
+            "@{chatter} Deadlock-Zugang fehlt? Im Discord bei frag-die-community kurz den Steam-Freundescode dazupacken, dann kann dir jemand direkt mit dem Invite helfen :) {invite}",
+            "@{chatter} Für den Spiel-Invite einmal zu frag-die-community im Discord, Steam-Freundescode dazu und der Weg ist klar :) {invite}",
+            "@{chatter} Wenn der Deadlock-Invite noch fehlt: frag-die-community im Discord öffnen, Steam-Freundescode dazuschreiben und los :) {invite}",
+            "@{chatter} Der Spielzugang hängt noch? Im Discord bei frag-die-community mit Steam-Freundescode melden, da kann dir jemand direkt weiterhelfen :) {invite}",
+        ];
+        let template = INVITE_LINES[INVITE_LINE_INDEX
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % INVITE_LINES.len()];
+        Ok(Some(
+            template
+                .replace("{chatter}", chatter_login)
+                .replace("{invite}", &invite_url),
+        ))
     }
 }
 

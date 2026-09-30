@@ -5,9 +5,15 @@ datum: 2026-09-10
 stand: 2026-09-11 — M1 bis M5 abgeschlossen: frischer Review gelaufen (REVIEW-F8.md, keine
 BLOCKER/MAJOR, MINOR behoben), über PR #874 auf main gemergt (c6453dca), CI grün.
 Release-Build fertig und eingefroren unter
+<<<<<<< Updated upstream
 `/opt/deadlock/twitch/builds/<vollständige SHA von c6453dca>` (Binaries als twitchbuild
 gebaut, Anker im Binary und Bundle nachgewiesen). Offen: Root-Installer,
 Service-Restart und Live-Prüfung (root-Schritte müssen vom Nutzer ausgeführt werden).
+=======
+/opt/deadlock/twitch/builds/c6453dcafde6e16a25e5d8038bd915ade6b3c323 (Binaries als
+twitchbuild gebaut, Anker im Binary und Bundle nachgewiesen). Offen: Root-Installer
++ Service-Restart + Live-Prüfung (root-Schritte müssen vom Nutzer ausgeführt werden).
+>>>>>>> Stashed changes
 
 Ziel steht im Contract (`.tasks/2026-09-10-admanager-steam-queue/CONTRACT.md`).
 
