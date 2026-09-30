@@ -625,6 +625,12 @@ const EN: Record<string, string> = {
   'Der Clip wurde verworfen.': 'The clip was discarded.',
   'Für diese Plattform fehlt eine gültige Verbindung.':
     'This platform does not have a valid connection.',
+  'Die Plattformverbindung konnte nicht sicher gelesen werden. Der Upload wird später erneut versucht.':
+    'The platform connection could not be read safely. The upload will be retried later.',
+  'Die Plattformverbindung konnte nicht entschlüsselt werden. Der Upload bleibt pausiert.':
+    'The platform connection could not be decrypted. The upload remains paused.',
+  'Diese Zielplattform wird vom Upload-Worker nicht unterstützt.':
+    'This target platform is not supported by the upload worker.',
   'Der zum Clip gehörende Kanal fehlt.': 'The channel belonging to this clip is missing.',
   'Der bisherige Veröffentlichungsstand konnte nicht sicher geprüft werden.':
     'The existing publication status could not be verified safely.',

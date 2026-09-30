@@ -12,7 +12,7 @@ use sqlx::{PgConnection, PgPool, Row};
 
 use crate::clip_queue::queue_upload;
 use crate::layout::apply_default_layout;
-use crate::retention::refresh_clip_publication_status;
+use crate::retention::refresh_clip_publication_status_in_tx;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManualUploadError {
@@ -303,6 +303,7 @@ pub async fn reconcile_provider_uploads(
             .execute(&mut *tx)
             .await?;
     }
+    refresh_clip_publication_status_in_tx(tx.as_mut(), clip_db_id).await?;
     tx.commit().await?;
     let reconciled_platforms: Vec<String> = normalized
         .into_iter()
@@ -313,16 +314,6 @@ pub async fn reconcile_provider_uploads(
         platforms = ?reconciled_platforms,
         "Unklarer Provider-Versuch wurde manuell bestätigt"
     );
-    if let Err(error) = refresh_clip_publication_status(pool, clip_db_id).await {
-        tracing::error!(
-            clip_db_id,
-            code = "publication_status_refresh_failed",
-            database_code = ?error
-                .as_database_error()
-                .and_then(|database| database.code()),
-            "Clip-Publikationsstatus konnte nach manuellem Abgleich nicht aktualisiert werden"
-        );
-    }
     Ok(ManualReconciliationOutcome {
         reconciled_platforms,
     })

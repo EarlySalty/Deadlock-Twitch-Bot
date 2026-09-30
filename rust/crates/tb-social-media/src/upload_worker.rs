@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::approval::is_clip_approved_for;
 use crate::clip_queue::{get_upload_queue, update_upload_status, UploadQueueItem};
-use crate::credentials::{CredentialManager, SocialMediaCredentials};
+use crate::credentials::{CredentialError, CredentialManager, SocialMediaCredentials};
 use crate::posting_plan::acquire_release_lock;
 use crate::preparation::{
     ClipPreparationService, IsolatedClipDownloader, PreparationError, VideoClipRenderer,
@@ -1022,18 +1022,18 @@ impl UploadWorker {
         platform: &str,
         streamer_login: Option<&str>,
         cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
-    ) -> Option<Arc<dyn PlatformUploader>> {
+    ) -> Result<Option<Arc<dyn PlatformUploader>>, CredentialError> {
         let creds = self
             .credentials
-            .get_credentials(platform, streamer_login)
+            .get_credentials_checked(platform, streamer_login)
             .await?;
         let key = (platform.to_string(), creds.id);
         if let Some(cached) = cache.get(&key) {
-            return cached.clone();
+            return Ok(cached.clone());
         }
         let uploader = build_uploader(platform, &creds);
         cache.insert(key, uploader.clone());
-        uploader
+        Ok(uploader)
     }
 
     /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
@@ -1071,18 +1071,72 @@ impl UploadWorker {
         let mut cache: HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>> = HashMap::new();
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
-            if let Some(uploader) = self
+            match self
                 .resolve_uploader(&item.platform, item.streamer_login.as_deref(), &mut cache)
                 .await
             {
-                batch.push((item, uploader));
-                if batch.len() >= self.max_parallel {
-                    break;
+                Ok(Some(uploader)) => {
+                    batch.push((item, uploader));
+                    if batch.len() >= self.max_parallel {
+                        break;
+                    }
                 }
-            } else {
-                self.task
-                    .park_claimed(&item, "credentials_missing", chrono::Duration::minutes(30))
-                    .await;
+                Err(CredentialError::NotFound) => {
+                    self.task
+                        .park_claimed(&item, "credentials_missing", chrono::Duration::minutes(30))
+                        .await;
+                }
+                Err(CredentialError::Db(error)) => {
+                    tracing::error!(
+                        queue_id = item.id,
+                        clip_db_id = item.clip_db_id,
+                        platform = %item.platform,
+                        code = "credentials_load_failed",
+                        database_code = ?error
+                            .as_database_error()
+                            .and_then(|database| database.code()),
+                        "Upload-Credentials konnten wegen eines Datenbankfehlers nicht geladen werden"
+                    );
+                    self.task
+                        .park_claimed(
+                            &item,
+                            "credentials_load_failed",
+                            chrono::Duration::minutes(5),
+                        )
+                        .await;
+                }
+                Err(CredentialError::Decrypt) => {
+                    tracing::error!(
+                        queue_id = item.id,
+                        clip_db_id = item.clip_db_id,
+                        platform = %item.platform,
+                        code = "credentials_decrypt_failed",
+                        "Upload-Credentials konnten nicht entschlüsselt werden"
+                    );
+                    self.task
+                        .park_claimed(
+                            &item,
+                            "credentials_decrypt_failed",
+                            chrono::Duration::minutes(30),
+                        )
+                        .await;
+                }
+                Ok(None) => {
+                    tracing::error!(
+                        queue_id = item.id,
+                        clip_db_id = item.clip_db_id,
+                        platform = %item.platform,
+                        code = "upload_platform_unsupported",
+                        "Upload-Plattform wird nicht unterstützt"
+                    );
+                    self.task
+                        .park_claimed(
+                            &item,
+                            "upload_platform_unsupported",
+                            chrono::Duration::minutes(30),
+                        )
+                        .await;
+                }
             }
         }
         if batch.is_empty() {

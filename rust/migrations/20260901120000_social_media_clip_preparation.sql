@@ -106,22 +106,42 @@ CREATE TABLE IF NOT EXISTS public.social_media_clip_preparation (
     render_path       TEXT,
     error_code        TEXT,
     error_message     TEXT,
+    retry_at          TIMESTAMPTZ,
+    attempt_count     INTEGER NOT NULL DEFAULT 0,
     requested_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     started_at        TIMESTAMPTZ,
     completed_at      TIMESTAMPTZ,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT social_media_clip_preparation_state_chk CHECK (
         state IN ('pending', 'materializing', 'source_ready', 'rendering', 'preview_ready', 'failed')
-    )
+    ),
+    CONSTRAINT social_media_clip_preparation_attempt_count_chk
+        CHECK (attempt_count BETWEEN 0 AND 5)
 );
+
+ALTER TABLE public.social_media_clip_preparation
+    ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ;
+ALTER TABLE public.social_media_clip_preparation
+    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE public.social_media_clip_preparation
+    DROP CONSTRAINT IF EXISTS social_media_clip_preparation_attempt_count_chk;
+ALTER TABLE public.social_media_clip_preparation
+    ADD CONSTRAINT social_media_clip_preparation_attempt_count_chk
+    CHECK (attempt_count BETWEEN 0 AND 5);
 
 CREATE INDEX IF NOT EXISTS idx_social_media_clip_preparation_pending
     ON public.social_media_clip_preparation (requested_at, clip_db_id)
     WHERE state = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_social_media_clip_preparation_active_lease
+CREATE INDEX IF NOT EXISTS idx_social_media_clip_preparation_retry_due
+    ON public.social_media_clip_preparation (retry_at, requested_at, clip_db_id)
+    WHERE state = 'pending';
+
+DROP INDEX IF EXISTS public.idx_social_media_clip_preparation_active_lease;
+CREATE INDEX idx_social_media_clip_preparation_active_lease
     ON public.social_media_clip_preparation (updated_at, clip_db_id)
-    WHERE state IN ('materializing', 'rendering');
+    WHERE state IN ('materializing', 'source_ready', 'rendering');
 
 CREATE OR REPLACE FUNCTION public.ensure_social_media_clip_preparation()
 RETURNS TRIGGER

@@ -4,7 +4,7 @@ use std::sync::{
     Arc,
 };
 
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::AbortHandle;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -23,16 +23,26 @@ enum SupervisorCommand {
 pub struct TaskSupervisor {
     tx: mpsc::UnboundedSender<SupervisorCommand>,
     closed: Arc<AtomicBool>,
+    critical_failure: Arc<AtomicBool>,
+    critical_failure_tx: watch::Sender<Option<&'static str>>,
     runner: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl TaskSupervisor {
     pub fn start() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let runner = tokio::spawn(run_supervisor(rx));
+        let (critical_failure_tx, _) = watch::channel(None);
+        let critical_failure = Arc::new(AtomicBool::new(false));
+        let runner = tokio::spawn(run_supervisor(
+            rx,
+            critical_failure_tx.clone(),
+            Arc::clone(&critical_failure),
+        ));
         Self {
             tx,
             closed: Arc::new(AtomicBool::new(false)),
+            critical_failure,
+            critical_failure_tx,
             runner: Arc::new(Mutex::new(Some(runner))),
         }
     }
@@ -107,9 +117,32 @@ impl TaskSupervisor {
             }
         }
     }
+
+    /// Wartet auf den unerwarteten Exit einer permanenten Aufgabe. Der
+    /// Hauptprozess beendet sich danach mit Fehler, damit systemd den gesamten
+    /// konsistenten Worker-Satz neu startet.
+    pub async fn wait_for_critical_failure(&self) -> &'static str {
+        let mut receiver = self.critical_failure_tx.subscribe();
+        loop {
+            if let Some(task) = *receiver.borrow_and_update() {
+                return task;
+            }
+            if receiver.changed().await.is_err() {
+                return "task_supervisor";
+            }
+        }
+    }
+
+    pub fn has_critical_failure(&self) -> bool {
+        self.critical_failure.load(Ordering::SeqCst)
+    }
 }
 
-async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
+async fn run_supervisor(
+    mut rx: mpsc::UnboundedReceiver<SupervisorCommand>,
+    critical_failure_tx: watch::Sender<Option<&'static str>>,
+    critical_failure: Arc<AtomicBool>,
+) {
     let mut watchers = JoinSet::new();
     let mut aborts = Vec::<(&'static str, AbortHandle)>::new();
     loop {
@@ -128,7 +161,7 @@ async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
                         abort.abort();
                     }
                     while let Some(joined) = watchers.join_next().await {
-                        log_joined(joined, true);
+                        let _ = classify_joined(joined, true);
                     }
                     let _ = done.send(());
                     break;
@@ -138,14 +171,17 @@ async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
                         abort.abort();
                     }
                     while let Some(joined) = watchers.join_next().await {
-                        log_joined(joined, true);
+                        let _ = classify_joined(joined, true);
                     }
                     break;
                 }
             },
             joined = watchers.join_next(), if !watchers.is_empty() => {
                 if let Some(joined) = joined {
-                    log_joined(joined, false);
+                    if let Some(task) = classify_joined(joined, false) {
+                        critical_failure.store(true, Ordering::SeqCst);
+                        let _ = critical_failure_tx.send(Some(task));
+                    }
                     aborts.retain(|(_, abort)| !abort.is_finished());
                 }
             }
@@ -153,35 +189,41 @@ async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
     }
 }
 
-fn log_joined(
+fn classify_joined(
     joined: Result<
         (&'static str, bool, Result<(), tokio::task::JoinError>),
         tokio::task::JoinError,
     >,
     shutting_down: bool,
-) {
+) -> Option<&'static str> {
     match joined {
         Ok((name, false, Ok(()))) if !shutting_down => {
             tracing::error!(task = name, "Background-Task unerwartet beendet");
+            Some(name)
         }
         Ok((name, true, Ok(()))) if !shutting_down => {
             tracing::debug!(task = name, "Endlicher Background-Task beendet");
+            None
         }
-        Ok((_, _, Ok(()))) => {}
-        Ok((name, _, Err(error))) if error.is_panic() => {
+        Ok((_, _, Ok(()))) => None,
+        Ok((name, _, Err(error))) if error.is_panic() && !shutting_down => {
             tracing::error!(task = name, %error, "Background-Task ist gepanikt");
+            Some(name)
         }
         Ok((name, _, Err(error))) if !shutting_down => {
             tracing::error!(task = name, %error, "Background-Task wurde abgebrochen");
+            Some(name)
         }
-        Ok(_) => {}
-        Err(error) if error.is_panic() => {
+        Ok(_) => None,
+        Err(error) if error.is_panic() && !shutting_down => {
             tracing::error!(%error, "Task-Supervisor-Watcher ist gepanikt");
+            Some("task_supervisor_watcher")
         }
         Err(error) if !shutting_down => {
             tracing::error!(%error, "Task-Supervisor-Watcher wurde abgebrochen");
+            Some("task_supervisor_watcher")
         }
-        Err(_) => {}
+        Err(_) => None,
     }
 }
 
@@ -251,6 +293,23 @@ mod tests {
         .await
         .expect("endlicher Task wird ausgeführt");
 
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn permanenter_task_exit_loest_fatalen_shutdown_aus() {
+        let supervisor = TaskSupervisor::start();
+        supervisor.spawn("unerwartet_fertig", async {});
+
+        let task = timeout(
+            Duration::from_secs(1),
+            supervisor.wait_for_critical_failure(),
+        )
+        .await
+        .expect("permanenter Exit muss den Prozess-Shutdown auslösen");
+
+        assert_eq!(task, "unerwartet_fertig");
+        assert!(supervisor.has_critical_failure());
         supervisor.shutdown().await;
     }
 }

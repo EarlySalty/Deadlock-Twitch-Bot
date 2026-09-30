@@ -1540,6 +1540,8 @@ async fn main() {
     // ansteht. Externe KI bleibt über den gespeicherten Consent gegatet;
     // Veröffentlichungen zusätzlich pro Kanal über `release_mode`.
     {
+        let mut worker_count = 5_u8;
+        let mut token_worker_count = 0_u8;
         // Plattformfreie Vorbereitung: Twitch-Quelle materialisieren und mit
         // dem gespeicherten Layout als prüfbare 9:16-MP4 rendern. Dieser Worker
         // benötigt keine Plattform-Zugangsdaten und überschreitet niemals die
@@ -1600,6 +1602,8 @@ async fn main() {
         // paniken.
         match tb_crypto::FieldCipher::from_env() {
             Ok(cipher) => {
+                token_worker_count = 4;
+                worker_count += token_worker_count;
                 let cipher = Arc::new(cipher);
                 let upload_creds = tb_social_media::credentials::CredentialManager::new(
                     pool.clone(),
@@ -1660,7 +1664,9 @@ async fn main() {
             }
         }
         tracing::info!(
-            "Social-Media-Pipeline-Worker gestartet (9 Loops inkl. Vorbereitung und VOD-Archiv)"
+            worker_count,
+            token_worker_count,
+            "Social-Media-Pipeline-Worker gestartet"
         );
     }
 
@@ -1781,8 +1787,9 @@ async fn main() {
     // Veröffentlichung bleibt unabhängig davon über `release_mode` hart aus,
     // bis ein Kanal bewusst vom Testbetrieb auf Live gestellt wird.
     if let Some(ref h) = *helix {
-        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
-            .start();
+        let clip_fetch =
+            tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()));
+        supervisor.spawn("social_clip_fetch", async move { clip_fetch.run().await });
     } else {
         tracing::warn!("clip_fetch: kein HelixClient verfügbar");
     }
@@ -2061,7 +2068,12 @@ async fn main() {
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(async move {
-        shutdown_signal().await;
+        tokio::select! {
+            _ = shutdown_signal() => {}
+            task = shutdown_supervisor.wait_for_critical_failure() => {
+                tracing::error!(task, "Kritischer Background-Task beendet; Dienst wird neu gestartet");
+            }
+        }
         shutdown_supervisor.shutdown().await;
         shutdown_ricky
             .close_all_open_sessions("process_shutdown")
@@ -2076,6 +2088,10 @@ async fn main() {
     .await
     {
         tracing::error!(%error, "Internal-API Server beendet");
+        std::process::exit(1);
+    }
+    if supervisor.has_critical_failure() {
+        tracing::error!("Dienst endet nach kritischem Background-Task-Fehler");
         std::process::exit(1);
     }
 }
@@ -2347,6 +2363,22 @@ mod tests {
                 "Prepare-only-Wiring fehlt: {required}"
             );
         }
+    }
+
+    #[test]
+    fn social_clip_fetch_laeuft_unter_dem_task_supervisor() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("let clip_fetch =")
+            .expect("Clip-Fetch-Composition-Root fehlt");
+        let end = source[start..]
+            .find("// Scout-Task")
+            .map(|offset| start + offset)
+            .expect("Clip-Fetch-Wiring endet nicht eindeutig");
+        let wiring = &source[start..end];
+        assert!(wiring.contains("supervisor.spawn(\"social_clip_fetch\""));
+        assert!(wiring.contains("clip_fetch.run().await"));
+        assert!(!wiring.contains(".start()"));
     }
 
     #[test]

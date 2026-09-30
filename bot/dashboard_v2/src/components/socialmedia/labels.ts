@@ -267,6 +267,11 @@ export const FEHLER_TEXTE: Record<string, string> = {
     'Der vorhandene Plattformstand konnte nicht sicher übernommen werden.',
   clip_discarded: 'Der Clip wurde verworfen.',
   credentials_missing: 'Für diese Plattform fehlt eine gültige Verbindung.',
+  credentials_load_failed:
+    'Die Plattformverbindung konnte nicht sicher gelesen werden. Der Upload wird später erneut versucht.',
+  credentials_decrypt_failed:
+    'Die Plattformverbindung konnte nicht entschlüsselt werden. Der Upload bleibt pausiert.',
+  upload_platform_unsupported: 'Diese Zielplattform wird vom Upload-Worker nicht unterstützt.',
   streamer_missing: 'Der zum Clip gehörende Kanal fehlt.',
   uploaded_flag_check_failed:
     'Der bisherige Veröffentlichungsstand konnte nicht sicher geprüft werden.',

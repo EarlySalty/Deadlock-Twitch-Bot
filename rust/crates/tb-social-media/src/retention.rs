@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 /// Plattform → Upload-Flag-Spalte.
 const PLATFORM_UPLOAD_COLUMNS: [(&str, &str); 3] = [
@@ -82,23 +82,62 @@ pub async fn refresh_clip_publication_status(
     clip_db_id: impl Into<i64>,
 ) -> Result<bool, sqlx::Error> {
     let clip_db_id = clip_db_id.into();
-    let published_all = is_clip_published_on_all_active_platforms(pool, clip_db_id).await?;
+    let mut transaction = pool.begin().await?;
+    let published_all =
+        refresh_clip_publication_status_in_tx(transaction.as_mut(), clip_db_id).await?;
+    transaction.commit().await?;
+    Ok(published_all)
+}
+
+/// Aktualisiert Upload-Flags und den abgeleiteten Clipstatus innerhalb der
+/// Transaktion des Aufrufers. Providerabschluss und Gesamtstatus dürfen nie
+/// auseinanderfallen, auch wenn der Auth-/Status-Leseweg gerade fehlschlägt.
+pub(crate) async fn refresh_clip_publication_status_in_tx(
+    connection: &mut PgConnection,
+    clip_db_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let row: Option<(String, bool, bool, bool)> = sqlx::query_as(
+        "SELECT streamer_login, COALESCE(uploaded_tiktok, false), \
+                COALESCE(uploaded_youtube, false), COALESCE(uploaded_instagram, false) \
+         FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE",
+    )
+    .bind(clip_db_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((streamer_login, uploaded_tiktok, uploaded_youtube, uploaded_instagram)) = row else {
+        return Ok(false);
+    };
+    let active: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT platform FROM social_media_platform_auth \
+         WHERE enabled = 1 \
+           AND (LOWER(COALESCE(streamer_login, '')) = LOWER($1) OR streamer_login IS NULL)",
+    )
+    .bind(streamer_login)
+    .fetch_all(&mut *connection)
+    .await?;
+    let published_all = !active.is_empty()
+        && active.iter().all(|platform| match platform.as_str() {
+            "tiktok" => uploaded_tiktok,
+            "youtube" => uploaded_youtube,
+            "instagram" => uploaded_instagram,
+            _ => false,
+        });
     if published_all {
-        sqlx::query!(
+        sqlx::query(
             "UPDATE twitch_clips_social_media SET status = 'published_all' \
              WHERE id = $1 AND discarded_at IS NULL",
-            clip_db_id
         )
-        .execute(pool)
+        .bind(clip_db_id)
+        .execute(&mut *connection)
         .await?;
     } else {
-        sqlx::query!(
+        sqlx::query(
             "UPDATE twitch_clips_social_media \
              SET status = CASE WHEN discarded_at IS NOT NULL THEN status ELSE 'pending' END \
              WHERE id = $1 AND status = 'published_all'",
-            clip_db_id
         )
-        .execute(pool)
+        .bind(clip_db_id)
+        .execute(&mut *connection)
         .await?;
     }
     Ok(published_all)

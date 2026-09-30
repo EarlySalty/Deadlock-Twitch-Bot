@@ -17,6 +17,67 @@ use crate::retention::iter_expired_clips_for_retention;
 const INTERVAL_SECS: u64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 30;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReconcileStats {
+    pub scanned: u64,
+    pub restored: u64,
+    pub purged_orphans: u64,
+    pub deferred: u64,
+    pub rejected: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ReconcileError {
+    #[error("quarantine_io_failed")]
+    Io(#[from] std::io::Error),
+    #[error("quarantine_database_failed")]
+    Db(#[from] sqlx::Error),
+    #[error("quarantine_restore_failed")]
+    Restore(#[source] std::io::Error),
+    #[error("quarantine_purge_failed")]
+    Purge(#[source] std::io::Error),
+    #[error("quarantine_restore_commit_uncertain")]
+    CommitUncertain(#[source] sqlx::Error),
+}
+
+impl ReconcileError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "retention_quarantine_io_failed",
+            Self::Db(_) => "retention_quarantine_database_failed",
+            Self::Restore(_) => "retention_quarantine_restore_failed",
+            Self::Purge(_) => "retention_quarantine_purge_failed",
+            Self::CommitUncertain(_) => "retention_restore_commit_uncertain",
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+enum ReconcileEntryOutcome {
+    Restored,
+    PurgedOrphan,
+    Deferred(&'static str),
+    Rejected(&'static str),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(sqlx::FromRow)]
+struct ReconcilePreparationRow {
+    state: String,
+    render_path: Option<String>,
+    render_fingerprint: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(sqlx::FromRow)]
+struct ReconcileClipRow {
+    clip_id: String,
+    streamer_login: String,
+    source_kind: String,
+    upload_local_path: Option<String>,
+    local_file_path: Option<String>,
+}
+
 /// Worker, der abgelaufene Clips aufräumt.
 pub struct RetentionWorker {
     pool: PgPool,
@@ -40,7 +101,27 @@ impl RetentionWorker {
 
     /// Ein Durchlauf (Python `_cleanup_expired_clips`).
     pub async fn run_once(&self) {
-        self.reconcile_quarantine().await;
+        let reconciliation = match self.reconcile_quarantine().await {
+            Ok(stats) => stats,
+            Err(error) => {
+                tracing::error!(
+                    code = error.code(),
+                    error = %error,
+                    "Social-Media-Retention: Quarantäne konnte nicht sicher abgeglichen werden; Cleanup bleibt aus"
+                );
+                return;
+            }
+        };
+        if reconciliation.scanned > 0 {
+            tracing::info!(
+                scanned = reconciliation.scanned,
+                restored = reconciliation.restored,
+                purged_orphans = reconciliation.purged_orphans,
+                deferred = reconciliation.deferred,
+                rejected = reconciliation.rejected,
+                "Social-Media-Retention: Quarantäne-Abgleich abgeschlossen"
+            );
+        }
         let now = Utc::now().to_rfc3339();
         let candidates = match iter_expired_clips_for_retention(&self.pool, &now).await {
             Ok(candidates) => candidates,
@@ -67,7 +148,7 @@ impl RetentionWorker {
         }
     }
 
-    async fn reconcile_quarantine(&self) {
+    async fn reconcile_quarantine(&self) -> Result<ReconcileStats, ReconcileError> {
         #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;
@@ -79,8 +160,12 @@ impl RetentionWorker {
             directory_options
                 .read(true)
                 .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
-            let Ok(root) = open_directory_chain(&self.clips_dir, &directory_options).await else {
-                return;
+            let root = match open_directory_chain(&self.clips_dir, &directory_options).await {
+                Ok(root) => root,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(ReconcileStats::default())
+                }
+                Err(error) => return Err(error.into()),
             };
             let quarantine_path = std::path::PathBuf::from(format!(
                 "/proc/self/fd/{}/.retention-quarantine",
@@ -88,23 +173,20 @@ impl RetentionWorker {
             ));
             let quarantine = match directory_options.open(&quarantine_path).await {
                 Ok(directory) => directory,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-                Err(_) => {
-                    tracing::warn!(
-                        code = "retention_quarantine_rejected",
-                        "Social-Media-Retention: Quarantäne-Verzeichnis wurde abgelehnt"
-                    );
-                    return;
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(ReconcileStats::default())
                 }
+                Err(error) => return Err(error.into()),
             };
             let read_path =
                 std::path::PathBuf::from(format!("/proc/self/fd/{}", quarantine.as_raw_fd()));
-            let Ok(mut entries) = tokio::fs::read_dir(read_path).await else {
-                return;
-            };
-            while let Ok(Some(entry)) = entries.next_entry().await {
+            let mut entries = tokio::fs::read_dir(read_path).await?;
+            let mut stats = ReconcileStats::default();
+            while let Some(entry) = entries.next_entry().await? {
+                stats.scanned += 1;
                 let name = entry.file_name();
                 let Some((clip_db_id, kind)) = parse_quarantine_name(&name) else {
+                    stats.rejected += 1;
                     tracing::warn!(
                         code = "retention_quarantine_name_rejected",
                         "Social-Media-Retention: unbekannter Quarantäne-Eintrag bleibt erhalten"
@@ -120,16 +202,25 @@ impl RetentionWorker {
                 file_options
                     .read(true)
                     .custom_flags(O_NOFOLLOW | O_NONBLOCK);
-                let Ok(file) = file_options.open(&anchored).await else {
-                    continue;
+                let file = match file_options.open(&anchored).await {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        stats.rejected += 1;
+                        tracing::warn!(
+                            clip_db_id,
+                            code = "retention_quarantine_entry_disappeared",
+                            "Social-Media-Retention: Quarantäne-Eintrag verschwand während des Abgleichs"
+                        );
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
                 };
-                let Ok(metadata) = file.metadata().await else {
-                    continue;
-                };
+                let metadata = file.metadata().await?;
                 if !metadata.file_type().is_file()
                     || metadata.nlink() != 1
                     || metadata.mode() & 0o777 != 0o640
                 {
+                    stats.rejected += 1;
                     tracing::warn!(
                         clip_db_id,
                         code = "retention_quarantine_file_rejected",
@@ -137,141 +228,155 @@ impl RetentionWorker {
                     );
                     continue;
                 }
-
-                let mut transaction = match self.pool.begin().await {
-                    Ok(transaction) => transaction,
-                    Err(_) => return,
-                };
-                let preparation = match sqlx::query(
-                    "SELECT state, render_path, render_fingerprint \
-                     FROM social_media_clip_preparation WHERE clip_db_id = $1 FOR UPDATE",
-                )
-                .bind(clip_db_id)
-                .fetch_optional(transaction.as_mut())
-                .await
-                {
-                    Ok(row) => row,
-                    Err(_) => {
-                        let _ = transaction.rollback().await;
-                        continue;
-                    }
-                };
-                let clip = match sqlx::query(
-                    "SELECT clip_id, streamer_login, source_kind, upload_local_path, local_file_path \
-                     FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE",
-                )
-                .bind(clip_db_id)
-                .fetch_optional(transaction.as_mut())
-                .await
-                {
-                    Ok(row) => row,
-                    Err(_) => {
-                        let _ = transaction.rollback().await;
-                        continue;
-                    }
-                };
-                let Some(clip) = clip else {
-                    if transaction.commit().await.is_ok() {
-                        let _ = unlink_in_directory(&quarantine, &name);
-                    }
-                    continue;
-                };
-                if preparation.as_ref().is_some_and(|row| {
-                    row.try_get::<String, _>("state")
-                        .is_ok_and(|state| matches!(state.as_str(), "materializing" | "rendering"))
-                }) {
-                    let _ = transaction.rollback().await;
-                    continue;
-                }
-                let expected = match kind {
-                    QuarantineKind::Source => {
-                        let clip_id = clip.try_get::<String, _>("clip_id").ok();
-                        let streamer = clip.try_get::<String, _>("streamer_login").ok();
-                        let source_kind = clip.try_get::<String, _>("source_kind").ok();
-                        let stored = clip
-                            .try_get::<Option<String>, _>("upload_local_path")
-                            .ok()
-                            .flatten()
-                            .filter(|value| !value.trim().is_empty())
-                            .or_else(|| {
-                                clip.try_get::<Option<String>, _>("local_file_path")
-                                    .ok()
-                                    .flatten()
-                                    .filter(|value| !value.trim().is_empty())
-                            });
-                        match (clip_id, streamer, source_kind, stored) {
-                            (Some(clip_id), Some(streamer), Some(kind), Some(stored))
-                                if kind == "manual_upload"
-                                    && safe_component(&clip_id)
-                                    && safe_component(&streamer) =>
-                            {
-                                let expected = self
-                                    .clips_dir
-                                    .join("uploads")
-                                    .join(streamer)
-                                    .join(format!("{clip_id}.mp4"));
-                                (expected == std::path::Path::new(&stored)).then_some(expected)
-                            }
-                            (_, _, Some(kind), Some(stored)) if kind == "twitch" => {
-                                let expected = self.clips_dir.join(format!("{clip_db_id}.mp4"));
-                                (expected == std::path::Path::new(&stored)).then_some(expected)
-                            }
-                            _ => None,
-                        }
-                    }
-                    QuarantineKind::Render(quarantined_fingerprint) => {
-                        preparation.as_ref().and_then(|row| {
-                            let stored = row
-                                .try_get::<Option<String>, _>("render_path")
-                                .ok()
-                                .flatten()?;
-                            let fingerprint = row
-                                .try_get::<Option<String>, _>("render_fingerprint")
-                                .ok()
-                                .flatten()?;
-                            if fingerprint.len() != 64
-                                || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
-                                || fingerprint != quarantined_fingerprint
-                            {
-                                return None;
-                            }
-                            let expected = self
-                                .clips_dir
-                                .join("rendered")
-                                .join(format!("{clip_db_id}-{fingerprint}.mp4"));
-                            (expected == std::path::Path::new(&stored)).then_some(expected)
-                        })
-                    }
-                };
-                let Some(expected) = expected else {
-                    let _ = transaction.rollback().await;
-                    continue;
-                };
-                let Ok(relative) = expected.strip_prefix(&self.clips_dir) else {
-                    let _ = transaction.rollback().await;
-                    continue;
-                };
-                let Some((target_directory, target_name)) =
-                    open_relative_parent(&self.clips_dir, relative, &directory_options).await
-                else {
-                    let _ = transaction.rollback().await;
-                    continue;
-                };
-                if rename_noreplace(&quarantine, &name, &target_directory, &target_name).is_err() {
-                    let _ = transaction.rollback().await;
-                    continue;
-                }
-                if transaction.commit().await.is_err() {
-                    // Commit-Ausgang unklar: die Datei liegt wieder am
-                    // erwarteten Ort; sie wird niemals zusätzlich gelöscht.
-                    tracing::error!(
+                match self
+                    .reconcile_quarantine_entry(
+                        &quarantine,
+                        &name,
                         clip_db_id,
-                        code = "retention_restore_commit_uncertain",
-                        "Social-Media-Retention: Wiederherstellungs-Commit ist unklar"
-                    );
+                        kind,
+                        &directory_options,
+                    )
+                    .await?
+                {
+                    ReconcileEntryOutcome::Restored => stats.restored += 1,
+                    ReconcileEntryOutcome::PurgedOrphan => stats.purged_orphans += 1,
+                    ReconcileEntryOutcome::Deferred(reason) => {
+                        stats.deferred += 1;
+                        tracing::warn!(
+                            clip_db_id,
+                            code = "retention_quarantine_restore_deferred",
+                            reason,
+                            "Social-Media-Retention: Quarantäne-Wiederherstellung wurde zurückgestellt"
+                        );
+                    }
+                    ReconcileEntryOutcome::Rejected(reason) => {
+                        stats.rejected += 1;
+                        tracing::warn!(
+                            clip_db_id,
+                            code = "retention_quarantine_state_rejected",
+                            reason,
+                            "Social-Media-Retention: Quarantäne-Eintrag passt nicht zum gespeicherten Zustand"
+                        );
+                    }
                 }
             }
+            Ok(stats)
         }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(ReconcileStats::default())
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn reconcile_quarantine_entry(
+        &self,
+        quarantine: &tokio::fs::File,
+        name: &std::ffi::OsStr,
+        clip_db_id: i64,
+        kind: QuarantineKind,
+        directory_options: &tokio::fs::OpenOptions,
+    ) -> Result<ReconcileEntryOutcome, ReconcileError> {
+        let mut transaction = self.pool.begin().await?;
+        let preparation: Option<ReconcilePreparationRow> = sqlx::query_as(
+            "SELECT state, render_path, render_fingerprint \
+             FROM social_media_clip_preparation WHERE clip_db_id = $1 FOR UPDATE",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        let clip: Option<ReconcileClipRow> = sqlx::query_as(
+            "SELECT clip_id, streamer_login, source_kind, upload_local_path, local_file_path \
+             FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        let Some(clip) = clip else {
+            transaction.commit().await?;
+            unlink_in_directory(quarantine, name).map_err(ReconcileError::Purge)?;
+            return Ok(ReconcileEntryOutcome::PurgedOrphan);
+        };
+        if preparation.as_ref().is_some_and(|row| {
+            matches!(
+                row.state.as_str(),
+                "materializing" | "source_ready" | "rendering"
+            )
+        }) {
+            transaction.rollback().await?;
+            return Ok(ReconcileEntryOutcome::Deferred("preparation_active"));
+        }
+
+        let expected = match kind {
+            QuarantineKind::Source => {
+                let stored = clip
+                    .upload_local_path
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        clip.local_file_path
+                            .as_deref()
+                            .filter(|value| !value.trim().is_empty())
+                    });
+                match (clip.source_kind.as_str(), stored) {
+                    ("manual_upload", Some(stored))
+                        if safe_component(&clip.clip_id)
+                            && safe_component(&clip.streamer_login) =>
+                    {
+                        let expected = self
+                            .clips_dir
+                            .join("uploads")
+                            .join(&clip.streamer_login)
+                            .join(format!("{}.mp4", clip.clip_id));
+                        (expected == std::path::Path::new(stored)).then_some(expected)
+                    }
+                    ("twitch", Some(stored)) => {
+                        let expected = self.clips_dir.join(format!("{clip_db_id}.mp4"));
+                        (expected == std::path::Path::new(stored)).then_some(expected)
+                    }
+                    _ => None,
+                }
+            }
+            QuarantineKind::Render(quarantined_fingerprint) => {
+                preparation.as_ref().and_then(|row| {
+                    let stored = row
+                        .render_path
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())?;
+                    let fingerprint = row.render_fingerprint.as_deref().filter(|value| {
+                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })?;
+                    if fingerprint != quarantined_fingerprint {
+                        return None;
+                    }
+                    let expected = self
+                        .clips_dir
+                        .join("rendered")
+                        .join(format!("{clip_db_id}-{fingerprint}.mp4"));
+                    (expected == std::path::Path::new(stored)).then_some(expected)
+                })
+            }
+        };
+        let Some(expected) = expected else {
+            transaction.rollback().await?;
+            return Ok(ReconcileEntryOutcome::Deferred("stored_state_mismatch"));
+        };
+        let relative = match expected.strip_prefix(&self.clips_dir) {
+            Ok(relative) => relative,
+            Err(_) => {
+                transaction.rollback().await?;
+                return Ok(ReconcileEntryOutcome::Rejected("path_outside_clips_root"));
+            }
+        };
+        let (target_directory, target_name) =
+            open_relative_parent(&self.clips_dir, relative, directory_options).await?;
+        rename_noreplace(quarantine, name, &target_directory, &target_name)
+            .map_err(ReconcileError::Restore)?;
+        transaction
+            .commit()
+            .await
+            .map_err(ReconcileError::CommitUncertain)?;
+        Ok(ReconcileEntryOutcome::Restored)
     }
 
     async fn cleanup_clip(&self, clip_db_id: i64) -> Result<bool, sqlx::Error> {
@@ -530,25 +635,25 @@ async fn open_relative_parent(
     root: &std::path::Path,
     relative: &std::path::Path,
     options: &tokio::fs::OpenOptions,
-) -> Option<(tokio::fs::File, std::ffi::OsString)> {
+) -> std::io::Result<(tokio::fs::File, std::ffi::OsString)> {
     use std::os::fd::AsRawFd;
-    let mut directory = open_directory_chain(root, options).await.ok()?;
+    let mut directory = open_directory_chain(root, options).await?;
     let mut components = relative.components().peekable();
     while let Some(component) = components.next() {
         let std::path::Component::Normal(name) = component else {
-            return None;
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
         };
         if components.peek().is_none() {
-            return Some((directory, name.to_os_string()));
+            return Ok((directory, name.to_os_string()));
         }
         let child = std::path::PathBuf::from(format!(
             "/proc/self/fd/{}/{}",
             directory.as_raw_fd(),
             name.to_string_lossy()
         ));
-        directory = options.open(child).await.ok()?;
+        directory = options.open(child).await?;
     }
-    None
+    Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
 }
 
 #[cfg(target_os = "linux")]
@@ -1233,7 +1338,9 @@ mod tests {
             .unwrap();
         set_media_mode(&old_quarantined);
         let worker = RetentionWorker::new(pool.clone()).with_clips_dir(&clips_dir);
-        worker.reconcile_quarantine().await;
+        let stats = worker.reconcile_quarantine().await.unwrap();
+        assert_eq!(stats.deferred, 1);
+        assert_eq!(stats.restored, 0);
         assert!(old_quarantined.exists());
         assert!(!new_render.exists());
 
@@ -1248,9 +1355,60 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        worker.reconcile_quarantine().await;
+        let stats = worker.reconcile_quarantine().await.unwrap();
+        assert_eq!(stats.restored, 1);
+        assert_eq!(stats.deferred, 0);
         assert!(!old_quarantined.exists());
         assert_eq!(tokio::fs::read(&old_render).await.unwrap(), b"altes-render");
+        let _ = std::fs::remove_dir_all(clips_dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn recoveryfehler_stoppt_den_neuen_cleanup_lauf() {
+        let Some(pool) = make_pool("t_sm_retention_recovery_blocks_cleanup").await else {
+            return;
+        };
+        let clips_dir = retention_test_dir("recovery-blocks-cleanup");
+        let quarantine = clips_dir.join(".retention-quarantine");
+        tokio::fs::create_dir_all(&quarantine).await.unwrap();
+
+        let clip_db_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media \
+             (clip_id, clip_url, streamer_login, discarded_at, retention_until) \
+             VALUES ('cleanup-blocked', 'https://clips.test/blocked', 'nani', NOW(), \
+                     NOW() - INTERVAL '1 day') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let quarantine_entry =
+            quarantine.join(format!("{clip_db_id}-source-{}.mp4", uuid::Uuid::new_v4()));
+        tokio::fs::write(&quarantine_entry, b"nicht zuordenbar")
+            .await
+            .unwrap();
+        set_media_mode(&quarantine_entry);
+        sqlx::query("DROP TABLE social_media_clip_preparation")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let worker = RetentionWorker::new(pool.clone()).with_clips_dir(&clips_dir);
+
+        assert!(worker.reconcile_quarantine().await.is_err());
+        worker.run_once().await;
+
+        let remains: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1)",
+        )
+        .bind(clip_db_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            remains,
+            "nach Recoveryfehler darf kein neuer Cleanup starten"
+        );
+        assert!(quarantine_entry.exists());
         let _ = std::fs::remove_dir_all(clips_dir);
     }
 }

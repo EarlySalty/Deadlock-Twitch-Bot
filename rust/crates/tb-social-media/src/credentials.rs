@@ -50,6 +50,20 @@ pub struct PlatformStatus {
     pub provider_calls_enabled: bool,
 }
 
+/// Fehlertransparenter Credential-Lesepfad. Nur `NotFound` bedeutet, dass eine
+/// Plattform tatsächlich nicht verbunden ist; Datenbank- und
+/// Entschlüsselungsfehler dürfen weder Dashboard noch Worker als fehlende
+/// Verbindung maskieren.
+#[derive(Debug, thiserror::Error)]
+pub enum CredentialError {
+    #[error("credentials_not_found")]
+    NotFound,
+    #[error("credential_database_failed: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("credential_decryption_failed")]
+    Decrypt,
+}
+
 /// Lädt + entschlüsselt Plattform-Credentials.
 pub struct CredentialManager {
     pool: PgPool,
@@ -63,12 +77,40 @@ impl CredentialManager {
 
     /// Holt + entschlüsselt Credentials für eine Plattform. Bevorzugt einen
     /// exakten Streamer-Treffer, sonst den globalen Eintrag (Python
-    /// `get_credentials`). `None` bei fehlendem Eintrag oder Decrypt-Fehler.
+    /// `get_credentials`). Diese Legacy-Hülle bleibt für rein best-effort
+    /// arbeitende Altpfade bestehen; sicherheitskritische Pfade verwenden
+    /// [`Self::get_credentials_checked`].
     pub async fn get_credentials(
         &self,
         platform: &str,
         streamer_login: Option<&str>,
     ) -> Option<SocialMediaCredentials> {
+        match self.get_credentials_checked(platform, streamer_login).await {
+            Ok(credentials) => Some(credentials),
+            Err(CredentialError::NotFound) => None,
+            Err(error) => {
+                tracing::error!(
+                    platform = %sanitize(platform),
+                    streamer = %sanitize(streamer_login.unwrap_or("<none>")),
+                    code = "credential_read_failed",
+                    error_kind = match error {
+                        CredentialError::Db(_) => "database",
+                        CredentialError::Decrypt => "decrypt",
+                        CredentialError::NotFound => "not_found",
+                    },
+                    "Credential-Record konnte nicht sicher gelesen werden"
+                );
+                None
+            }
+        }
+    }
+
+    /// Lädt und entschlüsselt Credentials ohne Fehler zu verschlucken.
+    pub async fn get_credentials_checked(
+        &self,
+        platform: &str,
+        streamer_login: Option<&str>,
+    ) -> Result<SocialMediaCredentials, CredentialError> {
         let row = sqlx::query!(
             "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, \
                     client_id, client_secret_enc, token_expires_at, scopes, \
@@ -85,9 +127,8 @@ impl CredentialManager {
             streamer_login
         )
         .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten()?;
+        .await?
+        .ok_or(CredentialError::NotFound)?;
 
         let id = row.id;
         let row_platform = row.platform;
@@ -98,38 +139,47 @@ impl CredentialManager {
         let enc_version = row.enc_version.unwrap_or(1) as i64;
         let streamer_ref = row_streamer.as_deref();
 
-        let access_token = match self.cipher.decrypt_field(
-            &access_enc,
-            &aad::social_media("access_token", &row_platform, streamer_ref, enc_version),
-        ) {
-            Ok(t) => t,
-            Err(_) => {
-                tracing::error!(
-                    platform = %sanitize(platform),
-                    streamer = %sanitize(streamer_login.unwrap_or("<none>")),
-                    "Decrypt des Auth-Records fehlgeschlagen"
-                );
-                return None;
-            }
+        let access_token = self
+            .cipher
+            .decrypt_field(
+                &access_enc,
+                &aad::social_media("access_token", &row_platform, streamer_ref, enc_version),
+            )
+            .map_err(|_| CredentialError::Decrypt)?;
+        let refresh_token = match refresh_enc {
+            Some(value) => Some(
+                self.cipher
+                    .decrypt_field(
+                        &value,
+                        &aad::social_media(
+                            "refresh_token",
+                            &row_platform,
+                            streamer_ref,
+                            enc_version,
+                        ),
+                    )
+                    .map_err(|_| CredentialError::Decrypt)?,
+            ),
+            None => None,
         };
-        let refresh_token = refresh_enc.and_then(|b| {
-            self.cipher
-                .decrypt_field(
-                    &b,
-                    &aad::social_media("refresh_token", &row_platform, streamer_ref, enc_version),
-                )
-                .ok()
-        });
-        let client_secret = client_secret_enc.and_then(|b| {
-            self.cipher
-                .decrypt_field(
-                    &b,
-                    &aad::social_media("client_secret", &row_platform, streamer_ref, enc_version),
-                )
-                .ok()
-        });
+        let client_secret = match client_secret_enc {
+            Some(value) => Some(
+                self.cipher
+                    .decrypt_field(
+                        &value,
+                        &aad::social_media(
+                            "client_secret",
+                            &row_platform,
+                            streamer_ref,
+                            enc_version,
+                        ),
+                    )
+                    .map_err(|_| CredentialError::Decrypt)?,
+            ),
+            None => None,
+        };
 
-        Some(SocialMediaCredentials {
+        Ok(SocialMediaCredentials {
             id,
             platform: row_platform,
             streamer_login: row_streamer,
@@ -149,25 +199,15 @@ impl CredentialManager {
     pub async fn get_all_platforms_status(
         &self,
         streamer_login: Option<&str>,
-    ) -> Vec<PlatformStatus> {
+    ) -> Result<Vec<PlatformStatus>, CredentialError> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
-            let provider_calls_enabled =
-                match self.provider_calls_enabled(platform, streamer_login).await {
-                    Ok(enabled) => enabled,
-                    Err(error) => {
-                        tracing::error!(
-                            platform = %sanitize(platform),
-                            streamer = %sanitize(streamer_login.unwrap_or("<none>")),
-                            code = "platform_release_gate_read_failed",
-                            %error,
-                            "Plattform-Freigabegate konnte nicht gelesen werden"
-                        );
-                        false
-                    }
-                };
-            let status = match self.get_credentials(platform, streamer_login).await {
-                Some(creds) => {
+            let status = match self.get_credentials_checked(platform, streamer_login).await {
+                Ok(creds) => {
+                    let provider_calls_enabled = self
+                        .provider_calls_enabled(platform, streamer_login)
+                        .await
+                        .map_err(CredentialError::Db)?;
                     let uses_global_fallback =
                         streamer_login.is_some() && creds.streamer_login.is_none();
                     PlatformStatus {
@@ -182,7 +222,7 @@ impl CredentialManager {
                         provider_calls_enabled,
                     }
                 }
-                None => PlatformStatus {
+                Err(CredentialError::NotFound) => PlatformStatus {
                     platform: platform.to_string(),
                     connected: false,
                     username: None,
@@ -193,10 +233,11 @@ impl CredentialManager {
                     uses_global_fallback: false,
                     provider_calls_enabled: false,
                 },
+                Err(error) => return Err(error),
             };
             out.push(status);
         }
-        out
+        Ok(out)
     }
 
     /// Liest den wirksamen Freigabeschalter mit derselben Priorität wie die
@@ -417,11 +458,91 @@ mod tests {
         let c = cipher();
         seed(&pool, &c, "youtube", None, "yt-access", None).await;
         let mgr = CredentialManager::new(pool, c);
-        let status = mgr.get_all_platforms_status(None).await;
+        let status = mgr.get_all_platforms_status(None).await.unwrap();
         assert_eq!(status.len(), 3);
         let yt = status.iter().find(|s| s.platform == "youtube").unwrap();
         assert!(yt.connected);
         let tk = status.iter().find(|s| s.platform == "tiktok").unwrap();
         assert!(!tk.connected);
+    }
+
+    #[tokio::test]
+    async fn checked_credentials_unterscheidet_not_found_db_und_decrypt() {
+        let Some(pool) = make_pool("t_sm_creds_checked_errors").await else {
+            return;
+        };
+        let c = cipher();
+        let mgr = CredentialManager::new(pool.clone(), c.clone());
+        assert!(matches!(
+            mgr.get_credentials_checked("youtube", Some("nani")).await,
+            Err(CredentialError::NotFound)
+        ));
+
+        seed(
+            &pool,
+            &c,
+            "youtube",
+            Some("nani"),
+            "access",
+            Some("refresh"),
+        )
+        .await;
+        sqlx::query(
+            "UPDATE social_media_platform_auth SET refresh_token_enc = '\\x00'::bytea \
+             WHERE platform = 'youtube' AND streamer_login = 'nani'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            mgr.get_credentials_checked("youtube", Some("nani")).await,
+            Err(CredentialError::Decrypt)
+        ));
+
+        sqlx::query(
+            "UPDATE social_media_platform_auth \
+             SET refresh_token_enc = NULL, client_secret_enc = '\\x00'::bytea \
+             WHERE platform = 'youtube' AND streamer_login = 'nani'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            mgr.get_credentials_checked("youtube", Some("nani")).await,
+            Err(CredentialError::Decrypt)
+        ));
+
+        sqlx::query("DROP TABLE social_media_platform_auth")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.get_credentials_checked("youtube", Some("nani")).await,
+            Err(CredentialError::Db(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn plattformstatus_maskiert_nur_not_found_als_nicht_verbunden() {
+        let Some(pool) = make_pool("t_sm_creds_status_errors").await else {
+            return;
+        };
+        let c = cipher();
+        let mgr = CredentialManager::new(pool.clone(), c.clone());
+        let missing = mgr.get_all_platforms_status(None).await.unwrap();
+        assert!(missing.iter().all(|status| !status.connected));
+
+        seed(&pool, &c, "instagram", None, "access", None).await;
+        sqlx::query(
+            "UPDATE social_media_platform_auth SET access_token_enc = '\\x00'::bytea \
+             WHERE platform = 'instagram' AND streamer_login IS NULL",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            mgr.get_all_platforms_status(None).await,
+            Err(CredentialError::Decrypt)
+        ));
     }
 }

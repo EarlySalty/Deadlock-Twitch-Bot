@@ -255,6 +255,7 @@ social_media_clip_enrichment|transcript_lang|text|YES|
 social_media_clip_enrichment|transcript_raw|text|YES|
 social_media_clip_enrichment|transcript_segments|jsonb|YES|
 social_media_clip_enrichment|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_clip_preparation|attempt_count|integer|NO|0
 social_media_clip_preparation|clip_db_id|bigint|NO|
 social_media_clip_preparation|completed_at|timestamp with time zone|YES|
 social_media_clip_preparation|error_code|text|YES|
@@ -263,6 +264,7 @@ social_media_clip_preparation|lease_token|text|YES|
 social_media_clip_preparation|render_fingerprint|text|YES|
 social_media_clip_preparation|render_path|text|YES|
 social_media_clip_preparation|requested_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_clip_preparation|retry_at|timestamp with time zone|YES|
 social_media_clip_preparation|source_fingerprint|text|YES|
 social_media_clip_preparation|started_at|timestamp with time zone|YES|
 social_media_clip_preparation|state|text|NO|'pending'::text

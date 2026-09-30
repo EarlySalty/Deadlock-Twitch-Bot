@@ -36,8 +36,8 @@ use tb_social_media::analytics::{
     list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord,
 };
 use tb_social_media::approval::{
-    cancel_scheduled_uploads, get_approval_record, handle_decision, serialize_approval_record,
-    ApprovalError, ContentMutationError, DECISION_APPROVE,
+    cancel_scheduled_uploads, get_approval_record_checked, handle_decision,
+    serialize_approval_record, ApprovalError, ContentMutationError, DECISION_APPROVE,
 };
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::{
@@ -50,16 +50,16 @@ use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags,
     get_streamer_templates, GlobalTemplate, StreamerTemplate,
 };
-use tb_social_media::credentials::{CredentialManager, PlatformStatus};
+use tb_social_media::credentials::{CredentialError, CredentialManager, PlatformStatus};
 use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError};
 use tb_social_media::enrichment::{
-    ensure_enrichment_row_checked, get_enrichment, get_enrichment_checked, update_manual_edit,
-    EnrichmentRecord,
+    ensure_enrichment_row_checked, get_enrichment_checked, update_manual_edit, EnrichmentRecord,
 };
 use tb_social_media::forms::{submit_clip_form, FormKey, FormSubmissionOutcome};
 use tb_social_media::layout::{
-    apply_default_layout, default_streamer_layout, get_clip_effective_layout, get_streamer_layout,
-    set_clip_layout_override, upsert_streamer_layout, LayoutMutationError, StreamerLayout,
+    apply_default_layout, default_streamer_layout, get_clip_effective_layout_checked,
+    get_streamer_layout_checked, set_clip_layout_override, upsert_streamer_layout,
+    EffectiveLayoutError, LayoutMutationError, StreamerLayout,
 };
 use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
@@ -750,15 +750,19 @@ fn normalize_safe_slug(raw: Option<&str>, field: &str) -> Result<String, Respons
 }
 
 async fn ensure_streamer_exists(pool: &PgPool, slug: &str) -> bool {
+    ensure_streamer_exists_checked(pool, slug)
+        .await
+        .unwrap_or(false)
+}
+
+async fn ensure_streamer_exists_checked(pool: &PgPool, slug: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
     )
     .bind(slug)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten()
-    .is_some()
+    .map(|row| row.is_some())
 }
 
 async fn clip_exists(pool: &PgPool, clip_db_id: i64) -> bool {
@@ -1977,25 +1981,69 @@ pub async fn streamer_layout_get_handler(
         Ok(s) => s.to_lowercase(),
         Err(e) => return e,
     };
-    if !ensure_streamer_exists(&pool, &slug).await {
+    let streamer_exists = match ensure_streamer_exists_checked(&pool, &slug).await {
+        Ok(exists) => exists,
+        Err(error) => {
+            tracing::error!(
+                streamer_login = %slug,
+                code = "layout_streamer_lookup_failed",
+                database_code = ?error
+                    .as_database_error()
+                    .and_then(|database| database.code()),
+                "Kanal für Layout-GET konnte nicht geladen werden"
+            );
+            return layout_load_failed();
+        }
+    };
+    if !streamer_exists {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "unknown_streamer" })),
         )
             .into_response();
     }
-    let stored = get_streamer_layout(&pool, &slug).await;
+    let stored = match get_streamer_layout_checked(&pool, &slug).await {
+        Ok(layout) => layout,
+        Err(error) => {
+            tracing::error!(
+                streamer_login = %slug,
+                code = "streamer_layout_read_failed",
+                error_kind = effective_layout_error_kind(&error),
+                "Kanal-Layout konnte nicht sicher geladen werden"
+            );
+            return layout_load_failed();
+        }
+    };
     let layout = stored.clone().unwrap_or_else(default_streamer_layout);
     let (updated_at, updated_by) = if stored.is_some() {
-        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        match sqlx::query_as::<_, (Option<String>, Option<String>)>(
             "SELECT updated_at::text, updated_by FROM social_media_streamer_layout WHERE LOWER(streamer_login) = LOWER($1) LIMIT 1",
         )
         .bind(&slug)
         .fetch_optional(&pool)
         .await
-        .ok()
-        .flatten()
-        .unwrap_or((None, None))
+        {
+            Ok(Some(metadata)) => metadata,
+            Ok(None) => {
+                tracing::error!(
+                    streamer_login = %slug,
+                    code = "streamer_layout_metadata_missing",
+                    "Kanal-Layout verschwand zwischen Layout- und Metadatenabfrage"
+                );
+                return layout_load_failed();
+            }
+            Err(error) => {
+                tracing::error!(
+                    streamer_login = %slug,
+                    code = "streamer_layout_metadata_failed",
+                    database_code = ?error
+                        .as_database_error()
+                        .and_then(|database| database.code()),
+                    "Kanal-Layout-Metadaten konnten nicht geladen werden"
+                );
+                return layout_load_failed();
+            }
+        }
     } else {
         (None, None)
     };
@@ -2009,6 +2057,23 @@ pub async fn streamer_layout_get_handler(
         "updated_by": updated_by,
     }))
     .into_response()
+}
+
+fn layout_load_failed() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "layout_load_failed" })),
+    )
+        .into_response()
+}
+
+fn effective_layout_error_kind(error: &EffectiveLayoutError) -> &'static str {
+    match error {
+        EffectiveLayoutError::ClipNotFound => "clip_not_found",
+        EffectiveLayoutError::InvalidClipLayout => "invalid_clip_layout",
+        EffectiveLayoutError::InvalidStreamerLayout => "invalid_streamer_layout",
+        EffectiveLayoutError::Db(_) => "database",
+    }
 }
 
 /// `PUT /social-media/api/admin/streamer-layout` — Default-Layout setzen (Admin).
@@ -2105,7 +2170,18 @@ pub async fn clip_layout_put_handler(
             Ok(outcome) => outcome,
             Err(error) => return layout_mutation_error_response(error),
         };
-        let effective = get_clip_effective_layout(&pool, clip_db_id).await;
+        let effective = match get_clip_effective_layout_checked(&pool, clip_db_id).await {
+            Ok(layout) => layout,
+            Err(error) => {
+                tracing::error!(
+                    clip_db_id,
+                    code = "clip_layout_readback_failed",
+                    error_kind = effective_layout_error_kind(&error),
+                    "Effektives Clip-Layout konnte nach dem Löschen nicht geladen werden"
+                );
+                return layout_load_failed();
+            }
+        };
         return Json(json!({
             "clip_db_id": clip_db_id,
             "layout_override": Value::Null,
@@ -2123,7 +2199,18 @@ pub async fn clip_layout_put_handler(
         Ok(outcome) => outcome,
         Err(error) => return layout_mutation_error_response(error),
     };
-    let effective = get_clip_effective_layout(&pool, clip_db_id).await;
+    let effective = match get_clip_effective_layout_checked(&pool, clip_db_id).await {
+        Ok(layout) => layout,
+        Err(error) => {
+            tracing::error!(
+                clip_db_id,
+                code = "clip_layout_readback_failed",
+                error_kind = effective_layout_error_kind(&error),
+                "Effektives Clip-Layout konnte nach dem Speichern nicht geladen werden"
+            );
+            return layout_load_failed();
+        }
+    };
     Json(json!({
         "clip_db_id": clip_db_id,
         "layout_override": layout.to_override_json(),
@@ -2860,7 +2947,25 @@ pub async fn platforms_status_handler(
     };
     let db_scope = credential_scope(scope.as_deref());
     let has_scope = db_scope.is_some();
-    let statuses = cred_mgr.get_all_platforms_status(db_scope).await;
+    let statuses = match cred_mgr.get_all_platforms_status(db_scope).await {
+        Ok(statuses) => statuses,
+        Err(error) => {
+            tracing::error!(
+                code = "platform_status_credentials_failed",
+                error_kind = match error {
+                    CredentialError::NotFound => "not_found",
+                    CredentialError::Db(_) => "database",
+                    CredentialError::Decrypt => "decrypt",
+                },
+                "Plattformstatus konnte nicht sicher geladen werden"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "platform_status_failed" })),
+            )
+                .into_response();
+        }
+    };
     let platforms: Vec<Value> = statuses
         .iter()
         .map(|s| platform_status_json(s, has_scope))
@@ -3034,6 +3139,9 @@ fn safe_upload_error_code(raw: &str) -> &'static str {
         "layout_changed" => "layout_changed",
         "enrichment_changed" => "enrichment_changed",
         "credentials_missing" => "credentials_missing",
+        "credentials_load_failed" => "credentials_load_failed",
+        "credentials_decrypt_failed" => "credentials_decrypt_failed",
+        "upload_platform_unsupported" => "upload_platform_unsupported",
         "streamer_missing" => "streamer_missing",
         "uploaded_flag_check_failed" => "uploaded_flag_check_failed",
         "completed_write_failed" => "completed_write_failed",
@@ -3113,9 +3221,21 @@ fn platform_value_map<'a>(
 ///
 /// Für Einzelclips; die Listen-Endpoints holen den Queue-Stand einmal für die
 /// ganze Seite und rufen [`serialize_clip_record_with`] direkt auf.
-async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Result<Value, sqlx::Error> {
+#[derive(Debug, thiserror::Error)]
+enum ClipRecordReadError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Layout(#[from] EffectiveLayoutError),
+    #[error("stored_layout_json_invalid")]
+    LayoutJson(#[from] serde_json::Error),
+    #[error("clip_id_out_of_range")]
+    ClipIdOutOfRange,
+}
+
+async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Result<Value, ClipRecordReadError> {
     let queue = load_upload_queue_info(pool, &[row.id]).await?;
-    Ok(serialize_clip_record_with(pool, row, queue.get(&row.id)).await)
+    serialize_clip_record_with(pool, row, queue.get(&row.id)).await
 }
 
 /// Wie [`serialize_clip_record`], nur mit schon geladenem Queue-Stand.
@@ -3123,32 +3243,25 @@ async fn serialize_clip_record_with(
     pool: &PgPool,
     row: &ClipRow,
     queue: Option<&std::collections::HashMap<String, UploadQueueEntry>>,
-) -> Value {
-    let layout_override = row
+) -> Result<Value, ClipRecordReadError> {
+    let layout_override = match row
         .layout_override_json
         .as_deref()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .unwrap_or(Value::Null);
-    let effective_layout = get_clip_effective_layout(pool, row.id)
-        .await
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => serde_json::from_str::<Value>(raw)?,
+        None => Value::Null,
+    };
+    let effective_layout = get_clip_effective_layout_checked(pool, row.id)
+        .await?
         .to_override_json();
 
-    let child_clip_db_id = match i32::try_from(row.id) {
-        Ok(id) => Some(id),
-        Err(_) => {
-            tracing::warn!(
-                clip_db_id = row.id,
-                "clip id exceeds int4-backed social media child tables; enrichment and approval omitted"
-            );
-            None
-        }
-    };
+    let child_clip_db_id =
+        i32::try_from(row.id).map_err(|_| ClipRecordReadError::ClipIdOutOfRange)?;
 
-    let (enrichment_status, enrichment_summary) = match child_clip_db_id {
-        Some(id) => match get_enrichment(pool, id).await {
+    let (enrichment_status, enrichment_summary) =
+        match get_enrichment_checked(pool, child_clip_db_id).await? {
             Some(e) => {
-                // Dedup youtube→tiktok→instagram, erste 5.
                 let mut seen = std::collections::HashSet::new();
                 let mut top: Vec<String> = Vec::new();
                 for tag in e
@@ -3170,18 +3283,13 @@ async fn serialize_clip_record_with(
                 )
             }
             None => (Value::Null, Value::Null),
-        },
-        None => (Value::Null, Value::Null),
-    };
-    let approval = match child_clip_db_id {
-        Some(id) => match get_approval_record(pool, id).await {
-            Some(rec) => serialize_approval_record(&rec),
-            None => Value::Null,
-        },
+        };
+    let approval = match get_approval_record_checked(pool, child_clip_db_id).await? {
+        Some(record) => serialize_approval_record(&record),
         None => Value::Null,
     };
 
-    json!({
+    Ok(json!({
         "clip_db_id": row.id,
         "clip_id": row.clip_id,
         "clip_url": row.clip_url,
@@ -3214,7 +3322,7 @@ async fn serialize_clip_record_with(
         "scheduled_at": platform_value_map(queue, |e| e.scheduled_at.as_deref()),
         "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
         "upload_states": upload_states_value(queue),
-    })
+    }))
 }
 
 fn child_clip_db_id_or_500(clip_db_id: i64, operation: &str) -> Result<i32, Response> {
@@ -3257,18 +3365,15 @@ async fn require_clip_child_id(
     child_clip_db_id_or_500(clip_db_id, operation)
 }
 
-async fn optional_approval_json(pool: &PgPool, clip_db_id: i64) -> Value {
-    let Ok(child_id) = i32::try_from(clip_db_id) else {
-        tracing::warn!(
-            clip_db_id,
-            "clip id exceeds int4-backed approval table; approval omitted"
-        );
-        return Value::Null;
-    };
-    match get_approval_record(pool, child_id).await {
-        Some(rec) => serialize_approval_record(&rec),
+async fn optional_approval_json(
+    pool: &PgPool,
+    clip_db_id: i64,
+) -> Result<Value, ClipRecordReadError> {
+    let child_id = i32::try_from(clip_db_id).map_err(|_| ClipRecordReadError::ClipIdOutOfRange)?;
+    Ok(match get_approval_record_checked(pool, child_id).await? {
+        Some(record) => serialize_approval_record(&record),
         None => Value::Null,
-    }
+    })
 }
 
 fn invalid_clip_db_id() -> Response {
@@ -3398,7 +3503,18 @@ pub async fn admin_clips_handler(
     };
     let mut items: Vec<Value> = Vec::with_capacity(clips.len());
     for clip in &clips {
-        items.push(serialize_clip_record_with(&pool, clip, queue_info.get(&clip.id)).await);
+        match serialize_clip_record_with(&pool, clip, queue_info.get(&clip.id)).await {
+            Ok(record) => items.push(record),
+            Err(error) => {
+                tracing::error!(
+                    clip_db_id = clip.id,
+                    code = "clip_record_load_failed",
+                    error = %error,
+                    "Social-Media-Clip konnte nicht vollständig serialisiert werden"
+                );
+                return clip_load_failed();
+            }
+        }
     }
     Json(json!({ "items": items, "page": page, "page_size": page_size, "total": total }))
         .into_response()
@@ -4461,7 +4577,18 @@ pub async fn approval_get_handler(
     if let Err(e) = require_clip_row(&pool, clip_db_id).await {
         return e;
     }
-    let approval = optional_approval_json(&pool, clip_db_id).await;
+    let approval = match optional_approval_json(&pool, clip_db_id).await {
+        Ok(approval) => approval,
+        Err(error) => {
+            tracing::error!(
+                clip_db_id,
+                code = "approval_read_failed",
+                error = %error,
+                "Approval-State konnte nicht sicher geladen werden"
+            );
+            return clip_load_failed();
+        }
+    };
     Json(json!({ "clip_db_id": clip_db_id, "approval": approval })).into_response()
 }
 
@@ -7096,6 +7223,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streamer_layout_get_liefert_bei_beschaedigtem_layout_stabilen_5xx() {
+        let Some(pool) = make_pool("t_dash_sm_layout_read_error").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_streamer_layout \
+             (streamer_login, layout_json, cam_enabled, mode) \
+             VALUES ('nani', '{}'::jsonb, TRUE, 'pip')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = streamer_layout_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Query(StreamerLoginQuery {
+                streamer_login: Some("nani".into()),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_json(response).await["error"], "layout_load_failed");
+    }
+
+    #[tokio::test]
     async fn clip_layout_put_set_und_clear() {
         let Some(pool) = make_pool("t_dash_sm_clip_layout").await else {
             return;
@@ -7606,6 +7766,92 @@ mod tests {
             .status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    async fn clip_get_liefert_bei_kindtabellen_decodefehlern_stabilen_5xx() {
+        let Some(pool) = make_pool("t_dash_sm_clip_checked_reads").await else {
+            return;
+        };
+        let clip_db_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media \
+             (clip_id, streamer_login, clip_title) \
+             VALUES ('checked-read', 'nani', 'Checked Read') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let child_id = i32::try_from(clip_db_id).unwrap();
+
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment \
+             (clip_db_id, status, hashtags_youtube) \
+             VALUES ($1, 'done', '[1]'::jsonb)",
+        )
+        .bind(child_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let response = admin_clip_detail_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_json(response).await["error"], "clip_load_failed");
+
+        sqlx::query("DELETE FROM social_media_clip_enrichment WHERE clip_db_id = $1")
+            .bind(child_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval \
+             (clip_db_id, state, approved_platforms) \
+             VALUES ($1, 'approved', '{}'::jsonb)",
+        )
+        .bind(child_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let response = admin_clip_detail_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_json(response).await["error"], "clip_load_failed");
+        let response = approval_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip_db_id.to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_json(response).await["error"], "clip_load_failed");
+
+        sqlx::query("DELETE FROM social_media_clip_approval WHERE clip_db_id = $1")
+            .bind(child_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_clips_social_media SET layout_override_json = '{}'::jsonb WHERE id = $1",
+        )
+        .bind(clip_db_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let response = admin_clip_detail_handler(
+            DashboardAuthLevel::admin(),
+            State(pool),
+            Path(clip_db_id.to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_json(response).await["error"], "clip_load_failed");
     }
 
     #[tokio::test]
@@ -8149,9 +8395,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let error = body_json(resp).await;
         assert_eq!(error["error"], "enrichment_limits_exceeded");
-        let saved = get_enrichment(&pool, i32::try_from(clip).unwrap())
-            .await
-            .unwrap();
+        let saved =
+            tb_social_media::enrichment::get_enrichment(&pool, i32::try_from(clip).unwrap())
+                .await
+                .unwrap();
         assert_eq!(saved.title_youtube.as_deref(), Some("YT"));
 
         // nicht existierender Clip → 404.

@@ -9,8 +9,8 @@
 use serde_json::{json, Value};
 use sqlx::{PgConnection, PgPool};
 
-use crate::clip_queue::queue_upload;
-use crate::enrichment::get_enrichment;
+use crate::clip_queue::{queue_upload, QueueError};
+use crate::enrichment::get_enrichment_checked;
 use crate::posting_plan;
 
 pub const STATE_AWAITING: &str = "awaiting_approval";
@@ -30,6 +30,8 @@ pub enum ApprovalError {
     ClipNotFound(i32),
     #[error("clip_db_id {0} is out of range for social_media_clip_approval.clip_db_id")]
     ClipIdOutOfRange(i64),
+    #[error("clip_streamer_missing: {0}")]
+    ClipStreamerMissing(i32),
     #[error("at least one platform must be approved")]
     NoPlatform,
     /// Alle gewaehlten Plattformen stehen auf null Posts und sind damit
@@ -51,6 +53,8 @@ pub enum ApprovalError {
     PreviewNotReady,
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Queue(#[from] QueueError),
 }
 
 /// Ergebnis der gemeinsamen Freigabe-/Queue-Invalidierung vor einer
@@ -219,17 +223,25 @@ pub fn normalize_decision(decision: &str) -> &'static str {
     }
 }
 
-fn decode_platforms(raw: Option<&str>) -> Vec<String> {
-    let parsed: Vec<String> = raw
-        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-        .unwrap_or_default();
-    normalize_platforms(parsed)
+fn decode_platforms(raw: &str) -> Result<Vec<String>, sqlx::Error> {
+    let parsed = serde_json::from_str::<Vec<String>>(raw)
+        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+    if let Some(platform) = parsed
+        .iter()
+        .find(|platform| !SUPPORTED_PLATFORMS.contains(&platform.trim().to_lowercase().as_str()))
+    {
+        return Err(sqlx::Error::Decode(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Nicht unterstützte Approval-Plattform: {platform}"),
+        ))));
+    }
+    Ok(normalize_platforms(parsed))
 }
 
 type Row = (
     i32,
-    Option<String>,
-    Option<String>,
+    String,
+    String,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -238,11 +250,11 @@ type Row = (
     Option<String>,
 );
 
-fn row_to_record(r: Row) -> ApprovalRecord {
-    ApprovalRecord {
+fn row_to_record(r: Row) -> Result<ApprovalRecord, sqlx::Error> {
+    Ok(ApprovalRecord {
         clip_db_id: r.0,
-        state: r.1.unwrap_or_else(|| STATE_AWAITING.to_string()),
-        approved_platforms: decode_platforms(r.2.as_deref()),
+        state: r.1,
+        approved_platforms: decode_platforms(&r.2)?,
         approver_user_id: r.3,
         decided_at: r.4,
         dm_message_id: r.5,
@@ -250,7 +262,7 @@ fn row_to_record(r: Row) -> ApprovalRecord {
         last_sent_at: r.7,
         approved_render_fingerprint: r.8,
         nicht_eingeplant: Vec::new(),
-    }
+    })
 }
 
 const SELECT_SQL: &str = "SELECT clip_db_id, state, approved_platforms::text, approver_user_id, \
@@ -258,22 +270,9 @@ const SELECT_SQL: &str = "SELECT clip_db_id, state, approved_platforms::text, ap
     approved_render_fingerprint \
     FROM social_media_clip_approval WHERE clip_db_id = $1 LIMIT 1";
 
-/// Approval-Zeile eines Clips.
-pub async fn get_approval_record(pool: &PgPool, clip_db_id: i32) -> Option<ApprovalRecord> {
-    match fetch_approval_record(pool, clip_db_id).await {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                clip_db_id,
-                "Social-Media-Approval: Approval-Zeile nicht ladbar"
-            );
-            None
-        }
-    }
-}
-
-async fn fetch_approval_record(
+/// Fehlertransparente Approval-Zeile eines Clips. Nur eine wirklich fehlende
+/// Zeile wird zu `Ok(None)`; DB- und Dekodierfehler bleiben sichtbar.
+pub async fn get_approval_record_checked(
     pool: &PgPool,
     clip_db_id: i32,
 ) -> Result<Option<ApprovalRecord>, sqlx::Error> {
@@ -281,104 +280,145 @@ async fn fetch_approval_record(
         .bind(clip_db_id)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(row_to_record))
+    row.map(row_to_record).transpose()
 }
 
-/// Stellt eine (awaiting-)Approval-Zeile sicher.
-pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalRecord {
-    if let Some(r) = get_approval_record(pool, clip_db_id).await {
-        return r;
+async fn fetch_approval_record(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<Option<ApprovalRecord>, sqlx::Error> {
+    get_approval_record_checked(pool, clip_db_id).await
+}
+
+async fn ensure_approval_row_checked(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<ApprovalRecord, ApprovalError> {
+    if let Some(record) = fetch_approval_record(pool, clip_db_id).await? {
+        return Ok(record);
     }
-    if let Err(error) = sqlx::query!(
+    sqlx::query!(
         "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) \
          VALUES ($1, $2, '[]'::jsonb) ON CONFLICT (clip_db_id) DO NOTHING",
         clip_db_id,
         STATE_AWAITING
     )
     .execute(pool)
-    .await
-    {
-        tracing::warn!(
-            %error,
-            clip_db_id,
-            "Social-Media-Approval: Awaiting-Zeile konnte nicht sichergestellt werden"
-        );
-    }
-    get_approval_record(pool, clip_db_id)
-        .await
-        .unwrap_or(ApprovalRecord {
-            clip_db_id,
-            state: STATE_AWAITING.to_string(),
-            approved_platforms: Vec::new(),
-            approver_user_id: None,
-            decided_at: None,
-            dm_message_id: None,
-            dm_channel_id: None,
-            last_sent_at: None,
-            approved_render_fingerprint: None,
-            nicht_eingeplant: Vec::new(),
-        })
+    .await?;
+    fetch_approval_record(pool, clip_db_id)
+        .await?
+        .ok_or(ApprovalError::ClipNotFound(clip_db_id))
 }
 
 /// Setzt den Clip (zurück) auf „wartet auf Freigabe" (Python
 /// `mark_clip_awaiting_approval`; ersetzt den Orchestrator-Stub).
+///
+/// Der Legacy-Enrichment-Aufrufer kann noch kein `Result` annehmen. Ein Fehler
+/// wird deshalb sichtbar geloggt und anhand der bereits committed
+/// `llm_provider`-Markierung vom Approval-Worker dauerhaft erneut versucht.
 pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
-    ensure_approval_row(pool, clip_db_id).await;
-    if let Err(error) = sqlx::query(
-        "UPDATE social_media_clip_approval SET state = $1, approver_user_id = NULL, \
-         decided_at = NULL, approved_platforms = '[]'::jsonb, dm_message_id = NULL, \
-         dm_channel_id = NULL, last_sent_at = NULL, approved_render_fingerprint = NULL \
-         WHERE clip_db_id = $2 AND state <> $1",
-    )
-    .bind(STATE_AWAITING)
-    .bind(clip_db_id)
-    .execute(pool)
-    .await
-    {
+    if let Err(error) = mark_clip_awaiting_approval_checked(pool, clip_db_id).await {
         tracing::warn!(
             %error,
             clip_db_id,
             "Social-Media-Approval: Awaiting-Status konnte nicht gesetzt werden"
         );
     }
-    if let Err(error) = sqlx::query!(
-        "UPDATE twitch_clips_social_media SET status = $1 WHERE id = $2 \
-         AND COALESCE(status, '') NOT IN ('published_all', 'published_partial', 'discarded')",
-        STATE_AWAITING,
-        clip_db_id as i64
-    )
-    .execute(pool)
-    .await
-    {
-        tracing::warn!(
-            %error,
-            clip_db_id,
-            "Social-Media-Approval: Clip-Status konnte nicht auf awaiting gesetzt werden"
-        );
-    }
 }
 
-/// Clips, die ohne Enrichment direkt in den Approval-Workflow gehoeren.
+pub async fn mark_clip_awaiting_approval_checked(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<(), ApprovalError> {
+    let mut transaction = pool.begin().await?;
+    // Globale Sperrreihenfolge: Preparation -> Clip -> Queue -> Approval.
+    // Dieser Pfad benötigt keine Queue-Zeile, hält aber dieselbe relative
+    // Reihenfolge ein wie Content-Invalidierung und Provider-Start.
+    sqlx::query(
+        "SELECT clip_db_id FROM social_media_clip_preparation \
+         WHERE clip_db_id = $1 FOR UPDATE",
+    )
+    .bind(i64::from(clip_db_id))
+    .fetch_optional(transaction.as_mut())
+    .await?;
+    let clip_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id::bigint FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
+            .bind(i64::from(clip_db_id))
+            .fetch_optional(transaction.as_mut())
+            .await?;
+    if clip_exists.is_none() {
+        transaction.rollback().await?;
+        return Err(ApprovalError::ClipNotFound(clip_db_id));
+    }
+    sqlx::query(
+        "INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) \
+         VALUES ($1, $2, '[]'::jsonb) ON CONFLICT (clip_db_id) DO NOTHING",
+    )
+    .bind(clip_db_id)
+    .bind(STATE_AWAITING)
+    .execute(transaction.as_mut())
+    .await?;
+    sqlx::query(
+        "SELECT clip_db_id FROM social_media_clip_approval \
+         WHERE clip_db_id = $1 FOR UPDATE",
+    )
+    .bind(clip_db_id)
+    .fetch_one(transaction.as_mut())
+    .await?;
+    sqlx::query(
+        "UPDATE social_media_clip_approval SET state = $1, approver_user_id = NULL, \
+         decided_at = NULL, approved_platforms = '[]'::jsonb, dm_message_id = NULL, \
+         dm_channel_id = NULL, last_sent_at = NULL, approved_render_fingerprint = NULL \
+         WHERE clip_db_id = $2",
+    )
+    .bind(STATE_AWAITING)
+    .bind(clip_db_id)
+    .execute(transaction.as_mut())
+    .await?;
+    let clip_update = sqlx::query(
+        "UPDATE twitch_clips_social_media SET status = $1 WHERE id = $2 \
+         AND COALESCE(status, '') NOT IN ('published_all', 'published_partial', 'discarded')",
+    )
+    .bind(STATE_AWAITING)
+    .bind(i64::from(clip_db_id))
+    .execute(transaction.as_mut())
+    .await;
+    if let Err(error) = clip_update {
+        transaction.rollback().await?;
+        return Err(error.into());
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Clips, die in den Approval-Workflow nachgeholt werden müssen.
 ///
 /// Die LLM-Anreicherung laeuft nur fuer Kategorien mit `enrichment_enabled`, und
 /// erst an ihrem Ende landet ein Clip in `awaiting_approval`. Clips anderer
-/// Kategorien wuerden sonst nie auftauchen; die holt diese Abfrage ab.
-pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
-    sqlx::query_scalar!(
-        "SELECT c.id::int AS \"id!\" FROM twitch_clips_social_media c \
+/// Kategorien wuerden sonst nie auftauchen; die holt diese Abfrage ab. Ebenso
+/// wichtig ist der zweite Zweig: Wurde die LLM-Ausgabe bereits committed, aber
+/// danach scheiterten Status- oder Approval-Write, sorgt der Worker anhand der
+/// dauerhaft gespeicherten Provider-Markierung für die fehlende Approval-Zeile.
+pub async fn iter_clips_ohne_enrichment(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT c.id::int FROM twitch_clips_social_media c \
          JOIN social_media_category k ON k.category_key = c.category_key \
+         LEFT JOIN social_media_clip_enrichment e ON e.clip_db_id = c.id \
          LEFT JOIN social_media_clip_approval a ON a.clip_db_id = c.id \
          WHERE c.discarded_at IS NULL \
-           AND NOT k.enrichment_enabled \
+           AND (NOT k.enrichment_enabled OR e.status = 'done' \
+                OR NULLIF(BTRIM(e.llm_provider), '') IS NOT NULL) \
            AND a.clip_db_id IS NULL \
            AND COALESCE(c.status, 'pending') = 'pending' \
            AND c.id BETWEEN 0 AND 2147483647 \
          ORDER BY c.created_at DESC LIMIT $1",
-        limit.max(1)
     )
+    .bind(limit.max(1))
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
 }
 
 /// Wiederholbare Auto-Freigabe für den zulässigen Race-Fall „Enrichment war
@@ -401,7 +441,9 @@ pub async fn iter_auto_approval_retry_candidates(
            AND p.state = 'preview_ready' \
            AND p.render_fingerprint IS NOT NULL \
            AND p.render_path IS NOT NULL \
-           AND (COALESCE(k.enrichment_enabled, FALSE) = FALSE OR e.status = 'done') \
+           AND (COALESCE(k.enrichment_enabled, FALSE) = FALSE \
+                OR e.status = 'done' \
+                OR NULLIF(BTRIM(e.llm_provider), '') IS NOT NULL) \
            AND a.clip_db_id BETWEEN 0 AND 2147483647 \
          ORDER BY p.completed_at NULLS LAST, a.clip_db_id \
          LIMIT $1",
@@ -470,17 +512,17 @@ pub async fn iter_auto_approval_retry_candidates(
 /// wiederbelebt; der Weg zurueck ist die ausdrueckliche erneute Freigabe im
 /// Dashboard, die ueber `handle_decision` laeuft und dort auf
 /// `upload_already_exists` trifft.
-pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec<i32> {
-    sqlx::query_scalar!(
-        "SELECT a.clip_db_id AS \"clip_db_id!\" \
+pub async fn iter_approved_clips_pending_queue(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT a.clip_db_id \
            FROM social_media_clip_approval a \
           WHERE a.state = $1 \
             AND EXISTS ( \
                   SELECT 1 \
-                    FROM jsonb_array_elements_text( \
-                           CASE WHEN jsonb_typeof(a.approved_platforms) = 'array' \
-                                THEN a.approved_platforms \
-                                ELSE '[]'::jsonb END) AS p(platform) \
+                    FROM jsonb_array_elements_text(a.approved_platforms) AS p(platform) \
                    WHERE NOT EXISTS ( \
                          SELECT 1 FROM twitch_clips_upload_queue q \
                           WHERE q.clip_id = a.clip_db_id::bigint \
@@ -488,12 +530,11 @@ pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec
           ORDER BY a.letzter_nachreih_versuch ASC NULLS FIRST, \
                    a.decided_at ASC NULLS FIRST, a.clip_db_id ASC \
           LIMIT $2",
-        STATE_APPROVED,
-        limit.max(1)
     )
+    .bind(STATE_APPROVED)
+    .bind(limit.max(1))
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
 }
 
 /// Haelt fest, dass der Nachreih-Lauf diesen Clip gerade versucht hat.
@@ -509,23 +550,18 @@ pub async fn iter_approved_clips_pending_queue(pool: &PgPool, limit: i64) -> Vec
 /// Eine frische Freigabe aus dem Dashboard behaelt deshalb `NULL` und steht
 /// beim naechsten Lauf ganz vorn.
 ///
-/// Best effort: schlaegt das Schreiben fehl, verliert der Clip nur seinen
-/// Platz in der Rotation, es geht nichts kaputt.
-pub async fn vermerke_nachreih_versuch(pool: &PgPool, clip_db_id: i32) {
-    if let Err(error) = sqlx::query!(
+pub async fn vermerke_nachreih_versuch_checked(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
         "UPDATE social_media_clip_approval SET letzter_nachreih_versuch = now() \
          WHERE clip_db_id = $1",
         clip_db_id
     )
     .execute(pool)
-    .await
-    {
-        tracing::warn!(
-            %error,
-            clip_db_id,
-            "Social-Media-Approval: Nachreih-Versuch konnte nicht vermerkt werden"
-        );
-    }
+    .await?;
+    Ok(())
 }
 
 /// `true`, wenn der Clip für diese Plattform freigegeben ist.
@@ -558,15 +594,23 @@ pub async fn is_clip_approved_for(
     .bind(approval_clip_db_id)
     .fetch_optional(pool)
     .await?;
-    Ok(matches!(
-        row,
-        Some((approval_state, approved_platforms, Some(approved_fingerprint), preparation_state, Some(render_fingerprint), Some(render_path)))
-            if approval_state == STATE_APPROVED
-                && preparation_state == "preview_ready"
-                && approved_fingerprint == render_fingerprint
-                && decode_platforms(Some(&approved_platforms)).contains(&platform)
-                && prepared_file_is_ready(&render_path)
-    ))
+    let Some((
+        approval_state,
+        approved_platforms,
+        Some(approved_fingerprint),
+        preparation_state,
+        Some(render_fingerprint),
+        Some(render_path),
+    )) = row
+    else {
+        return Ok(false);
+    };
+    let approved_platforms = decode_platforms(&approved_platforms)?;
+    Ok(approval_state == STATE_APPROVED
+        && preparation_state == "preview_ready"
+        && approved_fingerprint == render_fingerprint
+        && approved_platforms.contains(&platform)
+        && prepared_file_is_ready(&render_path))
 }
 
 fn prepared_file_is_ready(path: &str) -> bool {
@@ -590,47 +634,46 @@ pub fn serialize_approval_record(record: &ApprovalRecord) -> Value {
 }
 
 /// Kanal, dem dieser Clip gehoert.
-async fn clip_streamer(pool: &PgPool, clip_db_id: i32) -> Option<String> {
-    sqlx::query_scalar!(
-        "SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1",
-        clip_db_id as i64
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
+async fn clip_streamer(pool: &PgPool, clip_db_id: i32) -> Result<String, ApprovalError> {
+    let streamer: Option<Option<String>> =
+        sqlx::query_scalar("SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1")
+            .bind(i64::from(clip_db_id))
+            .fetch_optional(pool)
+            .await?;
+    streamer
+        .flatten()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .ok_or(ApprovalError::ClipStreamerMissing(clip_db_id))
 }
 
 /// Plattformen, auf denen der Kanal dieses Clips automatisch postet.
-async fn auto_platforms(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
-    let Some(streamer) = clip_streamer(pool, clip_db_id).await else {
-        return Vec::new();
-    };
-    posting_plan::auto_post_platforms(pool, &streamer).await
+async fn auto_platforms(pool: &PgPool, clip_db_id: i32) -> Result<Vec<String>, ApprovalError> {
+    let streamer = clip_streamer(pool, clip_db_id).await?;
+    Ok(
+        posting_plan::load_platform_schedules_checked(pool, &streamer)
+            .await?
+            .into_iter()
+            .filter(|schedule| {
+                schedule.platform != "tiktok"
+                    && schedule.auto_post
+                    && !schedule.limits().blocks_everything()
+            })
+            .map(|schedule| schedule.platform)
+            .collect(),
+    )
 }
 
 /// Plant einen Clip ohne menschliche Sichtung ein, wenn der Freigabe-Modus des
 /// Kanals und der Kategorie-Schalter das hergeben.
 ///
 /// Wird am Ende der Enrichment-Pipeline aufgerufen. Im Modus `manual` passiert
-/// hier nichts, der Clip bleibt in `awaiting_approval` liegen.
+/// hier nichts, der Clip bleibt in `awaiting_approval` liegen. Ein DB-Fehler im
+/// Legacy-Aufruf bleibt durch die awaiting-Zeile und den Worker-Nachlauf
+/// dauerhaft retrybar; der Worker selbst nutzt ausschließlich die checked API.
 pub async fn auto_approve_if_allowed(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
-    if !posting_plan::auto_schedule_allowed(pool, i64::from(clip_db_id)).await {
-        return Vec::new();
-    }
-    let platforms = auto_platforms(pool, clip_db_id).await;
-    if platforms.is_empty() {
-        return Vec::new();
-    }
-    match handle_decision(pool, clip_db_id, DECISION_APPROVE, &platforms, Some("auto")).await {
-        Ok(record) => {
-            tracing::info!(
-                clip_db_id,
-                platforms = ?record.approved_platforms,
-                "Social-Media-Approval: Clip automatisch eingeplant"
-            );
-            record.approved_platforms
-        }
+    match auto_approve_if_allowed_checked(pool, clip_db_id).await {
+        Ok(platforms) => platforms,
         Err(error) => {
             tracing::warn!(
                 %error,
@@ -642,6 +685,49 @@ pub async fn auto_approve_if_allowed(pool: &PgPool, clip_db_id: i32) -> Vec<Stri
     }
 }
 
+pub async fn auto_approve_if_allowed_checked(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<Vec<String>, ApprovalError> {
+    let auto_schedule: Option<(Option<String>, bool)> = sqlx::query_as(
+        "SELECT c.streamer_login, COALESCE(s.auto_post, FALSE) \
+           FROM twitch_clips_social_media c \
+           LEFT JOIN social_media_category_settings s \
+             ON s.category_key = c.category_key AND s.streamer_login = c.streamer_login \
+          WHERE c.id = $1",
+    )
+    .bind(i64::from(clip_db_id))
+    .fetch_optional(pool)
+    .await?;
+    let Some((streamer, category_auto_post)) = auto_schedule else {
+        return Err(ApprovalError::ClipNotFound(clip_db_id));
+    };
+    let streamer = streamer
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .ok_or(ApprovalError::ClipStreamerMissing(clip_db_id))?;
+    if !category_auto_post
+        || !posting_plan::load_streamer_settings_checked(pool, &streamer)
+            .await?
+            .approval_mode
+            .schedules_without_review()
+    {
+        return Ok(Vec::new());
+    }
+    let platforms = auto_platforms(pool, clip_db_id).await?;
+    if platforms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let record =
+        handle_decision(pool, clip_db_id, DECISION_APPROVE, &platforms, Some("auto")).await?;
+    tracing::info!(
+        clip_db_id,
+        platforms = ?record.approved_platforms,
+        "Social-Media-Approval: Clip automatisch eingeplant"
+    );
+    Ok(record.approved_platforms)
+}
+
 /// Verarbeitet eine Approval-Entscheidung (Python `handle_decision`): setzt
 /// State + Plattformen + Clip-Status; bei approve werden die Uploads eingereiht.
 pub async fn handle_decision(
@@ -651,7 +737,7 @@ pub async fn handle_decision(
     approved_platforms: &[String],
     user_id: Option<&str>,
 ) -> Result<ApprovalRecord, ApprovalError> {
-    if !clip_exists(pool, clip_db_id).await {
+    if !clip_exists(pool, clip_db_id).await? {
         return Err(ApprovalError::ClipNotFound(clip_db_id));
     }
     let decision = normalize_decision(decision);
@@ -665,7 +751,7 @@ pub async fn handle_decision(
             // Kanals. Frueher wurden globale Flags immer dazugemischt, was die
             // Auswahl des Nutzers still ueberschrieb.
             let gewaehlt = if selected.is_empty() {
-                normalize_platforms(auto_platforms(pool, clip_db_id).await)
+                normalize_platforms(auto_platforms(pool, clip_db_id).await?)
             } else {
                 selected
             };
@@ -687,7 +773,7 @@ pub async fn handle_decision(
             // quittiert und wuerde trotzdem nie stattfinden: es entsteht keine
             // Queue-Zeile, und der Clip bliebe als "freigegeben" liegen, ohne
             // dass es irgendwo sichtbar waere.
-            let (eingeplant, pausiert) = teile_pausierte_ab(pool, clip_db_id, gewaehlt).await;
+            let (eingeplant, pausiert) = teile_pausierte_ab(pool, clip_db_id, gewaehlt).await?;
             if eingeplant.is_empty() {
                 return Err(ApprovalError::NurPausiertePlattformen(pausiert.join(", ")));
             }
@@ -774,7 +860,7 @@ pub async fn handle_decision(
         String::new()
     };
     let clip_locked: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
+        sqlx::query_scalar("SELECT id::bigint FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
             .bind(i64::from(clip_db_id))
             .fetch_optional(transaction.as_mut())
             .await?;
@@ -844,9 +930,11 @@ pub async fn handle_decision(
     transaction.commit().await?;
 
     if decision == DECISION_APPROVE {
-        ensure_queued_uploads(pool, clip_db_id).await;
+        ensure_queued_uploads(pool, clip_db_id).await?;
     }
-    let mut record = ensure_approval_row(pool, clip_db_id).await;
+    let mut record = fetch_approval_record(pool, clip_db_id)
+        .await?
+        .ok_or(ApprovalError::ClipNotFound(clip_db_id))?;
     record.nicht_eingeplant = nicht_eingeplant;
     Ok(record)
 }
@@ -860,15 +948,18 @@ async fn teile_pausierte_ab(
     pool: &PgPool,
     clip_db_id: i32,
     gewaehlt: Vec<String>,
-) -> (Vec<String>, Vec<String>) {
-    let Some(streamer) = clip_streamer(pool, clip_db_id).await else {
-        return (gewaehlt, Vec::new());
-    };
-    let pausierte = posting_plan::pausierte_plattformen(pool, &streamer).await;
+) -> Result<(Vec<String>, Vec<String>), ApprovalError> {
+    let streamer = clip_streamer(pool, clip_db_id).await?;
+    let pausierte: Vec<String> = posting_plan::load_platform_schedules_checked(pool, &streamer)
+        .await?
+        .into_iter()
+        .filter(|schedule| schedule.limits().blocks_everything())
+        .map(|schedule| schedule.platform)
+        .collect();
     let (pausiert, eingeplant): (Vec<String>, Vec<String>) = gewaehlt
         .into_iter()
         .partition(|platform| pausierte.contains(platform));
-    (eingeplant, pausiert)
+    Ok((eingeplant, pausiert))
 }
 
 /// Reiht die freigegebenen Plattformen eines Clips in die Upload-Queue
@@ -886,21 +977,30 @@ async fn teile_pausierte_ab(
 /// kann (Upload-Flag steht schon, Planungshorizont bleibt voll), sortiert der
 /// Nachreih-Lauf nach dem letzten Versuch und nicht nach der Entscheidung.
 /// Siehe [`iter_approved_clips_pending_queue`] und
-/// [`vermerke_nachreih_versuch`].
-pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
-    if !clip_exists(pool, clip_db_id).await {
-        return Vec::new();
+/// [`vermerke_nachreih_versuch_checked`].
+pub async fn ensure_queued_uploads(
+    pool: &PgPool,
+    clip_db_id: i32,
+) -> Result<Vec<(String, i64)>, ApprovalError> {
+    if !clip_exists(pool, clip_db_id).await? {
+        return Err(ApprovalError::ClipNotFound(clip_db_id));
     }
-    let record = ensure_approval_row(pool, clip_db_id).await;
+    let Some(record) = fetch_approval_record(pool, clip_db_id).await? else {
+        return Ok(Vec::new());
+    };
     if record.state != STATE_APPROVED {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let enrichment = get_enrichment(pool, clip_db_id).await;
-    let streamer = clip_streamer(pool, clip_db_id).await;
+    let enrichment = get_enrichment_checked(pool, clip_db_id).await?;
+    let streamer = clip_streamer(pool, clip_db_id).await?;
     let now = chrono::Utc::now();
     let mut queued = Vec::new();
     // Plattformen, die der Kanal nach der Freigabe auf null gestellt hat.
     let mut nachtraeglich_pausiert: Vec<String> = Vec::new();
+    // Alle Approval-/Preparation-Leseprüfungen passieren vor dem ersten
+    // Queue-Write. Ein Decode- oder DB-Fehler auf der zweiten Plattform darf
+    // nicht bereits einen Job für die erste Plattform zurücklassen.
+    let mut provider_eligible = Vec::new();
     for platform in &record.approved_platforms {
         // Alt-/manuell geschriebene TikTok-Freigaben dürfen auch beim
         // Nachreih-Worker keine Queue-Zeile erzeugen. Der finale Worker enthält
@@ -910,14 +1010,13 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
             continue;
         }
         match is_clip_approved_for(pool, i64::from(clip_db_id), platform).await {
-            Ok(true) => {}
+            Ok(true) => provider_eligible.push(platform.clone()),
             Ok(false) => continue,
-            Err(e) => {
-                tracing::warn!(clip_db_id, platform = %platform, %e, "approval check failed while queuing uploads");
-                continue;
-            }
+            Err(error) => return Err(error),
         }
-        if upload_already_exists(pool, clip_db_id, platform).await {
+    }
+    for platform in &provider_eligible {
+        if upload_already_exists(pool, clip_db_id, platform).await? {
             continue;
         }
         let (title, description, hashtags) =
@@ -960,41 +1059,39 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
         //
         // Ohne Kanal bleibt es beim alten Verhalten: dort gibt es keine Kadenz,
         // an die man sich halten koennte.
-        let scheduled_at = match &streamer {
-            Some(login) => match posting_plan::plan_next_slot(pool, login, platform, now).await {
-                Ok(posting_plan::SlotPlan::Termin(slot)) => Some(slot.to_rfc3339()),
-                Ok(posting_plan::SlotPlan::Ausgeschaltet) => {
-                    // Die Plattform wurde nach der Freigabe abgeschaltet.
-                    // `handle_decision` laesst sie gar nicht erst zu, hier
-                    // bleibt nur der nachtraegliche Fall. Die Freigabe gilt
-                    // dort nicht mehr, sie wird deshalb weiter unten aus
-                    // `approved_platforms` entfernt statt endlos wiederholt.
-                    nachtraeglich_pausiert.push(platform.clone());
-                    continue;
-                }
-                Ok(posting_plan::SlotPlan::HorizontVoll) => {
-                    tracing::warn!(
-                        clip_db_id,
-                        platform = %platform,
-                        streamer = %login,
-                        "Social-Media-Approval: kein freier Termin im Planungshorizont, \
-                         Freigabe bleibt offen und wird spaeter erneut versucht"
-                    );
-                    continue;
-                }
-                Err(error) => {
-                    tracing::error!(
-                        clip_db_id,
-                        platform = %platform,
-                        streamer = %login,
-                        code = "slot_plan_read_failed",
-                        %error,
-                        "Social-Media-Approval: Termin konnte nicht sicher geplant werden"
-                    );
-                    continue;
-                }
-            },
-            None => None,
+        let scheduled_at = match posting_plan::plan_next_slot(pool, &streamer, platform, now).await
+        {
+            Ok(posting_plan::SlotPlan::Termin(slot)) => Some(slot.to_rfc3339()),
+            Ok(posting_plan::SlotPlan::Ausgeschaltet) => {
+                // Die Plattform wurde nach der Freigabe abgeschaltet.
+                // `handle_decision` laesst sie gar nicht erst zu, hier
+                // bleibt nur der nachtraegliche Fall. Die Freigabe gilt
+                // dort nicht mehr, sie wird deshalb weiter unten aus
+                // `approved_platforms` entfernt statt endlos wiederholt.
+                nachtraeglich_pausiert.push(platform.clone());
+                continue;
+            }
+            Ok(posting_plan::SlotPlan::HorizontVoll) => {
+                tracing::warn!(
+                    clip_db_id,
+                    platform = %platform,
+                    streamer = %streamer,
+                    "Social-Media-Approval: kein freier Termin im Planungshorizont, \
+                     Freigabe bleibt offen und wird spaeter erneut versucht"
+                );
+                continue;
+            }
+            Err(error) => {
+                tracing::error!(
+                    clip_db_id,
+                    platform = %platform,
+                    streamer = %streamer,
+                    code = "slot_plan_read_failed",
+                    %error,
+                    "Social-Media-Approval: Termin konnte nicht sicher geplant werden"
+                );
+                return Err(error.into());
+            }
         };
         match queue_upload(
             pool,
@@ -1009,20 +1106,13 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
         .await
         {
             Ok(queue_id) => queued.push((platform.clone(), queue_id)),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    clip_db_id,
-                    platform = %platform,
-                    "Social-Media-Approval: Upload konnte nicht eingereiht werden"
-                );
-            }
+            Err(error) => return Err(error.into()),
         }
     }
     if !nachtraeglich_pausiert.is_empty() {
-        entferne_pausierte_freigaben(pool, clip_db_id, &record, &nachtraeglich_pausiert).await;
+        entferne_pausierte_freigaben(pool, clip_db_id, &record, &nachtraeglich_pausiert).await?;
     }
-    queued
+    Ok(queued)
 }
 
 /// Nimmt abgeschaltete Plattformen aus der Freigabe heraus.
@@ -1036,7 +1126,7 @@ async fn entferne_pausierte_freigaben(
     clip_db_id: i32,
     record: &ApprovalRecord,
     pausiert: &[String],
-) {
+) -> Result<(), ApprovalError> {
     let verbleibend: Vec<String> = record
         .approved_platforms
         .iter()
@@ -1049,25 +1139,18 @@ async fn entferne_pausierte_freigaben(
         verbleibend = ?verbleibend,
         "Social-Media-Approval: abgeschaltete Plattform aus der Freigabe entfernt"
     );
-    if let Err(error) = sqlx::query(
+    sqlx::query(
         "UPDATE social_media_clip_approval SET approved_platforms = $1::text::jsonb \
          WHERE clip_db_id = $2",
     )
     .bind(serde_json::to_string(&verbleibend).unwrap_or_else(|_| "[]".to_string()))
     .bind(clip_db_id)
     .execute(pool)
-    .await
-    {
-        tracing::warn!(
-            %error,
-            clip_db_id,
-            "Social-Media-Approval: Freigabe konnte nicht bereinigt werden"
-        );
-        return;
-    }
+    .await?;
     if verbleibend.is_empty() {
-        mark_clip_awaiting_approval(pool, clip_db_id).await;
+        mark_clip_awaiting_approval_checked(pool, clip_db_id).await?;
     }
+    Ok(())
 }
 
 /// Was ein Abbruch tatsaechlich erreicht hat.
@@ -1110,7 +1193,7 @@ pub async fn cancel_scheduled_uploads(
     .fetch_all(&mut *tx)
     .await?;
     let clip: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
+        sqlx::query_scalar("SELECT id::bigint FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
             .bind(i64::from(clip_db_id))
             .fetch_optional(&mut *tx)
             .await?;
@@ -1189,16 +1272,14 @@ pub async fn cancel_scheduled_uploads(
     })
 }
 
-async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> bool {
-    sqlx::query_scalar!(
+async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query_scalar!(
         "SELECT 1 AS \"exists!\" FROM twitch_clips_social_media WHERE id = $1",
         clip_db_id as i64
     )
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some()
+    .await?
+    .is_some())
 }
 
 /// `true`, wenn die Plattform schon hochgeladen ODER eine nicht-failed
@@ -1213,12 +1294,16 @@ async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> bool {
 /// zusaetzliche an; ein automatischer Nachreih-Lauf wuerde einer dauerhaft
 /// scheiternden Plattform deshalb bei jedem Fehlschlag eine weitere Zeile
 /// verpassen, endlos.
-async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -> bool {
+async fn upload_already_exists(
+    pool: &PgPool,
+    clip_db_id: i32,
+    platform: &str,
+) -> Result<bool, sqlx::Error> {
     let column = match platform {
         "youtube" => "uploaded_youtube",
         "tiktok" => "uploaded_tiktok",
         "instagram" => "uploaded_instagram",
-        _ => return true,
+        _ => return Ok(true),
     };
     let row: Option<(Option<bool>, bool)> = sqlx::query_as(&format!(
         "SELECT {column}, EXISTS(SELECT 1 FROM twitch_clips_upload_queue \
@@ -1229,13 +1314,11 @@ async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -
     .bind(platform)
     .bind(clip_db_id as i64)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    match row {
+    .await?;
+    Ok(match row {
         Some((uploaded, has_queue)) => uploaded.unwrap_or(false) || has_queue,
         None => true,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1245,6 +1328,14 @@ mod tests {
     use std::str::FromStr;
 
     use crate::test_support::test_dsn;
+
+    #[test]
+    fn unbekannte_approval_plattform_wird_nicht_still_entfernt() {
+        assert!(matches!(
+            decode_platforms("[\"youtube\",\"mastodon\"]"),
+            Err(sqlx::Error::Decode(_))
+        ));
+    }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = test_dsn()?;
@@ -1271,11 +1362,13 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', streamer_login TEXT DEFAULT 'nani', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ, approved_render_fingerprint TEXT)",
             "CREATE TABLE social_media_clip_preparation (clip_db_id BIGINT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'pending', render_fingerprint TEXT, render_path TEXT)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ, provider_started_at TIMESTAMPTZ, provider_lease_token TEXT, provider_external_id TEXT, provider_accepted_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', release_mode TEXT NOT NULL DEFAULT 'prepare_only', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, platform))",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -1348,7 +1441,7 @@ mod tests {
             .unwrap());
 
         // ensure_queued_uploads erneut → idempotent (kein zweiter Job).
-        ensure_queued_uploads(&pool, clip).await;
+        ensure_queued_uploads(&pool, clip).await.unwrap();
         let n: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
                 .bind(clip)
@@ -1362,6 +1455,7 @@ mod tests {
         // nicht mehr ins Batch-Fenster.
         assert!(iter_approved_clips_pending_queue(&pool, 10)
             .await
+            .unwrap()
             .is_empty());
 
         // Ohne Queue-Zeile taucht dieselbe Freigabe wieder auf.
@@ -1371,9 +1465,103 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            iter_approved_clips_pending_queue(&pool, 10).await,
+            iter_approved_clips_pending_queue(&pool, 10).await.unwrap(),
             vec![clip]
         );
+    }
+
+    #[tokio::test]
+    async fn queue_aufbau_schreibt_nichts_bei_enrichment_decodefehler() {
+        let Some(pool) = make_pool("t_sm_approval_enrichment_decode").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval \
+             (clip_db_id, state, approved_platforms, approved_render_fingerprint) \
+             VALUES ($1, 'approved', '[\"youtube\"]'::jsonb, 'render-v1')",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment \
+             (clip_db_id, status, hashtags_youtube) \
+             VALUES ($1, 'done', '[1]'::jsonb)",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            ensure_queued_uploads(&pool, clip).await,
+            Err(ApprovalError::Db(sqlx::Error::Decode(_)))
+        ));
+        let queued: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(clip)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(queued, 0);
+    }
+
+    #[tokio::test]
+    async fn queue_aufbau_schreibt_nichts_bei_fehlendem_streamer_oder_defektem_approval() {
+        let Some(pool) = make_pool("t_sm_approval_strict_reads").await else {
+            return;
+        };
+        let missing_streamer = seed_clip(&pool).await;
+        sqlx::query("UPDATE twitch_clips_social_media SET streamer_login = NULL WHERE id = $1")
+            .bind(missing_streamer)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval \
+             (clip_db_id, state, approved_platforms, approved_render_fingerprint) \
+             VALUES ($1, 'approved', '[\"youtube\"]'::jsonb, 'render-v1')",
+        )
+        .bind(missing_streamer)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            ensure_queued_uploads(&pool, missing_streamer).await,
+            Err(ApprovalError::ClipStreamerMissing(id)) if id == missing_streamer
+        ));
+
+        let corrupt_approval = seed_clip(&pool).await;
+        sqlx::query(
+            "INSERT INTO social_media_clip_approval \
+             (clip_db_id, state, approved_platforms, approved_render_fingerprint) \
+             VALUES ($1, 'approved', '{}'::jsonb, 'render-v1')",
+        )
+        .bind(corrupt_approval)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            ensure_queued_uploads(&pool, corrupt_approval).await,
+            Err(ApprovalError::Db(sqlx::Error::Decode(_)))
+        ));
+        assert!(
+            iter_approved_clips_pending_queue(&pool, 10).await.is_err(),
+            "eine defekte Approval-Zeile darf nicht still aus dem Worker-Fenster fallen"
+        );
+
+        let queued: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue \
+             WHERE clip_id IN ($1, $2)",
+        )
+        .bind(missing_streamer)
+        .bind(corrupt_approval)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(queued, 0);
     }
 
     #[tokio::test]
@@ -1424,7 +1612,10 @@ mod tests {
             .unwrap();
         // mark_awaiting setzt zurück.
         mark_clip_awaiting_approval(&pool, clip).await;
-        let rec = get_approval_record(&pool, clip).await.unwrap();
+        let rec = get_approval_record_checked(&pool, clip)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(rec.state, "awaiting_approval");
         assert!(rec.approved_platforms.is_empty());
         let cstatus: String =
@@ -1437,6 +1628,45 @@ mod tests {
         // serialize.
         let v = serialize_approval_record(&rec);
         assert_eq!(v["state"], "awaiting_approval");
+    }
+
+    #[tokio::test]
+    async fn mark_awaiting_rollt_approval_bei_clip_write_fehler_zurueck() {
+        let Some(pool) = make_pool("t_sm_approval_mark_atomic_rollback").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        handle_decision(&pool, clip, "approve", &["youtube".to_string()], None)
+            .await
+            .unwrap();
+        sqlx::query(
+            "ALTER TABLE twitch_clips_social_media \
+             ADD CONSTRAINT reject_awaiting_status CHECK (status <> 'awaiting_approval')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            mark_clip_awaiting_approval_checked(&pool, clip).await,
+            Err(ApprovalError::Db(_))
+        ));
+        let approval = get_approval_record_checked(&pool, clip)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(approval.state, STATE_APPROVED);
+        assert_eq!(approval.approved_platforms, vec!["youtube"]);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT status FROM twitch_clips_social_media WHERE id = $1",
+            )
+            .bind(clip)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            STATE_APPROVED
+        );
     }
 
     #[tokio::test]
@@ -1475,7 +1705,10 @@ mod tests {
                 .unwrap();
         assert_eq!(rest, 0, "Queue muss leer sein");
 
-        let rec = get_approval_record(&pool, clip).await.unwrap();
+        let rec = get_approval_record_checked(&pool, clip)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(rec.state, STATE_AWAITING);
         assert!(rec.approved_platforms.is_empty());
         assert!(rec.approver_user_id.is_none());
@@ -1555,13 +1788,12 @@ mod tests {
     /// eine eingecheckte Datei prueft.
     async fn zeitplan_tabellen(pool: &PgPool) {
         for ddl in [
-            "ALTER TABLE twitch_clips_social_media ADD COLUMN streamer_login TEXT",
-            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, \
+            "CREATE TABLE IF NOT EXISTS social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, \
              approval_mode TEXT NOT NULL DEFAULT 'manual', \
              timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', \
              release_mode TEXT NOT NULL DEFAULT 'prepare_only', \
              updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
-            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, \
+            "CREATE TABLE IF NOT EXISTS social_media_platform_schedule (streamer_login TEXT NOT NULL, \
              platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, \
              posts_per_week INTEGER NOT NULL DEFAULT 4, \
              max_posts_per_day INTEGER NOT NULL DEFAULT 1, \
@@ -1669,7 +1901,7 @@ mod tests {
             "war: {fehler:?}"
         );
 
-        let record = ensure_approval_row(&pool, clip).await;
+        let record = ensure_approval_row_checked(&pool, clip).await.unwrap();
         assert_eq!(
             record.state, STATE_AWAITING,
             "eine abgelehnte Entscheidung darf den Clip nicht auf freigegeben setzen"
@@ -1760,9 +1992,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(ensure_queued_uploads(&pool, clip).await.is_empty());
+        assert!(ensure_queued_uploads(&pool, clip).await.unwrap().is_empty());
 
-        let record = ensure_approval_row(&pool, clip).await;
+        let record = ensure_approval_row_checked(&pool, clip).await.unwrap();
         assert!(record.approved_platforms.is_empty());
         assert_eq!(
             record.state, STATE_AWAITING,
@@ -1778,6 +2010,7 @@ mod tests {
         // Und damit ist der Clip auch aus dem Batch-Fenster raus.
         assert!(iter_approved_clips_pending_queue(&pool, 10)
             .await
+            .unwrap()
             .is_empty());
     }
 
@@ -1841,6 +2074,7 @@ mod tests {
         assert!(
             iter_approved_clips_pending_queue(&pool, 10)
                 .await
+                .unwrap()
                 .is_empty(),
             "eine gescheiterte Zeile gilt als eingereiht, der Automatismus legt keine zweite an"
         );
@@ -1848,7 +2082,9 @@ mod tests {
         // Gegenprobe: der zweite Guard sieht dieselbe Zeile anders. Genau
         // dieser Unterschied traegt die ausdrueckliche erneute Freigabe.
         assert!(
-            !upload_already_exists(&pool, gescheitert, "youtube").await,
+            !upload_already_exists(&pool, gescheitert, "youtube")
+                .await
+                .unwrap(),
             "eine erneute Freigabe darf den gescheiterten Upload neu einreihen"
         );
     }
@@ -1876,7 +2112,7 @@ mod tests {
         seed_queue_zeile(&pool, voll, "tiktok").await;
         seed_queue_zeile(&pool, voll, "youtube").await;
 
-        let batch = iter_approved_clips_pending_queue(&pool, 10).await;
+        let batch = iter_approved_clips_pending_queue(&pool, 10).await.unwrap();
         assert_eq!(
             batch,
             vec![halb],
@@ -1902,7 +2138,7 @@ mod tests {
             seed_freigabe(&pool, &["youtube"], minuten).await;
         }
 
-        let batch = iter_approved_clips_pending_queue(&pool, 10).await;
+        let batch = iter_approved_clips_pending_queue(&pool, 10).await.unwrap();
         assert_eq!(batch.len(), 10);
         assert_eq!(
             batch.first().copied(),
@@ -1960,7 +2196,7 @@ mod tests {
             .unwrap();
         }
 
-        let batch = iter_approved_clips_pending_queue(&pool, 10).await;
+        let batch = iter_approved_clips_pending_queue(&pool, 10).await.unwrap();
         assert_eq!(
             batch,
             vec![ohne_termin],
@@ -2107,6 +2343,7 @@ mod tests {
         assert!(
             iter_approved_clips_pending_queue(&pool, 10)
                 .await
+                .unwrap()
                 .contains(&clip),
             "die offene youtube-Freigabe muss den Clip in der Nachreih-Liste halten"
         );

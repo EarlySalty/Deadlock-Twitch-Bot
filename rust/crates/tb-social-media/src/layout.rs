@@ -430,9 +430,34 @@ fn decode_layout_json(raw: &str) -> Option<Value> {
 
 /// Default-Layout eines Streamers (`None` wenn keins gesetzt).
 pub async fn get_streamer_layout(pool: &PgPool, login: &str) -> Option<StreamerLayout> {
+    match get_streamer_layout_checked(pool, login).await {
+        Ok(layout) => layout,
+        Err(error) => {
+            tracing::warn!(
+                streamer_login = login,
+                error_kind = match error {
+                    EffectiveLayoutError::InvalidStreamerLayout => "invalid_streamer_layout",
+                    EffectiveLayoutError::Db(_) => "database_failed",
+                    EffectiveLayoutError::ClipNotFound => "clip_not_found",
+                    EffectiveLayoutError::InvalidClipLayout => "invalid_clip_layout",
+                },
+                "Kanal-Layout konnte nicht geladen werden"
+            );
+            None
+        }
+    }
+}
+
+/// Fehlertransparenter Lesepfad für Dashboard und andere entscheidende Pfade.
+/// Nur eine wirklich fehlende Zeile wird zu `Ok(None)`; DB- und Decodefehler
+/// bleiben sichtbar.
+pub async fn get_streamer_layout_checked(
+    pool: &PgPool,
+    login: &str,
+) -> Result<Option<StreamerLayout>, EffectiveLayoutError> {
     let normalized = login.trim().to_lowercase();
     if normalized.is_empty() {
-        return None;
+        return Ok(None);
     }
     let row = sqlx::query!(
         "SELECT layout_json::text AS \"layout_json!\", cam_enabled AS \"cam_enabled!\", mode AS \"mode!\" FROM social_media_streamer_layout \
@@ -440,15 +465,18 @@ pub async fn get_streamer_layout(pool: &PgPool, login: &str) -> Option<StreamerL
         &normalized
     )
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    let row = row?;
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
     let layout_json = row.layout_json;
     let cam_enabled = row.cam_enabled;
     let mode = row.mode;
-    let payload = decode_layout_json(&layout_json)?;
-    StreamerLayout::from_stored_value(&payload, Some(cam_enabled), Some(&mode)).ok()
+    let payload =
+        decode_layout_json(&layout_json).ok_or(EffectiveLayoutError::InvalidStreamerLayout)?;
+    StreamerLayout::from_stored_value(&payload, Some(cam_enabled), Some(&mode))
+        .map(Some)
+        .map_err(|_| EffectiveLayoutError::InvalidStreamerLayout)
 }
 
 /// Schreibt/aktualisiert das Default-Layout eines Streamers.

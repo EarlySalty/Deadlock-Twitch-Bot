@@ -28,17 +28,15 @@ impl ClipFetchTask {
         }
     }
 
-    /// Startet den Task bedingungslos (1:1 zu Pythons always-on-ClipFetcher).
-    pub fn start(self) {
+    /// Läuft bedingungslos (1:1 zu Pythons always-on-ClipFetcher). Das Spawning
+    /// gehört dem zentralen Bot-Supervisor, damit ein Exit den Dienst sichtbar
+    /// neu startet statt diesen Pipeline-Eingang still zu verlieren.
+    pub async fn run(self) {
         tracing::info!(
             "clip_fetch: Task startet (Intervall={}s, InitialDelay={}s)",
             self.interval.as_secs(),
             self.initial_delay.as_secs(),
         );
-        spawn_logged("clip_fetch", self.run());
-    }
-
-    async fn run(self) {
         sleep(self.initial_delay).await;
 
         loop {
@@ -46,16 +44,4 @@ impl ClipFetchTask {
             sleep(self.interval).await;
         }
     }
-}
-
-fn spawn_logged(
-    task: &'static str,
-    future: impl std::future::Future<Output = ()> + Send + 'static,
-) {
-    let handle = tokio::spawn(future);
-    tokio::spawn(async move {
-        if let Err(error) = handle.await {
-            tracing::error!(task, %error, "Social-Media-Clip-Task fehlerhaft beendet");
-        }
-    });
 }

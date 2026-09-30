@@ -15,7 +15,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::analytics::{upsert_clip_analytics, ClipAnalyticsUpsert, BUCKETS, PLATFORMS};
-use crate::credentials::{CredentialManager, SocialMediaCredentials};
+use crate::credentials::{CredentialError, CredentialManager, SocialMediaCredentials};
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
 use crate::uploaders::PlatformUploader;
@@ -71,7 +71,10 @@ fn resolve_insights_client(
 /// Sammelt fällige (Clip × Plattform × Bucket)-Ziele. `not_due` (next_pull_at in
 /// der Zukunft) wird per SQL-Zeitvergleich bestimmt — robuster als Pythons
 /// String-Vergleich, gleiche Absicht.
-pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarget> {
+pub async fn collect_due_targets(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<AnalyticsTarget>, sqlx::Error> {
     let limit = limit.max(1);
     let clip_limit = (limit * 4).max(limit);
     let clip_rows = sqlx::query!(
@@ -89,8 +92,7 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
         clip_limit
     )
     .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    .await?;
 
     let analytics_rows = sqlx::query!(
         "SELECT clip_id AS \"clip_id!\", platform AS \"platform!\", COALESCE(bucket, '') AS \"bucket!\", \
@@ -98,8 +100,7 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
            FROM twitch_clips_social_analytics",
     )
     .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    .await?;
     let mut not_due: HashMap<(i64, String, String), bool> = HashMap::new();
     for r in &analytics_rows {
         let key = (r.clip_id, r.platform.clone(), r.bucket.clone());
@@ -143,12 +144,12 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
                     bucket: bucket.to_string(),
                 });
                 if due.len() as i64 >= limit {
-                    return due;
+                    return Ok(due);
                 }
             }
         }
     }
-    due
+    Ok(due)
 }
 
 /// Insights-Worker.
@@ -173,11 +174,16 @@ impl InsightsWorker {
         &self,
         platform: &str,
         streamer_login: &str,
-    ) -> Option<Arc<dyn PlatformUploader>> {
-        let creds = self
+    ) -> Result<Option<Arc<dyn PlatformUploader>>, CredentialError> {
+        let creds = match self
             .credentials
-            .get_credentials(platform, Some(streamer_login))
-            .await?;
+            .get_credentials_checked(platform, Some(streamer_login))
+            .await
+        {
+            Ok(credentials) => credentials,
+            Err(CredentialError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
         // Kein Rueckfall auf die Sammelverbindung. Der VOD-Worker sperrt ihn
         // bewusst, hier fehlte er: ein privates oder ungelistetes Partner-Video
         // wurde mit dem Betreiber-Token abgefragt, lieferte eine leere Trefferliste
@@ -188,14 +194,18 @@ impl InsightsWorker {
                 streamer = %streamer_login,
                 "Insights uebersprungen: keine eigene Plattform-Verbindung"
             );
-            return None;
+            return Ok(None);
         }
-        resolve_insights_client(platform, &creds)
+        Ok(resolve_insights_client(platform, &creds))
     }
 
-    async fn schedule_retry(&self, target: &AnalyticsTarget, provider: &str) {
+    async fn schedule_retry(
+        &self,
+        target: &AnalyticsTarget,
+        provider: &str,
+    ) -> Result<(), sqlx::Error> {
         let next_pull = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-        let _ = crate::analytics::schedule_clip_analytics_retry(
+        crate::analytics::schedule_clip_analytics_retry(
             &self.pool,
             target.clip_db_id,
             &target.platform,
@@ -203,12 +213,24 @@ impl InsightsWorker {
             Some(provider),
             &next_pull,
         )
-        .await;
+        .await
     }
 
     /// Ein Durchlauf (Python `_process_due_targets`).
     pub async fn run_once(&self) {
-        let targets = collect_due_targets(&self.pool, self.batch_size).await;
+        let targets = match collect_due_targets(&self.pool, self.batch_size).await {
+            Ok(targets) => targets,
+            Err(error) => {
+                tracing::error!(
+                    code = "insights_targets_load_failed",
+                    database_code = ?error
+                        .as_database_error()
+                        .and_then(|database| database.code()),
+                    "Fällige Social-Media-Statistiken konnten nicht geladen werden"
+                );
+                return;
+            }
+        };
         if targets.is_empty() {
             return;
         }
@@ -217,21 +239,71 @@ impl InsightsWorker {
         for target in targets {
             let key = (target.platform.clone(), target.streamer_login.clone());
             let client = match client_cache.get(&key) {
-                Some(c) => c.clone(),
+                Some(c) => Ok(c.clone()),
                 None => {
-                    let c = self
+                    let resolved = self
                         .resolve_client(&target.platform, &target.streamer_login)
                         .await;
-                    client_cache.insert(key, c.clone());
-                    c
+                    if let Ok(client) = &resolved {
+                        client_cache.insert(key, client.clone());
+                    }
+                    resolved
+                }
+            };
+            let client = match client {
+                Ok(client) => client,
+                Err(error) => {
+                    let error_kind = match error {
+                        CredentialError::Db(_) => "database",
+                        CredentialError::Decrypt => "decrypt",
+                        CredentialError::NotFound => "not_found",
+                    };
+                    tracing::error!(
+                        clip_db_id = target.clip_db_id,
+                        platform = %target.platform,
+                        streamer = %target.streamer_login,
+                        code = "insights_credentials_load_failed",
+                        error_kind,
+                        "Credentials für Social-Media-Statistiken konnten nicht sicher gelesen werden"
+                    );
+                    if let Err(retry_error) = self
+                        .schedule_retry(
+                            &target,
+                            &format!("error:{}:credentials_{error_kind}", target.platform),
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            clip_db_id = target.clip_db_id,
+                            platform = %target.platform,
+                            code = "insights_retry_schedule_failed",
+                            database_code = ?retry_error
+                                .as_database_error()
+                                .and_then(|database| database.code()),
+                            "Wiederholung für Social-Media-Statistiken konnte nicht gespeichert werden"
+                        );
+                    }
+                    continue;
                 }
             };
             let Some(client) = client else {
-                self.schedule_retry(
-                    &target,
-                    &format!("error:{}:missing_client", target.platform),
-                )
-                .await;
+                if let Err(error) = self
+                    .schedule_retry(
+                        &target,
+                        &format!("error:{}:missing_client", target.platform),
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        clip_db_id = target.clip_db_id,
+                        platform = %target.platform,
+                        code = "insights_retry_schedule_failed",
+                        database_code = ?error
+                            .as_database_error()
+                            .and_then(|database| database.code()),
+                        "Wiederholung für Social-Media-Statistiken konnte nicht gespeichert werden"
+                    );
+                }
                 continue;
             };
             let metrics = match client
@@ -240,8 +312,20 @@ impl InsightsWorker {
             {
                 Ok(m) => m,
                 Err(_) => {
-                    self.schedule_retry(&target, &format!("error:{}:api", target.platform))
-                        .await;
+                    if let Err(error) = self
+                        .schedule_retry(&target, &format!("error:{}:api", target.platform))
+                        .await
+                    {
+                        tracing::error!(
+                            clip_db_id = target.clip_db_id,
+                            platform = %target.platform,
+                            code = "insights_retry_schedule_failed",
+                            database_code = ?error
+                                .as_database_error()
+                                .and_then(|database| database.code()),
+                            "Wiederholung für Social-Media-Statistiken konnte nicht gespeichert werden"
+                        );
+                    }
                     continue;
                 }
             };
@@ -251,7 +335,7 @@ impl InsightsWorker {
                 metrics.provider.trim().to_string()
             };
             let next_pull = (Utc::now() + success_delay(&target.bucket)).to_rfc3339();
-            let _ = upsert_clip_analytics(
+            if let Err(error) = upsert_clip_analytics(
                 &self.pool,
                 &ClipAnalyticsUpsert {
                     clip_db_id: target.clip_db_id,
@@ -269,7 +353,18 @@ impl InsightsWorker {
                     next_pull_at: Some(next_pull),
                 },
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    clip_db_id = target.clip_db_id,
+                    platform = %target.platform,
+                    code = "insights_store_failed",
+                    database_code = ?error
+                        .as_database_error()
+                        .and_then(|database| database.code()),
+                    "Social-Media-Statistiken konnten nicht gespeichert werden"
+                );
+            }
         }
     }
 
@@ -338,7 +433,7 @@ mod tests {
         // D: verworfen → kein Kandidat.
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id, discarded_at) VALUES ('d', 'https://clips.test/d', 'nani', TRUE, 'tt4', NOW())").execute(&pool).await.unwrap();
 
-        let targets = collect_due_targets(&pool, 100).await;
+        let targets = collect_due_targets(&pool, 100).await.unwrap();
         let keys: Vec<(i64, String)> = targets
             .iter()
             .map(|t| (t.clip_db_id, t.bucket.clone()))
@@ -359,6 +454,21 @@ mod tests {
             .all(|t| t.platform == "tiktok" && t.platform_video_id.starts_with("tt")));
 
         // Limit greift.
-        assert_eq!(collect_due_targets(&pool, 2).await.len(), 2);
+        assert_eq!(collect_due_targets(&pool, 2).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn due_targets_maskiert_datenbankfehler_nicht_als_leere_liste() {
+        let Some(pool) = make_pool("t_sm_insights_db_error").await else {
+            return;
+        };
+        sqlx::query("DROP TABLE twitch_clips_social_analytics")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        collect_due_targets(&pool, 18)
+            .await
+            .expect_err("ein defekter Lesepfad darf nicht wie 'nichts fällig' aussehen");
     }
 }

@@ -26,6 +26,8 @@ pub const CATEGORY_DEADLOCK: &str = "deadlock";
 /// Unter dieser Reichweite warnt das Dashboard vor leerem Clip-Pool.
 pub const VORRAT_WARNUNG_TAGE: i64 = 7;
 
+const MAX_POST_TIMES: usize = 12;
+
 /// Freigabe-Modus eines Streamers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalMode {
@@ -169,6 +171,37 @@ impl PlatformSchedule {
             timezone: timezone.to_string(),
         }
     }
+}
+
+fn decode_stored_post_times(
+    platform: &str,
+    raw: Option<&str>,
+) -> Result<Vec<String>, sqlx::Error> {
+    let invalid = |reason: &str| {
+        sqlx::Error::Decode(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("ungültiger gespeicherter Zeitplan für {platform}: {reason}"),
+        )))
+    };
+    let raw = raw.ok_or_else(|| invalid("post_times fehlt"))?;
+    let times: Vec<String> =
+        serde_json::from_str(raw).map_err(|_| invalid("post_times ist kein String-Array"))?;
+    if times.is_empty() || times.len() > MAX_POST_TIMES {
+        return Err(invalid("post_times hat eine ungültige Anzahl"));
+    }
+    for time in &times {
+        let bytes = time.as_bytes();
+        let exact_hh_mm = bytes.len() == 5
+            && bytes[0].is_ascii_digit()
+            && bytes[1].is_ascii_digit()
+            && bytes[2] == b':'
+            && bytes[3].is_ascii_digit()
+            && bytes[4].is_ascii_digit();
+        if !exact_hh_mm || chrono::NaiveTime::parse_from_str(time, "%H:%M").is_err() {
+            return Err(invalid("post_times enthält keine gültige HH:MM-Uhrzeit"));
+        }
+    }
+    Ok(times)
 }
 
 /// Eine Spielkategorie samt Schalter des Streamers.
@@ -427,22 +460,18 @@ async fn replan_pending_for_live(
     let schedules: Vec<PlatformSchedule> = PLATFORMS
         .iter()
         .map(|platform| {
-            rows.iter()
-                .find(|row| row.0 == *platform)
-                .map(|row| PlatformSchedule {
+            match rows.iter().find(|row| row.0 == *platform) {
+                Some(row) => Ok(PlatformSchedule {
                     platform: row.0.clone(),
                     auto_post: row.1 && row.0 != "tiktok",
                     posts_per_week: row.2,
                     max_posts_per_day: row.3,
-                    post_times: row
-                        .4
-                        .as_deref()
-                        .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
-                        .unwrap_or_else(|| PlatformSchedule::default_for(platform).post_times),
-                })
-                .unwrap_or_else(|| PlatformSchedule::default_for(platform))
+                    post_times: decode_stored_post_times(platform, row.4.as_deref())?,
+                }),
+                None => Ok(PlatformSchedule::default_for(platform)),
+            }
         })
-        .collect();
+        .collect::<Result<_, sqlx::Error>>()?;
     let pending_ids: Vec<i64> = pending.iter().map(|(id, _)| *id).collect();
     let existing: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT q.platform, q.scheduled_at FROM twitch_clips_upload_queue q \
@@ -570,25 +599,21 @@ pub async fn load_platform_schedules_checked(
     .fetch_all(pool)
     .await?;
 
-    Ok(PLATFORMS
+    PLATFORMS
         .iter()
         .map(|platform| {
-            rows.iter()
-                .find(|row| row.platform == *platform)
-                .map(|row| PlatformSchedule {
+            match rows.iter().find(|row| row.platform == *platform) {
+                Some(row) => Ok(PlatformSchedule {
                     platform: row.platform.clone(),
                     auto_post: row.auto_post,
                     posts_per_week: row.posts_per_week,
                     max_posts_per_day: row.max_posts_per_day,
-                    post_times: row
-                        .post_times
-                        .as_deref()
-                        .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
-                        .unwrap_or_else(|| PlatformSchedule::default_for(platform).post_times),
-                })
-                .unwrap_or_else(|| PlatformSchedule::default_for(platform))
+                    post_times: decode_stored_post_times(platform, row.post_times.as_deref())?,
+                }),
+                None => Ok(PlatformSchedule::default_for(platform)),
+            }
         })
-        .collect())
+        .collect::<Result<_, sqlx::Error>>()
 }
 
 /// Schreibt die Kadenz einer Plattform.
@@ -1183,6 +1208,68 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(mode, "live");
+    }
+
+    #[tokio::test]
+    async fn live_aktivierung_rollt_bei_kaputtem_zeitplan_zurueck() {
+        let Some(pool) = make_pool("t_sm_posting_plan_invalid_schedule").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO social_media_streamer_settings \
+             (streamer_login, approval_mode, timezone, release_mode) \
+             VALUES ('nani', 'manual', 'Europe/Berlin', 'prepare_only')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_platform_schedule \
+             (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times) \
+             VALUES ('nani', 'youtube', TRUE, 2, 1, '{\"kein_array\":true}'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let clip: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login) \
+             VALUES ('clip-invalid-plan', 'nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) \
+             VALUES ($1, 'youtube', 'pending')",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = save_streamer_settings(
+            &pool,
+            "nani",
+            &StreamerSettings {
+                approval_mode: ApprovalMode::Manual,
+                timezone: "Europe/Berlin".into(),
+                release_mode: ReleaseMode::Live,
+            },
+            Some("test"),
+        )
+        .await
+        .expect_err("ein ungültiger gespeicherter Zeitplan darf nicht live gehen");
+        assert!(matches!(
+            error,
+            StreamerSettingsSaveError::Db(sqlx::Error::Decode(_))
+        ));
+        let mode: String = sqlx::query_scalar(
+            "SELECT release_mode FROM social_media_streamer_settings WHERE streamer_login = 'nani'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(mode, "prepare_only");
     }
 
     async fn wait_for_advisory_waiters(pool: &PgPool, minimum: i64) {

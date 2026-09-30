@@ -24,7 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
-use tb_social_media::credentials::CredentialManager;
+use tb_social_media::credentials::{CredentialError, CredentialManager};
 use tb_social_media::upload_worker::youtube_uploader;
 use tb_social_media::uploaders::youtube::{
     ChunkOutcome, ResumeStand, VideoZustand, YouTubeUploader,
@@ -117,12 +117,15 @@ impl TeilHochlader for YouTubeUploader {
 /// Verbindung, es wird nur lokal archiviert.
 #[async_trait]
 pub trait HochladerQuelle: Send + Sync {
-    async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>>;
+    async fn fuer(
+        &self,
+        streamer_login: &str,
+    ) -> Result<Option<Arc<dyn TeilHochlader>>, CredentialError>;
 }
 
 /// Betriebsfassung: der Zugang kommt aus den Credentials **dieses** Streamers.
 ///
-/// Der globale Rueckfall von [`CredentialManager::get_credentials`] wird
+/// Der globale Rückfall von [`CredentialManager::get_credentials_checked`] wird
 /// bewusst verworfen: er wuerde das VOD eines Partners auf den YouTube-Kanal
 /// des Betreibers schieben.
 pub struct StreamerZugang {
@@ -131,11 +134,19 @@ pub struct StreamerZugang {
 
 #[async_trait]
 impl HochladerQuelle for StreamerZugang {
-    async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>> {
-        let creds = self
+    async fn fuer(
+        &self,
+        streamer_login: &str,
+    ) -> Result<Option<Arc<dyn TeilHochlader>>, CredentialError> {
+        let creds = match self
             .credentials
-            .get_credentials("youtube", Some(streamer_login))
-            .await?;
+            .get_credentials_checked("youtube", Some(streamer_login))
+            .await
+        {
+            Ok(credentials) => credentials,
+            Err(CredentialError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
         let gehoert_dem_streamer = creds
             .streamer_login
             .as_deref()
@@ -145,12 +156,12 @@ impl HochladerQuelle for StreamerZugang {
                 kanal = %streamer_login,
                 "Nur ein globaler YouTube-Zugang vorhanden, der gilt hier nicht"
             );
-            return None;
+            return Ok(None);
         }
         if creds.access_token.is_empty() {
-            return None;
+            return Ok(None);
         }
-        Some(Arc::new(youtube_uploader(&creds)))
+        Ok(Some(Arc::new(youtube_uploader(&creds))))
     }
 }
 
@@ -303,14 +314,32 @@ impl VodArchiveWorker {
         // Ohne YouTube-Zugang wird nur geladen. Das ist der wichtigere Teil.
         let mut uploader: HashMap<String, Option<Arc<dyn TeilHochlader>>> = HashMap::new();
         for einstellung in streamer {
-            let zugang = self.zugang.fuer(&einstellung.streamer_login).await;
-            if zugang.is_none() {
-                tracing::info!(
-                    kanal = %einstellung.streamer_login,
-                    "Kein eigener YouTube-Zugang hinterlegt, es wird nur lokal archiviert. \
-                     Der Upload startet, sobald die Verbindung im Dashboard steht."
-                );
-            }
+            let zugang = match self.zugang.fuer(&einstellung.streamer_login).await {
+                Ok(zugang) => {
+                    if zugang.is_none() {
+                        tracing::info!(
+                            kanal = %einstellung.streamer_login,
+                            "Kein eigener YouTube-Zugang hinterlegt, es wird nur lokal archiviert. \
+                             Der Upload startet, sobald die Verbindung im Dashboard steht."
+                        );
+                    }
+                    zugang
+                }
+                Err(error) => {
+                    let error_kind = match error {
+                        CredentialError::Db(_) => "database",
+                        CredentialError::Decrypt => "decrypt",
+                        CredentialError::NotFound => "not_found",
+                    };
+                    tracing::error!(
+                        kanal = %einstellung.streamer_login,
+                        code = "vod_archive_credentials_load_failed",
+                        error_kind,
+                        "YouTube-Zugang konnte nicht sicher gelesen werden; lokales Archiv läuft weiter und der Upload wird erneut versucht"
+                    );
+                    None
+                }
+            };
             uploader.insert(einstellung.streamer_login.clone(), zugang);
         }
 
@@ -1099,8 +1128,23 @@ mod tests {
 
     #[async_trait]
     impl HochladerQuelle for FesteQuelle {
-        async fn fuer(&self, _streamer_login: &str) -> Option<Arc<dyn TeilHochlader>> {
-            Some(self.0.clone())
+        async fn fuer(
+            &self,
+            _streamer_login: &str,
+        ) -> Result<Option<Arc<dyn TeilHochlader>>, CredentialError> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    struct FehlerQuelle;
+
+    #[async_trait]
+    impl HochladerQuelle for FehlerQuelle {
+        async fn fuer(
+            &self,
+            _streamer_login: &str,
+        ) -> Result<Option<Arc<dyn TeilHochlader>>, CredentialError> {
+            Err(CredentialError::Decrypt)
         }
     }
 
@@ -1189,6 +1233,36 @@ mod tests {
     ) -> VodArchiveWorker {
         VodArchiveWorker::mit_zugang(pool.clone(), cfg, Arc::new(FesteQuelle(hochlader.clone())))
             .with_runner(Arc::new(WerkzeugAttrappe::neu()))
+    }
+
+    #[tokio::test]
+    async fn credential_fehler_stoppt_das_lokale_archiv_nicht() {
+        let Some(pool) = pool("t_vod_credential_fehler").await else {
+            return;
+        };
+        store::merke_vod(&pool, "v-credential", "earlysalty", "Stream", 60)
+            .await
+            .unwrap();
+        let verzeichnis = temp_verzeichnis("credential_fehler");
+        let worker = VodArchiveWorker::mit_zugang(
+            pool.clone(),
+            config(&verzeichnis),
+            Arc::new(FehlerQuelle),
+        )
+        .with_runner(Arc::new(WerkzeugAttrappe::neu()));
+
+        let bilanz = worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+
+        assert_eq!(bilanz.geladen, 1);
+        assert_eq!(bilanz.hochgeladen, 0);
+        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        assert_eq!(offen.len(), 1);
+        assert!(
+            !offen[0].braucht_download(),
+            "die lokale Sicherung muss trotz Credential-Fehler fertig werden"
+        );
+
+        let _ = std::fs::remove_dir_all(verzeichnis);
     }
 
     /// Fund 1: der Upload-Deckel griff nur auf dem reinen Upload-Pfad. Sechs

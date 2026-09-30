@@ -9,7 +9,7 @@
 use chrono::{Duration, Utc};
 use sqlx::{PgPool, Row};
 
-use crate::retention::refresh_clip_publication_status;
+use crate::retention::refresh_clip_publication_status_in_tx;
 
 /// Stale-Schwelle für processing-Jobs (Python: 30 min).
 const PROCESSING_STALE_MINUTES: i64 = 30;
@@ -201,7 +201,7 @@ pub async fn get_upload_queue(
 
     let mut sql = String::from(
         "SELECT q.id, q.clip_id, q.platform, q.status, q.priority, q.title, q.description, \
-                q.hashtags, q.scheduled_at, q.attempts, q.quota_deferrals, \
+                q.hashtags, q.scheduled_at::text AS scheduled_at, q.attempts, q.quota_deferrals, \
                 c.clip_id AS twitch_clip_id, c.clip_url, \
                 c.clip_title, c.streamer_login, c.local_file_path, c.converted_file_path \
          FROM twitch_clips_upload_queue q \
@@ -307,7 +307,7 @@ async fn claim_pending_uploads(
 
     let rows = sqlx::query(
         "SELECT q.id, q.clip_id, q.platform, q.status, q.priority, q.title, q.description, \
-                q.hashtags, q.scheduled_at, q.attempts, q.quota_deferrals, \
+                q.hashtags, q.scheduled_at::text AS scheduled_at, q.attempts, q.quota_deferrals, \
                 c.clip_id AS twitch_clip_id, c.clip_url, c.clip_title, c.streamer_login, \
                 c.local_file_path, c.converted_file_path \
            FROM twitch_clips_upload_queue q \
@@ -459,17 +459,8 @@ pub async fn update_upload_status(
                 .bind(clip_id)
                 .execute(&mut *tx)
                 .await?;
+            refresh_clip_publication_status_in_tx(tx.as_mut(), clip_id).await?;
             tx.commit().await?;
-            if let Err(error) = refresh_clip_publication_status(pool, clip_id).await {
-                tracing::error!(
-                    clip_db_id = clip_id,
-                    code = "publication_status_refresh_failed",
-                    database_code = ?error
-                        .as_database_error()
-                        .and_then(|database| database.code()),
-                    "Clip-Publikationsstatus konnte nach Queue-Abschluss nicht aktualisiert werden"
-                );
-            }
         }
         "failed" => {
             sqlx::query(
@@ -593,17 +584,8 @@ pub async fn complete_provider_upload(
         .bind(clip_id)
         .execute(&mut *tx)
         .await?;
+    refresh_clip_publication_status_in_tx(tx.as_mut(), clip_id).await?;
     tx.commit().await?;
-    if let Err(error) = refresh_clip_publication_status(pool, clip_id).await {
-        tracing::error!(
-            clip_db_id = clip_id,
-            code = "publication_status_refresh_failed",
-            database_code = ?error
-                .as_database_error()
-                .and_then(|database| database.code()),
-            "Clip-Publikationsstatus konnte nach Provider-Abschluss nicht aktualisiert werden"
-        );
-    }
     Ok(true)
 }
 
@@ -798,6 +780,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claim_liefert_einen_gesetzten_termin_als_text_zurueck() {
+        let Some(pool) = make_pool("t_sm_queue_scheduled_decode").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        sqlx::query(
+            "INSERT INTO social_media_platform_auth \
+             (platform, streamer_login, provider_calls_enabled) \
+             VALUES ('youtube', 'nani', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        queue_upload(
+            &pool,
+            clip,
+            "youtube",
+            None,
+            None,
+            None,
+            Some("2020-01-02T03:04:05Z"),
+            0,
+        )
+        .await
+        .unwrap();
+
+        let items = get_upload_queue(&pool, Some("youtube"), "pending", 1, None)
+            .await
+            .expect("ein gesetzter TIMESTAMPTZ-Termin muss stabil lesbar sein");
+
+        assert_eq!(items.len(), 1);
+        assert!(items[0]
+            .scheduled_at
+            .as_deref()
+            .is_some_and(|value| value.starts_with("2020-01-02 03:04:05")));
+    }
+
+    #[tokio::test]
     async fn get_queue_skips_future_scheduled_jobs() {
         let Some(pool) = make_pool("t_sm_queue_schedule_gate").await else {
             return;
@@ -862,6 +882,14 @@ mod tests {
             return;
         };
         let clip = seed_clip(&pool).await;
+        sqlx::query(
+            "INSERT INTO social_media_platform_auth \
+             (platform, streamer_login, provider_calls_enabled) \
+             VALUES ('youtube', 'nani', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
             .await
             .unwrap();
@@ -1083,6 +1111,48 @@ mod tests {
         assert_eq!(status, "completed");
         assert!(uploaded);
         assert_eq!(video_id.as_deref(), Some("provider-42"));
+    }
+
+    #[tokio::test]
+    async fn provider_finalize_rollt_bei_statusfehler_vollstaendig_zurueck() {
+        let Some(pool) = make_pool("t_sm_queue_provider_finalize_atomic").await else {
+            return;
+        };
+        let clip = seed_clip(&pool).await;
+        let queue_id = queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET status = 'processing', \
+             provider_started_at = NOW(), provider_lease_token = 'lease-atomic' WHERE id = $1",
+        )
+        .bind(queue_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Der Publikationsstatus braucht diese Tabelle. Ein Ausfall an dieser
+        // Stelle darf weder Queue noch Upload-Flag vorzeitig committen.
+        sqlx::query("DROP TABLE social_media_platform_auth")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        complete_provider_upload(&pool, queue_id, "lease-atomic", Some("provider-atomic"))
+            .await
+            .expect_err("Statusfehler muss den gesamten Abschluss abbrechen");
+
+        let (status, uploaded, external_id): (String, bool, Option<String>) = sqlx::query_as(
+            "SELECT q.status, c.uploaded_youtube, q.provider_external_id \
+             FROM twitch_clips_upload_queue q \
+             JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "processing");
+        assert!(!uploaded);
+        assert_eq!(external_id, None);
     }
 
     #[tokio::test]

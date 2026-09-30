@@ -21,6 +21,9 @@ const WORKER_INTERVAL_SECS: u64 = 30;
 const RENDERER_VERSION: &str = "layout-compose-v1-1080x1920-60s";
 const STALE_LEASE_MINUTES: i64 = 30;
 const MAX_MATERIALIZED_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PREPARATION_ATTEMPTS: i32 = 5;
+const PREPARATION_RETRY_BASE_SECS: i64 = 60;
+const PREPARATION_RETRY_MAX_SECS: i64 = 30 * 60;
 
 struct SecureDirectory {
     handle: tokio::fs::File,
@@ -513,12 +516,16 @@ pub enum PreparationError {
     Discarded(i64),
     #[error("Clip {0} wird bereits aufbereitet")]
     Busy(i64),
+    #[error("Aufbereitung für Clip {0} ist dauerhaft fehlgeschlagen")]
+    Terminal(i64),
     #[error("Keine nutzbare Quelldatei für Clip {0}")]
     SourceMissing(i64),
     #[error("Ungültige Twitch-Clip-URL")]
     InvalidSourceUrl,
     #[error("Download fehlgeschlagen: {0}")]
     Download(String),
+    #[error("Clip-Quelle überschreitet das Größenlimit")]
+    SourceTooLarge,
     #[error("Automatischer Twitch-Download benötigt einen isolierten Netzwerkpfad")]
     DownloadIsolationRequired,
     #[error(transparent)]
@@ -539,9 +546,11 @@ impl PreparationError {
             Self::ClipNotFound(_) => "clip_not_found",
             Self::Discarded(_) => "clip_discarded",
             Self::Busy(_) => "preparation_busy",
+            Self::Terminal(_) => "preparation_failed",
             Self::SourceMissing(_) => "source_missing",
             Self::InvalidSourceUrl => "invalid_source_url",
             Self::Download(_) => "download_failed",
+            Self::SourceTooLarge => "download_failed",
             Self::DownloadIsolationRequired => "download_isolation_required",
             Self::Render(_) | Self::Renderer(_) => "render_failed",
             Self::Layout(EffectiveLayoutError::Db(_)) => "database_failed",
@@ -549,6 +558,47 @@ impl PreparationError {
             Self::Io(_) => "io_failed",
             Self::Db(_) => "database_failed",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureDisposition {
+    Retry {
+        attempt_count: i32,
+        delay_seconds: i64,
+    },
+    Failed {
+        attempt_count: i32,
+    },
+}
+
+fn failure_disposition(error: &PreparationError, current_attempt_count: i32) -> FailureDisposition {
+    let attempt_count = current_attempt_count
+        .max(0)
+        .saturating_add(1)
+        .min(MAX_PREPARATION_ATTEMPTS);
+    let permanent = matches!(
+        error,
+        PreparationError::ClipNotFound(_)
+            | PreparationError::Discarded(_)
+            | PreparationError::Terminal(_)
+            | PreparationError::SourceMissing(_)
+            | PreparationError::InvalidSourceUrl
+            | PreparationError::SourceTooLarge
+            | PreparationError::Layout(EffectiveLayoutError::ClipNotFound)
+            | PreparationError::Layout(EffectiveLayoutError::InvalidClipLayout)
+            | PreparationError::Layout(EffectiveLayoutError::InvalidStreamerLayout)
+    );
+    if permanent || attempt_count >= MAX_PREPARATION_ATTEMPTS {
+        return FailureDisposition::Failed { attempt_count };
+    }
+    let exponent = u32::try_from(attempt_count.saturating_sub(1)).unwrap_or(0);
+    let delay_seconds = PREPARATION_RETRY_BASE_SECS
+        .saturating_mul(2_i64.saturating_pow(exponent))
+        .min(PREPARATION_RETRY_MAX_SECS);
+    FailureDisposition::Retry {
+        attempt_count,
+        delay_seconds,
     }
 }
 
@@ -641,9 +691,7 @@ impl ClipSourceDownloader for IsolatedClipDownloader {
                 })?
         };
         if output_len > MAX_MATERIALIZED_SOURCE_BYTES {
-            return Err(PreparationError::Download(
-                "Clip-Quelle überschreitet das Größenlimit".to_string(),
-            ));
+            return Err(PreparationError::SourceTooLarge);
         }
         Ok(())
     }
@@ -813,8 +861,9 @@ impl ClipPreparationService {
             "UPDATE social_media_clip_preparation SET state = 'pending', \
              lease_token = NULL, \
              requested_at = CURRENT_TIMESTAMP, error_code = NULL, error_message = NULL, \
-             completed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $1 \
-             AND (state NOT IN ('materializing', 'rendering') \
+             retry_at = NULL, attempt_count = 0, completed_at = NULL, \
+             updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $1 \
+             AND (state NOT IN ('materializing', 'source_ready', 'rendering') \
                   OR updated_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')",
         )
         .bind(clip_db_id)
@@ -854,10 +903,15 @@ impl ClipPreparationService {
         clip_db_id: i64,
     ) -> Result<ClipPreparationRecord, PreparationError> {
         self.ensure_pending(clip_db_id).await?;
+        if let Some(record) = self.get(clip_db_id).await? {
+            if record.preview_ready() {
+                return Ok(record);
+            }
+        }
         let lease_token = uuid::Uuid::new_v4().to_string();
         let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "SELECT clip_db_id FROM social_media_clip_preparation \
+        let state: String = sqlx::query_scalar(
+            "SELECT state FROM social_media_clip_preparation \
              WHERE clip_db_id = $1 FOR UPDATE",
         )
         .bind(clip_db_id)
@@ -879,14 +933,27 @@ impl ClipPreparationService {
             transaction.rollback().await?;
             return Err(PreparationError::Busy(clip_db_id));
         }
+        match state.as_str() {
+            "pending" => {}
+            "failed" | "preview_ready" => {
+                transaction.rollback().await?;
+                return Err(PreparationError::Terminal(clip_db_id));
+            }
+            _ => {
+                transaction.rollback().await?;
+                return Err(PreparationError::Busy(clip_db_id));
+            }
+        }
         let claimed = sqlx::query(
             "UPDATE social_media_clip_preparation \
                 SET state = 'materializing', started_at = CURRENT_TIMESTAMP, \
                     lease_token = $2, \
-                    completed_at = NULL, error_code = NULL, error_message = NULL, \
+                    retry_at = NULL, completed_at = NULL, \
+                    error_code = NULL, error_message = NULL, \
                     updated_at = CURRENT_TIMESTAMP \
-              WHERE clip_db_id = $1 AND (state NOT IN ('materializing', 'rendering') \
-                    OR updated_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes')",
+              WHERE clip_db_id = $1 \
+                AND state = 'pending' \
+                AND (retry_at IS NULL OR retry_at <= CURRENT_TIMESTAMP)",
         )
         .bind(clip_db_id)
         .bind(&lease_token)
@@ -902,10 +969,89 @@ impl ClipPreparationService {
         match self.prepare_claimed(clip_db_id, &lease_token).await {
             Ok(record) => Ok(record),
             Err(error) => {
-                self.record_failure(clip_db_id, &lease_token, &error).await;
+                self.record_failure(clip_db_id, &lease_token, &error)
+                    .await?;
                 Err(error)
             }
         }
+    }
+
+    /// Claimt genau einen fälligen Worker-Auftrag und setzt die eindeutige
+    /// Lease in derselben Transaktion. `SKIP LOCKED` verhindert, dass zwei
+    /// überlappende Worker denselben Clip verarbeiten; Backoff- und
+    /// Endzustände sind Teil der Auswahl.
+    async fn claim_next_due_pending(&self) -> Result<Option<(i64, String)>, PreparationError> {
+        let lease_token = uuid::Uuid::new_v4().to_string();
+        let mut transaction = self.pool.begin().await?;
+        let clip_db_id: Option<i64> = sqlx::query_scalar(
+            "WITH candidate AS ( \
+                 SELECT p.clip_db_id \
+                   FROM social_media_clip_preparation p \
+                   JOIN twitch_clips_social_media c ON c.id = p.clip_db_id \
+                  WHERE p.state = 'pending' \
+                    AND (p.retry_at IS NULL OR p.retry_at <= CURRENT_TIMESTAMP) \
+                    AND c.discarded_at IS NULL \
+                    AND NOT EXISTS ( \
+                        SELECT 1 FROM twitch_clips_upload_queue q \
+                         WHERE q.clip_id = p.clip_db_id \
+                           AND q.provider_started_at IS NOT NULL \
+                           AND q.status IN ('processing', 'reconciliation_required')) \
+                  ORDER BY p.retry_at ASC NULLS FIRST, p.requested_at, p.clip_db_id \
+                  LIMIT 1 FOR UPDATE OF p SKIP LOCKED \
+             ) \
+             UPDATE social_media_clip_preparation p \
+                SET state = 'materializing', started_at = CURRENT_TIMESTAMP, \
+                    lease_token = $1, retry_at = NULL, completed_at = NULL, \
+                    error_code = NULL, error_message = NULL, \
+                    updated_at = CURRENT_TIMESTAMP \
+               FROM candidate \
+              WHERE p.clip_db_id = candidate.clip_db_id \
+                AND p.state = 'pending' \
+                AND (p.retry_at IS NULL OR p.retry_at <= CURRENT_TIMESTAMP) \
+              RETURNING p.clip_db_id",
+        )
+        .bind(&lease_token)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        let Some(clip_db_id) = clip_db_id else {
+            transaction.commit().await?;
+            return Ok(None);
+        };
+
+        // Globale Sperrreihenfolge: Preparation -> Clip -> Queue.
+        let discarded: Option<bool> = sqlx::query_scalar(
+            "SELECT discarded_at IS NOT NULL FROM twitch_clips_social_media \
+             WHERE id = $1 FOR UPDATE",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        match discarded {
+            Some(false) => {}
+            Some(true) => {
+                transaction.rollback().await?;
+                return Err(PreparationError::Discarded(clip_db_id));
+            }
+            None => {
+                transaction.rollback().await?;
+                return Err(PreparationError::ClipNotFound(clip_db_id));
+            }
+        }
+        let provider_active: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM twitch_clips_upload_queue \
+             WHERE clip_id = $1 AND provider_started_at IS NOT NULL \
+               AND status IN ('processing', 'reconciliation_required') \
+             ORDER BY id LIMIT 1 FOR UPDATE",
+        )
+        .bind(clip_db_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        if provider_active.is_some() {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+        transaction.commit().await?;
+        Ok(Some((clip_db_id, lease_token)))
     }
 
     async fn prepare_claimed(
@@ -1305,7 +1451,9 @@ impl ClipPreparationService {
             "UPDATE social_media_clip_preparation SET state = 'preview_ready', \
              source_fingerprint = $2, render_fingerprint = $3, render_path = $4, \
              lease_token = NULL, \
-             error_code = NULL, error_message = NULL, completed_at = CURRENT_TIMESTAMP, \
+             retry_at = NULL, attempt_count = 0, \
+             error_code = NULL, error_message = NULL, \
+             completed_at = CURRENT_TIMESTAMP, \
              updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $1 \
                AND state = 'rendering' AND render_fingerprint = $3 AND lease_token = $5",
         )
@@ -1341,76 +1489,123 @@ impl ClipPreparationService {
         Ok(())
     }
 
-    async fn record_failure(&self, clip_db_id: i64, lease_token: &str, error: &PreparationError) {
-        if let Err(db_error) = sqlx::query(
-            "UPDATE social_media_clip_preparation SET state = 'failed', error_code = $2, \
-             error_message = NULL, lease_token = NULL, completed_at = CURRENT_TIMESTAMP, \
-             updated_at = CURRENT_TIMESTAMP WHERE clip_db_id = $1 \
-             AND lease_token = $3 AND state IN ('materializing', 'source_ready', 'rendering')",
+    async fn record_failure(
+        &self,
+        clip_db_id: i64,
+        lease_token: &str,
+        error: &PreparationError,
+    ) -> Result<(), PreparationError> {
+        // Busy bedeutet hier immer, dass diese Lease den Auftrag bereits
+        // verloren hat. Ein alter Lauf darf weder den neuen Versuch als Fehler
+        // markieren noch dessen Retry-Zähler verbrauchen.
+        if matches!(error, PreparationError::Busy(_)) {
+            return Ok(());
+        }
+        let mut transaction = self.pool.begin().await?;
+        let attempt_count: Option<i32> = sqlx::query_scalar(
+            "SELECT attempt_count FROM social_media_clip_preparation \
+             WHERE clip_db_id = $1 AND lease_token = $2 \
+               AND state IN ('materializing', 'source_ready', 'rendering') \
+             FOR UPDATE",
         )
         .bind(clip_db_id)
-        .bind(error.code())
         .bind(lease_token)
-        .execute(&self.pool)
-        .await
-        {
-            tracing::warn!(%db_error, clip_db_id, "Clip-Aufbereitungsfehler konnte nicht gespeichert werden");
+        .fetch_optional(transaction.as_mut())
+        .await?;
+        let Some(current_attempt_count) = attempt_count else {
+            transaction.commit().await?;
+            return Ok(());
+        };
+        let disposition = failure_disposition(error, current_attempt_count);
+        let updated = match disposition {
+            FailureDisposition::Retry {
+                attempt_count,
+                delay_seconds,
+            } => {
+                sqlx::query(
+                    "UPDATE social_media_clip_preparation \
+                     SET state = 'pending', attempt_count = $3, \
+                         retry_at = CURRENT_TIMESTAMP + ($4::bigint * INTERVAL '1 second'), \
+                         error_code = $5, error_message = NULL, lease_token = NULL, \
+                         completed_at = NULL, requested_at = CURRENT_TIMESTAMP, \
+                         updated_at = CURRENT_TIMESTAMP \
+                     WHERE clip_db_id = $1 AND lease_token = $2 \
+                       AND state IN ('materializing', 'source_ready', 'rendering')",
+                )
+                .bind(clip_db_id)
+                .bind(lease_token)
+                .bind(attempt_count)
+                .bind(delay_seconds)
+                .bind(error.code())
+                .execute(transaction.as_mut())
+                .await?
+            }
+            FailureDisposition::Failed { attempt_count } => {
+                sqlx::query(
+                    "UPDATE social_media_clip_preparation \
+                     SET state = 'failed', attempt_count = $3, retry_at = NULL, \
+                         error_code = $4, error_message = NULL, lease_token = NULL, \
+                         completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
+                     WHERE clip_db_id = $1 AND lease_token = $2 \
+                       AND state IN ('materializing', 'source_ready', 'rendering')",
+                )
+                .bind(clip_db_id)
+                .bind(lease_token)
+                .bind(attempt_count)
+                .bind(error.code())
+                .execute(transaction.as_mut())
+                .await?
+            }
+        };
+        if updated.rows_affected() != 1 {
+            transaction.rollback().await?;
+            return Ok(());
         }
+        transaction.commit().await?;
+        Ok(())
     }
 
     /// Arbeitet offene Aufträge ab. Das Wiring kann unabhängig vom Upload-Worker
     /// aktiviert werden; der Kern selbst enthält keinerlei Plattformzugriff.
-    pub async fn process_pending(&self, limit: i64) -> usize {
-        match sqlx::query(
-            "UPDATE social_media_clip_preparation SET state = 'pending', \
-             lease_token = NULL, \
-             error_code = 'preparation_stale', error_message = NULL, \
-             requested_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
-             WHERE state IN ('materializing', 'rendering') \
+    pub async fn process_pending(&self, limit: i64) -> Result<usize, PreparationError> {
+        let stale = sqlx::query(
+            "UPDATE social_media_clip_preparation \
+             SET state = CASE WHEN attempt_count + 1 >= 5 THEN 'failed' ELSE 'pending' END, \
+                 attempt_count = LEAST(attempt_count + 1, 5), lease_token = NULL, \
+                 retry_at = CASE WHEN attempt_count + 1 >= 5 THEN NULL ELSE \
+                     CURRENT_TIMESTAMP + CASE \
+                         WHEN attempt_count <= 0 THEN INTERVAL '60 seconds' \
+                         WHEN attempt_count = 1 THEN INTERVAL '120 seconds' \
+                         WHEN attempt_count = 2 THEN INTERVAL '240 seconds' \
+                         WHEN attempt_count = 3 THEN INTERVAL '480 seconds' \
+                         ELSE INTERVAL '960 seconds' END END, \
+                 error_code = 'preparation_stale', error_message = NULL, \
+                 completed_at = CASE WHEN attempt_count + 1 >= 5 \
+                                     THEN CURRENT_TIMESTAMP ELSE NULL END, \
+                 requested_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
+             WHERE state IN ('materializing', 'source_ready', 'rendering') \
                AND updated_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'",
         )
         .execute(&self.pool)
-        .await
-        {
-            Ok(result) if result.rows_affected() > 0 => {
-                tracing::warn!(
-                    count = result.rows_affected(),
-                    stale_after_minutes = STALE_LEASE_MINUTES,
-                    "Verwaiste Clip-Aufbereitungen wurden erneut eingereiht"
-                );
-            }
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(%error, "Verwaiste Clip-Aufbereitungen konnten nicht geprüft werden");
-                return 0;
-            }
-        }
-        if let Err(error) = self.cleanup_preparation_work().await {
+        .await?;
+        if stale.rows_affected() > 0 {
             tracing::warn!(
-                code = error.code(),
-                "Verwaiste Medien-Arbeitsdateien konnten nicht sicher bereinigt werden"
+                count = stale.rows_affected(),
+                stale_after_minutes = STALE_LEASE_MINUTES,
+                "Verwaiste Clip-Aufbereitungen wurden in den Retry-Vertrag übernommen"
             );
-            return 0;
         }
-        let ids: Vec<i64> = match sqlx::query_scalar(
-            "SELECT clip_db_id FROM social_media_clip_preparation \
-             WHERE state = 'pending' ORDER BY requested_at, clip_db_id LIMIT $1",
-        )
-        .bind(limit.max(0))
-        .fetch_all(&self.pool)
-        .await
-        {
-            Ok(ids) => ids,
-            Err(error) => {
-                tracing::warn!(%error, "Offene Clip-Aufbereitungen konnten nicht geladen werden");
-                return 0;
-            }
-        };
+        self.cleanup_preparation_work().await?;
         let mut completed = 0;
-        for clip_db_id in ids {
-            match self.prepare(clip_db_id).await {
+        for _ in 0..limit.max(0) {
+            let Some((clip_db_id, lease_token)) = self.claim_next_due_pending().await? else {
+                break;
+            };
+            match self.prepare_claimed(clip_db_id, &lease_token).await {
                 Ok(_) => completed += 1,
                 Err(error) => {
+                    self.record_failure(clip_db_id, &lease_token, &error)
+                        .await?;
                     tracing::warn!(
                         clip_db_id,
                         code = error.code(),
@@ -1419,7 +1614,7 @@ impl ClipPreparationService {
                 }
             }
         }
-        completed
+        Ok(completed)
     }
 
     async fn cleanup_preparation_work(&self) -> Result<usize, PreparationError> {
@@ -1504,13 +1699,22 @@ impl ClipPreparationWorker {
         }
     }
 
-    pub async fn run_once(&self) -> usize {
+    pub async fn run_once(&self) -> Result<usize, PreparationError> {
         self.service.process_pending(self.batch_size).await
     }
 
     pub async fn run(&self) {
         loop {
-            self.run_once().await;
+            match self.run_once().await {
+                Ok(completed) => tracing::debug!(
+                    completed,
+                    "Clip-Aufbereitungsworker-Durchlauf abgeschlossen"
+                ),
+                Err(error) => tracing::error!(
+                    code = error.code(),
+                    "Clip-Aufbereitungsworker-Durchlauf fehlgeschlagen"
+                ),
+            }
             tokio::time::sleep(self.interval).await;
         }
     }
@@ -1768,6 +1972,7 @@ mod tests {
              twitch_clips_social_media(id), state TEXT NOT NULL DEFAULT 'pending', lease_token TEXT, source_fingerprint TEXT, \
              render_fingerprint TEXT, render_path TEXT, error_code TEXT, error_message TEXT, \
              requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, \
+             retry_at TIMESTAMPTZ, attempt_count INTEGER NOT NULL DEFAULT 0, \
              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         )
         .execute(&pool)
@@ -1811,6 +2016,334 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn preparation_fehler_werden_permanent_oder_mit_begrenztem_backoff_eingeordnet() {
+        use super::{failure_disposition, FailureDisposition, PreparationError};
+
+        assert_eq!(
+            failure_disposition(&PreparationError::InvalidSourceUrl, 0),
+            FailureDisposition::Failed { attempt_count: 1 }
+        );
+        assert_eq!(
+            failure_disposition(&PreparationError::DownloadIsolationRequired, 0),
+            FailureDisposition::Retry {
+                attempt_count: 1,
+                delay_seconds: 60,
+            }
+        );
+        assert_eq!(
+            failure_disposition(
+                &PreparationError::Renderer("temporär nicht verfügbar".to_string()),
+                3,
+            ),
+            FailureDisposition::Retry {
+                attempt_count: 4,
+                delay_seconds: 480,
+            }
+        );
+        assert_eq!(
+            failure_disposition(&PreparationError::DownloadIsolationRequired, 4),
+            FailureDisposition::Failed { attempt_count: 5 }
+        );
+    }
+
+    #[tokio::test]
+    async fn transienter_fehler_wird_persistiert_erneut_eingeplant() {
+        let Some(pool) = make_pool("t_sm_preparation_retry").await else {
+            return;
+        };
+        let clip_db_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_url) \
+             VALUES ('https://clips.twitch.tv/Retry') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation (clip_db_id, state, lease_token) \
+             VALUES ($1, 'materializing', 'lease-retry')",
+        )
+        .bind(clip_db_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let service = super::ClipPreparationService::new(pool.clone());
+        service
+            .record_failure(
+                clip_db_id,
+                "lease-retry",
+                &super::PreparationError::DownloadIsolationRequired,
+            )
+            .await
+            .unwrap();
+
+        let row: (String, i32, bool, Option<String>) = sqlx::query_as(
+            "SELECT state, attempt_count, retry_at > CURRENT_TIMESTAMP, error_code \
+             FROM social_media_clip_preparation WHERE clip_db_id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 1);
+        assert!(row.2);
+        assert_eq!(row.3.as_deref(), Some("download_isolation_required"));
+    }
+
+    #[tokio::test]
+    async fn permanente_und_ausgereizte_fehler_bleiben_endgueltig_failed() {
+        let Some(pool) = make_pool("t_sm_preparation_permanent_failure").await else {
+            return;
+        };
+        for (lease, attempts) in [("lease-invalid", 0_i32), ("lease-max", 4_i32)] {
+            let clip_db_id: i64 = sqlx::query_scalar(
+                "INSERT INTO twitch_clips_social_media (clip_url) \
+                 VALUES ('https://clips.twitch.tv/Permanent') RETURNING id",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO social_media_clip_preparation \
+                 (clip_db_id, state, lease_token, attempt_count) \
+                 VALUES ($1, 'materializing', $2, $3)",
+            )
+            .bind(clip_db_id)
+            .bind(lease)
+            .bind(attempts)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let error = if attempts == 0 {
+                super::PreparationError::InvalidSourceUrl
+            } else {
+                super::PreparationError::DownloadIsolationRequired
+            };
+            super::ClipPreparationService::new(pool.clone())
+                .record_failure(clip_db_id, lease, &error)
+                .await
+                .unwrap();
+            let row: (String, i32, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+                "SELECT state, attempt_count, retry_at \
+                 FROM social_media_clip_preparation WHERE clip_db_id = $1",
+            )
+            .bind(clip_db_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(row.0, "failed");
+            assert_eq!(row.1, if attempts == 0 { 1 } else { 5 });
+            assert!(row.2.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn kandidaten_db_fehler_wird_nicht_als_leerer_durchlauf_gemeldet() {
+        let Some(pool) = make_pool("t_sm_preparation_candidate_failure").await else {
+            return;
+        };
+        sqlx::query("DROP TABLE social_media_clip_preparation")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let service = super::ClipPreparationService::new(pool);
+        assert!(matches!(
+            service.process_pending(2).await,
+            Err(super::PreparationError::Db(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_source_ready_wird_in_den_retry_vertrag_zurueckgeholt() {
+        let Some(pool) = make_pool("t_sm_preparation_source_ready_stale").await else {
+            return;
+        };
+        let clip_db_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_url) \
+             VALUES ('https://clips.twitch.tv/StaleSourceReady') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation \
+             (clip_db_id, state, lease_token, updated_at) \
+             VALUES ($1, 'source_ready', 'dead-lease', \
+                     CURRENT_TIMESTAMP - INTERVAL '31 minutes')",
+        )
+        .bind(clip_db_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let clips_dir =
+            std::env::temp_dir().join(format!("tb-sm-source-ready-{}", uuid::Uuid::new_v4()));
+        let service = super::ClipPreparationService::new(pool.clone()).with_clips_dir(&clips_dir);
+
+        assert_eq!(service.process_pending(0).await.unwrap(), 0);
+        let row: (String, i32, bool, Option<String>) = sqlx::query_as(
+            "SELECT state, attempt_count, retry_at > CURRENT_TIMESTAMP, error_code \
+             FROM social_media_clip_preparation WHERE clip_db_id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 1);
+        assert!(row.2);
+        assert_eq!(row.3.as_deref(), Some("preparation_stale"));
+        let _ = std::fs::remove_dir_all(clips_dir);
+    }
+
+    #[tokio::test]
+    async fn due_claim_ist_atomare_einmalleased_und_ueberspringt_backoff_und_terminal() {
+        let Some(pool) = make_pool("t_sm_preparation_atomic_due_claim").await else {
+            return;
+        };
+        let due: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_url) \
+             VALUES ('https://clips.twitch.tv/Due') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let future: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_url) \
+             VALUES ('https://clips.twitch.tv/Future') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let terminal: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_url) \
+             VALUES ('https://clips.twitch.tv/Terminal') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for (clip_db_id, state, retry) in [
+            (due, "pending", "CURRENT_TIMESTAMP - INTERVAL '1 second'"),
+            (future, "pending", "CURRENT_TIMESTAMP + INTERVAL '1 hour'"),
+            (terminal, "failed", "NULL"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO social_media_clip_preparation \
+                 (clip_db_id, state, retry_at) VALUES ($1, $2, {retry})"
+            ))
+            .bind(clip_db_id)
+            .bind(state)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let first = super::ClipPreparationService::new(pool.clone());
+        let second = first.clone();
+        let (first_claim, second_claim) = tokio::join!(
+            first.claim_next_due_pending(),
+            second.claim_next_due_pending()
+        );
+        let claims = [first_claim.unwrap(), second_claim.unwrap()];
+        assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+        assert_eq!(
+            claims
+                .iter()
+                .flatten()
+                .map(|claim| claim.0)
+                .collect::<Vec<_>>(),
+            vec![due]
+        );
+
+        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+            "SELECT clip_db_id, state, lease_token \
+             FROM social_media_clip_preparation ORDER BY clip_db_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows[0].0, due);
+        assert_eq!(rows[0].1, "materializing");
+        assert!(rows[0].2.is_some());
+        assert_eq!((rows[1].0, rows[1].1.as_str()), (future, "pending"));
+        assert!(rows[1].2.is_none());
+        assert_eq!((rows[2].0, rows[2].1.as_str()), (terminal, "failed"));
+        assert!(rows[2].2.is_none());
+
+        assert!(matches!(
+            super::ClipPreparationService::new(pool.clone())
+                .prepare(future)
+                .await,
+            Err(super::PreparationError::Busy(id)) if id == future
+        ));
+        assert!(matches!(
+            super::ClipPreparationService::new(pool)
+                .prepare(terminal)
+                .await,
+            Err(super::PreparationError::Terminal(id)) if id == terminal
+        ));
+    }
+
+    #[tokio::test]
+    async fn erfolgreicher_finalize_setzt_retry_zaehler_zurueck() {
+        let Some(pool) = make_pool("t_sm_preparation_success_resets_attempts").await else {
+            return;
+        };
+        let clip_db_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (clip_url) \
+             VALUES ('https://clips.twitch.tv/SuccessReset') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_preparation \
+             (clip_db_id, state, lease_token, source_fingerprint, \
+              render_fingerprint, attempt_count) \
+             VALUES ($1, 'rendering', 'lease-success', 'source-v1', 'render-v1', 4)",
+        )
+        .bind(clip_db_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let clips_dir =
+            std::env::temp_dir().join(format!("tb-sm-success-reset-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(clips_dir.join("rendered"))
+            .await
+            .unwrap();
+        let destination = clips_dir
+            .join("rendered")
+            .join(format!("{clip_db_id}-render-v1.mp4"));
+        tokio::fs::write(&destination, b"render").await.unwrap();
+        super::set_media_permissions(&destination).await.unwrap();
+
+        super::ClipPreparationService::new(pool.clone())
+            .with_clips_dir(clips_dir.clone())
+            .finalize_ready(
+                clip_db_id,
+                "source-v1",
+                "render-v1",
+                &destination,
+                None,
+                "lease-success",
+            )
+            .await
+            .unwrap();
+
+        let row: (String, i32, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+            "SELECT state, attempt_count, retry_at \
+             FROM social_media_clip_preparation WHERE clip_db_id = $1",
+        )
+        .bind(clip_db_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "preview_ready");
+        assert_eq!(row.1, 0);
+        assert!(row.2.is_none());
+        std::fs::remove_dir_all(clips_dir).unwrap();
     }
 
     #[tokio::test]
@@ -2013,7 +2546,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO social_media_clip_preparation \
              (clip_db_id, state, render_fingerprint, error_code) \
-             VALUES ($1, 'failed', $2, 'database_failed')",
+             VALUES ($1, 'pending', $2, 'database_failed')",
         )
         .bind(clip_db_id)
         .bind(&fingerprint)
@@ -2063,7 +2596,7 @@ mod tests {
         super::set_media_permissions(&destination).await.unwrap();
         sqlx::query(
             "INSERT INTO social_media_clip_preparation \
-             (clip_db_id, state, render_fingerprint) VALUES ($1, 'failed', $2)",
+             (clip_db_id, state, render_fingerprint) VALUES ($1, 'pending', $2)",
         )
         .bind(clip_db_id)
         .bind("b".repeat(64))
@@ -2258,7 +2791,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, super::PreparationError::Discarded(id) if id == clip_db_id));
-        service.record_failure(clip_db_id, "lease-a", &error).await;
+        service
+            .record_failure(clip_db_id, "lease-a", &error)
+            .await
+            .unwrap();
         assert!(!work_dir
             .join(format!("{clip_db_id}-lease-a-render-render.tmp.mp4"))
             .exists());
@@ -2334,7 +2870,8 @@ mod tests {
                 "lease-alt",
                 &super::PreparationError::Renderer("alter Lauf".to_string()),
             )
-            .await;
+            .await
+            .unwrap();
 
         let state: (String, Option<String>, Option<String>) = sqlx::query_as(
             "SELECT state, lease_token, error_code FROM social_media_clip_preparation \
