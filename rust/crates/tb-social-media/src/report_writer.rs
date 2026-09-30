@@ -91,26 +91,22 @@ pub async fn load_clip_performance(
     bucket: &str,
     period_start: &str,
     period_end: &str,
-    streamer_login: Option<&str>,
+    twitch_user_id: Option<&str>,
 ) -> Vec<ClipPerformance> {
-    let rows = sqlx::query!(
-        "SELECT c.id AS \"clip_db_id!\", c.streamer_login AS \"streamer_login!\", c.clip_title, c.clip_url, \
-                c.created_at::text AS created_at, c.game_name, a.platform, \
-                COALESCE(a.views, 0) AS \"views!\", COALESCE(a.likes, 0) AS \"likes!\", \
-                COALESCE(a.comments, 0) AS \"comments!\", COALESCE(a.shares, 0) AS \"shares!\", \
-                COALESCE(a.watch_time_seconds, 0) AS \"watch_time_seconds!\", \
-                a.ctr_percent::double precision AS \"ctr?\", a.engagement_rate::double precision AS \"eng?\" \
-           FROM twitch_clips_social_analytics a \
-           JOIN twitch_clips_social_media c ON c.id = a.clip_id \
-          WHERE a.bucket = $1 AND a.synced_at >= $2::text::timestamptz AND a.synced_at < $3::text::timestamptz \
-            AND c.discarded_at IS NULL AND COALESCE(a.provider, '') NOT LIKE 'error:%' \
-            AND ($4::text IS NULL OR LOWER(c.streamer_login) = LOWER($4)) \
+    let rows = sqlx::query_as::<_, PlatformRow>(
+        "SELECT c.id AS clip_db_id, c.streamer_login, c.clip_title, c.clip_url,
+                c.created_at::text AS created_at, c.game_name, a.platform,
+                COALESCE(a.views, 0)::bigint AS views, COALESCE(a.likes, 0)::bigint AS likes,
+                COALESCE(a.comments, 0)::bigint AS comments, COALESCE(a.shares, 0)::bigint AS shares,
+                COALESCE(a.watch_time_seconds, 0)::bigint AS watch_time_seconds,
+                a.ctr_percent::double precision AS ctr_percent, a.engagement_rate::double precision AS engagement_rate
+           FROM twitch_clips_social_analytics a JOIN twitch_clips_social_media c ON c.id = a.clip_id
+          WHERE a.bucket = $1 AND a.synced_at >= $2::text::timestamptz AND a.synced_at < $3::text::timestamptz
+            AND c.discarded_at IS NULL AND COALESCE(a.provider, '') NOT LIKE 'error:%'
+            AND ($4::text IS NULL OR c.twitch_user_id = $4)
           ORDER BY c.id ASC, a.platform ASC, a.synced_at DESC",
-        bucket,
-        period_start,
-        period_end,
-        streamer_login
     )
+    .bind(bucket).bind(period_start).bind(period_end).bind(twitch_user_id)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -121,33 +117,17 @@ pub async fn load_clip_performance(
     let mut order: Vec<i64> = Vec::new();
     let mut grouped: std::collections::HashMap<i64, Vec<PlatformRow>> =
         std::collections::HashMap::new();
-    for r in &rows {
+    for r in rows {
         let clip_db_id = r.clip_db_id;
         let platform = r.platform.clone();
         if !seen.insert((clip_db_id, platform.clone())) {
             continue;
         }
-        let pr = PlatformRow {
-            clip_db_id,
-            streamer_login: r.streamer_login.clone(),
-            clip_title: r.clip_title.clone(),
-            clip_url: Some(r.clip_url.clone()),
-            game_name: r.game_name.clone(),
-            created_at: r.created_at.clone(),
-            platform,
-            views: r.views as i64,
-            likes: r.likes as i64,
-            comments: r.comments as i64,
-            shares: r.shares as i64,
-            watch_time_seconds: r.watch_time_seconds as i64,
-            ctr_percent: r.ctr,
-            engagement_rate: r.eng,
-        };
         grouped.entry(clip_db_id).or_insert_with(|| {
             order.push(clip_db_id);
             Vec::new()
         });
-        grouped.get_mut(&clip_db_id).unwrap().push(pr);
+        grouped.get_mut(&clip_db_id).unwrap().push(r);
     }
 
     order
@@ -156,6 +136,7 @@ pub async fn load_clip_performance(
         .collect()
 }
 
+#[derive(sqlx::FromRow)]
 struct PlatformRow {
     clip_db_id: i64,
     streamer_login: String,
@@ -521,6 +502,7 @@ impl SocialMediaReportWriter {
     /// Wochenreport eines Streamers (kind=streamer, 7d-Bucket).
     pub async fn write_streamer_report(
         &self,
+        twitch_user_id: &str,
         streamer_login: &str,
         period_start: Option<DateTime<Utc>>,
         period_end: Option<DateTime<Utc>>,
@@ -534,7 +516,7 @@ impl SocialMediaReportWriter {
                 "streamer",
                 &start_iso,
                 &end_iso,
-                Some(streamer_login),
+                Some(twitch_user_id),
             )
             .await
             {
@@ -542,7 +524,7 @@ impl SocialMediaReportWriter {
             }
         }
         let clips =
-            load_clip_performance(&self.pool, "7d", &start_iso, &end_iso, Some(streamer_login))
+            load_clip_performance(&self.pool, "7d", &start_iso, &end_iso, Some(twitch_user_id))
                 .await;
         let rendered = self
             .render_streamer_report(streamer_login, &period, &clips)
@@ -551,6 +533,7 @@ impl SocialMediaReportWriter {
             &self.pool,
             "streamer",
             Some(streamer_login),
+            Some(twitch_user_id),
             &start_iso,
             &end_iso,
             &rendered.content,
@@ -581,6 +564,7 @@ impl SocialMediaReportWriter {
             &self.pool,
             "cross",
             None,
+            None,
             &start_iso,
             &end_iso,
             &rendered.content,
@@ -610,6 +594,7 @@ impl SocialMediaReportWriter {
         insert_report(
             &self.pool,
             "admin",
+            None,
             None,
             &start_iso,
             &end_iso,
@@ -870,9 +855,9 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, clip_title TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), game_name TEXT, source_kind TEXT NOT NULL DEFAULT 'twitch', discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', clip_title TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), game_name TEXT, source_kind TEXT NOT NULL DEFAULT 'twitch', discarded_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC, engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ NOT NULL)",
-            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, twitch_user_id TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -933,7 +918,7 @@ mod tests {
 
         // Keine Analytics → No-Data-Fallback (LLM nicht erreichbar im Test).
         let r1 = writer
-            .write_streamer_report("nani", Some(start), Some(end), false)
+            .write_streamer_report("42", "nani", Some(start), Some(end), false)
             .await
             .unwrap();
         assert_eq!(r1.kind, "streamer");
@@ -943,7 +928,7 @@ mod tests {
 
         // Idempotent: zweiter Lauf ohne force liefert denselben Datensatz.
         let r2 = writer
-            .write_streamer_report("nani", Some(start), Some(end), false)
+            .write_streamer_report("42", "nani", Some(start), Some(end), false)
             .await
             .unwrap();
         assert_eq!(r2.id, r1.id);
@@ -957,7 +942,7 @@ mod tests {
         let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('report-2', 'https://clips.test/report-2', 'nani', 'Hot Clip') RETURNING id").fetch_one(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '7d', 500, 50, 12.0, 'ok', '2026-06-10T12:00:00+00:00')").bind(c).execute(&pool).await.unwrap();
         let r3 = writer
-            .write_streamer_report("nani", Some(start), Some(end), true)
+            .write_streamer_report("42", "nani", Some(start), Some(end), true)
             .await
             .unwrap();
         assert_ne!(r3.id, r1.id); // force → neue Zeile

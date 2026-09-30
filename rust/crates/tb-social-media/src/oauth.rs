@@ -67,6 +67,7 @@ impl Default for TokenUrls {
 }
 
 /// Aus dem Code-Exchange gewonnene Tokens (Python `tokens`-Dict).
+#[derive(Clone)]
 struct ExchangedTokens {
     access_token: String,
     refresh_token: Option<String>,
@@ -83,6 +84,7 @@ struct ExchangedTokens {
 pub struct CallbackResult {
     pub platform: String,
     pub streamer_login: Option<String>,
+    pub twitch_user_id: Option<String>,
 }
 
 /// OAuth-Manager: Authorize-URLs + Callback-Exchange + verschlüsselter Persist.
@@ -126,9 +128,25 @@ impl OAuthManager {
     pub async fn generate_auth_url(
         &self,
         platform: &str,
-        streamer_login: Option<&str>,
+        twitch_user_id: Option<&str>,
         redirect_uri: &str,
     ) -> Result<String, OAuthError> {
+        let streamer_login = if let Some(id) = twitch_user_id {
+            if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(OAuthError::StateInvalid);
+            }
+            Some(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1",
+                )
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or(OAuthError::StateInvalid)?,
+            )
+        } else {
+            None
+        };
         let state = tb_crypto::random_hex_token(24);
         let pkce_verifier = match platform {
             "tiktok" | "youtube" => Some(tb_crypto::random_hex_token(48)),
@@ -148,17 +166,11 @@ impl OAuthManager {
             .as_deref()
             .map(|verifier| encrypt_pkce(&self.cipher, platform, &state_lookup_key, verifier))
             .transpose()?;
-        sqlx::query!(
-            "INSERT INTO oauth_state_tokens \
-                (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, NULL)",
-            &state_lookup_key,
-            platform,
-            streamer_login,
-            redirect_uri,
-            pkce_verifier_enc.as_deref(),
-            expires_at
+        sqlx::query(
+            "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier, expires_at, consumed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)",
         )
+        .bind(&state_lookup_key).bind(platform).bind(streamer_login.as_deref()).bind(twitch_user_id)
+        .bind(redirect_uri).bind(pkce_verifier_enc.as_deref()).bind(expires_at)
         .execute(&self.pool)
         .await?;
 
@@ -174,7 +186,7 @@ impl OAuthManager {
         expected_platform: Option<&str>,
         expected_redirect_uri: Option<&str>,
     ) -> Result<CallbackResult, OAuthError> {
-        let (platform, streamer_login, redirect_uri, verifier) = self
+        let (platform, twitch_user_id, redirect_uri, verifier) = self
             .consume_state_token(state, expected_platform, expected_redirect_uri)
             .await?;
 
@@ -191,11 +203,13 @@ impl OAuthManager {
             other => return Err(OAuthError::UnknownPlatform(other.to_string())),
         };
 
-        self.save_encrypted_tokens(&platform, streamer_login.as_deref(), &tokens)
+        let streamer_login = self
+            .save_encrypted_tokens(&platform, twitch_user_id.as_deref(), &tokens)
             .await?;
         Ok(CallbackResult {
             platform,
             streamer_login,
+            twitch_user_id,
         })
     }
 
@@ -214,24 +228,22 @@ impl OAuthManager {
         let now = Utc::now();
         let state_lookup_key = tb_crypto::token_lookup_key(state);
         // Plattform-Filter optional über $3 (NULL = kein Filter).
-        let row = sqlx::query!(
-            "UPDATE oauth_state_tokens SET consumed_at = $1 \
-             WHERE state_token = $2 AND expires_at > $1 AND consumed_at IS NULL \
-               AND ($3::text IS NULL OR platform = $3) \
-             RETURNING platform, streamer_login, redirect_uri, pkce_verifier",
-            now,
-            state_lookup_key,
-            expected_platform.as_deref()
+        let (platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier) = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>, Option<String>)>(
+            "UPDATE oauth_state_tokens SET consumed_at = $1 WHERE state_token = $2 AND expires_at > $1 AND consumed_at IS NULL AND ($3::text IS NULL OR platform = $3) RETURNING platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier",
         )
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(OAuthError::StateInvalid)?;
-
-        let platform = row.platform;
-        let streamer_login = row.streamer_login;
-        let redirect_uri = row.redirect_uri.unwrap_or_default();
-        let verifier = row
-            .pkce_verifier
+        .bind(now).bind(&state_lookup_key).bind(expected_platform.as_deref())
+        .fetch_optional(&self.pool).await?.ok_or(OAuthError::StateInvalid)?;
+        // Ein alter kanaleigener State ohne ID ist keine Besitzbestätigung.
+        // Der bestehende ausdrückliche globale Flow besitzt weiterhin keinen Kanal.
+        if streamer_login.is_some()
+            && !twitch_user_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return Err(OAuthError::StateInvalid);
+        }
+        let redirect_uri = redirect_uri.unwrap_or_default();
+        let verifier = pkce_verifier
             .as_deref()
             .map(|encoded| decrypt_pkce(&self.cipher, &platform, &state_lookup_key, encoded))
             .transpose()?;
@@ -244,7 +256,7 @@ impl OAuthManager {
                 return Err(OAuthError::RedirectMismatch);
             }
         }
-        Ok((platform, streamer_login, redirect_uri, verifier))
+        Ok((platform, twitch_user_id, redirect_uri, verifier))
     }
 
     async fn tiktok_exchange_code(
@@ -539,9 +551,93 @@ impl OAuthManager {
     async fn save_encrypted_tokens(
         &self,
         platform: &str,
-        streamer_login: Option<&str>,
+        twitch_user_id: Option<&str>,
         tokens: &ExchangedTokens,
-    ) -> Result<(), OAuthError> {
+    ) -> Result<Option<String>, OAuthError> {
+        let mut tx = self.pool.begin().await?;
+        let login = if let Some(id) = twitch_user_id {
+            Some(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1 FOR SHARE",
+                )
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(OAuthError::StateInvalid)?,
+            )
+        } else {
+            None
+        };
+        let streamer_login = login.as_deref();
+        let mut tokens = tokens.clone();
+        if let (Some(id), Some(login)) = (twitch_user_id, streamer_login) {
+            #[derive(sqlx::FromRow)]
+            struct OwnedTokens {
+                streamer_login: String,
+                refresh_token_enc: Option<Vec<u8>>,
+                client_secret_enc: Option<Vec<u8>>,
+                enc_version: Option<i32>,
+                client_id: Option<String>,
+                scopes: Option<String>,
+                platform_user_id: Option<String>,
+                platform_username: Option<String>,
+            }
+            // Nur nachweislich derselben Plattform-ID gehörende Daten dürfen
+            // einen Rename überleben. Der alte Login ist ausschließlich AAD.
+            let previous = sqlx::query_as::<_, OwnedTokens>(
+                "SELECT streamer_login, refresh_token_enc, client_secret_enc, enc_version,
+                        client_id, scopes, platform_user_id, platform_username
+                 FROM social_media_platform_auth
+                 WHERE platform = $1 AND twitch_user_id = $2 AND streamer_login IS NOT NULL
+                 ORDER BY (streamer_login = $3) DESC, authorized_at DESC, id DESC
+                 LIMIT 1 FOR UPDATE",
+            )
+            .bind(platform)
+            .bind(id)
+            .bind(login)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(previous) = previous {
+                let decrypt = |field: &str, blob: Option<Vec<u8>>| {
+                    blob.map(|blob| {
+                        self.cipher
+                            .decrypt_field(
+                                &blob,
+                                &aad::social_media(
+                                    field,
+                                    platform,
+                                    Some(&previous.streamer_login),
+                                    i64::from(previous.enc_version.unwrap_or(1)),
+                                ),
+                            )
+                            .map_err(|_| OAuthError::Exchange {
+                                platform: "persist",
+                                detail: "decrypt owned token".into(),
+                            })
+                    })
+                    .transpose()
+                };
+                if tokens.refresh_token.is_none() {
+                    tokens.refresh_token = decrypt("refresh_token", previous.refresh_token_enc)?;
+                }
+                if tokens
+                    .client_secret
+                    .as_ref()
+                    .is_none_or(|secret| secret.is_empty())
+                {
+                    tokens.client_secret = decrypt("client_secret", previous.client_secret_enc)?;
+                }
+                tokens.client_id = tokens
+                    .client_id
+                    .filter(|id| !id.is_empty())
+                    .or(previous.client_id);
+                tokens.scopes = tokens.scopes.or(previous.scopes);
+                tokens.user_id = tokens.user_id.or(previous.platform_user_id);
+                tokens.username = tokens.username.or(previous.platform_username);
+            }
+            sqlx::query("DELETE FROM social_media_platform_auth WHERE platform = $1 AND twitch_user_id = $2 AND streamer_login <> $3")
+                .bind(platform).bind(id).bind(login).execute(&mut *tx).await?;
+        }
         let access_enc = self
             .cipher
             .encrypt_field(
@@ -552,26 +648,37 @@ impl OAuthManager {
                 platform: "persist",
                 detail: "encrypt access".to_string(),
             })?;
-        let refresh_enc = tokens.refresh_token.as_ref().and_then(|t| {
-            self.cipher
-                .encrypt_field(
-                    t,
-                    &aad::social_media("refresh_token", platform, streamer_login, 1),
-                )
-                .ok()
-        });
+        let refresh_enc = tokens
+            .refresh_token
+            .as_ref()
+            .map(|t| {
+                self.cipher
+                    .encrypt_field(
+                        t,
+                        &aad::social_media("refresh_token", platform, streamer_login, 1),
+                    )
+                    .map_err(|_| OAuthError::Exchange {
+                        platform: "persist",
+                        detail: "encrypt refresh".into(),
+                    })
+            })
+            .transpose()?;
         let secret_enc = tokens
             .client_secret
             .as_ref()
             .filter(|s| !s.is_empty())
-            .and_then(|s| {
+            .map(|s| {
                 self.cipher
                     .encrypt_field(
                         s,
                         &aad::social_media("client_secret", platform, streamer_login, 1),
                     )
-                    .ok()
-            });
+                    .map_err(|_| OAuthError::Exchange {
+                        platform: "persist",
+                        detail: "encrypt client secret".into(),
+                    })
+            })
+            .transpose()?;
         let expires_at_iso = tokens.expires_at.to_rfc3339();
 
         let conflict = if streamer_login.is_none() {
@@ -581,23 +688,25 @@ impl OAuthManager {
         };
         let sql = format!(
             "INSERT INTO social_media_platform_auth \
-                (platform, streamer_login, access_token_enc, refresh_token_enc, client_id, \
+                (platform, streamer_login, twitch_user_id, access_token_enc, refresh_token_enc, client_id, \
                  client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, \
                  enc_version, enc_kid) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, 'v1') \
+             VALUES ($1, $2, $11, $3, $4, $5, $6, $7, $8, $9, $10, 1, 'v1') \
              {conflict} DO UPDATE SET \
-                access_token_enc = EXCLUDED.access_token_enc, \
-                refresh_token_enc = COALESCE(EXCLUDED.refresh_token_enc, social_media_platform_auth.refresh_token_enc), \
-                client_id = COALESCE(EXCLUDED.client_id, social_media_platform_auth.client_id), \
-                client_secret_enc = COALESCE(EXCLUDED.client_secret_enc, social_media_platform_auth.client_secret_enc), \
-                token_expires_at = COALESCE(EXCLUDED.token_expires_at, social_media_platform_auth.token_expires_at), \
-                scopes = COALESCE(EXCLUDED.scopes, social_media_platform_auth.scopes), \
-                platform_user_id = COALESCE(EXCLUDED.platform_user_id, social_media_platform_auth.platform_user_id), \
-                platform_username = COALESCE(EXCLUDED.platform_username, social_media_platform_auth.platform_username), \
+                twitch_user_id = EXCLUDED.twitch_user_id, access_token_enc = EXCLUDED.access_token_enc, \
+                refresh_token_enc = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.refresh_token_enc, social_media_platform_auth.refresh_token_enc) ELSE EXCLUDED.refresh_token_enc END, \
+                client_id = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.client_id, social_media_platform_auth.client_id) ELSE EXCLUDED.client_id END, \
+                client_secret_enc = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.client_secret_enc, social_media_platform_auth.client_secret_enc) ELSE EXCLUDED.client_secret_enc END, \
+                token_expires_at = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.token_expires_at, social_media_platform_auth.token_expires_at) ELSE EXCLUDED.token_expires_at END, \
+                scopes = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.scopes, social_media_platform_auth.scopes) ELSE EXCLUDED.scopes END, \
+                platform_user_id = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.platform_user_id, social_media_platform_auth.platform_user_id) ELSE EXCLUDED.platform_user_id END, \
+                platform_username = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.platform_username, social_media_platform_auth.platform_username) ELSE EXCLUDED.platform_username END, \
                 enc_version = EXCLUDED.enc_version, enc_kid = EXCLUDED.enc_kid, \
-                enabled = 1, last_refreshed_at = CURRENT_TIMESTAMP"
+                enabled = 1, last_refreshed_at = CURRENT_TIMESTAMP \
+             WHERE social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id \
+                OR social_media_platform_auth.twitch_user_id IS NULL"
         );
-        sqlx::query(sqlx::AssertSqlSafe(sql))
+        let changed = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(platform)
             .bind(streamer_login)
             .bind(access_enc)
@@ -608,9 +717,14 @@ impl OAuthManager {
             .bind(tokens.scopes.as_deref())
             .bind(tokens.user_id.as_deref())
             .bind(tokens.username.as_deref())
-            .execute(&self.pool)
+            .bind(twitch_user_id)
+            .execute(&mut *tx)
             .await?;
-        Ok(())
+        if changed.rows_affected() != 1 {
+            return Err(OAuthError::StateInvalid);
+        }
+        tx.commit().await?;
+        Ok(login)
     }
 
     /// Erneuert einen Access-Token (Python `refresh_token`). Nur TikTok/YouTube
@@ -1173,17 +1287,22 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE oauth_state_tokens (state_token TEXT PRIMARY KEY, platform TEXT, \
-             streamer_login TEXT, redirect_uri TEXT, pkce_verifier TEXT, expires_at TIMESTAMPTZ, \
+             streamer_login TEXT, twitch_user_id TEXT, redirect_uri TEXT, pkce_verifier TEXT, expires_at TIMESTAMPTZ, \
              consumed_at TIMESTAMPTZ)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT UNIQUE)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('nani', '42')")
+            .execute(&pool)
+            .await
+            .unwrap();
         // Auth-Tabelle + partielle Unique-Indizes (storage/pg.py).
         sqlx::query(
             "CREATE TABLE social_media_platform_auth (\
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, platform TEXT NOT NULL, \
-                streamer_login TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, \
+                streamer_login TEXT, twitch_user_id TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, \
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
@@ -1213,8 +1332,8 @@ mod tests {
         let verifier_enc = verifier
             .map(|value| encrypt_pkce(&cipher, platform, &state_lookup_key, value).unwrap());
         sqlx::query(
-            "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at) \
-             VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '5 minutes', NULL)",
+            "INSERT INTO oauth_state_tokens (state_token, platform, streamer_login, twitch_user_id, redirect_uri, pkce_verifier, expires_at, consumed_at) \
+             VALUES ($1, $2, $3, CASE WHEN $3::text IS NULL THEN NULL ELSE '42' END, $4, $5, NOW() + INTERVAL '5 minutes', NULL)",
         )
         .bind(state_lookup_key)
         .bind(platform)
@@ -1232,7 +1351,7 @@ mod tests {
         std::env::set_var("YOUTUBE_CLIENT_ID", "yt-cid");
         let mgr = OAuthManager::new(pool.clone(), test_cipher());
         let url = mgr
-            .generate_auth_url("youtube", Some("nani"), "https://cb/yt")
+            .generate_auth_url("youtube", Some("42"), "https://cb/yt")
             .await
             .unwrap();
         assert!(url.contains("client_id=yt-cid"));
@@ -1287,7 +1406,7 @@ mod tests {
         let (platform, streamer, redirect, verifier) =
             mgr.consume_state_token("st1", None, None).await.unwrap();
         assert_eq!(platform, "tiktok");
-        assert_eq!(streamer.as_deref(), Some("nani"));
+        assert_eq!(streamer.as_deref(), Some("42"));
         assert_eq!(redirect, "https://cb/x");
         assert_eq!(verifier.as_deref(), Some("verif"));
         // Zweiter Consume → bereits benutzt.
@@ -1347,7 +1466,8 @@ mod tests {
             result,
             CallbackResult {
                 platform: "youtube".to_string(),
-                streamer_login: Some("nani".to_string())
+                streamer_login: Some("nani".to_string()),
+                twitch_user_id: Some("42".to_string()),
             }
         );
 
@@ -1402,5 +1522,240 @@ mod tests {
         )
         .fetch_one(&pool).await.unwrap();
         assert!(refresh_present, "refresh_token via COALESCE erhalten");
+    }
+    #[tokio::test]
+    async fn callback_keeps_state_identity_and_rejects_unbound_legacy_before_exchange() {
+        let Some(pool) = make_pool("t_sm_oauth_identity").await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "local-access", "refresh_token": "local-refresh", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(pool.clone(), test_cipher()).with_token_urls(
+            "http://127.0.0.1:1".into(),
+            format!("{}/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+        );
+        seed_state(
+            &pool,
+            "selected-a",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("verifier"),
+        )
+        .await;
+        sqlx::query(
+            "UPDATE twitch_streamers SET twitch_login = 'renamed_a' WHERE twitch_user_id = '42'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('nani', '99')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = mgr
+            .handle_callback(
+                "local-code",
+                "selected-a",
+                Some("youtube"),
+                Some("https://cb/yt"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.streamer_login.as_deref(), Some("renamed_a"));
+        assert_eq!(result.twitch_user_id.as_deref(), Some("42"));
+        let stored: (String, String) = sqlx::query_as("SELECT streamer_login, twitch_user_id FROM social_media_platform_auth WHERE platform = 'youtube'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, ("renamed_a".into(), "42".into()));
+        seed_state(
+            &pool,
+            "legacy",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("verifier"),
+        )
+        .await;
+        sqlx::query("UPDATE oauth_state_tokens SET twitch_user_id = NULL WHERE state_token = $1")
+            .bind(tb_crypto::token_lookup_key("legacy"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.handle_callback("local-code", "legacy", None, None)
+                .await,
+            Err(OAuthError::StateInvalid)
+        ));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "Legacy-State erreicht keinen Exchange"
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_rename_keeps_owned_refresh_with_new_aad() {
+        let Some(pool) = make_pool("t_sm_oauth_rename").await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"access_token": "new-local-access", "expires_in": 3600}),
+            ))
+            .mount(&server)
+            .await;
+        let cipher = test_cipher();
+        let mgr = OAuthManager::new(pool.clone(), cipher.clone()).with_token_urls(
+            "http://127.0.0.1:1".into(),
+            format!("{}/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+        );
+        mgr.save_encrypted_tokens(
+            "youtube",
+            Some("42"),
+            &ExchangedTokens {
+                access_token: "old-local-access".into(),
+                refresh_token: Some("owned-local-refresh".into()),
+                expires_at: Utc::now() + Duration::hours(1),
+                scopes: Some("youtube.upload".into()),
+                user_id: Some("owned-platform-id".into()),
+                username: Some("owned-platform-name".into()),
+                client_id: Some("local-client".into()),
+                client_secret: Some("owned-local-secret".into()),
+            },
+        )
+        .await
+        .unwrap();
+        seed_state(
+            &pool,
+            "rename",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("verifier"),
+        )
+        .await;
+        sqlx::query(
+            "UPDATE twitch_streamers SET twitch_login = 'renamed_a' WHERE twitch_user_id = '42'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('nani', '99')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        mgr.handle_callback("local-code", "rename", None, None)
+            .await
+            .unwrap();
+        let reader = crate::credentials::CredentialManager::new(pool.clone(), cipher.clone());
+        let own = reader
+            .get_credentials_for_id("youtube", Some("42"))
+            .await
+            .unwrap();
+        assert_eq!(own.streamer_login.as_deref(), Some("renamed_a"));
+        assert_eq!(own.access_token, "new-local-access");
+        assert_eq!(own.refresh_token.as_deref(), Some("owned-local-refresh"));
+        assert_eq!(own.client_secret.as_deref(), Some("owned-local-secret"));
+        assert_eq!(own.platform_user_id.as_deref(), Some("owned-platform-id"));
+        assert!(reader
+            .get_credentials_for_id("youtube", Some("99"))
+            .await
+            .is_none());
+        let encrypted: Vec<u8> = sqlx::query_scalar(
+            "SELECT refresh_token_enc FROM social_media_platform_auth WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            cipher
+                .decrypt_field(
+                    &encrypted,
+                    &aad::social_media("refresh_token", "youtube", Some("nani"), 1)
+                )
+                .is_err(),
+            "Alter Login-AAD darf nicht mehr passen"
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_binds_legacy_without_reusing_unowned_refresh_or_user_data() {
+        let Some(pool) = make_pool("t_sm_oauth_legacy_bind").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, access_token_enc, refresh_token_enc, client_secret_enc, platform_user_id, platform_username, scopes) VALUES ('youtube', 'nani', decode('01','hex'), decode('02','hex'), decode('03','hex'), 'legacy-owner', 'legacy-name', 'legacy-scope')")
+            .execute(&pool).await.unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"access_token": "local-access", "expires_in": 3600}),
+            ))
+            .mount(&server)
+            .await;
+        let mgr = OAuthManager::new(pool.clone(), test_cipher()).with_token_urls(
+            "http://127.0.0.1:1".into(),
+            format!("{}/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+        );
+        seed_state(
+            &pool,
+            "bind",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("verifier"),
+        )
+        .await;
+        mgr.handle_callback("local-code", "bind", None, None)
+            .await
+            .unwrap();
+        let isolated: bool = sqlx::query_scalar("SELECT twitch_user_id = '42' AND refresh_token_enc IS NULL AND platform_user_id IS NULL AND platform_username IS NULL AND scopes IS NULL FROM social_media_platform_auth WHERE platform = 'youtube'")
+            .fetch_one(&pool).await.unwrap();
+        assert!(isolated, "Neue ID erbt keine ungebundenen Accountdaten");
+        // Ein späterer Besitzer desselben Logins darf die nun bekannte ID
+        // weder übernehmen noch deren vorhandene Verbindung überschreiben.
+        sqlx::query(
+            "UPDATE twitch_streamers SET twitch_user_id = '99' WHERE twitch_login = 'nani'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_state(
+            &pool,
+            "foreign",
+            "youtube",
+            Some("nani"),
+            "https://cb/yt",
+            Some("verifier"),
+        )
+        .await;
+        sqlx::query("UPDATE oauth_state_tokens SET twitch_user_id = '99' WHERE state_token = $1")
+            .bind(tb_crypto::token_lookup_key("foreign"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.handle_callback("local-code", "foreign", None, None)
+                .await,
+            Err(OAuthError::StateInvalid)
+        ));
+        let owner: String = sqlx::query_scalar(
+            "SELECT twitch_user_id FROM social_media_platform_auth WHERE platform = 'youtube'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(owner, "42");
     }
 }

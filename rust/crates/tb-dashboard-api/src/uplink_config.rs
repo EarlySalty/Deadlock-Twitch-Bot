@@ -4,6 +4,8 @@
 use std::{collections::HashMap, path::Path, sync::OnceLock, time::Duration};
 
 use serde::Deserialize;
+use sqlx::PgPool;
+use tb_config::{BotConfigSnapshot, DbConfig};
 use tb_transport_twitch::{HelixClient, HelixConfig};
 use tokio::io::AsyncReadExt;
 use zeroize::{Zeroize, Zeroizing};
@@ -104,6 +106,44 @@ pub fn install(runtime: UplinkRuntime) -> Result<(), &'static str> {
     RUNTIME
         .set(runtime)
         .map_err(|_| "Uplink wurde bereits eingerichtet.")
+}
+
+/// Enger Laufzeitkontext für die Clip-Kontexternte. Er nutzt ausschließlich
+/// bereits geladene Infisical-Werte und die normalen Poolzeiten der Config.
+pub struct ClipContextRuntime {
+    pub read_pool: PgPool,
+    pub write_pool: PgPool,
+    pub helix: Option<HelixClient>,
+}
+
+pub async fn clip_context_runtime(
+    snapshot: &BotConfigSnapshot,
+) -> Result<ClipContextRuntime, &'static str> {
+    let runtime = runtime()?;
+    let dsn = runtime
+        .platform_value("TWITCH_ANALYTICS_DSN")
+        .ok_or("Der Datenbankzugang für die Clip-Kontexternte fehlt in Infisical.")?;
+    let helix = runtime.helix.clone();
+
+    let database = &snapshot.settings().database;
+    let pool_config = DbConfig {
+        dsn,
+        pool_max: 2,
+        acquire_timeout: Duration::from_millis(database.acquire_timeout_ms),
+        connect_timeout: Duration::from_secs(database.connect_timeout_seconds),
+    };
+    let read_pool = tb_db::pool::connect_readonly(&pool_config)
+        .await
+        .map_err(|_| "Die lesende Datenbankverbindung für Clip-Kontext ist fehlgeschlagen.")?;
+    let write_pool = tb_db::pool::connect(&pool_config)
+        .await
+        .map_err(|_| "Die schreibende Datenbankverbindung für Clip-Kontext ist fehlgeschlagen.")?;
+
+    Ok(ClipContextRuntime {
+        read_pool,
+        write_pool,
+        helix,
+    })
 }
 
 /// Lokale Verwaltungsendpunkte ohne DNS, Zugangsdaten, Pfad oder Redirect.

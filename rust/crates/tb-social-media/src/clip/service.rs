@@ -66,7 +66,20 @@ impl ClipFetchService {
             }
         };
 
-        let clips = match self.helix.fetch_clips(&user_id, login, self.clip_limit).await {
+        self.fetch_for_broadcaster(&user_id, login).await
+    }
+
+    /// Manueller Dashboardpfad: die autorisierte ID wird nie erneut aus dem Namen ermittelt.
+    pub async fn fetch_for_broadcaster(&self, user_id: &str, login: &str) -> StreamerFetchResult {
+        let started = Instant::now();
+        if user_id.is_empty() || !user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return error_result(login, "Ungültige Twitch-ID", started);
+        }
+        let clips = match self
+            .helix
+            .fetch_clips(user_id, login, self.clip_limit)
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 return error_result(login, &e.to_string(), started);
@@ -74,7 +87,7 @@ impl ClipFetchService {
         };
 
         // FK sicherstellen bevor Clips geschrieben werden.
-        if let Err(e) = self.repo.ensure_monitored_streamer(login, &user_id).await {
+        if let Err(e) = self.repo.ensure_monitored_streamer(login, user_id).await {
             return error_result(login, &e.to_string(), started);
         }
 

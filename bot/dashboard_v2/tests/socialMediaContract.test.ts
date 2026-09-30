@@ -29,6 +29,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
+import { resolveSocialMediaChannel } from '../src/utils/socialMediaChannel';
 import {
   clipFehler,
   istGesperrt,
@@ -528,4 +529,30 @@ test('ein Code ohne Meldung landet nicht als Platzhalterinhalt im Satz', () => {
     (text, params) => translate('en', text, params),
   );
   assert.equal(satz, 'The decision could not be saved.');
+});
+
+test('Admin-Upload hält die ausgewählte Twitch-ID statt des veränderlichen Namens fest', () => {
+  const admin = lies('src/pages/SocialMediaAdmin.tsx');
+  const studio = lies('src/pages/SocialMedia.tsx');
+  const api = lies('src/api/socialMedia.ts');
+  assert.match(admin, /value=\{selectedChannel\?\.twitchUserId \?\? ''\}/);
+  assert.match(admin, /value=\{channel\.twitchUserId \?\? ''\}/);
+  assert.match(admin, /twitchUserId=\{selectedChannel\?\.twitchUserId \?\? undefined\}/);
+  assert.match(studio, /uploadClip\(\{ file, twitch_user_id: twitchUserId \}\)/);
+  const upload = api.slice(api.indexOf('export async function uploadClip'), api.indexOf('export interface PlatformStatus'));
+  assert.match(upload, /form\.append\('twitch_user_id', input\.twitch_user_id\)/);
+  assert.doesNotMatch(upload, /streamer_login/);
+});
+
+test('Kanalwahl hält URL, sichtbaren Kanal und Uploadziel gemeinsam an derselben ID', () => {
+  const channels = [{ login: 'alpha', twitchUserId: '11' }, { login: 'beta', twitchUserId: '22' }];
+  assert.equal(resolveSocialMediaChannel(channels, '11', 'beta'), undefined);
+  assert.deepEqual(resolveSocialMediaChannel(channels, '11'), channels[0]);
+  assert.equal(resolveSocialMediaChannel(channels, null, 'alpha'), undefined);
+  assert.deepEqual(resolveSocialMediaChannel(channels, '22'), channels[1]);
+  assert.equal(resolveSocialMediaChannel(channels, '999'), undefined);
+  assert.equal(resolveSocialMediaChannel([...channels, { login: 'duplicate', twitchUserId: '11' }], '11'), undefined);
+  const renamed = [{ login: 'old_alpha', twitchUserId: '11' }, { login: 'alpha', twitchUserId: '22' }];
+  assert.deepEqual(resolveSocialMediaChannel(renamed, '11'), renamed[0]);
+  assert.equal(resolveSocialMediaChannel(renamed, '11', 'alpha'), undefined);
 });

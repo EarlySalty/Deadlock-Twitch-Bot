@@ -16,6 +16,8 @@ pub mod youtube;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UploadError {
+    #[error("Übertragung wurde nicht gestartet: {0}")]
+    NotStarted(#[source] Box<UploadError>),
     #[error("not authenticated")]
     NotAuthenticated,
     #[error("validation failed: {0}")]
@@ -33,6 +35,12 @@ pub enum UploadError {
     NotImplemented(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl UploadError {
+    pub(crate) fn not_started(error: Self) -> Self {
+        Self::NotStarted(Box::new(error))
+    }
 }
 
 /// Best-effort-Statistiken eines veröffentlichten Clips (mirror
@@ -80,6 +88,11 @@ impl AnalyticsSnapshot {
     }
 }
 
+#[async_trait]
+pub trait UploadCheckpoint: Send + Sync {
+    async fn record_publish_id(&self, publish_id: &str) -> Result<(), UploadError>;
+}
+
 /// Gemeinsame Uploader-Schnittstelle.
 #[async_trait]
 pub trait PlatformUploader: Send + Sync {
@@ -97,6 +110,19 @@ pub trait PlatformUploader: Send + Sync {
         description: &str,
         hashtags: &[String],
     ) -> Result<String, UploadError>;
+
+    async fn upload_video_checkpointed(
+        &self,
+        _video_path: &str,
+        _title: &str,
+        _description: &str,
+        _hashtags: &[String],
+        _checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        Err(UploadError::NotImplemented(
+            "Dieser Uploader unterstützt keine dauerhaft gesicherte Übertragung".into(),
+        ))
+    }
 
     /// Verarbeitungs-/Veröffentlichungsstatus (best-effort, `{}` bei Fehler).
     async fn get_video_status(&self, video_id: &str) -> Value;

@@ -274,17 +274,17 @@ const REPORT_COLUMNS: &str = "id, kind, streamer_login, period_start::text, peri
 pub async fn list_reports(
     pool: &PgPool,
     kind: Option<&str>,
-    streamer_login: Option<&str>,
+    twitch_user_id: Option<&str>,
     limit: i64,
 ) -> Vec<SocialMediaReportRecord> {
     let rows: Vec<ReportRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {REPORT_COLUMNS} FROM social_media_reports \
           WHERE ($1::text IS NULL OR kind = $1) \
-            AND ($2::text IS NULL OR LOWER(COALESCE(streamer_login, '')) = LOWER($2)) \
+            AND ($2::text IS NULL OR twitch_user_id = $2) \
           ORDER BY period_end DESC, created_at DESC, id DESC LIMIT $3"
     )))
     .bind(kind)
-    .bind(streamer_login)
+    .bind(twitch_user_id)
     .bind(limit.clamp(1, 100))
     .fetch_all(pool)
     .await
@@ -298,18 +298,18 @@ pub async fn get_existing_report(
     kind: &str,
     period_start: &str,
     period_end: &str,
-    streamer_login: Option<&str>,
+    twitch_user_id: Option<&str>,
 ) -> Option<SocialMediaReportRecord> {
     let row: Option<ReportRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {REPORT_COLUMNS} FROM social_media_reports \
           WHERE kind = $1 AND period_start = $2::timestamptz AND period_end = $3::timestamptz \
-            AND (streamer_login = $4 OR (streamer_login IS NULL AND $4::text IS NULL)) \
+            AND (twitch_user_id = $4 OR (streamer_login IS NULL AND $4::text IS NULL)) \
           ORDER BY created_at DESC, id DESC LIMIT 1"
     )))
     .bind(kind)
     .bind(period_start)
     .bind(period_end)
-    .bind(streamer_login)
+    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await
     .ok()
@@ -322,14 +322,15 @@ pub async fn insert_report(
     pool: &PgPool,
     kind: &str,
     streamer_login: Option<&str>,
+    twitch_user_id: Option<&str>,
     period_start: &str,
     period_end: &str,
     content_md: &str,
     model: Option<&str>,
 ) -> Result<SocialMediaReportRecord, sqlx::Error> {
     let row: ReportRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO social_media_reports (kind, streamer_login, period_start, period_end, content_md, model) \
-         VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6) RETURNING {REPORT_COLUMNS}"
+        "INSERT INTO social_media_reports (kind, streamer_login, twitch_user_id, period_start, period_end, content_md, model) \
+         VALUES ($1, $2, $7, $3::timestamptz, $4::timestamptz, $5, $6) RETURNING {REPORT_COLUMNS}"
     )))
     .bind(kind)
     .bind(streamer_login)
@@ -337,6 +338,7 @@ pub async fn insert_report(
     .bind(period_end)
     .bind(content_md)
     .bind(model)
+    .bind(twitch_user_id)
     .fetch_one(pool)
     .await?;
     Ok(row_to_report(row))
@@ -480,7 +482,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, \
+            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, twitch_user_id TEXT, \
              period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, \
              model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         )
@@ -501,6 +503,7 @@ mod tests {
             &pool,
             "weekly",
             Some("nani"),
+            Some("42"),
             ps,
             pe,
             "# Report",
@@ -514,14 +517,14 @@ mod tests {
         assert!(rec.created_at.is_some());
 
         // get_existing trifft denselben Zeitraum (timestamptz-Gleichheit, formatunabhängig).
-        let found = get_existing_report(&pool, "weekly", ps, pe, Some("nani")).await;
+        let found = get_existing_report(&pool, "weekly", ps, pe, Some("42")).await;
         assert_eq!(found.map(|r| r.id), Some(rec.id));
         // Anderer Streamer → kein Treffer.
         assert!(get_existing_report(&pool, "weekly", ps, pe, Some("other"))
             .await
             .is_none());
         // Globaler Report (streamer NULL) separat.
-        insert_report(&pool, "weekly", None, ps, pe, "# Global", None)
+        insert_report(&pool, "weekly", None, None, ps, pe, "# Global", None)
             .await
             .unwrap();
         let global = get_existing_report(&pool, "weekly", ps, pe, None)
@@ -533,7 +536,7 @@ mod tests {
         // list: ohne Filter beide, kind-Filter greift, streamer-Filter greift.
         assert_eq!(list_reports(&pool, None, None, 20).await.len(), 2);
         assert_eq!(
-            list_reports(&pool, Some("weekly"), Some("nani"), 20)
+            list_reports(&pool, Some("weekly"), Some("42"), 20)
                 .await
                 .len(),
             1

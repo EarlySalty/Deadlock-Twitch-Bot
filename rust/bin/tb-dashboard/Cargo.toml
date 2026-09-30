@@ -8,8 +8,13 @@ edition.workspace = true
 name = "tb-dashboard"
 path = "src/main.rs"
 
+[[bin]]
+name = "clip_context_learn"
+path = "src/bin/clip_context_learn.rs"
+
 [dependencies]
 axum              = { workspace = true }
+chrono            = { workspace = true }
 tokio             = { workspace = true }
 tracing           = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -18,4 +23,5 @@ whoami            = { workspace = true }
 tb-config         = { workspace = true }
 tb-db             = { workspace = true }
 tb-dashboard-api  = { workspace = true }
+tb-social-media   = { workspace = true }
 tb-transport-twitch = { workspace = true }

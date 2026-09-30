@@ -83,6 +83,7 @@ const EN: Record<string, string> = {
   "Post stoppen": "Stop post",
   "Transkript & Metadaten": "Transcript & metadata",
   "Aufbewahrung": "Retention",
+  "Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.": "Access could not be changed. Please check the selected channel.",
   "Änderungen gespeichert.": "Changes saved.",
   "Teilweise gespeichert. Dein Entwurf bleibt erhalten.": "Partially saved. Your draft has been kept.",
   "Speichern fehlgeschlagen. Dein Entwurf bleibt erhalten.": "Save failed. Your draft has been kept.",
@@ -226,6 +227,12 @@ const EN: Record<string, string> = {
     'Burns spoken words into the vertical video as subtitles.',
   'Vorschau wird gerendert…': 'Rendering preview…',
   'Vorschau konnte nicht gerendert werden.': 'The preview could not be rendered.',
+  'TikTok: Der Clip liegt in deinem Postfach. Öffne TikTok, bearbeite ihn und veröffentliche ihn dort.':
+    'TikTok: Your clip is in your inbox. Open TikTok to edit and publish it.',
+  'Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.':
+    'Your TikTok transfer is not confirmed yet. We keep checking the same transfer; another upload remains blocked.',
+  'TikTok hat den direkten Post abgelehnt. Neue Clips gehen jetzt in dein TikTok-Postfach, wo du sie selbst veröffentlichen kannst.':
+    'TikTok rejected the direct post. New clips go to your TikTok inbox, where you can publish them.',
   'Wähle zuerst mindestens eine Zielplattform.': 'Select at least one target platform first.',
   Ablehnen: 'Reject',
   Archivieren: 'Archive',
@@ -485,8 +492,8 @@ const EN: Record<string, string> = {
   '{count} geplante Posts gestoppt.': 'Stopped {count} scheduled posts.',
   'Auf {platforms} passiert nichts, dort steht die Kadenz auf null.':
     'Nothing happens on {platforms}, the cadence there is set to zero.',
-  'Gestoppt, aber {count} Plattform war schon durch.':
-    'Stopped, but {count} platform had already gone out.',
+  'Geplante Posts gestoppt. Bei {count} Plattformen hat die Übertragung bereits begonnen und lässt sich hier nicht mehr stoppen.':
+    'Scheduled posts stopped. Transfers have already started on {count} platforms and can no longer be stopped here.',
 
   // -- Reports --------------------------------------------------------------
 

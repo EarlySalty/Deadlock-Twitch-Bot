@@ -29,9 +29,9 @@ const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS social_media_streamer_layout (\
         streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
         layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, \
-        mode TEXT NOT NULL DEFAULT 'pip', \
+        mode TEXT NOT NULL DEFAULT 'stacked', \
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT, \
-        CONSTRAINT social_media_layout_mode_chk CHECK (mode IN ('pip', 'stacked')))",
+        CONSTRAINT social_media_layout_mode_chk CHECK (mode IN ('pip', 'stacked', 'blur_pad')))",
     // Clip-Tabelle: Social-Media-Spalten + Retention.
     "ALTER TABLE twitch_clips_social_media \
         ADD COLUMN IF NOT EXISTS layout_override_json JSONB, \
@@ -127,7 +127,7 @@ const STATEMENTS: &[&str] = &[
     // Partner-Freigabe für Social-Media-Posts (zentraler Guard).
     "CREATE TABLE IF NOT EXISTS social_media_partner_access (\
         streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
-        granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
+        twitch_user_id TEXT, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
         granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     // Analytics-Spalten (Phase 3) — neue Spalten idempotent.
     "ALTER TABLE twitch_clips_social_analytics \

@@ -1665,7 +1665,7 @@ async fn main() {
         let preview = tb_social_media::preview::PreviewWorker::new(
             pool.clone(),
             yt_dlp_path(snapshot).to_string_lossy().into_owned(),
-            "data/clips",
+            tb_social_media::clip_prep_worker::DEFAULT_CLIPS_DIR,
         );
         supervisor.spawn(
             "social_clip_preview_worker",

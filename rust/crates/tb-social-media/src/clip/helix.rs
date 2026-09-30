@@ -74,6 +74,27 @@ impl HelixClipSource {
         Self { client }
     }
 
+    pub async fn fetch_clip_by_id(
+        &self,
+        clip_id: &str,
+        streamer_login: &str,
+    ) -> Result<Option<ClipRecord>, HelixError> {
+        let req = self.client.get("/clips").await?.query(&[("id", clip_id)]);
+        let resp: serde_json::Value = req.send().await?.error_for_status()?.json().await?;
+        Ok(resp
+            .get("data")
+            .and_then(|data| data.as_array())
+            .and_then(|data| {
+                data.iter()
+                    .find(|item| item.get("id").and_then(|id| id.as_str()) == Some(clip_id))
+            })
+            .and_then(|item| parse_clip(item, ""))
+            .map(|mut clip| {
+                clip.streamer_login = streamer_login.to_owned();
+                clip
+            }))
+    }
+
     /// Holt die Twitch-User-ID für einen Login-Namen.
     pub async fn fetch_user_id(&self, login: &str) -> Result<Option<String>, HelixError> {
         let users = self.client.get_users(&[login]).await?;
@@ -362,6 +383,49 @@ mod tests {
         assert_eq!(rec.vod_id.as_deref(), Some("vod789"));
         assert_eq!(rec.vod_offset_s, Some(3600));
         assert_eq!(rec.twitch_user_id, "555");
+    }
+
+    #[tokio::test]
+    async fn created_clip_is_looked_up_by_id_with_vod_offset() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/clips"))
+            .and(query_param("id", "clip123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "clip123", "url": "https://clips.twitch.tv/clip123",
+                    "created_at": "2026-09-29T12:00:00Z", "duration": 30.0,
+                    "broadcaster_id": "42", "video_id": "2886579008", "vod_offset": 3650
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = HelixClient::new(tb_transport_twitch::HelixConfig {
+            client_id: "test".to_owned(),
+            client_secret: "test".to_owned(),
+            token_url: format!("{}/oauth2/token", server.uri()),
+            helix_base: format!("{}/helix", server.uri()),
+        })
+        .unwrap();
+        let clip = HelixClipSource::new(Arc::new(client))
+            .fetch_clip_by_id("clip123", "earlysalty")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(clip.vod_offset_s, Some(3650));
+        assert_eq!(clip.vod_id.as_deref(), Some("2886579008"));
+        assert_eq!(clip.streamer_login, "earlysalty");
     }
 
     #[test]
