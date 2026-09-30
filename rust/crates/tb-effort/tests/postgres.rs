@@ -852,8 +852,9 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     assert_eq!(confirmed_seconds(&pool).await, Some(180));
 
     // Prime the timeout Engine before seeding the old 1,790-second row. Hold
-    // its real PostgreSQL upsert, then prove cancellation cleanup cannot allow
-    // that late write to restore the awardable observation.
+    // its real PostgreSQL upsert. INSERT .. ON CONFLICT fires this trigger
+    // twice; bounded lock timeout must leave continuity dirty/unhealthy if
+    // cleanup cannot acquire the lock before the delayed writer releases it.
     let slow_helix = mock_server(false, std::time::Duration::ZERO).await;
     let timeout_engine = engine(&pool, &slow_helix, 2);
     mark_live_at(&pool, after_contention).await;
@@ -861,7 +862,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     let timeout_at = start + Duration::seconds(810);
     seed_continuity(&pool, timeout_at - Duration::seconds(60)).await;
     mark_live_at(&pool, timeout_at).await;
-    sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(3); END IF; RETURN NEW; END $$;
+    sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(5); END IF; RETURN NEW; END $$;
         CREATE TRIGGER test_delay_shared_chat_observation BEFORE INSERT OR UPDATE ON partner_effort_shared_chat_observations FOR EACH ROW EXECUTE FUNCTION test_delay_shared_chat_observation();")
         .execute(&pool)
         .await
@@ -886,13 +887,30 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         write_started,
         "the PostgreSQL observation trigger did not start"
     );
-    assert!(ticking.await.unwrap().is_err());
+    let timeout_error = ticking.await.unwrap().unwrap_err();
+    let timeout_sqlstate = match &timeout_error {
+        tb_effort::Error::Database(error) => error
+            .as_database_error()
+            .and_then(|database| database.code()),
+        _ => None,
+    };
+    assert_eq!(timeout_sqlstate.as_deref(), Some("55P03"));
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     sqlx::raw_sql("DROP TRIGGER test_delay_shared_chat_observation ON partner_effort_shared_chat_observations; DROP FUNCTION test_delay_shared_chat_observation()")
         .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(confirmed_seconds(&pool).await, None);
+    assert_eq!(confirmed_seconds(&pool).await, Some(1790));
+    for source in ["shared_chat", "engine"] {
+        let healthy: bool =
+            sqlx::query_scalar("SELECT healthy FROM partner_effort_source_state WHERE source=$1")
+                .bind(source)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!healthy, "{source} must expose the bounded reset failure");
+    }
+    assert!(timeout_engine.ensure_ready(timeout_at).await.is_err());
     no_costream_award(&pool).await;
     let after_timeout = start + Duration::seconds(870);
     mark_live_at(&pool, after_timeout).await;
