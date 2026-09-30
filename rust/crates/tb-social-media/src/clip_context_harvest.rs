@@ -507,7 +507,10 @@ fn clip_context_transcriber(config: &SttConfig, temp_dir: &Path) -> Option<OpenA
     OpenAiTranscriber::from_local_config(
         &endpoint,
         &config.model,
-        Duration::from_secs(config.timeout_seconds),
+        // Der Clip sendet sein gesamtes Audio in einer Anfrage. Queuezeit und
+        // Inferenz dürfen das vorhandene Harvestbudget nutzen; apply_speech
+        // begrenzt weiterhin Extraktion und Anfrage ZUSAMMEN auf dieses Budget.
+        Duration::from_secs(config.extraction_timeout_seconds),
     )
     .ok()
     .map(|stt| stt.with_temp_dir(temp_dir))
@@ -988,6 +991,82 @@ mod tests {
         assert!(
             !owner_path.exists(),
             "outer RAII owner removes cancelled WAV directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn speech_deadline_allows_response_after_short_general_timeout() {
+        speech_deadline_case(3, Duration::from_millis(1_250), "timestamped").await;
+    }
+
+    #[tokio::test]
+    async fn speech_deadline_still_bounds_harvest_without_retry() {
+        speech_deadline_case(1, Duration::from_secs(3), "failed:timeout").await;
+    }
+
+    // Reiner HTTP-/Deadlinevertrag mit lokalem PCM und vorgegebener Antwort,
+    // ausdrücklich kein Nachweis echter Spracherkennung oder gelernter Sprache.
+    async fn speech_deadline_case(budget: u64, delay: Duration, expected: &str) {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_delay(delay).set_body_json(
+                serde_json::json!({"text":"Protokollprobe", "duration":0.1, "language":"de",
+                    "segments":[{"start":0.0,"end":0.1,"text":"Protokollprobe"}]}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config = SttConfig {
+            host: server.address().ip(),
+            port: server.address().port(),
+            timeout_seconds: 1,
+            extraction_timeout_seconds: budget,
+            ..SttConfig::default()
+        };
+        let media = TemporaryMedia::create().await.unwrap();
+        let input = media.0.join("input.wav");
+        // 0,1s stummes 16-kHz/16-bit-Mono-PCM; der vorhandene FFmpeg-Pfad
+        // extrahiert daraus wie bei einem Clip das Upload-WAV.
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36_u32 + 3_200).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&16_000_u32.to_le_bytes());
+        wav.extend_from_slice(&32_000_u32.to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&3_200_u32.to_le_bytes());
+        wav.resize(44 + 3_200, 0);
+        tokio::fs::write(&input, wav).await.unwrap();
+        let mut timeline = vec![ContextSecond::default(); 1];
+        let status = tokio::time::timeout(
+            Duration::from_secs(budget + 1),
+            apply_speech(&input, &media.0, &mut timeline, true, &config),
+        )
+        .await
+        .expect("Harvest bleibt innerhalb seines bestehenden Gesamtbudgets");
+        assert_eq!(status, expected);
+        assert_eq!(timeline[0].speech.is_some(), expected == "timestamped");
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "Kein automatischer Retry"
+        );
+        let owned = media.0.clone();
+        drop(media);
+        assert!(
+            !owned.exists(),
+            "Eigene WAV-Temps werden auch nach Deadline entfernt"
         );
     }
 
