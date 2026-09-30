@@ -175,6 +175,9 @@ required_artifacts=(
 if [[ -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
   required_artifacts+=(rust/target/release/tb-category-collector)
 fi
+if [[ -f "$src/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" ]]; then
+  required_artifacts+=(rust/target/release/clip_context_learn)
+fi
 for artifact in "${required_artifacts[@]}"; do
   if [[ ! -e "$src/$artifact" ]]; then
     echo "Release-Artefakt fehlt vor dem Verschieben: $artifact" >&2
