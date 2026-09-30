@@ -67,7 +67,11 @@ fn stream_extra_text(goal: i64, baseline_minutes: i64) -> String {
     if baseline_minutes == 0 {
         format!("Streame diese Woche mindestens {goal} {goal_unit}")
     } else {
-        let baseline_unit = if baseline_minutes == 1 { "Minute" } else { "Minuten" };
+        let baseline_unit = if baseline_minutes == 1 {
+            "Minute"
+        } else {
+            "Minuten"
+        };
         format!(
             "Streame {goal} {goal_unit} länger als dein 4-Wochen-Mittel von {baseline_minutes} {baseline_unit}"
         )
