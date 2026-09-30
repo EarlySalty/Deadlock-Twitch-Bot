@@ -46,7 +46,7 @@ async fn connect_with_mode(cfg: &DbConfig, read_only: bool) -> Result<PgPool, Db
             Box::pin(async move {
                 if read_only {
                     sqlx::query(
-                        "SET default_transaction_read_only = on, statement_timeout = 20000",
+                        "SELECT set_config('default_transaction_read_only', 'on', false), set_config('statement_timeout', '20000', false)",
                     )
                     .execute(connection)
                     .await?;

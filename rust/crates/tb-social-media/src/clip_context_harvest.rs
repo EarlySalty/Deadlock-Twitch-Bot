@@ -459,6 +459,7 @@ async fn apply_chat(
 
 async fn apply_speech(
     path: &Path,
+    temp_dir: &Path,
     timeline: &mut [ContextSecond],
     enabled: bool,
     config: &SttConfig,
@@ -466,14 +467,8 @@ async fn apply_speech(
     if !enabled || config.remote_endpoint.is_some() || !config.host.is_loopback() {
         return "unavailable".to_owned();
     }
-    let endpoint = format!("{}/v1/audio/transcriptions", config.local_origin());
-    let stt = match OpenAiTranscriber::from_local_config(
-        &endpoint,
-        &config.model,
-        Duration::from_secs(config.timeout_seconds),
-    ) {
-        Ok(stt) => stt,
-        Err(_) => return "unavailable".to_owned(),
+    let Some(stt) = clip_context_transcriber(config, temp_dir) else {
+        return "unavailable".to_owned();
     };
     let transcription = tokio::time::timeout(
         Duration::from_secs(config.extraction_timeout_seconds),
@@ -502,6 +497,20 @@ async fn apply_speech(
         Ok(Err(error)) => format!("failed:{error}"),
         Err(_) => "failed:timeout".to_owned(),
     }
+}
+
+fn clip_context_transcriber(config: &SttConfig, temp_dir: &Path) -> Option<OpenAiTranscriber> {
+    if config.remote_endpoint.is_some() || !config.host.is_loopback() {
+        return None;
+    }
+    let endpoint = format!("{}/v1/audio/transcriptions", config.local_origin());
+    OpenAiTranscriber::from_local_config(
+        &endpoint,
+        &config.model,
+        Duration::from_secs(config.timeout_seconds),
+    )
+    .ok()
+    .map(|stt| stt.with_temp_dir(temp_dir))
 }
 
 async fn stt_health(config: &SttConfig) -> bool {
@@ -642,7 +651,8 @@ pub async fn harvest(
         Err(error) => format!("ocr_failed:{error}"),
     };
     apply_chat(read_pool, clip, start, &mut timeline).await?;
-    let stt_status = apply_speech(&media, &mut timeline, stt_enabled, stt_config).await;
+    let stt_status =
+        apply_speech(&media, &temporary.0, &mut timeline, stt_enabled, stt_config).await;
     save_timeline(write_pool, clip, &timeline, &stt_status, &visual_status).await?;
     Ok(HarvestResult {
         clip_id: clip.clip_id.clone(),
@@ -793,10 +803,6 @@ pub async fn learn_and_store(write_pool: &PgPool) -> Result<Option<CutTemplate>,
         .map(|(_, moment, timeline)| (*moment, timeline.clone()))
         .collect();
     let Some(template) = learn_template(&training) else {
-        sqlx::query("DELETE FROM twitch_clip_cut_templates WHERE name='chat_clip_v1'")
-            .execute(write_pool)
-            .await
-            .map_err(|e| e.to_string())?;
         return Ok(None);
     };
     let weights = serde_json::to_value(&template.weights).map_err(|e| e.to_string())?;
@@ -816,6 +822,7 @@ pub async fn learn_and_store(write_pool: &PgPool) -> Result<Option<CutTemplate>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn audio_metadata_aggregates_at_second_boundaries() {
@@ -831,5 +838,64 @@ mod tests {
         assert_eq!(speech_flags("Haha, wow!"), (true, true));
         assert_eq!(speech_flags("Wir laufen zur Lane"), (false, false));
         assert_eq!(parse_souls("$3,665"), Some(3665));
+    }
+
+    #[tokio::test]
+    async fn cancellation_leaves_owned_audio_for_temporary_media_cleanup() {
+        let media_owner = TemporaryMedia::create().await.unwrap();
+        let ffmpeg = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        tokio::fs::write(
+            ffmpeg.path(),
+            b"#!/bin/sh\nfor last do :; done\nprintf wav > \"$last\"\nexec sleep 30\n",
+        )
+        .await
+        .unwrap();
+        std::fs::set_permissions(ffmpeg.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let transcriber = clip_context_transcriber(&SttConfig::default(), &media_owner.0)
+            .expect("current local caller configuration builds")
+            .with_ffmpeg_bin(ffmpeg.path().display().to_string());
+        let audio = media_owner.0.join("input.mp4");
+        tokio::fs::write(&audio, b"fixture").await.unwrap();
+
+        let mut transcription = Box::pin(transcriber.transcribe_clip(&audio));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut transcription => panic!("fixture ffmpeg unexpectedly returned: {result:?}"),
+                _ = async {
+                    loop {
+                        if std::fs::read_dir(&media_owner.0)
+                            .unwrap()
+                            .flatten()
+                            .any(|entry| entry.path().join("audio.wav").exists())
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                } => {}
+            }
+        })
+        .await
+        .expect("fixture ffmpeg created the owned WAV directory");
+        drop(transcription);
+        let audio_dir = std::fs::read_dir(&media_owner.0)
+            .unwrap()
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("eng-whisper-")
+            })
+            .expect("transcription created its WAV directory")
+            .path();
+        assert!(audio_dir.join("audio.wav").exists());
+
+        let owner_path = media_owner.0.clone();
+        drop(media_owner);
+        assert!(
+            !owner_path.exists(),
+            "outer RAII owner removes cancelled WAV directory"
+        );
     }
 }

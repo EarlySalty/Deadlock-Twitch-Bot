@@ -96,12 +96,12 @@ impl OpenAiTranscriber {
         timeout: Duration,
     ) -> Result<Self, &'static str> {
         let url = reqwest::Url::parse(endpoint).map_err(|_| "STT-Adresse ist ungültig.")?;
-        let local_host = url.host_str().is_some_and(|host| {
-            host == "localhost"
-                || host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        });
+        let local_host = match url.host() {
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            Some(url::Host::Domain(host)) => host == "localhost",
+            None => false,
+        };
         if url.scheme() != "http"
             || !local_host
             || !url.username().is_empty()
@@ -488,6 +488,30 @@ mod tests {
         ] {
             assert!(!host_is_loopback(fremd), "{fremd} ist auswaertig");
         }
+    }
+
+    #[test]
+    fn lokaler_clip_stt_akzeptiert_ipv4_und_ipv6_loopback() {
+        for endpoint in [
+            "http://127.0.0.1:8791/v1/audio/transcriptions",
+            "http://[::1]:8791/v1/audio/transcriptions",
+        ] {
+            assert!(
+                OpenAiTranscriber::from_local_config(
+                    endpoint,
+                    "local-model",
+                    Duration::from_secs(1)
+                )
+                .is_ok(),
+                "Loopback-Adresse muss erlaubt sein: {endpoint}"
+            );
+        }
+        assert!(OpenAiTranscriber::from_local_config(
+            "http://192.0.2.1:8791/v1/audio/transcriptions",
+            "local-model",
+            Duration::from_secs(1)
+        )
+        .is_err());
     }
 
     fn transcriber_with_timeout(base: &str, timeout: Duration) -> OpenAiTranscriber {

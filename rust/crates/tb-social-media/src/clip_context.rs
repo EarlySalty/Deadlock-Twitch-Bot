@@ -198,7 +198,7 @@ pub fn suggest_cut(
     })
 }
 
-fn learn_weights(timelines: &[(i32, Vec<ContextSecond>)]) -> CutWeights {
+fn learn_weights(timelines: &[(i32, Vec<ContextSecond>)]) -> Option<CutWeights> {
     let mut counts = [[[0.0_f64; 2]; 9]; 2];
     for (moment, timeline) in timelines {
         let audio_floor = median(timeline.iter().filter_map(|s| s.lufs).collect()).unwrap_or(-40.0);
@@ -245,9 +245,9 @@ fn learn_weights(timelines: &[(i32, Vec<ContextSecond>)]) -> CutWeights {
     }
     let sum: f64 = lift.iter().sum();
     if sum <= 0.0 {
-        return CutWeights::default();
+        return None;
     }
-    CutWeights {
+    Some(CutWeights {
         audio: lift[0] / sum,
         speech: lift[1] / sum,
         laughter: lift[2] / sum,
@@ -257,14 +257,14 @@ fn learn_weights(timelines: &[(i32, Vec<ContextSecond>)]) -> CutWeights {
         death: lift[6] / sum,
         scene: lift[7] / sum,
         chat: lift[8] / sum,
-    }
+    })
 }
 
 pub fn learn_template(timelines: &[(i32, Vec<ContextSecond>)]) -> Option<CutTemplate> {
     if timelines.is_empty() {
         return None;
     }
-    let weights = learn_weights(timelines);
+    let weights = learn_weights(timelines)?;
     let mut leads = Vec::new();
     let mut trails = Vec::new();
     for (moment, timeline) in timelines {
@@ -409,5 +409,17 @@ mod tests {
         assert_eq!(template.weights.speech, 0.0);
         assert!(template.lead_seconds > 0);
         assert!(template.trail_seconds >= 5);
+    }
+
+    #[test]
+    fn signalfreier_nichtleerer_korpus_ist_nicht_lernbar() {
+        let timeline: Vec<_> = (0..=180)
+            .map(|vod_second| ContextSecond {
+                vod_second,
+                ..Default::default()
+            })
+            .collect();
+
+        assert!(learn_template(&[(90, timeline)]).is_none());
     }
 }
