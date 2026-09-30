@@ -11,7 +11,49 @@ struct Live {
     twitch_user_id: String,
     stream_id: String,
     started_at: DateTime<Utc>,
+    is_live: Option<i32>,
     last_seen_at: Option<String>,
+}
+
+fn current_live(row: Live, now: DateTime<Utc>, max_gap_seconds: i64) -> Result<Option<Live>> {
+    match row.is_live {
+        Some(0) => Ok(None),
+        Some(1) => {
+            let last_seen = row
+                .last_seen_at
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+                .ok_or(Error::Source("live_state_stale"))?;
+            if last_seen < now - Duration::seconds(max_gap_seconds) {
+                return Err(Error::Source("live_state_stale"));
+            }
+            if row.stream_id.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(row))
+        }
+        Some(_) => Err(Error::Source("live_state_invalid")),
+        None => Err(Error::Source("live_state_missing")),
+    }
+}
+
+fn current_lives(
+    rows: Vec<Live>,
+    partner_ids: &HashSet<String>,
+    now: DateTime<Utc>,
+    max_gap_seconds: i64,
+) -> Result<Vec<Live>> {
+    let mut live = Vec::new();
+    for row in rows {
+        if !partner_ids.contains(&row.twitch_user_id) {
+            continue;
+        }
+        if let Some(row) = current_live(row, now, max_gap_seconds)? {
+            live.push(row);
+        }
+    }
+    Ok(live)
 }
 
 #[derive(Clone)]
@@ -147,30 +189,10 @@ impl Engine {
             .into_iter()
             .map(|p| p.twitch_user_id)
             .collect();
-        let current: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM twitch_live_state WHERE last_seen_at::timestamptz >= $1)",
-        )
-        .bind(now - Duration::seconds(self.cfg.evidence_max_gap_seconds))
-        .fetch_one(&self.pool)
-        .await?;
-        if !ids.is_empty() && !current {
-            return Err(Error::Source("live_state_stale"));
-        }
-        let rows: Vec<Live>=sqlx::query_as("SELECT s.twitch_user_id,s.stream_id,s.started_at,l.last_seen_at FROM twitch_stream_sessions s JOIN twitch_live_state l ON l.twitch_user_id=s.twitch_user_id AND l.active_session_id=s.id WHERE s.twitch_user_id=ANY($1) AND s.ended_at IS NULL AND s.stream_id IS NOT NULL AND l.is_live=1 AND s.started_at <= $2")
+        let partner_ids: HashSet<_> = ids.iter().cloned().collect();
+        let rows: Vec<Live>=sqlx::query_as("SELECT s.twitch_user_id,s.stream_id,s.started_at,l.is_live,l.last_seen_at FROM twitch_stream_sessions s LEFT JOIN twitch_live_state l ON l.twitch_user_id=s.twitch_user_id AND l.active_session_id=s.id WHERE s.twitch_user_id=ANY($1) AND s.ended_at IS NULL AND s.stream_id IS NOT NULL AND s.started_at <= $2")
             .bind(ids).bind(now).fetch_all(&self.pool).await?;
-        Ok(rows
-            .into_iter()
-            .filter(|r| {
-                !r.stream_id.is_empty()
-                    && r.last_seen_at
-                        .as_deref()
-                        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-                        .is_some_and(|t| {
-                            t.with_timezone(&Utc)
-                                >= now - Duration::seconds(self.cfg.evidence_max_gap_seconds)
-                        })
-            })
-            .collect())
+        current_lives(rows, &partner_ids, now, self.cfg.evidence_max_gap_seconds)
     }
 
     pub(super) async fn shared_chat(&self, now: DateTime<Utc>) -> Result<()> {
@@ -493,6 +515,66 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_live_partner_fails_even_when_unrelated_poll_is_fresh() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let stale_partner = Live {
+            twitch_user_id: "101".into(),
+            stream_id: "stream-a".into(),
+            started_at: now - Duration::minutes(10),
+            is_live: Some(1),
+            last_seen_at: Some((now - Duration::minutes(5)).to_rfc3339()),
+        };
+        let fresh_unrelated = Live {
+            twitch_user_id: "999".into(),
+            stream_id: "stream-other".into(),
+            started_at: now,
+            is_live: Some(1),
+            last_seen_at: Some(now.to_rfc3339()),
+        };
+
+        let relevant_partners = HashSet::from(["101".to_string()]);
+
+        assert!(current_lives(
+            vec![stale_partner, fresh_unrelated],
+            &relevant_partners,
+            now,
+            150
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn offline_partner_does_not_require_a_fresh_poll() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let offline = Live {
+            twitch_user_id: "101".into(),
+            stream_id: "old-stream".into(),
+            started_at: now - Duration::hours(1),
+            is_live: Some(0),
+            last_seen_at: Some((now - Duration::hours(1)).to_rfc3339()),
+        };
+
+        assert!(current_live(offline, now, 150).unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_poll_for_open_partner_session_fails_closed() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let missing = Live {
+            twitch_user_id: "101".into(),
+            stream_id: "stream-a".into(),
+            started_at: now - Duration::minutes(1),
+            is_live: None,
+            last_seen_at: None,
+        };
+
+        assert!(matches!(
+            current_live(missing, now, 150),
+            Err(Error::Source("live_state_missing"))
+        ));
+    }
+
     #[test]
     fn history_requires_owner_and_final_result() {
         let now = DateTime::from_timestamp(1000, 0).unwrap();
