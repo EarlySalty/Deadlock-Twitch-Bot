@@ -229,7 +229,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           </div>
           <h1 className="text-2xl font-bold text-white">Titel, die nach dir klingen</h1>
           <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Eigene Historie, Human-Feedback und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.
+            Deine bisherigen Titel, deine Rückmeldungen und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.
           </p>
         </div>
       </div>
@@ -287,7 +287,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               <Zap className="h-4 w-4 text-warning" /> Experimentell: automatisch auf Twitch setzen
             </div>
             <p className="mt-1 text-xs text-text-secondary">
-              Nach der Generierung wird der Hauptvorschlag direkt als Twitch-Titel gesetzt. Benötigt <code className="font-mono text-[11px]">channel:manage:broadcast</code>.
+              Nach der Generierung wird der Hauptvorschlag direkt als Twitch-Titel gesetzt. Benötigt die Freigabe, deinen Twitch-Titel zu ändern.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
@@ -354,7 +354,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               <div className="flex items-center gap-2 text-sm font-semibold text-accent"><Sparkles className="h-4 w-4" /> Vorschlag</div>
               <div className="flex items-center gap-2 text-[11px] text-text-secondary">
                 {result.auto_mode && <span className="rounded-full border border-border px-2 py-0.5">Auto-Modus</span>}
-                {result.generated_by === 'fallback' && <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-warning">Fallback</span>}
+                {result.generated_by === 'fallback' && <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-warning">Ersatzvorschlag</span>}
                 {result.live_context_used && <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-success">Live-Kontext</span>}
               </div>
             </div>
@@ -442,7 +442,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-text-secondary/60">Viewer-Performance ist nur ein Signal. Explizites Human-Feedback und deine gespeicherte Stilpräferenz wiegen im Generator stärker.</p>
+          <p className="text-[11px] text-text-secondary/60">Zuschauerzahlen sind nur ein Signal. Deine Rückmeldungen und deine gespeicherten Stilwünsche wiegen beim Erstellen der Titel stärker.</p>
         </div>
       )}
 
