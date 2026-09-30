@@ -67,6 +67,42 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+// The preference identity is not an authentication credential. It names the
+// verified account, never a session token, display name, or synthetic owner.
+fn preference_key_for_account(provider: &str, user_id: &str) -> Option<String> {
+    let user_id = user_id.trim();
+    (!user_id.is_empty()).then(|| format!("{provider}:{user_id}"))
+}
+
+async fn preferences_user_key(
+    auth: &DashboardAuthLevel,
+    admin_session: Option<&AuthenticatedAdminSessionId>,
+    auth_state: Option<&DashboardAuthState>,
+) -> Option<String> {
+    if !auth.is_authenticated() {
+        return None;
+    }
+    // Discord administrators can be presented as the synthetic Twitch owner.
+    // Their real verified Discord session therefore takes precedence.
+    if let Some(session) = admin_session {
+        let user_id = auth_state?
+            .load_admin_session_user_id(&session.0)
+            .await
+            .ok()
+            .flatten()?;
+        return preference_key_for_account("discord", &user_id);
+    }
+    match auth {
+        DashboardAuthLevel::Admin { actor: Some(actor) } => {
+            preference_key_for_account("twitch", &actor.twitch_user_id)
+        }
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => {
+            preference_key_for_account("twitch", twitch_user_id)
+        }
+        _ => None,
+    }
+}
+
 // ── Handler ─────────────────────────────────────────────────────────────────
 
 /// `GET /twitch/api/v2/auth-status`
@@ -81,6 +117,12 @@ pub async fn auth_status_handler(
     State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Response {
+    let preferences_user_key = preferences_user_key(
+        &auth,
+        admin_session.as_ref().map(|Extension(session)| session),
+        auth_state.as_ref().map(|Extension(state)| state),
+    )
+    .await;
     let csrf_token = match (admin_session, partner_session, auth_state) {
         (Some(Extension(session)), _, Some(Extension(state))) => state
             .admin_csrf_token(&session.0)
@@ -98,7 +140,7 @@ pub async fn auth_status_handler(
         DashboardAuthLevel::None => unauth_response().await,
         DashboardAuthLevel::Admin { actor: Some(actor) } => {
             if admin_mode_header_active(&headers) {
-                admin_response("admin", true, true, csrf_token.as_deref())
+                admin_response("admin", true, true, csrf_token.as_deref(), preferences_user_key.as_deref())
             } else {
                 partner_response(
                     &pool,
@@ -107,12 +149,13 @@ pub async fn auth_status_handler(
                     true,
                     false,
                     csrf_token.as_deref(),
+                    preferences_user_key.as_deref(),
                 )
                 .await
             }
         }
         DashboardAuthLevel::Admin { actor: None } => {
-            admin_response("admin", false, true, csrf_token.as_deref())
+            admin_response("admin", false, true, csrf_token.as_deref(), preferences_user_key.as_deref())
         }
         DashboardAuthLevel::Partner {
             twitch_login,
@@ -126,6 +169,7 @@ pub async fn auth_status_handler(
                 is_admin_login(twitch_login),
                 false,
                 csrf_token.as_deref(),
+                preferences_user_key.as_deref(),
             )
             .await
         }
@@ -166,6 +210,7 @@ async fn unauth_response() -> Response {
 fn unauth_payload() -> serde_json::Value {
     json!({
         "authenticated": false,
+        "preferencesUserKey": null,
         "level": "none",
         "authLevel": "none",
         "demoMode": false,
@@ -205,6 +250,7 @@ fn admin_response(
     admin_eligible: bool,
     admin_mode: bool,
     csrf_token: Option<&str>,
+    preferences_user_key: Option<&str>,
 ) -> Response {
     // Admin gilt serverseitig als Creator Pro (`auth::stufe_fuer_auth`), also
     // steht hier auch Pro. Vorher lieferte der synthetische Plan die
@@ -223,6 +269,7 @@ fn admin_response(
     let is_localhost = level == "localhost";
     let payload = json!({
         "authenticated": true,
+        "preferencesUserKey": preferences_user_key,
         "level": level,
         "authLevel": level,
         "demoMode": false,
@@ -253,7 +300,7 @@ fn admin_response(
             "viewOverlap": true,
         },
     });
-    Json(payload).into_response()
+    ([(header::CACHE_CONTROL, "private, no-store")], Json(payload)).into_response()
 }
 
 // ── Partner-Session ─────────────────────────────────────────────────────────
@@ -265,6 +312,7 @@ async fn partner_response(
     admin_eligible: bool,
     admin_mode: bool,
     csrf_token: Option<&str>,
+    preferences_user_key: Option<&str>,
 ) -> Response {
     let access = tb_analytics::partner_access::load_partner_access_state(pool, login, user_id)
         .await
@@ -298,6 +346,7 @@ async fn partner_response(
     let can_analytics = access.analytics_access_allowed;
     let payload = json!({
         "authenticated": true,
+        "preferencesUserKey": preferences_user_key,
         "level": "partner",
         "authLevel": "partner",
         "demoMode": false,
@@ -329,7 +378,7 @@ async fn partner_response(
             "viewOverlap": can_analytics,
         },
     });
-    Json(payload).into_response()
+    ([(header::CACHE_CONTROL, "private, no-store")], Json(payload)).into_response()
 }
 
 // ── Hilfsroutine ────────────────────────────────────────────────────────────
@@ -448,6 +497,7 @@ mod tests {
         assert_eq!(value["adminMode"], true);
         assert_eq!(value["plan"]["tier"], "extended");
         assert_eq!(value["plan"]["planName"], "Creator Pro (Admin)");
+        assert_eq!(value["preferencesUserKey"], "twitch:42");
         // Admin gilt serverseitig als Pro, also muss der synthetische Plan auch
         // `social.auto_post` tragen; sonst blendet das Dashboard Funktionen aus,
         // die der Server erlaubt.
@@ -458,9 +508,34 @@ mod tests {
         assert!(entitlements.iter().any(|e| e == "analytics"));
     }
 
+    #[test]
+    fn preference_keys_are_provider_scoped_and_never_use_an_empty_identity() {
+        assert_ne!(preference_key_for_account("twitch", "42"), preference_key_for_account("discord", "42"));
+        assert_eq!(preference_key_for_account("discord", " 42 "), Some("discord:42".to_string()));
+        assert_eq!(preference_key_for_account("discord", " "), None);
+    }
+
+    #[tokio::test]
+    async fn unidentified_admin_has_no_shared_preferences_key() {
+        let response = auth_status_handler(
+            DashboardAuthLevel::admin(), None, None, None,
+            State(unavailable_pool()), HeaderMap::new(),
+        ).await;
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "private, no-store");
+        let value = json_body(response).await;
+        assert!(value["preferencesUserKey"].is_null());
+    }
+
+    #[tokio::test]
+    async fn missing_discord_identity_does_not_fall_back_to_the_synthetic_twitch_owner() {
+        let session = AuthenticatedAdminSessionId("fixture-session-not-a-user-id".to_string());
+        assert_eq!(preferences_user_key(&twitch_admin(), Some(&session), None).await, None);
+        assert_eq!(preferences_user_key(&DashboardAuthLevel::None, Some(&session), None).await, None);
+    }
+
     #[tokio::test]
     async fn admin_response_liefert_session_csrf() {
-        let value = json_body(admin_response("admin", false, true, Some("session-csrf"))).await;
+        let value = json_body(admin_response("admin", false, true, Some("session-csrf"), None)).await;
 
         assert_eq!(value["csrfToken"], "session-csrf");
         assert_eq!(value["csrf_token"], "session-csrf");
@@ -476,6 +551,7 @@ mod tests {
                 false,
                 false,
                 Some("partner-csrf"),
+                Some("twitch:99"),
             )
             .await,
         )
@@ -484,6 +560,7 @@ mod tests {
         assert_eq!(value["csrfToken"], "partner-csrf");
         assert_eq!(value["csrf_token"], "partner-csrf");
         assert_eq!(value["twitchUserId"], "99");
+        assert_eq!(value["preferencesUserKey"], "twitch:99");
     }
 
     #[tokio::test]
