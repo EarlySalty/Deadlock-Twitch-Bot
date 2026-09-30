@@ -944,10 +944,9 @@ mod tests {
         mount_creator_info(&server, json!(["PUBLIC_TO_EVERYONE"])).await;
         Mock::given(method("POST"))
             .and(path("/post/publish/video/init/"))
-            .respond_with(
-                ResponseTemplate::new(403)
-                    .set_body_string("unaudited_client_can_only_post_to_private_accounts"),
-            )
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "error": { "code": "unaudited_client_can_only_post_to_private_accounts" }
+            })))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
