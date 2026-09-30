@@ -1,3 +1,5 @@
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -10,6 +12,9 @@ use tb_social_media::clip_context_harvest::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if print_build_revision() {
+        return Ok(());
+    }
     let config_arguments = ConfigArguments::parse(std::env::args_os().skip(1))?;
     let snapshot = BotConfigSnapshot::load(&config_arguments.path)?;
     let stt_config = snapshot.settings().stt.clone();
