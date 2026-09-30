@@ -382,7 +382,9 @@ fn transcribe(
         params.set_language(Some(language));
     } else {
         params.set_language(None);
-        params.set_detect_language(true);
+        // None erkennt die Sprache automatisch. detect_language=true würde
+        // whisper.cpp direkt danach, noch vor der Transkription, beenden.
+        params.set_detect_language(false);
     }
 
     let vad_path = config
