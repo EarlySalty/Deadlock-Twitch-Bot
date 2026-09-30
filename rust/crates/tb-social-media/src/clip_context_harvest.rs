@@ -9,10 +9,6 @@ use tb_engagement::transcribe::OpenAiTranscriber;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-#[cfg(test)]
-#[path = "../../../test-support/database.rs"]
-mod test_database;
-
 use crate::clip_context::{
     clip_moment_from_start, learn_template, suggest_cut, ContextSecond, CutProposal, CutTemplate,
 };
@@ -871,11 +867,7 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
     async fn isolated_schema(label: &str) -> Option<(PgPool, PgPool, String)> {
-        let Some(dsn) = test_database::database_url() else {
-            assert!(
-                !test_database::required(),
-                "PostgreSQL test config is required"
-            );
+        let Some(dsn) = crate::test_support::test_dsn() else {
             return None;
         };
         let options = PgConnectOptions::from_str(&dsn).expect("parse configured test DSN");
