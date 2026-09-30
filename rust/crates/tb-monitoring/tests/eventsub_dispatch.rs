@@ -15,7 +15,7 @@ use tb_monitoring::{
     epoch_clock, ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore,
     ExpSessionTracker, GuardKind, GuardStore, HandlerError, HypeTrainPhase, InboxHandler,
     InboxRuntime, InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
-    ProcessingInboxStore, SessionTracker, StreamerLoginStore, StreamSnapshot, TelemetryStore,
+    ProcessingInboxStore, SessionTracker, StreamSnapshot, StreamerLoginStore, TelemetryStore,
 };
 
 mod support;
@@ -42,6 +42,8 @@ struct RecordingHooks {
     channel_raid: AtomicU64,
     chat_raid: AtomicU64,
     chat_unraid: AtomicU64,
+    chat_announcement: AtomicU64,
+    chat_message_delete: AtomicU64,
     /// Klassifizierte Sub-Notifications (in Reihenfolge des Eintreffens).
     chat_sub_kinds: Mutex<Vec<ChatNotificationKind>>,
 }
@@ -94,6 +96,16 @@ impl EventSubHooks for RecordingHooks {
         _message_id: Option<&str>,
     ) {
         self.chat_unraid.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_chat_announcement_notification(
+        &self,
+        _event: &serde_json::Value,
+        _message_id: Option<&str>,
+    ) {
+        self.chat_announcement.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_chat_message_delete(&self, _event: &serde_json::Value, _message_id: Option<&str>) {
+        self.chat_message_delete.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -1238,10 +1250,26 @@ async fn chat_notification_demuxt_nach_notice_type() {
         .await
         .unwrap();
 
-    // Unbekannter notice_type → kein Panic, nicht processed.
+    // announcement → eigener Promo-Delivery-Hook.
+    let announcement = serde_json::json!({
+        "subscription": {"type": "channel.chat.notification"},
+        "event": {"broadcaster_user_id": "42", "notice_type": "announcement",
+                   "message_id": "promo-msg-1", "message": {"text": "promo"}}
+    });
+    let outcome = dispatcher
+        .dispatch(
+            "channel.chat.notification",
+            Some("cn-announcement"),
+            &announcement,
+        )
+        .await
+        .unwrap();
+    assert!(outcome.ok && outcome.processed && !outcome.queued);
+
+    // Wirklich unbekannter notice_type → kein Panic, nicht processed.
     let unknown = serde_json::json!({
         "subscription": {"type": "channel.chat.notification"},
-        "event": {"broadcaster_user_id": "42", "notice_type": "announcement"}
+        "event": {"broadcaster_user_id": "42", "notice_type": "mystery_notice"}
     });
     let outcome = dispatcher
         .dispatch("channel.chat.notification", Some("cn-unknown"), &unknown)
@@ -1249,10 +1277,23 @@ async fn chat_notification_demuxt_nach_notice_type() {
         .unwrap();
     assert!(outcome.ok && !outcome.processed && !outcome.queued);
 
+    // message_delete → eigener Delete-Hook.
+    let deleted = serde_json::json!({
+        "subscription": {"type": "channel.chat.message_delete"},
+        "event": {"broadcaster_user_id": "42", "message_id": "promo-msg-1", "target_user_id": "bot"}
+    });
+    let outcome = dispatcher
+        .dispatch("channel.chat.message_delete", Some("cn-delete"), &deleted)
+        .await
+        .unwrap();
+    assert!(outcome.ok && outcome.processed && !outcome.queued);
+
     runtime.shutdown().await;
 
     assert_eq!(hooks.chat_raid.load(Ordering::SeqCst), 1);
     assert_eq!(hooks.chat_unraid.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.chat_announcement.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.chat_message_delete.load(Ordering::SeqCst), 1);
     let sub_kinds = hooks.chat_sub_kinds.lock().unwrap().clone();
     assert_eq!(
         sub_kinds,
@@ -1430,27 +1471,85 @@ mod isolated_postgres;
 
 #[tokio::test]
 async fn sub_reminder_subscription_dbfehler_retry_und_originalzeit() {
-    let db=isolated_postgres::TestPostgres::start().await;
+    let db = isolated_postgres::TestPostgres::start().await;
     support::create_schema(&db.pool).await;
-    sqlx::query("CREATE TABLE streamer_plans(twitch_user_id text PRIMARY KEY,twitch_login text)").execute(&db.pool).await.unwrap();
-    sqlx::raw_sql(include_str!("../../../migrations/20260909220000_sub_reminders.sql")).execute(&db.pool).await.unwrap();
+    sqlx::query("CREATE TABLE streamer_plans(twitch_user_id text PRIMARY KEY,twitch_login text)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260909220000_sub_reminders.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO streamer_plans(twitch_user_id,sub_reminder_enabled,sub_reminder_enabled_at) VALUES('b',1,now()-interval '1 hour')").execute(&db.pool).await.unwrap();
     sqlx::query("INSERT INTO twitch_sub_reminders(broadcaster_user_id,viewer_user_id,enabled,consent_at) VALUES('b','u',true,now()-interval '1 hour')").execute(&db.pool).await.unwrap();
-    let hooks=Arc::new(RecordingHooks::default());
-    let (dispatcher,runtime,_)=build_stack(&db.pool,hooks);
-    let payload=serde_json::json!({"subscription":{"type":"channel.subscription.end"},"metadata":{"message_timestamp":chrono::Utc::now().to_rfc3339()},"event":{"broadcaster_user_id":"b","user_id":"u","user_login":"old_name","tier":"1000","is_gift":false}});
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, _) = build_stack(&db.pool, hooks);
+    let payload = serde_json::json!({"subscription":{"type":"channel.subscription.end"},"metadata":{"message_timestamp":chrono::Utc::now().to_rfc3339()},"event":{"broadcaster_user_id":"b","user_id":"u","user_login":"old_name","tier":"1000","is_gift":false}});
     // DB-Fehler nach dem Telemetrie-Insert rollt BEIDE Schreibpfade zurück.
-    sqlx::query("ALTER TABLE twitch_sub_reminders RENAME TO unavailable_reminders").execute(&db.pool).await.unwrap();
-    assert!(dispatcher.dispatch("channel.subscription.end",Some("end-1"),&payload).await.is_err());
-    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM twitch_subscription_events").fetch_one(&db.pool).await.unwrap(),0);
-    sqlx::query("ALTER TABLE unavailable_reminders RENAME TO twitch_sub_reminders").execute(&db.pool).await.unwrap();
-    let retry=dispatcher.dispatch("channel.subscription.end",Some("end-1"),&payload).await.unwrap();
+    sqlx::query("ALTER TABLE twitch_sub_reminders RENAME TO unavailable_reminders")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(dispatcher
+        .dispatch("channel.subscription.end", Some("end-1"), &payload)
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM twitch_subscription_events")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("ALTER TABLE unavailable_reminders RENAME TO twitch_sub_reminders")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let retry = dispatcher
+        .dispatch("channel.subscription.end", Some("end-1"), &payload)
+        .await
+        .unwrap();
     assert!(!retry.duplicate);
-    assert_eq!(sqlx::query_scalar::<_,String>("SELECT end_message_id FROM twitch_sub_reminders").fetch_one(&db.pool).await.unwrap(),"end-1");
-    assert_eq!(sqlx::query_scalar::<_,String>("SELECT viewer_user_id FROM twitch_subscription_events").fetch_one(&db.pool).await.unwrap(),"u");
-    assert!(dispatcher.dispatch("channel.subscription.end",Some("end-1"),&payload).await.unwrap().duplicate);
-    let mut missing_time=payload.clone();missing_time.as_object_mut().unwrap().remove("metadata");
-    dispatcher.dispatch("channel.subscription.end",Some("end-no-time"),&missing_time).await.unwrap();
-    assert_eq!(sqlx::query_scalar::<_,String>("SELECT end_message_id FROM twitch_sub_reminders").fetch_one(&db.pool).await.unwrap(),"end-1");
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT end_message_id FROM twitch_sub_reminders")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        "end-1"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT viewer_user_id FROM twitch_subscription_events")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        "u"
+    );
+    assert!(
+        dispatcher
+            .dispatch("channel.subscription.end", Some("end-1"), &payload)
+            .await
+            .unwrap()
+            .duplicate
+    );
+    let mut missing_time = payload.clone();
+    missing_time.as_object_mut().unwrap().remove("metadata");
+    dispatcher
+        .dispatch(
+            "channel.subscription.end",
+            Some("end-no-time"),
+            &missing_time,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT end_message_id FROM twitch_sub_reminders")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        "end-1"
+    );
     runtime.shutdown().await;
 }

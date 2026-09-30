@@ -34,6 +34,7 @@ pub const EVENTSUB_CORE_SUB_TYPES: &[&str] = &["stream.online", "stream.offline"
 const CHAT_MOD_RETRY_SUB_TYPES: &[&str] = &[
     "channel.chat.message",
     "channel.chat.notification",
+    "channel.chat.message_delete",
     "channel.chat.user_first_message",
 ];
 
@@ -1019,7 +1020,11 @@ impl SubscriptionManager {
         bot_user_id: &str,
         login: &str,
     ) -> bool {
-        const CHAT_SUB_TYPES: [&str; 2] = ["channel.chat.message", "channel.chat.notification"];
+        const CHAT_SUB_TYPES: [&str; 3] = [
+            "channel.chat.message",
+            "channel.chat.notification",
+            "channel.chat.message_delete",
+        ];
 
         // Passive-Lurker-Gate (B8-07, Python `connection.py:1237`/`:1532`):
         // monitored-only Kanäle ohne Partner-State und ohne Raid-Auth sind ein
@@ -1063,9 +1068,13 @@ impl SubscriptionManager {
 
     pub fn chat_subscriptions_permanently_blocked(&self, broadcaster_id: &str) -> bool {
         let broadcaster_id = broadcaster_id.trim();
-        ["channel.chat.message", "channel.chat.notification"]
-            .into_iter()
-            .any(|sub_type| self.is_perm_failed(sub_type, broadcaster_id))
+        [
+            "channel.chat.message",
+            "channel.chat.notification",
+            "channel.chat.message_delete",
+        ]
+        .into_iter()
+        .any(|sub_type| self.is_perm_failed(sub_type, broadcaster_id))
     }
 
     /// `true`, wenn der Kanal ein passiver Lurker ist — monitored-only **und**
@@ -2572,7 +2581,11 @@ mod tests {
         .with_bot_ban_handler(handler.clone());
         let condition = serde_json::json!({"broadcaster_user_id": "500"});
 
-        for sub_type in ["channel.chat.message", "channel.chat.notification"] {
+        for sub_type in [
+            "channel.chat.message",
+            "channel.chat.message_delete",
+            "channel.chat.notification",
+        ] {
             assert!(
                 !manager
                     .retry_chat_subscription_after_mod(
@@ -2583,7 +2596,7 @@ mod tests {
         }
 
         let signals = handler.signals.lock().expect("signals lock");
-        assert_eq!(signals.len(), 2);
+        assert_eq!(signals.len(), 3);
         assert!(signals.iter().all(|signal| {
             signal.broadcaster_id == "500"
                 && signal.broadcaster_login == "banme"

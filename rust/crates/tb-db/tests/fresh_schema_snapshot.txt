@@ -577,6 +577,12 @@ twitch_bot_ban_klassifikation|twitch_user_id|text|NO|
 twitch_bot_capabilities|has_chatters_scope|boolean|NO|true
 twitch_bot_capabilities|id|smallint|NO|1
 twitch_bot_capabilities|updated_at|timestamp with time zone|NO|now()
+twitch_bot_message_delete_events|broadcaster_user_id|text|NO|
+twitch_bot_message_delete_events|broadcaster_user_login|text|YES|
+twitch_bot_message_delete_events|created_at|timestamp with time zone|NO|now()
+twitch_bot_message_delete_events|deleted_at|timestamp with time zone|NO|now()
+twitch_bot_message_delete_events|target_user_id|text|YES|
+twitch_bot_message_delete_events|twitch_message_id|text|NO|
 twitch_caster_overlay|id|boolean|NO|true
 twitch_caster_overlay|revision|bigint|NO|0
 twitch_caster_overlay|scene|jsonb|NO|'{"slots": [null, null], "roster": []}'::jsonb
@@ -1259,6 +1265,18 @@ twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|
 twitch_promo_cooldowns|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|wall_ts|double precision|NO|
+twitch_promo_delivery_audit|announcement_seen_at|timestamp with time zone|YES|
+twitch_promo_delivery_audit|bot_log_sent_at|timestamp with time zone|YES|
+twitch_promo_delivery_audit|broadcaster_user_id|text|NO|
+twitch_promo_delivery_audit|channel_login|text|NO|
+twitch_promo_delivery_audit|created_at|timestamp with time zone|NO|now()
+twitch_promo_delivery_audit|deleted_at|timestamp with time zone|YES|
+twitch_promo_delivery_audit|deleted_target_user_id|text|YES|
+twitch_promo_delivery_audit|id|bigint|NO|nextval('twitch_promo_delivery_audit_id_seq'::regclass)
+twitch_promo_delivery_audit|message_text|text|NO|
+twitch_promo_delivery_audit|send_accepted_at|timestamp with time zone|NO|now()
+twitch_promo_delivery_audit|source|text|NO|
+twitch_promo_delivery_audit|twitch_message_id|text|YES|
 twitch_promo_pitch_log|bewertet_at|timestamp with time zone|YES|
 twitch_promo_pitch_log|bewertung|text|YES|
 twitch_promo_pitch_log|channel_login|text|NO|

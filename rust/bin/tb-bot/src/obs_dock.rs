@@ -640,7 +640,9 @@ pub fn chat_subscription_zu_event(
             }
         }
         // Raid und Unraid laufen ueber eigene Hooks, hier ist nichts zu tun.
-        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => return None,
+        ChatNotificationKind::Raid
+        | ChatNotificationKind::Unraid
+        | ChatNotificationKind::Announcement => return None,
     };
     Some(PlatformEvent::Activity(ereignis))
 }

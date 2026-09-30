@@ -489,6 +489,23 @@ pub trait PitchReviewSink: Send + Sync {
     ) -> Option<i64>;
 }
 
+#[derive(Debug, Clone)]
+pub struct PromoDeleteAlert {
+    pub channel_login: String,
+    pub broadcaster_user_id: String,
+    pub source: String,
+    pub message_text: String,
+    pub twitch_message_id: String,
+    pub send_accepted_at: DateTime<Utc>,
+    pub deleted_at: DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait PromoDeleteAlertSink: Send + Sync {
+    /// Liefert `true`, wenn der Bot-Log-Eintrag erfolgreich zugestellt wurde.
+    async fn notify_deleted_promo(&self, alert: PromoDeleteAlert) -> bool;
+}
+
 // ---------------------------------------------------------------------------
 // Default-Implementierungen
 // ---------------------------------------------------------------------------
@@ -612,6 +629,7 @@ pub struct PromoEngine {
     pitch_text_gen: Arc<dyn PitchTextGen>,
     partner_pitch_gen: Arc<dyn PartnerPitchGen>,
     pitch_review_sink: Option<Arc<dyn PitchReviewSink>>,
+    promo_delete_alert_sink: Option<Arc<dyn PromoDeleteAlertSink>>,
     pitch_judge_last: DashMap<String, Instant>,
     pitch_judge_channel: DashMap<String, Vec<Instant>>,
     pitch_semaphore: Semaphore,
@@ -661,6 +679,7 @@ impl PromoEngine {
             pitch_text_gen: Arc::new(crate::promo_pitch::FireworksPitchTextGen),
             partner_pitch_gen: Arc::new(crate::promo_pitch::FireworksPartnerPitchGen),
             pitch_review_sink: None,
+            promo_delete_alert_sink: None,
             pitch_judge_last: DashMap::new(),
             pitch_judge_channel: DashMap::new(),
             pitch_semaphore: Semaphore::new(PITCH_MAX_CONCURRENT),
@@ -711,6 +730,379 @@ impl PromoEngine {
     pub fn set_bot_user_id(mut self, bot_user_id: impl Into<String>) -> Self {
         self.bot_user_id = bot_user_id.into();
         self
+    }
+
+    pub fn set_promo_delete_alert_sink(mut self, sink: Arc<dyn PromoDeleteAlertSink>) -> Self {
+        self.promo_delete_alert_sink = Some(sink);
+        self
+    }
+
+    /// Legt nach einem von Twitch akzeptierten Promo-Announcement einen
+    /// ausstehenden Audit-Eintrag an. Der Announcement-Endpoint liefert selbst
+    /// keine Message-ID; die wird spaeter aus `channel.chat.notification`
+    /// (`notice_type=announcement`) gebunden.
+    async fn record_promo_delivery(
+        &self,
+        channel_login: &str,
+        broadcaster_user_id: &str,
+        source: &str,
+        message_text: &str,
+    ) {
+        let login = channel_login.trim().trim_start_matches('#').to_lowercase();
+        let broadcaster_user_id = broadcaster_user_id.trim();
+        let message_text = message_text.trim();
+        if login.is_empty() || broadcaster_user_id.is_empty() || message_text.is_empty() {
+            return;
+        }
+        if let Err(error) = sqlx::query(
+            "INSERT INTO twitch_promo_delivery_audit
+                (channel_login, broadcaster_user_id, source, message_text, send_accepted_at)
+             VALUES ($1, $2, $3, $4, NOW())",
+        )
+        .bind(&login)
+        .bind(broadcaster_user_id)
+        .bind(source)
+        .bind(message_text)
+        .execute(&self.pool)
+        .await
+        {
+            warn!(
+                %error,
+                channel_login = %login,
+                source,
+                "Promo-Delivery-Audit konnte nicht angelegt werden"
+            );
+        }
+    }
+
+    async fn maybe_notify_deleted_promo(&self, twitch_message_id: &str) {
+        let Some(sink) = self.promo_delete_alert_sink.as_ref() else {
+            return;
+        };
+        let message_id = twitch_message_id.trim();
+        if message_id.is_empty() {
+            return;
+        }
+
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                DateTime<Utc>,
+                DateTime<Utc>,
+            ),
+        >(
+            "SELECT channel_login, broadcaster_user_id, source, message_text,
+                    twitch_message_id, send_accepted_at, deleted_at
+               FROM twitch_promo_delivery_audit
+              WHERE twitch_message_id = $1
+                AND deleted_at IS NOT NULL
+                AND bot_log_sent_at IS NULL
+              LIMIT 1",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await;
+
+        let Some((
+            channel_login,
+            broadcaster_user_id,
+            source,
+            message_text,
+            twitch_message_id,
+            send_accepted_at,
+            deleted_at,
+        )) = (match row {
+            Ok(row) => row,
+            Err(error) => {
+                warn!(%error, twitch_message_id = %message_id, "Promo-Delete-Alert konnte nicht geladen werden");
+                return;
+            }
+        })
+        else {
+            return;
+        };
+
+        let delivered = sink
+            .notify_deleted_promo(PromoDeleteAlert {
+                channel_login: channel_login.clone(),
+                broadcaster_user_id,
+                source,
+                message_text,
+                twitch_message_id: twitch_message_id.clone(),
+                send_accepted_at,
+                deleted_at,
+            })
+            .await;
+        if !delivered {
+            warn!(
+                channel_login = %channel_login,
+                twitch_message_id = %twitch_message_id,
+                "Promo-Loeschung konnte nicht in Bot-Logs gemeldet werden"
+            );
+            return;
+        }
+
+        match sqlx::query(
+            "UPDATE twitch_promo_delivery_audit
+                SET bot_log_sent_at = COALESCE(bot_log_sent_at, NOW())
+              WHERE twitch_message_id = $1
+                AND bot_log_sent_at IS NULL",
+        )
+        .bind(&twitch_message_id)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(_) => info!(
+                channel_login = %channel_login,
+                twitch_message_id = %twitch_message_id,
+                "Promo-Loeschung in Bot-Logs gemeldet"
+            ),
+            Err(error) => warn!(
+                %error,
+                twitch_message_id = %twitch_message_id,
+                "Bot-Log-Zustellung der Promo-Loeschung konnte nicht markiert werden"
+            ),
+        }
+    }
+
+    /// Bindet die echte Twitch-Message-ID an den zuletzt akzeptierten,
+    /// textgleichen Promo-Send dieses Kanals. Twitch liefert die Message-ID bei
+    /// Announcements erst ueber `channel.chat.notification`, nicht im Send-Call.
+    /// Shared-Chat-Notices werden auf ihre Source-ID normalisiert.
+    pub async fn observe_announcement_notification(&self, event: &serde_json::Value) {
+        let bot_user_id = self.bot_user_id.trim();
+        if bot_user_id.is_empty() {
+            return;
+        }
+        let chatter_user_id = event
+            .get("chatter_user_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if chatter_user_id != bot_user_id {
+            return;
+        }
+
+        let source_broadcaster_id = event
+            .get("source_broadcaster_user_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let broadcaster_user_id = source_broadcaster_id.unwrap_or_else(|| {
+            event
+                .get("broadcaster_user_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+        });
+        let channel_login = if source_broadcaster_id.is_some() {
+            event
+                .get("source_broadcaster_user_login")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+        } else {
+            event
+                .get("broadcaster_user_login")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+        }
+        .trim()
+        .trim_start_matches('#')
+        .to_lowercase();
+        let message_id = if source_broadcaster_id.is_some() {
+            event
+                .get("source_message_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+        } else {
+            event
+                .get("message_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+        }
+        .trim();
+        let message_text = event
+            .get("message")
+            .and_then(|value| value.get("text"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if broadcaster_user_id.is_empty()
+            || channel_login.is_empty()
+            || message_id.is_empty()
+            || message_text.is_empty()
+        {
+            return;
+        }
+
+        let matched = sqlx::query_scalar::<_, i64>(
+            "UPDATE twitch_promo_delivery_audit
+                SET twitch_message_id = $4,
+                    announcement_seen_at = COALESCE(announcement_seen_at, NOW())
+              WHERE id = (
+                    SELECT id
+                      FROM twitch_promo_delivery_audit
+                     WHERE broadcaster_user_id = $1
+                       AND LOWER(channel_login) = LOWER($2)
+                       AND message_text = $3
+                       AND twitch_message_id IS NULL
+                       AND send_accepted_at >= NOW() - INTERVAL '10 minutes'
+                     ORDER BY send_accepted_at DESC
+                     LIMIT 1
+              )
+              RETURNING id",
+        )
+        .bind(broadcaster_user_id)
+        .bind(&channel_login)
+        .bind(message_text)
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await;
+
+        let matched_id = match matched {
+            Ok(id) => id,
+            Err(error) => {
+                warn!(
+                    %error,
+                    channel_login = %channel_login,
+                    "Promo-Announcement konnte nicht mit Delivery-Audit korreliert werden"
+                );
+                return;
+            }
+        };
+        let Some(audit_id) = matched_id else {
+            return;
+        };
+
+        // Falls das Delete-Event schneller als das Announcement-Notice ankam,
+        // jetzt den gepufferten Delete-Zeitpunkt nachziehen.
+        if let Err(error) = sqlx::query(
+            "UPDATE twitch_promo_delivery_audit audit
+                SET deleted_at = COALESCE(audit.deleted_at, deletion.deleted_at),
+                    deleted_target_user_id = COALESCE(audit.deleted_target_user_id, deletion.target_user_id)
+               FROM twitch_bot_message_delete_events deletion
+              WHERE audit.id = $1
+                AND deletion.twitch_message_id = audit.twitch_message_id",
+        )
+        .bind(audit_id)
+        .execute(&self.pool)
+        .await
+        {
+            warn!(%error, audit_id, "Promo-Delete-Puffer konnte nicht nachgezogen werden");
+        }
+
+        debug!(
+            audit_id,
+            channel_login = %channel_login,
+            twitch_message_id = %message_id,
+            "Promo-Announcement mit Twitch-Message-ID korreliert"
+        );
+        self.maybe_notify_deleted_promo(message_id).await;
+    }
+
+    /// Persistiert Loeschungen eigener Bot-Nachrichten. Ist die Message-ID
+    /// bereits einer Promo zugeordnet, wird `deleted_at` direkt gesetzt; sonst
+    /// bleibt das Delete-Event gepuffert und wird beim spaeteren Announcement-
+    /// Notice nachgezogen.
+    pub async fn observe_message_delete(&self, event: &serde_json::Value) {
+        let bot_user_id = self.bot_user_id.trim();
+        if bot_user_id.is_empty() {
+            return;
+        }
+        let target_user_id = event
+            .get("target_user_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if target_user_id != bot_user_id {
+            return;
+        }
+        let broadcaster_user_id = event
+            .get("broadcaster_user_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let broadcaster_user_login = event
+            .get("broadcaster_user_login")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .trim_start_matches('#')
+            .to_lowercase();
+        let message_id = event
+            .get("message_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if broadcaster_user_id.is_empty() || message_id.is_empty() {
+            return;
+        }
+
+        if let Err(error) = sqlx::query(
+            "INSERT INTO twitch_bot_message_delete_events
+                (twitch_message_id, broadcaster_user_id, broadcaster_user_login, target_user_id, deleted_at)
+             VALUES ($1, $2, NULLIF($3, ''), $4, NOW())
+             ON CONFLICT (twitch_message_id) DO UPDATE
+                 SET deleted_at = LEAST(twitch_bot_message_delete_events.deleted_at, EXCLUDED.deleted_at),
+                     broadcaster_user_id = EXCLUDED.broadcaster_user_id,
+                     broadcaster_user_login = COALESCE(EXCLUDED.broadcaster_user_login, twitch_bot_message_delete_events.broadcaster_user_login),
+                     target_user_id = COALESCE(EXCLUDED.target_user_id, twitch_bot_message_delete_events.target_user_id)",
+        )
+        .bind(message_id)
+        .bind(broadcaster_user_id)
+        .bind(&broadcaster_user_login)
+        .bind(target_user_id)
+        .execute(&self.pool)
+        .await
+        {
+            warn!(
+                %error,
+                broadcaster_user_id,
+                twitch_message_id = %message_id,
+                "Bot-Message-Delete konnte nicht auditiert werden"
+            );
+            return;
+        }
+
+        match sqlx::query(
+            "UPDATE twitch_promo_delivery_audit
+                SET deleted_at = COALESCE(deleted_at, NOW()),
+                    deleted_target_user_id = COALESCE(deleted_target_user_id, $2)
+              WHERE twitch_message_id = $1",
+        )
+        .bind(message_id)
+        .bind(target_user_id)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(result) if result.rows_affected() > 0 => {
+                info!(
+                    broadcaster_user_id,
+                    channel_login = %broadcaster_user_login,
+                    twitch_message_id = %message_id,
+                    "Promo-Announcement wurde aus dem Twitch-Chat geloescht"
+                );
+                self.maybe_notify_deleted_promo(message_id).await;
+            }
+            Ok(_) => {
+                debug!(
+                    broadcaster_user_id,
+                    channel_login = %broadcaster_user_login,
+                    twitch_message_id = %message_id,
+                    "Eigene Bot-Nachricht geloescht; noch keine Promo-Korrelation"
+                );
+            }
+            Err(error) => warn!(
+                %error,
+                twitch_message_id = %message_id,
+                "Promo-Delete konnte nicht auf Delivery-Audit markiert werden"
+            ),
+        }
     }
 
     pub fn set_zuschauer_register(
@@ -1921,6 +2313,9 @@ impl PromoEngine {
             return false;
         }
 
+        self.record_promo_delivery(login, channel_id, reason, &text)
+            .await;
+
         self.record_pitch_log(PitchLogEntry {
             channel_login: login.to_string(),
             target_user_id: None,
@@ -1969,6 +2364,8 @@ impl PromoEngine {
             debug!(login, "Werbefrei-Pitch nicht gesendet (Drop/Fehler)");
             return false;
         }
+        self.record_promo_delivery(login, channel_id, "timeout_pitch", message)
+            .await;
         // Promo-Cooldown belegen (Python `_mark_promo_sent(reason="timeout_pitch")`).
         self.mark_promo_sent(
             login,
@@ -2590,6 +2987,8 @@ impl PromoEngine {
         if !sent {
             return;
         }
+        self.record_promo_delivery(login, channel_id, "lurker_tax", &text)
+            .await;
         {
             let state_ref = self
                 .channel_states
@@ -4334,6 +4733,19 @@ mod db_tests {
     }
 
     #[derive(Default, Clone)]
+    struct RecordingDeleteSink {
+        alerts: Arc<Mutex<Vec<PromoDeleteAlert>>>,
+    }
+
+    #[async_trait]
+    impl PromoDeleteAlertSink for RecordingDeleteSink {
+        async fn notify_deleted_promo(&self, alert: PromoDeleteAlert) -> bool {
+            self.alerts.lock().await.push(alert);
+            true
+        }
+    }
+
+    #[derive(Default, Clone)]
     struct RecordingReviewSink {
         cards: Arc<
             Mutex<
@@ -4671,6 +5083,31 @@ mod db_tests {
                 bewertet_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
+            r#"CREATE TABLE twitch_promo_delivery_audit (
+                id BIGSERIAL PRIMARY KEY,
+                channel_login TEXT NOT NULL,
+                broadcaster_user_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                message_text TEXT NOT NULL,
+                send_accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                twitch_message_id TEXT,
+                announcement_seen_at TIMESTAMPTZ,
+                deleted_at TIMESTAMPTZ,
+                deleted_target_user_id TEXT,
+                bot_log_sent_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
+            r#"CREATE UNIQUE INDEX idx_twitch_promo_delivery_message_id_test
+                ON twitch_promo_delivery_audit (twitch_message_id)
+                WHERE twitch_message_id IS NOT NULL"#,
+            r#"CREATE TABLE twitch_bot_message_delete_events (
+                twitch_message_id TEXT PRIMARY KEY,
+                broadcaster_user_id TEXT NOT NULL,
+                broadcaster_user_login TEXT,
+                target_user_id TEXT,
+                deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"#,
             r#"CREATE TABLE twitch_chat_messages (
                 id INTEGER,
                 session_id INTEGER,
@@ -4693,6 +5130,93 @@ mod db_tests {
             Arc::new(super::tests::MockApi::default()),
             Arc::new(NoopSuppressionCheck),
         )
+    }
+
+    #[tokio::test]
+    async fn promo_delete_nach_announcement_meldet_genau_einmal() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let sink = RecordingDeleteSink::default();
+        let engine = make_engine(pool.clone())
+            .set_bot_user_id("bot-1")
+            .set_promo_delete_alert_sink(Arc::new(sink.clone()));
+
+        engine
+            .record_promo_delivery("marcymcwhy", "broadcaster-1", "chat_activity", "promo text")
+            .await;
+        engine
+            .observe_announcement_notification(&serde_json::json!({
+                "broadcaster_user_id": "broadcaster-1",
+                "broadcaster_user_login": "marcymcwhy",
+                "chatter_user_id": "bot-1",
+                "message_id": "promo-msg-1",
+                "message": {"text": "promo text"},
+                "notice_type": "announcement"
+            }))
+            .await;
+        let delete = serde_json::json!({
+            "broadcaster_user_id": "broadcaster-1",
+            "broadcaster_user_login": "marcymcwhy",
+            "target_user_id": "bot-1",
+            "message_id": "promo-msg-1"
+        });
+        engine.observe_message_delete(&delete).await;
+        engine.observe_message_delete(&delete).await;
+
+        let alerts = sink.alerts.lock().await;
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].channel_login, "marcymcwhy");
+        assert_eq!(alerts[0].twitch_message_id, "promo-msg-1");
+        drop(alerts);
+        let marked: bool = sqlx::query_scalar(
+            "SELECT deleted_at IS NOT NULL AND bot_log_sent_at IS NOT NULL
+               FROM twitch_promo_delivery_audit
+              WHERE twitch_message_id = 'promo-msg-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(marked);
+    }
+
+    #[tokio::test]
+    async fn promo_delete_vor_announcement_wird_nachtraeglich_gemeldet() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let sink = RecordingDeleteSink::default();
+        let engine = make_engine(pool.clone())
+            .set_bot_user_id("bot-1")
+            .set_promo_delete_alert_sink(Arc::new(sink.clone()));
+
+        engine
+            .record_promo_delivery("marcymcwhy", "broadcaster-1", "chat_activity", "promo text")
+            .await;
+        engine
+            .observe_message_delete(&serde_json::json!({
+                "broadcaster_user_id": "broadcaster-1",
+                "broadcaster_user_login": "marcymcwhy",
+                "target_user_id": "bot-1",
+                "message_id": "promo-msg-race"
+            }))
+            .await;
+        assert!(sink.alerts.lock().await.is_empty());
+
+        engine
+            .observe_announcement_notification(&serde_json::json!({
+                "broadcaster_user_id": "broadcaster-1",
+                "broadcaster_user_login": "marcymcwhy",
+                "chatter_user_id": "bot-1",
+                "message_id": "promo-msg-race",
+                "message": {"text": "promo text"},
+                "notice_type": "announcement"
+            }))
+            .await;
+
+        let alerts = sink.alerts.lock().await;
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].twitch_message_id, "promo-msg-race");
     }
 
     #[tokio::test]
@@ -6089,7 +6613,9 @@ mod db_tests {
         seed_deadlock_candidate(&pool, "kandidatlogin", "u-pk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "dieser text darf nie erzeugt werden",
+        )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_partner_pitch_gen(gen.clone());
 
@@ -6114,7 +6640,10 @@ mod db_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(count, 0, "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log");
+        assert_eq!(
+            count, 0,
+            "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log"
+        );
     }
 
     #[tokio::test]
@@ -6163,7 +6692,9 @@ mod db_tests {
         seed_deadlock_candidate(&pool, "ledgerlogin", "u-lk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let gen = Arc::new(MockPartnerPitchGen::new(Some("dieser text darf nie erzeugt werden")));
+        let gen = Arc::new(MockPartnerPitchGen::new(Some(
+            "dieser text darf nie erzeugt werden",
+        )));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_partner_pitch_gen(gen.clone())
@@ -6180,11 +6711,15 @@ mod db_tests {
 
         assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(api.message_count().await, 0);
-        let ledger_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(ledger_count, 0, "kein kalter Streamer-Outreach-Ledger-Eintrag");
+        let ledger_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            ledger_count, 0,
+            "kein kalter Streamer-Outreach-Ledger-Eintrag"
+        );
         assert!(sink.cards.lock().await.is_empty(), "keine Review-Karte");
     }
 

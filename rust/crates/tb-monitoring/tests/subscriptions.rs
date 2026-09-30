@@ -937,7 +937,11 @@ async fn chat_subscribe_passiver_lurker_schreibt_state_statt_zu_subscriben() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        vec!["channel.chat.message", "channel.chat.notification"]
+        vec![
+            "channel.chat.message",
+            "channel.chat.message_delete",
+            "channel.chat.notification"
+        ]
     );
     for (_, state, detail) in &states {
         assert_eq!(state, tb_chat::PASSIVE_LURKER_STATE);
@@ -993,7 +997,11 @@ async fn chat_subscribe_aktiver_partner_subscribed_normal() {
     types.sort_unstable();
     assert_eq!(
         types,
-        vec!["channel.chat.message", "channel.chat.notification"]
+        vec![
+            "channel.chat.message",
+            "channel.chat.message_delete",
+            "channel.chat.notification"
+        ]
     );
     // Kein Lurker-State geschrieben.
     assert!(manager.chat_subscription_states("partner").is_empty());

@@ -40,7 +40,7 @@ pub const CORE_DELIVERY_TYPES: [&str; 4] = [
 /// (eventsub_core_callbacks/eventsub_mixin). `channel.moderate` ist ergänzt,
 /// weil die Rust-`route` ihn behandelt (Raid-Blacklist-Guard) — Python hat ihn
 /// via `set_callback` ebenfalls registriert.
-pub const REGISTERED_SUB_TYPES: [&str; 25] = [
+pub const REGISTERED_SUB_TYPES: [&str; 26] = [
     // Core (Inbox)
     "stream.online",
     "stream.offline",
@@ -50,6 +50,7 @@ pub const REGISTERED_SUB_TYPES: [&str; 25] = [
     "channel.moderate",
     "channel.chat.message",
     "channel.chat.notification",
+    "channel.chat.message_delete",
     // Telemetrie
     "channel.follow",
     "channel.subscribe",
@@ -136,6 +137,8 @@ pub enum ChatNotificationKind {
     Raid,
     /// `notice_type=unraid` → Raid-Withdraw (B7-02 / Source-Self-Unraid B7-03).
     Unraid,
+    /// `notice_type=announcement` → sichtbare Chat-Ankündigung mit Message-ID.
+    Announcement,
 }
 
 impl ChatNotificationKind {
@@ -170,6 +173,7 @@ pub fn classify_chat_notification(notice_type: &str) -> Option<ChatNotificationK
         "community_sub_gift" => Some(ChatNotificationKind::CommunitySubGift),
         "raid" => Some(ChatNotificationKind::Raid),
         "unraid" => Some(ChatNotificationKind::Unraid),
+        "announcement" => Some(ChatNotificationKind::Announcement),
         _ => None,
     }
 }
@@ -219,6 +223,15 @@ pub trait EventSubHooks: Send + Sync {
     /// `channel.chat.message` (Welle B: nativer Chat-Bot — Moderation,
     /// Commands, Promos). Default no-op bis zur Chat-Verdrahtung.
     async fn on_chat_message(&self, _event: &Value, _message_id: Option<&str>) {}
+
+    /// `channel.chat.message_delete`: konkrete, von einem Moderator entfernte
+    /// Chat-Nachricht. Der Event-Body enthält die gelöschte `message_id` und den
+    /// ursprünglichen Autor (`target_user_id`).
+    async fn on_chat_message_delete(&self, _event: &Value, _message_id: Option<&str>) {}
+
+    /// `channel.chat.notification` mit `notice_type=announcement`: liefert die
+    /// Message-ID eines zuvor via Send Chat Announcement akzeptierten Sends.
+    async fn on_chat_announcement_notification(&self, _event: &Value, _message_id: Option<&str>) {}
 
     /// Routing-Punkt B8-00: `channel.chat.notification` mit Sub/Resub/Gift-
     /// `notice_type` (Sub-Telemetrie-Fallback, B8-01). `kind` ist die
@@ -354,6 +367,16 @@ impl EventSubHooks for ChatSubscriptionTelemetryHooks {
 
     async fn on_chat_message(&self, event: &Value, message_id: Option<&str>) {
         self.inner.on_chat_message(event, message_id).await;
+    }
+
+    async fn on_chat_message_delete(&self, event: &Value, message_id: Option<&str>) {
+        self.inner.on_chat_message_delete(event, message_id).await;
+    }
+
+    async fn on_chat_announcement_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.inner
+            .on_chat_announcement_notification(event, message_id)
+            .await;
     }
 
     async fn on_chat_subscription_notification(
@@ -501,7 +524,9 @@ fn chat_notification_to_subscription_event(
                 }),
             ))
         }
-        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => None,
+        ChatNotificationKind::Raid
+        | ChatNotificationKind::Unraid
+        | ChatNotificationKind::Announcement => None,
     }
 }
 
@@ -694,11 +719,15 @@ impl EventSubDispatcher {
         if let Some(event) = context.event.as_object_mut() {
             event.remove("_sub_event_timestamp");
             event.remove("_sub_message_id");
-            if let Some(timestamp) = body.pointer("/metadata/message_timestamp")
+            if let Some(timestamp) = body
+                .pointer("/metadata/message_timestamp")
                 .or_else(|| body.pointer("/payload/metadata/message_timestamp"))
                 .and_then(Value::as_str)
             {
-                event.insert("_sub_event_timestamp".into(), Value::String(timestamp.into()));
+                event.insert(
+                    "_sub_event_timestamp".into(),
+                    Value::String(timestamp.into()),
+                );
             }
             if let Some(id) = message_id {
                 event.insert("_sub_message_id".into(), Value::String(id.into()));
@@ -819,6 +848,12 @@ impl EventSubDispatcher {
                 self.hooks.on_chat_message(&context.event, message_id).await;
                 outcome.processed = true;
             }
+            "channel.chat.message_delete" => {
+                self.hooks
+                    .on_chat_message_delete(&context.event, message_id)
+                    .await;
+                outcome.processed = true;
+            }
             "channel.chat.notification" => {
                 outcome.processed = self
                     .route_chat_notification(message_id, &context.event)
@@ -890,6 +925,11 @@ impl EventSubDispatcher {
                     .on_chat_unraid_notification(event, message_id)
                     .await;
             }
+            ChatNotificationKind::Announcement => {
+                self.hooks
+                    .on_chat_announcement_notification(event, message_id)
+                    .await;
+            }
             sub_kind => {
                 self.hooks
                     .on_chat_subscription_notification(sub_kind, event, message_id)
@@ -901,7 +941,11 @@ impl EventSubDispatcher {
 
     /// Subscription-Lifecycle-Fehler werden vor dem Ack propagiert. Übrige
     /// Telemetrie behält ihr bisheriges Logging. `true` = Typ war bekannt.
-    async fn store_telemetry(&self, sub_type: &str, context: &NotificationContext) -> Result<bool, sqlx::Error> {
+    async fn store_telemetry(
+        &self,
+        sub_type: &str,
+        context: &NotificationContext,
+    ) -> Result<bool, sqlx::Error> {
         let user_id = context.broadcaster_id.as_str();
         let event = &context.event;
         let now = epoch_to_datetime((self.clock)());
@@ -1004,7 +1048,10 @@ impl EventSubDispatcher {
             }
         };
         if let Err(error) = result {
-            if matches!(sub_type, "channel.subscribe" | "channel.subscription.message" | "channel.subscription.end") {
+            if matches!(
+                sub_type,
+                "channel.subscribe" | "channel.subscription.message" | "channel.subscription.end"
+            ) {
                 return Err(error);
             }
             tracing::error!(%error, sub_type, "EventSub: Telemetrie-Insert fehlgeschlagen");
@@ -1099,8 +1146,12 @@ mod tests {
             classify_chat_notification("  shared_chat_raid  "),
             Some(ChatNotificationKind::Raid)
         );
+        // Announcement hat einen eigenen Promo-Delivery-Routing-Punkt.
+        assert_eq!(
+            classify_chat_notification("announcement"),
+            Some(ChatNotificationKind::Announcement)
+        );
         // Unbekannter / leerer notice_type → None (sauberes Ignorieren, kein Panic).
-        assert_eq!(classify_chat_notification("announcement"), None);
         assert_eq!(classify_chat_notification(""), None);
         assert_eq!(classify_chat_notification("   "), None);
     }

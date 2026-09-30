@@ -34,7 +34,7 @@ use tb_chat::moderation::{
 };
 use tb_chat::promos::{
     InviteResolver, LurkerRewardChecker, PartnerChannelCheck, PitchCardKind, PitchReviewSink,
-    PromoEngine,
+    PromoDeleteAlert, PromoDeleteAlertSink, PromoEngine,
 };
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
@@ -752,11 +752,17 @@ pub async fn build_runtime(
             }
         });
     }
-    let pitch_review_sink: Option<Arc<dyn PitchReviewSink>> = review_relay.map(|relay| {
+    let pitch_review_sink: Option<Arc<dyn PitchReviewSink>> = review_relay.clone().map(|relay| {
         Arc::new(DiscordPitchReviewSink {
             discord: Arc::new(relay),
         }) as Arc<dyn PitchReviewSink>
     });
+    let promo_delete_alert_sink: Option<Arc<dyn PromoDeleteAlertSink>> =
+        review_relay.map(|relay| {
+            Arc::new(DiscordPromoDeleteAlertSink {
+                discord: Arc::new(relay),
+            }) as Arc<dyn PromoDeleteAlertSink>
+        });
     let promos = Arc::new({
         let mut engine = PromoEngine::new(pool.clone(), Arc::clone(&api), Arc::clone(&suppression))
             // P1.1: Schreibseite der Outbound-Suppression — derselbe Store, der
@@ -778,6 +784,9 @@ pub async fn build_runtime(
         }
         if let Some(sink) = pitch_review_sink {
             engine = engine.set_pitch_review_sink(sink);
+        }
+        if let Some(sink) = promo_delete_alert_sink {
+            engine = engine.set_promo_delete_alert_sink(sink);
         }
         if let Some(register) = zuschauer_register.clone() {
             engine = engine.set_zuschauer_register(register);
@@ -1792,6 +1801,18 @@ impl EventSubHooks for ChatHooks {
         }
     }
 
+    async fn on_chat_message_delete(&self, event: &Value, message_id: Option<&str>) {
+        self.inner.on_chat_message_delete(event, message_id).await;
+        self.promos.observe_message_delete(event).await;
+    }
+
+    async fn on_chat_announcement_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.inner
+            .on_chat_announcement_notification(event, message_id)
+            .await;
+        self.promos.observe_announcement_notification(event).await;
+    }
+
     // B7: chat.notification-Raid/Unraid an die Raid-Schicht durchreichen (der
     // Demux in tb-monitoring klassifiziert vorab nach notice_type).
     async fn on_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
@@ -1894,9 +1915,11 @@ fn chat_notification_eventsub_type(kind: ChatNotificationKind) -> &'static str {
         ChatNotificationKind::SubGift | ChatNotificationKind::CommunitySubGift => {
             "channel.subscription.gift"
         }
-        // Raid/Unraid laufen nie über diesen Pfad (anderer Hook); defensiver
-        // Fallback ohne Match-Effekt.
-        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => "",
+        // Raid/Unraid/Announcement laufen nie über diesen Sub-Fallback-Pfad;
+        // Announcement wird separat an die Promo-Delivery-Detection geroutet.
+        ChatNotificationKind::Raid
+        | ChatNotificationKind::Unraid
+        | ChatNotificationKind::Announcement => "",
     }
 }
 
@@ -1995,7 +2018,9 @@ fn chat_notification_to_subscription_event(
                 }),
             ))
         }
-        ChatNotificationKind::Raid | ChatNotificationKind::Unraid => None,
+        ChatNotificationKind::Raid
+        | ChatNotificationKind::Unraid
+        | ChatNotificationKind::Announcement => None,
     }
 }
 
@@ -2068,6 +2093,10 @@ struct DiscordPitchReviewSink {
     discord: Arc<dyn DiscordBackend>,
 }
 
+struct DiscordPromoDeleteAlertSink {
+    discord: Arc<dyn DiscordBackend>,
+}
+
 struct BrokerReaktionsQuelle {
     relay: BrokerRelay,
     channel_id: i64,
@@ -2078,8 +2107,10 @@ impl tb_chat::pitch_bewertung::ReaktionsQuelle for BrokerReaktionsQuelle {
     async fn reaktionen(
         &self,
         message_id: &str,
-    ) -> Result<Option<Vec<tb_chat::pitch_bewertung::Reaktion>>, tb_chat::pitch_bewertung::ReaktionsFehler>
-    {
+    ) -> Result<
+        Option<Vec<tb_chat::pitch_bewertung::Reaktion>>,
+        tb_chat::pitch_bewertung::ReaktionsFehler,
+    > {
         match self
             .relay
             .get_message_reactions(&self.channel_id.to_string(), message_id)
@@ -2166,6 +2197,47 @@ fn neutralize_pitch_codespan(value: &str) -> String {
 }
 
 #[async_trait::async_trait]
+impl PromoDeleteAlertSink for DiscordPromoDeleteAlertSink {
+    async fn notify_deleted_promo(&self, alert: PromoDeleteAlert) -> bool {
+        let text = neutralize_pitch_field(&alert.message_text)
+            .chars()
+            .take(420)
+            .collect::<String>();
+        let payload = SendRichMessage {
+            channel_id: PITCH_REVIEW_CHANNEL_ID,
+            content: None,
+            embed: serde_json::json!({
+                "title": "Twitch-Promo wurde gelöscht",
+                "color": 0xE67E22,
+                "description": text,
+                "fields": [
+                    {"name": "Kanal", "value": neutralize_pitch_field(&alert.channel_login), "inline": true},
+                    {"name": "Quelle", "value": neutralize_pitch_field(&alert.source), "inline": true},
+                    {"name": "Twitch Message-ID", "value": neutralize_pitch_codespan(&alert.twitch_message_id), "inline": false},
+                    {"name": "Gesendet", "value": alert.send_accepted_at.to_rfc3339(), "inline": true},
+                    {"name": "Gelöscht", "value": alert.deleted_at.to_rfc3339(), "inline": true}
+                ]
+            }),
+            components: None,
+            allowed_role_ids: vec![],
+            view_spec: None,
+        };
+        match self.discord.send_rich_message(payload).await {
+            Ok(_) => true,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    channel = %alert.channel_login,
+                    twitch_message_id = %alert.twitch_message_id,
+                    "Promo-Delete-Bot-Log fehlgeschlagen"
+                );
+                false
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
 impl PitchReviewSink for DiscordPitchReviewSink {
     async fn send_card(
         &self,
@@ -2193,9 +2265,8 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         if let Some(hint) = candidate_hint {
             displays.push(neutralize_pitch_field(hint));
         }
-        displays.push(
-            "Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string(),
-        );
+        displays
+            .push("Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string());
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
             content: None,
@@ -3476,6 +3547,45 @@ mod chat_notification_tests {
             payload.allowed_role_ids.is_empty(),
             "Karte darf keine Rollen-Mentions erlauben"
         );
+    }
+
+    #[tokio::test]
+    async fn promo_delete_alert_geht_in_bot_logs_und_neutralisiert_mentions() {
+        let backend = Arc::new(CapturingDiscordBackend {
+            last: Mutex::new(None),
+        });
+        let sink = DiscordPromoDeleteAlertSink {
+            discord: Arc::clone(&backend) as Arc<dyn DiscordBackend>,
+        };
+        let now = chrono::Utc::now();
+
+        assert!(
+            sink.notify_deleted_promo(PromoDeleteAlert {
+                channel_login: "marcymcwhy @everyone".to_string(),
+                broadcaster_user_id: "123".to_string(),
+                source: "chat_activity".to_string(),
+                message_text: "Unsere Promo @here <@123> https://discord.gg/test".to_string(),
+                twitch_message_id: "abc-123".to_string(),
+                send_accepted_at: now,
+                deleted_at: now,
+            })
+            .await
+        );
+
+        let payload = backend
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("Bot-Log muss gesendet worden sein");
+        assert_eq!(payload.channel_id, PITCH_REVIEW_CHANNEL_ID);
+        assert_eq!(payload.embed["title"], "Twitch-Promo wurde gelöscht");
+        let rendered = serde_json::to_string(&payload.embed).unwrap();
+        assert!(!rendered.contains("@everyone"));
+        assert!(!rendered.contains("@here"));
+        assert!(!rendered.contains("<@"));
+        assert!(!rendered.contains("discord.gg"));
+        assert!(payload.allowed_role_ids.is_empty());
     }
 
     #[tokio::test]
