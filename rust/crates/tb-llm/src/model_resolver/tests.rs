@@ -175,6 +175,38 @@ async fn paginierung_und_numerisch_neuestes_modell_mit_probe() {
 }
 
 #[tokio::test]
+async fn abgelehntes_aktuelles_modell_wird_nicht_bei_spaeterem_probe_503_zurueckgegeben() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(catalog(&["v4p2-flash"])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"model": model("v4p2-flash")})))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"model": model("v4p1-flash")})))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let resolver = resolver(&server);
+    *resolver.current.write().unwrap() = Some(VerifiedModel {
+        model: model("v4p2-flash"),
+        verified_at: Utc::now().timestamp(),
+    });
+    assert!(resolver.resolve("synthetic-key", None, None).await.is_err());
+}
+
+#[tokio::test]
 async fn parallele_aufrufer_teilen_katalog_und_probe() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

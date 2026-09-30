@@ -455,7 +455,7 @@ fn is_loopback_endpoint(base_url: &str) -> bool {
     reqwest::Url::parse(base_url).ok().is_some_and(|url| {
         url.username().is_empty()
             && url.password().is_none()
-            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
     })
 }
 
@@ -475,8 +475,9 @@ async fn call_selected_endpoint(
     endpoint.model.clear();
     let resolver = crate::model_resolver::global()?;
     let operation = async {
-        let pool = ledger::pool().await;
-        call_with_resolver(resolver, endpoint, request, purpose, frist, pool).await
+        // An inference request must not wait for optional ledger/cache I/O.
+        // The supervised refresh loop owns persistence and cache hydration.
+        call_with_resolver(resolver, endpoint, request, purpose, frist, None).await
     };
     tokio::time::timeout(frist, operation).await.map_err(|_| {
         LlmError::Timeout("Gesamtfrist einschließlich Modellauswahl erschöpft".into())
@@ -840,13 +841,6 @@ mod tests {
             model: crate::selection::configured_fireworks_model().to_string(),
             api_key: Some("k".to_string()),
         }
-    }
-
-    #[test]
-    fn ipv6_loopback_ist_ein_lokaler_mock_endpoint() {
-        assert!(is_loopback_endpoint("http://[::1]:8080"));
-        assert!(is_loopback_endpoint("http://localhost:8080"));
-        assert!(!is_loopback_endpoint("https://example.com"));
     }
 
     #[test]

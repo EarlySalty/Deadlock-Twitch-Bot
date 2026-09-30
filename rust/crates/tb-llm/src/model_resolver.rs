@@ -389,7 +389,10 @@ impl ModelResolver {
                     // Nicht auf eine ältere YAML-Version zurückstufen, solange
                     // der letzte geprüfte Stand noch gültig ist.
                     if !matches!(status, Some(404 | 410)) {
-                        if let Some(cached) = &usable {
+                        if let Some(cached) = usable
+                            .as_ref()
+                            .filter(|cached| !state.rejected.contains_key(&cached.model))
+                        {
                             tracing::warn!(model = %cached.model,
                                 "Modellprobe vorübergehend fehlgeschlagen; geprüfter Stand bleibt aktiv");
                             return Ok(cached.model.clone());
