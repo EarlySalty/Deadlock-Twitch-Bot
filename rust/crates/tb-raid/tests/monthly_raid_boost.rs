@@ -1021,7 +1021,7 @@ async fn read_only_boost_lesepfad_reserviert_und_verbraucht_nicht() {
     let start = granted + chrono::Duration::days(1);
     set_live_session(&pool, 901, "winner", start, "Deadlock").await;
 
-    let options = PgConnectOptions::from_str(&std::env::var("TB_TEST_DATABASE_URL").unwrap())
+    let options = PgConnectOptions::from_str(&test_database::database_url().unwrap())
         .unwrap()
         .options([
             ("search_path", schema),
