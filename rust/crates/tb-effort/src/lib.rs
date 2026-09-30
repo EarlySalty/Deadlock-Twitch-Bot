@@ -12,8 +12,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, ConnectOptions, Connection, PgConnection, PgPool};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tb_config::challenges::Challenges;
+use tb_observability::WarningBudget;
 use tb_transport_twitch::HelixClient;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -127,10 +131,18 @@ impl Engine {
     pub async fn run(self) {
         let mut ticker = tokio::time::interval(Duration::from_secs(self.cfg.poll_seconds));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut warning_budget = WarningBudget::default();
         loop {
             ticker.tick().await;
             if let Err(error) = self.tick(Utc::now()).await {
-                tracing::warn!(%error, "Partner-Challenges konnten nicht vollständig aktualisiert werden");
+                if let Some(suppressed_repeats) = warning_budget.allow(Instant::now()) {
+                    tracing::warn!(
+                        %error,
+                        error_group = "effort_tick",
+                        suppressed_repeats,
+                        "Partner-Challenges konnten nicht vollständig aktualisiert werden"
+                    );
+                }
             }
         }
     }

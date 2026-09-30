@@ -10,6 +10,7 @@ pub mod analytics_service;
 pub mod event;
 pub mod raid_service;
 pub mod value;
+pub mod warning_budget;
 pub mod writer;
 
 pub use analytics_service::{
@@ -18,6 +19,7 @@ pub use analytics_service::{
 pub use event::{ObservabilityEvent, StoragePayload};
 pub use raid_service::{EventSink, MillisSource, RaidObservabilityService};
 pub use value::{format_fields, normalize_value, safe_observability_text, DEFAULT_VALUE_LIMIT};
+pub use warning_budget::WarningBudget;
 pub use writer::{
     sanitize_payload, ObservabilityRow, ObservabilityWriter, DEFAULT_BATCH_SIZE,
     DEFAULT_QUEUE_CAPACITY,

@@ -1,30 +1,49 @@
 //! Monatlicher Abschluss der Partner-Effort-Season um 00:05 Europe/Berlin.
 
+use std::time::Instant;
+
 use chrono::Utc;
 use sqlx::PgPool;
+use tb_observability::WarningBudget;
 use tb_raid::{MonthlyRaidBoostStore, SeasonCloseOutcome};
 
 use crate::score_refresh::ScoreRefreshResolver;
 
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
+#[derive(Default)]
+struct MonthlyWarningBudgets {
+    cutoff_lookup: WarningBudget,
+    close_retry: WarningBudget,
+    score_prepare: WarningBudget,
+    score_refresh: WarningBudget,
+}
+
 pub async fn run(pool: PgPool) {
     let store = MonthlyRaidBoostStore::new(pool.clone());
     let mut ticker = tokio::time::interval(RETRY_DELAY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut warnings = MonthlyWarningBudgets::default();
     loop {
         ticker.tick().await;
         let now = Utc::now();
         match store.due_season_cutoffs(now).await {
             Ok(cutoffs) => {
                 for cutoff in cutoffs {
-                    if !close_once(&store, &pool, cutoff, now).await {
+                    if !close_once(&store, &pool, cutoff, now, &mut warnings).await {
                         break;
                     }
                 }
             }
             Err(error) => {
-                tracing::warn!(%error, "Offene Monatswertungen konnten nicht gelesen werden")
+                if let Some(suppressed_repeats) = warnings.cutoff_lookup.allow(Instant::now()) {
+                    tracing::warn!(
+                        %error,
+                        error_group = "monthly_cutoff_lookup",
+                        suppressed_repeats,
+                        "Offene Monatswertungen konnten nicht gelesen werden"
+                    );
+                }
             }
         }
     }
@@ -37,6 +56,7 @@ async fn close_once(
     pool: &PgPool,
     cutoff: chrono::DateTime<Utc>,
     now: chrono::DateTime<Utc>,
+    warnings: &mut MonthlyWarningBudgets,
 ) -> bool {
     let season_key = match store.close_season_ending_at(cutoff, now).await {
         Ok(SeasonCloseOutcome::Closed {
@@ -49,11 +69,25 @@ async fn close_once(
         }
         Ok(SeasonCloseOutcome::AlreadyClosed { season_key }) => season_key,
         Ok(SeasonCloseOutcome::SourceUnavailable { season_key }) => {
-            tracing::warn!(%season_key, "Partner-Effort-Eventquelle noch nicht verfügbar; Monatsabschluss wird erneut versucht");
+            if let Some(suppressed_repeats) = warnings.close_retry.allow(Instant::now()) {
+                tracing::warn!(
+                    %season_key,
+                    error_group = "monthly_close_retry",
+                    suppressed_repeats,
+                    "Partner-Effort-Eventquelle noch nicht verfügbar; Monatsabschluss wird erneut versucht"
+                );
+            }
             return false;
         }
         Err(error) => {
-            tracing::error!(%error, "Partner-Effort-Monatsabschluss fehlgeschlagen; Retry folgt");
+            if let Some(suppressed_repeats) = warnings.close_retry.allow(Instant::now()) {
+                tracing::error!(
+                    %error,
+                    error_group = "monthly_close_retry",
+                    suppressed_repeats,
+                    "Partner-Effort-Monatsabschluss fehlgeschlagen; Retry folgt"
+                );
+            }
             return false;
         }
     };
@@ -73,7 +107,15 @@ async fn close_once(
     {
         Ok(recipient) => recipient,
         Err(error) => {
-            tracing::error!(%error, %season_key, "Monatsboost-Score-Refresh konnte nicht vorbereitet werden");
+            if let Some(suppressed_repeats) = warnings.score_prepare.allow(Instant::now()) {
+                tracing::error!(
+                    %error,
+                    %season_key,
+                    error_group = "monthly_score_prepare",
+                    suppressed_repeats,
+                    "Monatsboost-Score-Refresh konnte nicht vorbereitet werden"
+                );
+            }
             return false;
         }
     };
@@ -86,11 +128,27 @@ async fn close_once(
     {
         Ok(1) => true,
         Ok(written) => {
-            tracing::warn!(%season_key, written, "Monatsboost-Score fehlt; Refresh wird erneut versucht");
+            if let Some(suppressed_repeats) = warnings.score_refresh.allow(Instant::now()) {
+                tracing::warn!(
+                    %season_key,
+                    written,
+                    error_group = "monthly_score_refresh",
+                    suppressed_repeats,
+                    "Monatsboost-Score fehlt; Refresh wird erneut versucht"
+                );
+            }
             false
         }
         Err(error) => {
-            tracing::error!(%error, %season_key, "Sofortiger Raid-Score-Refresh nach Monatsboost fehlgeschlagen; Retry folgt");
+            if let Some(suppressed_repeats) = warnings.score_refresh.allow(Instant::now()) {
+                tracing::error!(
+                    %error,
+                    %season_key,
+                    error_group = "monthly_score_refresh",
+                    suppressed_repeats,
+                    "Sofortiger Raid-Score-Refresh nach Monatsboost fehlgeschlagen; Retry folgt"
+                );
+            }
             false
         }
     }

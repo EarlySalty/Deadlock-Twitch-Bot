@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tb-config = { workspace = true }
+tb-observability = { workspace = true }
 tb-transport-twitch = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
