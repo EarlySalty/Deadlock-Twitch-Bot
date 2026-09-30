@@ -304,13 +304,11 @@ impl BrainChatService {
             .backend_state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if *previous == current {
-            return;
-        }
         if current == BackendState::Unavailable {
-            tracing::warn!("Brain-Antwortdienst nicht erreichbar, Chat-Antworten bleiben aus");
-        } else if *previous == BackendState::Unavailable {
-            tracing::info!("Brain-Antwortdienst wieder erreichbar");
+            tb_observability::warning_budget::warn(
+                "brain_backend",
+                "Brain-Antwortdienst nicht erreichbar, Chat-Antworten bleiben aus",
+            );
         }
         *previous = current;
     }
@@ -336,8 +334,11 @@ impl BrainChatService {
                 .await
             {
                 Ok(()) => return true,
-                Err(error) if attempt == 2 => {
-                    tracing::warn!(%error, log_id = id, "Brain-Chat-Protokoll konnte nicht abgeschlossen werden");
+                Err(_) if attempt == 2 => {
+                    tb_observability::warning_budget::warn(
+                        "brain_log_finish",
+                        "Brain-Chat-Protokoll konnte nicht abgeschlossen werden",
+                    );
                 }
                 Err(_) => tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await,
             }
@@ -350,8 +351,11 @@ impl BrainChatService {
             let duration_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
             match self.log.delivery(id, sent, duration_ms).await {
                 Ok(()) => return,
-                Err(error) if attempt == 2 => {
-                    tracing::warn!(%error, log_id = id, "Brain-Chat-Zustellung bleibt ungeklärt");
+                Err(_) if attempt == 2 => {
+                    tb_observability::warning_budget::warn(
+                        "brain_log_delivery",
+                        "Brain-Chat-Zustellung bleibt ungeklärt",
+                    );
                 }
                 Err(_) => tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await,
             }
@@ -396,8 +400,11 @@ impl BrainChatPort for BrainChatService {
         let id = match self.log.begin(&record).await {
             Ok(Some(id)) => id,
             Ok(None) => return true,
-            Err(error) => {
-                tracing::warn!(%error, channel_id = %record.channel_id, "Brain-Chat-Protokoll nicht verfügbar, Antwort unterdrückt");
+            Err(_) => {
+                tb_observability::warning_budget::warn(
+                    "brain_log_begin",
+                    "Brain-Chat-Protokoll nicht verfügbar, Antwort unterdrückt",
+                );
                 return true;
             }
         };
@@ -422,14 +429,16 @@ impl BrainChatPort for BrainChatService {
                 if error == BrainAdapterError::Backend {
                     self.backend_state(BackendState::Unavailable);
                 } else {
-                    tracing::warn!(?error, channel_id = %record.channel_id, "Brain-Chat-Frage abgelehnt");
+                    tb_observability::warning_budget::warn(
+                        "brain_question",
+                        "Brain-Chat-Frage abgelehnt",
+                    );
                 }
                 let _ = self.finish(id, "", "Fehler", false, started).await;
                 return true;
             }
         };
         if !self.finish(id, &text, status, true, started).await {
-            tracing::warn!(channel_id = %record.channel_id, message_id = %record.message_id, "Brain-Chat-Antwort ohne Protokoll nicht gesendet");
             return true;
         }
         let send = self
@@ -438,7 +447,10 @@ impl BrainChatPort for BrainChatService {
             .await;
         let delivered = matches!(send, Ok(SendOutcome::Sent));
         if !delivered {
-            tracing::warn!(channel_id = %record.channel_id, message_id = %record.message_id, outcome = ?send, "Brain-Chat-Antwort nicht zugestellt");
+            tb_observability::warning_budget::warn(
+                "brain_send",
+                "Brain-Chat-Antwort nicht zugestellt",
+            );
         }
         self.delivery(id, delivered, started).await;
         true
@@ -472,7 +484,10 @@ pub fn build(
         return None;
     }
     let answerer = if token.trim().is_empty() {
-        tracing::warn!("Brain-Chat-Adapter ohne Dienstzugang, Antworten bleiben aus");
+        tb_observability::warning_budget::warn(
+            "brain_backend",
+            "Brain-Chat-Adapter ohne Dienstzugang, Antworten bleiben aus",
+        );
         None
     } else {
         BrainKnowledgeAdapter::new(
@@ -482,8 +497,11 @@ pub fn build(
             client.public_scopes.iter().cloned().collect(),
         )
         .map(|adapter| Arc::new(adapter) as Arc<dyn BrainAnswerPort>)
-        .map_err(|error| {
-            tracing::warn!(?error, "Brain-Chat-Adapter konnte nicht gestartet werden");
+        .map_err(|_| {
+            tb_observability::warning_budget::warn(
+                "brain_backend",
+                "Brain-Chat-Adapter konnte nicht gestartet werden",
+            );
         })
         .ok()
     };

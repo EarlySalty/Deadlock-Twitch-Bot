@@ -175,3 +175,7 @@ export async function setTwitchTitle(
     }),
   );
 }
+
+export async function fetchTitleStreamers(): Promise<{ items: { login: string; twitchUserId: string | null }[] }> {
+  return fetchJson('/twitch/api/admin/streamers?view=all', withCookieCredentials({}));
+}

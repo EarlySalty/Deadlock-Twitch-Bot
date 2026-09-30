@@ -3585,6 +3585,7 @@ dependencies = [
  "tb-engagement",
  "tb-knowledge",
  "tb-llm",
+ "tb-observability",
  "tb-transport-twitch",
  "tempfile",
  "tokio",

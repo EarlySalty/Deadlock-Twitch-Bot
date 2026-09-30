@@ -26,8 +26,8 @@ pub async fn get_rank_for_discord_user(_pool: &PgPool, user_id: i64) -> Option<R
 fn rank_context(result: Result<stats::RankInfo, StatsError>) -> Option<RankInfo> {
     let info = match result {
         Ok(info) => info,
-        Err(error) => {
-            tracing::warn!(%error, "Titel wird ohne optionalen Rang erzeugt");
+        Err(_) => {
+            warn_title_source("title_rank");
             return None;
         }
     };
@@ -190,23 +190,17 @@ fn fresh_live_stamp(stamp: Option<&str>) -> bool {
         })
 }
 
-fn source_transition(state: &std::sync::atomic::AtomicU8, source: u8, failed: bool) -> bool {
-    use std::sync::atomic::Ordering;
-    if failed {
-        state.fetch_or(source, Ordering::Relaxed) & source == 0
-    } else {
-        state.fetch_and(!source, Ordering::Relaxed);
-        false
-    }
+pub fn warn_title_source(source: &'static str) {
+    tb_observability::warning_budget::warn(source, "Titel nutzt die übrigen verfügbaren Angaben");
 }
 
 fn source_state(source: u8, failed: bool) {
-    static FAILURES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-    if source_transition(&FAILURES, source, failed) {
-        tracing::warn!(
-            source,
-            "title_costream_source_unavailable: Titel nutzt die übrigen verfügbaren Angaben"
-        );
+    if failed {
+        warn_title_source(match source {
+            1 => "title_shared_chat",
+            2 => "title_central_context",
+            _ => "title_local_live",
+        });
     }
 }
 
@@ -254,7 +248,7 @@ async fn fetch_central_title_context(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| ())?;
-    client
+    let mut response = client
         .get(url)
         .header("X-Internal-Token", token)
         .query(&[("discord_id", discord_id)])
@@ -262,10 +256,41 @@ async fn fetch_central_title_context(
         .await
         .map_err(|_| ())?
         .error_for_status()
-        .map_err(|_| ())?
-        .json()
-        .await
-        .map_err(|_| ())
+        .map_err(|_| ())?;
+    const MAX_BODY: usize = 32 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_BODY as u64)
+    {
+        return Err(());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+        if chunk.len() > MAX_BODY.saturating_sub(body.len()) {
+            return Err(());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let context: CentralTitleContext = serde_json::from_slice(&body).map_err(|_| ())?;
+    if context.party_discord_ids.len() > 64
+        || context.voice_discord_ids.len() > 256
+        || context
+            .party_size
+            .is_some_and(|size| !(1..=6).contains(&size))
+        || context
+            .party_discord_ids
+            .iter()
+            .chain(&context.voice_discord_ids)
+            .any(|id| {
+                id.is_empty()
+                    || id.len() > 19
+                    || !id.bytes().all(|byte| byte.is_ascii_digit())
+                    || id.parse::<i64>().map_or(true, |value| value <= 0)
+            })
+    {
+        return Err(());
+    }
+    Ok(context)
 }
 
 async fn shared_chat_streamers(
@@ -468,17 +493,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn review_warnung_einmal_je_stoerung_mit_erholung() {
-        let state = std::sync::atomic::AtomicU8::new(0);
-        assert!(source_transition(&state, 1, true));
-        assert!(!source_transition(&state, 1, true));
-        assert!(source_transition(&state, 2, true));
-        assert!(!source_transition(&state, 1, false));
-        assert!(source_transition(&state, 1, true));
-        assert!(!source_transition(&state, 2, true));
-    }
-
     #[tokio::test]
     async fn review_bestehender_steam_dienst_auth_und_keine_token_weitergabe() {
         let server = MockServer::start().await;
@@ -513,6 +527,71 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn review_chunked_antwort_ueber_grenze_wird_abgewiesen() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://{}/internal/title-context",
+            listener.local_addr().unwrap()
+        );
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let _ = socket.read(&mut request);
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            for _ in 0..9 {
+                if socket.write_all(b"1000\r\n").is_err()
+                    || socket.write_all(&[b' '; 4096]).is_err()
+                    || socket.write_all(b"\r\n").is_err()
+                {
+                    break;
+                }
+            }
+            let _ = socket.write_all(b"0\r\n\r\n");
+        });
+        assert!(
+            fetch_central_title_context(&endpoint, "synthetic-token", 42)
+                .await
+                .is_err()
+        );
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn review_zentrale_id_listen_sind_begrenzt() {
+        for ids in [
+            vec!["9".repeat(20)],
+            vec!["-1".into()],
+            vec!["0".into()],
+            vec!["43".into(); 257],
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "captured_at": chrono::Utc::now().timestamp(), "party_size": 2,
+                    "party_discord_ids": [], "voice_discord_ids": ids
+                })))
+                .mount(&server)
+                .await;
+            assert!(
+                fetch_central_title_context(&server.uri(), "synthetic-token", 42)
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     use wiremock::{

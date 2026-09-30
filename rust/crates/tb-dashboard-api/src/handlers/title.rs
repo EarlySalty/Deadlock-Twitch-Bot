@@ -74,84 +74,45 @@ pub struct TitleSettingsBody {
 const TITLE_OAUTH_URL: &str = "/twitch/raid/auth?scope_profile=title&source=title_generator";
 const TITLE_MANAGE_SCOPE: &str = "channel:manage:broadcast";
 
+fn own_user_id(auth: &DashboardAuthLevel) -> Result<&str, (StatusCode, Json<serde_json::Value>)> {
+    let id = match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => twitch_user_id,
+        DashboardAuthLevel::Admin { actor: Some(actor) } => &actor.twitch_user_id,
+        _ => return Err(crate::auth::unauthorized_v2_json()),
+    };
+    if id.is_empty() || id.len() > 20 || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(crate::auth::unauthorized_v2_json());
+    }
+    Ok(id)
+}
+
 fn requested_user_id(
     auth: &DashboardAuthLevel,
     requested: Option<&str>,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let (own_login, own_id) = match auth {
-        DashboardAuthLevel::Partner {
-            twitch_login,
-            twitch_user_id,
-            ..
-        } => (twitch_login, twitch_user_id),
-        DashboardAuthLevel::Admin { actor: Some(actor) } => {
-            (&actor.twitch_login, &actor.twitch_user_id)
-        }
-        _ => return Err(crate::auth::unauthorized_v2_json()),
-    };
-    if own_id.trim().is_empty() {
-        return Err(crate::auth::unauthorized_v2_json());
-    }
-    let requested = requested.unwrap_or("").trim();
-    if !requested.is_empty() && !requested.eq_ignore_ascii_case(own_login.trim()) {
+    let own = own_user_id(auth)?;
+    if requested.is_some_and(|id| !id.trim().is_empty() && id.trim() != own) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({"error":"Du kannst nur deinen eigenen Twitch-Account bearbeiten."})),
         ));
     }
-    Ok(own_id.clone())
+    Ok(own.to_owned())
 }
 
-fn requested_login(
-    auth: &DashboardAuthLevel,
-    requested: Option<&str>,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let requested = requested.unwrap_or("").trim().to_lowercase();
-    match auth {
-        DashboardAuthLevel::None => Err(crate::auth::unauthorized_v2_json()),
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
-            let own = twitch_login.trim().to_lowercase();
-            if !requested.is_empty() && requested != own {
-                Err((
-                    StatusCode::FORBIDDEN,
-                    Json(
-                        json!({"error":"Du kannst nur auf deinen eigenen Twitch-Account zugreifen."}),
-                    ),
-                ))
-            } else {
-                Ok(own)
-            }
-        }
-        DashboardAuthLevel::Admin { actor } => {
-            let actor_login = actor
-                .as_ref()
-                .map(|a| a.twitch_login.trim().to_lowercase())
-                .unwrap_or_default();
-            let login = if requested.is_empty() {
-                actor_login
-            } else {
-                requested
-            };
-            if login.is_empty() {
-                Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error":"streamer required"})),
-                ))
-            } else {
-                Ok(login)
-            }
-        }
+fn combined_target<'a>(
+    body: Option<&'a str>,
+    query: Option<&'a str>,
+) -> Result<Option<&'a str>, (StatusCode, Json<serde_json::Value>)> {
+    let body = body.map(str::trim).filter(|id| !id.is_empty());
+    let query = query.map(str::trim).filter(|id| !id.is_empty());
+    if body.zip(query).is_some_and(|(a, b)| a != b) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Widersprüchliche Twitch-ID."})),
+        ));
     }
-}
-
-async fn resolve_user_id(pool: &PgPool, login: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar!(
-        "SELECT twitch_user_id AS \"twitch_user_id!\" FROM twitch_streamers \
-         WHERE LOWER(twitch_login) = $1 AND COALESCE(twitch_user_id, '') <> '' LIMIT 1",
-        login
-    )
-    .fetch_optional(pool)
-    .await
+    Ok(body.or(query))
 }
 
 async fn resolve_target_user_id(
@@ -159,20 +120,40 @@ async fn resolve_target_user_id(
     auth: &DashboardAuthLevel,
     requested: Option<&str>,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    if matches!(auth, DashboardAuthLevel::Admin { .. }) {
-        let login = requested_login(auth, requested)?;
-        resolve_user_id(pool, &login)
-            .await
-            .map_err(|_| crate::auth::analytics_request_failed_json())?
-            .ok_or_else(|| {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({"error":"streamer not found"})),
-                )
-            })
-    } else {
-        requested_user_id(auth, requested)
+    let own = own_user_id(auth)?;
+    let target = requested
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(own);
+    if target == own {
+        return Ok(own.to_owned());
     }
+    if !matches!(auth, DashboardAuthLevel::Admin { .. }) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"Du kannst nur auf deinen eigenen Twitch-Account zugreifen."})),
+        ));
+    }
+    if target.len() > 20 || !target.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Ungültige Twitch-ID."})),
+        ));
+    }
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM twitch_streamers WHERE twitch_user_id = $1)",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| crate::auth::analytics_request_failed_json())?;
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"Streamer nicht gefunden."})),
+        ));
+    }
+    Ok(target.to_owned())
 }
 
 async fn can_manage_title(pool: &PgPool, twitch_user_id: &str) -> bool {
@@ -334,12 +315,8 @@ async fn resolve_discord_user_id(pool: &PgPool, twitch_user_id: &str) -> Option<
     .await;
     match row {
         Ok(row) => row.flatten().and_then(|s| s.trim().parse::<i64>().ok()),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                twitch_user_id = %twitch_user_id.chars().take(16).collect::<String>(),
-                "Title-Kontext: Discord-ID-Abfrage fehlgeschlagen; der Titel wird ohne Rang und Live-Daten erzeugt"
-            );
+        Err(_) => {
+            tb_chat::steam_lookup::warn_title_source("title_identity");
             None
         }
     }
@@ -371,12 +348,8 @@ async fn resolve_title_context(
             Some(discord_id) => {
                 match steam_lookup::get_live_state_for_discord_user(pool, discord_id).await {
                     Ok(live) => live,
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            discord_id_tail = discord_id.rem_euclid(10_000),
-                            "Title-Kontext: Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
-                        );
+                    Err(_) => {
+                        tb_chat::steam_lookup::warn_title_source("title_steam_live");
                         None
                     }
                 }
@@ -435,7 +408,7 @@ async fn finish_suggestion(
     let primary = safe.primary;
     let alternatives = safe.alternatives;
     let generation_id = tb_crypto::random_hex_token(16);
-    if let Err(error) = title_db::insert_title_generation(
+    if title_db::insert_title_generation(
         pool,
         &generation_id,
         user_id,
@@ -444,8 +417,9 @@ async fn finish_suggestion(
         &alternatives,
     )
     .await
+    .is_err()
     {
-        tracing::warn!(%error, "title generation feedback row konnte nicht gespeichert werden");
+        tb_chat::steam_lookup::warn_title_source("title_generation_log");
     }
 
     let oauth_connected = can_manage_title(pool, user_id).await;
@@ -513,16 +487,11 @@ pub async fn suggest_handler(
         )
             .into_response();
     }
-    let requested_streamer = body
-        .streamer
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            query
-                .streamer
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-        });
+    let requested_streamer =
+        match combined_target(body.streamer.as_deref(), query.streamer.as_deref()) {
+            Ok(target) => target,
+            Err(response) => return response.into_response(),
+        };
     let user_id = match resolve_target_user_id(&pool, &auth, requested_streamer).await {
         Ok(login) => login,
         Err(resp) => return resp.into_response(),
@@ -919,7 +888,7 @@ mod tests {
             partner(),
             State(db.pool.clone()),
             Json(TitleSettingsBody {
-                streamer: Some("NANI".into()),
+                streamer: Some("1".into()),
                 style_preference: "trocken".into(),
                 experimental_auto_set: false,
                 never_words: submitted,
@@ -1016,19 +985,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_admin_leseziel_bleibt_erhalten_partner_nutzt_session_id() {
+    async fn review_admin_und_partner_nutzen_stabile_ids() {
         let db = crate::test_postgres::TestPostgres::start().await;
         sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_user_id TEXT, twitch_login TEXT); INSERT INTO twitch_streamers VALUES ('2', 'other'), ('wrong-id', 'nani');")
             .execute(&db.pool).await.unwrap();
         assert_eq!(
-            resolve_target_user_id(&db.pool, &DashboardAuthLevel::admin(), Some("other"))
+            resolve_target_user_id(&db.pool, &admin_actor(), Some("2"))
                 .await
                 .unwrap(),
             "2"
         );
         assert!(requested_user_id(&DashboardAuthLevel::admin(), Some("other")).is_err());
         assert_eq!(
-            resolve_target_user_id(&db.pool, &partner(), Some("nani"))
+            resolve_target_user_id(&db.pool, &admin_actor(), None)
+                .await
+                .unwrap(),
+            "1"
+        );
+        assert_eq!(
+            resolve_target_user_id(&db.pool, &admin_actor(), Some("1"))
+                .await
+                .unwrap(),
+            "1"
+        );
+        assert!(
+            resolve_target_user_id(&db.pool, &admin_actor(), Some("nani"))
+                .await
+                .is_err()
+        );
+        assert!(resolve_target_user_id(&db.pool, &partner(), Some("2"))
+            .await
+            .is_err());
+        assert!(combined_target(Some("1"), Some("2")).is_err());
+        assert_eq!(
+            resolve_target_user_id(&db.pool, &partner(), Some("1"))
                 .await
                 .unwrap(),
             "1"
@@ -1069,6 +1059,15 @@ mod tests {
         );
     }
 
+    fn admin_actor() -> DashboardAuthLevel {
+        DashboardAuthLevel::Admin {
+            actor: Some(crate::auth::level::AdminActor {
+                twitch_login: "nani".into(),
+                twitch_user_id: "1".into(),
+            }),
+        }
+    }
+
     fn partner() -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
             twitch_login: "nani".into(),
@@ -1078,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn partner_darf_nur_eigenen_login_nutzen() {
+    fn partner_darf_nur_eigene_id_nutzen() {
         assert_eq!(requested_user_id(&partner(), None).unwrap(), "1");
         assert!(requested_user_id(&partner(), Some("other")).is_err());
     }
@@ -1086,14 +1085,14 @@ mod tests {
     #[test]
     fn admin_braucht_eigene_twitch_session() {
         assert!(requested_user_id(&DashboardAuthLevel::admin(), None).is_err());
-        assert!(requested_user_id(&DashboardAuthLevel::admin(), Some("Nani")).is_err());
+        assert!(requested_user_id(&DashboardAuthLevel::admin(), Some("1")).is_err());
         let admin = DashboardAuthLevel::Admin {
             actor: Some(crate::auth::level::AdminActor {
                 twitch_login: "nani".into(),
                 twitch_user_id: "1".into(),
             }),
         };
-        assert_eq!(requested_user_id(&admin, Some("Nani")).unwrap(), "1");
+        assert_eq!(requested_user_id(&admin, Some("1")).unwrap(), "1");
         assert!(requested_user_id(&admin, Some("other")).is_err());
     }
 

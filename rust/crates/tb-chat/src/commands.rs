@@ -1135,8 +1135,8 @@ impl CommandEngine {
         .await;
         match enabled {
             Ok(Some(0)) => return,
-            Err(error) => {
-                tracing::warn!(%error, streamer_id = %event.broadcaster_user_id, "!title Einstellung konnte nicht gelesen werden");
+            Err(_) => {
+                crate::steam_lookup::warn_title_source("title_settings");
                 return;
             }
             Ok(_) => {}
@@ -1188,13 +1188,8 @@ impl CommandEngine {
             .await
             {
                 Ok(row) => row,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        channel = %channel,
-                        streamer_id = %streamer_id,
-                        "!title Streamer-Lookup fehlgeschlagen"
-                    );
+                Err(_) => {
+                    crate::steam_lookup::warn_title_source("title_identity");
                     None
                 }
             };
@@ -1252,13 +1247,8 @@ impl CommandEngine {
                         match crate::steam_lookup::get_live_state_for_discord_user(&pool, did).await
                         {
                             Ok(live) => live,
-                            Err(error) => {
-                                tracing::warn!(
-                                    %error,
-                                    channel = %channel,
-                                    discord_id_tail = did.rem_euclid(10_000),
-                                    "!title Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
-                                );
+                            Err(_) => {
+                                crate::steam_lookup::warn_title_source("title_steam_live");
                                 None
                             }
                         }

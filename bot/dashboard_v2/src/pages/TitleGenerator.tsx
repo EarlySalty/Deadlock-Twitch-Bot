@@ -79,6 +79,7 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
 export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
+  const canEditSettings = streamer === authStatus?.twitchUserId;
   const csrfToken = authStatus?.csrfToken ?? authStatus?.csrf_token;
   const [keywords, setKeywords] = useState('');
   const [includeLive, setIncludeLive] = useState(true);
@@ -244,14 +245,16 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           <button
             type="button"
             onClick={saveSettings}
-            disabled={!styleDirty || settingsMutation.isPending}
+            disabled={!canEditSettings || !styleDirty || settingsMutation.isPending}
             className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-white disabled:opacity-40"
           >
             {settingsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             Speichern
           </button>
         </div>
+        {!canEditSettings && <p className="text-xs text-text-secondary">Dauerhafte Titelwünsche kann nur der Kanalinhaber ändern.</p>}
         <textarea
+          disabled={!canEditSettings}
           value={stylePreference}
           onChange={(event) => setStylePreference(event.target.value)}
           maxLength={1200}
@@ -269,6 +272,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           <div className="text-sm font-medium text-white">Das will ich nie im Titel</div>
           <p className="mt-1 text-xs text-text-secondary">Ein Wort oder Satz je Zeile, bis zu 40 Einträge mit jeweils 60 Zeichen. Die gespeicherten Formulierungen werden aus den Vorschlägen ausgeschlossen.</p>
           <textarea
+            disabled={!canEditSettings}
             value={neverWords}
             onChange={(event) => setNeverWords(event.target.value)}
             rows={3}
@@ -294,7 +298,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             ) : (
               <span className="flex items-center gap-1 text-xs text-success"><Check className="h-3.5 w-3.5" /> Schreibrecht verbunden</span>
             )}
-            <Toggle checked={autoSet} disabled={!settings?.oauth_connected} onChange={setAutoSet} />
+            <Toggle checked={autoSet} disabled={!canEditSettings || !settings?.oauth_connected} onChange={setAutoSet} />
           </div>
         </div>
       </div>
