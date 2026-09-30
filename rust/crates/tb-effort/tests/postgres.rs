@@ -60,6 +60,8 @@ async fn fixture() -> (PgPool, PgPool, String) {
         CREATE TABLE core.steam_links(discord_id bigint,steam_id text,verified boolean);
         CREATE TABLE activity.voice_session_log(id bigint PRIMARY KEY,user_id bigint,guild_id bigint,channel_id bigint,started_at timestamptz,ended_at timestamptz);
         CREATE TABLE steam.steam_tasks(id bigint PRIMARY KEY,type text,payload jsonb,status text,result jsonb,finished_at timestamptz);
+        CREATE TABLE bot.twitch_invite_qualification_status(singleton boolean PRIMARY KEY DEFAULT TRUE CHECK(singleton),last_completed_at timestamptz NOT NULL,last_successful_at timestamptz,evaluation_interval_seconds integer NOT NULL CHECK(evaluation_interval_seconds BETWEEN 1 AND 86400),healthy boolean NOT NULL,CHECK(NOT healthy OR last_successful_at=last_completed_at));
+        INSERT INTO bot.twitch_invite_qualification_status(singleton,last_completed_at,last_successful_at,evaluation_interval_seconds,healthy) VALUES(TRUE,'2026-12-31','2026-12-31',300,TRUE);
         INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) VALUES('101','alice','active'),('102','bob','active'),('103','inactive','inactive');")
         .execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!("fixtures/qualified_twitch_invites.sql"))

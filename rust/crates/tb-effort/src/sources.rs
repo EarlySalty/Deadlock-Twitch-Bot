@@ -7,6 +7,29 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use std::collections::HashSet;
 
+#[derive(sqlx::FromRow)]
+struct QualificationStatus {
+    last_completed_at: DateTime<Utc>,
+    last_successful_at: Option<DateTime<Utc>>,
+    evaluation_interval_seconds: i32,
+    healthy: bool,
+}
+
+fn qualification_status_is_fresh(status: Option<QualificationStatus>, now: DateTime<Utc>) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    if !status.healthy || !(1..=86_400).contains(&status.evaluation_interval_seconds) {
+        return false;
+    }
+    let Some(last_successful_at) = status.last_successful_at else {
+        return false;
+    };
+    status.last_completed_at == last_successful_at
+        && last_successful_at
+            >= now - chrono::Duration::seconds(i64::from(status.evaluation_interval_seconds) * 3)
+}
+
 impl Engine {
     pub(crate) async fn collect(&self, now: DateTime<Utc>) -> Result<()> {
         let mut failure = None;
@@ -77,6 +100,16 @@ impl Engine {
     }
 
     async fn invites(&self, now: DateTime<Utc>) -> Result<()> {
+        let status: Option<QualificationStatus> = sqlx::query_as(
+            "SELECT last_completed_at,last_successful_at,evaluation_interval_seconds,healthy
+             FROM bot.twitch_invite_qualification_status WHERE singleton=TRUE",
+        )
+        .fetch_optional(self.central()?)
+        .await?;
+        if !qualification_status_is_fresh(status, now) {
+            return Err(Error::Source("invites_producer_not_ready"));
+        }
+
         let mut ready = true;
         for lane in ["recent", "reconcile"] {
             let cursor = self.cursor("invites", lane, now).await?;
@@ -206,5 +239,56 @@ impl Engine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn successful_status(at: DateTime<Utc>, interval: i32) -> QualificationStatus {
+        QualificationStatus {
+            last_completed_at: at,
+            last_successful_at: Some(at),
+            evaluation_interval_seconds: interval,
+            healthy: true,
+        }
+    }
+
+    #[test]
+    fn missing_or_failed_qualification_is_not_ready() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(!qualification_status_is_fresh(None, now));
+        assert!(!qualification_status_is_fresh(
+            Some(QualificationStatus {
+                last_completed_at: now,
+                last_successful_at: Some(now - chrono::Duration::seconds(300)),
+                evaluation_interval_seconds: 300,
+                healthy: false,
+            }),
+            now
+        ));
+    }
+
+    #[test]
+    fn freshness_tracks_three_configured_qualification_intervals() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(qualification_status_is_fresh(
+            Some(successful_status(now - chrono::Duration::seconds(900), 300)),
+            now
+        ));
+        assert!(!qualification_status_is_fresh(
+            Some(successful_status(now - chrono::Duration::seconds(901), 300)),
+            now
+        ));
+    }
+
+    #[test]
+    fn mismatched_completion_and_success_times_fail_closed() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let mut status = successful_status(now, 300);
+        status.last_completed_at += chrono::Duration::seconds(1);
+
+        assert!(!qualification_status_is_fresh(Some(status), now));
     }
 }
