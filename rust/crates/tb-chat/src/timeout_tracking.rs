@@ -64,7 +64,10 @@ pub fn bot_banned_reason(outcome: &SendOutcome) -> Option<String> {
             Some(reason_with_detail("chat_bot_banned_in_channel", message))
         }
         SendOutcome::HttpError { status, body } if looks_like_bot_banned_error(*status, body) => {
-            Some(reason_with_detail(&format!("chat_bot_banned_in_channel_http_{status}"), body))
+            Some(reason_with_detail(
+                &format!("chat_bot_banned_in_channel_http_{status}"),
+                body,
+            ))
         }
         _ => None,
     }
@@ -215,6 +218,21 @@ impl ChatApi for TimeoutTrackingChatApi {
         .await
     }
 
+    async fn send_thread_reply(
+        &self,
+        broadcaster_id: &str,
+        parent_message_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.track_send_outcome(
+            broadcaster_id,
+            self.inner
+                .send_thread_reply(broadcaster_id, parent_message_id, message)
+                .await,
+        )
+        .await
+    }
+
     async fn send_source_only_message(
         &self,
         broadcaster_id: &str,
@@ -284,7 +302,9 @@ impl ChatApi for TimeoutTrackingChatApi {
         target_user_id: &str,
         reason: &str,
     ) -> Result<BanOutcome, String> {
-        self.inner.ban_user(broadcaster_id, target_user_id, reason).await
+        self.inner
+            .ban_user(broadcaster_id, target_user_id, reason)
+            .await
     }
 
     async fn timeout_user(
@@ -299,26 +319,15 @@ impl ChatApi for TimeoutTrackingChatApi {
             .await
     }
 
-    async fn unban_user(
-        &self,
-        broadcaster_id: &str,
-        target_user_id: &str,
-    ) -> Result<bool, String> {
+    async fn unban_user(&self, broadcaster_id: &str, target_user_id: &str) -> Result<bool, String> {
         self.inner.unban_user(broadcaster_id, target_user_id).await
     }
 
-    async fn delete_message(
-        &self,
-        broadcaster_id: &str,
-        message_id: &str,
-    ) -> Result<bool, String> {
+    async fn delete_message(&self, broadcaster_id: &str, message_id: &str) -> Result<bool, String> {
         self.inner.delete_message(broadcaster_id, message_id).await
     }
 
-    async fn user_created_at(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<DateTime<Utc>>, String> {
+    async fn user_created_at(&self, user_id: &str) -> Result<Option<DateTime<Utc>>, String> {
         self.inner.user_created_at(user_id).await
     }
 
@@ -386,11 +395,6 @@ mod tests {
     use crate::promos::OutboundSuppressionCheck;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // -----------------------------------------------------------------------
-    // Mock-ChatApi — liefert ein konfigurierbares send_message-Ergebnis.
-    // Nur send_message zählt; die übrigen 8 Methoden sind Defaults/unimplemented.
-    // -----------------------------------------------------------------------
-
     struct MockApi {
         send_calls: AtomicUsize,
         source_only_calls: AtomicUsize,
@@ -419,6 +423,16 @@ mod tests {
             _m: &str,
         ) -> Result<SendOutcome, String> {
             self.source_only_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.outcome.clone())
+        }
+        async fn send_thread_reply(
+            &self,
+            _b: &str,
+            parent_message_id: &str,
+            _m: &str,
+        ) -> Result<SendOutcome, String> {
+            assert_eq!(parent_message_id, "parent-1");
+            self.send_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.outcome.clone())
         }
         async fn send_announcement(&self, _b: &str, _m: &str, _c: &str) -> Result<bool, String> {
@@ -628,7 +642,39 @@ mod tests {
             matches!(out, SendOutcome::Dropped { ref code, .. } if code == "channel_settings"),
             "Original-Ergebnis unverändert"
         );
-        assert!(!guard.is_muted("egal"), "anderer Code → kein record_timeout");
+        assert!(
+            !guard.is_muted("egal"),
+            "anderer Code → kein record_timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn decorator_reply_drop_merkt_timeout_und_ban() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT); \
+             INSERT INTO twitch_streamer_identities VALUES ('200', 'kanal');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let guard = Arc::new(TimeoutGuard::new());
+        for (index, code) in ["sender_timedout", "sender_banned"].into_iter().enumerate() {
+            let outcome = SendOutcome::Dropped {
+                code: code.into(),
+                message: String::new(),
+            };
+            let inner = MockApi::with_outcome(outcome.clone());
+            let api = TimeoutTrackingChatApi::new(inner.clone(), guard.clone(), db.pool.clone());
+            assert_eq!(
+                api.send_thread_reply("200", "parent-1", "Antwort")
+                    .await
+                    .unwrap(),
+                outcome
+            );
+            assert_eq!(inner.send_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(guard.is_muted("kanal"), index == 1);
+        }
     }
 }
 

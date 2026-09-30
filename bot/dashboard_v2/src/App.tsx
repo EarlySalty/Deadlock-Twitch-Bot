@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
@@ -15,6 +15,7 @@ import { Challenges } from '@/pages/Challenges';
 import { PartnerProfile } from '@/pages/PartnerProfile';
 import { CategoryCollector } from '@/pages/CategoryCollector';
 import { TitleGenerator } from '@/pages/TitleGenerator';
+import { fetchTitleStreamers } from '@/api/title';
 import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
@@ -362,10 +363,21 @@ function AnalyticsDashboard() {
 
 function TitleGeneratorRoute() {
   const { data: authStatus } = useAuthStatus();
-  const streamer = authStatus?.twitchLogin ?? authStatus?.adminDefaultStreamer ?? null;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const ownId = authStatus?.twitchUserId ?? null;
+  const streamer = authStatus?.isAdmin ? selectedId ?? ownId : ownId;
+  const directory = useQuery({ queryKey: ['title-streamer-directory'], queryFn: fetchTitleStreamers, enabled: Boolean(authStatus?.isAdmin) });
   return (
     <DashboardShell activeRoute="title">
-      <TitleGenerator streamer={streamer} />
+      {authStatus?.isAdmin && <div className="mx-auto max-w-4xl pt-4">
+        <label htmlFor="title-streamer" className="text-sm text-text-secondary">Twitch-Kanal</label>
+        <select id="title-streamer" value={streamer ?? ''} onChange={(event) => setSelectedId(event.target.value)} className="ml-3 rounded-lg border border-border bg-card px-3 py-2 text-white">
+          {ownId ? <option value={ownId}>Mein Kanal</option> : <option value="" disabled>Kanal auswählen</option>}
+          {directory.data?.items.filter((item) => item.twitchUserId && item.twitchUserId !== ownId).map((item) => <option key={item.twitchUserId} value={item.twitchUserId!}>{item.login}</option>)}
+        </select>
+        {directory.isError && <p role="status" className="mt-2 text-sm text-error">Die Kanalliste ist gerade nicht verfügbar.</p>}
+      </div>}
+      <TitleGenerator key={streamer} streamer={streamer} />
     </DashboardShell>
   );
 }

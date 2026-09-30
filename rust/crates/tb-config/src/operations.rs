@@ -1,8 +1,52 @@
 //! Bestehende Bot-Betriebsoptionen. Defaults stammen aus der bisherigen
 //! Composition-Root; keine Aktivierung neuer Aufgaben durch die Migration.
-use crate::{file::FileError, global::range};
+use crate::{dashboard_options::BrainClientOptions, file::FileError, global::range};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrainChatOptions {
+    pub enabled: bool,
+    pub user_cooldown_seconds: u64,
+    pub channel_hourly_limit: u32,
+    pub global_daily_limit: u32,
+}
+
+impl Default for BrainChatOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            user_cooldown_seconds: 60,
+            channel_hourly_limit: 20,
+            global_daily_limit: 500,
+        }
+    }
+}
+
+impl BrainChatOptions {
+    fn validate(&self) -> Result<(), FileError> {
+        range(
+            self.user_cooldown_seconds,
+            1,
+            3600,
+            "bot.brain_chat.user_cooldown_seconds",
+        )?;
+        range(
+            self.channel_hourly_limit.into(),
+            1,
+            500,
+            "bot.brain_chat.channel_hourly_limit",
+        )?;
+        range(
+            self.global_daily_limit.into(),
+            1,
+            10_000,
+            "bot.brain_chat.global_daily_limit",
+        )?;
+        Ok(())
+    }
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -20,6 +64,8 @@ pub struct BotOperations {
     pub alert_mention: Option<String>,
     pub discord_ref_code: Option<String>,
     pub chat_enabled: bool,
+    pub brain_client: BrainClientOptions,
+    pub brain_chat: BrainChatOptions,
     pub chat_persist_all_games: bool,
     pub lfg_pitch_enabled: bool,
     pub golive_tips_enabled: bool,
@@ -60,6 +106,8 @@ impl Default for BotOperations {
             alert_mention: None,
             discord_ref_code: None,
             chat_enabled: false,
+            brain_client: BrainClientOptions::default(),
+            brain_chat: BrainChatOptions::default(),
             chat_persist_all_games: true,
             lfg_pitch_enabled: true,
             golive_tips_enabled: false,
@@ -89,10 +137,19 @@ impl Default for BotOperations {
 impl BotOperations {
     pub fn validate(&self) -> Result<(), FileError> {
         use crate::global::public_url;
+        self.brain_client.validate_for(
+            "bot.brain_client.endpoint",
+            "bot.brain_client.public_scopes",
+            "bot.brain_client.timeout_ms",
+        )?;
+        self.brain_chat.validate()?;
         if self.runtime_role.len() > 64 || self.runtime_role.chars().any(char::is_control) {
             return Err(FileError::invalid("bot.runtime_role"));
         }
-        if self.legacy_internal_api_port.is_some_and(|port| port == 0 || port == 8766) {
+        if self
+            .legacy_internal_api_port
+            .is_some_and(|port| port == 0 || port == 8766)
+        {
             return Err(FileError::invalid("bot.legacy_internal_api_port"));
         }
         public_url(&self.raid_redirect_uri, "bot.raid_redirect_uri", false)?;
@@ -121,7 +178,10 @@ impl BotOperations {
                 "bot.service_warning_log_directory",
             ),
             (self.yt_dlp_binary.as_ref(), "bot.yt_dlp_binary"),
-            (self.outreach_yt_dlp_binary.as_ref(), "bot.outreach_yt_dlp_binary"),
+            (
+                self.outreach_yt_dlp_binary.as_ref(),
+                "bot.outreach_yt_dlp_binary",
+            ),
         ] {
             if let Some(path) = path {
                 let value = path.to_str().ok_or_else(|| FileError::invalid(field))?;

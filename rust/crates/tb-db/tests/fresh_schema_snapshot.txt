@@ -566,6 +566,18 @@ tb_chat_autoban_log|id|bigint|NO|nextval('tb_chat_autoban_log_id_seq'::regclass)
 tb_chat_autoban_log|reason|text|YES|
 tb_chat_autoban_log|score|real|YES|
 tb_chat_autoban_log|source_path|text|YES|
+tb_chat_brain_answers|answer|text|NO|''::text
+tb_chat_brain_answers|broadcaster_login|text|NO|
+tb_chat_brain_answers|broadcaster_user_id|text|NO|
+tb_chat_brain_answers|chatter_user_id|text|NO|
+tb_chat_brain_answers|created_at|timestamp with time zone|NO|now()
+tb_chat_brain_answers|delivery_status|text|NO|'Pending'::text
+tb_chat_brain_answers|duration_ms|bigint|YES|
+tb_chat_brain_answers|finished_at|timestamp with time zone|YES|
+tb_chat_brain_answers|id|bigint|NO|nextval('tb_chat_brain_answers_id_seq'::regclass)
+tb_chat_brain_answers|message_id|text|NO|
+tb_chat_brain_answers|question|text|NO|
+tb_chat_brain_answers|status|text|NO|
 tb_schema_ownership|component|text|NO|
 tb_schema_ownership|details_json|jsonb|NO|'{}'::jsonb
 tb_schema_ownership|marker_version|integer|NO|
@@ -604,6 +616,7 @@ title_generator_knowledge|source_streamer|text|YES|
 title_generator_knowledge|streamer_size|text|YES|
 title_generator_knowledge|title|text|NO|
 title_generator_preferences|experimental_auto_set|boolean|NO|false
+title_generator_preferences|never_words|text|NO|''::text
 title_generator_preferences|style_preference|text|NO|''::text
 title_generator_preferences|twitch_user_id|text|NO|
 title_generator_preferences|updated_at|timestamp with time zone|NO|now()

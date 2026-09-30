@@ -12,6 +12,7 @@ include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
 
 mod ad_manager_wiring;
 mod auto_raid;
+mod brain_chat_wiring;
 mod category_followers;
 mod chat_typen_wiring;
 mod chat_wiring;
@@ -1270,6 +1271,11 @@ async fn main() {
                 handle,
                 pool.clone(),
                 chat_wiring::ChatRuntimePorts {
+                    title_context: tb_chat::steam_lookup::CoStreamRuntime::new(
+                        config.dashboard.options.steam_title_context_url.clone(),
+                        settings.internal_api.token.clone(),
+                        helix.as_ref().clone(),
+                    ),
                     discord_chat: config.discord.chat.clone(),
                     subscription_status: chat_wiring::build_subscription_status(
                         helix.as_ref().clone().map(Arc::new),
@@ -1280,6 +1286,9 @@ async fn main() {
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     golive_tips_enabled: config.bot.golive_tips_enabled,
+                    brain_client: config.bot.brain_client.clone(),
+                    brain_chat: config.bot.brain_chat.clone(),
+                    brain_service_token: settings.internal_api.token.clone(),
                     chat_persist_all_games: config.bot.chat_persist_all_games,
                     lfg_pitch_enabled: config.bot.lfg_pitch_enabled,
                     invite_channel_id: config
