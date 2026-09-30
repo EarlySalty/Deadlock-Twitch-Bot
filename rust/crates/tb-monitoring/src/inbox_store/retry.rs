@@ -126,6 +126,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    mod test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
+
     use super::*;
     use sqlx::PgPool;
     use std::cell::Cell;
@@ -163,17 +170,31 @@ mod tests {
     }
 
     async fn make_pool() -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .ok()
+        let Some(dsn) = test_database::database_url() else {
+            assert!(
+                !test_database::required(),
+                "isolierte Testdatenbank muss konfiguriert sein"
+            );
+            eprintln!("SKIP: keine isolierte Testdatenbank konfiguriert");
+            return None;
+        };
+        Some(
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&dsn)
+                .await
+                .expect("isolierte Testdatenbank muss erreichbar sein"),
+        )
     }
 
     async fn raise_sqlstate(pool: &PgPool, code: &str) -> sqlx::Error {
-        assert!(code.len() == 5 && code.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()));
-        let sql = format!("DO $ BEGIN RAISE SQLSTATE '{code}'; END $$");
+        assert!(
+            code.len() == 5
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        );
+        let sql = format!("DO $body$ BEGIN RAISE SQLSTATE '{code}'; END; $body$");
         match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
             Ok(_) => panic!("RAISE SQLSTATE {code} unexpectedly succeeded"),
             Err(err) => err,
@@ -189,6 +210,13 @@ mod tests {
             "08000", "08001", "08003", "08004", "08006", "57P01", "57P02", "57P03", "53300",
         ] {
             let err = raise_sqlstate(&pool, code).await;
+            assert_eq!(
+                err.as_database_error()
+                    .and_then(|database_error| database_error.code())
+                    .as_deref(),
+                Some(code),
+                "PostgreSQL muss exakt SQLSTATE {code} liefern"
+            );
             assert!(is_retryable(&err), "{code} muss retrybar sein");
         }
     }

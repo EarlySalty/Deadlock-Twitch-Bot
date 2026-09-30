@@ -150,6 +150,83 @@ fn clip(index: i64) -> HelixClip {
     }
 }
 
+#[tokio::test]
+async fn postgres_contest_sql_blocks_technically_paused_partner() {
+    let Some((pool, admin, schema)) = fixture().await else {
+        return;
+    };
+    sqlx::query(
+        "CREATE TABLE twitch_partners (
+        twitch_user_id TEXT PRIMARY KEY,
+        twitch_login TEXT NOT NULL,
+        status TEXT NOT NULL,
+        admin_archived_at TIMESTAMPTZ,
+        departnered_at TIMESTAMPTZ,
+        manual_partner_opt_out INTEGER NOT NULL DEFAULT 0,
+        technical_pause_reason TEXT
+    )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let migration = include_str!(
+        "../../../../../migrations/20260930010000_partner_challenge_runtime_roles.sql"
+    );
+    let function_start = migration
+        .find("CREATE FUNCTION public.twitch_clip_contest_active_partner(")
+        .expect("contest eligibility function in migration");
+    let function_end = migration[function_start..]
+        .find("$active_partner$;")
+        .map(|offset| function_start + offset + "$active_partner$;".len())
+        .expect("contest eligibility function terminator");
+    let function_sql = migration[function_start..function_end].replace("public", &schema);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(function_sql))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners
+        (twitch_user_id,twitch_login,status,technical_pause_reason)
+        VALUES ('101','eligible','active',NULL),('102','paused','active','token_error')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let paused: Option<String> = sqlx::query_scalar(ACTIVE_PARTNER_SQL)
+        .bind("102")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    let eligible: Option<String> = sqlx::query_scalar(ACTIVE_PARTNER_SQL)
+        .bind("101")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert_eq!(paused, None);
+    assert_eq!(eligible.as_deref(), Some("eligible"));
+
+    let submissions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clip_contest_submissions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let awards: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clip_contest_hall_of_fame")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(submissions, 0);
+    assert_eq!(awards, 0);
+
+    pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
 #[test]
 fn exact_sixty_day_age_is_allowed_but_future_and_older_are_not() {
     let now = instant("2026-09-20T12:00:00Z");

@@ -17,7 +17,7 @@
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Connection, PgConnection, PgPool, Postgres, Transaction};
 
 use crate::scoring::RAID_BOOST_MULTIPLIER;
 
@@ -146,10 +146,12 @@ impl MonthlyRaidBoostStore {
         now: DateTime<Utc>,
     ) -> Result<SeasonCloseOutcome, sqlx::Error> {
         let window = previous_season_window(cutoff);
-        let mut tx = self.pool.begin().await?;
+        let mut lock_connection = PgConnection::connect_with(&self.pool.connect_options()).await?;
+        let mut lock = lock_connection.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(713219, 27)")
-            .execute(&mut *tx)
+            .execute(&mut *lock)
             .await?;
+        let mut tx = self.pool.begin().await?;
         let closed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_partner_effort_season_closures WHERE season_key=$1)")
             .bind(&window.key).fetch_one(&mut *tx).await?;
         if closed {
@@ -252,6 +254,7 @@ impl MonthlyRaidBoostStore {
         }
 
         tx.commit().await?;
+        lock.commit().await?;
 
         Ok(SeasonCloseOutcome::Closed {
             season_key: window.key,

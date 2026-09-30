@@ -126,6 +126,7 @@ RETURNS TABLE(twitch_login text) LANGUAGE sql SECURITY DEFINER SET search_path =
     WHERE p.twitch_user_id = target_twitch_user_id
       AND status = 'active' AND admin_archived_at IS NULL AND departnered_at IS NULL
       AND COALESCE(manual_partner_opt_out, 0) = 0
+      AND COALESCE(technical_pause_reason, '') = ''
     FOR SHARE
 $active_partner$;
 REVOKE ALL ON FUNCTION public.twitch_clip_contest_active_partner(text) FROM PUBLIC;

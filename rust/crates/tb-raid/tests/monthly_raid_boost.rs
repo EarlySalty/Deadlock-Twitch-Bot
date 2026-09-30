@@ -4,10 +4,14 @@ use std::str::FromStr;
 
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::PgPool;
+use sqlx::{Connection, PgConnection, PgPool};
 use tb_raid::{MonthlyRaidBoostStore, SeasonCloseOutcome};
 
 async fn pool_or_skip(schema: &str) -> Option<PgPool> {
+    pool_or_skip_with_max(schema, 4).await
+}
+
+async fn pool_or_skip_with_max(schema: &str, max_connections: u32) -> Option<PgPool> {
     let Some(dsn) = test_database::database_url() else {
         assert!(
             !test_database::required(),
@@ -39,11 +43,53 @@ async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         .options([("search_path", schema)]);
     Some(
         PgPoolOptions::new()
-            .max_connections(4)
+            .max_connections(max_connections)
             .connect_with(options)
             .await
             .unwrap(),
     )
+}
+
+#[tokio::test]
+async fn closer_wartet_auf_engine_lock_ohne_pool_slot_zu_belegen() {
+    let Some(pool) = pool_or_skip_with_max("monthly_effort_pool_one", 1).await else {
+        return;
+    };
+    create_schema(&pool).await;
+    sqlx::query("UPDATE partner_effort_source_state SET successful_at='2027-03-01'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut engine_connection = PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
+    let mut engine_lock = engine_connection.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(713219, 27)")
+        .execute(&mut *engine_lock)
+        .await
+        .unwrap();
+
+    let store = MonthlyRaidBoostStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2027, 2, 1, 12, 0, 0).single().unwrap();
+    let closer = tokio::spawn(async move { store.close_season_ending_at(now, now).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&pool),
+    )
+    .await
+    .expect("Closer darf beim Warten auf den Engine-Lock keinen einzigen Pool-Slot halten")
+    .unwrap();
+    assert_eq!(probe, 1);
+
+    engine_lock.rollback().await.unwrap();
+    assert!(matches!(
+        closer.await.unwrap().unwrap(),
+        SeasonCloseOutcome::Closed { winner: None, .. }
+    ));
+    pool.close().await;
 }
 
 async fn create_schema(pool: &PgPool) {
