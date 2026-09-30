@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::secret_sink::SecretSink;
 
@@ -178,6 +178,7 @@ pub enum TokenError {
     Http(reqwest::Error),
     Rejected { status: u16, body: String },
     NotInitialized,
+    PersistenceFailed,
 }
 
 impl std::fmt::Debug for TokenError {
@@ -196,6 +197,9 @@ impl std::fmt::Display for TokenError {
             ),
             Self::Rejected { status, .. } => write!(f, "Token abgelehnt: HTTP {status}"),
             Self::NotInitialized => write!(f, "token manager not initialized"),
+            Self::PersistenceFailed => {
+                write!(f, "Bot-Zugang nicht gespeichert; Verwendung gesperrt")
+            }
         }
     }
 }
@@ -216,6 +220,8 @@ pub struct BotTokenManager {
     bot_user_id: RwLock<String>,
     bot_login: RwLock<String>,
     state: RwLock<Option<TokenState>>,
+    pending: Mutex<Option<(TokenState, bool)>>,
+    refresh_lock: Mutex<()>,
     /// URLs für Tests überschreibbar.
     validate_url: String,
     token_url: String,
@@ -236,6 +242,8 @@ impl BotTokenManager {
             bot_user_id: RwLock::new(String::new()),
             bot_login: RwLock::new(String::new()),
             state: RwLock::new(None),
+            pending: Mutex::new(None),
+            refresh_lock: Mutex::new(()),
             validate_url: VALIDATE_URL.to_string(),
             token_url: TOKEN_URL.to_string(),
             users_url: HELIX_USERS_URL.to_string(),
@@ -294,6 +302,7 @@ impl BotTokenManager {
 
     /// Aktueller Access-Token; refresht lazy wenn < 1 h Restlaufzeit.
     pub async fn access_token(&self) -> Result<String, TokenError> {
+        self.persist_pending().await?;
         {
             let guard = self.state.read().await;
             if let Some(ref s) = *guard {
@@ -312,6 +321,8 @@ impl BotTokenManager {
 
     /// Erzwingt einen Refresh (z. B. nach Helix-401).
     pub async fn force_refresh(&self) -> Result<(), TokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        self.persist_pending().await?;
         let refresh_token = {
             let guard = self.state.read().await;
             guard
@@ -476,37 +487,42 @@ impl BotTokenManager {
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| refresh_token.to_string());
         let access_token = refreshed.access_token;
-        // Refresh-Token nur zurückschreiben, wenn Twitch ihn tatsächlich rotiert
-        // hat — spart Infisical-Versionen und deckt das echte Lockout-Risiko ab.
+        // Rotation in RAM erhalten, bis die verbindliche Senke bestätigt hat.
+        // Während eines DB-Ausfalls wird kein neuer Token verwendet oder rotiert.
         let refresh_changed = new_refresh != refresh_token;
-
-        // Persist-Argumente nur klonen, wenn überhaupt eine Senke hängt; der
-        // State-Pfad selbst übernimmt die Werte ohne Klon.
-        let persist = self.sink.as_ref().map(|sink| {
-            (
-                Arc::clone(sink),
-                access_token.clone(),
-                refresh_changed.then(|| new_refresh.clone()),
-            )
-        });
-
-        *self.state.write().await = Some(TokenState {
-            access_token,
-            refresh_token: new_refresh,
-            expires_at: Utc::now() + chrono::Duration::seconds(refreshed.expires_in.max(60)),
-            scopes: validate.scopes,
-        });
+        *self.pending.lock().await = Some((
+            TokenState {
+                access_token,
+                refresh_token: new_refresh,
+                expires_at: Utc::now() + chrono::Duration::seconds(refreshed.expires_in.max(60)),
+                scopes: validate.scopes,
+            },
+            refresh_changed,
+        ));
+        self.persist_pending().await?;
         tracing::info!(
             login = %validate.login,
             expires_in = refreshed.expires_in,
             "Bot-Token refresht"
         );
 
-        // Best-effort Write-Back: ein Schreibfehler wird in der Senke geloggt,
-        // kippt aber weder diesen Refresh noch den Chat (State steht bereits).
-        if let Some((sink, access, refresh)) = persist {
-            sink.persist_bot_tokens(&access, refresh.as_deref()).await;
+        Ok(())
+    }
+
+    async fn persist_pending(&self) -> Result<(), TokenError> {
+        let mut pending = self.pending.lock().await;
+        let Some((next, refresh_changed)) = pending.as_ref() else {
+            return Ok(());
+        };
+        if let Some(sink) = &self.sink {
+            sink.persist_checked(
+                &next.access_token,
+                refresh_changed.then_some(next.refresh_token.as_str()),
+            )
+            .await
+            .map_err(|_| TokenError::PersistenceFailed)?;
         }
+        *self.state.write().await = pending.take().map(|(state, _)| state);
         Ok(())
     }
 }
@@ -518,6 +534,52 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type PersistedTokenCall = (String, Option<String>);
+
+    #[tokio::test]
+    async fn failed_persistence_blocks_access_and_retries_rotated_token_without_new_refresh() {
+        struct CheckedSink(std::sync::atomic::AtomicBool);
+        #[async_trait::async_trait]
+        impl SecretSink for CheckedSink {
+            async fn persist_bot_tokens(&self, _: &str, _: Option<&str>) {}
+            async fn persist_checked(&self, _: &str, _: Option<&str>) -> Result<(), ()> {
+                self.0
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then_some(())
+                    .ok_or(())
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "synthetic-new-access", "refresh_token": "synthetic-new-refresh", "expires_in": 14000
+            }))).expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+        let sink = Arc::new(CheckedSink(std::sync::atomic::AtomicBool::new(false)));
+        let manager = manager(&server).await.with_sink(sink.clone());
+        assert!(matches!(
+            manager.initialize(None, "synthetic-old-refresh").await,
+            Err(TokenError::PersistenceFailed)
+        ));
+        assert!(manager.state.read().await.is_none());
+        assert!(matches!(
+            manager.access_token().await,
+            Err(TokenError::PersistenceFailed)
+        ));
+        sink.0.store(true, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            manager.access_token().await.unwrap(),
+            "synthetic-new-access"
+        );
+        assert_eq!(
+            manager.state.read().await.as_ref().unwrap().refresh_token,
+            "synthetic-new-refresh"
+        );
+        assert!(manager.pending.lock().await.is_none());
+    }
 
     async fn manager(server: &MockServer) -> BotTokenManager {
         BotTokenManager::new("cid".into(), "csec".into())

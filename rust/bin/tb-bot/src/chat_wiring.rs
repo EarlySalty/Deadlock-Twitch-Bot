@@ -612,6 +612,7 @@ pub async fn try_build_api(
     helix: Option<HelixClient>,
     pool: PgPool,
     enabled: bool,
+    cipher: Option<Arc<FieldCipher>>,
 ) -> Option<ChatApiHandle> {
     if !enabled {
         tracing::info!("Nativer Chat laut Betriebskonfiguration deaktiviert");
@@ -629,9 +630,9 @@ pub async fn try_build_api(
         tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_CLIENT_ID/SECRET fehlen");
         return None;
     };
-    let cipher = match tb_crypto::FieldCipher::from_env() {
-        Ok(cipher) => Arc::new(cipher),
-        Err(_) => {
+    let cipher = match cipher {
+        Some(cipher) => cipher,
+        None => {
             tracing::error!("Bot-Zugang: Datenbank-Verschlüsselungsschlüssel fehlt");
             return None;
         }
@@ -667,8 +668,25 @@ pub async fn try_build_api(
         .initialize(seed_access.as_deref(), &refresh_token)
         .await
     {
-        tracing::error!("Bot-Token-Boot fehlgeschlagen: {e} — nativer Chat bleibt aus");
-        return None;
+        if matches!(e, tb_chat::token::TokenError::PersistenceFailed) {
+            tracing::error!("Bot-Token-Boot wartet auf Datenbank-Rückschreibung; Chat bleibt bis dahin gesperrt");
+            // Der Anbieter hat bereits rotiert. Den einzigen neuen Refresh
+            // nicht durch Verwerfen des Managers verlieren oder erneut rotieren.
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                match token_manager.access_token().await {
+                    Ok(_) => break,
+                    Err(tb_chat::token::TokenError::PersistenceFailed) => continue,
+                    Err(error) => {
+                        tracing::error!(%error, "Bot-Token-Boot nach Rückschreibung fehlgeschlagen");
+                        return None;
+                    }
+                }
+            }
+        } else {
+            tracing::error!("Bot-Token-Boot fehlgeschlagen: {e} — nativer Chat bleibt aus");
+            return None;
+        }
     }
     let bot_user_id = token_manager.bot_user_id().await;
     if !store.healthy() || store.bind_identity(&bot_user_id).await.is_err() {

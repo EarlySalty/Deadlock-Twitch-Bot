@@ -32,6 +32,16 @@ pub trait SecretSink: Send + Sync {
     /// Schreibt den Access-Token immer; den Refresh-Token nur wenn `Some`
     /// (der Aufrufer übergibt ihn nur bei tatsächlicher Rotation).
     async fn persist_bot_tokens(&self, access_token: &str, refresh_token: Option<&str>);
+    /// Verbindliche DB-Senken propagieren Fehler vor Nutzung der neuen Tokens.
+    /// Legacy-Senken behalten ihren bisherigen Vertrag.
+    async fn persist_checked(
+        &self,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> Result<(), ()> {
+        self.persist_bot_tokens(access_token, refresh_token).await;
+        Ok(())
+    }
 }
 
 /// Fehler eines einzelnen Secret-Writes (nie mit Token-Wert).

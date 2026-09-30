@@ -494,11 +494,13 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
+    let runtime_cipher = FieldCipher::from_env().map(Arc::new);
     // Expliziter Wartungslauf: keine normalen Writer oder Hintergrundjobs starten.
     // Die vorhandene Infisical- und Betriebsdatei-Initialisierung bleibt gemeinsam.
     if migrate_token_storage {
-        let result = match tb_crypto::FieldCipher::from_env() {
-            Ok(cipher) => tb_vod_archive::store::migrate_resume_sessions(&pool, &cipher)
+        let result = match &runtime_cipher {
+            Ok(cipher) => tb_vod_archive::store::migrate_resume_sessions(&pool, cipher)
                 .await
                 .map_err(|_| ()),
             Err(_) => Err(()),
@@ -608,6 +610,7 @@ async fn main() {
         helix.as_ref().clone(),
         pool.clone(),
         config.bot.chat_enabled,
+        runtime_cipher.as_ref().ok().cloned(),
     )
     .await;
     let smalltalk_loop = smalltalk_loop_wiring::start(
@@ -884,11 +887,9 @@ async fn main() {
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
-        FieldCipher::from_env(),
+        runtime_cipher,
     ) {
         (Some(manager), Some(helix_client), Ok(cipher)) => {
-            let cipher = Arc::new(cipher);
-
             // Raid-OAuth-Strecke (Welle B): StateStore + AuthWriter +
             // Token-Client zur Composition-Root verdrahten. redirect_uri wie
             // Python (TWITCH_RAID_REDIRECT_URI mit Hardcode-Default,

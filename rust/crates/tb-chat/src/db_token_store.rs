@@ -107,6 +107,15 @@ mod tests;
 
 #[async_trait::async_trait]
 impl SecretSink for DatabaseTokenStore {
+    async fn persist_checked(
+        &self,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> Result<(), ()> {
+        let result = self.persist(access_token, refresh_token).await;
+        self.healthy.store(result.is_ok(), Ordering::Release);
+        result.map_err(|_| ())
+    }
     async fn persist_bot_tokens(&self, access_token: &str, refresh_token: Option<&str>) {
         let result = self.persist(access_token, refresh_token).await;
         self.healthy.store(result.is_ok(), Ordering::Release);
