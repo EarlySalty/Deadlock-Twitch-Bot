@@ -13,7 +13,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, ConnectOptions, Connection, PgConnection, PgPool};
 use std::{
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tb_config::challenges::Challenges;
@@ -43,6 +46,34 @@ pub struct Engine {
     pub(crate) cfg: Arc<Challenges>,
     pub(crate) rules_hash: String,
     pub(crate) helix: Option<HelixClient>,
+    pub(crate) shared_chat_continuity_dirty: Arc<AtomicBool>,
+}
+
+pub(crate) struct SharedChatContinuityGuard {
+    dirty: Arc<AtomicBool>,
+    confirmed: bool,
+}
+
+impl SharedChatContinuityGuard {
+    fn new(dirty: Arc<AtomicBool>) -> Self {
+        Self {
+            dirty,
+            confirmed: false,
+        }
+    }
+
+    pub(crate) fn confirm(&mut self) {
+        self.dirty.store(false, Ordering::Release);
+        self.confirmed = true;
+    }
+}
+
+impl Drop for SharedChatContinuityGuard {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.dirty.store(true, Ordering::Release);
+        }
+    }
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -102,6 +133,7 @@ impl Engine {
             cfg: Arc::new(cfg),
             rules_hash: hex::encode(Sha256::digest(rules)),
             helix,
+            shared_chat_continuity_dirty: Arc::new(AtomicBool::new(true)),
         })
     }
 
@@ -151,6 +183,8 @@ impl Engine {
         if !self.cfg.enabled {
             return Ok(());
         }
+        let mut shared_chat_guard =
+            SharedChatContinuityGuard::new(self.shared_chat_continuity_dirty.clone());
         // Der Tick benötigt den Pool für seine Quelltransaktionen. Der globale
         // Abschluss-Lock darf deshalb auch bei pool_max=1 keinen Slot belegen.
         let mut lock_connection = PgConnection::connect_with(&self.pool.connect_options()).await?;
@@ -161,7 +195,7 @@ impl Engine {
         if !acquired {
             return Ok(());
         }
-        let result = self.collect(now).await;
+        let result = self.collect(now, &mut shared_chat_guard).await;
         let settlement = self.settle(now).await;
         self.source_state("engine", now, &settlement).await?;
         lock.commit().await?;

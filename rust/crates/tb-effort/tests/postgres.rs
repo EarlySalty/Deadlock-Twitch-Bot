@@ -539,31 +539,35 @@ async fn shared_chat_collection_is_bounded_and_keeps_completed_partner_evidence(
             .await
             .unwrap();
     }
-    sqlx::query("INSERT INTO partner_effort_shared_chat_observations(partner_twitch_user_id,stream_id,other_partner_twitch_user_id,shared_chat_session_id,first_seen_at,last_seen_at,confirmed_seconds) VALUES('101','stream-101','102','shared-session',$1,$2,120)")
-        .bind(start - Duration::seconds(120))
-        .bind(start - Duration::seconds(60))
-        .execute(&pool)
+    engine
+        .append(
+            &event(
+                "101",
+                EventKind::CoStream,
+                "already-completed-shared-chat",
+                start,
+            ),
+            start,
+        )
         .await
         .unwrap();
-    sqlx::query("INSERT INTO partner_effort_source_state(source,checked_at,healthy,error_code) VALUES('shared_chat',$1,FALSE,'source_unavailable')")
-        .bind(start - Duration::seconds(1))
-        .execute(&pool)
-        .await
-        .unwrap();
-
     engine.tick(start).await.unwrap();
+    engine.tick(start + Duration::minutes(1)).await.unwrap();
 
     let seconds: i64 = sqlx::query_scalar("SELECT confirmed_seconds FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id='101' AND other_partner_twitch_user_id='102'")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(seconds, 180);
+    assert_eq!(seconds, 60);
     let observations: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_shared_chat_observations")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(observations, 110);
+    let permanent_events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_events WHERE event_type='co_stream' AND source_id='already-completed-shared-chat'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(permanent_events, 1);
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP DATABASE {name} WITH (FORCE)"
@@ -720,10 +724,72 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
     no_costream_award(&pool).await;
 
+    // A new Engine starts with continuity dirty even when old rows survived a
+    // process restart. Its first successful snapshot must begin at zero.
+    let restart_at = start + Duration::seconds(270);
+    seed_continuity(&pool, restart_at - Duration::seconds(60)).await;
+    let restarted_engine = engine(&pool, &recovered_helix, 10);
+    mark_live_at(&pool, restart_at).await;
+    restarted_engine.tick(restart_at).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+
+    // A failed reset cannot clear the in-memory dirty latch. Once PostgreSQL
+    // recovers, the same Engine resets stale observations before collecting.
+    let reset_failure_at = start + Duration::seconds(330);
+    seed_continuity(&pool, reset_failure_at - Duration::seconds(60)).await;
+    sqlx::query("UPDATE twitch_stream_sessions SET stream_id=NULL WHERE twitch_user_id='101'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("CREATE FUNCTION test_fail_shared_chat_reset() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture reset failure'; END $$;
+        CREATE TRIGGER test_fail_shared_chat_reset BEFORE DELETE ON partner_effort_shared_chat_observations FOR EACH STATEMENT EXECUTE FUNCTION test_fail_shared_chat_reset();")
+        .execute(&pool)
+        .await
+        .unwrap();
+    mark_live_at(&pool, reset_failure_at).await;
+    assert!(recovered_engine.tick(reset_failure_at).await.is_err());
+    sqlx::raw_sql("DROP TRIGGER test_fail_shared_chat_reset ON partner_effort_shared_chat_observations; DROP FUNCTION test_fail_shared_chat_reset()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE twitch_stream_sessions SET stream_id='stream-101' WHERE twitch_user_id='101'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let after_reset_recovery = start + Duration::seconds(390);
+    mark_live_at(&pool, after_reset_recovery).await;
+    recovered_engine.tick(after_reset_recovery).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+
+    // A confirmed snapshot with one partner offline ends that pair's
+    // observation. Returning with the same stream_id starts a new interval.
+    let partner_offline_at = start + Duration::seconds(450);
+    seed_continuity(&pool, partner_offline_at - Duration::seconds(60)).await;
+    sqlx::query("UPDATE twitch_live_state SET is_live=0 WHERE twitch_user_id='102'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    mark_live_at(&pool, partner_offline_at).await;
+    recovered_engine.tick(partner_offline_at).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, None);
+    let partner_returned_at = start + Duration::seconds(510);
+    sqlx::query(
+        "UPDATE twitch_live_state SET is_live=1,last_seen_at=$1 WHERE twitch_user_id='102'",
+    )
+    .bind(partner_returned_at.to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+    mark_live_at(&pool, partner_returned_at).await;
+    recovered_engine.tick(partner_returned_at).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+
     // Hold a real observation upsert inside PostgreSQL after the source has
     // acquired the shared write lock. The source timeout must wait for that
     // transaction to roll back before clearing rows, so it cannot commit late.
-    let timeout_at = start + Duration::seconds(300);
+    let timeout_at = start + Duration::seconds(570);
     seed_continuity(&pool, timeout_at - Duration::seconds(60)).await;
     mark_live_at(&pool, timeout_at).await;
     sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(5); END IF; RETURN NEW; END $$;
@@ -761,13 +827,14 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         .unwrap();
     assert_eq!(confirmed_seconds(&pool).await, None);
     no_costream_award(&pool).await;
-    let after_timeout = start + Duration::seconds(360);
+    let after_timeout = start + Duration::seconds(630);
     mark_live_at(&pool, after_timeout).await;
     recovered_engine.tick(after_timeout).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
     no_costream_award(&pool).await;
 
     drop(timeout_engine);
+    drop(restarted_engine);
     drop(recovered_engine);
     drop(failed_engine);
     pool.close().await;

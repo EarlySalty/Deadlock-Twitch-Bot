@@ -5,7 +5,7 @@ use crate::{Engine, Error, Event, EventKind, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::Row;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::atomic::Ordering};
 
 #[derive(sqlx::FromRow)]
 struct QualificationStatus {
@@ -32,7 +32,14 @@ fn qualification_status_is_fresh(status: Option<QualificationStatus>, now: DateT
 }
 
 impl Engine {
-    pub(crate) async fn collect(&self, now: DateTime<Utc>) -> Result<()> {
+    pub(crate) async fn collect(
+        &self,
+        now: DateTime<Utc>,
+        shared_chat_guard: &mut crate::SharedChatContinuityGuard,
+    ) -> Result<()> {
+        if self.shared_chat_continuity_dirty.load(Ordering::Acquire) {
+            self.interrupt_shared_chat_observations().await?;
+        }
         let mut failure = None;
         for source in [
             "invites",
@@ -59,8 +66,13 @@ impl Engine {
                 Ok(result) => result,
                 Err(_) => Err(Error::Source("timeout")),
             };
-            if source == "shared_chat" && result.is_err() {
-                self.interrupt_shared_chat_observations().await?;
+            if source == "shared_chat" {
+                if result.is_err() {
+                    self.shared_chat_continuity_dirty
+                        .store(true, Ordering::Release);
+                    self.interrupt_shared_chat_observations().await?;
+                }
+                shared_chat_guard.confirm();
             }
             self.source_state(source, now, &result).await?;
             if let Err(error) = result {
