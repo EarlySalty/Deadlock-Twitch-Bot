@@ -33,7 +33,7 @@ fn unauthorized() -> Response {
 pub(crate) async fn resolve_clip_upload_target(
     pool: &sqlx::PgPool,
     auth: &DashboardAuthLevel,
-    requested_login: Option<&str>,
+    requested_twitch_user_id: Option<&str>,
 ) -> Result<(String, String), Response> {
     let target = match auth {
         DashboardAuthLevel::Partner { twitch_user_id, .. } => {
@@ -50,13 +50,13 @@ pub(crate) async fn resolve_clip_upload_target(
             .await
         }
         DashboardAuthLevel::Admin { .. } => {
-            let Some(login) = requested_login.map(str::trim).filter(|value| !value.is_empty()) else {
-                return Err((StatusCode::BAD_REQUEST, "streamer_login required").into_response());
+            let Some(id) = requested_twitch_user_id.filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())) else {
+                return Err((StatusCode::BAD_REQUEST, "twitch_user_id required").into_response());
             };
             sqlx::query_as::<_, (String, Option<String>)>(
-                "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+                "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
             )
-            .bind(login)
+            .bind(id)
             .fetch_optional(pool)
             .await
         }

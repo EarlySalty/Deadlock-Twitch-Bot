@@ -14,6 +14,7 @@ use crate::auth::level::DashboardAuthLevel;
 #[serde(rename_all = "camelCase")]
 pub struct StreamerJson {
     pub login: String,
+    pub twitch_user_id: Option<String>,
     pub is_partner: bool,
     pub is_live: bool,
     pub viewer_count: i32,
@@ -23,6 +24,7 @@ impl From<StreamerListRow> for StreamerJson {
     fn from(r: StreamerListRow) -> Self {
         Self {
             login: r.twitch_login,
+            twitch_user_id: r.twitch_user_id,
             is_partner: r.is_partner,
             is_live: r.is_live != 0,
             viewer_count: r.viewer_count,
@@ -65,7 +67,18 @@ mod tests {
     const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
 
     fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
+        mod local_test_database {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/database.rs"
+            ));
+        }
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        dsn
     }
 
     macro_rules! db_dsn_or_skip {
@@ -105,6 +118,7 @@ mod tests {
             .await
             .expect("search_path setzen fehlgeschlagen");
         for ddl in [
+            "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
             r#"CREATE TABLE twitch_streamers_partner_state (
                 twitch_login      TEXT NOT NULL PRIMARY KEY,
                 is_partner_active INTEGER NOT NULL DEFAULT 0
@@ -243,6 +257,12 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool_with_sessions(&dsn, "test_streamers_admin").await;
         sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '11')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active)
              VALUES ('nani', 1)",
         )
@@ -265,6 +285,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert!(v.is_array());
         assert_eq!(v[0]["login"], "nani");
+        assert_eq!(v[0]["twitchUserId"], "11");
         assert_eq!(v[0]["isPartner"], true);
         assert_eq!(v[0]["isLive"], false);
         assert_eq!(v[0]["viewerCount"], 0);

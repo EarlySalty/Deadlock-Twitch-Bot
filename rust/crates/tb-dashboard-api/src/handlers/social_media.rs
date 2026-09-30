@@ -1018,13 +1018,13 @@ pub async fn upload_clip_handler(
         return error;
     }
     let mut bytes: Option<Vec<u8>> = None;
-    let mut streamer_login: Option<String> = None;
+    let mut target_twitch_user_id: Option<String> = None;
     let mut clip_id: Option<String> = None;
     let mut title: Option<String> = None;
     while let Ok(Some(field)) = multipart.next_field().await {
         match field.name().map(str::to_string).as_deref() {
             Some("file") => bytes = field.bytes().await.ok().map(|b| b.to_vec()),
-            Some("streamer_login") => streamer_login = field.text().await.ok(),
+            Some("twitch_user_id") => target_twitch_user_id = field.text().await.ok(),
             Some("clip_id") => clip_id = field.text().await.ok(),
             Some("title") => title = field.text().await.ok(),
             _ => {}
@@ -1044,7 +1044,7 @@ pub async fn upload_clip_handler(
         match crate::auth::streamer_scope::resolve_clip_upload_target(
             &pool,
             &auth,
-            streamer_login.as_deref(),
+            target_twitch_user_id.as_deref(),
         )
         .await
         {
@@ -6420,7 +6420,7 @@ mod tests {
             twitch_user_id: "22".into(),
             display_name: "B".into(),
         };
-        let target = resolve_clip_upload_target(&pool, &session_b, Some("reused_login"))
+        let target = resolve_clip_upload_target(&pool, &session_b, Some("11"))
             .await
             .unwrap();
         assert_eq!(target, ("previous_b_login".into(), "22".into()));
@@ -6450,12 +6450,28 @@ mod tests {
         .unwrap();
         assert_eq!(owner, target);
 
-        // Eine explizite Admin-Auswahl von L bleibt der autorisierte Kanal A.
-        let admin_target =
-            resolve_clip_upload_target(&pool, &DashboardAuthLevel::admin(), Some("reused_login"))
-                .await
-                .unwrap();
-        assert_eq!(admin_target, ("reused_login".into(), "11".into()));
+        // Admin wählt A/11 unter L. Danach bekommt B/22 den Namen L.
+        let selected_admin_id = "11";
+        sqlx::query(
+            "UPDATE twitch_streamers SET twitch_login = 'renamed_a' WHERE twitch_user_id = '11'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE twitch_streamers SET twitch_login = 'reused_login' WHERE twitch_user_id = '22'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let admin_target = resolve_clip_upload_target(
+            &pool,
+            &DashboardAuthLevel::admin(),
+            Some(selected_admin_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(admin_target, ("renamed_a".into(), "11".into()));
         let (admin_id, _) = register_manual_upload(
             &pool,
             "admin_target_clip",
@@ -6474,6 +6490,20 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(admin_owner, admin_target);
+
+        for (id, expected) in [
+            (None, StatusCode::BAD_REQUEST),
+            (Some("reused_login"), StatusCode::BAD_REQUEST),
+            (Some("33"), StatusCode::NOT_FOUND),
+        ] {
+            assert_eq!(
+                resolve_clip_upload_target(&pool, &DashboardAuthLevel::admin(), id)
+                    .await
+                    .unwrap_err()
+                    .status(),
+                expected
+            );
+        }
 
         // Ohne belegten ID-Datensatz oder gültige Session-ID kein Namensfallback.
         for (id, expected) in [

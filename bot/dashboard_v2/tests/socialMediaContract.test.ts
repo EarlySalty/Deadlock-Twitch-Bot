@@ -529,3 +529,16 @@ test('ein Code ohne Meldung landet nicht als Platzhalterinhalt im Satz', () => {
   );
   assert.equal(satz, 'The decision could not be saved.');
 });
+
+test('Admin-Upload hält die ausgewählte Twitch-ID statt des veränderlichen Namens fest', () => {
+  const admin = lies('src/pages/SocialMediaAdmin.tsx');
+  const studio = lies('src/pages/SocialMedia.tsx');
+  const api = lies('src/api/socialMedia.ts');
+  assert.match(admin, /value=\{streamerUserId\}/);
+  assert.match(admin, /value=\{channel\.twitchUserId \?\? ''\}/);
+  assert.match(admin, /twitchUserId=\{streamerUserId\}/);
+  assert.match(studio, /uploadClip\(\{ file, twitch_user_id: twitchUserId \}\)/);
+  const upload = api.slice(api.indexOf('export async function uploadClip'), api.indexOf('export interface PlatformStatus'));
+  assert.match(upload, /form\.append\('twitch_user_id', input\.twitch_user_id\)/);
+  assert.doesNotMatch(upload, /streamer_login/);
+});

@@ -188,7 +188,7 @@ test(
           },
         });
       if (p === '/twitch/api/v2/streamers')
-        return json([{ login: 'earlysalty' }, { login: 'partner2' }]);
+        return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
       if (p === '/social-media/api/access/me')
         return json({ allowed: true, streamer: 'earlysalty', isAdmin: true });
       if (p === '/social-media/api/access')
@@ -371,7 +371,7 @@ test(
     await page.route('**/*', (route) =>
       route.request().url().startsWith(base) ? route.continue() : route.abort(),
     );
-    await page.goto(base + '/social-media-admin?streamer=earlysalty');
+    await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
     await page.locator('.studio-clip').first().waitFor();
     const tab = (name) => page.getByRole('tab', { name, exact: true });
     await t.test(
@@ -582,7 +582,7 @@ test(
         await page.getByLabel('Posts pro Woche', { exact: true }).first().fill('8');
         await page.getByRole('heading', { name: 'Dein Posting-Rhythmus' }).click();
         page.once('dialog', (d) => d.accept());
-        await page.getByLabel('Streamer wählen', { exact: true }).selectOption('partner2');
+        await page.getByLabel('Streamer wählen', { exact: true }).selectOption('22');
         await tab('Auto-Pilot & Zeitplan').click();
         assert.equal(
           await page.getByLabel('Posts pro Woche', { exact: true }).first().inputValue(),
@@ -645,7 +645,7 @@ test(
         for (const width of [390, 1024, 1440, 1920]) {
           await page.setViewportSize({ width, height: 1080 });
           let reference;
-          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty']) {
+          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty&twitch_user_id=11']) {
             await page.goto(base + route);
             await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
             await page.evaluate(() => document.fonts.ready);
@@ -664,7 +664,7 @@ test(
         }
       } finally {
         await fs.writeFile(path.join(evidence, 'shell-geometry.json'), JSON.stringify(measurements, null, 2));
-        await page.goto(base + '/social-media-admin?streamer=earlysalty');
+        await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
         await page.locator('.studio-clip').first().waitFor();
       }
     });
@@ -680,7 +680,7 @@ test(
         probe.remove();
         return color;
       });
-      await page.goto(base + '/social-media-admin?streamer=earlysalty');
+      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const social = await activeBackground();
       assert.equal(social, goldTint, 'Gold-Aktivzustand erwartet, erhalten: ' + social);
@@ -688,7 +688,7 @@ test(
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const home = await activeBackground();
       assert.equal(home, goldTint, 'Home traegt denselben Gold-Aktivzustand: ' + home);
-      await page.goto(base + '/social-media-admin?streamer=earlysalty');
+      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
       await page.locator('.studio-clip').first().waitFor();
     });
     await t.test('Lange Clip-Titel lassen mobile Dialoge und Schließen erreichbar', async () => {

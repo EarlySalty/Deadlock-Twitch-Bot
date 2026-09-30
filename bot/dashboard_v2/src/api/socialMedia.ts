@@ -467,13 +467,13 @@ export async function seedVocab(): Promise<{ inserted: number; updated: number }
 
 export async function uploadClip(input: {
   file: File;
-  streamer_login: string;
+  twitch_user_id?: string;
   title?: string;
   clip_id?: string;
 }): Promise<UploadResponse> {
   const form = new FormData();
   form.append('file', input.file);
-  form.append('streamer_login', input.streamer_login);
+  if (input.twitch_user_id) form.append('twitch_user_id', input.twitch_user_id);
   if (input.title) form.append('title', input.title);
   if (input.clip_id) form.append('clip_id', input.clip_id);
 

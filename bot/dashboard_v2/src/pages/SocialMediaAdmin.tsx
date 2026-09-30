@@ -26,6 +26,10 @@ import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 export function SocialMediaAdminDashboard() {
   const t = useT();
   const [streamer, setStreamer] = useState<string>('');
+  const [streamerUserId, setStreamerUserId] = useState(() => {
+    const id = new URLSearchParams(window.location.search).get('twitch_user_id');
+    return id && /^\d+$/.test(id) ? id : '';
+  });
   const hasAutoSetStreamer = useRef(false);
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
@@ -90,6 +94,7 @@ export function SocialMediaAdminDashboard() {
       (isDemoShell ? dashboardRuntimeConfig.defaultDemoProfile : null);
     if (!hasAutoSetStreamer.current && fallback) {
       setStreamer(fallback);
+      setStreamerUserId(authStatus?.twitchUserId ?? '');
       hasAutoSetStreamer.current = true;
     }
   }, [authStatus, isDemoShell]);
@@ -101,12 +106,17 @@ export function SocialMediaAdminDashboard() {
     } else {
       params.delete('streamer');
     }
+    if (streamerUserId) {
+      params.set('twitch_user_id', streamerUserId);
+    } else {
+      params.delete('twitch_user_id');
+    }
     const qs = params.toString();
     const newUrl = qs
       ? `${window.location.pathname}?${qs}`
       : window.location.pathname;
     window.history.replaceState({}, '', newUrl);
-  }, [streamer]);
+  }, [streamer, streamerUserId]);
 
   const AuthBadge = () => {
     const base =
@@ -193,18 +203,20 @@ export function SocialMediaAdminDashboard() {
             {isAdminView && (
               <select
                 aria-label={t('Streamer wählen')}
-                value={streamer}
+                value={streamerUserId}
                 onChange={(event) => {
                   if (document.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
                   hasAutoSetStreamer.current = true;
-                  setStreamer(event.target.value);
+                  const selected = streamers.find((channel) => channel.twitchUserId === event.target.value);
+                  setStreamerUserId(selected?.twitchUserId ?? '');
+                  setStreamer(selected?.login.toLowerCase() ?? '');
                 }}
                 disabled={loadingStreamers}
                 className="min-w-44 rounded-lg border border-white/[0.08] bg-ui-elevated px-3 py-2 text-sm font-medium text-ui-text outline-none transition-colors focus:border-ui-accent-strong/40"
               >
                 <option value="">{t('Streamer wählen')}</option>
                 {streamers.map((channel) => (
-                  <option key={channel.login} value={channel.login.toLowerCase()}>
+                  <option key={channel.twitchUserId ?? channel.login} value={channel.twitchUserId ?? ''} disabled={!channel.twitchUserId}>
                     {channel.login}
                   </option>
                 ))}
@@ -225,7 +237,7 @@ export function SocialMediaAdminDashboard() {
           <TrialBanner />
 
           {isAdminView ? (
-            <SocialMedia key={streamer} streamer={streamer} isAdmin />
+            <SocialMedia key={streamerUserId} streamer={streamerUserId ? streamer : ''} twitchUserId={streamerUserId} isAdmin />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
               {t('Zugriff wird geprüft…')}

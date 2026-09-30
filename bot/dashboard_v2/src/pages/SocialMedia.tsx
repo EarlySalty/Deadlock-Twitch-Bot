@@ -98,6 +98,7 @@ import {
 
 interface SocialMediaProps {
   streamer: string;
+  twitchUserId?: string;
   /** Reports und Cross-Auswertungen sind der Verwaltung vorbehalten. */
   isAdmin?: boolean;
 }
@@ -161,7 +162,7 @@ const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: strin
   konten: SlidersHorizontal,
 };
 
-export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
+export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<QueueStage>('all');
@@ -280,7 +281,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadClip({ file, streamer_login: streamer }),
+    mutationFn: (file: File) => uploadClip({ file, twitch_user_id: twitchUserId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
