@@ -9,6 +9,9 @@ pub mod ai_state;
 pub mod auth;
 pub mod handlers;
 pub mod obs;
+mod operating_options;
+#[cfg(test)]
+mod test_config;
 pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
@@ -2162,6 +2165,7 @@ mod router_wiring_tests {
 
     #[tokio::test]
     async fn cors_gilt_nur_fuer_public_api_nicht_fuer_html_redirects() {
+        let _config = crate::test_config::scope("");
         let app = build_public_router(lazy_pool());
         let html = app
             .clone()
@@ -2210,6 +2214,7 @@ mod router_wiring_tests {
     /// `/twitch/pricing` bleibt als Marketing-Seite offen.
     #[tokio::test]
     async fn spa_shells_sind_ohne_session_gegated_pricing_bleibt_offen() {
+        let _config = crate::test_config::scope("");
         let app = build_router(lazy_pool(), "smoke-token".into());
         let gegated = [
             (

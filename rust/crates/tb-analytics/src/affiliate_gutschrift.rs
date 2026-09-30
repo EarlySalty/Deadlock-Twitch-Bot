@@ -137,49 +137,21 @@ pub struct AffiliateEmailSettings {
 }
 
 impl AffiliateEmailSettings {
-    pub fn from_secret_loader<F>(mut loader: F) -> Option<Self>
+    pub fn from_config_and_secret_loader<F>(
+        options: &tb_config::affiliate_options::AffiliateMailOptions,
+        mut loader: F,
+    ) -> Option<Self>
     where
         F: FnMut(&[&str]) -> Option<String>,
     {
-        let host = load_secret(
-            &mut loader,
-            &["AFFILIATE_GUTSCHRIFT_SMTP_HOST", "SMTP_HOST"],
-        );
-        if host.trim().is_empty() {
+        let host = options.host.as_deref()?.trim();
+        let from_email = options.from_email.as_deref()?.trim();
+        if host.is_empty() || from_email.is_empty() {
             return None;
         }
-        let port = load_secret(
-            &mut loader,
-            &["AFFILIATE_GUTSCHRIFT_SMTP_PORT", "SMTP_PORT"],
-        )
-        .trim()
-        .parse::<u16>()
-        .ok()
-        .filter(|value| *value > 0)
-        .unwrap_or(587);
-        let from_email = load_secret(
-            &mut loader,
-            &[
-                "AFFILIATE_GUTSCHRIFT_SMTP_FROM",
-                "AFFILIATE_GUTSCHRIFT_FROM_EMAIL",
-                "SMTP_FROM",
-            ],
-        );
-        if from_email.trim().is_empty() {
-            return None;
-        }
-
-        let from_name = load_secret(
-            &mut loader,
-            &[
-                "AFFILIATE_GUTSCHRIFT_SMTP_FROM_NAME",
-                "AFFILIATE_GUTSCHRIFT_FROM_NAME",
-            ],
-        );
-
         Some(Self {
-            host: host.trim().to_string(),
-            port,
+            host: host.into(),
+            port: options.port,
             username: load_secret(
                 &mut loader,
                 &["AFFILIATE_GUTSCHRIFT_SMTP_USERNAME", "SMTP_USERNAME"],
@@ -192,22 +164,14 @@ impl AffiliateEmailSettings {
             )
             .trim()
             .to_string(),
-            from_email: from_email.trim().to_string(),
-            from_name: from_name
+            from_email: from_email.into(),
+            from_name: options
+                .from_name
                 .trim()
                 .if_empty("Deadlock Partner Network")
-                .to_string(),
-            starttls: normalize_bool(
-                &load_secret(
-                    &mut loader,
-                    &["AFFILIATE_GUTSCHRIFT_SMTP_STARTTLS", "SMTP_STARTTLS"],
-                ),
-                true,
-            ),
-            use_ssl: normalize_bool(
-                &load_secret(&mut loader, &["AFFILIATE_GUTSCHRIFT_SMTP_SSL", "SMTP_SSL"]),
-                false,
-            ),
+                .into(),
+            starttls: options.starttls,
+            use_ssl: options.use_ssl,
             timeout_seconds: 20,
         })
     }
@@ -241,11 +205,14 @@ impl SmtpAffiliateEmailSender {
         Self { settings }
     }
 
-    pub fn from_secret_loader<F>(loader: F) -> Option<Self>
+    pub fn from_config_and_secret_loader<F>(
+        options: &tb_config::affiliate_options::AffiliateMailOptions,
+        loader: F,
+    ) -> Option<Self>
     where
         F: FnMut(&[&str]) -> Option<String>,
     {
-        AffiliateEmailSettings::from_secret_loader(loader).map(Self::new)
+        AffiliateEmailSettings::from_config_and_secret_loader(options, loader).map(Self::new)
     }
 }
 
@@ -339,79 +306,36 @@ pub struct AffiliateGutschriftSeller {
 
 impl Default for AffiliateGutschriftSeller {
     fn default() -> Self {
-        Self {
-            name: "[STEUERBERATER: Firmenname]".to_string(),
-            company: "[STEUERBERATER: Firmierung]".to_string(),
-            street: "[STEUERBERATER: Adresse]".to_string(),
-            postal_code: String::new(),
-            city: String::new(),
-            country: "DE".to_string(),
-            email: "billing@example.invalid".to_string(),
-            website: String::new(),
-            tax_id: "[STEUERBERATER: Steuernummer/USt-IdNr.]".to_string(),
-        }
+        let mut seller = Self::from_config(
+            &tb_config::affiliate_options::AffiliateSellerOptions::default(),
+            None,
+        );
+        seller.website.clear();
+        seller
     }
 }
-
 impl AffiliateGutschriftSeller {
-    pub fn from_secret_loader<F>(mut loader: F, public_url: Option<&str>) -> Self
-    where
-        F: FnMut(&[&str]) -> Option<String>,
-    {
-        let default = Self::default();
-        let website_fallback = public_url
+    pub fn from_config(
+        options: &tb_config::affiliate_options::AffiliateSellerOptions,
+        public_url: Option<&str>,
+    ) -> Self {
+        let website = options
+            .website
+            .as_deref()
+            .or(public_url)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("https://deutsche-deadlock-community.de");
         Self {
-            name: load_or_default(
-                &mut loader,
-                &["AFFILIATE_GUTSCHRIFT_SELLER_NAME"],
-                &default.name,
-            ),
-            company: load_or_default(
-                &mut loader,
-                &["AFFILIATE_GUTSCHRIFT_SELLER_COMPANY"],
-                &default.company,
-            ),
-            street: load_or_default(
-                &mut loader,
-                &["AFFILIATE_GUTSCHRIFT_SELLER_STREET"],
-                &default.street,
-            ),
-            postal_code: load_secret(&mut loader, &["AFFILIATE_GUTSCHRIFT_SELLER_POSTAL_CODE"])
-                .trim()
-                .to_string(),
-            city: load_secret(&mut loader, &["AFFILIATE_GUTSCHRIFT_SELLER_CITY"])
-                .trim()
-                .to_string(),
-            country: load_or_default(
-                &mut loader,
-                &["AFFILIATE_GUTSCHRIFT_SELLER_COUNTRY"],
-                &default.country,
-            )
-            .to_uppercase(),
-            email: load_or_default(
-                &mut loader,
-                &[
-                    "AFFILIATE_GUTSCHRIFT_SELLER_EMAIL",
-                    "AFFILIATE_GUTSCHRIFT_FROM_EMAIL",
-                ],
-                &default.email,
-            ),
-            website: load_or_default(
-                &mut loader,
-                &["AFFILIATE_GUTSCHRIFT_SELLER_WEBSITE"],
-                website_fallback,
-            ),
-            tax_id: load_or_default(
-                &mut loader,
-                &[
-                    "AFFILIATE_GUTSCHRIFT_SELLER_TAX_ID",
-                    "AFFILIATE_GUTSCHRIFT_SELLER_VAT_ID",
-                ],
-                &default.tax_id,
-            ),
+            name: options.name.trim().to_owned(),
+            company: options.company.trim().to_owned(),
+            street: options.street.trim().to_owned(),
+            postal_code: options.postal_code.trim().to_owned(),
+            city: options.city.trim().to_owned(),
+            country: options.country.trim().to_uppercase(),
+            email: options.email.trim().to_owned(),
+            website: website.into(),
+            tax_id: options.tax_id.trim().to_owned(),
         }
     }
 
@@ -1783,23 +1707,6 @@ where
     loader(keys).unwrap_or_default()
 }
 
-fn load_or_default<F>(loader: &mut F, keys: &[&str], default: &str) -> String
-where
-    F: FnMut(&[&str]) -> Option<String>,
-{
-    let value = load_secret(loader, keys);
-    value.trim().if_empty(default).to_string()
-}
-
-fn normalize_bool(value: &str, default: bool) -> bool {
-    let raw = value.trim().to_lowercase();
-    if raw.is_empty() {
-        default
-    } else {
-        matches!(raw.as_str(), "1" | "true" | "yes" | "on")
-    }
-}
-
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
@@ -2034,10 +1941,17 @@ mod tests {
 
     #[test]
     fn smtp_settings_loader_paritaet() {
-        let settings = AffiliateEmailSettings::from_secret_loader(|keys| match keys[0] {
-            "AFFILIATE_GUTSCHRIFT_SMTP_HOST" => Some("smtp.example.test".into()),
-            "AFFILIATE_GUTSCHRIFT_SMTP_FROM" => Some("billing@example.test".into()),
-            _ => None,
+        let options = tb_config::affiliate_options::AffiliateMailOptions {
+            host: Some("smtp.example.test".into()),
+            from_email: Some("billing@example.test".into()),
+            ..Default::default()
+        };
+        let settings = AffiliateEmailSettings::from_config_and_secret_loader(&options, |keys| {
+            assert!(matches!(
+                keys[0],
+                "AFFILIATE_GUTSCHRIFT_SMTP_USERNAME" | "AFFILIATE_GUTSCHRIFT_SMTP_PASSWORD"
+            ));
+            None
         })
         .unwrap();
         assert_eq!(settings.port, 587);

@@ -100,6 +100,9 @@ fn clamp_limit(limit: Option<i64>) -> usize {
 }
 
 fn data_path(name: &str) -> PathBuf {
+    if name == "legal_pages.json" {
+        return super::admin_legal::legal_path();
+    }
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("data/admin_dashboard")

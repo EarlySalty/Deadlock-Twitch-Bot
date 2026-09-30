@@ -33,39 +33,6 @@ extern "C" {
     fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
 }
 
-fn optional_env_bool(name: &str, default: bool) -> bool {
-    match std::env::var(name) {
-        Ok(value) => {
-            let raw = value.trim().to_lowercase();
-            match raw.as_str() {
-                "" => default,
-                "1" | "true" | "yes" | "on" => true,
-                "0" | "false" | "no" | "off" => false,
-                _ => {
-                    tracing::warn!(
-                        setting = name,
-                        value = %value,
-                        default,
-                        "Ungültiger optionaler Bool-Env-Wert; Default wird verwendet"
-                    );
-                    default
-                }
-            }
-        }
-        Err(_) => default,
-    }
-}
-
-fn split_runtime_enforced() -> bool {
-    if std::env::var("TWITCH_RUNTIME_ENFORCE")
-        .ok()
-        .is_some_and(|v| !v.trim().is_empty())
-    {
-        return optional_env_bool("TWITCH_RUNTIME_ENFORCE", true);
-    }
-    optional_env_bool("TWITCH_SPLIT_RUNTIME_ENFORCE", true)
-}
-
 fn pause_loop_helix_config_from_values(
     client_id: Option<String>,
     client_secret: Option<String>,
@@ -112,25 +79,9 @@ fn resolve_runtime_role(raw: &str) -> String {
     }
 }
 
-fn runtime_role_from_env() -> String {
-    let raw = std::env::var("TWITCH_RUNTIME_ROLE")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            std::env::var("TWITCH_SPLIT_RUNTIME_ROLE")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-        })
-        .unwrap_or_default();
-    resolve_runtime_role(&raw)
-}
-
-fn enforce_dashboard_runtime(role: Option<&str>, port: u16) -> Result<String, String> {
-    let role = match role {
-        Some(value) => resolve_runtime_role(value),
-        None => runtime_role_from_env(),
-    };
-    if !split_runtime_enforced() {
+fn enforce_dashboard_runtime(role: &str, port: u16, enforce: bool) -> Result<String, String> {
+    let role = resolve_runtime_role(role);
+    if !enforce {
         return Ok(role);
     }
     if role != ROLE_DASHBOARD {
@@ -145,7 +96,7 @@ fn enforce_dashboard_runtime(role: Option<&str>, port: u16) -> Result<String, St
 fn role_error_message(got_role: &str) -> String {
     const ALLOWED: [&str; 3] = ["master", "twitch_worker", "dashboard"];
     if got_role.is_empty() {
-        return "Runtime hardening violation for dashboard_service: runtime role is missing. Set TWITCH_RUNTIME_ROLE=dashboard (or TWITCH_SPLIT_RUNTIME_ROLE=dashboard).".to_string();
+        return "Runtime hardening violation for dashboard_service: runtime role is missing. Set dashboard.options.runtime_role = 'dashboard' in TOML.".to_string();
     }
     if !ALLOWED.contains(&got_role) {
         return format!(
@@ -227,12 +178,10 @@ impl Drop for RuntimePidLock {
 }
 
 fn runtime_lock_dir() -> PathBuf {
-    std::env::var("TWITCH_RUNTIME_PID_LOCK_DIR")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("data/runtime/locks"))
+    let snapshot = tb_config::runtime::active().expect("Dashboard benötigt die geprüfte TOML");
+    snapshot
+        .resolve(&snapshot.settings().dashboard.options.runtime_lock_dir)
+        .expect("Geprüfter Lockpfad")
 }
 
 #[cfg(unix)]
@@ -307,7 +256,9 @@ async fn main() {
             // startet keinen Dashboardprozess und benötigt keinen Snapshot.
             let arguments = if arguments.iter().any(|argument| {
                 argument == "--config"
-                    || argument.to_str().is_some_and(|value| value.starts_with("--config="))
+                    || argument
+                        .to_str()
+                        .is_some_and(|value| value.starts_with("--config="))
             }) {
                 tb_config::file::ConfigArguments::parse(arguments.clone())
                     .map_err(|_| "Ungültiger Konfigurationspfad für den Uplink-Migrator.")?
@@ -352,33 +303,49 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(2);
     });
+    let config = snapshot.settings();
+    let port = config.dashboard.port;
+    let runtime_role = enforce_dashboard_runtime(
+        &config.dashboard.options.runtime_role,
+        port,
+        config.dashboard.options.runtime_enforce,
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("Dashboard Runtime-Härtung verletzt: {error}");
+        std::process::exit(2);
+    });
     if remaining.len() == 1 && remaining[0] == "--check-config" {
         println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
         return;
     }
-    let config = snapshot.settings();
     tracing_subscriber::fmt()
         .with_max_level(config.logging.level.tracing_level())
         .init();
-    tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_DASHBOARD_CONFIG_V1");
+    tracing::info!(
+        fingerprint = snapshot.fingerprint(),
+        "TWITCH_DASHBOARD_CONFIG_V1"
+    );
+
+    tracing::info!(runtime_role = %runtime_role, port, "Dashboard Runtime-Härtung bestanden");
 
     // Nur Uplink migriert hier auf normale Konfiguration und Infisical-FD.
     // Bestehende benachbarte Dashboarddienste behalten ihren eigenen Startvertrag.
-    let configured =
-        match tb_dashboard_api::uplink_config::load_arguments(remaining).await {
-            Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
-            Ok(None) => Ok(()),
-            Err(error) => Err(error),
-        };
+    let configured = match tb_dashboard_api::uplink_config::load_arguments(remaining).await {
+        Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
+        Ok(None) => Ok(()),
+        Err(error) => Err(error),
+    };
     if let Err(error) = configured {
         tracing::error!("{error}");
         std::process::exit(1);
     }
 
-    let settings = snapshot.runtime_settings(&|key| std::env::var(key).ok()).unwrap_or_else(|e| {
-        tracing::error!("Konfigurationsfehler: {e}");
-        std::process::exit(1);
-    });
+    let settings = snapshot
+        .runtime_settings(&|key| std::env::var(key).ok())
+        .unwrap_or_else(|e| {
+            tracing::error!("Konfigurationsfehler: {e}");
+            std::process::exit(1);
+        });
 
     let pool = tb_db::connect(&settings.db).await.unwrap_or_else(|e| {
         tracing::error!("DB-Verbindungsfehler: {e}");
@@ -402,17 +369,6 @@ async fn main() {
     // Startzeit-Timestamp so früh wie möglich setzen
     let _ = tb_dashboard_api::process_info::uptime_secs();
 
-    let port = config.dashboard.port;
-
-    match enforce_dashboard_runtime(None, port) {
-        Ok(role) => {
-            tracing::info!(runtime_role = %role, port, "Dashboard Runtime-Härtung bestanden");
-        }
-        Err(error) => {
-            tracing::error!("Dashboard Runtime-Härtung verletzt: {error}");
-            std::process::exit(1);
-        }
-    }
     let _dashboard_runtime_lock = RuntimePidLock::acquire("dashboard_service", port)
         .unwrap_or_else(|error| {
             tracing::error!("Dashboard Runtime-PID-Lock verletzt: {error}");
@@ -433,10 +389,7 @@ async fn main() {
     // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
     // portierte Dashboard-Routen. Ohne konfigurierte URL bleibt der Proxy
     // aus und unbekannte Pfade antworten wie bisher mit 404.
-    let fallback_url = std::env::var("TB_DASHBOARD_LEGACY_FALLBACK_URL")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let fallback_url = config.dashboard.options.legacy_fallback_url.clone();
     let proxy_ext = match &fallback_url {
         Some(url) => {
             app = app.fallback(tb_dashboard_api::proxy::dashboard_fallback_handler);
@@ -549,70 +502,25 @@ async fn main() {
 mod tests {
     use super::*;
 
-    struct EnvGuard {
-        saved: Vec<(&'static str, Option<String>)>,
-    }
-
-    impl EnvGuard {
-        fn capture(names: &[&'static str]) -> Self {
-            Self {
-                saved: names
-                    .iter()
-                    .map(|name| (*name, std::env::var(name).ok()))
-                    .collect(),
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-
     #[test]
     fn dashboard_runtime_enforcement_contract() {
-        let _guard = EnvGuard::capture(&[
-            "TWITCH_RUNTIME_ENFORCE",
-            "TWITCH_SPLIT_RUNTIME_ENFORCE",
-            "TWITCH_RUNTIME_ROLE",
-            "TWITCH_SPLIT_RUNTIME_ROLE",
-        ]);
-        std::env::set_var("TWITCH_RUNTIME_ENFORCE", "1");
-        std::env::remove_var("TWITCH_SPLIT_RUNTIME_ENFORCE");
-        std::env::remove_var("TWITCH_RUNTIME_ROLE");
-        std::env::remove_var("TWITCH_SPLIT_RUNTIME_ROLE");
-
         assert_eq!(
-            enforce_dashboard_runtime(Some(ROLE_DASHBOARD), 8769).as_deref(),
+            enforce_dashboard_runtime(ROLE_DASHBOARD, 8769, true).as_deref(),
             Ok(ROLE_DASHBOARD)
         );
         assert_eq!(
-            enforce_dashboard_runtime(Some(ROLE_DASHBOARD), DASHBOARD_SERVICE_PORT).as_deref(),
+            enforce_dashboard_runtime(ROLE_DASHBOARD, DASHBOARD_SERVICE_PORT, true).as_deref(),
             Ok(ROLE_DASHBOARD)
         );
-
-        let reserved_error =
-            enforce_dashboard_runtime(Some(ROLE_DASHBOARD), MASTER_API_RESERVED_PORT).unwrap_err();
-        assert!(reserved_error.contains("reserved for the master API service"));
-
-        assert!(enforce_dashboard_runtime(Some("master"), DASHBOARD_SERVICE_PORT).is_err());
-        assert!(enforce_dashboard_runtime(Some(""), DASHBOARD_SERVICE_PORT).is_err());
-
-        std::env::set_var("TWITCH_RUNTIME_ROLE", ROLE_DASHBOARD);
-        assert_eq!(
-            enforce_dashboard_runtime(None, 8769).as_deref(),
-            Ok(ROLE_DASHBOARD)
+        assert!(
+            enforce_dashboard_runtime(ROLE_DASHBOARD, MASTER_API_RESERVED_PORT, true)
+                .unwrap_err()
+                .contains("reserved for the master API service")
         );
-
-        std::env::set_var("TWITCH_RUNTIME_ENFORCE", "0");
+        assert!(enforce_dashboard_runtime("master", DASHBOARD_SERVICE_PORT, true).is_err());
+        assert!(enforce_dashboard_runtime("", DASHBOARD_SERVICE_PORT, true).is_err());
         assert_eq!(
-            enforce_dashboard_runtime(Some("bot"), MASTER_API_RESERVED_PORT).as_deref(),
+            enforce_dashboard_runtime("bot", MASTER_API_RESERVED_PORT, false).as_deref(),
             Ok(ROLE_TWITCH_WORKER)
         );
     }

@@ -42,7 +42,6 @@ use std::path::PathBuf;
 use crate::auth::level::DashboardAuthLevel;
 
 /// Default-Dist-Pfad der Admin-SPA (relativ zum Service-WorkingDir = Repo-Root).
-const DEFAULT_ADMIN_DIST_PATH: &str = "bot/admin_dashboard/dist";
 
 /// Kanonisches Ziel für `/twitch/stats` + Dashboard-Aliase (Python:
 /// `legacy_dashboard_redirect`, routes_entry.py:80-86).
@@ -98,7 +97,10 @@ pub async fn admin_index_handler(auth: DashboardAuthLevel) -> Response {
 ///
 /// Python: `_serve_admin_dashboard_path` (api_overview.py:649-660) +
 /// `_admin_dashboard_path_should_serve_index` (Z. 451-458).
-pub async fn admin_path_handler(auth: DashboardAuthLevel, Path(raw_path): Path<String>) -> Response {
+pub async fn admin_path_handler(
+    auth: DashboardAuthLevel,
+    Path(raw_path): Path<String>,
+) -> Response {
     if let Some(denied) = admin_auth_gate(&auth) {
         return denied;
     }
@@ -123,13 +125,7 @@ fn admin_auth_gate(auth: &DashboardAuthLevel) -> Option<Response> {
     if auth.is_privileged() {
         None
     } else {
-        Some(
-            (
-                StatusCode::UNAUTHORIZED,
-                "Admin access required.",
-            )
-                .into_response(),
-        )
+        Some((StatusCode::UNAUTHORIZED, "Admin access required.").into_response())
     }
 }
 
@@ -154,9 +150,7 @@ fn path_should_serve_index(raw_path: &str) -> bool {
 // ── Asset-Serving (Mechanik gespiegelt von spa.rs) ────────────────────────────
 
 fn admin_dist_root() -> PathBuf {
-    let base = std::env::var("ADMIN_DASHBOARD_DIST_PATH")
-        .unwrap_or_else(|_| DEFAULT_ADMIN_DIST_PATH.to_string());
-    PathBuf::from(base)
+    crate::operating_options::path(&crate::operating_options::options().admin_dist_path)
 }
 
 /// Liefert die Admin-SPA-Shell (`index.html`). 404 mit Build-Hinweis, wenn das
@@ -164,11 +158,7 @@ fn admin_dist_root() -> PathBuf {
 async fn serve_admin_index() -> Response {
     let index = admin_dist_root().join("index.html");
     match tokio::fs::read(&index).await {
-        Ok(bytes) => (
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            bytes,
-        )
-            .into_response(),
+        Ok(bytes) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response(),
         Err(_) => (
             StatusCode::NOT_FOUND,
             "Admin dashboard not built. Run npm run build in bot/admin_dashboard/",
@@ -250,7 +240,10 @@ mod tests {
     async fn root_privilegiert_geht_zu_admin() {
         let resp = root_handler(DashboardAuthLevel::admin()).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/twitch/admin");
+        assert_eq!(
+            resp.headers().get(header::LOCATION).unwrap(),
+            "/twitch/admin"
+        );
     }
 
     #[tokio::test]
@@ -285,6 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_index_admin_liefert_shell_kein_proxy() {
+        let _config = crate::test_config::scope("");
         // Mit echtem Dist liefert es die Shell (200), ohne gebauten Dist 404 —
         // in BEIDEN Fällen KEIN 401/502/Proxy. Der Auth-Gate ist passiert.
         let resp = admin_index_handler(DashboardAuthLevel::admin()).await;
@@ -298,12 +292,10 @@ mod tests {
 
     #[tokio::test]
     async fn admin_path_deeplink_admin_serviert_index_kein_proxy() {
+        let _config = crate::test_config::scope("");
         // Deep-Link ohne Dateiendung → Shell-Serving-Pfad, Auth passiert.
-        let resp = admin_path_handler(
-            DashboardAuthLevel::admin(),
-            Path("/streamers".to_string()),
-        )
-        .await;
+        let resp =
+            admin_path_handler(DashboardAuthLevel::admin(), Path("/streamers".to_string())).await;
         assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -336,6 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn asset_path_traversal_404() {
+        let _config = crate::test_config::scope("");
         let resp = serve_admin_asset("../../etc/passwd").await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let resp2 = serve_admin_asset("assets/../../secret").await;

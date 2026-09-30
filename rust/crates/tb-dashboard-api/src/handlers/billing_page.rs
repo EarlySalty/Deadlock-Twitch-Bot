@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
-    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_map_from_env,
+    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_map_from_config,
     resolved_price_id,
 };
 use tb_analytics::plan::resolve_plan_snapshot;
@@ -111,14 +111,12 @@ pub fn billing_page_config_from_env() -> Option<BillingPageConfig> {
 /// Leitet den Public-Origin aus den konfigurierten URLs ab (Origin-Teil) oder
 /// fällt auf den Default zurück. Spiegelt `_billing_configured_public_origin`.
 fn resolve_public_origin() -> String {
-    let from_url =
-        |key: &str| -> Option<String> { std::env::var(key).ok().and_then(|raw| origin_of(&raw)) };
-    from_url("STRIPE_CHECKOUT_SUCCESS_URL")
-        .or_else(|| from_url("STRIPE_CHECKOUT_CANCEL_URL"))
-        .or_else(|| from_url("TWITCH_BILLING_CHECKOUT_SUCCESS_URL"))
-        .or_else(|| from_url("TWITCH_BILLING_CHECKOUT_CANCEL_URL"))
-        .or_else(|| non_empty_env(&["TWITCH_ADMIN_PUBLIC_URL"]).and_then(|u| origin_of(&u)))
-        .or_else(|| non_empty_env(&["MASTER_DASHBOARD_PUBLIC_URL"]).and_then(|u| origin_of(&u)))
+    let options = crate::operating_options::options();
+    options
+        .billing_public_origin
+        .as_deref()
+        .and_then(origin_of)
+        .or_else(|| options.admin_public_url.as_deref().and_then(origin_of))
         .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
 }
 
@@ -217,7 +215,7 @@ pub async fn checkout_start_handler(
     };
     // P2.126: Env-Override (Vault-Map) vor dem Hardcode-Default konsumieren —
     // erlaubt pro Plan/Zyklus eine abweichende Stripe-Price-ID ohne Code-Build.
-    let price_vault = price_id_map_from_env();
+    let price_vault = price_id_map_from_config(&crate::operating_options::options());
     let Some(price_id) = resolved_price_id(plan_id, cycle, &price_vault) else {
         return pricing_unavailable("missing_stripe_price_id");
     };
@@ -656,7 +654,7 @@ pub async fn catalog_handler(
 
     let cycle = normalize_billing_cycle(parse_u32(params.cycle.as_deref(), 1));
     let mut payload = catalog_json(cycle);
-    let price_vault = price_id_map_from_env();
+    let price_vault = price_id_map_from_config(&crate::operating_options::options());
     let readiness = readiness_payload(config.as_ref().map(|Extension(c)| c));
     let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
 
@@ -805,7 +803,11 @@ pub async fn checkout_preview_handler(
     let checkout_ready = readiness["checkout_ready"].as_bool().unwrap_or(false);
     let price_map_ready = readiness["price_map_ready"].as_bool().unwrap_or(false);
     let price_id = if is_paid_plan_id(&selected_plan_id) {
-        resolved_price_id(&selected_plan_id, cycle, &price_id_map_from_env())
+        resolved_price_id(
+            &selected_plan_id,
+            cycle,
+            &price_id_map_from_config(&crate::operating_options::options()),
+        )
     } else {
         None
     };
@@ -880,8 +882,7 @@ pub async fn readiness_handler(
 ///
 /// Bewusst KEINE Secret-Previews — der native Pfad liest Secrets aus Infisical
 /// und gibt sie nie aus. `checkout_ready` = Stripe-Client konfiguriert;
-/// `price_map_ready` = eingecheckte Price-ID-Defaults decken alle bezahlten
-/// Pläne ab (sie tun es per Konstruktion, s. catalog::PRICE_ID_DEFAULTS).
+/// `price_map_ready` prüft die tatsächliche TOML-Zuordnung aller buchbaren Pläne.
 fn readiness_payload(config: Option<&BillingPageConfig>) -> Value {
     let checkout_ready = config.is_some();
     let webhook_ready = non_empty_env(&[
@@ -889,8 +890,9 @@ fn readiness_payload(config: Option<&BillingPageConfig>) -> Value {
         "TWITCH_BILLING_STRIPE_WEBHOOK_SECRET",
     ])
     .is_some();
-    // Eingecheckte Defaults decken alle bezahlten Pläne × {1,12} ab.
-    let price_map_ready = true;
+    let price_map_ready = tb_analytics::billing::catalog::configured_price_map_ready(
+        &crate::operating_options::options(),
+    );
     json!({
         "provider": "stripe",
         "integration_state": if checkout_ready && price_map_ready { "live" } else { "planned" },
@@ -1210,10 +1212,11 @@ mod tests {
 
     #[test]
     fn readiness_without_config_is_not_checkout_ready() {
+        let _config = crate::test_config::scope("");
         let payload = readiness_payload(None);
         assert_eq!(payload["provider"], "stripe");
         assert_eq!(payload["checkout_ready"], false);
-        assert_eq!(payload["price_map_ready"], true);
+        assert_eq!(payload["price_map_ready"], false);
         assert_eq!(payload["integration_state"], "planned");
         assert_eq!(payload["ready_for_live"], false);
     }
@@ -1287,6 +1290,7 @@ mod tests {
     /// P2.125: Die served `payment`-Sektion trägt die zuvor fehlenden Keys.
     #[test]
     fn payment_section_emits_full_python_keys() {
+        let _config = crate::test_config::scope("");
         let readiness = readiness_payload(None); // checkout_ready=false → planned
         let payment = payment_section(&readiness);
         assert_eq!(payment["provider"], "stripe");
@@ -1351,6 +1355,7 @@ mod tests {
     /// next_steps; ready=false (Checkout nicht konfiguriert), price_id=null.
     #[tokio::test]
     async fn checkout_preview_valid_plan_returns_readiness() {
+        let _config = crate::test_config::scope("");
         let resp = checkout_preview_handler(
             partner("login", "5"),
             None,
@@ -1435,18 +1440,9 @@ mod tests {
             .unwrap()
     }
 
-    /// Seit dem Umbau auf drei Stufen stehen keine Stripe-Price-IDs mehr im
-    /// Code (die alten zeigten auf Netto-Preise). Produktiv liefert sie der
-    /// Vault; im Test setzen wir dieselbe Env-Variable einmal prozessweit.
-    fn test_price_map_setzen() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            std::env::set_var(
-                "STRIPE_PRICE_ID_MAP",
-                r#"{"plus":{"1":"price_test_plus_1m","12":"price_test_plus_12m"},
-                    "pro":{"1":"price_test_pro_1m","12":"price_test_pro_12m"}}"#,
-            );
-        });
+    /// Synthetische Price-IDs ausschließlich aus der Test-TOML.
+    fn test_price_map_setzen() -> crate::test_config::Scope {
+        crate::test_config::scope("[dashboard.options.stripe_price_ids.plus]\nmonthly='price_test_plus_1m'\nyearly='price_test_plus_12m'\n[dashboard.options.stripe_price_ids.pro]\nmonthly='price_test_pro_1m'\nyearly='price_test_pro_12m'\n")
     }
 
     /// Unauth → Login-Redirect, KEIN Stripe-Call.
@@ -1472,7 +1468,7 @@ mod tests {
     /// erstellt UND auf die hosted URL redirected (302).
     #[tokio::test]
     async fn checkout_creates_session_and_redirects_to_hosted_url() {
-        test_price_map_setzen();
+        let _config = test_price_map_setzen();
         let Some(pool) = pool_or_skip("bp_checkout_session").await else {
             return;
         };
@@ -1591,7 +1587,7 @@ mod tests {
     /// Startet einen Checkout gegen einen Mock-Stripe und liefert den rohen
     /// Request-Body der Checkout-Session zurueck.
     async fn checkout_session_body(cycle: &str) -> String {
-        test_price_map_setzen();
+        let _config = test_price_map_setzen();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/checkout/sessions"))
@@ -1625,6 +1621,7 @@ mod tests {
     /// `manual_plan_expires_at` um 2*31 Tage: 14 Monate fuer zehn Monatspreise.
     #[tokio::test]
     async fn jahres_checkout_setzt_keine_bonus_monate() {
+        let _config = crate::test_config::scope("");
         let body = checkout_session_body("12").await;
         assert!(
             !body.contains("bonus_months"),
@@ -1638,6 +1635,7 @@ mod tests {
     /// noch `trial_period_days`.
     #[tokio::test]
     async fn monats_checkout_setzt_trial() {
+        let _config = crate::test_config::scope("");
         let body = checkout_session_body("1").await;
         assert!(
             body.contains("trial_period_days"),
@@ -1872,7 +1870,7 @@ mod tests {
     /// wird aufgelöst; bezahlte Pläne tragen checkout_available + stripe_price_id.
     #[tokio::test]
     async fn catalog_returns_plan_status_not_proxy() {
-        test_price_map_setzen();
+        let _config = test_price_map_setzen();
         let Some(pool) = pool_or_skip("bp_catalog").await else {
             return;
         };

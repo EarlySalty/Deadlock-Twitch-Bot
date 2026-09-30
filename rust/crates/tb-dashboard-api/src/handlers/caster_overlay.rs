@@ -894,11 +894,7 @@ pub async fn context_handler(
             Json(json!({"available":false,"reason":"turnier_token_missing","teams":[]})),
         ));
     };
-    let base = std::env::var("TURNIER_INTERNAL_API_BASE_URL")
-        .ok()
-        .map(|value| value.trim_end_matches('/').to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "http://127.0.0.1:8900".to_string());
+    let base = crate::operating_options::options().turnier_internal_base_url.trim_end_matches('/').to_string();
     let url = format!("{base}/internal/turnier/v1/caster/teams");
     let response = match reqwest::Client::new()
         .get(url)

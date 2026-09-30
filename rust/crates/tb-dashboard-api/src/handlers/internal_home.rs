@@ -73,7 +73,6 @@ const ANALYTICS_BLOCKED_PARTNER_STATUSES: &[&str] = &[
 const INTERNAL_HOME_LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard";
 const INTERNAL_HOME_DISCORD_CONNECT_URL: &str =
     "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung%23konto";
-const STEAM_LINK_DEFAULT_BASE_URL: &str = "https://deutsche-deadlock-community.de/link";
 
 struct CachedAvatar {
     value: Option<String>,
@@ -380,11 +379,9 @@ impl AvatarCache {
 /// Community-Seite, gekoppelt an die Discord-ID). Liest `STEAM_LINK_START_BASE_URL`
 /// und schneidet einen evtl. abschließenden `/` ab.
 fn steam_link_base() -> String {
-    std::env::var("STEAM_LINK_START_BASE_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| STEAM_LINK_DEFAULT_BASE_URL.to_string())
+    crate::operating_options::options()
+        .steam_link_start_base_url
+        .trim()
         .trim_end_matches('/')
         .to_string()
 }
@@ -671,7 +668,9 @@ pub async fn get_handler(
     let links = super::onboarding::account_links(&pool, &resolved_user_id).await;
     let discord_connected = links.discord_status == super::onboarding::LinkStatus::Connected;
     let steam_connected = links.steam_status == super::onboarding::LinkStatus::Connected;
-    let steam_connect_url = links.discord_id.as_deref()
+    let steam_connect_url = links
+        .discord_id
+        .as_deref()
         .map(|id| format!("{}/steam/login?uid={}", steam_link_base(), id));
 
     let autoban_events = load_autoban_events(&resolved_login, since);

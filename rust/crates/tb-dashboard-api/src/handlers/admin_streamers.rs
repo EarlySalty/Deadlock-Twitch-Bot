@@ -778,18 +778,9 @@ fn internal_api_token() -> Option<String> {
 }
 
 fn worker_internal_base_url() -> String {
-    let read = |key: &str| {
-        std::env::var(key)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
-    if let Some(explicit) = read("TWITCH_INTERNAL_API_BASE_URL") {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    let host = read("TWITCH_INTERNAL_API_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = read("TWITCH_INTERNAL_API_PORT").unwrap_or_else(|| "8776".to_string());
-    format!("http://{host}:{port}")
+    crate::operating_options::settings()
+        .internal_api
+        .client_base_url()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

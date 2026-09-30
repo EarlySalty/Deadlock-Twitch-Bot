@@ -301,10 +301,7 @@ fn evaluate_answer(question: &str, generated: Option<&str>) -> SelfExplainerAnsw
 // ── Fireworks-Generierung + Orchestrierung ─────────────────────────────────────
 
 fn knowledge_dir() -> PathBuf {
-    match nonempty_env("KNOWLEDGE_DIR") {
-        Some(p) => PathBuf::from(p),
-        None => PathBuf::from("rust/knowledge"),
-    }
+    crate::operating_options::path(&crate::operating_options::settings().knowledge.directory)
 }
 
 pub(crate) fn knowledge_base() -> &'static KnowledgeBase {
@@ -572,12 +569,9 @@ fn nonempty_env(key: &str) -> Option<String> {
 }
 
 fn worker_internal_base_url() -> String {
-    if let Some(explicit) = nonempty_env("TWITCH_INTERNAL_API_BASE_URL") {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    let host = nonempty_env("TWITCH_INTERNAL_API_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = nonempty_env("TWITCH_INTERNAL_API_PORT").unwrap_or_else(|| "8776".to_string());
-    format!("http://{host}:{port}")
+    crate::operating_options::settings()
+        .internal_api
+        .client_base_url()
 }
 
 /// Relayt das Embed best-effort über den Worker-Internal-Endpoint nach Discord.

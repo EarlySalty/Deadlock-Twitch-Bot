@@ -19,7 +19,6 @@ use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
 const SLUGS: [&str; 4] = ["impressum", "datenschutz", "agb", "sicherheit"];
-const LEGAL_REL_PATH: &str = "data/admin_dashboard/legal_pages.json";
 
 // Eingebettete Default-Bodies (1:1 aus _DEFAULT_LEGAL_PAGE_BODIES extrahiert).
 const DEFAULT_IMPRESSUM: &str = include_str!("../../templates/legal_default_impressum.html");
@@ -58,10 +57,8 @@ fn normalize_slug(raw: Option<&str>) -> Option<String> {
     }
 }
 
-fn legal_path() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(LEGAL_REL_PATH)
+pub(crate) fn legal_path() -> PathBuf {
+    crate::operating_options::path(&crate::operating_options::options().legal_pages_path)
 }
 
 #[derive(Debug, Clone)]

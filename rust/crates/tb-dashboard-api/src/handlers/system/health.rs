@@ -110,21 +110,9 @@ fn local_analytics_fingerprint() -> Option<String> {
 
 /// Basis-URL der Internal-API (gleiche Konvention wie admin_chat_action.rs).
 fn internal_base_url() -> String {
-    if let Some(explicit) = std::env::var("TWITCH_INTERNAL_API_BASE_URL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-    {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    let host = std::env::var("TWITCH_INTERNAL_API_HOST")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = std::env::var("TWITCH_INTERNAL_API_PORT")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "8776".to_string());
-    format!("http://{host}:{port}")
+    crate::operating_options::settings()
+        .internal_api
+        .client_base_url()
 }
 
 /// Liest den `analyticsDbFingerprint` vom Internal-API-`/healthz`-Endpoint.

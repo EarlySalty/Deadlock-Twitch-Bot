@@ -14,8 +14,6 @@ use tb_http_core::{INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER};
 use url::Url;
 
 const SERVICE_NAME: &str = "twitch-dashboard-service";
-const DEFAULT_INTERNAL_API_HOST: &str = "127.0.0.1";
-const DEFAULT_INTERNAL_API_PORT: &str = "8776";
 const INTERNAL_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 const FINGERPRINT_SALT: &[u8] = b"deadlock.analytics-db-fingerprint.v1";
 const FINGERPRINT_ITERATIONS: u32 = 100_000;
@@ -207,34 +205,19 @@ fn non_empty_env(name: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn parse_env_bool(name: &str, default: bool) -> bool {
-    match non_empty_env(name)
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "1" | "true" | "yes" | "on" => true,
-        "0" | "false" | "no" | "off" => false,
-        _ => default,
-    }
-}
+
 
 fn oauth_configured() -> bool {
-    parse_env_bool("TWITCH_DASHBOARD_NOAUTH", false)
+    crate::operating_options::options().noauth_readiness
         || (non_empty_env("TWITCH_CLIENT_ID").is_some()
             && non_empty_env("TWITCH_CLIENT_SECRET").is_some())
 }
 
 fn internal_api_config() -> Option<InternalApiConfig> {
     let token = non_empty_env("TWITCH_INTERNAL_API_TOKEN")?;
-    let raw_base = non_empty_env("TWITCH_INTERNAL_API_BASE_URL").unwrap_or_else(|| {
-        let host = non_empty_env("TWITCH_INTERNAL_API_HOST")
-            .unwrap_or_else(|| DEFAULT_INTERNAL_API_HOST.to_string());
-        let port = non_empty_env("TWITCH_INTERNAL_API_PORT")
-            .unwrap_or_else(|| DEFAULT_INTERNAL_API_PORT.to_string());
-        format!("http://{host}:{port}")
-    });
-    let allow_non_loopback = parse_env_bool("TWITCH_INTERNAL_API_ALLOW_NON_LOOPBACK", false);
+    let settings = tb_config::runtime::settings().ok()?;
+    let raw_base = settings.internal_api.client_base_url();
+    let allow_non_loopback = settings.internal_api.probe_allow_non_loopback;
     let base_url = normalize_internal_base_url(&raw_base, allow_non_loopback)?;
     Some(InternalApiConfig { base_url, token })
 }

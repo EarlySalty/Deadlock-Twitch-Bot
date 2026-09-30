@@ -36,7 +36,6 @@ const LOGIN_URL: &str = "/twitch/auth/login?next=%2Fanalyse";
 /// Main-Domain-Shells duerfen ihn deshalb nicht umschreiben.
 const MAIN_DOMAIN_ASSET_PREFIX: &str = "/twitch/dashboard-v2/";
 const LEGACY_DASHBOARD_URL: &str = "/twitch/dashboard";
-const DEFAULT_DIST_PATH: &str = "bot/analytics/dashboard_v2/dist";
 
 /// Literal-Fallback-Hostname des Admin-Dashboards.
 ///
@@ -423,17 +422,20 @@ async fn check_spa_auth(auth: &DashboardAuthLevel, pool: &PgPool) -> Option<Resp
             twitch_user_id,
             ..
         } => {
-            let access =
-                tb_analytics::partner_access::load_partner_access_state(pool, twitch_login, twitch_user_id)
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
-                        tb_analytics::partner_access::AccessState {
-                            analytics_access_allowed: true,
-                            landing_access_allowed: true,
-                            ..Default::default()
-                        }
-                    });
+            let access = tb_analytics::partner_access::load_partner_access_state(
+                pool,
+                twitch_login,
+                twitch_user_id,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
+                tb_analytics::partner_access::AccessState {
+                    analytics_access_allowed: true,
+                    landing_access_allowed: true,
+                    ..Default::default()
+                }
+            });
 
             if !access.landing_access_allowed {
                 return Some(
@@ -504,18 +506,12 @@ pub(crate) fn is_admin_dashboard_host_request(headers: &HeaderMap) -> bool {
 /// Jeder Kandidat wird wie eine Origin/URL geparst; der erste mit nicht-leerem
 /// Hostnamen gewinnt. Bei kompletter Leere → `ADMIN_DASHBOARD_HOST_DEFAULT`.
 fn configured_admin_dashboard_host() -> String {
-    let env_candidates = [
-        std::env::var("TWITCH_ADMIN_PUBLIC_URL").ok(),
-        std::env::var("MASTER_DASHBOARD_PUBLIC_URL").ok(),
-        Some(format!("https://{ADMIN_DASHBOARD_HOST_DEFAULT}")),
-    ];
-    for candidate in env_candidates.into_iter().flatten() {
-        let host = host_from_origin_like(&candidate);
-        if !host.is_empty() {
-            return host;
-        }
-    }
-    ADMIN_DASHBOARD_HOST_DEFAULT.to_string()
+    crate::operating_options::options()
+        .admin_public_url
+        .as_deref()
+        .map(host_from_origin_like)
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| ADMIN_DASHBOARD_HOST_DEFAULT.to_string())
 }
 
 /// Extrahiert den Hostnamen aus einem Origin-/URL-artigen String (lowercased).
@@ -600,9 +596,7 @@ fn parse_url_hostname(candidate: &str) -> String {
 
 /// Dist-Wurzel des Dashboard-Builds (von `/analyse` und `/twitch/demo` geteilt).
 pub(crate) fn dist_root() -> PathBuf {
-    let base = std::env::var("DASHBOARD_V2_DIST_PATH")
-        .unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
-    PathBuf::from(base)
+    crate::operating_options::path(&crate::operating_options::options().dashboard_dist_path)
 }
 
 /// Dient eine Datei aus `dist/` mit strikter Pfad-Validierung.
@@ -635,7 +629,8 @@ async fn serve_asset_from_root(dist: PathBuf, raw_path: &str) -> Response {
             (header::CACHE_CONTROL, cache_control_for_asset(raw_path)),
         ],
         data,
-    ).into_response()
+    )
+        .into_response()
 }
 
 fn cache_control_for_asset(raw_path: &str) -> &'static str {
@@ -687,7 +682,10 @@ mod tests {
             cache_control_for_asset("assets/index-a1b2c3.js"),
             "public, max-age=31536000, immutable"
         );
-        assert_eq!(cache_control_for_asset("favicon.ico"), "public, max-age=3600");
+        assert_eq!(
+            cache_control_for_asset("favicon.ico"),
+            "public, max-age=3600"
+        );
     }
 
     #[test]
@@ -733,6 +731,7 @@ mod tests {
 
     #[test]
     fn admin_host_default_erkannt() {
+        let _config = crate::test_config::scope("");
         // Ohne gesetzte Env-Variablen entspricht der Default-Hostname dem
         // Literal aus der Python-Kandidatenkette.
         // Hinweis: setzt KEINE Env-Variablen, um andere Tests nicht zu
@@ -755,9 +754,13 @@ mod tests {
 
     #[test]
     fn nicht_admin_host_abgelehnt() {
+        let _config = crate::test_config::scope("");
         // Regulärer Nutzer-Host → kein Admin-Host.
         let mut user = HeaderMap::new();
-        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        user.insert(
+            header::HOST,
+            "deutsche-deadlock-community.de".parse().unwrap(),
+        );
         assert!(!is_admin_dashboard_host_request(&user));
 
         // Localhost → kein Admin-Host.
@@ -772,6 +775,7 @@ mod tests {
 
     #[test]
     fn gate_liefert_404_nur_auf_admin_host() {
+        let _config = crate::test_config::scope("");
         // Admin-Host → 404-Gate greift.
         let mut admin = HeaderMap::new();
         admin.insert(
@@ -784,27 +788,39 @@ mod tests {
 
         // Nutzer-Host → kein Gate, Request läuft weiter.
         let mut user = HeaderMap::new();
-        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        user.insert(
+            header::HOST,
+            "deutsche-deadlock-community.de".parse().unwrap(),
+        );
         assert!(admin_dashboard_host_page_gate(&user).is_none());
     }
 
     #[tokio::test]
     async fn asset_handler_setzt_cache_header() {
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("tb_spa_asset_test_{unique}"));
         let assets = root.join("assets");
         tokio::fs::create_dir_all(&assets).await.unwrap();
-        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');").await.unwrap();
+        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');")
+            .await
+            .unwrap();
 
         let resp = serve_asset_from_root(root.clone(), "assets/index-abc123.js").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static("public, max-age=31536000, immutable"))
+            Some(&HeaderValue::from_static(
+                "public, max-age=31536000, immutable"
+            ))
         );
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static("application/javascript; charset=utf-8"))
+            Some(&HeaderValue::from_static(
+                "application/javascript; charset=utf-8"
+            ))
         );
         let body = body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"console.log('ok');");

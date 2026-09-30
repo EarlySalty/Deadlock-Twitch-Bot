@@ -49,13 +49,11 @@ fn env_secret(keys: &[&str]) -> Option<String> {
 }
 
 fn public_url_from_env() -> Option<String> {
-    env_secret(&[
-        "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
-        "TWITCH_PUBLIC_URL",
-        "PUBLIC_URL",
-        "TWITCH_ADMIN_PUBLIC_URL",
-        "MASTER_DASHBOARD_PUBLIC_URL",
-    ])
+    let options = crate::operating_options::options();
+    options
+        .public_dashboard_url
+        .clone()
+        .or_else(|| options.admin_public_url.clone())
 }
 
 fn payload_from_body(body: &Bytes) -> serde_json::Value {
@@ -154,12 +152,12 @@ async fn run_gutschrift_job(
     month: Option<i32>,
     force: bool,
 ) -> Result<Vec<GenerateGutschriftResult>, GutschriftError> {
-    let email_sender = SmtpAffiliateEmailSender::from_secret_loader(env_secret);
+    let email_sender = SmtpAffiliateEmailSender::from_config_and_secret_loader(&crate::operating_options::options().affiliate_mail, env_secret);
     let sender_ref = email_sender
         .as_ref()
         .map(|sender| sender as &dyn AffiliateGutschriftEmailSender);
     let public_url = public_url_from_env();
-    let seller = AffiliateGutschriftSeller::from_secret_loader(env_secret, public_url.as_deref());
+    let seller = AffiliateGutschriftSeller::from_config(&crate::operating_options::options().affiliate_seller, public_url.as_deref());
 
     if let (Some(year), Some(month)) = (year, month) {
         return affiliate_gutschrift::generate_monthly_gutschriften(

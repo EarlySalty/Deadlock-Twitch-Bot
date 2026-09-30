@@ -41,9 +41,13 @@ fn non_empty_env(key: &str) -> Option<String> {
 pub fn demo_login_config_from_env() -> Option<DemoLoginConfig> {
     let username = non_empty_env("TWITCH_DEMO_LOGIN_USER")?;
     let password_hash = non_empty_env("TWITCH_DEMO_LOGIN_PASSWORD_HASH")?;
-    let twitch_user_id = non_empty_env("TWITCH_DEMO_LOGIN_TWITCH_USER_ID")?;
-    let display_name = non_empty_env("TWITCH_DEMO_LOGIN_DISPLAY_NAME").unwrap_or_default();
-    let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
+    let twitch_user_id = crate::operating_options::options()
+        .demo_login_twitch_user_id
+        .clone()?;
+    let display_name = crate::operating_options::options()
+        .demo_login_display_name
+        .clone();
+    let cookie_secure = !crate::operating_options::options().cookie_insecure;
     Some(DemoLoginConfig {
         username,
         password_hash,
@@ -536,17 +540,15 @@ mod route_tests {
         Some(pool)
     }
 
-    fn set_secrets() {
+    fn set_secrets() -> crate::test_config::Scope {
         std::env::set_var("TWITCH_DEMO_LOGIN_USER", TEST_USER);
         std::env::set_var("TWITCH_DEMO_LOGIN_PASSWORD_HASH", make_hash(&TEST_PASSWORD));
-        std::env::set_var("TWITCH_DEMO_LOGIN_TWITCH_USER_ID", TEST_USER_ID);
+        crate::test_config::scope(&format!("[dashboard.options]\ndemo_login_twitch_user_id=\"{TEST_USER_ID}\"\n"))
     }
 
     fn clear_secrets() {
         std::env::remove_var("TWITCH_DEMO_LOGIN_USER");
         std::env::remove_var("TWITCH_DEMO_LOGIN_PASSWORD_HASH");
-        std::env::remove_var("TWITCH_DEMO_LOGIN_TWITCH_USER_ID");
-        std::env::remove_var("TWITCH_DEMO_LOGIN_DISPLAY_NAME");
     }
 
     fn app(pool: PgPool, state: DashboardAuthState, max_requests: u32) -> Router {
@@ -590,6 +592,7 @@ mod route_tests {
 
     #[tokio::test]
     async fn ohne_secrets_get_und_post_404() {
+        let _config = crate::test_config::scope("");
         let Some(pool) = make_pool("t_demo_404").await else {
             return;
         };
@@ -616,7 +619,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state, 100)
@@ -642,7 +645,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state, 100)
@@ -659,7 +662,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
         let router = app(pool.clone(), state, 3);
 
@@ -688,7 +691,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state.clone(), 100)
@@ -718,7 +721,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let resp = app(pool.clone(), state.clone(), 100)
@@ -766,7 +769,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         sqlx::query("DELETE FROM twitch_partners")
             .execute(&pool)
             .await
@@ -803,7 +806,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         sqlx::query("DELETE FROM twitch_partners")
             .execute(&pool)
             .await
@@ -900,7 +903,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         sqlx::query("DELETE FROM twitch_partners")
             .execute(&pool)
             .await
@@ -938,7 +941,7 @@ mod route_tests {
             return;
         };
         let _guard = ENV_LOCK.lock().await;
-        set_secrets();
+        let _config = set_secrets();
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let mut permits = Vec::new();

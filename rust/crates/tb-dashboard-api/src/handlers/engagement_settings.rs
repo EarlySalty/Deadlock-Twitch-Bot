@@ -611,6 +611,8 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
+        sqlx::raw_sql(include_str!("../../../../migrations/20260918024500_smalltalk_candidate_state.sql"))
+            .execute(&db.pool).await.unwrap();
         sqlx::raw_sql("CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, cooldown_until TEXT)")
             .execute(&db.pool).await.unwrap();
         for existed in [false, true] {

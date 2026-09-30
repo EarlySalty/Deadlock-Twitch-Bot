@@ -604,14 +604,6 @@ struct LegalDocument {
     body: String,
 }
 
-fn legal_pages_storage_path() -> std::path::PathBuf {
-    std::env::var("TB_LEGAL_PAGES_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::path::PathBuf::from("data/admin_dashboard/legal_pages.json")
-        })
-}
-
 fn load_legal_page_document(slug: &str) -> Option<LegalDocument> {
     let title = legal_page_title(slug)?;
     let body = default_legal_page_body(slug)?;
@@ -620,7 +612,7 @@ fn load_legal_page_document(slug: &str) -> Option<LegalDocument> {
         body: body.to_string(),
     };
 
-    let Ok(raw) = std::fs::read_to_string(legal_pages_storage_path()) else {
+    let Ok(raw) = std::fs::read_to_string(super::admin_legal::legal_path()) else {
         return Some(document);
     };
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -670,13 +662,7 @@ fn render_legal_page(
 ) -> String {
     let footer_html = footer_links
         .iter()
-        .map(|(href, label)| {
-            format!(
-                "<a href='{}'>{}</a>",
-                escape_html(href),
-                escape_html(label)
-            )
-        })
+        .map(|(href, label)| format!("<a href='{}'>{}</a>", escape_html(href), escape_html(label)))
         .collect::<Vec<_>>()
         .join(" &nbsp;&middot;&nbsp; ");
     let robots_meta = if noindex {
@@ -844,9 +830,14 @@ impl LegalGateConfig {
                 .to_string()
         }
         Self {
-            site_key: read("TWITCH_LEGAL_TURNSTILE_SITE_KEY", "TURNSTILE_SITE_KEY"),
+            site_key: crate::operating_options::options()
+                .legal_turnstile_site_key
+                .clone(),
             secret_key: read("TWITCH_LEGAL_TURNSTILE_SECRET_KEY", "TURNSTILE_SECRET_KEY"),
-            cookie_secret: read("TWITCH_LEGAL_GATE_COOKIE_SECRET", "LEGAL_GATE_COOKIE_SECRET"),
+            cookie_secret: read(
+                "TWITCH_LEGAL_GATE_COOKIE_SECRET",
+                "LEGAL_GATE_COOKIE_SECRET",
+            ),
         }
     }
 
@@ -1128,11 +1119,7 @@ fn legal_gate_page_response(
     response
 }
 
-fn verified_gate_response(
-    headers: &HeaderMap,
-    next_path: &str,
-    cookie_secret: &str,
-) -> Response {
+fn verified_gate_response(headers: &HeaderMap, next_path: &str, cookie_secret: &str) -> Response {
     let gate_cookie = set_gate_cookie_header(headers, cookie_secret);
     let clear_csrf_cookie = clear_csrf_cookie_header(headers);
     let mut response = (StatusCode::FOUND, [(header::LOCATION, next_path)]).into_response();
@@ -1210,7 +1197,11 @@ async fn verify_turnstile_token(
         }
     };
 
-    if !result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         tracing::warn!(
             error_codes = ?result.get("error-codes"),
             "legal_verify: siteverify success=false"
@@ -1501,7 +1492,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            format!("{LEGAL_GATE_COOKIE_NAME}={forged}").parse().unwrap(),
+            format!("{LEGAL_GATE_COOKIE_NAME}={forged}")
+                .parse()
+                .unwrap(),
         );
         assert!(!gate_cookie_is_valid(&config, &headers));
     }
@@ -1532,8 +1525,7 @@ mod tests {
         let abgelaufen = csrf_token_value(secret, now_epoch_secs() - 1, &"ab".repeat(16));
         assert!(!csrf_token_is_valid(secret, &abgelaufen));
 
-        let mut manipuliert =
-            csrf_token_value(secret, now_epoch_secs() + 600, &"ab".repeat(16));
+        let mut manipuliert = csrf_token_value(secret, now_epoch_secs() + 600, &"ab".repeat(16));
         manipuliert.push('0');
         assert!(!csrf_token_is_valid(secret, &manipuliert));
 
@@ -1560,11 +1552,7 @@ mod tests {
 
     #[test]
     fn gate_formular_und_cookie_enthalten_csrf_schutz() {
-        let token = csrf_token_value(
-            "cookie-secret",
-            now_epoch_secs() + 600,
-            &"ab".repeat(16),
-        );
+        let token = csrf_token_value("cookie-secret", now_epoch_secs() + 600, &"ab".repeat(16));
         let gate = render_legal_gate_page("/twitch/agb", "SITE-KEY", &token);
         assert!(gate.contains("name='csrf_token'"));
         assert!(gate.contains(&format!("value='{token}'")));
@@ -1619,10 +1607,16 @@ mod tests {
     #[test]
     fn ua_blockliste_greift() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::USER_AGENT, "Mozilla/5.0 GPTBot/1.0".parse().unwrap());
+        headers.insert(
+            header::USER_AGENT,
+            "Mozilla/5.0 GPTBot/1.0".parse().unwrap(),
+        );
         assert!(is_blocked_legal_page_user_agent(&headers));
         let mut ok = HeaderMap::new();
-        ok.insert(header::USER_AGENT, "Mozilla/5.0 Firefox/127.0".parse().unwrap());
+        ok.insert(
+            header::USER_AGENT,
+            "Mozilla/5.0 Firefox/127.0".parse().unwrap(),
+        );
         assert!(!is_blocked_legal_page_user_agent(&ok));
     }
 
@@ -1636,6 +1630,7 @@ mod tests {
 
     #[test]
     fn defaults_fuer_alle_slugs_vorhanden() {
+        let _config = crate::test_config::scope("");
         for slug in ["impressum", "datenschutz", "agb", "sicherheit"] {
             let doc = load_legal_page_document(slug).expect("Dokument vorhanden");
             assert!(!doc.title.is_empty());
@@ -1752,10 +1747,40 @@ mod tests {
 
     #[test]
     fn sicherheit_render_ist_indexierbar_agb_nicht() {
+        let _config = crate::test_config::scope("");
         let doc = load_legal_page_document("sicherheit").unwrap();
         let public = render_legal_page(&doc.title, &doc.body, &[], false);
         assert!(!public.contains("noindex"));
         let gated = render_legal_page("AGB", "<p>x</p>", &[], true);
         assert!(gated.contains("<meta name='robots' content='noindex, nofollow'>"));
+    }
+}
+
+#[cfg(test)]
+mod shared_config_path_tests {
+    use super::*;
+    #[tokio::test]
+    async fn admin_writer_and_public_reader_use_the_same_configured_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("custom-legal.json");
+        let _config = crate::test_config::scope(&format!(
+            "[dashboard.options]\nlegal_pages_path='{}'\n",
+            target.display()
+        ));
+        let response = crate::handlers::admin_legal::save_handler(
+            crate::auth::level::DashboardAuthLevel::admin(),
+            axum::extract::Path("impressum".into()),
+            axum::body::Bytes::from_static(
+                br#"{"title":"Synthetischer Titel","body":"<p>Synthetischer Inhalt</p>"}"#,
+            ),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let document = load_legal_page_document("impressum").unwrap();
+        assert_eq!(document.title, "Synthetischer Titel");
+        assert_eq!(document.body, "<p>Synthetischer Inhalt</p>");
+        assert!(target.is_file());
     }
 }

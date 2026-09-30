@@ -79,7 +79,7 @@ struct AffiliateAccount {
 pub fn affiliate_oauth_config_from_env() -> Option<AffiliateOAuthConfig> {
     let client_id = non_empty_env(&["TWITCH_CLIENT_ID"])?;
     let client_secret = non_empty_env(&["TWITCH_CLIENT_SECRET"])?;
-    let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
+    let cookie_secure = !crate::operating_options::options().cookie_insecure;
     let client =
         crate::auth::oauth_login::HelixOAuthClient::new(&client_id, &client_secret).ok()?;
     Some(AffiliateOAuthConfig {
@@ -1118,7 +1118,10 @@ fn build_stripe_connect_authorize_url(client_id: &str, redirect_uri: &str, state
 }
 
 fn affiliate_auth_redirect_uri() -> String {
-    if let Some(uri) = non_empty_env(&["TWITCH_AFFILIATE_AUTH_REDIRECT_URI"]) {
+    if let Some(uri) = crate::operating_options::options()
+        .affiliate_oauth_redirect_uri
+        .clone()
+    {
         return uri;
     }
     format!("{}{}", public_origin(), SHARED_TWITCH_CALLBACK_PATH)
@@ -1129,13 +1132,11 @@ fn affiliate_stripe_redirect_uri() -> String {
 }
 
 fn public_origin() -> String {
-    non_empty_env(&[
-        "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
-        "TWITCH_PUBLIC_URL",
-        "PUBLIC_URL",
-    ])
-    .and_then(|value| origin_from_urlish(&value))
-    .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
+    crate::operating_options::options()
+        .public_dashboard_url
+        .as_deref()
+        .and_then(origin_from_urlish)
+        .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
 }
 
 fn origin_from_urlish(raw: &str) -> Option<String> {
@@ -1203,7 +1204,7 @@ fn cookie_secure(headers: &HeaderMap, config: Option<&AffiliateOAuthConfig>) -> 
     if let Some(config) = config {
         return config.cookie_secure;
     }
-    if std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() == Ok("1") {
+    if crate::operating_options::options().cookie_insecure {
         return false;
     }
     header_first(headers, "x-forwarded-proto")
@@ -1310,43 +1311,12 @@ mod tests {
     use axum::http::Request;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
-    use std::sync::Mutex;
     use tb_transport_twitch::user_token::UserTokenError;
     use tower::ServiceExt;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct EnvGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self { key, previous }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::remove_var(key);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-
     #[derive(Clone)]
     struct FakeOAuth {
         identity: TwitchIdentity,
@@ -1601,18 +1571,8 @@ mod tests {
     }
 
     #[test]
-    fn redirect_uri_nutzt_secret_und_public_url_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let _auth = EnvGuard::set(
-            "TWITCH_AFFILIATE_AUTH_REDIRECT_URI",
-            "https://auth.example.test/custom/callback",
-        );
-        let _public = EnvGuard::set(
-            "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
-            "https://public.example.test",
-        );
-        let _legacy_public = EnvGuard::remove("TWITCH_PUBLIC_URL");
-        let _generic_public = EnvGuard::remove("PUBLIC_URL");
+    fn redirect_uri_nutzt_explizite_toml_adressen() {
+        let _config = crate::test_config::scope("[dashboard.options]\naffiliate_oauth_redirect_uri='https://auth.example.test/custom/callback'\npublic_dashboard_url='https://public.example.test'\n");
 
         assert_eq!(
             affiliate_auth_redirect_uri(),
@@ -1626,12 +1586,7 @@ mod tests {
 
     #[test]
     fn redirect_uri_fallback_ignoriert_request_host() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let _auth = EnvGuard::remove("TWITCH_AFFILIATE_AUTH_REDIRECT_URI");
-        let _public_dashboard = EnvGuard::remove("TWITCH_PUBLIC_DASHBOARD_BASE_URL");
-        let _legacy_public = EnvGuard::remove("TWITCH_PUBLIC_URL");
-        let _generic_public = EnvGuard::remove("PUBLIC_URL");
-
+        let _config = crate::test_config::scope("");
         assert_eq!(
             affiliate_auth_redirect_uri(),
             "https://deutsche-deadlock-community.de/callback/twitch"
@@ -2428,7 +2383,9 @@ mod tests {
         insert_claim(&pool, "aff_old", "stale_slot", &old_claimed_at).await;
         for login in ["aff_one", "missing"] {
             assert_eq!(
-                claim_streamer(&pool, login, "fresh_streamer").await.unwrap(),
+                claim_streamer(&pool, login, "fresh_streamer")
+                    .await
+                    .unwrap(),
                 ClaimStatus::AffiliateInactive
             );
             assert_eq!(
@@ -2492,16 +2449,20 @@ mod tests {
             .await
             .unwrap();
         let other_pool = pool.clone();
-        let mut claim = tokio::spawn(async move {
-            claim_streamer(&other_pool, "aff_one", "fresh_streamer").await
-        });
+        let mut claim =
+            tokio::spawn(
+                async move { claim_streamer(&other_pool, "aff_one", "fresh_streamer").await },
+            );
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(100), &mut claim)
                 .await
                 .is_err()
         );
         deactivation.commit().await.unwrap();
-        assert_eq!(claim.await.unwrap().unwrap(), ClaimStatus::AffiliateInactive);
+        assert_eq!(
+            claim.await.unwrap().unwrap(),
+            ClaimStatus::AffiliateInactive
+        );
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_streamer_claims")
             .fetch_one(&pool)
             .await

@@ -22,7 +22,6 @@ use std::path::PathBuf;
 
 /// Default-Dist-Pfad der öffentlichen Website (relativ zum Service-WorkingDir =
 /// Repo-Root). Python: `WEBSITE_DIST_ROOT_PATH = .../website/dist`.
-const DEFAULT_WEBSITE_DIST_PATH: &str = "website/dist";
 
 /// Kanonischer Basis-Pfad der öffentlichen Website.
 const PUBLIC_WEBSITE_BASE_PATH: &str = "/streamer";
@@ -79,9 +78,7 @@ fn with_query(location: String, uri: &Uri) -> String {
 }
 
 pub(crate) fn website_dist_root() -> PathBuf {
-    let base = std::env::var("WEBSITE_DIST_PATH")
-        .unwrap_or_else(|_| DEFAULT_WEBSITE_DIST_PATH.to_string());
-    PathBuf::from(base)
+    crate::operating_options::path(&crate::operating_options::options().website_dist_path)
 }
 
 /// Löst eine Datei aus `website/dist` mit strikter Pfad-Validierung auf.
@@ -156,7 +153,10 @@ mod tests {
             "/streamer/foo?ref=x&y=1"
         );
         let no_q: Uri = "/website/foo".parse().unwrap();
-        assert_eq!(with_query("/streamer/foo".to_string(), &no_q), "/streamer/foo");
+        assert_eq!(
+            with_query("/streamer/foo".to_string(), &no_q),
+            "/streamer/foo"
+        );
     }
 
     #[tokio::test]

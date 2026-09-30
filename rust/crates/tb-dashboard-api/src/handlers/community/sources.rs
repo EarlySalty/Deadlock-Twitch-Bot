@@ -72,8 +72,7 @@ pub async fn player_profile(discord_id: &str) -> PlayerProfile {
         let _ = expires; return value.clone();
     }
     let _permit = LIMIT.get_or_init(|| Semaphore::new(4)).acquire().await.expect("community semaphore open");
-    let rank_url = std::env::var("STEAM_BOT_RANK_URL").ok().filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "http://127.0.0.1:8783/rank".into());
+    let rank_url = crate::operating_options::options().steam_rank_url.clone();
     let base = rank_url.trim_end_matches('/').strip_suffix("/rank").unwrap_or(rank_url.trim_end_matches('/'));
     let matches_url = format!("{base}/player-matches");
     let rank_fetch = async { client().get(&rank_url).query(&[("discord_id",discord_id)]).send().await?.error_for_status()?.json::<Rank>().await };

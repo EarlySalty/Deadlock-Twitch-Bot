@@ -26,8 +26,6 @@ use tokio::sync::Notify;
 use crate::auth::level::DashboardAuthLevel;
 use crate::handlers::spa;
 
-const DEFAULT_STEAM_BOT_BASE_URL: &str = "http://127.0.0.1:8783";
-const DEFAULT_DEADLOCK_ASSETS_BASE: &str = "https://assets.deadlock-api.com";
 const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(30);
 const STEAM_BOT_TIMEOUT: Duration = Duration::from_secs(8);
 const HERO_ASSETS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -229,11 +227,11 @@ fn lock_cache<T>(cache: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn deadlock_assets_base_url() -> String {
-    std::env::var("DEADLOCK_ASSETS_BASE")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_DEADLOCK_ASSETS_BASE.to_string())
+    crate::operating_options::options()
+        .deadlock_assets_base_url
+        .trim()
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Hero-Name → Icon-URL aus der öffentlichen Deadlock-Assets-API, mit langem
@@ -570,17 +568,13 @@ fn steam_bot_url(path: &str) -> String {
 }
 
 fn steam_bot_base_url() -> String {
-    std::env::var("STEAM_BOT_RANK_URL")
-        .ok()
-        .and_then(|value| {
-            let trimmed = value.trim().trim_end_matches('/');
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(strip_endpoint_suffix(trimmed).to_string())
-            }
-        })
-        .unwrap_or_else(|| DEFAULT_STEAM_BOT_BASE_URL.to_string())
+    strip_endpoint_suffix(
+        crate::operating_options::options()
+            .steam_rank_url
+            .trim()
+            .trim_end_matches('/'),
+    )
+    .to_string()
 }
 
 fn strip_endpoint_suffix(value: &str) -> &str {

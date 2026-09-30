@@ -27,7 +27,6 @@ use serde_json::{json, Value};
 use crate::handlers::spa;
 
 /// Default-Origin, die das Demo einbetten darf (Python-Default).
-const DEFAULT_DEMO_EMBED_ORIGIN: &str = "https://deutsche-deadlock-community.de";
 
 /// Demo-Streamer-Login, der durchgängig in den Payloads erscheint.
 const DEMO_LOGIN: &str = "midcore_live";
@@ -41,11 +40,12 @@ const DEMO_RUNTIME_SCRIPT: &str = concat!(
 
 /// CSP-Header-Wert für die Demo-Seiten (erlaubt Embedding durch die Community).
 fn demo_csp_value() -> String {
-    let origins = std::env::var("TWITCH_DEMO_EMBED_ORIGINS")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_DEMO_EMBED_ORIGIN.to_string());
-    format!("frame-ancestors 'self' {}", origins.trim())
+    format!(
+        "frame-ancestors 'self' {}",
+        crate::operating_options::options()
+            .demo_embed_origins
+            .join(" ")
+    )
 }
 
 /// Fügt den Demo-CSP-Header an eine Response an (Embedding statt X-Frame DENY).
@@ -1160,7 +1160,10 @@ pub fn build_demo_router() -> Router {
     Router::new()
         .route("/twitch/demo", get(demo_index_handler))
         .route("/twitch/demo/", get(demo_index_handler))
-        .route("/twitch/demo/dashboard-v2/{*path}", get(demo_assets_handler))
+        .route(
+            "/twitch/demo/dashboard-v2/{*path}",
+            get(demo_assets_handler),
+        )
         .route("/twitch/demo/api/v2/auth-status", get(demo_auth_status))
         .route("/twitch/demo/api/v2/streamers", get(demo_streamers))
         .route("/twitch/demo/api/v2/overview", get(demo_overview))
@@ -1853,6 +1856,7 @@ mod tests {
 
     #[tokio::test]
     async fn index_setzt_demo_csp() {
+        let _config = crate::test_config::scope("");
         let app = build_demo_router();
         let resp = app
             .oneshot(

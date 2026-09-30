@@ -132,8 +132,7 @@ pub async fn portal_handler(
         }));
     }
 
-    let ref_code = std::env::var("TWITCH_DISCORD_REF_CODE")
-        .unwrap_or_else(|_| "DE-Deadlock-Discord".to_string());
+    let ref_code = crate::operating_options::options().discord_ref_code.clone();
     let referral_url = if ref_code.trim().is_empty() {
         format!("https://www.twitch.tv/{login}")
     } else {
@@ -534,27 +533,8 @@ mod tests {
     // P1.26: Portal-HTML-Seite wird nativ aus dem website-dist-Verzeichnis serviert.
     #[tokio::test]
     async fn portal_page_serviert_html() {
+        let _config = crate::test_config::scope("");
         use std::time::{SystemTime, UNIX_EPOCH};
-        struct EnvGuard {
-            key: &'static str,
-            previous: Option<String>,
-        }
-        impl EnvGuard {
-            fn set_path(key: &'static str, value: &std::path::Path) -> Self {
-                let previous = std::env::var(key).ok();
-                std::env::set_var(key, value);
-                Self { key, previous }
-            }
-        }
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                match self.previous.as_ref() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -565,7 +545,7 @@ mod tests {
         tokio::fs::write(portal_root.join("index.html"), b"<html>portal</html>")
             .await
             .unwrap();
-        let _guard = EnvGuard::set_path("WEBSITE_DIST_PATH", &root);
+        let _config = crate::test_config::scope(&format!("[dashboard.options]\nwebsite_dist_path=\"{}\"\n", root.display()));
 
         let res = portal_page_handler().await;
         assert_eq!(res.status(), StatusCode::OK);

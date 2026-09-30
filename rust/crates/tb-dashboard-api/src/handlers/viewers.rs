@@ -1241,6 +1241,7 @@ mod tests {
     // ── Reine Logik: Self- + Bot-Exklusionsliste ────────────────────────────
     #[test]
     fn exclusion_list_enthaelt_streamer_und_bots() {
+        let _config = crate::test_config::scope("");
         let logins = viewer_exclusion_logins_from_dynamic("MyStreamer", &[]);
         assert!(
             logins.contains(&"mystreamer".to_string()),
@@ -1254,6 +1255,7 @@ mod tests {
 
     #[test]
     fn exclusion_list_kein_doppelter_streamer() {
+        let _config = crate::test_config::scope("");
         // Streamer-Login der zufällig ein bekannter Bot ist → nicht doppelt.
         let logins = viewer_exclusion_logins_from_dynamic("nightbot", &[]);
         let count = logins.iter().filter(|l| *l == "nightbot").count();
@@ -1262,6 +1264,7 @@ mod tests {
 
     #[test]
     fn exclusion_list_leerer_streamer_nur_bots() {
+        let _config = crate::test_config::scope("");
         let logins = viewer_exclusion_logins_from_dynamic("", &[]);
         assert!(
             !logins.iter().any(|l| l.is_empty()),

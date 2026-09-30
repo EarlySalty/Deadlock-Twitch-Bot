@@ -9,13 +9,7 @@ use std::sync::OnceLock;
 use tb_knowledge::{ist_oeffentlich, KnowledgeBase, Namespace};
 
 fn knowledge_dir() -> PathBuf {
-    match std::env::var("KNOWLEDGE_DIR")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-    {
-        Some(p) => PathBuf::from(p),
-        None => PathBuf::from("rust/knowledge"),
-    }
+    crate::operating_options::path(&crate::operating_options::settings().knowledge.directory)
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
@@ -306,7 +300,10 @@ mod tests {
     /// Struktur nicht anfassen.
     #[test]
     fn branding_laesst_die_struktur_unangetastet() {
-        let html = page("Bot-Befehle", "<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>");
+        let html = page(
+            "Bot-Befehle",
+            "<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>",
+        );
 
         assert!(html.contains("<h1>Bot-Befehle</h1>"));
         assert!(html.contains("<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>"));

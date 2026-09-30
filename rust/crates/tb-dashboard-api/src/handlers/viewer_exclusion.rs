@@ -2,20 +2,6 @@ use sqlx::PgPool;
 
 use tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS;
 
-const DYNAMIC_BOT_LOGIN_ENV_KEYS: &[&str] = &[
-    "TWITCH_BOT_LOGIN",
-    "TWITCH_BOT_NAME",
-    "TWITCH_CHAT_BOT_LOGIN",
-    "TWITCH_RAID_BOT_LOGIN",
-    "TWITCH_VIEWER_EXCLUDED_BOT_LOGINS",
-];
-
-const DYNAMIC_BOT_USER_ID_ENV_KEYS: &[&str] = &[
-    "TWITCH_BOT_USER_ID",
-    "TWITCH_CHAT_BOT_USER_ID",
-    "TWITCH_RAID_BOT_USER_ID",
-];
-
 pub(crate) fn push_normalized_login(logins: &mut Vec<String>, raw: &str) {
     for part in raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
         let login = part.trim().trim_start_matches('@').to_lowercase();
@@ -27,24 +13,18 @@ pub(crate) fn push_normalized_login(logins: &mut Vec<String>, raw: &str) {
 
 fn dynamic_bot_logins_from_env() -> Vec<String> {
     let mut logins = Vec::new();
-    for key in DYNAMIC_BOT_LOGIN_ENV_KEYS {
-        if let Ok(value) = std::env::var(key) {
-            push_normalized_login(&mut logins, &value);
-        }
+    for value in &crate::operating_options::options().excluded_bot_logins {
+        push_normalized_login(&mut logins, value);
     }
     logins
 }
 
 fn dynamic_bot_user_ids_from_env() -> Vec<String> {
-    let mut ids = Vec::new();
-    for key in DYNAMIC_BOT_USER_ID_ENV_KEYS {
-        if let Ok(value) = std::env::var(key) {
-            for part in value.split(|c: char| c == ',' || c == ';' || c.is_whitespace()) {
-                let id = part.trim().to_string();
-                if !id.is_empty() && !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
+    let settings = crate::operating_options::settings();
+    let mut ids = vec![settings.twitch.bot_user_id.clone()];
+    for id in &settings.dashboard.options.additional_bot_user_ids {
+        if !ids.contains(id) {
+            ids.push(id.clone());
         }
     }
     ids

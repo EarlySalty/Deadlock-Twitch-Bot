@@ -237,8 +237,10 @@ async fn set_channel_title(pool: &PgPool, user_id: &str, title: &str) -> Result<
     if client_id.trim().is_empty() {
         return Err(TitleSetError::ClientUnavailable);
     }
-    let base = std::env::var("TWITCH_HELIX_BASE_URL")
-        .unwrap_or_else(|_| "https://api.twitch.tv/helix".to_string());
+    let base = crate::operating_options::options()
+        .helix_base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.twitch.tv/helix".to_string());
     let response = reqwest::Client::new()
         .patch(format!("{}/channels", base.trim_end_matches('/')))
         .query(&[("broadcaster_id", user_id)])

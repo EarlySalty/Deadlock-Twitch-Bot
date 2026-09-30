@@ -342,8 +342,10 @@ async fn callback_handler_inner(
     };
 
     if login_state.next_path == tb_chat::player_links::CONNECT_PATH {
-        return no_store(clear_context_and_respond(config.cookie_secure,
-            super::player_connect::complete_twitch_login(&state, &config, identity).await));
+        return no_store(clear_context_and_respond(
+            config.cookie_secure,
+            super::player_connect::complete_twitch_login(&state, &config, identity).await,
+        ));
     }
 
     // Partner-Gate (Python _is_partner_allowed). Kein Partner → 403, KEINE Session.
@@ -791,7 +793,9 @@ fn no_store(mut response: Response) -> Response {
 pub fn oauth_login_config_from_env() -> Option<OAuthLoginConfig> {
     let client_id = non_empty_env("TWITCH_CLIENT_ID")?;
     let client_secret = non_empty_env("TWITCH_CLIENT_SECRET")?;
-    let redirect_uri = non_empty_env("TWITCH_DASHBOARD_AUTH_REDIRECT_URI")?;
+    let redirect_uri = crate::operating_options::options()
+        .oauth_redirect_uri
+        .clone()?;
     // P2.137: Redirect-URI härten, BEVOR sie in die Authorize-URL fließt. Eine
     // verseuchte/falsch konfigurierte URI (fremder Host, userinfo, der RAID-
     // reservierte Callback) darf den nativen Login NICHT aktivieren — sonst
@@ -804,7 +808,7 @@ pub fn oauth_login_config_from_env() -> Option<OAuthLoginConfig> {
         return None;
     }
     // Secure-Cookies in Prod (HTTPS hinter dem Proxy); lokal abschaltbar.
-    let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
+    let cookie_secure = !crate::operating_options::options().cookie_insecure;
 
     let client =
         crate::auth::oauth_login::HelixOAuthClient::new(&client_id, &client_secret).ok()?;
@@ -838,12 +842,9 @@ fn raid_oauth_callback_config_from_env() -> Option<RaidOAuthCallbackConfig> {
 }
 
 fn worker_internal_base_url() -> String {
-    if let Some(explicit) = non_empty_env("TWITCH_INTERNAL_API_BASE_URL") {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    let host = non_empty_env("TWITCH_INTERNAL_API_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = non_empty_env("TWITCH_INTERNAL_API_PORT").unwrap_or_else(|| "8776".to_string());
-    format!("http://{host}:{port}")
+    crate::operating_options::settings()
+        .internal_api
+        .client_base_url()
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -968,6 +969,7 @@ mod tests {
 
     #[tokio::test]
     async fn logout_vom_admin_host_redirectet_zur_admin_login_und_loescht_cookies() {
+        let _config = crate::test_config::scope("");
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::HOST,

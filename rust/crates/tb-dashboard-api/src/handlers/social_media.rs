@@ -61,13 +61,13 @@ use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
     is_partner_granted, list_partner_access, set_partner_access,
 };
-use tb_social_media::preview::{get_preview, request_preview, PREVIEW_READY};
 use tb_social_media::posting_plan::{
     berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
     load_streamer_settings, save_category_setting, save_platform_schedule, save_streamer_settings,
     verfuegbare_clips, ApprovalMode, CategoryOption, PlatformSchedule, PoolForecast,
     StreamerSettings, PLATFORMS,
 };
+use tb_social_media::preview::{get_preview, request_preview, PREVIEW_READY};
 use tb_social_media::rendering::{render_privacy, render_terms};
 use tb_social_media::report_writer::SocialMediaReportWriter;
 use tb_social_media::retention::mark_clip_discarded;
@@ -3418,10 +3418,9 @@ fn vod_archive_json(s: &VodArchiveSettings) -> Value {
 /// auf `private` zurueck. Nach bestandenem Audit `YOUTUBE_AUDIT_PASSED=1`
 /// setzen, dann ist die Sichtbarkeit im Dashboard waehlbar.
 fn privacy_forced() -> bool {
-    !matches!(
-        std::env::var("YOUTUBE_AUDIT_PASSED").as_deref(),
-        Ok("1") | Ok("true")
-    )
+    !crate::operating_options::settings()
+        .media
+        .youtube_audit_passed
 }
 
 /// `privacy_forced` sagt der Oberfläche, dass YouTube ohne auditiertes
@@ -3509,11 +3508,12 @@ pub async fn vod_archive_put_handler(
 /// Request-Header-Ableitung — gleicher Effekt: die bei den Plattformen
 /// registrierte Callback-Basis.)
 fn oauth_public_origin() -> String {
-    std::env::var("SOCIAL_MEDIA_PUBLIC_ORIGIN")
-        .ok()
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://admin.deutsche-deadlock-community.de".to_string())
+    crate::operating_options::settings()
+        .media
+        .social_media_public_origin
+        .trim()
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Internes Dashboard-Redirect-Ziel (Python `_dashboard_url`).
@@ -3826,7 +3826,11 @@ pub async fn preview_request_handler(
         Err(e) => return e,
     };
     if request_preview(&pool, child).await.is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db" })),
+        )
+            .into_response();
     }
     Json(json!({ "clip_db_id": clip_db_id, "status": "pending" })).into_response()
 }
@@ -3881,11 +3885,18 @@ pub async fn preview_file_handler(
         Ok(b) => b,
         Err(_) => return preview_not_ready(),
     };
-    serve_mp4_range(bytes, headers.get(header::RANGE).and_then(|v| v.to_str().ok()))
+    serve_mp4_range(
+        bytes,
+        headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+    )
 }
 
 fn preview_not_ready() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "preview_not_ready" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "preview_not_ready" })),
+    )
+        .into_response()
 }
 
 fn parse_range(range: &str, len: u64) -> Option<(u64, u64)> {

@@ -62,12 +62,9 @@ fn nonempty_env(key: &str) -> Option<String> {
 }
 
 fn worker_internal_base_url() -> String {
-    if let Some(explicit) = nonempty_env("TWITCH_INTERNAL_API_BASE_URL") {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    let host = nonempty_env("TWITCH_INTERNAL_API_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = nonempty_env("TWITCH_INTERNAL_API_PORT").unwrap_or_else(|| "8776".to_string());
-    format!("http://{host}:{port}")
+    crate::operating_options::settings()
+        .internal_api
+        .client_base_url()
 }
 
 async fn proxy_for_owned_verdict(

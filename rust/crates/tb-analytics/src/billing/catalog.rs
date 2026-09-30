@@ -97,7 +97,8 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
         name: "Netzwerk Free",
         tier: "free",
         badge: "free",
-        description: "Dauerhaft kostenlos: Auto-Raid, Chat-Schutz und die Tagesform deines letzten Streams.",
+        description:
+            "Dauerhaft kostenlos: Auto-Raid, Chat-Schutz und die Tagesform deines letzten Streams.",
         monthly_gross_cents: 0,
         yearly_gross_cents: 0,
         recommended: false,
@@ -167,7 +168,7 @@ pub const BILLING_PLANS: &[BillingPlan] = &[
 /// ist die Liste **leer**: die alten Netto-Preise (1,99 / 3,49 / 4,99) duerfen
 /// nicht mehr gebucht werden, und fuer Free/Plus/Pro sind die Stripe-Preise noch
 /// nicht angelegt. Bis dahin liefert der Vault-Override
-/// (`STRIPE_PRICE_ID_MAP`) die IDs; ohne Eintrag meldet der Checkout sauber
+/// (dashboard.options.stripe_price_ids) die IDs; ohne Eintrag meldet der Checkout sauber
 /// `missing_stripe_price_id`. `(plan_id, &[(cycle, price_id)])`.
 pub const PRICE_ID_DEFAULTS: &[(&str, &[(u32, &str)])] = &[];
 
@@ -428,13 +429,7 @@ pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
 // Port von `billing_mixin.py:_billing_price_id_map`/`_billing_product_id_map` +
 // `billing_plans.py:billing_parse_*_mapping`/`billing_merge_*_defaults`.
 //
-// Die Maps stammen aus den Env-/Infisical-Variablen `STRIPE_PRICE_ID_MAP` /
-// `STRIPE_PRODUCT_ID_MAP` (Alias `TWITCH_BILLING_STRIPE_*`, erster nicht-leerer
-// gewinnt) und werden über die eingecheckten Defaults gelegt. **Price-IDs:**
-// Code-Defaults gewinnen für bekannte Pläne; das Vault kann nur NEUE (noch nicht
-// eingecheckte) Pläne ergänzen. **Product-IDs:** Vault gewinnt (Python
-// `result.update(mapping)`). Das sind keine Secrets, daher Plaintext-Env zulässig
-// (Direktive: Secrets read-only aus Infisical/Env; hier nur ID-Strings).
+// Die Zuordnungen stammen aus der validierten TOML; Zugangsdaten bleiben getrennt.
 //
 // Schreib-Rückweg (Python `_billing_set_*_map` via Keyring) liegt im
 // Sync-Handler (anderes Crate) und ist Folge-Wiring (siehe WIRING-TODO).
@@ -443,19 +438,6 @@ pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
 type PriceMap = Vec<(String, Vec<(u32, String)>)>;
 /// Geparste Product-Map: `(plan_id, product_id)`.
 type ProductMap = Vec<(String, String)>;
-
-/// Liest die erste nicht-leere Env-Variable aus `keys` (getrimmt).
-fn first_env(keys: &[&str]) -> String {
-    for key in keys {
-        if let Ok(value) = std::env::var(key) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-    }
-    String::new()
-}
 
 /// Parst eine JSON-Price-Map (`{"plan":{"1":"price_x","12":"price_y"}}`).
 ///
@@ -532,8 +514,12 @@ fn parse_cycle_key(raw: &str) -> Option<u32> {
 /// Reihenfolge (Python `_billing_price_id_for_plan` + `billing_merge_price_id_defaults`):
 /// eingecheckter Default gewinnt für bekannte Pläne; nur für Pläne OHNE
 /// eingecheckten Default greift die übergebene Vault-Map. `vault_price_map` kommt
-/// aus [`parse_price_id_mapping`]; in Produktion via [`price_id_map_from_env`].
-pub fn resolved_price_id(plan_id: &str, cycle_months: u32, vault_price_map: &PriceMap) -> Option<String> {
+/// aus [`parse_price_id_mapping`]; in Produktion via [`price_id_map_from_config`].
+pub fn resolved_price_id(
+    plan_id: &str,
+    cycle_months: u32,
+    vault_price_map: &PriceMap,
+) -> Option<String> {
     let cycle = normalize_billing_cycle(cycle_months);
     if let Some(default) = price_id_default(plan_id, cycle) {
         return Some(default.to_string());
@@ -555,22 +541,49 @@ pub fn resolved_product_id(plan_id: &str, vault_product_map: &ProductMap) -> Opt
     product_id_default(plan_id).map(str::to_string)
 }
 
-/// Liest die Price-Map aus der Umgebung (`STRIPE_PRICE_ID_MAP`, Alias
-/// `TWITCH_BILLING_STRIPE_PRICE_ID_MAP`) und parst sie.
-pub fn price_id_map_from_env() -> PriceMap {
-    parse_price_id_mapping(&first_env(&[
-        "STRIPE_PRICE_ID_MAP",
-        "TWITCH_BILLING_STRIPE_PRICE_ID_MAP",
-    ]))
+/// Liest die geprüfte Price-ID-Zuordnung aus der aktiven TOML.
+pub fn price_id_map_from_config(
+    options: &tb_config::dashboard_options::DashboardOptions,
+) -> PriceMap {
+    options
+        .stripe_price_ids
+        .iter()
+        .map(|(plan, cycles)| {
+            (
+                plan.clone(),
+                cycles
+                    .cycles()
+                    .map(|(cycle, id)| (cycle, id.trim().to_owned()))
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
-/// Liest die Product-Map aus der Umgebung (`STRIPE_PRODUCT_ID_MAP`, Alias
-/// `TWITCH_BILLING_STRIPE_PRODUCT_ID_MAP`) und parst sie.
-pub fn product_id_map_from_env() -> ProductMap {
-    parse_product_id_mapping(&first_env(&[
-        "STRIPE_PRODUCT_ID_MAP",
-        "TWITCH_BILLING_STRIPE_PRODUCT_ID_MAP",
-    ]))
+/// Liest die geprüfte Product-ID-Zuordnung aus der aktiven TOML.
+pub fn product_id_map_from_config(
+    options: &tb_config::dashboard_options::DashboardOptions,
+) -> ProductMap {
+    options
+        .stripe_product_ids
+        .iter()
+        .map(|(plan, id)| (plan.clone(), id.trim().to_owned()))
+        .collect()
+}
+
+/// Nur tatsächlich buchbare kostenpflichtige Pläne benötigen beide Price-IDs.
+pub fn configured_price_map_ready(
+    options: &tb_config::dashboard_options::DashboardOptions,
+) -> bool {
+    let prices = price_id_map_from_config(options);
+    BILLING_PLANS
+        .iter()
+        .filter(|plan| plan.buchbar && is_paid_plan_id(plan.id))
+        .all(|plan| {
+            [1, 12]
+                .into_iter()
+                .all(|cycle| resolved_price_id(plan.id, cycle, &prices).is_some())
+        })
 }
 
 #[cfg(test)]
@@ -590,7 +603,11 @@ mod tests {
         for (plan, exp) in BILLING_PLANS.iter().zip(EXPECTED.iter()) {
             assert_eq!(plan.id, exp.0, "Reihenfolge der Plan-IDs");
             assert_eq!(plan.name, exp.1, "Name fuer {}", exp.0);
-            assert_eq!(plan.monthly_gross_cents, exp.2, "Monatspreis fuer {}", exp.0);
+            assert_eq!(
+                plan.monthly_gross_cents, exp.2,
+                "Monatspreis fuer {}",
+                exp.0
+            );
             assert_eq!(plan.yearly_gross_cents, exp.3, "Jahrespreis fuer {}", exp.0);
             assert_eq!(plan.tier, exp.4, "tier fuer {}", exp.0);
             // Kein Empfohlen-Badge (Spec M6).
@@ -744,7 +761,10 @@ mod tests {
             "bundle_komplett",
             "analytics_trial",
         ] {
-            assert!(find_plan(alt).is_none(), "{alt} darf nicht im Katalog stehen");
+            assert!(
+                find_plan(alt).is_none(),
+                "{alt} darf nicht im Katalog stehen"
+            );
         }
     }
 
@@ -853,8 +873,14 @@ mod tests {
     fn katalog_json_zeigt_keine_netto_felder_und_keine_bundles() {
         for cycle in [1u32, 12u32] {
             let raw = catalog_json(cycle).to_string();
-            assert!(!raw.contains("net_cents"), "Netto-Feld im Katalog ({cycle}m)");
-            assert!(!raw.contains("net_label"), "Netto-Label im Katalog ({cycle}m)");
+            assert!(
+                !raw.contains("net_cents"),
+                "Netto-Feld im Katalog ({cycle}m)"
+            );
+            assert!(
+                !raw.contains("net_label"),
+                "Netto-Label im Katalog ({cycle}m)"
+            );
             assert!(!raw.contains("bundle"), "Bundle im Katalog ({cycle}m)");
             assert!(!raw.contains("1,99"), "1,99 im Katalog ({cycle}m)");
         }
@@ -886,9 +912,8 @@ mod tests {
     /// Stufen; das ist der einzige Weg, bis die Stripe-Preise angelegt sind.
     #[test]
     fn resolved_price_id_kommt_aus_dem_vault() {
-        let vault = parse_price_id_mapping(
-            r#"{"plus": {"1": "price_plus_1m", "12": "price_plus_12m"}}"#,
-        );
+        let vault =
+            parse_price_id_mapping(r#"{"plus": {"1": "price_plus_1m", "12": "price_plus_12m"}}"#);
         assert_eq!(
             resolved_price_id("plus", 1, &vault).as_deref(),
             Some("price_plus_1m")
@@ -925,7 +950,8 @@ mod tests {
             let mut sorted = plan.entitlements.to_vec();
             sorted.sort_unstable();
             assert_eq!(
-                plan.entitlements, &sorted[..],
+                plan.entitlements,
+                &sorted[..],
                 "entitlements fuer {} muessen sortiert sein",
                 plan.id
             );
