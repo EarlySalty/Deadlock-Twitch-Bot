@@ -10,6 +10,7 @@
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use sqlx::{PgPool, Row};
+use tb_crypto::FieldCipher;
 
 use crate::error::VodArchiveError;
 
@@ -227,7 +228,11 @@ pub async fn setze_teile(
     Ok(())
 }
 
-pub async fn teile(pool: &PgPool, vod_id: i64) -> Result<Vec<Teil>, VodArchiveError> {
+pub async fn teile(
+    pool: &PgPool,
+    vod_id: i64,
+    cipher: &FieldCipher,
+) -> Result<Vec<Teil>, VodArchiveError> {
     let rows = sqlx::query(
         "SELECT id, part_index, file_path, status, upload_session_uri, upload_offset, \
                 youtube_video_id, updated_at \
@@ -236,19 +241,28 @@ pub async fn teile(pool: &PgPool, vod_id: i64) -> Result<Vec<Teil>, VodArchiveEr
     .bind(vod_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| Teil {
-            id: row.get("id"),
-            part_index: row.get("part_index"),
-            file_path: row.get("file_path"),
-            status: row.get("status"),
-            upload_session_uri: row.get("upload_session_uri"),
-            upload_offset: row.get("upload_offset"),
-            youtube_video_id: row.get("youtube_video_id"),
-            updated_at: row.get("updated_at"),
+    rows.into_iter()
+        .map(|row| -> Result<Teil, VodArchiveError> {
+            let id: i64 = row.get("id");
+            let stored: Option<String> = row.get("upload_session_uri");
+            let session = stored
+                .map(|encoded| {
+                    tb_crypto::text::decrypt(cipher, &encoded, &session_aad(id))
+                        .map_err(|_| VodArchiveError::SessionCrypto)
+                })
+                .transpose()?;
+            Ok(Teil {
+                id: row.get("id"),
+                part_index: row.get("part_index"),
+                file_path: row.get("file_path"),
+                status: row.get("status"),
+                upload_session_uri: session,
+                upload_offset: row.get("upload_offset"),
+                youtube_video_id: row.get("youtube_video_id"),
+                updated_at: row.get("updated_at"),
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Haelt die frisch begonnene Upload-Sitzung fest. Ohne diesen Schritt faengt
@@ -258,7 +272,10 @@ pub async fn setze_teil_sitzung(
     teil_id: i64,
     session_uri: &str,
     offset: i64,
+    cipher: &FieldCipher,
 ) -> Result<(), VodArchiveError> {
+    let session_uri_enc = tb_crypto::text::encrypt(cipher, session_uri, &session_aad(teil_id))
+        .map_err(|_| VodArchiveError::SessionCrypto)?;
     sqlx::query(
         "UPDATE twitch_vod_archive_parts \
          SET upload_session_uri = $2, upload_offset = $3, status = 'uploading', \
@@ -266,7 +283,7 @@ pub async fn setze_teil_sitzung(
          WHERE id = $1",
     )
     .bind(teil_id)
-    .bind(session_uri)
+    .bind(session_uri_enc)
     .bind(offset)
     .execute(pool)
     .await?;
@@ -310,7 +327,7 @@ pub async fn setze_teil_fertig(
 ) -> Result<(), VodArchiveError> {
     sqlx::query(
         "UPDATE twitch_vod_archive_parts \
-         SET status = 'done', youtube_video_id = $2, last_error = NULL, \
+         SET status = 'done', youtube_video_id = $2, upload_session_uri = NULL, last_error = NULL, \
              updated_at = CURRENT_TIMESTAMP \
          WHERE id = $1",
     )
@@ -485,15 +502,70 @@ pub async fn markiere_archiviert(pool: &PgPool, id: i64) -> Result<(), VodArchiv
     Ok(())
 }
 
+fn session_aad(part_id: i64) -> String {
+    format!("twitch_vod_archive_parts|upload_session_uri|{part_id}|1")
+}
+
+/// Einmaliger, transaktionaler Cutover. Niemals automatisch aus einem Upload
+/// aufrufen: erst alle alten Writer anhalten, dann diesen Weg ausführen.
+/// Die Rückgabe enthält nur eine Anzahl, keine URLs oder Geheimnisse.
+pub async fn migrate_resume_sessions(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+) -> Result<u64, VodArchiveError> {
+    let mut tx = pool.begin().await?;
+    let rows = sqlx::query("SELECT id, status, upload_session_uri FROM twitch_vod_archive_parts WHERE upload_session_uri IS NOT NULL ORDER BY id FOR UPDATE")
+        .fetch_all(&mut *tx).await?;
+    let mut changed = 0;
+    for row in rows {
+        let id: i64 = row.get("id");
+        let status: String = row.get("status");
+        let old: String = row.get("upload_session_uri");
+        let next = if status == TEIL_FERTIG {
+            None
+        } else if old.starts_with(tb_crypto::text::PREFIX) {
+            tb_crypto::text::decrypt(cipher, &old, &session_aad(id))
+                .map_err(|_| VodArchiveError::SessionCrypto)?;
+            continue;
+        } else {
+            let encoded = tb_crypto::text::encrypt(cipher, &old, &session_aad(id))
+                .map_err(|_| VodArchiveError::SessionCrypto)?;
+            if tb_crypto::text::decrypt(cipher, &encoded, &session_aad(id))
+                .map_err(|_| VodArchiveError::SessionCrypto)?
+                != old
+            {
+                return Err(VodArchiveError::SessionCrypto);
+            }
+            Some(encoded)
+        };
+        changed +=
+            sqlx::query("UPDATE twitch_vod_archive_parts SET upload_session_uri=$2 WHERE id=$1")
+                .bind(id)
+                .bind(next)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+    }
+    tx.commit().await?;
+    Ok(changed)
+}
+
+#[cfg(test)]
+#[path = "resume_migration_tests.rs"]
+mod resume_migration_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub(super) fn test_cipher() -> FieldCipher {
+        FieldCipher::from_hex_key(&"11".repeat(32), "v1").unwrap()
+    }
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
     /// Wegwerf-Schema. Ohne TB_TEST_DATABASE_URL ueberspringen die Tests still,
     /// wie im uebrigen Workspace.
-    async fn pool(schema: &str) -> Option<PgPool> {
+    pub(super) async fn pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
@@ -594,16 +666,22 @@ mod tests {
         .await
         .unwrap();
 
-        let teile_liste = teile(&pool, vod.id).await.unwrap();
+        let teile_liste = teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert_eq!(teile_liste.len(), 2);
 
         // Erster Teil fertig, zweiter mitten im Upload.
         setze_teil_fertig(&pool, teile_liste[0].id, "yt-a")
             .await
             .unwrap();
-        setze_teil_sitzung(&pool, teile_liste[1].id, "https://sitzung/2", 0)
-            .await
-            .unwrap();
+        setze_teil_sitzung(
+            &pool,
+            teile_liste[1].id,
+            "https://sitzung/2",
+            0,
+            &test_cipher(),
+        )
+        .await
+        .unwrap();
         setze_teil_offset(&pool, teile_liste[1].id, 33_554_432)
             .await
             .unwrap();
@@ -618,7 +696,7 @@ mod tests {
         .await
         .unwrap();
 
-        let nachher = teile(&pool, vod.id).await.unwrap();
+        let nachher = teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert_eq!(nachher[0].status, TEIL_FERTIG);
         assert_eq!(nachher[0].file_path, "/archiv/v2.part000.mp4");
         assert_eq!(nachher[0].youtube_video_id.as_deref(), Some("yt-a"));
@@ -631,7 +709,7 @@ mod tests {
 
         // Verfallene Sitzung wegwerfen setzt den Stand zurueck.
         loesche_teil_sitzung(&pool, nachher[1].id).await.unwrap();
-        let danach = teile(&pool, vod.id).await.unwrap();
+        let danach = teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert!(danach[1].upload_session_uri.is_none());
         assert_eq!(danach[1].upload_offset, 0);
 
@@ -654,8 +732,11 @@ mod tests {
         setze_teile(&pool, vod.id, "earlysalty", &["/archiv/v2a.mp4".into()])
             .await
             .unwrap();
-        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
-        setze_teil_sitzung(&pool, teil.id, "https://sitzung/alt", 42)
+        let teil = teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .remove(0);
+        setze_teil_sitzung(&pool, teil.id, "https://sitzung/alt", 42, &test_cipher())
             .await
             .unwrap();
         setze_teil_fertig(&pool, teil.id, "yt-alt").await.unwrap();
@@ -665,7 +746,10 @@ mod tests {
             .await
             .unwrap();
 
-        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
+        let teil = teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .remove(0);
         assert_eq!(teil.status, TEIL_ABGELEHNT);
         assert!(teil.upload_session_uri.is_none());
         assert_eq!(teil.upload_offset, 0);
@@ -692,8 +776,11 @@ mod tests {
         setze_teile(&pool, vod.id, "earlysalty", &["/archiv/v2b.mp4".into()])
             .await
             .unwrap();
-        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
-        setze_teil_sitzung(&pool, teil.id, "https://sitzung/alt", 42)
+        let teil = teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .remove(0);
+        setze_teil_sitzung(&pool, teil.id, "https://sitzung/alt", 42, &test_cipher())
             .await
             .unwrap();
         setze_teil_fertig(&pool, teil.id, "yt-alt").await.unwrap();
@@ -716,12 +803,13 @@ mod tests {
         assert!(setze_upload_abgelehnt(&pool, teil.id, vod.id, "verworfen")
             .await
             .is_err());
-        let teil = teile(&pool, vod.id).await.unwrap().remove(0);
+        let teil = teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .remove(0);
         assert_eq!(teil.status, TEIL_FERTIG);
-        assert_eq!(
-            teil.upload_session_uri.as_deref(),
-            Some("https://sitzung/alt")
-        );
+        // Bereits fertige Uploads benötigen keine Resume-Freigabe mehr.
+        assert!(teil.upload_session_uri.is_none());
         assert_eq!(teil.upload_offset, 42);
         assert_eq!(teil.youtube_video_id.as_deref(), Some("yt-alt"));
     }

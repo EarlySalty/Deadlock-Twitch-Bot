@@ -4,6 +4,8 @@ use tb_social_media::uploaders::UploadError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VodArchiveError {
+    #[error("Upload-Sitzung konnte nicht geschützt gelesen oder gespeichert werden; Migration und Schlüssel prüfen.")]
+    SessionCrypto,
     #[error("{programm} hat die Zeitgrenze von {sekunden}s ueberschritten")]
     Zeitgrenze { programm: String, sekunden: u64 },
     #[error("{schritt} fehlgeschlagen: {meldung}")]

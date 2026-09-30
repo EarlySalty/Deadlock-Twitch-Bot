@@ -1433,7 +1433,8 @@ impl ScamPitchDetector {
 fn append_service_warning(line: &str) -> std::io::Result<()> {
     let snapshot = tb_config::runtime::active()
         .ok_or_else(|| std::io::Error::other("Betriebskonfiguration fehlt"))?;
-    let dir = snapshot.resolve(&snapshot.settings().bot.service_warning_log_directory)
+    let dir = snapshot
+        .resolve(&snapshot.settings().bot.service_warning_log_directory)
         .map_err(|_| std::io::Error::other("Ungültiger Warnprotokollpfad"))?;
     append_service_warning_in(&dir, line)
 }

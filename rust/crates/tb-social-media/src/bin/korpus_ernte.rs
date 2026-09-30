@@ -15,13 +15,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--game-id" => {
-                game_id = args
-                    .next()
-                    .ok_or("--game-id braucht einen Wert")?;
+                game_id = args.next().ok_or("--game-id braucht einen Wert")?;
             }
             "--limit" => {
                 let raw = args.next().ok_or("--limit braucht einen Wert")?;
-                limit = raw.parse::<u32>().map_err(|e| format!("--limit ungültig: {e}"))?;
+                limit = raw
+                    .parse::<u32>()
+                    .map_err(|e| format!("--limit ungültig: {e}"))?;
             }
             other => {
                 return Err(format!("unbekanntes Argument: {other}").into());

@@ -17,10 +17,7 @@ pub struct ReaktionsFehler(pub String);
 
 #[async_trait]
 pub trait ReaktionsQuelle: Send + Sync {
-    async fn reaktionen(
-        &self,
-        message_id: &str,
-    ) -> Result<Option<Vec<Reaktion>>, ReaktionsFehler>;
+    async fn reaktionen(&self, message_id: &str) -> Result<Option<Vec<Reaktion>>, ReaktionsFehler>;
 }
 
 fn urteil(reaktionen: &[Reaktion]) -> Option<&'static str> {
@@ -71,7 +68,10 @@ pub async fn bewerte_offene_karten<Q: ReaktionsQuelle + ?Sized>(pool: &PgPool, q
         }
     }
     if fehler > 0 {
-        warn!(fehler, "pitch-bewertung: Broker-Reaktionen teilweise nicht abrufbar");
+        warn!(
+            fehler,
+            "pitch-bewertung: Broker-Reaktionen teilweise nicht abrufbar"
+        );
     }
 }
 
@@ -250,13 +250,31 @@ mod db_tests {
         let fehler = insert_karte(&pool, 600).await;
 
         let mut map: HashMap<String, Result<Option<Vec<Reaktion>>, ()>> = HashMap::new();
-        map.insert("100".into(), Ok(Some(vec![Reaktion { emoji: "👍".into(), count: 2 }])));
-        map.insert("200".into(), Ok(Some(vec![Reaktion { emoji: "👎".into(), count: 1 }])));
+        map.insert(
+            "100".into(),
+            Ok(Some(vec![Reaktion {
+                emoji: "👍".into(),
+                count: 2,
+            }])),
+        );
+        map.insert(
+            "200".into(),
+            Ok(Some(vec![Reaktion {
+                emoji: "👎".into(),
+                count: 1,
+            }])),
+        );
         map.insert(
             "300".into(),
             Ok(Some(vec![
-                Reaktion { emoji: "👍".into(), count: 1 },
-                Reaktion { emoji: "👎".into(), count: 1 },
+                Reaktion {
+                    emoji: "👍".into(),
+                    count: 1,
+                },
+                Reaktion {
+                    emoji: "👎".into(),
+                    count: 1,
+                },
             ])),
         );
         map.insert("400".into(), Ok(Some(Vec::new())));
@@ -266,8 +284,14 @@ mod db_tests {
         bewerte_offene_karten(&pool, &FakeQuelle(map)).await;
 
         assert_eq!(bewertung_von(&pool, gut).await, (Some("gut".into()), true));
-        assert_eq!(bewertung_von(&pool, schlecht).await, (Some("schlecht".into()), true));
-        assert_eq!(bewertung_von(&pool, beides).await, (Some("schlecht".into()), true));
+        assert_eq!(
+            bewertung_von(&pool, schlecht).await,
+            (Some("schlecht".into()), true)
+        );
+        assert_eq!(
+            bewertung_von(&pool, beides).await,
+            (Some("schlecht".into()), true)
+        );
         assert_eq!(bewertung_von(&pool, leer).await, (None, false));
         assert_eq!(bewertung_von(&pool, geloescht).await, (None, true));
         assert_eq!(bewertung_von(&pool, fehler).await, (None, false));

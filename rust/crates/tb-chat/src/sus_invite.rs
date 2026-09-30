@@ -31,7 +31,9 @@ use crate::types::ChatMessageEvent;
 /// Regex für Discord-Invite-Links (moderation.py Z. 776, re.IGNORECASE).
 fn discord_invite_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)discord\.gg/[A-Za-z0-9]+").expect("DISCORD_INVITE_RE ist konstant"))
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)discord\.gg/[A-Za-z0-9]+").expect("DISCORD_INVITE_RE ist konstant")
+    })
 }
 
 /// Spiegelt den Community-Invite aus `promos.rs`.
@@ -301,7 +303,11 @@ mod tests {
     fn make_event(text: &str, is_mod: bool) -> ChatMessageEvent {
         let mut badges = vec![];
         if is_mod {
-            badges.push(ChatBadge { set_id: "moderator".to_string(), id: String::new(), info: String::new() });
+            badges.push(ChatBadge {
+                set_id: "moderator".to_string(),
+                id: String::new(),
+                info: String::new(),
+            });
         }
         ChatMessageEvent {
             broadcaster_user_id: "ch1".to_string(),
@@ -311,7 +317,10 @@ mod tests {
             chatter_user_login: "user1".to_string(),
             chatter_user_name: "User1".to_string(),
             message_id: "m1".to_string(),
-            message: ChatMessageBody { text: text.to_string(), fragments: vec![] },
+            message: ChatMessageBody {
+                text: text.to_string(),
+                fragments: vec![],
+            },
             badges,
             color: String::new(),
             ..Default::default()
@@ -465,7 +474,10 @@ mod db_tests {
             chatter_user_login: "spammer".to_string(),
             chatter_user_name: "Spammer".to_string(),
             message_id: "m1".to_string(),
-            message: ChatMessageBody { text: text.to_string(), fragments: vec![] },
+            message: ChatMessageBody {
+                text: text.to_string(),
+                fragments: vec![],
+            },
             badges: vec![],
             color: String::new(),
             ..Default::default()
@@ -478,7 +490,9 @@ mod db_tests {
         create_tables(&pool).await;
 
         let check = SusInviteCheck::new(pool.clone());
-        let hit = check.check(&make_event_db("discord.gg/abc123"), "streamer1").await;
+        let hit = check
+            .check(&make_event_db("discord.gg/abc123"), "streamer1")
+            .await;
 
         let hit = hit.expect("Invite-Link muss Hit liefern");
         assert_eq!(hit.chatter_login, "spammer");
@@ -506,7 +520,9 @@ mod db_tests {
         .unwrap();
 
         let check = SusInviteCheck::new(pool.clone());
-        let hit = check.check(&make_event_db("discord.gg/abc123"), "streamer1").await;
+        let hit = check
+            .check(&make_event_db("discord.gg/abc123"), "streamer1")
+            .await;
         assert!(hit.is_none(), "Etablierter Chatter darf keinen Hit liefern");
     }
 
@@ -516,8 +532,12 @@ mod db_tests {
         create_tables(&pool).await;
 
         let check = SusInviteCheck::new(pool.clone());
-        let first = check.check(&make_event_db("discord.gg/abc123"), "streamer1").await;
-        let second = check.check(&make_event_db("discord.gg/xyz456"), "streamer1").await;
+        let first = check
+            .check(&make_event_db("discord.gg/abc123"), "streamer1")
+            .await;
+        let second = check
+            .check(&make_event_db("discord.gg/xyz456"), "streamer1")
+            .await;
 
         assert!(first.is_some());
         assert!(second.is_none(), "Cooldown muss zweiten Hit verhindern");
@@ -529,7 +549,9 @@ mod db_tests {
         create_tables(&pool).await;
 
         let check = SusInviteCheck::new(pool.clone());
-        let hit = check.check(&make_event_db("ich spiele auf discord"), "streamer1").await;
+        let hit = check
+            .check(&make_event_db("ich spiele auf discord"), "streamer1")
+            .await;
         assert!(hit.is_none());
     }
 
@@ -553,7 +575,9 @@ mod db_tests {
         .unwrap();
 
         let check = SusInviteCheck::new(pool.clone());
-        let hit = check.check(&make_event_db("discord.gg/abc"), "streamer1").await;
+        let hit = check
+            .check(&make_event_db("discord.gg/abc"), "streamer1")
+            .await;
         assert!(hit.is_none(), "40 Nachrichten = etabliert → kein Hit");
     }
 }

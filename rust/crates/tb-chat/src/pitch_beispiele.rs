@@ -173,7 +173,8 @@ pub fn baue_block(start: &[Beispiel], gut: &[Beispiel], schlecht: &[Beispiel]) -
         start.iter().take(MAX_GUT as usize).collect()
     };
 
-    let mut zeilen = vec!["Gute Antworten (Ton und Länge nachahmen, Inhalt nicht wiederholen):".to_string()];
+    let mut zeilen =
+        vec!["Gute Antworten (Ton und Länge nachahmen, Inhalt nicht wiederholen):".to_string()];
     for beispiel in gute {
         zeilen.push(render_zeile(beispiel));
     }

@@ -629,30 +629,40 @@ pub async fn try_build_api(
         tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_CLIENT_ID/SECRET fehlen");
         return None;
     };
-    let Ok(refresh_token) = std::env::var("TWITCH_BOT_REFRESH_TOKEN") else {
-        tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_BOT_REFRESH_TOKEN fehlt");
-        return None;
-    };
-
-    // Token-Boot: Access-Seed darf tot sein (Infisical-Stand), Refresh trägt.
-    let token_manager = match BotTokenManager::new(client_id, client_secret) {
-        Ok(m) => {
-            let m = if let Some(writer) = tb_chat::InfisicalWriter::from_env() {
-                m.with_sink(Arc::new(writer))
-            } else {
-                tracing::warn!(
-                    "Bot-Token-Write-Back deaktiviert: INFISICAL_WRITE_TOKEN/Config fehlt — Env-Snapshot veraltet weiter"
-                );
-                m
-            };
-            Arc::new(m)
-        }
-        Err(e) => {
-            tracing::error!("BotTokenManager nicht initialisierbar: {e}");
+    let cipher = match tb_crypto::FieldCipher::from_env() {
+        Ok(cipher) => Arc::new(cipher),
+        Err(_) => {
+            tracing::error!("Bot-Zugang: Datenbank-Verschlüsselungsschlüssel fehlt");
             return None;
         }
     };
-    let seed_access = std::env::var("TWITCH_BOT_TOKEN").ok();
+    let store = Arc::new(tb_chat::db_token_store::DatabaseTokenStore::new(
+        pool.clone(),
+        cipher,
+        client_id.clone(),
+    ));
+    let seeds = match store
+        .seed_and_load(tb_chat::token::load_seed_tokens())
+        .await
+    {
+        Ok(seeds) => seeds,
+        Err(reason) => {
+            tracing::error!(reason, "Bot-Zugang aus Datenbank nicht verfügbar");
+            return None;
+        }
+    };
+    let Some(refresh_token) = seeds.refresh_token else {
+        tracing::error!("Bot-Refresh-Token fehlt in der Datenbank");
+        return None;
+    };
+    let token_manager = match BotTokenManager::new(client_id, client_secret) {
+        Ok(manager) => Arc::new(manager.with_sink(store.clone())),
+        Err(_) => {
+            tracing::error!("BotTokenManager nicht initialisierbar");
+            return None;
+        }
+    };
+    let seed_access = seeds.access_token;
     if let Err(e) = token_manager
         .initialize(seed_access.as_deref(), &refresh_token)
         .await
@@ -661,6 +671,10 @@ pub async fn try_build_api(
         return None;
     }
     let bot_user_id = token_manager.bot_user_id().await;
+    if !store.healthy() || store.bind_identity(&bot_user_id).await.is_err() {
+        tracing::error!("Bot-Zugang konnte nicht dauerhaft gespeichert oder dem richtigen Konto zugeordnet werden");
+        return None;
+    }
     let scopes = token_manager.scopes().await;
     tracing::info!(
         bot_login = %token_manager.bot_login().await,

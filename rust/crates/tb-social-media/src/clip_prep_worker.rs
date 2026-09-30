@@ -42,13 +42,7 @@ impl YtDlpDownloader {
 impl ClipDownloader for YtDlpDownloader {
     async fn download(&self, clip_url: &str, dest: &Path) -> Result<(), String> {
         let output = tokio::process::Command::new(&self.yt_dlp_path)
-            .args([
-                "-f",
-                "best",
-                "-o",
-                &dest.to_string_lossy(),
-                clip_url,
-            ])
+            .args(["-f", "best", "-o", &dest.to_string_lossy(), clip_url])
             .output()
             .await
             .map_err(|e| e.to_string())?;
@@ -72,7 +66,9 @@ pub async fn download_atomic(
         return Ok(());
     }
     if let Some(parent) = Path::new(dest_path).parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     let tmp = format!("{dest_path}.dl-{}.part", tb_crypto::random_hex_token(8));
     downloader.download(clip_url, Path::new(&tmp)).await?;
@@ -221,9 +217,13 @@ mod tests {
     impl ClipDownloader for FakeDownloader {
         async fn download(&self, _clip_url: &str, dest: &Path) -> Result<(), String> {
             if let Some(parent) = dest.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
-            tokio::fs::write(dest, b"fake-mp4").await.map_err(|e| e.to_string())?;
+            tokio::fs::write(dest, b"fake-mp4")
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(())
         }
     }
@@ -302,7 +302,10 @@ mod tests {
         .await
         .unwrap();
         assert!(path.is_some(), "Deadlock-Clip hat local_file_path");
-        assert!(Path::new(path.as_deref().unwrap()).exists(), "Datei liegt auf der Platte");
+        assert!(
+            Path::new(path.as_deref().unwrap()).exists(),
+            "Datei liegt auf der Platte"
+        );
 
         // other bleibt ohne Datei.
         let other_path: Option<String> = sqlx::query_scalar(

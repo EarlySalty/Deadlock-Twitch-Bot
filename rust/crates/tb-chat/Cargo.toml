@@ -20,6 +20,7 @@ tokio       = { workspace = true, features = ["time", "sync"] }
 tracing     = { workspace = true }
 unicode-normalization = { workspace = true }
 tb-config   = { workspace = true }
+tb-crypto = { workspace = true }
 tb-domain   = { workspace = true }
 tb-engagement = { workspace = true }
 tb-knowledge = { workspace = true }
