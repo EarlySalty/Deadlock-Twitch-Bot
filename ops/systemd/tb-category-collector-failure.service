@@ -1,12 +1,12 @@
 [Unit]
 Description=Notify operator about failed anonymous category collector
-StartLimitIntervalSec=900
-StartLimitBurst=1
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 DynamicUser=yes
-ExecStart=/usr/bin/python3 /usr/local/libexec/tb-category-notify.py
+StateDirectory=tb-category-notify
+ExecStart=/usr/local/libexec/tb-category-notify
 LoadCredentialEncrypted=category-notify:/etc/credstore.encrypted/deadlock-category-notify.cred
 NoNewPrivileges=yes
 PrivateTmp=yes
