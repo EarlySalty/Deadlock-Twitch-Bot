@@ -407,13 +407,13 @@ pub async fn session_handler(
     }))
 }
 
-fn validate_clip_age(clip: &HelixClip, now: DateTime<Utc>) -> Result<(), Response> {
+fn validate_clip_age(clip: &HelixClip, now: DateTime<Utc>) -> Result<(), Box<Response>> {
     if clip.created_at > now || clip.created_at < now - Duration::days(MAX_CLIP_AGE_DAYS) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "clip_too_old",
             "Der Clip darf höchstens 60 Tage alt sein und nicht in der Zukunft liegen.",
-        ));
+        )));
     }
     Ok(())
 }
@@ -520,7 +520,7 @@ pub async fn submit_handler(
         Err(response) => return response,
     };
     if let Err(response) = validate_clip_age(&clip, Utc::now()) {
-        return response;
+        return *response;
     }
     let game = match deadlock_game_id(&pool).await {
         Ok(game) => game,
@@ -635,7 +635,7 @@ pub async fn submit_handler(
             Err(_) => return unavailable(),
         },
     ) {
-        return response;
+        return *response;
     }
     if !phase_matches(&clock, &actual, Phase::Submission) {
         return json_error(

@@ -544,21 +544,21 @@ fn membership_eligibility_at(
     present: bool,
     synced_at: Option<DateTime<Utc>>,
     latest: Option<(String, DateTime<Utc>)>,
-) -> Result<DiscordEligibility, Response> {
+) -> Result<DiscordEligibility, Box<Response>> {
     // The directory is refreshed daily. Never trust an indefinitely stale census.
     if synced_at.is_none_or(|at| at < now - Duration::hours(26) || at > now) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "community_check_unavailable",
             "Die Discord-Mitgliedschaft kann gerade nicht zuverlässig geprüft werden.",
-        ));
+        )));
     }
     let mut joined_at = joined_at;
     let mut present = present;
     // Live join/leave events take precedence over the most recent full census.
     if let Some((kind, at)) = latest.filter(|(_, at)| synced_at.is_none_or(|synced| *at > synced)) {
         if at > now {
-            return Err(unavailable());
+            return Err(Box::new(unavailable()));
         }
         present = kind == "join";
         if present {
@@ -606,6 +606,7 @@ async fn discord_eligibility(
         row.try_get("synced_at").map_err(|_| unavailable())?,
         kind.zip(occurred),
     )
+    .map_err(|response| *response)
 }
 
 mod contest;
