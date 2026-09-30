@@ -2377,7 +2377,7 @@ function ClipCard({
           )}
           {tiktokPending && (
             <p role="status" className="text-sm text-text-secondary">
-              {t('TikTok verarbeitet den Clip. Sobald er im Postfach liegt, kannst du ihn in der App veröffentlichen.')}
+              {t('Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.')}
             </p>
           )}
           {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}

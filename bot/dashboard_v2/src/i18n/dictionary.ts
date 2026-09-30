@@ -228,8 +228,8 @@ const EN: Record<string, string> = {
   'Vorschau konnte nicht gerendert werden.': 'The preview could not be rendered.',
   'TikTok: Der Clip liegt in deinem Postfach. Öffne TikTok, bearbeite ihn und veröffentliche ihn dort.':
     'TikTok: Your clip is in your inbox. Open TikTok to edit and publish it.',
-  'TikTok verarbeitet den Clip. Sobald er im Postfach liegt, kannst du ihn in der App veröffentlichen.':
-    'TikTok is processing your clip. Once it reaches your inbox, you can publish it in the app.',
+  'Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.':
+    'Your TikTok transfer is not confirmed yet. We keep checking the same transfer; another upload remains blocked.',
   'TikTok hat den direkten Post abgelehnt. Neue Clips gehen jetzt in dein TikTok-Postfach, wo du sie selbst veröffentlichen kannst.':
     'TikTok rejected the direct post. New clips go to your TikTok inbox, where you can publish them.',
   'Wähle zuerst mindestens eine Zielplattform.': 'Select at least one target platform first.',

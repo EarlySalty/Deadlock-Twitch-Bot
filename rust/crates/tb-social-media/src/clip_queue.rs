@@ -316,14 +316,21 @@ pub async fn update_upload_status(
     match status {
         "inbox" | "inbox_pending" => {
             let mut tx = pool.begin().await?;
-            sqlx::query(
-                "UPDATE twitch_clips_upload_queue SET status = $1, last_error = NULL, last_attempt_at = $2::text::timestamptz WHERE id = $3",
+            let changed = sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = $1, last_error = NULL, \
+                 last_attempt_at = $2::text::timestamptz, tiktok_publish_id = COALESCE($4, tiktok_publish_id) \
+                 WHERE id = $3 AND platform = 'tiktok' AND status IN ('pending', 'processing', 'inbox', 'inbox_pending')",
             )
             .bind(status)
             .bind(&now)
             .bind(queue_id)
+            .bind(external_video_id)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
+            if changed != 1 {
+                return Ok(());
+            }
             if let Some(publish_id) = external_video_id {
                 sqlx::query(
                     "UPDATE twitch_clips_social_media SET tiktok_video_id = $1 WHERE id = (SELECT clip_id FROM twitch_clips_upload_queue WHERE id = $2 AND platform = 'tiktok')",
@@ -378,13 +385,14 @@ pub async fn update_upload_status(
             }
         }
         "failed" => {
-            sqlx::query!(
+            sqlx::query(
                 "UPDATE twitch_clips_upload_queue SET status = 'failed', attempts = attempts + 1, \
-                 last_error = $1, last_attempt_at = $2::text::timestamptz WHERE id = $3",
-                error,
-                &now,
-                queue_id
+                 last_error = $1, last_attempt_at = $2::text::timestamptz WHERE id = $3 \
+                 AND NOT (platform = 'tiktok' AND status IN ('inbox', 'inbox_pending'))",
             )
+            .bind(error)
+            .bind(&now)
+            .bind(queue_id)
             .execute(pool)
             .await?;
         }
@@ -437,7 +445,7 @@ mod tests {
             .unwrap();
         sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         Some(pool)
     }
 

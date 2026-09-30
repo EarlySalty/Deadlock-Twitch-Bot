@@ -23,7 +23,7 @@ use tokio::io::AsyncReadExt;
 
 use super::{
     expect_ok_json, tiktok_error_guard, truncate_utf16, validate_local_file, AnalyticsSnapshot,
-    PlatformUploader, UploadError,
+    PlatformUploader, UploadCheckpoint, UploadError,
 };
 use crate::video_processor::format_hashtags;
 
@@ -127,7 +127,10 @@ impl TikTokUploader {
             api_base: DEFAULT_API_BASE.to_string(),
             privacy_level: DEFAULT_PRIVACY.to_string(),
             mode: UploadMode::Inbox,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("TikTok HTTP client"),
         }
     }
 
@@ -172,6 +175,68 @@ impl TikTokUploader {
         })
     }
 
+    async fn upload_with_checkpoint(
+        &self,
+        video_path: &str,
+        title: &str,
+        description: &str,
+        hashtags: &[String],
+        checkpoint: Option<&dyn UploadCheckpoint>,
+    ) -> Result<String, UploadError> {
+        if self.access_token.is_empty() {
+            return Err(UploadError::NotAuthenticated);
+        }
+        self.validate_video(video_path)?;
+        let video_size = tokio::fs::metadata(video_path).await?.len();
+        if video_size == 0 {
+            return Err(UploadError::Validation(format!(
+                "Video file is empty: {video_path}"
+            )));
+        }
+
+        let (chunk_size, total_chunk_count) = chunk_plan(video_size);
+        let plan = ChunkPlan {
+            chunk_size,
+            total_chunk_count,
+        };
+        let caption = build_caption(title, description, hashtags);
+        let info = if self.mode == UploadMode::DirectPost {
+            let info = self.query_creator_info().await?;
+            if !info
+                .privacy_level_options
+                .iter()
+                .any(|option| option == &self.privacy_level)
+            {
+                return Err(UploadError::Validation(format!(
+                    "TikTok privacy_level {} nicht erlaubt, möglich sind: {}",
+                    self.privacy_level,
+                    info.privacy_level_options.join(", ")
+                )));
+            }
+            Some(info)
+        } else {
+            None
+        };
+        let upload = self
+            .init_upload(&caption, info.as_ref(), video_size, plan)
+            .await;
+        let (publish_id, upload_url) = match upload {
+            Err(UploadError::Api(reason))
+                if info.is_some()
+                    && reason.contains("unaudited_client_can_only_post_to_private_accounts") =>
+            {
+                self.init_upload(&caption, None, video_size, plan).await?
+            }
+            result => result?,
+        };
+        if let Some(checkpoint) = checkpoint {
+            checkpoint.record_publish_id(&publish_id).await?;
+        }
+        self.upload_chunks(video_path, &upload_url, video_size, plan)
+            .await?;
+        Ok(publish_id)
+    }
+
     async fn init_upload(
         &self,
         caption: &str,
@@ -205,15 +270,17 @@ impl TikTokUploader {
             }),
             None => json!({ "source_info": source }),
         };
-        let payload = self
-            .json_with_retry("TikTok init upload", || {
-                self.http
-                    .post(&url)
-                    .bearer_auth(&self.access_token)
-                    .header(CONTENT_TYPE, JSON_CONTENT_TYPE)
-                    .body(body.to_string())
-            })
-            .await?;
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.access_token)
+            .header(CONTENT_TYPE, JSON_CONTENT_TYPE)
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|error| UploadError::Request(error.without_url().to_string()))?;
+        let payload = expect_ok_json(response, "TikTok init upload").await?;
+        tiktok_error_guard(&payload, "TikTok init upload")?;
         let publish_id = payload["data"]["publish_id"]
             .as_str()
             .map(str::to_string)
@@ -292,7 +359,7 @@ impl TikTokUploader {
                     }
                     last = UploadError::Api(format!("TikTok chunk upload failed: {status} {text}"));
                 }
-                Err(e) => last = UploadError::Request(e.to_string()),
+                Err(e) => last = UploadError::Request(e.without_url().to_string()),
             }
             backoff(attempt).await;
         }
@@ -321,7 +388,7 @@ impl TikTokUploader {
                         return Ok(payload);
                     }
                 }
-                Err(e) => last = UploadError::Request(e.to_string()),
+                Err(e) => last = UploadError::Request(e.without_url().to_string()),
             }
             backoff(attempt).await;
         }
@@ -354,55 +421,20 @@ impl PlatformUploader for TikTokUploader {
         description: &str,
         hashtags: &[String],
     ) -> Result<String, UploadError> {
-        if self.access_token.is_empty() {
-            return Err(UploadError::NotAuthenticated);
-        }
-        self.validate_video(video_path)?;
-        let video_size = tokio::fs::metadata(video_path).await?.len();
-        if video_size == 0 {
-            return Err(UploadError::Validation(format!(
-                "Video file is empty: {video_path}"
-            )));
-        }
+        self.upload_with_checkpoint(video_path, title, description, hashtags, None)
+            .await
+    }
 
-        let (chunk_size, total_chunk_count) = chunk_plan(video_size);
-        let plan = ChunkPlan {
-            chunk_size,
-            total_chunk_count,
-        };
-        let caption = build_caption(title, description, hashtags);
-        let info = if self.mode == UploadMode::DirectPost {
-            let info = self.query_creator_info().await?;
-            if !info
-                .privacy_level_options
-                .iter()
-                .any(|option| option == &self.privacy_level)
-            {
-                return Err(UploadError::Validation(format!(
-                    "TikTok privacy_level {} nicht erlaubt, möglich sind: {}",
-                    self.privacy_level,
-                    info.privacy_level_options.join(", ")
-                )));
-            }
-            Some(info)
-        } else {
-            None
-        };
-        let upload = self
-            .init_upload(&caption, info.as_ref(), video_size, plan)
-            .await;
-        let (publish_id, upload_url) = match upload {
-            Err(UploadError::Api(reason))
-                if info.is_some()
-                    && reason.contains("unaudited_client_can_only_post_to_private_accounts") =>
-            {
-                self.init_upload(&caption, None, video_size, plan).await?
-            }
-            result => result?,
-        };
-        self.upload_chunks(video_path, &upload_url, video_size, plan)
-            .await?;
-        Ok(publish_id)
+    async fn upload_video_checkpointed(
+        &self,
+        video_path: &str,
+        title: &str,
+        description: &str,
+        hashtags: &[String],
+        checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        self.upload_with_checkpoint(video_path, title, description, hashtags, Some(checkpoint))
+            .await
     }
 
     async fn get_video_status(&self, video_id: &str) -> Value {
@@ -485,6 +517,115 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(creator_info_body(options)))
             .mount(server)
             .await;
+    }
+
+    struct RecordingCheckpoint {
+        ids: std::sync::Mutex<Vec<String>>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl UploadCheckpoint for RecordingCheckpoint {
+        async fn record_publish_id(&self, publish_id: &str) -> Result<(), UploadError> {
+            if self.fail {
+                return Err(UploadError::Api("Test: Datenbank nicht erreichbar".into()));
+            }
+            self.ids.lock().unwrap().push(publish_id.to_string());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn tiktok_checkpoint_failure_prevents_video_transfer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/post/publish/inbox/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "publish_id": "operation-1", "upload_url": format!("{}/upload/", server.uri()) },
+                "error": { "code": "ok" }
+            })))
+            .expect(1).mount(&server).await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: true,
+        };
+        let video = temp_video("tb_tiktok_checkpoint.mp4", 16).await;
+        let result = TikTokUploader::new("test-token")
+            .with_api_base(server.uri())
+            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+            .await;
+        assert!(result.is_err());
+        server.verify().await;
+        tokio::fs::remove_file(video).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tiktok_init_timeout_is_not_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/post/publish/inbox/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let video = temp_video("tb_tiktok_init_timeout.mp4", 16).await;
+        let mut uploader = TikTokUploader::new("test-token").with_api_base(server.uri());
+        uploader.http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(20))
+            .build()
+            .unwrap();
+        let result = uploader
+            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+            .await;
+        assert!(matches!(result, Err(UploadError::Request(_))));
+        assert!(checkpoint.ids.lock().unwrap().is_empty());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        server.verify().await;
+        tokio::fs::remove_file(video).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tiktok_chunk_timeout_keeps_checkpoint_and_never_reinitializes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/post/publish/inbox/video/init/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "publish_id": "operation-1", "upload_url": format!("{}/upload/?signature=test-only", server.uri()) },
+                "error": { "code": "ok" }
+            })))
+            .expect(1).mount(&server).await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_millis(100)))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let video = temp_video("tb_tiktok_chunk_timeout.mp4", 16).await;
+        let mut uploader = TikTokUploader::new("test-token").with_api_base(server.uri());
+        uploader.http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(20))
+            .build()
+            .unwrap();
+        let error = uploader
+            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+            .await
+            .unwrap_err();
+        assert_eq!(*checkpoint.ids.lock().unwrap(), vec!["operation-1"]);
+        assert!(!error.to_string().contains("signature"));
+        server.verify().await;
+        tokio::fs::remove_file(video).await.unwrap();
     }
 
     // --- Chunk-Plan ---------------------------------------------------------

@@ -80,6 +80,11 @@ impl AnalyticsSnapshot {
     }
 }
 
+#[async_trait]
+pub trait UploadCheckpoint: Send + Sync {
+    async fn record_publish_id(&self, publish_id: &str) -> Result<(), UploadError>;
+}
+
 /// Gemeinsame Uploader-Schnittstelle.
 #[async_trait]
 pub trait PlatformUploader: Send + Sync {
@@ -97,6 +102,19 @@ pub trait PlatformUploader: Send + Sync {
         description: &str,
         hashtags: &[String],
     ) -> Result<String, UploadError>;
+
+    async fn upload_video_checkpointed(
+        &self,
+        _video_path: &str,
+        _title: &str,
+        _description: &str,
+        _hashtags: &[String],
+        _checkpoint: &dyn UploadCheckpoint,
+    ) -> Result<String, UploadError> {
+        Err(UploadError::NotImplemented(
+            "Dieser Uploader unterstützt keine dauerhaft gesicherte Übertragung".into(),
+        ))
+    }
 
     /// Verarbeitungs-/Veröffentlichungsstatus (best-effort, `{}` bei Fehler).
     async fn get_video_status(&self, video_id: &str) -> Value;
