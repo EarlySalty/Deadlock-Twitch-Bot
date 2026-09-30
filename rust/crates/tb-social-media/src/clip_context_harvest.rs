@@ -687,6 +687,24 @@ pub async fn load_clips(
                 e.vod_id AS event_vod_id
            FROM twitch_clips_social_media c
            LEFT JOIN twitch_clip_command_events e ON e.clip_id=c.clip_id
+           CROSS JOIN LATERAL (
+               SELECT CASE
+                   WHEN c.duration_seconds >= 0.5
+                    AND c.duration_seconds < 2147483647.5
+                   THEN CASE
+                       WHEN c.vod_offset_s::bigint
+                            + trunc(c.duration_seconds)::bigint
+                            + CASE WHEN c.duration_seconds - trunc(c.duration_seconds) >= 0.5 THEN 1 ELSE 0 END
+                            <= 2147483647
+                       THEN (c.vod_offset_s::bigint
+                            + trunc(c.duration_seconds)::bigint
+                            + CASE WHEN c.duration_seconds - trunc(c.duration_seconds) >= 0.5 THEN 1 ELSE 0 END
+                       )::integer
+                       ELSE NULL
+                   END
+                   ELSE NULL
+               END AS fallback_moment
+           ) clip_time
           WHERE c.vod_id IS NOT NULL AND c.vod_offset_s IS NOT NULL AND c.vod_offset_s >= 0
             AND c.duration_seconds IS NOT NULL AND c.duration_seconds >= 0.5
             AND c.game_id = '2132205352'
@@ -694,12 +712,13 @@ pub async fn load_clips(
             AND ($2::text IS NULL OR c.clip_id=$2)
             AND ($3::boolean OR NOT EXISTS (
                 SELECT 1 FROM twitch_clip_context_runs r
-                 WHERE r.clip_id=c.clip_id AND r.visual_status='sampled' AND r.vod_id=c.vod_id
-                   AND r.moment_offset_s = COALESCE(
-                       CASE WHEN e.vod_id=c.vod_id AND e.moment_offset_s IS NOT NULL
-                            THEN e.moment_offset_s END,
-                       c.vod_offset_s + round(c.duration_seconds)::integer
-                   )
+                 WHERE clip_time.fallback_moment IS NOT NULL
+                   AND r.clip_id=c.clip_id AND r.visual_status='sampled' AND r.vod_id=c.vod_id
+                   AND r.moment_offset_s = CASE
+                       WHEN e.vod_id=c.vod_id AND e.moment_offset_s IS NOT NULL
+                           THEN e.moment_offset_s
+                       ELSE clip_time.fallback_moment
+                   END
                    AND (NOT $4::boolean OR r.stt_status='timestamped')
             ))
           ORDER BY c.created_at DESC LIMIT $1",
@@ -1084,9 +1103,22 @@ mod tests {
              INSERT INTO twitch_clip_command_events VALUES
                  ('newest',now(),'175','vod-a'),
                  ('second',now(),'999','different-vod');
+             INSERT INTO twitch_clips_social_media VALUES
+                 ('half-round','url-half','streamer',now()-interval '5 minutes','vod-half',100,30.5,'2132205352'),
+                 ('nan-duration','url-nan','streamer',now()-interval '6 minutes','vod-nan',100,'NaN'::double precision,'2132205352'),
+                 ('infinite-duration','url-infinity','streamer',now()-interval '7 minutes','vod-infinity',100,'Infinity'::double precision,'2132205352'),
+                 ('overflow-moment','url-overflow','streamer',now()-interval '8 minutes','vod-overflow',2147483640,20,'2132205352');
+             INSERT INTO twitch_clip_command_events VALUES
+                 ('nan-duration',now(),'999','vod-nan'),
+                 ('infinite-duration',now(),'999','vod-infinity'),
+                 ('overflow-moment',now(),'999','vod-overflow');
              INSERT INTO twitch_clip_context_runs VALUES
                  ('newest','vod-a',175,'sampled','timestamped'),
-                 ('second','vod-b',150,'sampled','unavailable');",
+                 ('second','vod-b',150,'sampled','unavailable'),
+                 ('half-round','vod-half',131,'sampled','unavailable'),
+                 ('nan-duration','vod-nan',999,'sampled','unavailable'),
+                 ('infinite-duration','vod-infinity',999,'sampled','unavailable'),
+                 ('overflow-moment','vod-overflow',999,'sampled','unavailable');",
         )
         .execute(&pool)
         .await
@@ -1112,6 +1144,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["second", "older-open-a"]
         );
+        assert!(load_clips(&pool, 20, Some("half-round"), false, false)
+            .await
+            .expect("the 30.5-second half-up match is complete")
+            .is_empty());
+        let forced_half = load_clips(&pool, 20, Some("half-round"), false, true)
+            .await
+            .expect("force includes the completed half-up boundary");
+        assert_eq!(
+            clip_moment_from_start(forced_half[0].moment_offset_s, forced_half[0].duration_s),
+            Some(131)
+        );
+        assert_eq!(
+            load_clips(&pool, 20, Some("nan-duration"), false, false)
+                .await
+                .expect_err("NaN remains in Rust's invalid-range path"),
+            "ungültiger Clip-Zeitbereich: nan-duration"
+        );
+        for clip_id in ["infinite-duration", "overflow-moment"] {
+            assert_eq!(
+                load_clips(&pool, 20, Some(clip_id), false, false)
+                    .await
+                    .expect_err("invalid clip range remains in Rust's validation path"),
+                format!("ungültiger Clip-Zeitbereich: {clip_id}")
+            );
+        }
         let forced = load_clips(&pool, 1, None, true, true)
             .await
             .expect("force includes completed candidates");
