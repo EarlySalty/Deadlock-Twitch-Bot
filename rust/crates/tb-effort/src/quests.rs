@@ -62,12 +62,14 @@ pub(crate) fn draw(id: &str, week: NaiveDate, pool: &[QuestKind]) -> Result<Vec<
 }
 
 fn stream_extra_text(goal: i64, baseline_minutes: i64) -> String {
+    let goal_unit = if goal == 1 { "Minute" } else { "Minuten" };
     // Missing stream history is normalized to zero by Engine::stream_minutes.
     if baseline_minutes == 0 {
-        format!("Streame diese Woche mindestens {goal} Minuten")
+        format!("Streame diese Woche mindestens {goal} {goal_unit}")
     } else {
+        let baseline_unit = if baseline_minutes == 1 { "Minute" } else { "Minuten" };
         format!(
-            "Streame {goal} Minuten länger als dein 4-Wochen-Mittel von {baseline_minutes} Minuten"
+            "Streame {goal} {goal_unit} länger als dein 4-Wochen-Mittel von {baseline_minutes} {baseline_unit}"
         )
     }
 }
@@ -399,7 +401,15 @@ mod tests {
         );
         assert_eq!(
             stream_extra_text(45, 1),
-            "Streame 45 Minuten länger als dein 4-Wochen-Mittel von 1 Minuten"
+            "Streame 45 Minuten länger als dein 4-Wochen-Mittel von 1 Minute"
+        );
+        assert_eq!(
+            stream_extra_text(1, 0),
+            "Streame diese Woche mindestens 1 Minute"
+        );
+        assert_eq!(
+            stream_extra_text(1, 1),
+            "Streame 1 Minute länger als dein 4-Wochen-Mittel von 1 Minute"
         );
     }
 
