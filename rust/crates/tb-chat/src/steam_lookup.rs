@@ -64,6 +64,48 @@ struct CentralTitleContext {
     voice_discord_ids: Vec<String>,
 }
 
+/// Ausschließlich Vertragsmetadaten, keine Identitäten oder Rohantworten.
+#[derive(serde::Serialize)]
+pub struct CentralTitleContextStatus {
+    pub captured_at: i64,
+    pub age_seconds: Option<i64>,
+    pub fresh: bool,
+    pub party_size: Option<i32>,
+    pub party_member_count: usize,
+    pub voice_member_count: usize,
+}
+
+/// Rein lesende Diagnose über exakt denselben begrenzten produktiven Reader.
+pub async fn central_title_context_status(
+    url: &str,
+    token: &str,
+    discord_id: i64,
+) -> Result<CentralTitleContextStatus, &'static str> {
+    if discord_id <= 0 {
+        return Err("Eine positive Discord-ID ist erforderlich.");
+    }
+    let context = fetch_central_title_context(url, token, discord_id)
+        .await
+        .map_err(|_| {
+            "Steam-Kontext konnte nicht authentifiziert und vertragsgemäß gelesen werden."
+        })?;
+    let age_seconds = chrono::Utc::now()
+        .timestamp()
+        .checked_sub(context.captured_at);
+    Ok(CentralTitleContextStatus {
+        captured_at: context.captured_at,
+        age_seconds,
+        fresh: central_context_fresh(age_seconds),
+        party_size: context.party_size,
+        party_member_count: context.party_discord_ids.len(),
+        voice_member_count: context.voice_discord_ids.len(),
+    })
+}
+
+fn central_context_fresh(age_seconds: Option<i64>) -> bool {
+    age_seconds.is_some_and(|age| (0..600).contains(&age))
+}
+
 #[derive(Debug, Default)]
 pub struct CoStreamContext {
     pub co_streamers: Vec<String>,
@@ -106,10 +148,11 @@ async fn detect_co_streamers_with_shared(
     shared: Vec<CoStreamer>,
     central: &CentralTitleContext,
 ) -> CoStreamContext {
-    let central_fresh = chrono::Utc::now()
-        .timestamp()
-        .checked_sub(central.captured_at)
-        .is_some_and(|age| (0..600).contains(&age));
+    let central_fresh = central_context_fresh(
+        chrono::Utc::now()
+            .timestamp()
+            .checked_sub(central.captured_at),
+    );
     let party_hint = central
         .party_size
         .filter(|size| central_fresh && (1..=6).contains(size))
