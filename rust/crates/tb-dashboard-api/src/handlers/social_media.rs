@@ -4962,7 +4962,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["is_default"], true);
-        assert_eq!(v["mode"], "pip");
+        assert_eq!(v["mode"], "stacked");
 
         // PUT setzt ein Layout (mode stacked).
         let resp = streamer_layout_put_handler(
