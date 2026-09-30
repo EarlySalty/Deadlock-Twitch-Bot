@@ -369,6 +369,9 @@ partner_effort_stream_weeks|observed_through|timestamp with time zone|NO|
 partner_effort_stream_weeks|partner_twitch_user_id|text|NO|
 partner_effort_stream_weeks|stream_id|text|NO|
 partner_effort_stream_weeks|week_start|date|NO|
+partner_effort_weekly_quest_evaluations|evaluated_at|timestamp with time zone|NO|
+partner_effort_weekly_quest_evaluations|partner_twitch_user_id|text|NO|
+partner_effort_weekly_quest_evaluations|week_start|date|NO|
 partner_effort_weekly_quests|assigned_at|timestamp with time zone|NO|now()
 partner_effort_weekly_quests|baseline_minutes|bigint|NO|0
 partner_effort_weekly_quests|bonus_points|integer|NO|

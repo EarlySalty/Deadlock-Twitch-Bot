@@ -22,7 +22,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
         GRANT SELECT, INSERT ON partner_effort_weekly_quest_evaluations TO twitchbot;
     END IF;
-    FOREACH role_name IN ARRAY ARRAY['twitchdash','twitchlegacy','twitchcontest'] LOOP
+    FOREACH role_name IN ARRAY ARRAY['twitchdash','twitchlegacy'] LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
             EXECUTE format('GRANT SELECT ON partner_effort_weekly_quest_evaluations TO %I',role_name);
         END IF;

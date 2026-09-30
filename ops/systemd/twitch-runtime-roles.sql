@@ -291,3 +291,26 @@ BEGIN
     END IF;
 END
 $partner_challenge_roles$;
+
+-- The additive weekly evaluation record stays append-only for the bot and
+-- read-only for dashboard readers after the broad legacy grants above.
+DO $weekly_quest_evaluation_roles$
+DECLARE role_name text;
+BEGIN
+    IF to_regclass('public.partner_effort_weekly_quest_evaluations') IS NOT NULL THEN
+        FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcontest'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('REVOKE ALL ON TABLE public.partner_effort_weekly_quest_evaluations FROM %I', role_name);
+            END IF;
+        END LOOP;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+            GRANT SELECT, INSERT ON public.partner_effort_weekly_quest_evaluations TO twitchbot;
+        END IF;
+        FOREACH role_name IN ARRAY ARRAY['twitchdash','twitchlegacy'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('GRANT SELECT ON TABLE public.partner_effort_weekly_quest_evaluations TO %I', role_name);
+            END IF;
+        END LOOP;
+    END IF;
+END
+$weekly_quest_evaluation_roles$;
