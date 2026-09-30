@@ -470,6 +470,9 @@ async fn call_selected_endpoint(
     if endpoint.provider != "fireworks" || is_loopback_endpoint(&endpoint.base_url) {
         return call_endpoint(endpoint, request, purpose, frist).await;
     }
+    // Vor der Auflösung ist die YAML-Mindestversion noch kein tatsächlich
+    // aufgerufenes Modell. Fehler an dieser Stelle tragen keine Modell-ID.
+    endpoint.model.clear();
     let resolver = crate::model_resolver::global()?;
     let operation = async {
         let pool = ledger::pool().await;

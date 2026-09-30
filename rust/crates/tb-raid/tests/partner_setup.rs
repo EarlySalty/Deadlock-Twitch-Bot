@@ -75,7 +75,6 @@ mod referral_test_support {
 }
 
 async fn apply_ddl(pool: &PgPool) {
-    referral_test_support::schema(pool).await;
     for ddl in [
         // Prod: alle Timestamp-Spalten TEXT, Flags INTEGER, live_ping_role_id BIGINT.
         r#"CREATE TABLE twitch_partners (
@@ -173,6 +172,9 @@ async fn apply_ddl(pool: &PgPool) {
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
+    // Die produktive SQL-Funktion prüft ihre Tabellen bereits beim Anlegen.
+    // Deshalb erst installieren, wenn auch twitch_partners vorhanden ist.
+    referral_test_support::schema(pool).await;
 }
 
 fn default_args(login: &str, uid: &str) -> PromotePartnerArgs {

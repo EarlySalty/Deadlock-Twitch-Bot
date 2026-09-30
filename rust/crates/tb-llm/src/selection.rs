@@ -41,7 +41,7 @@ pub fn endpoint_chain(use_case: &str) -> Vec<LlmEndpoint> {
 }
 
 /// Eine umgebogene Basis-URL bleibt für lokale Mock- und Proxy-Tests möglich.
-/// Der Modellname selbst bleibt fest.
+/// Die Modellversion wird dagegen zentral aus der YAML-Policy aufgelöst.
 pub(crate) fn fireworks_base_url() -> String {
     nonempty_env("FIREWORK_BASE_URL")
         .or_else(|| nonempty_env("FIREWORKS_BASE_URL"))

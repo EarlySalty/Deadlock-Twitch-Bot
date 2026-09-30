@@ -625,6 +625,14 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Auch die nachfolgende Schema-Erweiterung gehört zur Testbasis.
+        // Die Tests dürfen nicht gegen den historischen Modus-Constraint laufen.
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260916013000_smalltalk_live_mode.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 

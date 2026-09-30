@@ -1433,7 +1433,8 @@ impl ScamPitchDetector {
 fn append_service_warning(line: &str) -> std::io::Result<()> {
     let snapshot = tb_config::runtime::active()
         .ok_or_else(|| std::io::Error::other("Betriebskonfiguration fehlt"))?;
-    let dir = snapshot.resolve(&snapshot.settings().bot.service_warning_log_directory)
+    let dir = snapshot
+        .resolve(&snapshot.settings().bot.service_warning_log_directory)
         .map_err(|_| std::io::Error::other("Ungültiger Warnprotokollpfad"))?;
     append_service_warning_in(&dir, line)
 }
@@ -3151,7 +3152,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn call_judge_wechselt_das_festgelegte_modell_bei_404_nicht() {
+    async fn call_judge_behaelt_lokalen_mock_bei_404_ohne_externen_fallback() {
         let _guard = PROVIDER_ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3160,7 +3161,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .and(body_string_contains("deepseek-v4-flash-0731"))
+            .and(body_string_contains(
+                tb_llm::selection::configured_fireworks_model(),
+            ))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
             .mount(&server)

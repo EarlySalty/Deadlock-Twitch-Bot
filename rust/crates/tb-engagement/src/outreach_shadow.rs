@@ -7,8 +7,6 @@ use serde_json::json;
 use serde_json::Value;
 use uuid::Uuid;
 
-use tb_llm::selection::configured_fireworks_model;
-
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HOOKS: usize = 5;
 const MAX_HOOK_TEXT_CHARS: usize = 500;
@@ -199,6 +197,37 @@ pub struct OutreachReviewClient {
     endpoint: tb_llm::LlmEndpoint,
 }
 
+/// Ergebnis samt tatsächlichem Modell des Aufrufs. Die YAML-Mindestversion
+/// ist keine verlässliche Herkunftsangabe für eine bereits erfolgte Antwort.
+pub struct ReviewedDecision {
+    pub decision: Result<OutreachDecision, OutreachError>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+fn reviewed_decision(
+    response: Result<tb_llm::Response, tb_llm::LlmFailure>,
+    evidence: &SessionEvidence,
+) -> ReviewedDecision {
+    let (decision, provider, model) = match response {
+        Ok(response) => (
+            parse_outreach_decision(&response.text, evidence),
+            response.provider,
+            response.model,
+        ),
+        Err(failure) => (
+            Err(outreach_error(failure.error)),
+            failure.provider,
+            failure.model,
+        ),
+    };
+    ReviewedDecision {
+        decision,
+        provider: (!provider.is_empty() && provider != "keiner").then_some(provider),
+        model: (!model.is_empty()).then_some(model),
+    }
+}
+
 impl OutreachReviewClient {
     pub fn from_env() -> Result<Self, OutreachError> {
         if OUTREACH_SYSTEM_PROMPT.trim().is_empty() {
@@ -219,19 +248,27 @@ impl OutreachReviewClient {
         Ok(Self { endpoint })
     }
 
-    /// Modell des aufgeloesten Endpunkts (fuer Tests).
-    #[cfg(test)]
-    pub(crate) fn endpoint_model(&self) -> &str {
-        &self.endpoint.model
-    }
-
     pub async fn decide(
         &self,
         input: &OutreachModelInput,
         evidence: &SessionEvidence,
     ) -> Result<OutreachDecision, OutreachError> {
-        let user_data = serde_json::to_string(input).map_err(|_| OutreachError::Decode)?;
-        let response = tb_llm::complete(
+        self.decide_detailed(input, evidence).await.decision
+    }
+
+    pub async fn decide_detailed(
+        &self,
+        input: &OutreachModelInput,
+        evidence: &SessionEvidence,
+    ) -> ReviewedDecision {
+        let Ok(user_data) = serde_json::to_string(input) else {
+            return ReviewedDecision {
+                decision: Err(OutreachError::Decode),
+                provider: None,
+                model: None,
+            };
+        };
+        let response = tb_llm::complete_detailed(
             USE_CASE,
             tb_llm::Request::simple(OUTREACH_SYSTEM_PROMPT, user_data)
                 .temperature(0.0)
@@ -241,12 +278,8 @@ impl OutreachReviewClient {
                 .no_ledger()
                 .endpoint(self.endpoint.clone()),
         )
-        .await
-        .map_err(outreach_error)?;
-        if response.text.trim().is_empty() {
-            return Err(OutreachError::Decode);
-        }
-        parse_outreach_decision(&response.text, evidence)
+        .await;
+        reviewed_decision(response, evidence)
     }
 }
 
@@ -563,6 +596,8 @@ impl NewOutreachEvent {
         transcript: Option<String>,
         result: CycleResult,
     ) -> Self {
+        // Ohne Aufrufnachweis kein geratenes Flash-Modell speichern. Das
+        // Wiring übernimmt die Herkunft aus decide_detailed, auch bei Fehlern.
         let (outcome, decision, error_class, provider, model) = match result {
             CycleResult::Decision(decision) => {
                 let outcome = if decision.hooks.is_empty() {
@@ -570,34 +605,28 @@ impl NewOutreachEvent {
                 } else {
                     OutreachOutcome::Hook
                 };
-                (
-                    outcome,
-                    Some(decision),
-                    None,
-                    Some("fireworks".to_owned()),
-                    Some(configured_fireworks_model().to_owned()),
-                )
+                (outcome, Some(decision), None, None, None)
             }
             CycleResult::ParserError => (
                 OutreachOutcome::ParserError,
                 None,
                 Some("decode".to_owned()),
-                Some("fireworks".to_owned()),
-                Some(configured_fireworks_model().to_owned()),
+                None,
+                None,
             ),
             CycleResult::Timeout => (
                 OutreachOutcome::Timeout,
                 None,
                 Some("timeout".to_owned()),
-                Some("fireworks".to_owned()),
-                Some(configured_fireworks_model().to_owned()),
+                None,
+                None,
             ),
             CycleResult::ProviderError(error) => (
                 OutreachOutcome::ProviderError,
                 None,
                 Some(error),
-                Some("fireworks".to_owned()),
-                Some(configured_fireworks_model().to_owned()),
+                None,
+                None,
             ),
             CycleResult::WhisperError(error) => (
                 OutreachOutcome::WhisperError,
@@ -880,6 +909,82 @@ mod tests {
             parse_outreach_decision(&decision(hooks, None), &evidence()),
             Err(OutreachError::Validation)
         );
+    }
+
+    #[test]
+    fn modellnachweis_nimmt_die_antwort_statt_der_yaml_mindestversion() {
+        let model = "accounts/fireworks/models/deepseek-v4p2-flash";
+        let result = reviewed_decision(
+            Ok(tb_llm::Response {
+                text: decision(vec![], Some("kein belegter Anlass")),
+                provider: "fireworks".to_owned(),
+                model: model.to_owned(),
+                prompt_tokens: None,
+                completion_tokens: None,
+                latency_ms: 0,
+            }),
+            &evidence(),
+        );
+        assert!(result.decision.is_ok());
+        assert_eq!(result.provider.as_deref(), Some("fireworks"));
+        assert_eq!(result.model.as_deref(), Some(model));
+    }
+
+    #[test]
+    fn parserfehler_behaelt_das_tatsaechlich_antwortende_modell() {
+        let model = "accounts/fireworks/models/deepseek-v5-flash";
+        let result = reviewed_decision(
+            Ok(tb_llm::Response {
+                text: "kein JSON".to_owned(),
+                provider: "fireworks".to_owned(),
+                model: model.to_owned(),
+                prompt_tokens: None,
+                completion_tokens: None,
+                latency_ms: 0,
+            }),
+            &evidence(),
+        );
+        assert_eq!(result.decision, Err(OutreachError::Decode));
+        assert_eq!(result.model.as_deref(), Some(model));
+    }
+
+    #[test]
+    fn fehlernachweis_behaelt_letzten_versuch_ohne_bootstrap_fallback() {
+        let model = "accounts/fireworks/models/deepseek-v5-flash";
+        for (error, expected) in [
+            (
+                tb_llm::LlmError::Timeout("Probe".to_owned()),
+                OutreachError::Timeout,
+            ),
+            (
+                tb_llm::LlmError::Http {
+                    status: 503,
+                    body: String::new(),
+                },
+                OutreachError::HttpStatus,
+            ),
+        ] {
+            let result = reviewed_decision(
+                Err(tb_llm::LlmFailure {
+                    provider: "fireworks".to_owned(),
+                    model: model.to_owned(),
+                    error,
+                }),
+                &evidence(),
+            );
+            assert_eq!(result.decision, Err(expected));
+            assert_eq!(result.model.as_deref(), Some(model));
+        }
+        let result = reviewed_decision(
+            Err(tb_llm::LlmFailure {
+                provider: "keiner".to_owned(),
+                model: String::new(),
+                error: tb_llm::LlmError::Unavailable("nicht aufgelöst".to_owned()),
+            }),
+            &evidence(),
+        );
+        assert!(result.provider.is_none());
+        assert!(result.model.is_none());
     }
 
     #[test]

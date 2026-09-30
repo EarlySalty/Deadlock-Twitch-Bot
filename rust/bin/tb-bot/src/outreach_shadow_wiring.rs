@@ -344,7 +344,10 @@ async fn process_once(
             Ok(transcript) => {
                 let text = transcript.text.trim().to_owned();
                 let context = store.load_context(&session, &text, Utc::now()).await?;
-                let result = match reviewer.decide(&context.input, &context.evidence).await {
+                let reviewed = reviewer
+                    .decide_detailed(&context.input, &context.evidence)
+                    .await;
+                let result = match reviewed.decision {
                     Ok(decision) => CycleResult::Decision(decision),
                     Err(OutreachError::Decode | OutreachError::Validation) => {
                         CycleResult::ParserError
@@ -359,6 +362,8 @@ async fn process_once(
                     Some(text.clone()),
                     result,
                 );
+                event.provider = reviewed.provider;
+                event.model = reviewed.model;
                 event.static_recruitment_text =
                     static_recruitment_text(&session, context.raid_count);
                 persist_and_log(store, event, claim.claim_id).await?;
