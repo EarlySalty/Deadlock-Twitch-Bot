@@ -15,7 +15,7 @@ Zwei Formen, beide nur rund um den Community-Discord, keine externen Sponsoren u
 
 - Persönliche Antworten sind frei geschrieben, keine fertigen Standard-Sprüche mehr.
 - In einer persönlichen Antwort steht nie ein Link und kein "komm auf Discord".
-- Den Discord-Link bekommt ein Zuschauer nur in der periodischen Einladung oder wenn er selbst nach dem Discord fragt (`!discord`, `!invite`).
+- Den Discord-Link bekommt ein Zuschauer nur in der periodischen Einladung oder wenn er ihn gezielt über `!dldc`, `!dlde` oder `!invite` anfordert. `!discord` bleibt für Creator-eigene Commands frei.
 - Keine Werbung für externe Produkte oder Drittanbieter.
 - Den Text der periodischen Einladung kannst du im Dashboard durch deinen eigenen ersetzen.
 

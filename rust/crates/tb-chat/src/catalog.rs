@@ -114,8 +114,8 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Postet den Einladungslink zur Community.",
         },
         CommandInfo {
-            name: "!discord",
-            aliases: &["!dldc", "!dlde"],
+            name: "!dldc",
+            aliases: &["!dlde"],
             group: Fun,
             summary: "Postet den Einladungslink zur Deutschen Deadlock Community.",
         },

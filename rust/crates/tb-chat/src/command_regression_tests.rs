@@ -388,7 +388,7 @@ async fn regression_portfehler_antworten_statt_schweigen_oder_leerzustand() {
         "!raid_history",
         "!silentban",
         "!silentraid",
-        "!discord",
+        "!dldc",
         "!invite",
     ] {
         let before = api.message_count().await;
