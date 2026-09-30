@@ -2,49 +2,88 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use sqlx::postgres::PgPoolOptions;
+use tb_config::{file::ConfigArguments, BotConfigSnapshot};
 use tb_social_media::clip::helix::HelixClipSource;
 use tb_social_media::clip_context_harvest::{
     available_stt, harvest, learn_and_store, load_clips, recommend_for_clip,
 };
-use tb_transport_twitch::{HelixClient, HelixConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config_arguments = ConfigArguments::parse(std::env::args_os().skip(1))?;
+    let snapshot = BotConfigSnapshot::load(&config_arguments.path)?;
+    let stt_config = snapshot.settings().stt.clone();
+    if stt_config.remote_endpoint.is_some() {
+        return Err("Clip-Kontext erlaubt keinen entfernten STT-Endpunkt.".into());
+    }
+    let mut uplink_arguments = Vec::new();
+    let mut operation_arguments = Vec::new();
+    let mut arguments = config_arguments.remaining.into_iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "--uplink-config" {
+            uplink_arguments.push(argument);
+            uplink_arguments.push(
+                arguments
+                    .next()
+                    .ok_or("Der Pfad der Uplink-Konfiguration fehlt.")?,
+            );
+        } else {
+            operation_arguments.push(argument);
+        }
+    }
+    let uplink_runtime = tb_dashboard_api::uplink_config::load_arguments(uplink_arguments)
+        .await?
+        .ok_or("Die Uplink-Konfiguration fehlt.")?;
+    tb_dashboard_api::uplink_config::install(uplink_runtime)?;
+    let runtime = tb_dashboard_api::uplink_config::clip_context_runtime(&snapshot).await?;
+    let read_pool = runtime.read_pool;
+    let write_pool = runtime.write_pool;
+
     let mut limit = 25_i64;
     let mut clip_id = None;
     let mut backfill = false;
     let mut force = false;
     let mut learn_only = false;
     let mut recommend_id = None;
-    let mut args = std::env::args().skip(1);
+    let mut args = operation_arguments.into_iter();
     while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--limit" => limit = args.next().ok_or("--limit braucht eine Zahl")?.parse()?,
-            "--clip-id" => clip_id = Some(args.next().ok_or("--clip-id braucht eine ID")?),
+        let arg = arg.to_str().ok_or("Argument ist nicht gültiger Text.")?;
+        match arg {
+            "--limit" => {
+                limit = args
+                    .next()
+                    .ok_or("--limit braucht eine Zahl")?
+                    .to_str()
+                    .ok_or("Limit ist ungültig.")?
+                    .parse()?
+            }
+            "--clip-id" => {
+                clip_id = Some(
+                    args.next()
+                        .ok_or("--clip-id braucht eine ID")?
+                        .into_string()
+                        .map_err(|_| "Clip-ID ist ungültig.")?,
+                )
+            }
             "--backfill" => backfill = true,
             "--force" => force = true,
             "--learn-only" => learn_only = true,
-            "--recommend" => recommend_id = Some(args.next().ok_or("--recommend braucht eine ID")?),
+            "--recommend" => {
+                recommend_id = Some(
+                    args.next()
+                        .ok_or("--recommend braucht eine ID")?
+                        .into_string()
+                        .map_err(|_| "Clip-ID ist ungültig.")?,
+                )
+            }
             other => return Err(format!("unbekanntes Argument: {other}").into()),
         }
     }
     if !(1..=200).contains(&limit) {
         return Err("--limit muss zwischen 1 und 200 liegen".into());
     }
-    let write_url = std::env::var("DATABASE_URL")?;
-    let read_url = std::env::var("TB_CLIP_CONTEXT_READ_DSN").unwrap_or_else(|_| write_url.clone());
-    let read_pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&read_url)
-        .await?;
-    let write_pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&write_url)
-        .await?;
-
     if let Some(id) = recommend_id {
-        match recommend_for_clip(&write_pool, &id).await? {
+        match recommend_for_clip(&read_pool, &id).await? {
             Some(cut) => println!(
                 "clip={id} start={} peak={} end={}",
                 cut.start_s, cut.peak_s, cut.end_s
@@ -55,11 +94,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if backfill {
-        let client = HelixClient::new(HelixConfig::new(
-            std::env::var("TWITCH_CLIENT_ID")?,
-            std::env::var("TWITCH_CLIENT_SECRET")?,
-        ))?;
-        let source = HelixClipSource::new(Arc::new(client));
+        let helix = Arc::new(
+            runtime
+                .helix
+                .ok_or("Der Twitch-Zugang für den Helix-Backfill fehlt in Infisical.")?,
+        );
+        let source = HelixClipSource::new(helix);
         let mut cursor: Option<(DateTime<Utc>, String)> = None;
         let mut updated = 0;
         loop {
@@ -72,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .bind(limit)
             .bind(cursor.as_ref().map(|(at, _)| at))
             .bind(cursor.as_ref().map(|(_, id)| id.as_str()))
-            .fetch_all(&write_pool)
+            .fetch_all(&read_pool)
             .await?;
             if ids.is_empty() {
                 break;
@@ -96,8 +136,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !learn_only {
-        let clips = load_clips(&read_pool, &write_pool, limit, clip_id.as_deref()).await?;
-        let stt = available_stt().await;
+        let clips = load_clips(&read_pool, limit, clip_id.as_deref()).await?;
+        let stt = available_stt(&stt_config).await;
         println!("candidates={} stt_available={stt}", clips.len());
         for clip in clips {
             let previous: Option<(String, String, i32, String)> = sqlx::query_as(
@@ -117,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("clip={} status=already_stored", clip.clip_id);
                 continue;
             }
-            match harvest(&read_pool, &write_pool, &clip, stt).await {
+            match harvest(&read_pool, &write_pool, &clip, stt, &stt_config).await {
                 Ok(result) => println!(
                     "clip={} status={} seconds={} stt={} visual={}",
                     result.clip_id,

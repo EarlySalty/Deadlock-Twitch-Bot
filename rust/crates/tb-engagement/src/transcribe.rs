@@ -88,6 +88,47 @@ pub struct OpenAiTranscriber {
 }
 
 impl OpenAiTranscriber {
+    /// Erzeugt einen lokalen Whisper-Client aus bereits geprüfter Laufzeitconfig.
+    /// Der Aufrufer liefert die vollständige lokale Transkriptionsadresse.
+    pub fn from_local_config(
+        endpoint: &str,
+        model: &str,
+        timeout: Duration,
+    ) -> Result<Self, &'static str> {
+        let url = reqwest::Url::parse(endpoint).map_err(|_| "STT-Adresse ist ungültig.")?;
+        let local_host = url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        });
+        if url.scheme() != "http"
+            || !local_host
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || model.trim().is_empty()
+            || timeout.is_zero()
+        {
+            return Err("Clip-Kontext erlaubt nur lokalen STT-Betrieb.");
+        }
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "STT-Verbindung konnte nicht vorbereitet werden.")?;
+        Ok(Self {
+            api_key: "local".to_string(),
+            model: model.to_string(),
+            base_url: endpoint.to_string(),
+            ffmpeg_bin: "ffmpeg".to_string(),
+            http,
+            temp_dir: None,
+        })
+    }
+
     /// Aus Env: `OPENAI_WHISPER_MODEL` (Legacy, Default `whisper-1`) und
     /// `FFMPEG_BIN` (Default `ffmpeg`).
     ///

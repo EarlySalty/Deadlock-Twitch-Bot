@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
+use tb_config::stt::SttConfig;
 use tb_engagement::transcribe::OpenAiTranscriber;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -456,18 +457,31 @@ async fn apply_chat(
     Ok(())
 }
 
-async fn apply_speech(path: &Path, timeline: &mut [ContextSecond], enabled: bool) -> String {
-    if !enabled {
+async fn apply_speech(
+    path: &Path,
+    timeline: &mut [ContextSecond],
+    enabled: bool,
+    config: &SttConfig,
+) -> String {
+    if !enabled || config.remote_endpoint.is_some() || !config.host.is_loopback() {
         return "unavailable".to_owned();
     }
-    let Some(stt) = OpenAiTranscriber::from_env_with_timeout(Duration::from_secs(900)) else {
-        return "unavailable".to_owned();
+    let endpoint = format!("{}/v1/audio/transcriptions", config.local_origin());
+    let stt = match OpenAiTranscriber::from_local_config(
+        &endpoint,
+        &config.model,
+        Duration::from_secs(config.timeout_seconds),
+    ) {
+        Ok(stt) => stt,
+        Err(_) => return "unavailable".to_owned(),
     };
-    if !stt.is_local() {
-        return "nonlocal_refused".to_owned();
-    }
-    match stt.transcribe_clip(path).await {
-        Ok(result) if !result.segments.is_empty() => {
+    let transcription = tokio::time::timeout(
+        Duration::from_secs(config.extraction_timeout_seconds),
+        stt.transcribe_clip(path),
+    )
+    .await;
+    match transcription {
+        Ok(Ok(result)) if !result.segments.is_empty() => {
             for segment in result.segments {
                 let start = segment.start_seconds.floor().max(0.0) as usize;
                 let end = segment.end_seconds.ceil().max(segment.start_seconds + 1.0) as usize;
@@ -484,21 +498,27 @@ async fn apply_speech(path: &Path, timeline: &mut [ContextSecond], enabled: bool
             }
             "timestamped".to_owned()
         }
-        Ok(_) => "no_segments".to_owned(),
-        Err(error) => format!("failed:{error}"),
+        Ok(Ok(_)) => "no_segments".to_owned(),
+        Ok(Err(error)) => format!("failed:{error}"),
+        Err(_) => "failed:timeout".to_owned(),
     }
 }
 
-async fn stt_health() -> bool {
+async fn stt_health(config: &SttConfig) -> bool {
+    if config.remote_endpoint.is_some() || !config.host.is_loopback() {
+        return false;
+    }
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(config.timeout_seconds))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(client) => client,
         Err(_) => return false,
     };
     client
-        .get("http://127.0.0.1:8791/health")
+        .get(format!("{}/health", config.local_origin()))
         .send()
         .await
         .is_ok_and(|response| response.status().is_success())
@@ -554,6 +574,7 @@ pub async fn harvest(
     write_pool: &PgPool,
     clip: &ClipInput,
     stt_enabled: bool,
+    stt_config: &SttConfig,
 ) -> Result<HarvestResult, String> {
     let start = clip.moment_offset_s.saturating_sub(90).max(0);
     let end = clip.moment_offset_s.saturating_add(90);
@@ -621,7 +642,7 @@ pub async fn harvest(
         Err(error) => format!("ocr_failed:{error}"),
     };
     apply_chat(read_pool, clip, start, &mut timeline).await?;
-    let stt_status = apply_speech(&media, &mut timeline, stt_enabled).await;
+    let stt_status = apply_speech(&media, &mut timeline, stt_enabled, stt_config).await;
     save_timeline(write_pool, clip, &timeline, &stt_status, &visual_status).await?;
     Ok(HarvestResult {
         clip_id: clip.clip_id.clone(),
@@ -632,13 +653,12 @@ pub async fn harvest(
     })
 }
 
-pub async fn available_stt() -> bool {
-    stt_health().await
+pub async fn available_stt(config: &SttConfig) -> bool {
+    stt_health(config).await
 }
 
 pub async fn load_clips(
     read_pool: &PgPool,
-    write_pool: &PgPool,
     limit: i64,
     clip_id: Option<&str>,
 ) -> Result<Vec<ClipInput>, String> {
@@ -670,7 +690,7 @@ pub async fn load_clips(
             "SELECT requested_at,moment_offset_s,vod_id FROM twitch_clip_command_events WHERE clip_id=$1",
         )
         .bind(&clip_id)
-        .fetch_optional(write_pool)
+        .fetch_optional(read_pool)
         .await
         .map_err(|e| e.to_string())?;
         let created_at: DateTime<Utc> = row.try_get("created_at").map_err(|e| e.to_string())?;
