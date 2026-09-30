@@ -52,6 +52,8 @@ export interface ChallengeSeason {
   active_partners: number;
 }
 
+export type ChallengeAssignmentStatus = 'assigned' | 'no_reachable_quests';
+
 export interface ChallengesMe {
   twitch_user_id: string;
   next_reset_at: string;
@@ -59,6 +61,7 @@ export interface ChallengesMe {
   timezone: string;
   streamer: string;
   quests: ChallengeQuest[];
+  quest_assignment_status: ChallengeAssignmentStatus;
   streak: ChallengeStreak;
   level: ChallengeLevel;
   next_goal: ChallengeNextGoal;

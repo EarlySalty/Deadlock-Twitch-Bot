@@ -438,9 +438,8 @@ pub struct DashboardAuthState {
     central_admin_validation_cache: Arc<Mutex<TimedCache<bool>>>,
     /// Cache für Partner-Sessions (twitch).
     partner_cache: Arc<Mutex<TimedCache<PartnerSession>>>,
-    /// Cache für die aus `twitch_partners` aufgelöste `twitch_user_id` eines
-    /// Admin-Logins (Owner-/Master-Session), keyed auf den kleingeschriebenen Login.
-    admin_user_id_cache: Arc<Mutex<TimedCache<String>>>,
+    /// Unveränderliche Twitch-User-ID des Betreibers aus der normalen Konfiguration.
+    admin_twitch_user_id: Option<String>,
 }
 
 impl DashboardAuthState {
@@ -454,8 +453,22 @@ impl DashboardAuthState {
             admin_cache: Arc::new(Mutex::new(TimedCache::default())),
             central_admin_validation_cache: Arc::new(Mutex::new(TimedCache::default())),
             partner_cache: Arc::new(Mutex::new(TimedCache::default())),
-            admin_user_id_cache: Arc::new(Mutex::new(TimedCache::default())),
+            admin_twitch_user_id: None,
         }
+    }
+
+    /// Bindet Twitch-Adminrechte an eine konfigurierte, positive Twitch-User-ID.
+    /// Ungültige oder fehlende IDs bleiben fail-closed.
+    pub fn with_admin_twitch_user_id(mut self, user_id: Option<String>) -> Self {
+        self.admin_twitch_user_id = user_id.filter(|id| {
+            id.bytes().all(|byte| byte.is_ascii_digit())
+                && id.parse::<u64>().is_ok_and(|parsed| parsed > 0)
+        });
+        self
+    }
+
+    pub fn admin_twitch_user_id(&self) -> Option<&str> {
+        self.admin_twitch_user_id.as_deref()
     }
 
     /// Prüft, ob diese zentrale Discord-Admin-Session in den letzten 30 Sekunden
@@ -485,47 +498,6 @@ impl DashboardAuthState {
             CENTRAL_ADMIN_VALIDATION_CACHE_TTL_SECS,
             now,
         );
-    }
-
-    /// Löst die `twitch_user_id` eines aktiven Partners für den gegebenen Login auf.
-    ///
-    /// Dient der Owner-/Master-Session, die aus dem Discord-Admin-Cookie entsteht
-    /// und keine eigene Twitch-Identität trägt. Handler, die auf die Twitch-User-ID
-    /// schlüsseln, bekommen so die echte ID statt einer leeren. Ergebnis wird mit
-    /// `CACHE_TTL_SECS` gecacht, damit nicht jeder Request eine DB-Abfrage auslöst.
-    /// Kein Treffer oder DB-Fehler → leerer String (fail-open wie bisher).
-    pub async fn resolve_admin_user_id(&self, login: &str) -> String {
-        let login = login.trim().to_lowercase();
-        if login.is_empty() {
-            return String::new();
-        }
-        let now = unix_now();
-        {
-            let cache = self.admin_user_id_cache.lock().await;
-            if let Some(user_id) = cache.get(&login, now) {
-                return user_id.clone();
-            }
-        }
-        let resolved: Option<String> = sqlx::query_scalar(
-            "SELECT twitch_user_id FROM twitch_partners \
-             WHERE LOWER(twitch_login) = $1 AND COALESCE(status, '') = 'active' \
-             ORDER BY COALESCE(departnered_at, admin_archived_at, partnered_at) DESC \
-             LIMIT 1",
-        )
-        .bind(&login)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or_else(|err| {
-            tracing::warn!(error = %err, login = %login, "Admin-user_id-Lookup fehlgeschlagen");
-            None
-        });
-        let user_id = resolved.unwrap_or_default();
-        {
-            let mut cache = self.admin_user_id_cache.lock().await;
-            cache.prune(now);
-            cache.insert(login, user_id.clone(), CACHE_TTL_SECS, now);
-        }
-        user_id
     }
 
     /// Referenz auf den DB-Pool (für Resolver, die ihn brauchen, z. B. der
@@ -559,12 +531,17 @@ impl DashboardAuthState {
     /// Public contest identities share the encrypted dashboard session store.
     /// This session type is deliberately never accepted by the partner/admin gates.
     pub async fn create_clip_contest_session(
-        &self, provider: &str, user_id: &str, display_name: &str,
+        &self,
+        provider: &str,
+        user_id: &str,
+        display_name: &str,
     ) -> Result<SessionCreation, sqlx::Error> {
         if !matches!(provider, "discord" | "twitch")
             || user_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
         {
-            return Err(sqlx::Error::InvalidArgument("invalid contest identity".into()));
+            return Err(sqlx::Error::InvalidArgument(
+                "invalid contest identity".into(),
+            ));
         }
         let now = unix_now();
         let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
@@ -575,27 +552,53 @@ impl DashboardAuthState {
             "identity_version": 1, "csrf_token": csrf_token,
             "created_at": now as f64, "expires_at": expires_at,
         });
-        self.persist_new_session(&session_id, "clip_contest", &payload,
-            now as f64, expires_at).await?;
-        Ok(SessionCreation { session_id, csrf_token })
+        self.persist_new_session(
+            &session_id,
+            "clip_contest",
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await?;
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
     }
 
     pub async fn load_clip_contest_session(
-        &self, token: &str,
+        &self,
+        token: &str,
     ) -> Result<Option<(String, String, String)>, sqlx::Error> {
-        if !(20..=128).contains(&token.len()) { return Ok(None); }
+        if !(20..=128).contains(&token.len()) {
+            return Ok(None);
+        }
         let now = unix_now();
-        let Some(payload) = self.fetch_session_payload(
-            token, "clip_contest", now).await? else { return Ok(None); };
+        let Some(payload) = self
+            .fetch_session_payload(token, "clip_contest", now)
+            .await?
+        else {
+            return Ok(None);
+        };
         if payload_expired(&payload, now)
             || payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1)
-        { return Ok(None); }
-        let field = |name: &str| payload.get(name).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        {
+            return Ok(None);
+        }
+        let field = |name: &str| {
+            payload
+                .get(name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         let provider = field("provider");
         let user_id = field("user_id");
         if !matches!(provider.as_str(), "discord" | "twitch")
             || user_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
-        { return Ok(None); }
+        {
+            return Ok(None);
+        }
         Ok(Some((provider, user_id, field("display_name"))))
     }
 

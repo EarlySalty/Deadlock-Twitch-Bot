@@ -63,6 +63,13 @@ pub struct SeasonResponse {
     pub active_partners: i64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestAssignmentStatus {
+    Assigned,
+    NoReachableQuests,
+}
+
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     pub twitch_user_id: String,
@@ -72,6 +79,7 @@ pub struct MeResponse {
     pub timezone: &'static str,
     pub streamer: String,
     pub quests: Vec<QuestResponse>,
+    pub quest_assignment_status: QuestAssignmentStatus,
     pub streak: StreakResponse,
     pub level: LevelResponse,
     pub next_goal: NextGoalResponse,

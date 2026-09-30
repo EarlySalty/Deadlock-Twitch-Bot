@@ -26,13 +26,10 @@ use axum::{
 };
 use std::net::{IpAddr, SocketAddr};
 
-/// Twitch-Session-Identität eines per OAuth eingeloggten Admins (senderauth-01).
+/// Twitch-Session-Identität des per OAuth authentifizierten Betreibers.
 ///
-/// Wird gesetzt, wenn ein Twitch-Login mit Admin-Rechten (`TWITCH_ADMIN_LOGINS`,
-/// z. B. `earlysalty`) zum `DashboardAuthLevel::Admin` promoted wird. Trägt die
-/// Session-Identität weiter, damit Handler sie für die Audit-Attribution
-/// (z. B. `enabled_by`) nutzen können — analog zu Pythons `_extract_session_user`,
-/// das `actor_id`/`actor_login` IMMER aus der Session liest, auch bei `admin`.
+/// Wird nur gesetzt, wenn die verifizierte Twitch-User-ID mit
+/// `dashboard.options.admin_twitch_user_id` übereinstimmt und der Admin-Modus aktiv ist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminActor {
     pub twitch_user_id: String,
@@ -221,15 +218,8 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
     cookie_values(&parts.headers, name).into_iter().next()
 }
 
-/// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin).
-/// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
+/// Twitch-Login des Owners nur als Anzeigefallback, niemals als Berechtigungsnachweis.
 pub(crate) const DEFAULT_ADMIN_LOGIN: &str = "earlysalty";
-const TWITCH_ADMIN_LOGINS: &[&str] = &[DEFAULT_ADMIN_LOGIN];
-
-pub(crate) fn is_admin_login(login: &str) -> bool {
-    let login = login.trim().to_lowercase();
-    TWITCH_ADMIN_LOGINS.contains(&login.as_str())
-}
 
 fn admin_mode_cookie_active(parts: &Parts) -> bool {
     extract_cookie(parts, crate::handlers::auth_status::ADMIN_MODE_COOKIE) == Some("2")
@@ -282,12 +272,13 @@ fn master_owner_identity(auth: DashboardAuthLevel, user_id: String) -> Dashboard
     }
 }
 
-/// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
-/// nur bei aktivem Admin-Mode-Cookie, sonst bleibt auch ein admin-eligibler Login
-/// Partner.
+/// Macht eine Partner-Session nur dann zum Admin, wenn die verifizierte Twitch-ID
+/// der dauerhaft konfigurierten Betreiber-ID entspricht. Das Modus-Cookie wählt
+/// ausschließlich die Ansicht und ist selbst kein Berechtigungsnachweis.
 fn partner_or_admin(
     partner: crate::auth::session::PartnerSession,
     admin_mode_active: bool,
+    admin_twitch_user_id: Option<&str>,
 ) -> DashboardAuthLevel {
     if partner.twitch_user_id.is_empty()
         || !partner.twitch_user_id.bytes().all(|c| c.is_ascii_digit())
@@ -295,10 +286,7 @@ fn partner_or_admin(
         return DashboardAuthLevel::None;
     }
     let login = partner.twitch_login.trim().to_lowercase();
-    if is_admin_login(&login) && admin_mode_active {
-        // senderauth-01: Twitch-Session-Identität an den Admin durchreichen, damit
-        // Handler sie für die Audit-Attribution nutzen können (Python liest
-        // actor_id/actor_login IMMER aus der Session, auch bei auth_level='admin').
+    if admin_mode_active && admin_twitch_user_id == Some(partner.twitch_user_id.as_str()) {
         return DashboardAuthLevel::Admin {
             actor: Some(AdminActor {
                 twitch_user_id: partner.twitch_user_id,
@@ -356,7 +344,11 @@ where
                             parts
                                 .extensions
                                 .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
-                            return Ok(partner_or_admin(partner, admin_mode_active));
+                            return Ok(partner_or_admin(
+                                partner,
+                                admin_mode_active,
+                                state.admin_twitch_user_id(),
+                            ));
                         }
                     }
                 }
@@ -379,7 +371,11 @@ where
                             .load_partner_access_session(session_id, user_agent)
                             .await
                         {
-                            return Ok(partner_or_admin(partner, admin_mode_active));
+                            return Ok(partner_or_admin(
+                                partner,
+                                admin_mode_active,
+                                state.admin_twitch_user_id(),
+                            ));
                         }
                     }
                 }
@@ -456,7 +452,7 @@ where
                     .insert(AuthenticatedAdminSessionId(session_id));
                 let mut auth = master_session_auth(admin_dashboard, admin_mode_active);
                 if !admin_dashboard {
-                    let user_id = state.resolve_admin_user_id(DEFAULT_ADMIN_LOGIN).await;
+                    let user_id = state.admin_twitch_user_id().unwrap_or_default().to_string();
                     auth = master_owner_identity(auth, user_id);
                 }
                 return Ok(auth);
@@ -631,7 +627,7 @@ mod tests {
                 display_name: String::new(),
             };
             assert!(matches!(
-                partner_or_admin(session, true),
+                partner_or_admin(session, true, Some("42")),
                 DashboardAuthLevel::None
             ));
         }
@@ -641,7 +637,7 @@ mod tests {
             display_name: String::new(),
         };
         assert!(
-            matches!(partner_or_admin(session, false), DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id == "42")
+            matches!(partner_or_admin(session, false, Some("42")), DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id == "42")
         );
     }
 
@@ -671,10 +667,42 @@ mod tests {
     }
 
     #[test]
-    fn is_admin_login_normalisiert() {
-        assert!(is_admin_login(" earlysalty "));
-        assert!(is_admin_login("EarlySalty"));
-        assert!(!is_admin_login("someoneelse"));
+    fn admin_promotion_uses_verified_platform_id_not_reused_login() {
+        let original = crate::auth::session::PartnerSession {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "Owner".into(),
+        };
+        assert!(matches!(
+            partner_or_admin(original, true, Some("42")),
+            DashboardAuthLevel::Admin { actor: Some(AdminActor { twitch_user_id, .. }) }
+                if twitch_user_id == "42"
+        ));
+
+        let reassigned_login = crate::auth::session::PartnerSession {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "99".into(),
+            display_name: "New account".into(),
+        };
+        assert!(matches!(
+            partner_or_admin(reassigned_login, true, Some("42")),
+            DashboardAuthLevel::Partner { twitch_user_id, .. }
+                if twitch_user_id == "99"
+        ));
+    }
+
+    #[test]
+    fn fehlende_betreiber_id_verhindert_admin_promotion() {
+        let session = crate::auth::session::PartnerSession {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "Owner".into(),
+        };
+        assert!(matches!(
+            partner_or_admin(session, true, None),
+            DashboardAuthLevel::Partner { twitch_user_id, .. }
+                if twitch_user_id == "42"
+        ));
     }
 
     fn local_parts(extra_header: Option<(&str, &str)>) -> Parts {

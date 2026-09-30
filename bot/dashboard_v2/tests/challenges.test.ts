@@ -33,7 +33,14 @@ test('Wochenaufgaben kommen vollständig aus der Engine ohne erfundene Ergänzun
   assert.match(PAGE, /freeze_used_this_month/);
 });
 
-test('Challenges zeigt Ziel, Wochenfortschritt, Erfolge und Werber', () => {
+test('leerer erreichbarer Quest-Pool wird als Partnerstatus angezeigt', () => {
+  assert.match(API, /'assigned' \| 'no_reachable_quests'/);
+  assert.match(API, /quest_assignment_status: ChallengeAssignmentStatus/);
+  assert.match(PAGE, /quest_assignment_status === 'no_reachable_quests'/);
+  assert.ok(PAGE.includes('Diese Woche ist gerade keine Aufgabe für dich erreichbar.'));
+  assert.ok(PAGE.includes('Die Monatswertung läuft unabhängig davon weiter.'));
+});
+
   for (const text of ['Diese Woche', 'Mit uns erreicht', 'Deine Werber', 'Einsatz (Monat)']) {
     assert.ok(PAGE.includes(text), `${text} fehlt`);
   }

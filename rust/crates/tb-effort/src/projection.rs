@@ -345,7 +345,7 @@ impl Engine {
         }
         let partner = self.partner(id).await?;
         let (_, next_reset_at, week_start) = berlin_week_bounds(now);
-        let quests = self.quests(id, week_start).await?;
+        let (quests, quest_assignment_status) = self.quests(id, week_start).await?;
         let streak = self.streak(id, now).await?;
         let achievements = self.achievements(id, &streak).await?;
         let (level, next_goal) = self.level(id, now, &quests).await?;
@@ -359,6 +359,7 @@ impl Engine {
             timezone: "Europe/Berlin",
             streamer: partner.login,
             quests,
+            quest_assignment_status,
             streak,
             level,
             next_goal,

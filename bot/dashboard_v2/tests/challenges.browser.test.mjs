@@ -10,6 +10,7 @@ import { createServer } from 'vite';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
 const ARTIFACTS = path.join(REPO, 'docs', 'screenshots', 'challenges');
+let emptyQuestMode = false;
 
 const AUTH = {
   authenticated: true,
@@ -149,7 +150,11 @@ function payloadFor(pathname) {
   if (pathname.endsWith('/internal-home')) {
     return { twitchLogin: 'test_partner', displayName: 'Test Partner', avatarUrl: null };
   }
-  if (pathname.endsWith('/challenges/me')) return CHALLENGES_ME;
+  if (pathname.endsWith('/challenges/me')) {
+    return emptyQuestMode
+      ? { ...CHALLENGES_ME, quests: [], quest_assignment_status: 'no_reachable_quests' }
+      : { ...CHALLENGES_ME, quest_assignment_status: 'assigned' };
+  }
   if (pathname.endsWith('/challenges/viewers')) return CHALLENGE_VIEWERS;
   if (pathname.endsWith('/leaderboard/effort')) return EFFORT_LEADERBOARD;
   if (pathname.endsWith('/leaderboard')) return VIEWER_LEADERBOARD;
@@ -192,8 +197,7 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
   await server.listen();
   t.after(async () => server.close());
 
-  const executablePath = process.env.BROWSER_BIN
-    || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/usr/bin/brave-browser'].find(existsSync);
+  const executablePath = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/usr/bin/brave-browser'].find(existsSync);
   assert.ok(executablePath, 'Chromium installieren oder BROWSER_BIN setzen.');
 
   const browser = await chromium.launch({
@@ -236,6 +240,18 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-mobile.png'), fullPage: true });
+
+  emptyQuestMode = true;
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
+  await page.getByRole('status').getByText('Diese Woche ist gerade keine Aufgabe für dich erreichbar.').waitFor();
+  await page.getByText('Bringe 1 neue aktive Person in den Discord', { exact: true }).waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
+  await page.getByText('Deine Position').waitFor();
+  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-no-quests-desktop.png'), fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-no-quests-mobile.png'), fullPage: true });
 
   assert.deepEqual(consoleErrors, []);
   await context.close();

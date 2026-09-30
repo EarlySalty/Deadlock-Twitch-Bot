@@ -71,6 +71,13 @@ struct Assignment {
     rules_hash: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AssignmentOutcome {
+    AlreadyAssigned,
+    Assigned,
+    NoReachableQuests,
+}
+
 impl Engine {
     pub(crate) async fn invite_available(
         &self,
@@ -97,12 +104,12 @@ impl Engine {
         Ok(available)
     }
 
-    async fn assign(&self, partner: &Partner, now: DateTime<Utc>) -> Result<()> {
+    async fn assign(&self, partner: &Partner, now: DateTime<Utc>) -> Result<AssignmentOutcome> {
         let (_, _, week) = berlin_week_bounds(now);
         let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2")
             .bind(&partner.twitch_user_id).bind(week).fetch_one(&self.pool).await?;
         if (1..=3).contains(&existing) {
-            return Ok(());
+            return Ok(AssignmentOutcome::AlreadyAssigned);
         }
         if existing != 0 {
             return Err(Error::Invalid("quest_assignment_count"));
@@ -136,7 +143,7 @@ impl Engine {
             available.push(QuestKind::Clip);
         }
         if available.is_empty() {
-            return Ok(());
+            return Ok(AssignmentOutcome::NoReachableQuests);
         }
         let selected = draw(&partner.twitch_user_id, week, &available)?;
         let mut tx = self.pool.begin().await?;
@@ -153,7 +160,7 @@ impl Engine {
                 .execute(&mut *tx).await?;
         }
         tx.commit().await?;
-        Ok(())
+        Ok(AssignmentOutcome::Assigned)
     }
 
     pub(crate) async fn clip_available(
@@ -241,12 +248,23 @@ impl Engine {
         ))
     }
 
-    pub(crate) async fn quests(&self, id: &str, week: NaiveDate) -> Result<Vec<QuestResponse>> {
-        let mut result = Vec::new();
-        for q in self.assignments(id, week).await? {
-            result.push(self.quest_progress(id, week, &q).await?.0);
+    pub(crate) async fn quests(
+        &self,
+        id: &str,
+        week: NaiveDate,
+    ) -> Result<(Vec<QuestResponse>, crate::types::QuestAssignmentStatus)> {
+        let assignments = self.assignments(id, week).await?;
+        if assignments.is_empty() {
+            return Ok((
+                Vec::new(),
+                crate::types::QuestAssignmentStatus::NoReachableQuests,
+            ));
         }
-        Ok(result)
+        let mut result = Vec::new();
+        for q in &assignments {
+            result.push(self.quest_progress(id, week, q).await?.0);
+        }
+        Ok((result, crate::types::QuestAssignmentStatus::Assigned))
     }
 
     async fn reward_quests(&self, id: &str, week: NaiveDate, now: DateTime<Utc>) -> Result<()> {
@@ -317,7 +335,12 @@ impl Engine {
         coverage?;
         self.refresh_stream_evidence(now).await?;
         for partner in self.active_partners().await? {
-            self.assign(&partner, now).await?;
+            match self.assign(&partner, now).await? {
+                AssignmentOutcome::AlreadyAssigned | AssignmentOutcome::Assigned => {}
+                // Kein erreichbarer Pool ist ein Zustand dieses Partners, kein
+                // Quellenfehler. Das Settlement für weitere Partner läuft weiter.
+                AssignmentOutcome::NoReachableQuests => {}
+            }
             let weeks: Vec<NaiveDate> = sqlx::query_scalar("SELECT DISTINCT week_start FROM partner_effort_weekly_quests q WHERE partner_twitch_user_id=$1 AND week_start <= $2 AND NOT EXISTS(SELECT 1 FROM partner_effort_events e WHERE e.partner_twitch_user_id=q.partner_twitch_user_id AND e.event_type='quest_done' AND e.source_id='quest:' || q.partner_twitch_user_id || ':' || q.week_start::text || ':all_three') ORDER BY week_start")
                 .bind(&partner.twitch_user_id).bind(berlin_week_start(now)).fetch_all(&self.pool).await?;
             for week in weeks {

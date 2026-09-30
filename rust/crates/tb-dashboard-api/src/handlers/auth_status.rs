@@ -7,10 +7,10 @@
 //! All-null-Payload beantwortet.
 
 use axum::{
-    Json,
     extract::{Extension, State},
-    http::{HeaderMap, header},
+    http::{header, HeaderMap},
     response::{IntoResponse, Response},
+    Json,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -20,8 +20,8 @@ use tokio::sync::Mutex;
 
 use crate::auth::{
     level::{
-        AdminActor, AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DEFAULT_ADMIN_LOGIN,
-        DashboardAuthLevel, is_admin_login,
+        AdminActor, AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DashboardAuthLevel,
+        DEFAULT_ADMIN_LOGIN,
     },
     session::DashboardAuthState,
 };
@@ -81,17 +81,23 @@ pub async fn auth_status_handler(
     State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Response {
+    let configured_admin_twitch_user_id = auth_state
+        .as_ref()
+        .and_then(|Extension(state)| state.admin_twitch_user_id())
+        .map(str::to_string);
+    let partner_admin_eligible = match &auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => configured_admin_twitch_user_id
+            .as_deref()
+            .is_some_and(|configured| configured == twitch_user_id),
+        _ => false,
+    };
     let csrf_token = match (admin_session, partner_session, auth_state) {
-        (Some(Extension(session)), _, Some(Extension(state))) => state
-            .admin_csrf_token(&session.0)
-            .await
-            .ok()
-            .flatten(),
-        (_, Some(Extension(session)), Some(Extension(state))) => state
-            .partner_csrf_token(&session.0)
-            .await
-            .ok()
-            .flatten(),
+        (Some(Extension(session)), _, Some(Extension(state))) => {
+            state.admin_csrf_token(&session.0).await.ok().flatten()
+        }
+        (_, Some(Extension(session)), Some(Extension(state))) => {
+            state.partner_csrf_token(&session.0).await.ok().flatten()
+        }
         _ => None,
     };
     match &auth {
@@ -123,7 +129,7 @@ pub async fn auth_status_handler(
                 &pool,
                 twitch_login,
                 twitch_user_id,
-                is_admin_login(twitch_login),
+                partner_admin_eligible,
                 false,
                 csrf_token.as_deref(),
             )
@@ -365,11 +371,11 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{HeaderMap, Request, StatusCode},
         routing::get,
+        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
@@ -433,16 +439,15 @@ mod tests {
             axum::http::header::COOKIE,
             axum::http::HeaderValue::from_static("tb_admin_mode=2"),
         );
-        let response =
-            auth_status_handler(
-                twitch_admin(),
-                None,
-                None,
-                None,
-                State(unavailable_pool()),
-                headers,
-            )
-            .await;
+        let response = auth_status_handler(
+            twitch_admin(),
+            None,
+            None,
+            None,
+            State(unavailable_pool()),
+            headers,
+        )
+        .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], true);
@@ -463,7 +468,14 @@ mod tests {
 
     #[tokio::test]
     async fn admin_response_liefert_session_csrf() {
-        let value = json_body(admin_response("admin", false, true, Some("session-csrf"), None)).await;
+        let value = json_body(admin_response(
+            "admin",
+            false,
+            true,
+            Some("session-csrf"),
+            None,
+        ))
+        .await;
 
         assert_eq!(value["csrfToken"], "session-csrf");
         assert_eq!(value["csrf_token"], "session-csrf");
@@ -491,16 +503,15 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_actor_ohne_mode_cookie_sieht_partner_praesentation() {
-        let response =
-            auth_status_handler(
-                twitch_admin(),
-                None,
-                None,
-                None,
-                State(unavailable_pool()),
-                HeaderMap::new(),
-            )
-            .await;
+        let response = auth_status_handler(
+            twitch_admin(),
+            None,
+            None,
+            None,
+            State(unavailable_pool()),
+            HeaderMap::new(),
+        )
+        .await;
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], false);
@@ -512,11 +523,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partner_admin_login_ist_admin_eligible_aber_nicht_admin() {
+    async fn reused_login_is_not_admin_eligible_without_operator_id() {
         let response = auth_status_handler(
             DashboardAuthLevel::Partner {
                 twitch_login: "earlysalty".to_string(),
-                twitch_user_id: "42".to_string(),
+                twitch_user_id: "99".to_string(),
                 display_name: "EarlySalty".to_string(),
             },
             None,
@@ -529,7 +540,7 @@ mod tests {
         let value = json_body(response).await;
 
         assert_eq!(value["isAdmin"], false);
-        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminEligible"], false);
         assert_eq!(value["adminMode"], false);
     }
 

@@ -93,6 +93,7 @@ pub struct DashboardOptions {
     pub admin_public_url: Option<String>,
     pub discord_oauth_broker_url: String,
     pub admin_owner_user_id: Option<u64>,
+    pub admin_twitch_user_id: Option<String>,
     pub admin_guild_ids: Vec<u64>,
     pub shared_admin_cookie_domain: String,
     pub demo_login_twitch_user_id: Option<String>,
@@ -134,6 +135,7 @@ impl Default for DashboardOptions {
             admin_public_url: None,
             discord_oauth_broker_url: "http://127.0.0.1:8770".into(),
             admin_owner_user_id: None,
+            admin_twitch_user_id: None,
             admin_guild_ids: Vec::new(),
             shared_admin_cookie_domain: "deutsche-deadlock-community.de".into(),
             demo_login_twitch_user_id: None,
@@ -268,6 +270,7 @@ impl DashboardOptions {
             .additional_bot_user_ids
             .iter()
             .chain(self.demo_login_twitch_user_id.iter())
+            .chain(self.admin_twitch_user_id.iter())
         {
             crate::global::positive_id(id, "dashboard.options.twitch_user_id")?;
         }
@@ -339,6 +342,17 @@ mod brain_client_tests {
         let config = DashboardOptions::default();
         assert!(config.validate().is_ok());
         assert_eq!(config.brain_client.mode, BrainClientMode::Legacy);
+    }
+
+    #[test]
+    fn admin_twitch_id_muss_eine_positive_plattform_id_sein() {
+        let mut config = DashboardOptions::default();
+        config.admin_twitch_user_id = Some("123456".into());
+        assert!(config.validate().is_ok());
+        config.admin_twitch_user_id = Some("earlysalty".into());
+        assert!(config.validate().is_err());
+        config.admin_twitch_user_id = Some("0".into());
+        assert!(config.validate().is_err());
     }
 
     #[test]

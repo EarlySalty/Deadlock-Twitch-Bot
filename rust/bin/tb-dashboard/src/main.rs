@@ -500,7 +500,13 @@ async fn main() {
     // v2-Routen. Ohne Key bleibt der Extractor fail-closed (Localhost/None).
     match tb_dashboard_api::DashboardAuthState::fernet_key_from_env() {
         Some(key) => {
-            let auth_state = tb_dashboard_api::DashboardAuthState::new(pool.clone(), key);
+            let auth_state = tb_dashboard_api::DashboardAuthState::new(pool.clone(), key)
+                .with_admin_twitch_user_id(config.dashboard.options.admin_twitch_user_id.clone());
+            if auth_state.admin_twitch_user_id().is_none() {
+                tracing::warn!(
+                    "dashboard.options.admin_twitch_user_id fehlt oder ist ungültig; Twitch-Admin-Promotion bleibt deaktiviert"
+                );
+            }
             app = app.layer(axum::Extension(auth_state));
             tracing::info!("Dashboard-Session-Auth aktiv (Fernet-Key geladen)");
         }

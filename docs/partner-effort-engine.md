@@ -35,7 +35,7 @@ Postgres sperrt konkurrierende Vergaben je Partner und Woche. Eine Quellen-ID is
 
 Alle Wochen beginnen Montag 00:00 in `Europe/Berlin`. Grenzen werden als lokale Kalendertage berechnet und erst dann in UTC umgerechnet; Wochen mit Zeitumstellung dauern korrekt 167 beziehungsweise 169 Stunden.
 
-Pro Woche werden bis zu drei erreichbare Aufgaben aus Partner-Twitch-ID, Wochenbeginn und Aufgabenkennung deterministisch ausgewählt und gespeichert. Party-Aufgaben brauchen verknüpfte Mitspieler, Stream Together einen weiteren aktiven Partner. Der Contest ist nur bei erreichbarem Einreichungsfenster und verfügbarem Monatskontingent im Pool. Gibt es in einer Woche lediglich Einladung und Stream-Verlängerung, werden genau diese zwei Aufgaben vergeben; der Bonus folgt dem Abschluss beider. Ein leerer Pool bleibt ein Fehler. Die API liefert deshalb eine Liste mit einer bis drei Aufgaben, keine feste Dreiergruppe.
+Pro Woche werden bis zu drei erreichbare Aufgaben aus Partner-Twitch-ID, Wochenbeginn und Aufgabenkennung deterministisch ausgewählt und gespeichert. Party-Aufgaben brauchen verknüpfte Mitspieler, Stream Together einen weiteren aktiven Partner. Der Contest ist nur bei erreichbarem Einreichungsfenster und verfügbarem Monatskontingent im Pool. Gibt es in einer Woche lediglich Einladung und Stream-Verlängerung, werden genau diese zwei Aufgaben vergeben; der Bonus folgt dem Abschluss beider. Ein leerer erreichbarer Pool ist ein partnerbezogener Zustand und kein globaler Quellenfehler. Die API liefert dann `quest_assignment_status: "no_reachable_quests"` und eine leere Aufgabenliste; andere Partner, Rangliste und Monatsabschluss laufen weiter. Echte Fehler oder nicht verfügbare Quellen bleiben Fehler. Bei vorhandenen Aufgaben liefert die API `quest_assignment_status: "assigned"` und eine Liste mit einer bis drei Aufgaben, keine feste Dreiergruppe.
 
 Die Zeitaufgabe bedeutet: **Deadlock-Minuten dieser Woche über dem Mittel der vier vorherigen vollständigen Berlin-Wochen**, plus die konfigurierten Zusatzminuten. Der Referenzwert und die Belohnungen werden bei Zuweisung eingefroren. Änderungen an der Konfiguration verändern eine laufende Aufgabe nicht. Fortschritt wird aus dem Ledger und den Zeitbelegen gelesen; auch verspätet belegte, bereits zugewiesene Vorwochenaufgaben werden abgerechnet. Für nie zugewiesene Ausfallwochen werden keine erfundenen Aufgaben erzeugt.
 
@@ -47,7 +47,7 @@ Lifetime-Punkte werden beim Monatswechsel nicht zurückgesetzt. Bereits verdient
 
 ## Persönliche API
 
-`GET /twitch/api/v2/challenges/me` liefert eine bis drei erreichbare Wochenaufgaben, Fortschritt und nächste Wochengrenze, Streak/Freeze, Lifetime-Level, nächstes Ziel, Achievement-Stufen, „mit uns“-Werte und den eigenen Monatsrang.
+`GET /twitch/api/v2/challenges/me` liefert Aufgabenstatus (`assigned` oder `no_reachable_quests`), eine bis drei erreichbare Wochenaufgaben oder eine leere Liste bei partnerbezogen leerem Pool, Fortschritt und nächste Wochengrenze, Streak/Freeze, Lifetime-Level, nächstes Ziel, Achievement-Stufen, „mit uns“-Werte und den eigenen Monatsrang.
 
 `GET /twitch/api/v2/challenges/viewers` liefert die maximal 50 besten eigenen Viewer-Werber mit qualifizierten Einladungen und über den vorhandenen Helix-Client aufgelösten Anzeigenamen. Ein von Twitch nicht mehr geliefertes Konto behält seine ID und erhält keinen erfundenen Anzeigenamen.
 

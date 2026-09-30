@@ -233,6 +233,8 @@ export function Challenges() {
 
   const countdown = useMondayCountdown(me.data?.next_reset_at);
   const quests = me.data?.quests ?? [];
+  const hasNoReachableQuests =
+    me.data?.quest_assignment_status === 'no_reachable_quests' || quests.length === 0;
   useEffect(() => {
     const resets = [me.data?.next_reset_at, me.data?.season.next_reset_at]
       .filter((value): value is string => Boolean(value))
@@ -330,11 +332,25 @@ export function Challenges() {
             </div>
           }
         />
-        <div className="grid gap-4 md:grid-cols-3">
-          {quests.map(quest => (
-            <QuestCard key={quest.key} quest={quest} />
-          ))}
-        </div>
+        {hasNoReachableQuests ? (
+          <div
+            role="status"
+            className="panel-card rounded-2xl border border-border p-4 md:p-5"
+          >
+            <p className="font-semibold text-white">
+              Diese Woche ist gerade keine Aufgabe für dich erreichbar.
+            </p>
+            <p className="mt-1 text-sm text-text-secondary">
+              Die Monatswertung läuft unabhängig davon weiter.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-3">
+            {quests.map(quest => (
+              <QuestCard key={quest.key} quest={quest} />
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="space-y-4">

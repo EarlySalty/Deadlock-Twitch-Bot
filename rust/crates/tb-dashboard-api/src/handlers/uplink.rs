@@ -17,10 +17,7 @@ use std::collections::HashMap;
 use tb_transport_twitch::{HelixClient, TwitchUser};
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
-use crate::auth::{
-    level::{is_admin_login, DashboardAuthLevel},
-    require_admin,
-};
+use crate::auth::{level::DashboardAuthLevel, require_admin};
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -487,19 +484,9 @@ pub async fn waitlist_handler(
     Ok(Json(wert))
 }
 
-/// Gate für die Uplink-Wartelistenverwaltung.
-///
-/// Zugelassen ist jeder Admin (Discord-Master oder per Twitch-OAuth promoteter
-/// Admin) und zusätzlich der Owner, der nur mit seiner Twitch-Identität
-/// eingeloggt ist: eine Partner-Session mit Admin-Login (`is_admin_login`, also
-/// `earlysalty`) verwaltet die Warteliste, ohne vorher den Admin-Modus
-/// einzuschalten. Ein normaler Partner bleibt draußen.
+/// Gate für die Uplink-Wartelistenverwaltung. Die zentrale Auth-Kaskade entscheidet
+/// anhand einer verifizierten Admin-Session, ob der Zugriff erlaubt ist.
 fn admin_pruefen(auth: &DashboardAuthLevel) -> Result<(), Response> {
-    if let DashboardAuthLevel::Partner { twitch_login, .. } = auth {
-        if is_admin_login(twitch_login) {
-            return Ok(());
-        }
-    }
     match require_admin(auth) {
         Some(fehler) => Err(fehler.into_response()),
         None => Ok(()),
@@ -573,14 +560,10 @@ fn mit_namen(mut wert: Value, users: &HashMap<String, TwitchUser>) -> Value {
 
 /// Wartende Uplink-Konten für die Admin-Box.
 ///
-/// Gate ist `admin_pruefen`: jeder Admin und zusätzlich der Owner, der nur mit
-/// seiner Twitch-Identität eingeloggt ist (Partner mit Admin-Login). So sieht
-/// und bedient der Owner die Warteliste auch ohne aktivierten Admin-Modus; ein
-/// normaler Partner bekommt weiterhin 403.
-///
-/// Die Einträge tragen nur die numerische `streamer_id`; für die Anzeige wird
-/// jeder Name best-effort über Twitch-Helix nachgeladen. Scheitert das (kein
-/// Secret, Twitch nicht erreichbar), bleibt die Liste mit den IDs erhalten.
+/// Nur die zentrale Auth-Kaskade kann eine Admin-Session ausstellen. Ein Twitch-Login
+/// ohne passende konfigurierte User-ID und aktiven Admin-Modus bleibt Partner.
+/// Die Einträge tragen numerische `streamer_id`s. Namen werden für die Anzeige
+/// best-effort über Twitch-Helix nachgeladen. Bei Ausfall bleiben die IDs erhalten.
 pub async fn admin_waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
     admin_pruefen(&auth)?;
     let wert = relay_json(reqwest::Method::GET, RELAY_ADMIN_WAITLIST_PFAD, None).await?;
@@ -749,12 +732,8 @@ pub async fn put_native_2k_hardware_handler(
             "2K-Hardwareprofil ist ungültig.",
         ));
     }
-    let bytes = serde_json::to_vec(&body.profile).map_err(|_| {
-        fehler(
-            StatusCode::BAD_REQUEST,
-            "2K-Hardwareprofil ist ungültig.",
-        )
-    })?;
+    let bytes = serde_json::to_vec(&body.profile)
+        .map_err(|_| fehler(StatusCode::BAD_REQUEST, "2K-Hardwareprofil ist ungültig."))?;
     if bytes.len() > 16 * 1024 {
         return Err(fehler(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -1038,7 +1017,9 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
     }
 
     if let Some(mode) = body.twitch_output_mode.as_deref() {
-        if body.platform.trim() != "twitch" || !matches!(mode, "single" | "enhanced" | "native_2k" | "native_2k_av1") {
+        if body.platform.trim() != "twitch"
+            || !matches!(mode, "single" | "enhanced" | "native_2k" | "native_2k_av1")
+        {
             return Err(fehler(
                 StatusCode::BAD_REQUEST,
                 "Twitch-Betriebsart ist ungültig.",
@@ -2044,15 +2025,13 @@ mod tests {
     }
 
     #[test]
-    fn wartelistenverwaltung_erlaubt_admin_und_owner_ohne_admin_modus() {
+    fn wartelistenverwaltung_erfordert_zentrale_admin_session() {
         let admin = DashboardAuthLevel::Admin { actor: None };
-        // Owner nur mit Twitch-Identität, ohne aktiven Admin-Modus.
-        let owner_partner = DashboardAuthLevel::Partner {
+        let namensgleicher_partner = DashboardAuthLevel::Partner {
             twitch_login: "earlysalty".into(),
-            twitch_user_id: "42".into(),
+            twitch_user_id: "99".into(),
             display_name: "Early".into(),
         };
-        // Normaler Partner bleibt draußen.
         let fremder_partner = DashboardAuthLevel::Partner {
             twitch_login: "someone".into(),
             twitch_user_id: "7".into(),
@@ -2060,7 +2039,10 @@ mod tests {
         };
 
         assert!(admin_pruefen(&admin).is_ok());
-        assert!(admin_pruefen(&owner_partner).is_ok());
+        assert_eq!(
+            admin_pruefen(&namensgleicher_partner).unwrap_err().status(),
+            StatusCode::FORBIDDEN
+        );
         assert_eq!(
             admin_pruefen(&fremder_partner).unwrap_err().status(),
             StatusCode::FORBIDDEN

@@ -1205,6 +1205,50 @@ async fn invite_quest_requires_a_join_that_can_qualify_during_its_week() {
 }
 
 #[tokio::test]
+async fn unreachable_quest_pool_is_partner_local_before_berlin_week_rollover() {
+    let (admin, pool, name) = fixture().await;
+    let cfg = Challenges::default();
+    let now = DateTime::parse_from_rfc3339("2026-09-27T23:59:00+02:00")
+        .unwrap()
+        .with_timezone(&Utc);
+    sqlx::query(
+        "INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) \
+         VALUES('104','latecomer','active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    insert_invite(&pool, 777701, cfg.community_guild_id, now).await;
+    let engine = Engine::new(pool.clone(), cfg, Some(pool.clone()), Some(idle_helix())).unwrap();
+
+    engine.ensure_ready(now).await.unwrap();
+
+    let latecomer = engine.me("104", now).await.unwrap();
+    assert!(latecomer.quests.is_empty());
+    assert_eq!(
+        latecomer.quest_assignment_status,
+        tb_effort::types::QuestAssignmentStatus::NoReachableQuests
+    );
+    assert!(latecomer.season.active_partners > 0);
+
+    let healthy_partner = engine.me("101", now).await.unwrap();
+    assert!(!healthy_partner.quests.is_empty());
+    assert_eq!(
+        healthy_partner.quest_assignment_status,
+        tb_effort::types::QuestAssignmentStatus::Assigned
+    );
+
+    pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
 async fn source_cursors_resume_and_reconcile_late_rows_without_starving_new_events() {
     let (admin, pool, name) = fixture().await;
     let cfg = Challenges {
