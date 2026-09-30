@@ -50,12 +50,18 @@ impl Engine {
                     _ => self.party_play(now).await,
                 }
             };
-            let result = tokio::time::timeout(
+            let result = match tokio::time::timeout(
                 std::time::Duration::from_secs(self.cfg.source_timeout_seconds),
                 work,
             )
             .await
-            .unwrap_or(Err(Error::Source("timeout")));
+            {
+                Ok(result) => result,
+                Err(_) => Err(Error::Source("timeout")),
+            };
+            if source == "shared_chat" && result.is_err() {
+                self.interrupt_shared_chat_observations().await?;
+            }
             self.source_state(source, now, &result).await?;
             if let Err(error) = result {
                 failure = Some(error);

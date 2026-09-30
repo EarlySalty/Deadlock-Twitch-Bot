@@ -575,6 +575,212 @@ async fn shared_chat_collection_is_bounded_and_keeps_completed_partner_evidence(
 }
 
 #[tokio::test]
+async fn shared_chat_failures_break_persisted_continuity_before_the_next_success() {
+    use tb_transport_twitch::{HelixClient, HelixConfig};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    async fn mock_server(fail: bool, delay: std::time::Duration) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"access_token":"fixture","expires_in":3600,"token_type":"bearer"}),
+            ))
+            .mount(&server)
+            .await;
+        let mut response = if fail {
+            ResponseTemplate::new(503)
+        } else {
+            ResponseTemplate::new(200).set_body_json(json!({"data":[{
+                "session_id":"shared-session",
+                "host_broadcaster_id":"101",
+                "participants":[{"broadcaster_id":"101"},{"broadcaster_id":"102"}],
+                "created_at":"2026-10-26T10:00:00Z",
+                "updated_at":"2026-10-26T10:00:00Z"
+            }]}))
+        };
+        response = response.set_delay(delay);
+        Mock::given(method("GET"))
+            .and(path("/shared_chat/session"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn engine(pool: &PgPool, server: &MockServer, source_timeout_seconds: u64) -> Engine {
+        let mut helix = HelixConfig::new("fixture", "fixture");
+        helix.helix_base = server.uri();
+        helix.token_url = format!("{}/token", server.uri());
+        Engine::new(
+            pool.clone(),
+            Challenges {
+                source_timeout_seconds,
+                ..Challenges::default()
+            },
+            Some(pool.clone()),
+            Some(HelixClient::new(helix).unwrap()),
+        )
+        .unwrap()
+    }
+
+    async fn insert_pair(pool: &PgPool, at: DateTime<Utc>) {
+        for (id, login, session_id) in [("101", "alice", 91_101_i64), ("102", "bob", 91_102_i64)] {
+            let stream_id = format!("stream-{id}");
+            sqlx::query("INSERT INTO twitch_stream_sessions(id,twitch_user_id,streamer_login,stream_id,started_at,game_name) VALUES($1,$2,$3,$4,$5,'Deadlock')")
+                .bind(session_id).bind(id).bind(login).bind(&stream_id).bind(at)
+                .execute(pool).await.unwrap();
+            sqlx::query("INSERT INTO twitch_live_state(twitch_user_id,streamer_login,active_session_id,is_live,last_seen_at,last_game) VALUES($1,$2,$3,1,$4,'Deadlock')")
+                .bind(id).bind(login).bind(session_id).bind(at.to_rfc3339())
+                .execute(pool).await.unwrap();
+        }
+    }
+
+    async fn mark_live_at(pool: &PgPool, at: DateTime<Utc>) {
+        sqlx::query(
+            "UPDATE twitch_live_state SET last_seen_at=$1 WHERE twitch_user_id IN ('101','102')",
+        )
+        .bind(at.to_rfc3339())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_continuity(pool: &PgPool, at: DateTime<Utc>) {
+        sqlx::query("INSERT INTO partner_effort_shared_chat_observations(partner_twitch_user_id,stream_id,other_partner_twitch_user_id,shared_chat_session_id,first_seen_at,last_seen_at,confirmed_seconds) VALUES('101','stream-101','102','shared-session',$1,$2,1790) ON CONFLICT(partner_twitch_user_id,stream_id,other_partner_twitch_user_id) DO UPDATE SET shared_chat_session_id=EXCLUDED.shared_chat_session_id,first_seen_at=EXCLUDED.first_seen_at,last_seen_at=EXCLUDED.last_seen_at,confirmed_seconds=EXCLUDED.confirmed_seconds")
+            .bind(at - Duration::seconds(1790)).bind(at)
+            .execute(pool).await.unwrap();
+    }
+
+    async fn confirmed_seconds(pool: &PgPool) -> Option<i64> {
+        sqlx::query_scalar("SELECT confirmed_seconds FROM partner_effort_shared_chat_observations WHERE partner_twitch_user_id='101' AND other_partner_twitch_user_id='102'")
+            .fetch_optional(pool).await.unwrap()
+    }
+
+    async fn no_costream_award(pool: &PgPool) {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM partner_effort_events WHERE event_type='co_stream'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    let (admin, pool, name) = fixture().await;
+    let start = DateTime::parse_from_rfc3339("2026-10-26T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    insert_pair(&pool, start).await;
+
+    // Failed Helix requests must erase the writer's previous continuity. The
+    // immediate successful poll starts from zero despite a 120-second gap.
+    seed_continuity(&pool, start).await;
+    let failed_helix = mock_server(true, std::time::Duration::ZERO).await;
+    let failed_engine = engine(&pool, &failed_helix, 10);
+    mark_live_at(&pool, start + Duration::seconds(60)).await;
+    assert!(failed_engine
+        .tick(start + Duration::seconds(60))
+        .await
+        .is_err());
+    assert_eq!(confirmed_seconds(&pool).await, None);
+    let recovered_helix = mock_server(false, std::time::Duration::ZERO).await;
+    let recovered_engine = engine(&pool, &recovered_helix, 10);
+    mark_live_at(&pool, start + Duration::seconds(120)).await;
+    recovered_engine
+        .tick(start + Duration::seconds(120))
+        .await
+        .unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+    no_costream_award(&pool).await;
+
+    // Unknown stream state, including a missing stream ID, invalidates that
+    // partner's stored observations before a later valid session is counted.
+    let state_error_at = start + Duration::seconds(180);
+    seed_continuity(&pool, state_error_at - Duration::seconds(60)).await;
+    sqlx::query("UPDATE twitch_stream_sessions SET stream_id=NULL WHERE twitch_user_id='101'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    mark_live_at(&pool, state_error_at).await;
+    assert!(recovered_engine.tick(state_error_at).await.is_err());
+    assert_eq!(confirmed_seconds(&pool).await, None);
+    sqlx::query(
+        "UPDATE twitch_stream_sessions SET stream_id='stream-101' WHERE twitch_user_id='101'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let after_state_error = start + Duration::seconds(240);
+    mark_live_at(&pool, after_state_error).await;
+    recovered_engine.tick(after_state_error).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+    no_costream_award(&pool).await;
+
+    // Hold a real observation upsert inside PostgreSQL after the source has
+    // acquired the shared write lock. The source timeout must wait for that
+    // transaction to roll back before clearing rows, so it cannot commit late.
+    let timeout_at = start + Duration::seconds(300);
+    seed_continuity(&pool, timeout_at - Duration::seconds(60)).await;
+    mark_live_at(&pool, timeout_at).await;
+    sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(5); END IF; RETURN NEW; END $$;
+        CREATE TRIGGER test_delay_shared_chat_observation BEFORE INSERT OR UPDATE ON partner_effort_shared_chat_observations FOR EACH ROW EXECUTE FUNCTION test_delay_shared_chat_observation();")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let slow_helix = mock_server(false, std::time::Duration::ZERO).await;
+    let timeout_engine = engine(&pool, &slow_helix, 2);
+    let ticking = tokio::spawn({
+        let timeout_engine = timeout_engine.clone();
+        async move { timeout_engine.tick(timeout_at).await }
+    });
+    let write_started = tokio::time::timeout(std::time::Duration::from_millis(1500), async {
+        loop {
+            let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE state='active' AND wait_event='PgSleep' AND query LIKE '%INSERT INTO partner_effort_shared_chat_observations%')")
+                .fetch_one(&pool).await.unwrap();
+            if active {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok();
+    assert!(
+        write_started,
+        "the PostgreSQL observation trigger did not start"
+    );
+    assert!(ticking.await.unwrap().is_err());
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    sqlx::raw_sql("DROP TRIGGER test_delay_shared_chat_observation ON partner_effort_shared_chat_observations; DROP FUNCTION test_delay_shared_chat_observation()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, None);
+    no_costream_award(&pool).await;
+    let after_timeout = start + Duration::seconds(360);
+    mark_live_at(&pool, after_timeout).await;
+    recovered_engine.tick(after_timeout).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+    no_costream_award(&pool).await;
+
+    drop(timeout_engine);
+    drop(recovered_engine);
+    drop(failed_engine);
+    pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
 async fn shared_chat_duration_and_completed_steam_match_are_required() {
     use tb_transport_twitch::{HelixClient, HelixConfig};
     use wiremock::{
