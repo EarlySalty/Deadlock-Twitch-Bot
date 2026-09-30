@@ -28,6 +28,7 @@ fn qualification_status_is_fresh(status: Option<QualificationStatus>, now: DateT
     status.last_completed_at == last_successful_at
         && last_successful_at
             >= now - chrono::Duration::seconds(i64::from(status.evaluation_interval_seconds) * 3)
+        && last_successful_at <= now
 }
 
 impl Engine {
@@ -106,7 +107,8 @@ impl Engine {
         )
         .fetch_optional(self.central()?)
         .await?;
-        if !qualification_status_is_fresh(status, now) {
+        // Readiness is a wall-clock heartbeat, not the historical data cutoff.
+        if !qualification_status_is_fresh(status, Utc::now()) {
             return Err(Error::Source("invites_producer_not_ready"));
         }
 
@@ -266,6 +268,24 @@ mod tests {
                 evaluation_interval_seconds: 300,
                 healthy: false,
             }),
+            now
+        ));
+    }
+
+    #[test]
+    fn successful_empty_cycle_marker_is_ready_without_invites() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(qualification_status_is_fresh(
+            Some(successful_status(now, 300)),
+            now
+        ));
+    }
+
+    #[test]
+    fn future_success_is_not_fresh() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(!qualification_status_is_fresh(
+            Some(successful_status(now + chrono::Duration::seconds(1), 300)),
             now
         ));
     }
