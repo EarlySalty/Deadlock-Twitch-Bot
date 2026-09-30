@@ -211,7 +211,9 @@ async fn unit_snapshot_if_recoverable(
         .map_err(|()| {
             "systemd konnte den Aktivierungszustand der STT-Unit nicht ermitteln.".to_owned()
         })?;
-    if !unit_enabled_state_allows_recovery(service, enabled.as_deref())? {
+    if !unit_enabled_state_allows_recovery(service, enabled.as_deref()).map_err(|()| {
+        "systemd lieferte einen ungültigen Aktivierungszustand der STT-Unit.".to_owned()
+    })? {
         return Ok(None);
     }
     let properties = run_systemctl_at(
