@@ -2323,11 +2323,11 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("admin connect");
-        sqlx::query(crate::test_sql::drop_schema(&schema, true))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .expect("drop schema");
-        sqlx::query(crate::test_sql::create_schema(&schema, false))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .expect("create schema");
