@@ -31,7 +31,7 @@ async fn read_only_settings_apply_to_multiple_connections_and_deny_persistent_wr
     );
     let create = format!("CREATE TABLE {table} (value integer NOT NULL)");
     let insert = format!("INSERT INTO {table} (value) VALUES (1)");
-    sqlx::query(&create)
+    sqlx::query(sqlx::AssertSqlSafe(create))
         .execute(&admin)
         .await
         .expect("create persistent probe table");
@@ -58,7 +58,7 @@ async fn read_only_settings_apply_to_multiple_connections_and_deny_persistent_wr
         .expect("read connection settings");
         assert_eq!(settings, (true, true));
     }
-    let error = sqlx::query(&insert)
+    let error = sqlx::query(sqlx::AssertSqlSafe(insert))
         .execute(&mut *connections[0])
         .await
         .expect_err("read-only connection must reject persistent table writes");
@@ -72,7 +72,7 @@ async fn read_only_settings_apply_to_multiple_connections_and_deny_persistent_wr
 
     drop(connections);
     readonly.close().await;
-    sqlx::query(&format!("DROP TABLE {table}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {table}")))
         .execute(&admin)
         .await
         .expect("drop persistent probe table");
