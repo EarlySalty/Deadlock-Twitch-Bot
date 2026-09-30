@@ -9,6 +9,10 @@ use tb_engagement::transcribe::OpenAiTranscriber;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+#[cfg(test)]
+#[path = "../../../test-support/database.rs"]
+mod test_database;
+
 use crate::clip_context::{
     clip_moment_from_start, learn_template, suggest_cut, ContextSecond, CutProposal, CutTemplate,
 };
@@ -487,8 +491,8 @@ async fn apply_speech(
                     .take(end.saturating_sub(start))
                 {
                     slot.speech = Some(segment.text.clone());
-                    slot.laughter = Some(laughter);
-                    slot.exclamation = Some(exclamation);
+                    slot.laughter = Some(slot.laughter.unwrap_or(false) || laughter);
+                    slot.exclamation = Some(slot.exclamation.unwrap_or(false) || exclamation);
                 }
             }
             "timestamped".to_owned()
@@ -551,6 +555,7 @@ async fn save_timeline(
             clip_url=EXCLUDED.clip_url, streamer_login=EXCLUDED.streamer_login, vod_id=EXCLUDED.vod_id,
             moment_offset_s=EXCLUDED.moment_offset_s, window_start_s=EXCLUDED.window_start_s,
             window_end_s=EXCLUDED.window_end_s, clip_duration_s=EXCLUDED.clip_duration_s,
+            peak_s=NULL, recommended_start_s=NULL, recommended_end_s=NULL,
             stt_status=EXCLUDED.stt_status, visual_status=EXCLUDED.visual_status, analyzed_at=now()",
     )
     .bind(&clip.clip_id).bind(&clip.clip_url).bind(&clip.streamer_login).bind(&clip.vod_id)
@@ -671,20 +676,38 @@ pub async fn load_clips(
     read_pool: &PgPool,
     limit: i64,
     clip_id: Option<&str>,
+    stt_available: bool,
+    force: bool,
 ) -> Result<Vec<ClipInput>, String> {
     let rows = sqlx::query(
-        "SELECT clip_id, clip_url, streamer_login, created_at, vod_id, vod_offset_s,
-                duration_seconds::double precision AS duration_s
-           FROM twitch_clips_social_media
-          WHERE vod_id IS NOT NULL AND vod_offset_s IS NOT NULL AND vod_offset_s >= 0
-            AND duration_seconds IS NOT NULL AND duration_seconds >= 0.5
-            AND game_id = '2132205352'
-            AND created_at > NOW() - INTERVAL '21 days'
-            AND ($2::text IS NULL OR clip_id=$2)
-          ORDER BY created_at DESC LIMIT $1",
+        "SELECT c.clip_id, c.clip_url, c.streamer_login, c.created_at, c.vod_id, c.vod_offset_s,
+                c.duration_seconds::double precision AS duration_s,
+                e.requested_at AS event_requested_at,
+                e.moment_offset_s AS event_moment_offset_s,
+                e.vod_id AS event_vod_id
+           FROM twitch_clips_social_media c
+           LEFT JOIN twitch_clip_command_events e ON e.clip_id=c.clip_id
+          WHERE c.vod_id IS NOT NULL AND c.vod_offset_s IS NOT NULL AND c.vod_offset_s >= 0
+            AND c.duration_seconds IS NOT NULL AND c.duration_seconds >= 0.5
+            AND c.game_id = '2132205352'
+            AND c.created_at > NOW() - INTERVAL '21 days'
+            AND ($2::text IS NULL OR c.clip_id=$2)
+            AND ($3::boolean OR NOT EXISTS (
+                SELECT 1 FROM twitch_clip_context_runs r
+                 WHERE r.clip_id=c.clip_id AND r.visual_status='sampled' AND r.vod_id=c.vod_id
+                   AND r.moment_offset_s = COALESCE(
+                       CASE WHEN e.vod_id=c.vod_id AND e.moment_offset_s IS NOT NULL
+                            THEN e.moment_offset_s END,
+                       c.vod_offset_s + round(c.duration_seconds)::integer
+                   )
+                   AND (NOT $4::boolean OR r.stt_status='timestamped')
+            ))
+          ORDER BY c.created_at DESC LIMIT $1",
     )
     .bind(limit)
     .bind(clip_id)
+    .bind(force)
+    .bind(stt_available)
     .fetch_all(read_pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -696,20 +719,20 @@ pub async fn load_clips(
         let duration_s: f64 = row.try_get("duration_s").map_err(|e| e.to_string())?;
         let fallback_moment = clip_moment_from_start(start, duration_s)
             .ok_or_else(|| format!("ungültiger Clip-Zeitbereich: {clip_id}"))?;
-        let event: Option<(DateTime<Utc>, Option<i32>, Option<String>)> = sqlx::query_as(
-            "SELECT requested_at,moment_offset_s,vod_id FROM twitch_clip_command_events WHERE clip_id=$1",
-        )
-        .bind(&clip_id)
-        .fetch_optional(read_pool)
-        .await
-        .map_err(|e| e.to_string())?;
         let created_at: DateTime<Utc> = row.try_get("created_at").map_err(|e| e.to_string())?;
-        let (requested_at, moment_offset_s) = match event {
-            Some((requested_at, Some(moment), Some(event_vod))) if event_vod == vod_id => {
+        let event_requested_at: Option<DateTime<Utc>> = row
+            .try_get("event_requested_at")
+            .map_err(|e| e.to_string())?;
+        let event_moment: Option<i32> = row
+            .try_get("event_moment_offset_s")
+            .map_err(|e| e.to_string())?;
+        let event_vod: Option<String> = row.try_get("event_vod_id").map_err(|e| e.to_string())?;
+        let (requested_at, moment_offset_s) = match (event_requested_at, event_moment, event_vod) {
+            (Some(requested_at), Some(moment), Some(event_vod)) if event_vod == vod_id => {
                 (requested_at, moment)
             }
-            Some((requested_at, _, _)) => (requested_at, fallback_moment),
-            None => (created_at, fallback_moment),
+            (Some(requested_at), _, _) => (requested_at, fallback_moment),
+            (None, _, _) => (created_at, fallback_moment),
         };
         clips.push(ClipInput {
             clip_id,
@@ -823,6 +846,53 @@ pub async fn learn_and_store(write_pool: &PgPool) -> Result<Option<CutTemplate>,
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::str::FromStr;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
+    async fn isolated_schema(label: &str) -> Option<(PgPool, PgPool, String)> {
+        let Some(dsn) = test_database::database_url() else {
+            assert!(
+                !test_database::required(),
+                "PostgreSQL test config is required"
+            );
+            return None;
+        };
+        let options = PgConnectOptions::from_str(&dsn).expect("parse configured test DSN");
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .expect("connect configured test database");
+        let schema = format!(
+            "clip_ctx_{label}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .expect("create isolated test schema");
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(options.options([("search_path", schema.as_str())]))
+            .await
+            .expect("connect isolated test schema");
+        Some((pool, admin, schema))
+    }
+
+    async fn drop_isolated_schema(pool: PgPool, admin: PgPool, schema: String) {
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await
+            .expect("drop isolated test schema");
+        admin.close().await;
+    }
 
     #[test]
     fn audio_metadata_aggregates_at_second_boundaries() {
@@ -838,6 +908,18 @@ mod tests {
         assert_eq!(speech_flags("Haha, wow!"), (true, true));
         assert_eq!(speech_flags("Wir laufen zur Lane"), (false, false));
         assert_eq!(parse_souls("$3,665"), Some(3665));
+    }
+
+    #[test]
+    fn overlapping_neutral_transcript_cannot_erase_reaction_flags() {
+        let mut timeline = [ContextSecond::default()];
+        timeline[0].laughter = Some(true);
+        timeline[0].exclamation = Some(true);
+        timeline[0].laughter = Some(timeline[0].laughter.unwrap_or(false) || false);
+        timeline[0].exclamation = Some(timeline[0].exclamation.unwrap_or(false) || false);
+
+        assert_eq!(timeline[0].laughter, Some(true));
+        assert_eq!(timeline[0].exclamation, Some(true));
     }
 
     #[tokio::test]
@@ -898,5 +980,143 @@ mod tests {
             !owner_path.exists(),
             "outer RAII owner removes cancelled WAV directory"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_reharvest_clears_old_cut_and_replaces_old_evidence() {
+        let Some((pool, admin, schema)) = isolated_schema("stale_cut").await else {
+            return;
+        };
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_clip_context_runs (
+                 clip_id text PRIMARY KEY, clip_url text NOT NULL, streamer_login text NOT NULL,
+                 vod_id text NOT NULL, moment_offset_s integer NOT NULL, window_start_s integer NOT NULL,
+                 window_end_s integer NOT NULL, clip_duration_s double precision NOT NULL,
+                 peak_s integer, recommended_start_s integer, recommended_end_s integer,
+                 stt_status text NOT NULL, visual_status text NOT NULL,
+                 analyzed_at timestamptz NOT NULL DEFAULT now()
+             );
+             CREATE TABLE twitch_clip_context_seconds (
+                 clip_id text NOT NULL, vod_second integer NOT NULL, lufs double precision,
+                 peak_dbfs double precision, speech text, laughter boolean, exclamation boolean,
+                 kill_feed text, souls integer, soul_jump integer, objective boolean,
+                 death_screen boolean, scene_change boolean, chat_messages integer NOT NULL,
+                 ocr_sampled boolean NOT NULL, PRIMARY KEY (clip_id, vod_second)
+             );",
+        )
+        .execute(&pool)
+        .await
+        .expect("create reharvest schema");
+        sqlx::query("INSERT INTO twitch_clip_context_runs (clip_id,clip_url,streamer_login,vod_id,moment_offset_s,window_start_s,window_end_s,clip_duration_s,peak_s,recommended_start_s,recommended_end_s,stt_status,visual_status) VALUES ('same-clip','old-url','streamer','old-vod',90,0,181,180,90,60,110,'timestamped','sampled')")
+            .execute(&pool)
+            .await
+            .expect("seed valid previous analysis and cut");
+        sqlx::query("INSERT INTO twitch_clip_context_seconds (clip_id,vod_second,lufs,peak_dbfs,speech,laughter,exclamation,kill_feed,souls,soul_jump,objective,death_screen,scene_change,chat_messages,ocr_sampled) VALUES ('same-clip',90,-4.0,-3.0,'old evidence',true,true,'eliminated',3000,150,true,false,true,8,true)")
+            .execute(&pool)
+            .await
+            .expect("seed previous measurements");
+
+        let clip = ClipInput {
+            clip_id: "same-clip".to_owned(),
+            clip_url: "new-url".to_owned(),
+            streamer_login: "streamer".to_owned(),
+            requested_at: chrono::Utc::now(),
+            vod_id: "new-vod".to_owned(),
+            moment_offset_s: 100,
+            duration_s: 20.0,
+        };
+        save_timeline(
+            &pool,
+            &clip,
+            &[ContextSecond {
+                vod_second: 100,
+                ..Default::default()
+            }],
+            "failed:timeout",
+            "ocr_failed:fixture",
+        )
+        .await
+        .expect("save replacement analysis atomically");
+        let current: (String, String, Option<i32>, Option<i32>, Option<i32>) = sqlx::query_as(
+            "SELECT vod_id,visual_status,peak_s,recommended_start_s,recommended_end_s FROM twitch_clip_context_runs WHERE clip_id='same-clip'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read replacement run");
+        assert_eq!(current.0, "new-vod");
+        assert_eq!(current.1, "ocr_failed:fixture");
+        assert_eq!((current.2, current.3, current.4), (None, None, None));
+        let measurements: (i32, Option<f64>, Option<String>) = sqlx::query_as(
+            "SELECT vod_second,lufs,speech FROM twitch_clip_context_seconds WHERE clip_id='same-clip'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read replacement measurements");
+        assert_eq!(measurements, (100, None, None));
+
+        drop_isolated_schema(pool, admin, schema).await;
+    }
+
+    #[tokio::test]
+    async fn completed_newest_clips_do_not_consume_eligible_batch_limit() {
+        let Some((pool, admin, schema)) = isolated_schema("batch_limit").await else {
+            return;
+        };
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_clips_social_media (
+                 clip_id text PRIMARY KEY, clip_url text NOT NULL, streamer_login text NOT NULL,
+                 created_at timestamptz NOT NULL, vod_id text, vod_offset_s integer,
+                 duration_seconds double precision, game_id text
+             );
+             CREATE TABLE twitch_clip_command_events (
+                 clip_id text PRIMARY KEY, requested_at timestamptz NOT NULL,
+                 moment_offset_s integer, vod_id text
+             );
+             CREATE TABLE twitch_clip_context_runs (
+                 clip_id text PRIMARY KEY, vod_id text NOT NULL, moment_offset_s integer NOT NULL,
+                 visual_status text NOT NULL, stt_status text NOT NULL
+             );
+             INSERT INTO twitch_clips_social_media VALUES
+                 ('newest','url-newest','streamer',now()-interval '1 minute','vod-a',100,50,'2132205352'),
+                 ('second','url-second','streamer',now()-interval '2 minutes','vod-b',100,50,'2132205352'),
+                 ('older-open-a','url-open-a','streamer',now()-interval '3 minutes','vod-c',100,50,'2132205352'),
+                 ('older-open-b','url-open-b','streamer',now()-interval '4 minutes','vod-d',100,50,'2132205352');
+             INSERT INTO twitch_clip_command_events VALUES
+                 ('newest',now(),'175','vod-a'),
+                 ('second',now(),'999','different-vod');
+             INSERT INTO twitch_clip_context_runs VALUES
+                 ('newest','vod-a',175,'sampled','timestamped'),
+                 ('second','vod-b',150,'sampled','unavailable');",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed completed and open clip candidates");
+
+        let unavailable = load_clips(&pool, 2, None, false, false)
+            .await
+            .expect("select only eligible clips before applying limit");
+        assert_eq!(
+            unavailable
+                .iter()
+                .map(|clip| clip.clip_id.as_str())
+                .collect::<Vec<_>>(),
+            ["older-open-a", "older-open-b"]
+        );
+        let available = load_clips(&pool, 2, None, true, false)
+            .await
+            .expect("speech-incomplete clip remains eligible when STT is available");
+        assert_eq!(
+            available
+                .iter()
+                .map(|clip| clip.clip_id.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "older-open-a"]
+        );
+        let forced = load_clips(&pool, 1, None, true, true)
+            .await
+            .expect("force includes completed candidates");
+        assert_eq!(forced[0].clip_id, "newest");
+
+        drop_isolated_schema(pool, admin, schema).await;
     }
 }

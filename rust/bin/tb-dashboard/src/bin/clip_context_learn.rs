@@ -136,27 +136,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !learn_only {
-        let clips = load_clips(&read_pool, limit, clip_id.as_deref()).await?;
         let stt = available_stt(&stt_config).await;
+        let clips = load_clips(&read_pool, limit, clip_id.as_deref(), stt, force).await?;
         println!("candidates={} stt_available={stt}", clips.len());
         for clip in clips {
-            let previous: Option<(String, String, i32, String)> = sqlx::query_as(
-                "SELECT stt_status,visual_status,moment_offset_s,vod_id FROM twitch_clip_context_runs WHERE clip_id=$1",
-            )
-            .bind(&clip.clip_id)
-            .fetch_optional(&write_pool)
-            .await?;
-            if !force
-                && previous.is_some_and(|(speech, visual, moment, vod)| {
-                    visual == "sampled"
-                        && moment == clip.moment_offset_s
-                        && vod == clip.vod_id
-                        && (!stt || speech == "timestamped")
-                })
-            {
-                println!("clip={} status=already_stored", clip.clip_id);
-                continue;
-            }
             match harvest(&read_pool, &write_pool, &clip, stt, &stt_config).await {
                 Ok(result) => println!(
                     "clip={} status={} seconds={} stt={} visual={}",
