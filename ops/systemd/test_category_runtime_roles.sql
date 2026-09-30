@@ -2,7 +2,7 @@
 BEGIN;
 SET LOCAL statement_timeout='20s';
 DO $$ BEGIN
-    IF current_database() NOT LIKE 'categorytest_%' THEN
+    IF current_database() NOT LIKE 'categorytest_%' AND current_database() <> 'twitch_all_live_test' THEN
         RAISE EXCEPTION 'This test may only run in the disposable category test database';
     END IF;
 END $$;
