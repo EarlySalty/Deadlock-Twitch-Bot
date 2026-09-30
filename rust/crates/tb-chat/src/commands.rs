@@ -404,25 +404,6 @@ impl CommandEngine {
         self
     }
 
-    /// Bekannte Automationsbots behalten ihren eingeschränkten Befehlszugang.
-    pub(crate) async fn handle_known_bot(&self, event: &ChatMessageEvent) -> bool {
-        let command = event
-            .text()
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
-        if crate::stat_commands::StatCommand::from_chat(&command).is_some()
-            || matches!(
-                command.as_str(),
-                "!clip" | "!createclip" | "!discord" | "!dldc" | "!dlde" | "!invite"
-            )
-        {
-            return false;
-        }
-        self.handle(event).await
-    }
-
     /// Verarbeitet eine eingehende Chat-Nachricht.
     ///
     /// Gibt `true` zurück wenn die Nachricht ein Command war (Pipeline stoppt),
@@ -430,6 +411,10 @@ impl CommandEngine {
     ///
     /// `commands.py` — RaidCommandsMixin dispatch-Tabelle.
     pub async fn handle(&self, event: &ChatMessageEvent) -> bool {
+        // Kein alternativer Command-Einstieg darf die Bot-Antwortsperre umgehen.
+        if tb_analytics::bekannte_bots::ist_ausgeschlossener_login(&event.chatter_user_login) {
+            return false;
+        }
         // Split the original text before normalizing the command: Unicode
         // case conversion may change byte offsets. Tabs/newlines are separators too.
         let (command, args) = event.text().split_once(char::is_whitespace)
@@ -3848,20 +3833,16 @@ mod tests {
             "!invite",
             "!discord",
             "!dldc",
+            "!commands",
+            "!ping",
+            "!help",
+            "!lurk",
         ] {
-            assert!(
-                !engine
-                    .handle_known_bot(&make_event(text, false, false))
-                    .await
-            );
+            let mut event = make_event(text, false, false);
+            event.chatter_user_login = "Nightbot".into();
+            assert!(!engine.handle(&event).await, "{text}");
         }
         assert_eq!(api.message_count().await, 0);
-        assert!(
-            engine
-                .handle_known_bot(&make_event("!commands", false, false))
-                .await
-        );
-        assert_eq!(api.message_count().await, 1);
     }
 
     #[tokio::test]

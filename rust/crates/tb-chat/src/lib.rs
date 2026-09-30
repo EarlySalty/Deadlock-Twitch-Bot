@@ -46,6 +46,7 @@ pub mod pitch_beispiele;
 pub mod pitch_bewertung;
 pub mod promo_pitch;
 pub mod promos;
+mod reaction_guard;
 pub mod safe_list;
 pub mod scam_pitch;
 pub mod secret_sink;

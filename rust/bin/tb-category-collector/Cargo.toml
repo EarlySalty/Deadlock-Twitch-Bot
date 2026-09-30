@@ -17,6 +17,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 zeroize = { workspace = true }
+nix = { version = "0.31", features = ["fs"] }
 uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }
 
 [dev-dependencies]

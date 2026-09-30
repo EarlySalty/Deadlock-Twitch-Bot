@@ -246,12 +246,20 @@ pub async fn delete_chat(pool: &PgPool, line: &str, room_id: &str) -> Result<u64
         "CLEARCHAT" => (None, tags.get("target-user-id").cloned()),
         _ => return Ok(0),
     };
-    if command == "CLEARMSG" && message.is_none() {
+    // A room-wide clear is not an instruction to destroy the historical archive.
+    // Malformed/empty targets must never become a wildcard deletion.
+    if message.as_ref().is_some_and(|id| id.trim().is_empty())
+        || user.as_ref().is_some_and(|id| id.trim().is_empty())
+        || (message.is_none() && user.is_none())
+    {
         return Ok(0);
     }
     let result = sqlx::query(
         "WITH removed AS (DELETE FROM category_chat_messages WHERE room_user_id=$1
          AND ($2::text IS NULL OR message_id=$2) AND ($3::text IS NULL OR chatter_user_id=$3)
+         AND ($2::text IS NOT NULL OR sent_at >= COALESCE((
+             SELECT started_at FROM category_stream_snapshots WHERE user_id=$1
+             ORDER BY snapshot_at DESC LIMIT 1), now()))
          RETURNING sent_at,room_user_id,detected_lang)
          INSERT INTO category_chat_dirty SELECT DISTINCT date_trunc('hour',sent_at),room_user_id,detected_lang
          FROM removed ON CONFLICT DO NOTHING")
@@ -353,17 +361,31 @@ pub async fn store_snapshot(
     tx.commit().await
 }
 
-/// Exact 90-day cutoff within the boundary partition, after finalizing buckets.
-/// The daily drop function reclaims fully expired partitions physically.
-pub async fn trim_expired_rows(pool: &PgPool, days: i32) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query("WITH expired AS (SELECT tableoid,ctid FROM category_chat_messages m
-        WHERE sent_at < now() - make_interval(days => $1)
-        AND NOT EXISTS(SELECT 1 FROM category_chat_dirty d WHERE d.hour_at=date_trunc('hour',m.sent_at)
-            AND d.room_user_id=m.room_user_id AND d.language=m.detected_lang)
-        LIMIT 10000)
-        DELETE FROM category_chat_messages m USING expired e WHERE m.tableoid=e.tableoid AND m.ctid=e.ctid")
-        .bind(days).execute(pool).await?;
-    Ok(result.rows_affected())
+/// Compatibility only: elapsed time never authorizes deletion of archived data.
+pub async fn trim_expired_rows(_pool: &PgPool, _days: i32) -> Result<u64, sqlx::Error> {
+    Ok(0)
+}
+
+/// Runtime configuration is persisted centrally; the bootstrap file holds access only.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CollectorConfig {
+    pub enabled: bool,
+    pub poll_seconds: i32,
+    pub raw_budget_bytes: i64,
+    pub min_free_bytes: i64,
+    pub media_enabled: bool,
+}
+
+pub async fn collector_config(pool: &PgPool) -> Result<CollectorConfig, sqlx::Error> {
+    sqlx::query_as("SELECT enabled,poll_seconds,raw_budget_bytes,min_free_bytes,media_enabled
+        FROM category_collector_config WHERE singleton AND preserve_raw_data")
+        .fetch_one(pool).await
+}
+
+pub async fn raw_storage_bytes(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COALESCE(sum(pg_total_relation_size(inhrelid)),0)::bigint
+        FROM pg_inherits WHERE inhparent='public.category_chat_messages'::regclass")
+        .fetch_one(pool).await
 }
 
 async fn json_query(pool: &PgPool, sql: &str, days: i32) -> Result<Value, sqlx::Error> {
