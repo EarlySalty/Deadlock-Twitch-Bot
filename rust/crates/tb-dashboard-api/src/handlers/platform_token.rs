@@ -108,9 +108,6 @@ pub fn platform_token_config_from_runtime() -> Option<PlatformTokenConfig> {
     })
 }
 
-/// Der Refresh-Weg zu Twitch. `exchange_code` und `token_owner` gehoeren zum
-/// Callback und laufen im Bot-Prozess; hier sind sie unerreichbar und sagen
-/// das auch, statt still etwas Falsches zu tun.
 pub struct HelixRefreshClient {
     helix: HelixClient,
 }
@@ -182,6 +179,7 @@ impl TwitchTokenClient for HelixRefreshClient {
 pub struct PlatformTokenQuery {
     pub streamer: Option<i64>,
     pub platform: Option<String>,
+    pub purpose: Option<String>,
 }
 
 /// Was das Relay bekommt. Bewusst ein eigener Typ ohne `refresh_token`: die
@@ -200,6 +198,14 @@ impl std::fmt::Debug for PlatformTokenAntwort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PlatformTokenAntwort([geschützt])")
     }
+}
+
+#[derive(Serialize)]
+struct PublishTokenAntwort {
+    #[serde(flatten)]
+    token: PlatformTokenAntwort,
+    purpose: &'static str,
+    token_owner: String,
 }
 
 /// Warum kein Token herausgeht.
@@ -380,11 +386,6 @@ pub async fn platform_token_antwort(
         return fremde_plattform_antwort(pool, config, streamer_id, platform, jetzt).await;
     }
     let (tokens, scopes) = gueltiger_twitch_token(pool, config, streamer_id, jetzt).await?;
-    // Ohne Chat-Lese-Recht kann das Relay den Chat gar nicht abonnieren. Der
-    // Grant ist fuer diese Route wertlos, also gibt es ihn auch nicht heraus.
-    // Bewusst NACH dem Token-Weg: ein Streamer mit altem Raid-Grant soll
-    // dieselbe 404 bekommen wie einer ohne Zeile, und der Refresh haelt seine
-    // Raid-Tokens dabei nebenbei frisch.
     Ok(PlatformTokenAntwort {
         connection_generation: tokens.connection_generation,
         access_token: tokens.access_token,
@@ -392,6 +393,51 @@ pub async fn platform_token_antwort(
         platform_user_id: streamer_id.to_string(),
         platform_login: tokens.twitch_login,
         scopes,
+    })
+}
+
+async fn publish_token_antwort(
+    pool: &PgPool,
+    config: &PlatformTokenConfig,
+    streamer_id: i64,
+    jetzt: DateTime<Utc>,
+) -> Result<PublishTokenAntwort, TokenFehler> {
+    if streamer_id <= 0 {
+        return Err(TokenFehler::KeineVerbindung);
+    }
+    let token = platform_token_antwort(pool, config, streamer_id, PLATFORM_TWITCH, jetzt).await?;
+    if !token
+        .scopes
+        .iter()
+        .any(|scope| scope == "channel:read:stream_key")
+    {
+        return Err(TokenFehler::KeineVerbindung);
+    }
+    let owner = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        config.token_client.token_owner(&token.access_token),
+    )
+    .await
+    .map_err(|_| TokenFehler::NichtLieferbar)?
+    .map_err(|_| TokenFehler::NichtLieferbar)?;
+    if owner.twitch_user_id != token.platform_user_id {
+        return Err(TokenFehler::NeuVerbinden);
+    }
+    if !tb_raid::target_generation::check_current(
+        pool,
+        &owner.twitch_user_id,
+        PLATFORM_TWITCH,
+        token.connection_generation,
+    )
+    .await
+    .map_err(|_| TokenFehler::NichtLieferbar)?
+    {
+        return Err(TokenFehler::KeineVerbindung);
+    }
+    Ok(PublishTokenAntwort {
+        token,
+        purpose: "publish",
+        token_owner: owner.twitch_user_id,
     })
 }
 
@@ -625,6 +671,23 @@ pub async fn internal_platform_token_handler(
             .into_response();
     };
     let platform = platform.trim().to_lowercase();
+    let publish = match query.purpose.as_deref() {
+        None if streamer_id > 0 => false,
+        Some("publish") if streamer_id > 0 && platform == PLATFORM_TWITCH => true,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Ungültiger Token-Zweck, Plattform oder Nutzer-ID." })),
+            )
+                .into_response();
+        }
+    };
+    if publish {
+        return match publish_token_antwort(&pool, &config, streamer_id, Utc::now()).await {
+            Ok(antwort) => Json(antwort).into_response(),
+            Err(fehler) => fehler_antwort(fehler),
+        };
+    }
     match platform_token_antwort(&pool, &config, streamer_id, &platform, Utc::now()).await {
         Ok(antwort) => Json(antwort).into_response(),
         Err(fehler) => fehler_antwort(fehler),
@@ -657,6 +720,9 @@ mod tests {
     struct FakeTokenClient {
         ergebnis: Mutex<Result<TokenResponse, RefreshError>>,
         aufrufe: Mutex<Vec<String>>,
+        owner: Mutex<Result<TokenOwnerInfo, RefreshError>>,
+        owner_aufrufe: Mutex<Vec<String>>,
+        owner_generation_change: Mutex<Option<PgPool>>,
     }
 
     impl FakeTokenClient {
@@ -669,6 +735,12 @@ mod tests {
                     scopes: Vec::new(),
                 })),
                 aufrufe: Mutex::new(Vec::new()),
+                owner: Mutex::new(Ok(TokenOwnerInfo {
+                    twitch_user_id: "5101".into(),
+                    twitch_login: "anderer_anzeigename".into(),
+                })),
+                owner_aufrufe: Mutex::new(Vec::new()),
+                owner_generation_change: Mutex::new(None),
             }
         }
     }
@@ -698,9 +770,163 @@ mod tests {
         async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
             unreachable!("kein Code-Tausch in diesem Modul")
         }
-        async fn token_owner(&self, _t: &str) -> Result<TokenOwnerInfo, RefreshError> {
-            unreachable!("kein Owner-Lookup in diesem Modul")
+        async fn token_owner(&self, token: &str) -> Result<TokenOwnerInfo, RefreshError> {
+            self.owner_aufrufe.lock().unwrap().push(token.into());
+            let pool = self.owner_generation_change.lock().unwrap().take();
+            if let Some(pool) = pool {
+                tb_raid::target_generation::activate_manual(&pool, "5101", "twitch")
+                    .await
+                    .unwrap();
+            }
+            self.owner.lock().unwrap().clone()
         }
+    }
+
+    #[tokio::test]
+    async fn publish_verifiziert_inhaber_scope_und_generation() {
+        let (pool, _database) = test_pool().await;
+        let client = Arc::new(FakeTokenClient::neu());
+        let config = config_mit(client.clone());
+        let jetzt = Utc::now();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "5101",
+            "gespeichert",
+            &["channel:read:stream_key"],
+            Some(jetzt + Duration::hours(3)),
+            false,
+        )
+        .await;
+        let generation = tb_raid::target_generation::activate_manual(&pool, "5101", "twitch")
+            .await
+            .unwrap();
+        let antwort = publish_token_antwort(&pool, &config, 5101, jetzt)
+            .await
+            .unwrap();
+        let wert = serde_json::to_value(antwort).unwrap();
+        assert_eq!(wert["purpose"], "publish");
+        assert_eq!(wert["token_owner"], "5101");
+        assert_eq!(wert["platform_user_id"], "5101");
+        assert_eq!(wert["connection_generation"], generation);
+        assert!(wert.get("refresh_token").is_none());
+        assert_eq!(*client.owner_aufrufe.lock().unwrap(), vec!["acc-alt"]);
+        let standard = platform_token_antwort(&pool, &config, 5101, "twitch", jetzt)
+            .await
+            .unwrap();
+        let standard = serde_json::to_value(standard).unwrap();
+        assert!(standard.get("purpose").is_none());
+        assert!(standard.get("token_owner").is_none());
+
+        client
+            .owner
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .twitch_user_id = "9999".into();
+        assert!(matches!(
+            publish_token_antwort(&pool, &config, 5101, jetzt).await,
+            Err(TokenFehler::NeuVerbinden)
+        ));
+        *client.owner.lock().unwrap() = Err(RefreshError::Other("geheimer-antwortkörper".into()));
+        assert!(matches!(
+            publish_token_antwort(&pool, &config, 5101, jetzt).await,
+            Err(TokenFehler::NichtLieferbar)
+        ));
+        let calls = client.owner_aufrufe.lock().unwrap().len();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "5101",
+            "gespeichert",
+            &["user:read:chat"],
+            Some(jetzt + Duration::hours(3)),
+            false,
+        )
+        .await;
+        assert!(matches!(
+            publish_token_antwort(&pool, &config, 5101, jetzt).await,
+            Err(TokenFehler::KeineVerbindung)
+        ));
+        assert_eq!(client.owner_aufrufe.lock().unwrap().len(), calls);
+    }
+
+    #[tokio::test]
+    async fn publish_handler_weist_ungueltige_anfragen_vor_datenbank_ab() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/ungenutzt")
+            .unwrap();
+        for (streamer, platform, purpose) in [
+            (0, "twitch", "publish"),
+            (-1, "twitch", "publish"),
+            (5101, "kick", "publish"),
+            (5101, "twitch", "unbekannt"),
+            (5101, "twitch", ""),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(INTERNAL_TOKEN_HEADER, "synthetisch".parse().unwrap());
+            let response = internal_platform_token_handler(
+                State(pool.clone()),
+                Some(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000)))),
+                Some(Extension(ExpectedToken("synthetisch".into()))),
+                Some(Extension(config_mit(Arc::new(FakeTokenClient::neu())))),
+                headers,
+                Query(PlatformTokenQuery {
+                    streamer: Some(streamer),
+                    platform: Some(platform.into()),
+                    purpose: Some(purpose.into()),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_prueft_frischen_token_und_verwirft_gewechselte_generation() {
+        let (pool, _database) = test_pool().await;
+        let client = Arc::new(FakeTokenClient::neu());
+        client.ergebnis.lock().unwrap().as_mut().unwrap().scopes =
+            vec!["channel:read:stream_key".into()];
+        let config = config_mit(client.clone());
+        let jetzt = Utc::now();
+        zeile_anlegen(
+            &pool,
+            &config.cipher,
+            "5101",
+            "gespeichert",
+            UPLINK,
+            Some(jetzt + Duration::minutes(2)),
+            false,
+        )
+        .await;
+        let antwort = publish_token_antwort(&pool, &config, 5101, jetzt)
+            .await
+            .unwrap();
+        let wert = serde_json::to_value(antwort).unwrap();
+        assert_eq!(wert["access_token"], "acc-frisch");
+        assert_eq!(*client.owner_aufrufe.lock().unwrap(), vec!["acc-frisch"]);
+        *client.owner_generation_change.lock().unwrap() = Some(pool.clone());
+        assert!(matches!(
+            publish_token_antwort(&pool, &config, 5101, jetzt).await,
+            Err(TokenFehler::KeineVerbindung)
+        ));
+        sqlx::query("UPDATE uplink_target_generations SET disconnect_pending=true WHERE twitch_user_id='5101'").execute(&pool).await.unwrap();
+        assert!(matches!(
+            publish_token_antwort(&pool, &config, 5101, jetzt).await,
+            Err(TokenFehler::KeineVerbindung)
+        ));
+        sqlx::query(
+            "UPDATE uplink_target_generations SET enabled=false WHERE twitch_user_id='5101'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            publish_token_antwort(&pool, &config, 5101, jetzt).await,
+            Err(TokenFehler::KeineVerbindung)
+        ));
     }
 
     // ── ohne DB ────────────────────────────────────────────────────────────
