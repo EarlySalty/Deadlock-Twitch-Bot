@@ -867,9 +867,7 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
     async fn isolated_schema(label: &str) -> Option<(PgPool, PgPool, String)> {
-        let Some(dsn) = crate::test_support::test_dsn() else {
-            return None;
-        };
+        let dsn = crate::test_support::test_dsn()?;
         let options = PgConnectOptions::from_str(&dsn).expect("parse configured test DSN");
         let admin = PgPoolOptions::new()
             .max_connections(1)
