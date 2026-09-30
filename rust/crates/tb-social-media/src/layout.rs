@@ -303,10 +303,18 @@ impl StreamerLayout {
 
     fn validate(&self) -> Result<(), LayoutValidationError> {
         // Crops liegen im Twitch-Bild ...
-        self.game_crop
-            .validate_within(self.source.width, self.source.height, "game_crop", "source")?;
-        self.cam_crop
-            .validate_within(self.source.width, self.source.height, "cam_crop", "source")?;
+        self.game_crop.validate_within(
+            self.source.width,
+            self.source.height,
+            "game_crop",
+            "source",
+        )?;
+        self.cam_crop.validate_within(
+            self.source.width,
+            self.source.height,
+            "cam_crop",
+            "source",
+        )?;
         // ... cam_position dagegen im fertigen Hochformat-Frame.
         self.cam_position
             .validate_within(TARGET_WIDTH, TARGET_HEIGHT, "cam_position", "target")?;
@@ -353,7 +361,12 @@ pub fn default_streamer_layout() -> StreamerLayout {
             w: 380,
             h: 380,
         },
-        cam_position: LayoutBox { x: 0, y: 0, w: TARGET_WIDTH, h: 600 },
+        cam_position: LayoutBox {
+            x: 0,
+            y: 0,
+            w: TARGET_WIDTH,
+            h: 600,
+        },
         cam_enabled: true,
         mode: "stacked".to_string(),
     }
@@ -638,7 +651,15 @@ mod tests {
         let layout = StreamerLayout::from_stored_value(&live_altlayout(), None, None).unwrap();
         assert_eq!(layout.mode, "pip");
         assert_eq!(layout.cam_position, DEFAULT_PIP_TILE);
-        assert_eq!(layout.game_crop, LayoutBox { x: 0, y: 0, w: 1080, h: 1080 });
+        assert_eq!(
+            layout.game_crop,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 1080
+            }
+        );
 
         // Auch wenn mode aus der Spalte kommt statt aus dem JSON.
         let layout =
@@ -649,17 +670,41 @@ mod tests {
         let mut stacked = live_altlayout();
         stacked["mode"] = json!("stacked");
         let layout = StreamerLayout::from_stored_value(&stacked, None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
 
         // Ein echter, schmaler PiP-Wert kommt unveraendert durch.
         let mut echt = live_altlayout();
         echt["cam_position"] = json!({"x": 40, "y": 900, "w": 300, "h": 300});
         let layout = StreamerLayout::from_stored_value(&echt, None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 40, y: 900, w: 300, h: 300 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 40,
+                y: 900,
+                w: 300,
+                h: 300
+            }
+        );
 
         // Der strenge Pfad (neue Eingaben) fasst nichts an.
         let layout = StreamerLayout::from_value(&live_altlayout(), None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
     }
 
     #[test]
@@ -667,8 +712,19 @@ mod tests {
         // yuv420p vertraegt keine ungeraden Chroma-Maße: scale=421:561 laesst
         // libx264 abbrechen.
         assert_eq!(
-            LayoutBox { x: 100, y: 100, w: 321, h: 201 }.clamped_to_target(),
-            LayoutBox { x: 100, y: 100, w: 320, h: 200 }
+            LayoutBox {
+                x: 100,
+                y: 100,
+                w: 321,
+                h: 201
+            }
+            .clamped_to_target(),
+            LayoutBox {
+                x: 100,
+                y: 100,
+                w: 320,
+                h: 200
+            }
         );
         // Gerade Werte bleiben, wie sie sind.
         assert_eq!(DEFAULT_PIP_TILE.clamped_to_target(), DEFAULT_PIP_TILE);
@@ -694,16 +750,48 @@ mod tests {
         // (Stacked, damit hier das Clampen greift und nicht die PiP-Altlast-Regel.)
         let layout = StreamerLayout::from_stored_value(&alt, None, Some("stacked"))
             .expect("gespeichertes Altlayout bleibt lesbar");
-        assert_eq!(layout.cam_position, LayoutBox { x: 0, y: 700, w: 1080, h: 540 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 700,
+                w: 1080,
+                h: 540
+            }
+        );
         // Die Crops bleiben unberuehrt.
-        assert_eq!(layout.game_crop, LayoutBox { x: 420, y: 0, w: 1080, h: 1080 });
-        assert_eq!(layout.cam_crop, LayoutBox { x: 1500, y: 50, w: 380, h: 380 });
+        assert_eq!(
+            layout.game_crop,
+            LayoutBox {
+                x: 420,
+                y: 0,
+                w: 1080,
+                h: 1080
+            }
+        );
+        assert_eq!(
+            layout.cam_crop,
+            LayoutBox {
+                x: 1500,
+                y: 50,
+                w: 380,
+                h: 380
+            }
+        );
 
         // Auch zu hohe Werte werden gestutzt statt abgelehnt.
         let mut zu_hoch = alt.clone();
         zu_hoch["cam_position"] = json!({"x": 900, "y": 1800, "w": 600, "h": 400});
         let layout = StreamerLayout::from_stored_value(&zu_hoch, None, None).unwrap();
-        assert_eq!(layout.cam_position, LayoutBox { x: 480, y: 1520, w: 600, h: 400 });
+        assert_eq!(
+            layout.cam_position,
+            LayoutBox {
+                x: 480,
+                y: 1520,
+                w: 600,
+                h: 400
+            }
+        );
 
         // Kaputte Struktur bleibt ein Fehler, auch beim Lesen.
         let mut kaputt = alt.clone();
@@ -795,8 +883,13 @@ mod tests {
         .await
         .unwrap();
         assert!(get_clip_stored_layout(&pool, clip).await.is_none());
-        assert_eq!(get_clip_effective_layout(&pool, clip).await.mode, "blur_pad");
-        apply_default_layout(&pool, clip, "ohnekamera").await.unwrap();
+        assert_eq!(
+            get_clip_effective_layout(&pool, clip).await.mode,
+            "blur_pad"
+        );
+        apply_default_layout(&pool, clip, "ohnekamera")
+            .await
+            .unwrap();
         let stored = get_clip_stored_layout(&pool, clip).await.unwrap();
         assert_eq!(stored.mode, "blur_pad");
         assert!(!stored.cam_enabled);
@@ -890,8 +983,24 @@ mod tests {
             .await
             .expect("Altlayout muss lesbar bleiben, nicht auf den Default kippen");
         assert_eq!(got.mode, "stacked");
-        assert_eq!(got.game_crop, LayoutBox { x: 420, y: 0, w: 1080, h: 1080 });
-        assert_eq!(got.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            got.game_crop,
+            LayoutBox {
+                x: 420,
+                y: 0,
+                w: 1080,
+                h: 1080
+            }
+        );
+        assert_eq!(
+            got.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
 
         // Auch der Clip-Pfad (Override) darf daran nicht scheitern.
         let clip: i32 = sqlx::query_scalar(
@@ -901,7 +1010,15 @@ mod tests {
         .await
         .unwrap();
         let eff = get_clip_effective_layout(&pool, clip).await;
-        assert_eq!(eff.cam_position, LayoutBox { x: 0, y: 0, w: 1080, h: 540 });
+        assert_eq!(
+            eff.cam_position,
+            LayoutBox {
+                x: 0,
+                y: 0,
+                w: 1080,
+                h: 540
+            }
+        );
         assert_ne!(eff, default_streamer_layout());
     }
 
@@ -924,10 +1041,16 @@ mod tests {
 
         // Clip mit gespeichertem Layout -> Compose-Pfad (Overlay), kein Center-Crop.
         let stored = get_clip_stored_layout(&pool, clip).await;
-        assert!(stored.is_some(), "gespeichertes Streamer-Layout muss gefunden werden");
+        assert!(
+            stored.is_some(),
+            "gespeichertes Streamer-Layout muss gefunden werden"
+        );
         match plan_vertical_render(stored.as_ref()) {
             VerticalRender::Compose { filter, .. } => {
-                assert!(filter.contains("vstack"), "Standardlayout rendert mit Kamera-Streifen: {filter}");
+                assert!(
+                    filter.contains("vstack"),
+                    "Standardlayout rendert mit Kamera-Streifen: {filter}"
+                );
             }
             VerticalRender::BlurPad => panic!("gespeichertes Layout darf nicht im Fallback landen"),
         }

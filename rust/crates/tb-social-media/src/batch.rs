@@ -117,9 +117,19 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(crate::test_sql::drop_schema(schema, true)).execute(&admin).await.unwrap();
-        sqlx::query(crate::test_sql::create_schema(schema, false)).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn)
             .unwrap()

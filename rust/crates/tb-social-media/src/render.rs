@@ -2,7 +2,9 @@ use sqlx::PgPool;
 
 use crate::enrichment::get_enrichment;
 use crate::layout::get_clip_stored_layout;
-use crate::subtitles::{ass_from_segments, build_branded_ass, correct_segments, segment_subtitles, SubtitleSegment};
+use crate::subtitles::{
+    ass_from_segments, build_branded_ass, correct_segments, segment_subtitles, SubtitleSegment,
+};
 use crate::video_processor::{VideoProcessor, VideoProcessorError};
 use crate::vocab::load_all_vocab;
 
@@ -73,7 +75,11 @@ pub async fn render_clip_vertical(
         Vec::new()
     };
     let source_duration = vp.get_video_info(input_path).await?.duration;
-    let duration = if source_duration > 0.0 { source_duration.min(max_duration as f64) } else { max_duration as f64 };
+    let duration = if source_duration > 0.0 {
+        source_duration.min(max_duration as f64)
+    } else {
+        max_duration as f64
+    };
     let cam_height = layout
         .as_ref()
         .filter(|value| value.cam_enabled && value.mode == "stacked")
@@ -81,12 +87,17 @@ pub async fn render_clip_vertical(
         .unwrap_or(600);
     let ass = build_branded_ass(
         &cues,
-        custom_title.as_deref().filter(|s| !s.trim().is_empty()).or(clip_title.as_deref()).unwrap_or(""),
+        custom_title
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(clip_title.as_deref())
+            .unwrap_or(""),
         &login,
         cam_height,
         duration,
     );
-    vp.render_branded(input_path, output_path, max_duration, layout.as_ref(), &ass).await
+    vp.render_branded(input_path, output_path, max_duration, layout.as_ref(), &ass)
+        .await
 }
 
 #[cfg(test)]
@@ -97,12 +108,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(crate::test_sql::drop_schema(schema, true)).execute(&admin).await.unwrap();
-        sqlx::query(crate::test_sql::create_schema(schema, false)).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(3)
+            .connect_with(opts)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT)",
             "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE)",
@@ -119,7 +146,12 @@ mod tests {
         let Some(pool) = make_pool("t_sm_render_flag").await else {
             return;
         };
-        let a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id").fetch_one(&pool).await.unwrap();
+        let a: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         // Ohne Settings-Zeile: Default an.
         assert!(subtitles_enabled_for_clip(&pool, a as i64).await);
         // Ausgeschaltet.
@@ -132,17 +164,35 @@ mod tests {
         let Some(pool) = make_pool("t_sm_render_ass").await else {
             return;
         };
-        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id").fetch_one(&pool).await.unwrap();
+        let clip: i32 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('nani') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         // Ohne Transkript: kein ASS.
-        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'done')").bind(clip).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'done')",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(build_clip_ass(&pool, clip as i64).await.is_none());
         // Mit Segmenten + Vokabel: ASS mit korrigiertem Text.
-        sqlx::query("INSERT INTO deadlock_vocab (term, canonical, category) VALUES ('haze','Haze','hero')").execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO deadlock_vocab (term, canonical, category) VALUES ('haze','Haze','hero')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("UPDATE social_media_clip_enrichment SET transcript_segments = $1::text::jsonb WHERE clip_db_id = $2")
             .bind(r#"[{"start_seconds":0.0,"end_seconds":2.0,"text":"haze ist stark"}]"#)
             .bind(clip)
             .execute(&pool).await.unwrap();
-        let ass = build_clip_ass(&pool, clip as i64).await.expect("ASS aus Transkript");
+        let ass = build_clip_ass(&pool, clip as i64)
+            .await
+            .expect("ASS aus Transkript");
         assert!(ass.contains("Haze ist stark"), "{ass}");
     }
 }

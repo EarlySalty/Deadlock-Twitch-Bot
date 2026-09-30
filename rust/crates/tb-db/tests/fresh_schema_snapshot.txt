@@ -498,7 +498,7 @@ social_media_settings|updated_by|text|YES|
 social_media_settings|value|jsonb|NO|
 social_media_streamer_layout|cam_enabled|boolean|NO|true
 social_media_streamer_layout|layout_json|jsonb|NO|
-social_media_streamer_layout|mode|text|NO|'pip'::text
+social_media_streamer_layout|mode|text|NO|'stacked'::text
 social_media_streamer_layout|streamer_login|text|NO|
 social_media_streamer_layout|twitch_user_id|text|YES|
 social_media_streamer_layout|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
