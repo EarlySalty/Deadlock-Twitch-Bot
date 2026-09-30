@@ -1,0 +1,4 @@
+rust/target-ci-953/validation/scanner-fixtures/actions-negative/syntax.yml:3:1: unexpected key "invalid_workflow_key" for "workflow" section. expected one of "concurrency", "defaults", "env", "jobs", "name", "on", "permissions", "run-name" [syntax-check]
+  |
+3 | invalid_workflow_key: true
+  | ^~~~~~~~~~~~~~~~~~~~~
