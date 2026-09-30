@@ -1151,10 +1151,7 @@ mod tests {
         let forced_half = load_clips(&pool, 20, Some("half-round"), false, true)
             .await
             .expect("force includes the completed half-up boundary");
-        assert_eq!(
-            clip_moment_from_start(forced_half[0].moment_offset_s, forced_half[0].duration_s),
-            Some(131)
-        );
+        assert_eq!(forced_half[0].moment_offset_s, 131);
         assert_eq!(
             load_clips(&pool, 20, Some("nan-duration"), false, false)
                 .await
