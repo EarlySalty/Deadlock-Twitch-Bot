@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 default = []
-local-eval = ["dep:serde", "dep:sha2", "dep:libc"]
+local-eval = ["dep:libc"]
 
 [[bin]]
 name = "tb-local-replay"
@@ -17,8 +17,8 @@ required-features = ["local-eval"]
 # erfolgreiche Call verbucht Tokens best-effort ins
 # gemeinsame Usage-Ledger (Tabelle `llm_usage`, zentrale Postgres).
 [dependencies]
-serde = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
 libc = { version = "0.2", optional = true }
 chrono      = { workspace = true }
 regex       = { workspace = true }
@@ -34,6 +34,7 @@ tracing     = { workspace = true }
 # tb-llm keinen Compile-Time-`.sqlx`-Cache braucht und der Workspace-schema-gate
 # nicht über eine gesonderte tb-llm-Cache-Datei stolpert.
 sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
+serde-saphyr = "1.3.0"
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }

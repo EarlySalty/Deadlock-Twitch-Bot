@@ -1,0 +1,14 @@
+# Zentrale, nicht geheime Modellauswahl für alle Fireworks-Aufrufe des Twitch-Bots.
+# Keine feste Versionsbindung: bootstrap_model ist die Mindestversion und der
+# Startkandidat bei einem nicht erreichbaren Modellkatalog, niemals ein Pin.
+# Neue Modelle werden erst nach erfolgreicher synthetischer JSON-Probe verwendet.
+schema_version: 1
+provider: fireworks
+family: deepseek-flash
+selection: latest
+bootstrap_model: accounts/fireworks/models/deepseek-v4p1-flash
+refresh_seconds: 3600
+retry_seconds: 60
+max_stale_seconds: 86400
+catalog_timeout_seconds: 10
+probe_timeout_seconds: 20

@@ -15,9 +15,10 @@
 //!
 //! # Anbieter
 //!
-//! Ausschließlich **DeepSeek V4 Flash bei Fireworks**. Ohne Fireworks-Schlüssel
-//! schlägt der Connector geschlossen fehl. Altanbieter, Provider-Overrides und
-//! Modell-Overrides werden nicht verwendet.
+//! Fireworks verwendet die neueste geprüfte **DeepSeek-Flash-Version** gemäß
+//! `rust/knowledge/llm.yaml`. Die bestehende GLM-Ausnahme für `title_ai` bleibt
+//! separat freigegeben. Ohne Schlüssel oder geprüftes Modell schlägt der
+//! Connector geschlossen fehl. Modell-ENV-Overrides werden nicht verwendet.
 //!
 //! # Ledger
 //!
@@ -34,6 +35,7 @@
 pub mod hub;
 pub mod keys;
 pub mod ledger;
+pub mod model_resolver;
 pub mod selection;
 
 #[cfg(feature = "local-eval")]

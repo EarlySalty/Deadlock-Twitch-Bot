@@ -2157,7 +2157,7 @@ mod tests {
         assert_eq!(providers[0].provider, "fireworks");
         assert_eq!(
             providers[0].model,
-            tb_llm::selection::FIREWORKS_DEFAULT_MODEL
+            tb_llm::selection::configured_fireworks_model()
         );
         clear_provider_env();
     }
@@ -3125,7 +3125,7 @@ mod tests {
             provider: "fireworks",
             base_url: server.uri(),
             api_key: Some("test-key".to_string()),
-            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
         let review = call_judge(Some(&provider), false, content)
             .await
@@ -3169,7 +3169,7 @@ mod tests {
             provider: "fireworks",
             base_url: server.uri(),
             api_key: Some("fw-key".to_string()),
-            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
         let error = call_judge(Some(&provider), false, "cheap viewers telegram")
             .await
@@ -3199,7 +3199,7 @@ mod tests {
             provider: "fireworks",
             base_url: server.uri(),
             api_key: Some("test-key".to_string()),
-            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
         call_judge(Some(&provider), false, "harmlose nachricht")
             .await

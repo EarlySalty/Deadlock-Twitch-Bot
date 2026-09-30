@@ -7,7 +7,7 @@ use serde_json::json;
 use serde_json::Value;
 use uuid::Uuid;
 
-use tb_llm::selection::FIREWORKS_DEFAULT_MODEL;
+use tb_llm::selection::configured_fireworks_model;
 
 const FIREWORKS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HOOKS: usize = 5;
@@ -575,7 +575,7 @@ impl NewOutreachEvent {
                     Some(decision),
                     None,
                     Some("fireworks".to_owned()),
-                    Some(FIREWORKS_DEFAULT_MODEL.to_owned()),
+                    Some(configured_fireworks_model().to_owned()),
                 )
             }
             CycleResult::ParserError => (
@@ -583,21 +583,21 @@ impl NewOutreachEvent {
                 None,
                 Some("decode".to_owned()),
                 Some("fireworks".to_owned()),
-                Some(FIREWORKS_DEFAULT_MODEL.to_owned()),
+                Some(configured_fireworks_model().to_owned()),
             ),
             CycleResult::Timeout => (
                 OutreachOutcome::Timeout,
                 None,
                 Some("timeout".to_owned()),
                 Some("fireworks".to_owned()),
-                Some(FIREWORKS_DEFAULT_MODEL.to_owned()),
+                Some(configured_fireworks_model().to_owned()),
             ),
             CycleResult::ProviderError(error) => (
                 OutreachOutcome::ProviderError,
                 None,
                 Some(error),
                 Some("fireworks".to_owned()),
-                Some(FIREWORKS_DEFAULT_MODEL.to_owned()),
+                Some(configured_fireworks_model().to_owned()),
             ),
             CycleResult::WhisperError(error) => (
                 OutreachOutcome::WhisperError,

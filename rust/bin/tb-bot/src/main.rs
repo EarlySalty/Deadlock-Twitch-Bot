@@ -452,6 +452,12 @@ async fn main() {
             std::process::exit(2);
         });
     let config = snapshot.settings();
+    // Die Modellpolicy muss mit dem Release ausgeliefert werden. Auch die
+    // bestehende --check-config-Probe prüft sie vor dem Laden von Secrets.
+    tb_llm::model_resolver::global().unwrap_or_else(|error| {
+        eprintln!("LLM-Konfiguration ungültig: {error}");
+        std::process::exit(2);
+    });
     let runtime_role = tb_internal_api::enforce_internal_api_runtime(
         Some(&config.bot.runtime_role),
         config.internal_api.port,
@@ -502,6 +508,10 @@ async fn main() {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
 
+    supervisor.spawn(
+        "llm_model_refresh",
+        tb_llm::model_resolver::run_refresh_loop(pool.clone()),
+    );
     supervisor.spawn(
         "monthly_effort_raid_boost",
         monthly_raid_boost::run(pool.clone()),

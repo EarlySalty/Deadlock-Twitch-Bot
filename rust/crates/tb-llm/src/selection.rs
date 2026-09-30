@@ -1,13 +1,13 @@
-//! Feste LLM-Auswahl des Twitch-Bots.
+//! Zentrale Fireworks-Auswahl aus der YAML-Modellpolicy.
 //!
-//! Jeder Anwendungsfall läuft ausschließlich über DeepSeek V4 Flash bei
-//! Fireworks. Frühere Provider- und Modell-Overrides werden bewusst ignoriert.
+//! Alle Fireworks-Anwendungsfälle verwenden die neueste erfolgreich geprüfte
+//! DeepSeek-Flash-Version. Alte Modell-ENV-Overrides bleiben wirkungslos.
 
 use std::sync::OnceLock;
 use tracing::warn;
 
 pub const FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
-pub const FIREWORKS_DEFAULT_MODEL: &str = "accounts/fireworks/models/deepseek-v4-flash-0731";
+pub use crate::model_resolver::configured_fireworks_model;
 
 /// Bestehende öffentliche Konstante für fachliche Guard-Tests. Inzwischen gilt
 /// dieselbe Fireworks-Bindung für jeden Anwendungsfall.
@@ -22,8 +22,8 @@ pub struct LlmEndpoint {
     pub api_key: Option<String>,
 }
 
-/// Anbieter und Modell sind absichtlich nicht mehr pro Anwendungsfall
-/// konfigurierbar. `use_case` bleibt für Ledger und Warnungen erhalten.
+/// Der Anbieter und die Flash-Familie sind zentral per YAML festgelegt.
+/// `use_case` bleibt für Ledger und Warnungen erhalten.
 pub fn endpoint_for(use_case: &str) -> LlmEndpoint {
     warne_ignorierte_altanbieter(use_case);
     fireworks_endpoint()
@@ -52,7 +52,8 @@ fn fireworks_endpoint() -> LlmEndpoint {
     LlmEndpoint {
         provider: "fireworks",
         base_url: fireworks_base_url(),
-        model: FIREWORKS_DEFAULT_MODEL.to_string(),
+        model: crate::model_resolver::resolved_fireworks_model()
+            .unwrap_or_else(|| configured_fireworks_model().to_owned()),
         api_key: crate::keys::fireworks_api_key(),
     }
 }
@@ -122,7 +123,7 @@ mod tests {
         for use_case in ["dashboard_self_explainer", "ai_chat", "spam_judge"] {
             let endpoint = endpoint_for(use_case);
             assert_eq!(endpoint.provider, "fireworks");
-            assert_eq!(endpoint.model, FIREWORKS_DEFAULT_MODEL);
+            assert_eq!(endpoint.model, configured_fireworks_model());
         }
         clear();
     }
@@ -140,7 +141,7 @@ mod tests {
 
         let endpoint = endpoint_for("ai_chat");
         assert_eq!(endpoint.provider, "fireworks");
-        assert_eq!(endpoint.model, FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(endpoint.model, configured_fireworks_model());
         assert!(endpoint.api_key.is_none());
         assert!(endpoint_chain("ai_chat").is_empty());
         clear();
@@ -156,7 +157,7 @@ mod tests {
         let chain = endpoint_chain("spam_judge");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].provider, "fireworks");
-        assert_eq!(chain[0].model, FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(chain[0].model, configured_fireworks_model());
         clear();
     }
 }

@@ -2410,7 +2410,7 @@ mod tests {
         std::env::set_var("TB_LLM_PROVIDER_POST_STREAM", "llm");
         let endpoint = tb_llm::endpoint_for("post_stream");
         assert_eq!(endpoint.provider, "fireworks");
-        assert_eq!(endpoint.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(endpoint.model, tb_llm::selection::configured_fireworks_model());
     }
 
     fn msg(content: &str, author: &str, minute: Option<i64>) -> ChatMessageRow {
@@ -2476,7 +2476,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(body_string_contains(
-                tb_llm::selection::FIREWORKS_DEFAULT_MODEL,
+                tb_llm::selection::configured_fireworks_model(),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(
                 serde_json::json!({"choices": [{"message": {"content": "ANTWORT"}}]}),
@@ -2523,7 +2523,7 @@ mod tests {
             .and(path("/chat/completions"))
             .and(header("authorization", "Bearer secret"))
             .and(body_string_contains(
-                tb_llm::selection::FIREWORKS_DEFAULT_MODEL,
+                tb_llm::selection::configured_fireworks_model(),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
