@@ -115,6 +115,19 @@ pub(crate) async fn uncertain(pool: &PgPool, queue_id: i64) -> Result<(), sqlx::
     Ok(())
 }
 
+pub(crate) async fn release_not_started(pool: &PgPool, queue_id: i64) -> Result<bool, sqlx::Error> {
+    let changed = sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET status = 'processing' \
+         WHERE id = $1 AND platform = 'tiktok' AND status = 'inbox_pending' \
+         AND tiktok_publish_id IS NULL",
+    )
+    .bind(queue_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +172,25 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn only_proven_not_started_operation_without_id_can_be_released() {
+        let Some(pool) = pool("t_sm_tiktok_release_local").await else {
+            return;
+        };
+        assert!(reserve(&pool, 1).await.unwrap());
+        assert!(release_not_started(&pool, 1).await.unwrap());
+        assert!(reserve(&pool, 1).await.unwrap());
+        Checkpoint {
+            pool: &pool,
+            queue_id: 1,
+        }
+        .record_publish_id("begun")
+        .await
+        .unwrap();
+        assert!(!release_not_started(&pool, 1).await.unwrap());
+        assert!(!reserve(&pool, 2).await.unwrap());
     }
 
     #[tokio::test]

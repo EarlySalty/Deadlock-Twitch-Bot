@@ -310,7 +310,22 @@ impl UploadTask {
                     }
                     Err(e) => {
                         if item.platform == "tiktok" {
-                            if let Err(error) =
+                            if let UploadError::NotStarted(cause) = &e {
+                                match crate::tiktok_recovery::release_not_started(
+                                    &self.pool, item.id,
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        self.handle_upload_error(&item, cause, "tiktok_not_started")
+                                            .await
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => {
+                                        tracing::warn!(queue_id = item.id, %error, "Nicht gestarteter TikTok-Vorgang konnte nicht freigegeben werden")
+                                    }
+                                }
+                            } else if let Err(error) =
                                 crate::tiktok_recovery::uncertain(&self.pool, item.id).await
                             {
                                 tracing::warn!(queue_id = item.id, %error, "Unklarer TikTok-Vorgang konnte nicht vermerkt werden");
@@ -532,6 +547,7 @@ impl UploadTask {
     /// Auf welches Konto die Vertagung dieses Fehlers geht.
     fn konto_fuer(error: &UploadError) -> VertagungsKonto {
         match error {
+            UploadError::NotStarted(cause) => Self::konto_fuer(cause),
             UploadError::QuotaExceeded(_) => VertagungsKonto::Kontingent,
             _ => VertagungsKonto::Versuch,
         }
@@ -636,9 +652,6 @@ impl UploadTask {
         platform: &str,
     ) -> Result<String, WorkerError> {
         let output_path = vertical_output_path(input_path, platform);
-        if Path::new(&output_path).exists() {
-            return Ok(output_path);
-        }
         render_clip_vertical(
             &self.video_processor,
             &self.pool,
@@ -874,6 +887,7 @@ impl UploadWorker {
 /// Einordnung ohne Datenbank pruefbar ist.
 fn verzoegerung_fuer(error: &UploadError) -> Option<chrono::Duration> {
     match error {
+        UploadError::NotStarted(cause) => verzoegerung_fuer(cause),
         // Kontingent voll: das heilt keine Wiederholung in fuenf Minuten, aber
         // morgen ist es wieder da. Der Clip selbst ist in Ordnung.
         UploadError::QuotaExceeded(_) => Some(chrono::Duration::hours(24)),
@@ -1196,7 +1210,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_user_id TEXT, platform_username TEXT, enc_version INTEGER, authorized_at TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
@@ -1233,7 +1247,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, custom_title TEXT, layout_override_json JSONB, streamer_login TEXT NOT NULL, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, tiktok_publish_id TEXT, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
         ] {
@@ -1254,9 +1268,39 @@ mod tests {
     }
 
     fn task(pool: PgPool) -> UploadTask {
+        static TOOLS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+        let (ffmpeg, ffprobe) = TOOLS.get_or_init(|| {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = unique_temp_dir("upload-worker-tools");
+            let ffmpeg = dir.join("ffmpeg");
+            let ffprobe = dir.join("ffprobe");
+            std::fs::write(
+                &ffmpeg,
+                r#"#!/bin/sh
+for out do :; done
+printf '%s\n' "$*" > "$out"
+cat overlay.ass >> "$out"
+"#,
+            )
+            .unwrap();
+            std::fs::write(
+                &ffprobe,
+                r#"#!/bin/sh
+printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"duration":"15"}]}'
+"#,
+            )
+            .unwrap();
+            for file in [&ffmpeg, &ffprobe] {
+                std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            (
+                ffmpeg.to_string_lossy().into_owned(),
+                ffprobe.to_string_lossy().into_owned(),
+            )
+        });
         UploadTask {
             pool,
-            video_processor: VideoProcessor::default(),
+            video_processor: VideoProcessor::new(ffmpeg, ffprobe),
             yt_dlp_path: "yt-dlp".to_string(),
             clips_dir: std::env::temp_dir().to_string_lossy().into_owned(),
         }
@@ -1340,6 +1384,58 @@ mod tests {
         .unwrap();
         assert_eq!(status, "failed");
         assert_eq!(err.as_deref(), Some("approval_required"));
+    }
+
+    #[tokio::test]
+    async fn upload_renders_current_layout_title_and_subtitles_again() {
+        let Some(pool) = make_pool("t_sm_upload_fresh_render").await else {
+            return;
+        };
+        for ddl in [
+            "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB, cam_enabled BOOLEAN, mode TEXT)",
+            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, subtitles_enabled BOOLEAN DEFAULT TRUE)",
+            "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
+            "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT, category TEXT, source TEXT, aliases JSONB, weight INTEGER, updated_at TIMESTAMPTZ)",
+        ] { sqlx::query(ddl).execute(&pool).await.unwrap(); }
+        let dir = unique_temp_dir("fresh-render");
+        let input = dir.join("clip.mp4");
+        std::fs::write(&input, b"input").unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('render', 'https://clips.test/render', 'nani', 'Alter Titel') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let mut layout = crate::layout::default_streamer_layout();
+        crate::layout::set_clip_layout_override(&pool, clip, Some(&layout))
+            .await
+            .unwrap();
+        let worker = task(pool.clone());
+        let output = worker
+            .convert_to_vertical(clip, input.to_str().unwrap(), "tiktok")
+            .await
+            .unwrap();
+        let first = std::fs::read_to_string(&output).unwrap();
+        assert!(first.contains("Alter Titel"));
+        layout.cam_position.h = 500;
+        crate::layout::set_clip_layout_override(&pool, clip, Some(&layout))
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_clips_social_media SET custom_title = 'Neuer Titel' WHERE id = $1",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, transcript_segments) VALUES ($1, $2)")
+            .bind(i32::try_from(clip).unwrap()).bind(serde_json::json!([{"start":0.0,"end":2.0,"text":"Neue Worte"}])).execute(&pool).await.unwrap();
+        let output = worker
+            .convert_to_vertical(clip, input.to_str().unwrap(), "tiktok")
+            .await
+            .unwrap();
+        let next = std::fs::read_to_string(&output).unwrap();
+        assert!(next.contains("Neuer Titel"));
+        assert!(!next.contains("Alter Titel"));
+        assert!(next.contains("Neue Worte"));
+        assert!(next.contains("1080:500"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

@@ -2400,7 +2400,7 @@ function ClipCard({
           {cancelResult && (
             <p role="status" className="text-sm text-text-secondary">
               {cancelResult.already_running
-                ? t('Gestoppt, aber {count} Plattform war schon durch.', {
+                ? t('Geplante Posts gestoppt. Bei {count} Plattformen hat die Übertragung bereits begonnen und lässt sich hier nicht mehr stoppen.', {
                     count: cancelResult.already_running,
                   })
                 : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}

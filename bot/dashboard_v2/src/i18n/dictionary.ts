@@ -491,8 +491,8 @@ const EN: Record<string, string> = {
   '{count} geplante Posts gestoppt.': 'Stopped {count} scheduled posts.',
   'Auf {platforms} passiert nichts, dort steht die Kadenz auf null.':
     'Nothing happens on {platforms}, the cadence there is set to zero.',
-  'Gestoppt, aber {count} Plattform war schon durch.':
-    'Stopped, but {count} platform had already gone out.',
+  'Geplante Posts gestoppt. Bei {count} Plattformen hat die Übertragung bereits begonnen und lässt sich hier nicht mehr stoppen.':
+    'Scheduled posts stopped. Transfers have already started on {count} platforms and can no longer be stopped here.',
 
   // -- Reports --------------------------------------------------------------
 

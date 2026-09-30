@@ -127,7 +127,7 @@ const STATEMENTS: &[&str] = &[
     // Partner-Freigabe für Social-Media-Posts (zentraler Guard).
     "CREATE TABLE IF NOT EXISTS social_media_partner_access (\
         streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
-        granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
+        twitch_user_id TEXT, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
         granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     // Analytics-Spalten (Phase 3) — neue Spalten idempotent.
     "ALTER TABLE twitch_clips_social_analytics \

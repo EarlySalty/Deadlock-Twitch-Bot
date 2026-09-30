@@ -453,6 +453,7 @@ social_media_partner_access|granted_at|timestamp with time zone|NO|CURRENT_TIMES
 social_media_partner_access|granted_by|text|YES|
 social_media_partner_access|granted|boolean|NO|false
 social_media_partner_access|streamer_login|text|NO|
+social_media_partner_access|twitch_user_id|text|YES|
 social_media_platform_auth|access_token_enc|bytea|NO|
 social_media_platform_auth|authorized_at|text|YES|CURRENT_TIMESTAMP
 social_media_platform_auth|client_id|text|YES|

@@ -92,7 +92,16 @@ pub(crate) fn resolve_streamer_scope(
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
     match auth {
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => {
+            if twitch_user_id.is_empty()
+                || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(unauthorized());
+            }
             let session = twitch_login.to_lowercase();
             if let Some(req) = &requested {
                 if *req != session {

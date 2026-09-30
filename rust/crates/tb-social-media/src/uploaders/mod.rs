@@ -16,6 +16,8 @@ pub mod youtube;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UploadError {
+    #[error("Übertragung wurde nicht gestartet: {0}")]
+    NotStarted(#[source] Box<UploadError>),
     #[error("not authenticated")]
     NotAuthenticated,
     #[error("validation failed: {0}")]
@@ -33,6 +35,12 @@ pub enum UploadError {
     NotImplemented(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl UploadError {
+    pub(crate) fn not_started(error: Self) -> Self {
+        Self::NotStarted(Box::new(error))
+    }
 }
 
 /// Best-effort-Statistiken eines veröffentlichten Clips (mirror

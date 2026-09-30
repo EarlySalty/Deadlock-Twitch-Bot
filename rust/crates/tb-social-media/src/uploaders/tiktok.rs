@@ -184,14 +184,18 @@ impl TikTokUploader {
         checkpoint: Option<&dyn UploadCheckpoint>,
     ) -> Result<String, UploadError> {
         if self.access_token.is_empty() {
-            return Err(UploadError::NotAuthenticated);
+            return Err(UploadError::not_started(UploadError::NotAuthenticated));
         }
-        self.validate_video(video_path)?;
-        let video_size = tokio::fs::metadata(video_path).await?.len();
+        self.validate_video(video_path)
+            .map_err(UploadError::not_started)?;
+        let video_size = tokio::fs::metadata(video_path)
+            .await
+            .map_err(|error| UploadError::not_started(UploadError::Io(error)))?
+            .len();
         if video_size == 0 {
-            return Err(UploadError::Validation(format!(
+            return Err(UploadError::not_started(UploadError::Validation(format!(
                 "Video file is empty: {video_path}"
-            )));
+            ))));
         }
 
         let (chunk_size, total_chunk_count) = chunk_plan(video_size);
@@ -201,17 +205,20 @@ impl TikTokUploader {
         };
         let caption = build_caption(title, description, hashtags);
         let info = if self.mode == UploadMode::DirectPost {
-            let info = self.query_creator_info().await?;
+            let info = self
+                .query_creator_info()
+                .await
+                .map_err(UploadError::not_started)?;
             if !info
                 .privacy_level_options
                 .iter()
                 .any(|option| option == &self.privacy_level)
             {
-                return Err(UploadError::Validation(format!(
+                return Err(UploadError::not_started(UploadError::Validation(format!(
                     "TikTok privacy_level {} nicht erlaubt, möglich sind: {}",
                     self.privacy_level,
                     info.privacy_level_options.join(", ")
-                )));
+                ))));
             }
             Some(info)
         } else {
@@ -221,9 +228,9 @@ impl TikTokUploader {
             .init_upload(&caption, info.as_ref(), video_size, plan)
             .await;
         let (publish_id, upload_url) = match upload {
-            Err(UploadError::Api(reason))
+            Err(UploadError::NotStarted(error))
                 if info.is_some()
-                    && reason.contains("unaudited_client_can_only_post_to_private_accounts") =>
+                    && matches!(error.as_ref(), UploadError::Api(reason) if reason.contains("unaudited_client_can_only_post_to_private_accounts")) =>
             {
                 self.init_upload(&caption, None, video_size, plan).await?
             }
@@ -279,8 +286,36 @@ impl TikTokUploader {
             .send()
             .await
             .map_err(|error| UploadError::Request(error.without_url().to_string()))?;
-        let payload = expect_ok_json(response, "TikTok init upload").await?;
-        tiktok_error_guard(&payload, "TikTok init upload")?;
+        let status = response.status();
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|error| UploadError::Request(error.without_url().to_string()))?;
+        if let Err(error) = tiktok_error_guard(&payload, "TikTok init upload") {
+            let code = payload["error"]["code"].as_str().unwrap_or("");
+            if !status.is_server_error()
+                && matches!(
+                    code,
+                    "access_token_invalid"
+                        | "scope_not_authorized"
+                        | "scope_permission_missed"
+                        | "rate_limit_exceeded"
+                        | "spam_risk_too_many_posts"
+                        | "spam_risk_user_banned_from_posting"
+                        | "reached_active_user_cap"
+                        | "spam_risk_too_many_pending_share"
+                        | "invalid_param"
+                        | "invalid_params"
+                        | "unaudited_client_can_only_post_to_private_accounts"
+                )
+            {
+                return Err(UploadError::not_started(error));
+            }
+            return Err(error);
+        }
+        if !status.is_success() {
+            return Err(UploadError::Api(format!("TikTok init upload: {status}")));
+        }
         let publish_id = payload["data"]["publish_id"]
             .as_str()
             .map(str::to_string)
@@ -423,6 +458,10 @@ impl PlatformUploader for TikTokUploader {
     ) -> Result<String, UploadError> {
         self.upload_with_checkpoint(video_path, title, description, hashtags, None)
             .await
+            .map_err(|error| match error {
+                UploadError::NotStarted(inner) => *inner,
+                other => other,
+            })
     }
 
     async fn upload_video_checkpointed(
@@ -532,6 +571,109 @@ mod tests {
             }
             self.ids.lock().unwrap().push(publish_id.to_string());
             Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn tiktok_local_validation_is_proven_not_started() {
+        let checkpoint = RecordingCheckpoint {
+            ids: Default::default(),
+            fail: false,
+        };
+        let error = TikTokUploader::new("test-token")
+            .upload_video_checkpointed(
+                "/missing/tiktok-test-video.mp4",
+                "Titel",
+                "",
+                &[],
+                &checkpoint,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, UploadError::NotStarted(cause) if matches!(*cause, UploadError::Validation(_)))
+        );
+        assert!(checkpoint.ids.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tiktok_explicit_init_rejection_allows_a_later_confirmed_attempt() {
+        for (status, code) in [
+            (401, "access_token_invalid"),
+            (429, "rate_limit_exceeded"),
+            (400, "invalid_params"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/post/publish/inbox/video/init/"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(json!({"error": {"code": code}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let checkpoint = RecordingCheckpoint {
+                ids: Default::default(),
+                fail: false,
+            };
+            let video = temp_video(&format!("tb_tiktok_rejected_{status}.mp4"), 16).await;
+            let uploader = TikTokUploader::new("test-token").with_api_base(server.uri());
+            let error = uploader
+                .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, UploadError::NotStarted(_)));
+            assert!(checkpoint.ids.lock().unwrap().is_empty());
+            server.verify().await;
+            server.reset().await;
+            Mock::given(method("POST")).and(path("/post/publish/inbox/video/init/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"publish_id": "later-operation", "upload_url": format!("{}/upload/", server.uri())}, "error": {"code": "ok"}})))
+                .expect(1).mount(&server).await;
+            Mock::given(method("PUT"))
+                .respond_with(ResponseTemplate::new(201))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                uploader
+                    .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+                    .await
+                    .unwrap(),
+                "later-operation"
+            );
+            assert_eq!(*checkpoint.ids.lock().unwrap(), vec!["later-operation"]);
+            tokio::fs::remove_file(video).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn tiktok_unknown_init_error_does_not_claim_to_be_not_started() {
+        for (status, code) in [
+            (500, "access_token_invalid"),
+            (403, "unknown_provider_error"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/post/publish/inbox/video/init/"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(json!({"error": {"code": code}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let video = temp_video(&format!("tb_tiktok_unknown_{status}.mp4"), 16).await;
+            let checkpoint = RecordingCheckpoint {
+                ids: Default::default(),
+                fail: false,
+            };
+            let error = TikTokUploader::new("test-token")
+                .with_api_base(server.uri())
+                .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
+                .await
+                .unwrap_err();
+            assert!(!matches!(error, UploadError::NotStarted(_)));
+            assert!(checkpoint.ids.lock().unwrap().is_empty());
+            tokio::fs::remove_file(video).await.unwrap();
         }
     }
 

@@ -18,20 +18,16 @@ pub struct PartnerAccessEntry {
     pub granted_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Zentraler Guard: `true` wenn der Streamer für Social-Media-Posts
-/// freigegeben ist (`granted = true` in `social_media_partner_access`).
-///
-/// Prüft case-insensitive (LOWER). Bei DB-Fehlern `false` (fail-closed —
-/// kein versehentlicher Zugang).
-pub async fn is_partner_granted(pool: &PgPool, streamer_login: &str) -> bool {
+pub async fn is_partner_id_granted(pool: &PgPool, twitch_user_id: &str) -> bool {
+    if twitch_user_id.is_empty() || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
     sqlx::query_scalar::<_, bool>(
-        "SELECT COALESCE((SELECT granted FROM social_media_partner_access WHERE LOWER(streamer_login) = LOWER($1)), FALSE)",
+        "SELECT COALESCE((SELECT granted FROM social_media_partner_access WHERE twitch_user_id = $1), FALSE)",
     )
-    .bind(streamer_login.trim())
-    .fetch_optional(pool)
+    .bind(twitch_user_id)
+    .fetch_one(pool)
     .await
-    .ok()
-    .flatten()
     .unwrap_or(false)
 }
 
@@ -62,17 +58,31 @@ pub async fn set_partner_access(
     let login = streamer_login.trim();
     let actor = granted_by.unwrap_or("system");
 
+    let mut tx = pool.begin().await?;
+    let twitch_user_id: String = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) \
+         AND twitch_user_id ~ '^[0-9]+$' FOR SHARE",
+    )
+    .bind(login)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM social_media_partner_access WHERE twitch_user_id = $1 AND streamer_login <> $2")
+        .bind(&twitch_user_id).bind(login).execute(&mut *tx).await?;
+
     sqlx::query(
-        "INSERT INTO social_media_partner_access (streamer_login, granted, granted_by, granted_at)
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        "INSERT INTO social_media_partner_access (streamer_login, granted, granted_by, granted_at, twitch_user_id)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
          ON CONFLICT (streamer_login)
-         DO UPDATE SET granted = $2, granted_by = $3, granted_at = CURRENT_TIMESTAMP",
+         DO UPDATE SET granted = $2, granted_by = $3, granted_at = CURRENT_TIMESTAMP, twitch_user_id = $4",
     )
     .bind(login)
     .bind(granted)
     .bind(actor)
-    .execute(pool)
+    .bind(&twitch_user_id)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let entry = sqlx::query_as!(
         PartnerAccessEntry,
@@ -109,21 +119,23 @@ mod tests {
             .await
             .unwrap();
         admin.close().await;
-        let opts =
-            PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .connect_with(opts)
             .await
             .unwrap();
         // Basistabelle + partner_access
-        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY)")
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT DEFAULT '42')")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
             "CREATE TABLE social_media_partner_access (
                 streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE,
+                twitch_user_id TEXT,
                 granted BOOLEAN NOT NULL DEFAULT FALSE,
                 granted_by TEXT,
                 granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -145,7 +157,7 @@ mod tests {
             .await
             .unwrap();
         // Kein Eintrag → nicht freigegeben
-        assert!(!is_partner_granted(&pool, "nani").await);
+        assert!(!is_partner_id_granted(&pool, "42").await);
     }
 
     #[tokio::test]
@@ -157,12 +169,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted, granted_by) VALUES ('earlysalty', TRUE, 'system')")
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted, granted_by) VALUES ('earlysalty', '42', TRUE, 'system')")
             .execute(&pool)
             .await
             .unwrap();
-        assert!(is_partner_granted(&pool, "earlysalty").await);
-        assert!(is_partner_granted(&pool, "EarlySalty").await); // case-insensitive
+        assert!(is_partner_id_granted(&pool, "42").await);
+        assert!(is_partner_id_granted(&pool, "42").await); // case-insensitive
     }
 
     #[tokio::test]
@@ -178,7 +190,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(!is_partner_granted(&pool, "testuser").await);
+        assert!(!is_partner_id_granted(&pool, "99").await);
     }
 
     #[tokio::test]
@@ -192,13 +204,17 @@ mod tests {
             .unwrap();
 
         // Erstellen
-        let entry = set_partner_access(&pool, "nani", true, Some("admin")).await.unwrap();
+        let entry = set_partner_access(&pool, "nani", true, Some("admin"))
+            .await
+            .unwrap();
         assert_eq!(entry.streamer_login, "nani");
         assert!(entry.granted);
         assert_eq!(entry.granted_by.as_deref(), Some("admin"));
 
         // Updaten
-        let entry = set_partner_access(&pool, "nani", false, Some("admin")).await.unwrap();
+        let entry = set_partner_access(&pool, "nani", false, Some("admin"))
+            .await
+            .unwrap();
         assert!(!entry.granted);
 
         // Liste

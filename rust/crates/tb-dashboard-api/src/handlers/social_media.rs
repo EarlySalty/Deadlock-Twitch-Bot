@@ -59,7 +59,7 @@ use tb_social_media::layout::{
 use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
-    is_partner_granted, list_partner_access, set_partner_access,
+    is_partner_id_granted, list_partner_access, set_partner_access,
 };
 use tb_social_media::posting_plan::{
     berechne_vorrat, ensure_streamer_rows, load_categories, load_platform_schedules,
@@ -269,7 +269,14 @@ pub async fn clips_handler(
         Ok(s) => s,
         Err(e) => return e,
     };
-    let clips = get_clips_for_dashboard(&pool, scope.as_deref(), q.status.as_deref(), limit).await;
+    let clips = get_clips_for_dashboard(
+        &pool,
+        scope.as_deref(),
+        partner_identity(&auth),
+        q.status.as_deref(),
+        limit,
+    )
+    .await;
     Json(clips).into_response()
 }
 
@@ -310,7 +317,26 @@ fn normalize_id(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-async fn clip_owned_by_streamer(pool: &PgPool, clip_id: i64, streamer: &str) -> bool {
+fn partner_identity(auth: &DashboardAuthLevel) -> Option<&str> {
+    match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id),
+        _ => None,
+    }
+}
+
+async fn clip_owned_by_streamer(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    clip_id: i64,
+    streamer: &str,
+) -> bool {
+    if let DashboardAuthLevel::Partner { twitch_user_id, .. } = auth {
+        if twitch_user_id.is_empty() {
+            return false;
+        }
+        return sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND twitch_user_id = $2)")
+            .bind(clip_id).bind(twitch_user_id).fetch_one(pool).await.unwrap_or(false);
+    }
     sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND LOWER(streamer_login) = LOWER($2) LIMIT 1",
     )
@@ -512,7 +538,7 @@ pub async fn apply_template_handler(
         }
     }
     if let Some(streamer) = &scope {
-        if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
+        if !clip_owned_by_streamer(&pool, &auth, clip_id, streamer).await {
             return (
                 StatusCode::FORBIDDEN,
                 Json(
@@ -558,8 +584,8 @@ async fn require_sm_access(
     pool: &PgPool,
     requested: Option<&str>,
 ) -> Result<Option<String>, Response> {
-    if let DashboardAuthLevel::Partner { twitch_login, .. } = auth {
-        if !is_partner_granted(pool, twitch_login).await {
+    if let DashboardAuthLevel::Partner { twitch_user_id, .. } = auth {
+        if !is_partner_id_granted(pool, twitch_user_id).await {
             return Err(forbidden(
                 "Social Media ist für deinen Kanal noch nicht freigeschaltet.",
             ));
@@ -573,13 +599,24 @@ async fn require_sm_access(
 #[allow(clippy::result_large_err)]
 async fn require_clip_in_scope(
     pool: &PgPool,
+    auth: &DashboardAuthLevel,
     clip_db_id: i64,
     scope: Option<&str>,
 ) -> Result<(), Response> {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return Err(unauthorized());
+    }
+    if matches!(auth, DashboardAuthLevel::Partner { .. }) {
+        return if clip_owned_by_streamer(pool, auth, clip_db_id, "").await {
+            Ok(())
+        } else {
+            Err(forbidden("Dieser Clip gehört nicht zu deinem Kanal."))
+        };
+    }
     match scope {
         None => Ok(()),
         Some(streamer) => {
-            if clip_owned_by_streamer(pool, clip_db_id, streamer).await {
+            if clip_owned_by_streamer(pool, auth, clip_db_id, streamer).await {
                 Ok(())
             } else {
                 Err(forbidden("Dieser Clip gehört nicht zu deinem Kanal."))
@@ -668,9 +705,13 @@ pub async fn my_access_handler(auth: DashboardAuthLevel, State(pool): State<PgPo
         DashboardAuthLevel::Admin { .. } => {
             Json(json!({ "allowed": true, "streamer": null, "isAdmin": true })).into_response()
         }
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id,
+            ..
+        } => {
             let login = twitch_login.to_lowercase();
-            let allowed = is_partner_granted(&pool, &login).await;
+            let allowed = is_partner_id_granted(&pool, twitch_user_id).await;
             Json(json!({ "allowed": allowed, "streamer": login, "isAdmin": false })).into_response()
         }
         DashboardAuthLevel::None => unauthorized(),
@@ -1149,7 +1190,7 @@ pub async fn clip_layout_put_handler(
         )
             .into_response();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     if !clip_exists(&pool, clip_db_id).await {
@@ -1271,7 +1312,7 @@ pub async fn queue_upload_handler(
         }
     }
     if let Some(streamer) = &scope {
-        if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
+        if !clip_owned_by_streamer(&pool, &auth, clip_id, streamer).await {
             return (
                 StatusCode::FORBIDDEN,
                 Json(
@@ -1524,7 +1565,14 @@ pub async fn batch_upload_handler(
             .into_response();
     }
     let apply_default_template = body.apply_default_template.unwrap_or(true);
-    let stats = batch_upload_all_new(&pool, &streamer, &platforms, apply_default_template).await;
+    let stats = batch_upload_all_new(
+        &pool,
+        &streamer,
+        partner_identity(&auth),
+        &platforms,
+        apply_default_template,
+    )
+    .await;
     Json(json!({
         "success": true,
         "stats": { "queued": stats.queued, "skipped": stats.skipped, "errors": stats.errors },
@@ -1581,7 +1629,7 @@ pub async fn mark_uploaded_handler(
         }
     }
     if let Some(streamer) = &scope {
-        if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
+        if !clip_owned_by_streamer(&pool, &auth, clip_id, streamer).await {
             return (
                 StatusCode::FORBIDDEN,
                 Json(
@@ -1921,16 +1969,18 @@ type UploadQueueInfo =
 /// Lädt Termin und Fehlergrund für eine ganze Clip-Seite in EINER Abfrage.
 ///
 /// Bewusst nicht je Clip einzeln: bei `page_size=100` wären das sonst hundert
-/// Rundreisen zur Datenbank. Je Clip und Plattform gewinnt die zuletzt angelegte
-/// Zeile (höchste `id`), das ist der aktuelle Versuch.
+/// Rundreisen zur Datenbank. Aktive TikTok-Vorgänge und bestätigte Abschlüsse
+/// behalten Vorrang vor verworfenen Doppelaufträgen.
 async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueInfo {
     let mut info: UploadQueueInfo = std::collections::HashMap::new();
     if clip_ids.is_empty() {
         return info;
     }
     let rows = sqlx::query(
-        "SELECT clip_id, platform, scheduled_at, last_error, status \
-         FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) ORDER BY id ASC",
+        "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status \
+         FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) \
+         ORDER BY clip_id, platform, CASE WHEN platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') THEN 3 \
+             WHEN platform = 'tiktok' AND status = 'completed' THEN 2 ELSE 0 END DESC, id DESC",
     )
     .bind(clip_ids)
     .fetch_all(pool)
@@ -2185,8 +2235,16 @@ pub struct AdminClipsQuery {
     pub streamer: Option<String>,
 }
 
-fn push_clips_where(qb: &mut QueryBuilder<Postgres>, streamer: Option<&str>, status: Option<&str>) {
-    if let Some(s) = streamer {
+fn push_clips_where(
+    qb: &mut QueryBuilder<Postgres>,
+    auth: &DashboardAuthLevel,
+    streamer: Option<&str>,
+    status: Option<&str>,
+) {
+    if let Some(id) = partner_identity(auth) {
+        qb.push(" AND twitch_user_id = ");
+        qb.push_bind(id.to_string());
+    } else if let Some(s) = streamer {
         qb.push(" AND LOWER(streamer_login) = LOWER(");
         qb.push_bind(s.to_string());
         qb.push(")");
@@ -2232,7 +2290,7 @@ pub async fn admin_clips_handler(
 
     let mut qb_total =
         QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM twitch_clips_social_media WHERE 1=1");
-    push_clips_where(&mut qb_total, streamer.as_deref(), status.as_deref());
+    push_clips_where(&mut qb_total, &auth, streamer.as_deref(), status.as_deref());
     let total: i64 = match qb_total.build_query_scalar().fetch_one(&pool).await {
         Ok(total) => total,
         Err(e) => {
@@ -2244,7 +2302,7 @@ pub async fn admin_clips_handler(
     let mut qb = QueryBuilder::<Postgres>::new(&format!(
         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
     ));
-    push_clips_where(&mut qb, streamer.as_deref(), status.as_deref());
+    push_clips_where(&mut qb, &auth, streamer.as_deref(), status.as_deref());
     qb.push(" ORDER BY created_at DESC, id DESC LIMIT ");
     qb.push_bind(page_size);
     qb.push(" OFFSET ");
@@ -2292,7 +2350,7 @@ pub async fn admin_clip_detail_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     match load_clip_row(&pool, clip_db_id).await {
@@ -2315,7 +2373,7 @@ pub async fn admin_clip_discard_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
@@ -2473,7 +2531,7 @@ pub async fn enrichment_put_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
@@ -2558,7 +2616,7 @@ pub async fn enrichment_get_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_get").await {
@@ -2588,7 +2646,7 @@ pub async fn enrichment_run_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
@@ -2642,7 +2700,7 @@ pub async fn clip_analytics_get_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     if let Err(e) = require_clip_row(&pool, clip_db_id).await {
@@ -2821,7 +2879,7 @@ pub async fn approval_get_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     if let Err(e) = require_clip_row(&pool, clip_db_id).await {
@@ -2845,7 +2903,7 @@ pub async fn approval_decision_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
@@ -2950,7 +3008,7 @@ pub async fn approval_cancel_handler(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return invalid_clip_db_id();
     };
-    if let Err(e) = require_clip_in_scope(&pool, clip_db_id, scope.as_deref()).await {
+    if let Err(e) = require_clip_in_scope(&pool, &auth, clip_db_id, scope.as_deref()).await {
         return e;
     }
     // Partner-Freigabe-Guard: nach Clip-Auflösung, vor Wirkung.
@@ -3774,7 +3832,7 @@ pub async fn partner_access_put_handler(
 pub async fn check_partner_access_guard(
     pool: &PgPool,
     auth: &DashboardAuthLevel,
-    streamer_login: &str,
+    _streamer_login: &str,
 ) -> Option<Response> {
     // Admin arbeitet für jeden Kanal, auch ohne Freigabe-Eintrag: die Freigabe
     // steuert den Selfservice der Partner, nicht das Admin-Werkzeug. Localhost
@@ -3782,7 +3840,13 @@ pub async fn check_partner_access_guard(
     if matches!(auth, DashboardAuthLevel::Admin { .. }) {
         return None;
     }
-    if !is_partner_granted(pool, streamer_login).await {
+    let granted = match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => {
+            is_partner_id_granted(pool, twitch_user_id).await
+        }
+        _ => false,
+    };
+    if !granted {
         Some(
             (
                 StatusCode::FORBIDDEN,
@@ -3807,7 +3871,7 @@ async fn preview_scope_and_child(
     let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
         return Err(invalid_clip_db_id());
     };
-    require_clip_in_scope(pool, clip_db_id, scope.as_deref()).await?;
+    require_clip_in_scope(pool, auth, clip_db_id, scope.as_deref()).await?;
     if let Some(guard) = guard_partner_access_for_clip(pool, auth, clip_db_id).await {
         return Err(guard);
     }
@@ -4002,7 +4066,12 @@ mod tests {
     fn partner(login: &str) -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
             twitch_login: login.to_string(),
-            twitch_user_id: "1".to_string(),
+            twitch_user_id: if matches!(login, "other" | "ismile_e") {
+                "99"
+            } else {
+                "42"
+            }
+            .to_string(),
             display_name: String::new(),
         }
     }
@@ -4170,7 +4239,18 @@ mod tests {
     async fn make_pool(schema: &str) -> Option<sqlx::PgPool> {
         use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
         use std::str::FromStr;
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        mod local_test_database {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/database.rs"
+            ));
+        }
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        let dsn = dsn?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -4196,7 +4276,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
@@ -4210,7 +4290,7 @@ mod tests {
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
-            "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
             "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
@@ -4233,8 +4313,119 @@ mod tests {
     fn sm_partner(login: &str) -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
             twitch_login: login.to_string(),
-            twitch_user_id: "42".to_string(),
+            twitch_user_id: if matches!(login, "other" | "ismile_e") {
+                "99"
+            } else {
+                "42"
+            }
+            .to_string(),
             display_name: login.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn preview_ownership_uses_platform_id_after_login_reassignment() {
+        let Some(pool) = make_pool("t_dash_sm_preview_identity").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('old_name', '42', TRUE), ('attacker_access', '99', TRUE), ('legacy', NULL, TRUE)")
+            .execute(&pool).await.unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, twitch_user_id) VALUES ('identity', 'old_name', '42') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let attacker = DashboardAuthLevel::Partner {
+            twitch_login: "old_name".into(),
+            twitch_user_id: "99".into(),
+            display_name: "Old name".into(),
+        };
+        assert_eq!(
+            preview_scope_and_child(&attacker, &pool, clip.to_string())
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let owner = DashboardAuthLevel::Partner {
+            twitch_login: "new_name".into(),
+            twitch_user_id: "42".into(),
+            display_name: "New name".into(),
+        };
+        assert!(preview_scope_and_child(&owner, &pool, clip.to_string())
+            .await
+            .is_ok());
+        let owner_list = clips_handler(
+            owner.clone(),
+            State(pool.clone()),
+            Query(ClipsQuery {
+                streamer: None,
+                status: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert_eq!(body_json(owner_list).await.as_array().unwrap().len(), 1);
+        let attacker_list = clips_handler(
+            attacker,
+            State(pool.clone()),
+            Query(ClipsQuery {
+                streamer: None,
+                status: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert!(body_json(attacker_list)
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty());
+        sqlx::query("UPDATE twitch_clips_social_media SET twitch_user_id = NULL WHERE id = $1")
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            preview_scope_and_child(&owner, &pool, clip.to_string())
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let no_id = DashboardAuthLevel::Partner {
+            twitch_login: "old_name".into(),
+            twitch_user_id: String::new(),
+            display_name: String::new(),
+        };
+        assert!(require_sm_access(&no_id, &pool, None).await.is_err());
+        let legacy = DashboardAuthLevel::Partner {
+            twitch_login: "legacy".into(),
+            twitch_user_id: "777".into(),
+            display_name: String::new(),
+        };
+        assert!(require_sm_access(&legacy, &pool, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn queue_reader_keeps_active_tiktok_operation_over_newer_rejected_duplicate() {
+        let Some(pool) = make_pool("t_dash_sm_queue_active").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('queue-state', 'nani') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let active: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'inbox_pending') RETURNING id")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, last_error) VALUES ($1, 'tiktok', 'failed', 'duplicate rejected')")
+            .bind(clip).execute(&pool).await.unwrap();
+        for status in ["inbox_pending", "inbox", "completed"] {
+            sqlx::query("UPDATE twitch_clips_upload_queue SET status = $1 WHERE id = $2")
+                .bind(status)
+                .bind(active)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let info = load_upload_queue_info(&pool, &[clip]).await;
+            let entry = &info[&clip]["tiktok"];
+            assert_eq!(entry.status.as_deref(), Some(status));
+            assert!(entry.last_error.is_none());
         }
     }
 
@@ -4392,7 +4583,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('eigen', 'earlysalty', 'pending'), ('fremd', 'ismile_e', 'pending')")
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, twitch_user_id, status) VALUES ('eigen', 'earlysalty', '42', 'pending'), ('fremd', 'ismile_e', '99', 'pending')")
             .execute(&pool)
             .await
             .unwrap();
@@ -4565,7 +4756,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
         // Beide Partner freigeben, damit hier wirklich die Clip-Zugehörigkeit greift.
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE), ('other', TRUE)")
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('nani', '42', TRUE), ('other', '99', TRUE)")
             .execute(&pool)
             .await
             .unwrap();
