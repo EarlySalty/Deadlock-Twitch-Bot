@@ -845,15 +845,15 @@ mod tests {
         let media_owner = TemporaryMedia::create().await.unwrap();
         let ffmpeg = tempfile::NamedTempFile::new().unwrap().into_temp_path();
         tokio::fs::write(
-            ffmpeg.path(),
+            ffmpeg.as_ref(),
             b"#!/bin/sh\nfor last do :; done\nprintf wav > \"$last\"\nexec sleep 30\n",
         )
         .await
         .unwrap();
-        std::fs::set_permissions(ffmpeg.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(ffmpeg.as_ref(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let transcriber = clip_context_transcriber(&SttConfig::default(), &media_owner.0)
             .expect("current local caller configuration builds")
-            .with_ffmpeg_bin(ffmpeg.path().display().to_string());
+            .with_ffmpeg_bin(ffmpeg.as_ref().display().to_string());
         let audio = media_owner.0.join("input.mp4");
         tokio::fs::write(&audio, b"fixture").await.unwrap();
 
