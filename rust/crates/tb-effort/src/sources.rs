@@ -38,7 +38,11 @@ impl Engine {
         shared_chat_guard: &mut crate::SharedChatContinuityGuard,
     ) -> Result<()> {
         if self.shared_chat_continuity_dirty.load(Ordering::Acquire) {
-            self.interrupt_shared_chat_observations().await?;
+            if let Err(error) = self.interrupt_shared_chat_observations().await {
+                self.source_state("shared_chat", now, &Err(Error::Source("continuity_reset")))
+                    .await?;
+                return Err(error);
+            }
         }
         let mut failure = None;
         for source in [
@@ -70,11 +74,15 @@ impl Engine {
                 if result.is_err() {
                     self.shared_chat_continuity_dirty
                         .store(true, Ordering::Release);
+                    self.source_state(source, now, &result).await?;
                     self.interrupt_shared_chat_observations().await?;
+                } else {
+                    self.source_state(source, now, &result).await?;
                 }
                 shared_chat_guard.confirm();
+            } else {
+                self.source_state(source, now, &result).await?;
             }
-            self.source_state(source, now, &result).await?;
             if let Err(error) = result {
                 failure = Some(error);
             }

@@ -748,6 +748,19 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         .unwrap();
     mark_live_at(&pool, reset_failure_at).await;
     assert!(recovered_engine.tick(reset_failure_at).await.is_err());
+    for source in ["shared_chat", "engine"] {
+        let healthy: bool =
+            sqlx::query_scalar("SELECT healthy FROM partner_effort_source_state WHERE source=$1")
+                .bind(source)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!healthy, "{source} must report the failed reset");
+    }
+    assert!(recovered_engine
+        .ensure_ready(reset_failure_at)
+        .await
+        .is_err());
     sqlx::raw_sql("DROP TRIGGER test_fail_shared_chat_reset ON partner_effort_shared_chat_observations; DROP FUNCTION test_fail_shared_chat_reset()")
         .execute(&pool)
         .await

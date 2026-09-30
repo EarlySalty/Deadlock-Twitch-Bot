@@ -197,9 +197,10 @@ impl Engine {
         }
         let result = self.collect(now, &mut shared_chat_guard).await;
         let settlement = self.settle(now).await;
-        self.source_state("engine", now, &settlement).await?;
+        let result = result.and(settlement);
+        self.source_state("engine", now, &result).await?;
         lock.commit().await?;
-        result.and(settlement)
+        result
     }
 
     pub async fn ensure_ready(&self, now: DateTime<Utc>) -> Result<()> {
