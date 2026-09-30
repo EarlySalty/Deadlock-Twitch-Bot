@@ -92,6 +92,11 @@ if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-co
   collector_expected=1
   generated+=(rust/target/release/tb-category-collector)
 fi
+clip_context_expected=0
+if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" 2>/dev/null; then
+  clip_context_expected=1
+  generated+=(rust/target/release/clip_context_learn)
+fi
 for relative in "${generated[@]}"; do
   if [[ ! -e "$checkout/$relative" ]]; then
     echo "Release-Artefakt fehlt: $relative" >&2
@@ -115,6 +120,7 @@ check_binary_revisions() {
   local source_root="$1" binary embedded_revision
   local binaries=(tb-bot tb-dashboard tb-stream-audit)
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
+  if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
   for binary in "${binaries[@]}"; do
     embedded_revision="$(readelf --string-dump=.twitch_build "$source_root/rust/target/release/$binary" 2>/dev/null | awk '/\[/{print $NF}')" || embedded_revision=""
     if [[ "$embedded_revision" != "$git_sha" ]]; then
@@ -154,6 +160,9 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
   if [[ "$collector_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
+  fi
+  if [[ "$clip_context_expected" == 1 ]]; then
+    install -m 0755 "$checkout/rust/target/release/clip_context_learn" "$stage/rust/target/release/clip_context_learn"
   fi
 
   # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des

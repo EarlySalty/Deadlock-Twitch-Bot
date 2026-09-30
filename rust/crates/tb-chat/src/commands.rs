@@ -327,6 +327,7 @@ pub trait ScamGuardCommandPort: Send + Sync {
 }
 
 pub struct CommandEngine {
+    title_context: Option<crate::steam_lookup::CoStreamRuntime>,
     sub_reminder: Option<Arc<crate::sub_reminder::SubReminder>>,
     pool: PgPool,
     api: Arc<dyn ChatApi>,
@@ -365,6 +366,7 @@ impl CommandEngine {
         autoban: Arc<dyn LastAutobanStore>,
     ) -> Self {
         Self {
+            title_context: None,
             sub_reminder: None,
             pool,
             api,
@@ -382,6 +384,11 @@ impl CommandEngine {
             watchtime_cooldowns: Mutex::new(HashMap::new()),
             rank_lookup: crate::rank_lookup::RankLookup::default(),
         }
+    }
+
+    pub fn set_title_context(mut self, context: crate::steam_lookup::CoStreamRuntime) -> Self {
+        self.title_context = Some(context);
+        self
     }
 
     pub fn set_sub_reminder(mut self, reminder: Arc<crate::sub_reminder::SubReminder>) -> Self {
@@ -1128,8 +1135,8 @@ impl CommandEngine {
         .await;
         match enabled {
             Ok(Some(0)) => return,
-            Err(error) => {
-                tracing::warn!(%error, streamer_id = %event.broadcaster_user_id, "!title Einstellung konnte nicht gelesen werden");
+            Err(_) => {
+                crate::steam_lookup::warn_title_source("title_settings");
                 return;
             }
             Ok(_) => {}
@@ -1161,6 +1168,7 @@ impl CommandEngine {
         let pool = self.pool.clone();
         let api = Arc::clone(&self.api);
         let rate_limiter = Arc::clone(&self.title_rate_limiter);
+        let title_context = self.title_context.clone();
         let streamer_id = event.broadcaster_user_id.clone();
         let channel = event.broadcaster_user_login.clone();
 
@@ -1180,13 +1188,8 @@ impl CommandEngine {
             .await
             {
                 Ok(row) => row,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        channel = %channel,
-                        streamer_id = %streamer_id,
-                        "!title Streamer-Lookup fehlgeschlagen"
-                    );
+                Err(_) => {
+                    crate::steam_lookup::warn_title_source("title_identity");
                     None
                 }
             };
@@ -1237,30 +1240,48 @@ impl CommandEngine {
             if let Some(did) = discord_id {
                 let rank = crate::steam_lookup::get_rank_for_discord_user(&pool, did).await;
                 rank_display = rank.map(|r| r.rank_display);
-                if include_live {
-                    let live_res = match crate::steam_lookup::get_live_state_for_discord_user(
-                        &pool, did,
-                    )
-                    .await
-                    {
-                        Ok(live) => live,
-                        Err(error) => {
-                            tracing::warn!(
-                                %error,
-                                channel = %channel,
-                                discord_id_tail = did.rem_euclid(10_000),
-                                "!title Steam-Live-Abfrage fehlgeschlagen; der Titel wird ohne Live-Daten erzeugt"
-                            );
-                            None
+            }
+            if include_live {
+                let live_res = match discord_id {
+                    Some(did) => {
+                        match crate::steam_lookup::get_live_state_for_discord_user(&pool, did).await
+                        {
+                            Ok(live) => live,
+                            Err(_) => {
+                                crate::steam_lookup::warn_title_source("title_steam_live");
+                                None
+                            }
                         }
-                    };
-                    live = live_res.map(|l| crate::title_ai::PromptLiveState {
-                        hero: l.hero,
-                        party_hint: l.party_hint,
+                    }
+                    None => None,
+                };
+                let co_context = crate::steam_lookup::detect_co_streamers_all(
+                    &pool,
+                    &streamer_id,
+                    discord_id,
+                    title_context.as_ref(),
+                )
+                .await;
+                let co_streamer = co_context.co_streamers;
+                let party_hint = co_context.party_hint;
+                if live_res.is_some() || party_hint.is_some() || !co_streamer.is_empty() {
+                    live = Some(crate::title_ai::PromptLiveState {
+                        hero: live_res.as_ref().and_then(|l| l.hero.clone()),
+                        party_hint,
+                        co_streamer,
                     });
                 }
             }
 
+            let never_words = match crate::title_db::get_title_preferences(&pool, &streamer_id)
+                .await
+            {
+                Ok(preferences) => preferences.never_words,
+                Err(_) => {
+                    crate::api::send_reply(api.as_ref(), &streamer_id, "Deine gespeicherten Titelwünsche sind gerade nicht verfügbar. Versuch es gleich noch einmal.").await;
+                    return;
+                }
+            };
             let result = crate::title_ai::generate_title(
                 &rate_limiter,
                 &streamer_id,
@@ -1269,6 +1290,7 @@ impl CommandEngine {
                 &prompt_knowledge,
                 rank_display.as_deref(),
                 live.as_ref(),
+                &never_words,
                 "chat",
             )
             .await;

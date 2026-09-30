@@ -1,3 +1,4 @@
+import { neverWordList } from '../utils/titlePreferences';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -78,10 +79,12 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
 export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
+  const canEditSettings = Boolean(authStatus?.twitchUserId && streamer === authStatus.twitchUserId);
   const csrfToken = authStatus?.csrfToken ?? authStatus?.csrf_token;
   const [keywords, setKeywords] = useState('');
   const [includeLive, setIncludeLive] = useState(true);
   const [stylePreference, setStylePreference] = useState('');
+  const [neverWords, setNeverWords] = useState('');
   const [autoSet, setAutoSet] = useState(false);
   const [result, setResult] = useState<TitleSuggestResult | null>(null);
   const [editableTitle, setEditableTitle] = useState('');
@@ -99,8 +102,11 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   useEffect(() => {
     if (!settings) return;
     setStylePreference(settings.style_preference ?? '');
+    setNeverWords((settings.never_words ?? []).join('\n'));
     setAutoSet(settings.experimental_auto_set ?? false);
   }, [settings]);
+
+
 
   const insightQuery = useQuery({
     queryKey: ['title-insights', streamer],
@@ -126,13 +132,14 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   });
 
   const settingsMutation = useMutation({
-    mutationFn: (next: Pick<TitleSettings, 'style_preference' | 'experimental_auto_set'>) => saveTitleSettings({
+    mutationFn: (next: Pick<TitleSettings, 'style_preference' | 'experimental_auto_set' | 'never_words'>) => saveTitleSettings({
       ...next,
       streamer,
     }, csrfToken),
     onSuccess: (data) => {
-      queryClient.setQueryData(['title-settings', streamer], data);
+      queryClient.setQueryData<TitleSettings>(['title-settings', streamer], (previous) => ({ ...previous, ...data }));
       setStylePreference(data.style_preference);
+      setNeverWords((data.never_words ?? []).join('\n'));
       setAutoSet(data.experimental_auto_set);
     },
   });
@@ -150,13 +157,28 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
 
   const styleDirty = useMemo(() => {
     if (!settings) return false;
-    return stylePreference.trim() !== settings.style_preference.trim() || autoSet !== settings.experimental_auto_set;
-  }, [autoSet, settings, stylePreference]);
+    const savedNever = (settings.never_words ?? []).join('\n');
+    return (
+      stylePreference.trim() !== settings.style_preference.trim() ||
+      autoSet !== settings.experimental_auto_set ||
+      neverWordList(neverWords).join('\n') !== savedNever
+    );
+  }, [autoSet, settings, stylePreference, neverWords]);
 
   const saveSettings = () => settingsMutation.mutate({
     style_preference: stylePreference.trim(),
     experimental_auto_set: autoSet,
+    never_words: neverWordList(neverWords),
   });
+
+  const addNeverWord = (phrase: string) => {
+    const clean = neverWordList(phrase)[0] ?? '';
+    if (!clean) return;
+    const current = neverWordList(neverWords);
+    if (current.some((entry) => entry.toLowerCase() === clean.toLowerCase())) return;
+    if (current.length >= 40) return;
+    setNeverWords([...current, clean].join('\n'));
+  };
 
   const submitFeedback = (feedback: 'liked' | 'disliked') => {
     feedbackMutation.mutate({ feedback }, {
@@ -207,7 +229,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           </div>
           <h1 className="text-2xl font-bold text-white">Titel, die nach dir klingen</h1>
           <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Eigene Historie, Human-Feedback und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.
+            Deine bisherigen Titel, deine Rückmeldungen und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.
           </p>
         </div>
       </div>
@@ -223,14 +245,16 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           <button
             type="button"
             onClick={saveSettings}
-            disabled={!styleDirty || settingsMutation.isPending}
+            disabled={!canEditSettings || !styleDirty || settingsMutation.isPending}
             className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-white disabled:opacity-40"
           >
             {settingsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             Speichern
           </button>
         </div>
+        {!canEditSettings && <p className="text-xs text-text-secondary">Dauerhafte Titelwünsche kann nur der Kanalinhaber ändern.</p>}
         <textarea
+          disabled={!canEditSettings}
           value={stylePreference}
           onChange={(event) => setStylePreference(event.target.value)}
           maxLength={1200}
@@ -244,13 +268,26 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           </div>
         )}
 
+        <div>
+          <div className="text-sm font-medium text-white">Das will ich nie im Titel</div>
+          <p className="mt-1 text-xs text-text-secondary">Ein Wort oder Satz je Zeile, bis zu 40 Einträge mit jeweils 60 Zeichen. Die gespeicherten Formulierungen werden aus den Vorschlägen ausgeschlossen.</p>
+          <textarea
+            disabled={!canEditSettings}
+            value={neverWords}
+            onChange={(event) => setNeverWords(event.target.value)}
+            rows={3}
+            placeholder={'z.B.\nRanked Grind\ncringe\nheute wird abgeliefert'}
+            className="mt-2 w-full resize-y rounded-xl border border-border bg-background px-3.5 py-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-text-secondary/45 focus:border-primary/60"
+          />
+        </div>
+
         <div className="flex flex-col gap-3 rounded-xl border border-warning/20 bg-warning/5 p-3.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-white">
               <Zap className="h-4 w-4 text-warning" /> Experimentell: automatisch auf Twitch setzen
             </div>
             <p className="mt-1 text-xs text-text-secondary">
-              Nach der Generierung wird der Hauptvorschlag direkt als Twitch-Titel gesetzt. Benötigt <code className="font-mono text-[11px]">channel:manage:broadcast</code>.
+              Nach der Generierung wird der Hauptvorschlag direkt als Twitch-Titel gesetzt. Benötigt die Freigabe, deinen Twitch-Titel zu ändern.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
@@ -261,7 +298,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             ) : (
               <span className="flex items-center gap-1 text-xs text-success"><Check className="h-3.5 w-3.5" /> Schreibrecht verbunden</span>
             )}
-            <Toggle checked={autoSet} disabled={!settings?.oauth_connected} onChange={setAutoSet} />
+            <Toggle checked={autoSet} disabled={!canEditSettings || !settings?.oauth_connected} onChange={setAutoSet} />
           </div>
         </div>
       </div>
@@ -293,8 +330,13 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary">
           <Toggle checked={includeLive} onChange={setIncludeLive} />
-          <span>Rang / Live-Hero / Party-Kontext nutzen, wenn vorhanden</span>
+          <span>Rang, gespielten Helden und gemeinsames Streamen berücksichtigen</span>
         </label>
+        {includeLive && result?.co_streamers && result.co_streamers.length > 0 && (
+          <p className="text-xs text-text-secondary">
+            Erkannt: du streamst mit {result.co_streamers.map((login) => `@${login}`).join(' und ')}
+          </p>
+        )}
         <AnimatePresence>
           {error && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="flex items-start gap-2 text-xs text-error">
@@ -312,7 +354,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               <div className="flex items-center gap-2 text-sm font-semibold text-accent"><Sparkles className="h-4 w-4" /> Vorschlag</div>
               <div className="flex items-center gap-2 text-[11px] text-text-secondary">
                 {result.auto_mode && <span className="rounded-full border border-border px-2 py-0.5">Auto-Modus</span>}
-                {result.generated_by === 'fallback' && <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-warning">Fallback</span>}
+                {result.generated_by === 'fallback' && <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-warning">Ersatzvorschlag</span>}
                 {result.live_context_used && <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-success">Live-Kontext</span>}
               </div>
             </div>
@@ -350,7 +392,21 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               </div>
             )}
             {setTitleStatus === 'error' && <p className="text-xs text-error">Twitch hat das Setzen des Titels gerade nicht bestätigt.</p>}
-            {result.auto_set_status === 'set' && <p className="text-xs text-success">Auto-Set war aktiv: Dieser Titel wurde direkt auf Twitch übernommen.</p>}
+            {result.auto_set_status === 'set' && <p className="text-xs text-success">Dieser Titel wurde automatisch auf Twitch übernommen.</p>}
+
+            {canEditSettings && feedbackState === 'disliked' && neverWordList(neverWords).length < 40 && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === (neverWordList(editableTitle)[0] ?? '').toLowerCase()) && (
+              <button
+                type="button"
+                onClick={() => addNeverWord(editableTitle)}
+                className="text-xs text-text-secondary underline decoration-dotted underline-offset-2 hover:text-white"
+              >
+                Diese Formulierung in "Das will ich nie im Titel" übernehmen (danach speichern)
+              </button>
+            )}
+
+            {canEditSettings && feedbackState === 'disliked' && neverWordList(neverWords).length >= 40 && (
+              <p className="text-xs text-text-secondary">Deine Liste enthält bereits 40 Einträge. Entferne dort einen Eintrag, bevor du eine weitere Formulierung übernimmst.</p>
+            )}
 
             {result.alternatives.length > 0 && (
               <div className="space-y-2 pt-1">
@@ -386,7 +442,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-text-secondary/60">Viewer-Performance ist nur ein Signal. Explizites Human-Feedback und deine gespeicherte Stilpräferenz wiegen im Generator stärker.</p>
+          <p className="text-[11px] text-text-secondary/60">Zuschauerzahlen sind nur ein Signal. Deine Rückmeldungen und deine gespeicherten Stilwünsche wiegen beim Erstellen der Titel stärker.</p>
         </div>
       )}
 

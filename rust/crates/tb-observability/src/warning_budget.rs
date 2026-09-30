@@ -40,6 +40,19 @@ impl WarningBudget {
     }
 }
 
+pub fn warn(class: &'static str, message: &'static str) {
+    static BUDGETS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<&'static str, WarningBudget>>,
+    > = std::sync::OnceLock::new();
+    let mut budgets = BUDGETS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(suppressed_repeats) = budgets.entry(class).or_default().allow(Instant::now()) {
+        tracing::warn!(class, suppressed_repeats, "{message}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::WarningBudget;

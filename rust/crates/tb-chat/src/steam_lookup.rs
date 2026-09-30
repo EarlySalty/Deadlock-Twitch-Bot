@@ -26,8 +26,8 @@ pub async fn get_rank_for_discord_user(_pool: &PgPool, user_id: i64) -> Option<R
 fn rank_context(result: Result<stats::RankInfo, StatsError>) -> Option<RankInfo> {
     let info = match result {
         Ok(info) => info,
-        Err(error) => {
-            tracing::warn!(%error, "Titel wird ohne optionalen Rang erzeugt");
+        Err(_) => {
+            warn_title_source("title_rank");
             return None;
         }
     };
@@ -47,6 +47,327 @@ pub async fn get_live_state_for_discord_user(
     user_id: i64,
 ) -> Result<Option<LiveState>, StatsError> {
     live_context(stats::fetch_live(&user_id.to_string()).await)
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct CoStreamer {
+    twitch_user_id: String,
+    login: String,
+    last_seen_at: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct CentralTitleContext {
+    captured_at: i64,
+    party_size: Option<i32>,
+    party_discord_ids: Vec<String>,
+    voice_discord_ids: Vec<String>,
+}
+
+/// Ausschließlich Vertragsmetadaten, keine Identitäten oder Rohantworten.
+#[derive(serde::Serialize)]
+pub struct CentralTitleContextStatus {
+    pub captured_at: i64,
+    pub age_seconds: Option<i64>,
+    pub fresh: bool,
+    pub party_size: Option<i32>,
+    pub party_member_count: usize,
+    pub voice_member_count: usize,
+}
+
+/// Rein lesende Diagnose über exakt denselben begrenzten produktiven Reader.
+pub async fn central_title_context_status(
+    url: &str,
+    token: &str,
+    discord_id: i64,
+) -> Result<CentralTitleContextStatus, &'static str> {
+    if discord_id <= 0 {
+        return Err("Eine positive Discord-ID ist erforderlich.");
+    }
+    let context = fetch_central_title_context(url, token, discord_id)
+        .await
+        .map_err(|_| {
+            "Steam-Kontext konnte nicht authentifiziert und vertragsgemäß gelesen werden."
+        })?;
+    let age_seconds = chrono::Utc::now()
+        .timestamp()
+        .checked_sub(context.captured_at);
+    Ok(CentralTitleContextStatus {
+        captured_at: context.captured_at,
+        age_seconds,
+        fresh: central_context_fresh(age_seconds),
+        party_size: context.party_size,
+        party_member_count: context.party_discord_ids.len(),
+        voice_member_count: context.voice_discord_ids.len(),
+    })
+}
+
+fn central_context_fresh(age_seconds: Option<i64>) -> bool {
+    age_seconds.is_some_and(|age| (0..600).contains(&age))
+}
+
+#[derive(Debug, Default)]
+pub struct CoStreamContext {
+    pub co_streamers: Vec<String>,
+    pub party_hint: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct CoStreamRuntime {
+    url: String,
+    token: String,
+    helix: Option<tb_transport_twitch::HelixClient>,
+}
+
+impl CoStreamRuntime {
+    pub fn new(
+        url: String,
+        token: String,
+        helix: Option<tb_transport_twitch::HelixClient>,
+    ) -> Self {
+        Self { url, token, helix }
+    }
+}
+
+pub async fn detect_co_streamers_all(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    discord_user_id: Option<i64>,
+    runtime: Option<&CoStreamRuntime>,
+) -> CoStreamContext {
+    let (shared, central) = tokio::join!(
+        shared_chat_streamers(twitch_user_id, runtime.and_then(|r| r.helix.as_ref())),
+        central_title_context(discord_user_id, runtime)
+    );
+    detect_co_streamers_with_shared(pool, twitch_user_id, shared, &central).await
+}
+
+async fn detect_co_streamers_with_shared(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    shared: Vec<CoStreamer>,
+    central: &CentralTitleContext,
+) -> CoStreamContext {
+    let central_fresh = central_context_fresh(
+        chrono::Utc::now()
+            .timestamp()
+            .checked_sub(central.captured_at),
+    );
+    let party_hint = central
+        .party_size
+        .filter(|size| central_fresh && (1..=6).contains(size))
+        .map(|size| party_size_word(i64::from(size)).to_string());
+    let own_live = if shared.is_empty() {
+        let stamp = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT last_seen_at FROM twitch_live_state WHERE twitch_user_id = $1 AND COALESCE(is_live, 0) = 1"
+        ).bind(twitch_user_id).fetch_optional(pool).await.ok().flatten().flatten();
+        fresh_live_stamp(stamp.as_deref())
+    } else {
+        true
+    };
+    let mut local = Vec::new();
+    if central_fresh && own_live {
+        let ids = central
+            .party_discord_ids
+            .iter()
+            .chain(&central.voice_discord_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            let rows = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+                "SELECT tsi.discord_user_id::text, ls.twitch_user_id, ls.streamer_login, ls.last_seen_at \
+                   FROM twitch_streamer_identities tsi \
+                   JOIN twitch_live_state ls ON ls.twitch_user_id = tsi.twitch_user_id \
+                  WHERE tsi.discord_user_id::text = ANY($1) AND COALESCE(ls.is_live, 0) = 1 \
+                  ORDER BY ls.twitch_user_id"
+            ).bind(&ids).fetch_all(pool).await;
+            source_state(4, rows.is_err());
+            let rows = rows.unwrap_or_default();
+            for members in [&central.party_discord_ids, &central.voice_discord_ids] {
+                local.extend(
+                    rows.iter()
+                        .filter(|row| members.contains(&row.0))
+                        .map(|row| CoStreamer {
+                            twitch_user_id: row.1.clone(),
+                            login: row.2.clone(),
+                            last_seen_at: row.3.clone(),
+                        }),
+                );
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for streamer in shared.into_iter().chain(local) {
+        let id = streamer.twitch_user_id.trim();
+        let login = streamer
+            .login
+            .trim()
+            .trim_start_matches('@')
+            .to_ascii_lowercase();
+        if id.is_empty()
+            || id == twitch_user_id
+            || !crate::title_ai::valid_co_streamer_login(&login)
+            || !fresh_live_stamp(streamer.last_seen_at.as_deref())
+            || !seen.insert(id.to_string())
+        {
+            continue;
+        }
+        out.push(login);
+        if out.len() == 2 {
+            break;
+        }
+    }
+    CoStreamContext {
+        co_streamers: out,
+        party_hint,
+    }
+}
+
+fn fresh_live_stamp(stamp: Option<&str>) -> bool {
+    stamp
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|stamp| {
+            let age = chrono::Utc::now().signed_duration_since(stamp);
+            age >= chrono::Duration::zero() && age < chrono::Duration::minutes(10)
+        })
+}
+
+pub fn warn_title_source(source: &'static str) {
+    tb_observability::warning_budget::warn(source, "Titel nutzt die übrigen verfügbaren Angaben");
+}
+
+fn source_state(source: u8, failed: bool) {
+    if failed {
+        warn_title_source(match source {
+            1 => "title_shared_chat",
+            2 => "title_central_context",
+            _ => "title_local_live",
+        });
+    }
+}
+
+async fn central_title_context(
+    discord_id: Option<i64>,
+    runtime: Option<&CoStreamRuntime>,
+) -> CentralTitleContext {
+    let Some(discord_id) = discord_id else {
+        return CentralTitleContext::default();
+    };
+    let result = match runtime {
+        Some(runtime) => {
+            fetch_central_title_context(&runtime.url, &runtime.token, discord_id).await
+        }
+        None => Err(()),
+    };
+    source_state(2, result.is_err());
+    result.unwrap_or_default()
+}
+
+async fn fetch_central_title_context(
+    url: &str,
+    token: &str,
+    discord_id: i64,
+) -> Result<CentralTitleContext, ()> {
+    let url = reqwest::Url::parse(url).map_err(|_| ())?;
+    if url.scheme() != "http"
+        || !url
+            .host_str()
+            .and_then(|host| {
+                host.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+            })
+            .is_some_and(|ip| ip.is_loopback())
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || token.trim().is_empty()
+    {
+        return Err(());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| ())?;
+    let mut response = client
+        .get(url)
+        .header("X-Internal-Token", token)
+        .query(&[("discord_id", discord_id)])
+        .send()
+        .await
+        .map_err(|_| ())?
+        .error_for_status()
+        .map_err(|_| ())?;
+    const MAX_BODY: usize = 32 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_BODY as u64)
+    {
+        return Err(());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+        if chunk.len() > MAX_BODY.saturating_sub(body.len()) {
+            return Err(());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let context: CentralTitleContext = serde_json::from_slice(&body).map_err(|_| ())?;
+    if context.party_discord_ids.len() > 64
+        || context.voice_discord_ids.len() > 256
+        || context
+            .party_size
+            .is_some_and(|size| !(1..=6).contains(&size))
+        || context
+            .party_discord_ids
+            .iter()
+            .chain(&context.voice_discord_ids)
+            .any(|id| {
+                id.is_empty()
+                    || id.len() > 19
+                    || !id.bytes().all(|byte| byte.is_ascii_digit())
+                    || id.parse::<i64>().map_or(true, |value| value <= 0)
+            })
+    {
+        return Err(());
+    }
+    Ok(context)
+}
+
+async fn shared_chat_streamers(
+    twitch_user_id: &str,
+    helix: Option<&tb_transport_twitch::HelixClient>,
+) -> Vec<CoStreamer> {
+    let result = match helix {
+        Some(helix) => helix
+            .get_shared_chat_users(twitch_user_id)
+            .await
+            .map_err(|_| ()),
+        None => Err(()),
+    };
+    source_state(1, result.is_err());
+    result
+        .unwrap_or_default()
+        .into_iter()
+        .map(|user| CoStreamer {
+            twitch_user_id: user.id,
+            login: user.login,
+            last_seen_at: Some(chrono::Utc::now().to_rfc3339()),
+        })
+        .collect()
+}
+
+fn party_size_word(size: i64) -> &'static str {
+    match size {
+        n if n <= 1 => "solo",
+        2 => "Duo",
+        3 => "Dreier",
+        4 => "Vierer",
+        5 => "Fünfer",
+        _ => "Sechser",
+    }
 }
 
 fn live_context(
@@ -70,6 +391,266 @@ fn live_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_postgres;
+
+    fn co_streamer(id: &str, login: &str) -> CoStreamer {
+        CoStreamer {
+            twitch_user_id: id.into(),
+            login: login.into(),
+            last_seen_at: Some(chrono::Utc::now().to_rfc3339()),
+        }
+    }
+
+    fn central() -> CentralTitleContext {
+        CentralTitleContext {
+            captured_at: chrono::Utc::now().timestamp(),
+            party_size: Some(2),
+            party_discord_ids: vec!["43".into()],
+            voice_discord_ids: vec!["43".into(), "44".into(), "45".into()],
+        }
+    }
+
+    async fn co_stream_pool() -> test_postgres::TestPostgres {
+        let db = test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, discord_user_id TEXT);
+            CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT, is_live INTEGER, last_seen_at TEXT DEFAULT (to_json(now()) #>> '{}'));
+            INSERT INTO twitch_streamer_identities VALUES ('100','42'),('200','43'),('300','44'),('400','45');
+            INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live) VALUES ('100','myself',1),('200','party_live',1),('300','voice_one',1),('400','voice_two',1);")
+            .execute(&db.pool).await.unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn review_getrennte_datenbanken_shared_party_voice_und_ids() {
+        let db = co_stream_pool().await;
+        let result = detect_co_streamers_with_shared(
+            &db.pool,
+            "100",
+            vec![co_streamer("900", "shared")],
+            &central(),
+        )
+        .await;
+        assert_eq!(result.co_streamers, ["shared", "party_live"]);
+        assert_eq!(result.party_hint.as_deref(), Some("Duo"));
+        let result = detect_co_streamers_with_shared(
+            &db.pool,
+            "100",
+            vec![
+                co_streamer("100", "self_renamed"),
+                co_streamer("200", "Renamed"),
+                co_streamer("200", "old_alias"),
+            ],
+            &central(),
+        )
+        .await;
+        assert_eq!(result.co_streamers, ["renamed", "voice_one"]);
+        let result = detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central()).await;
+        assert_eq!(result.co_streamers, ["party_live", "voice_one"]);
+    }
+
+    #[tokio::test]
+    async fn review_veraltete_twitch_daten_sind_nicht_live() {
+        let db = co_stream_pool().await;
+        for stamp in [
+            None,
+            Some(""),
+            Some("kaputt"),
+            Some("2020-01-01T00:00:00Z"),
+            Some("2099-01-01T00:00:00Z"),
+        ] {
+            sqlx::query(
+                "UPDATE twitch_live_state SET last_seen_at = $1 WHERE twitch_user_id <> '100'",
+            )
+            .bind(stamp)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            assert!(
+                detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central())
+                    .await
+                    .co_streamers
+                    .is_empty(),
+                "{stamp:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn review_eigener_offline_kanal_hat_keine_co_streamer() {
+        let db = co_stream_pool().await;
+        sqlx::query("UPDATE twitch_live_state SET is_live = 0 WHERE twitch_user_id = '100'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central())
+                .await
+                .co_streamers
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn review_quellausfall_und_alte_praesenz_lassen_shared_stehen() {
+        let db = co_stream_pool().await;
+        for age in [600, -60] {
+            let mut context = central();
+            context.captured_at -= age;
+            let result = detect_co_streamers_with_shared(
+                &db.pool,
+                "100",
+                vec![co_streamer("900", "shared")],
+                &context,
+            )
+            .await;
+            assert_eq!(result.co_streamers, ["shared"]);
+            assert!(result.party_hint.is_none());
+        }
+        sqlx::query("DROP TABLE twitch_streamer_identities")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            detect_co_streamers_with_shared(
+                &db.pool,
+                "100",
+                vec![co_streamer("900", "shared")],
+                &central()
+            )
+            .await
+            .co_streamers,
+            ["shared"]
+        );
+    }
+
+    #[tokio::test]
+    async fn review_fehlende_ids_offline_und_falsche_logins_werden_verworfen() {
+        let db = co_stream_pool().await;
+        sqlx::raw_sql("DELETE FROM twitch_streamer_identities WHERE twitch_user_id='200'; UPDATE twitch_live_state SET is_live=0 WHERE twitch_user_id='300'; UPDATE twitch_live_state SET streamer_login='fremdä' WHERE twitch_user_id='400';")
+            .execute(&db.pool).await.unwrap();
+        assert!(
+            detect_co_streamers_with_shared(&db.pool, "100", Vec::new(), &central())
+                .await
+                .co_streamers
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn review_bestehender_steam_dienst_auth_und_keine_token_weitergabe() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/internal/title-context"))
+            .and(query_param("discord_id", "42"))
+            .and(wiremock::matchers::header("x-internal-token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "captured_at":chrono::Utc::now().timestamp(), "party_size":2, "party_discord_ids":["43"], "voice_discord_ids":["44"]
+            }))).expect(1).mount(&server).await;
+        let url = format!("{}/internal/title-context", server.uri());
+        let runtime = CoStreamRuntime::new(url.clone(), "test-token".into(), None);
+        let context = central_title_context(Some(42), Some(&runtime)).await;
+        assert_eq!(context.party_discord_ids, ["43"]);
+        assert_eq!(context.voice_discord_ids, ["44"]);
+        assert!(fetch_central_title_context(&url, "", 42).await.is_err());
+        assert!(fetch_central_title_context(
+            "http://example.invalid/internal/title-context",
+            "test-token",
+            42
+        )
+        .await
+        .is_err());
+        Mock::given(path("/redirect"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", url.as_str()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(fetch_central_title_context(
+            &format!("{}/redirect", server.uri()),
+            "test-token",
+            42
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn review_chunked_antwort_ueber_grenze_wird_abgewiesen() {
+        use std::io::{Read, Write};
+        for padding in [0, 36 * 1024] {
+            let mut body = serde_json::to_vec(&serde_json::json!({
+                "captured_at": chrono::Utc::now().timestamp(), "party_size": 2,
+                "party_discord_ids": ["43"], "voice_discord_ids": ["44"]
+            }))
+            .unwrap();
+            body.resize(body.len() + padding, b' ');
+            let valid: CentralTitleContext = serde_json::from_slice(&body).unwrap();
+            assert_eq!(valid.party_discord_ids, ["43"]);
+            assert_eq!(valid.voice_discord_ids, ["44"]);
+            assert_eq!(body.len() > 32 * 1024, padding != 0);
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!(
+                "http://{}/internal/title-context",
+                listener.local_addr().unwrap()
+            );
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let _ = socket.read(&mut request);
+                socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
+                for chunk in body.chunks(4096) {
+                    if write!(socket, "{:X}\r\n", chunk.len()).is_err()
+                        || socket.write_all(chunk).is_err()
+                        || socket.write_all(b"\r\n").is_err()
+                    {
+                        break;
+                    }
+                }
+                let _ = socket.write_all(b"0\r\n\r\n");
+            });
+            let result = fetch_central_title_context(&endpoint, "synthetic-token", 42).await;
+            server.join().unwrap();
+            if padding == 0 {
+                let context = result.expect("gültige kleine Chunked-Antwort");
+                assert_eq!(context.party_discord_ids, ["43"]);
+                assert_eq!(context.voice_discord_ids, ["44"]);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "gültiges JSON über der Bodygrenze muss abgewiesen werden"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn review_zentrale_id_listen_sind_begrenzt() {
+        for ids in [
+            vec!["9".repeat(20)],
+            vec!["-1".into()],
+            vec!["0".into()],
+            vec!["43".into(); 257],
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "captured_at": chrono::Utc::now().timestamp(), "party_size": 2,
+                    "party_discord_ids": [], "voice_discord_ids": ids
+                })))
+                .mount(&server)
+                .await;
+            assert!(
+                fetch_central_title_context(&server.uri(), "synthetic-token", 42)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
     use wiremock::{
         matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,

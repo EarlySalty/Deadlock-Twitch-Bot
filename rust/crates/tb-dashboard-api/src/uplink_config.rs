@@ -51,6 +51,25 @@ impl std::fmt::Debug for UplinkRuntime {
 }
 
 impl UplinkRuntime {
+    /// Bestehende FD-/Infisical-Credential bleibt im Prozess. Ausschließlich
+    /// sichere Metadaten des vorhandenen Steam-Readers verlassen diese Fassade.
+    pub async fn steam_title_context_status(
+        &self,
+        url: &str,
+        discord_id: i64,
+    ) -> Result<tb_chat::steam_lookup::CentralTitleContextStatus, &'static str> {
+        let token = self
+            .platform
+            .get("TWITCH_INTERNAL_API_TOKEN")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("Der bestehende interne Dienstzugang fehlt.")?;
+        tb_chat::steam_lookup::central_title_context_status(url, token, discord_id)
+            .await
+            .map_err(|_| {
+                "Steam-Kontext konnte nicht authentifiziert und vertragsgemäß gelesen werden."
+            })
+    }
+
     pub(crate) fn platform_value(&self, name: &str) -> Option<String> {
         self.platform
             .get(name)
@@ -150,8 +169,8 @@ async fn credential(fd: u32) -> Result<Zeroizing<String>, &'static str> {
         .filter(|fd| *fd >= 3)
         .ok_or("Infisical-FD ist ungültig.")?;
     let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
-    let flags = fcntl(&borrowed, FcntlArg::F_GETFD)
-        .map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
+    let flags =
+        fcntl(&borrowed, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
     fcntl(
         &borrowed,
         FcntlArg::F_SETFD(FdFlag::from_bits_retain(flags) | FdFlag::FD_CLOEXEC),
