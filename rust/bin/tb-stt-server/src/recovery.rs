@@ -98,7 +98,7 @@ async fn run_for_unit_with_systemctl(
 
     let now = unix_time();
     let mut state = load_state(state_path)?;
-    let Some(unit_before_probe) = unit_snapshot_if_recoverable(service, systemctl_path).await
+    let Some(unit_before_probe) = unit_snapshot_if_recoverable(service, systemctl_path).await?
     else {
         clear_startup_observation(state_path, &mut state)?;
         return Ok(());
@@ -116,7 +116,7 @@ async fn run_for_unit_with_systemctl(
         reset_backoff(state_path)?;
         return Ok(());
     }
-    let Some(unit_before_recovery) = unit_snapshot_if_recoverable(service, systemctl_path).await
+    let Some(unit_before_recovery) = unit_snapshot_if_recoverable(service, systemctl_path).await?
     else {
         clear_startup_observation(state_path, &mut state)?;
         return Ok(());
@@ -132,7 +132,7 @@ async fn run_for_unit_with_systemctl(
         reset_backoff(state_path)?;
         return Ok(());
     }
-    let Some(unit_at_action) = unit_snapshot_if_recoverable(service, systemctl_path).await else {
+    let Some(unit_at_action) = unit_snapshot_if_recoverable(service, systemctl_path).await? else {
         clear_startup_observation(state_path, &mut state)?;
         return Ok(());
     };
@@ -205,12 +205,14 @@ struct HealthStatus {
 async fn unit_snapshot_if_recoverable(
     service: &str,
     systemctl_path: &Path,
-) -> Option<UnitSnapshot> {
-    let enabled = run_systemctl_at(systemctl_path, &["is-enabled", service])
+) -> Result<Option<UnitSnapshot>, String> {
+    let enabled = systemctl_enabled_at(systemctl_path, service)
         .await
-        .ok();
-    if !unit_enabled_state_allows_recovery(service, enabled.as_deref()) {
-        return None;
+        .map_err(|()| {
+            "systemd konnte den Aktivierungszustand der STT-Unit nicht ermitteln.".to_owned()
+        })?;
+    if !unit_enabled_state_allows_recovery(service, enabled.as_deref())? {
+        return Ok(None);
     }
     let properties = run_systemctl_at(
         systemctl_path,
@@ -221,50 +223,74 @@ async fn unit_snapshot_if_recoverable(
         ],
     )
     .await
-    .ok();
-    let properties = properties?;
+    .map_err(|()| "systemd konnte den Laufzeitzustand der STT-Unit nicht ermitteln.".to_owned())?;
     parse_unit_snapshot(&properties)
+        .map_err(|()| "systemd lieferte einen ungültigen Laufzeitzustand der STT-Unit.".to_owned())
 }
 
-fn unit_enabled_state_allows_recovery(service: &str, enabled: Option<&str>) -> bool {
-    if enabled_state_allows_recovery(enabled) {
-        return true;
-    }
-    #[cfg(test)]
-    {
-        // Only the hard-coded transient fixture may bypass enablement; the
-        // subsequent ActiveState snapshot still has to prove it is active.
-        service == SYSTEMD_FIXTURE_SERVICE
-    }
+fn unit_enabled_state_allows_recovery(service: &str, enabled: Option<&str>) -> Result<bool, ()> {
     #[cfg(not(test))]
-    {
-        let _ = service;
-        false
+    let _ = service;
+    match enabled {
+        Some("enabled" | "enabled-runtime") => Ok(true),
+        Some(
+            "disabled" | "masked" | "masked-runtime" | "static" | "indirect" | "generated"
+            | "transient" | "linked" | "linked-runtime" | "alias",
+        ) => {
+            #[cfg(test)]
+            if service == SYSTEMD_FIXTURE_SERVICE {
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        Some(_) | None => {
+            #[cfg(test)]
+            if service == SYSTEMD_FIXTURE_SERVICE && enabled.is_none() {
+                return Ok(true);
+            }
+            Err(())
+        }
     }
 }
 
-fn enabled_state_allows_recovery(enabled: Option<&str>) -> bool {
-    enabled == Some("enabled")
+fn enabled_state_allows_recovery(enabled: &str) -> Result<bool, ()> {
+    match enabled {
+        "enabled" | "enabled-runtime" => Ok(true),
+        "disabled" | "masked" | "masked-runtime" | "static" | "indirect" | "generated"
+        | "transient" | "linked" | "linked-runtime" | "alias" => Ok(false),
+        _ => Err(()),
+    }
 }
 
-fn parse_unit_snapshot(properties: &str) -> Option<UnitSnapshot> {
+fn parse_unit_snapshot(properties: &str) -> Result<Option<UnitSnapshot>, ()> {
     let mut active = None;
     let mut started = None;
     for line in properties.lines() {
         if let Some(value) = line.strip_prefix("ActiveState=") {
+            if active.is_some() {
+                return Err(());
+            }
             active = Some(value);
         } else if let Some(value) = line.strip_prefix("ActiveEnterTimestampMonotonic=") {
-            started = value.parse::<u64>().ok();
+            if started.is_some() {
+                return Err(());
+            }
+            started = Some(value.parse::<u64>().map_err(|_| ())?);
         }
     }
-    if active != Some("active") {
-        return None;
+    let active = active.ok_or(())?;
+    let started = started.ok_or(())?;
+    match active {
+        "active" => (started > 0)
+            .then_some(UnitSnapshot {
+                active_enter_monotonic_usec: started,
+            })
+            .map(Some)
+            .ok_or(()),
+        "inactive" | "failed" | "activating" | "deactivating" | "reloading" | "refreshing"
+        | "maintenance" => Ok(None),
+        _ => Err(()),
     }
-    started
-        .filter(|timestamp| *timestamp > 0)
-        .map(|active_enter_monotonic_usec| UnitSnapshot {
-            active_enter_monotonic_usec,
-        })
 }
 
 fn startup_grace_elapsed(unhealthy_since: Option<u64>, now: u64, grace_seconds: u64) -> bool {
@@ -298,6 +324,44 @@ fn record_attempt(state: &mut RecoveryState, now: u64) {
 }
 
 async fn run_systemctl_at(systemctl_path: &Path, arguments: &[&str]) -> Result<String, ()> {
+    let output = run_systemctl_output_at(systemctl_path, arguments).await?;
+    if !output.status.success() {
+        return Err(());
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_owned())
+        .map_err(|_| ())
+}
+
+async fn systemctl_enabled_at(systemctl_path: &Path, service: &str) -> Result<Option<String>, ()> {
+    let output = run_systemctl_output_at(systemctl_path, &["is-enabled", service]).await?;
+    let state = String::from_utf8(output.stdout)
+        .map_err(|_| ())?
+        .trim()
+        .to_owned();
+    if state.is_empty() {
+        return Err(());
+    }
+    match enabled_state_allows_recovery(&state) {
+        Ok(true) => {
+            if output.status.success() {
+                Ok(Some(state))
+            } else {
+                Err(())
+            }
+        }
+        Ok(false) => match output.status.code() {
+            Some(0 | 1) => Ok(Some(state)),
+            _ => Err(()),
+        },
+        Err(()) => Err(()),
+    }
+}
+
+async fn run_systemctl_output_at(
+    systemctl_path: &Path,
+    arguments: &[&str],
+) -> Result<std::process::Output, ()> {
     let command = Command::new(systemctl_path)
         .arg("--user")
         .arg("--no-pager")
@@ -305,14 +369,9 @@ async fn run_systemctl_at(systemctl_path: &Path, arguments: &[&str]) -> Result<S
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output();
-    let Ok(Ok(output)) = timeout(COMMAND_TIMEOUT, command).await else {
-        return Err(());
-    };
-    if !output.status.success() {
-        return Err(());
-    }
-    String::from_utf8(output.stdout)
-        .map(|value| value.trim().to_owned())
+    timeout(COMMAND_TIMEOUT, command)
+        .await
+        .map_err(|_| ())?
         .map_err(|_| ())
 }
 
@@ -443,8 +502,8 @@ mod tests {
         backoff_elapsed, enabled_state_allows_recovery, health_ok, load_state, observe_generation,
         parse_arguments, parse_unit_snapshot, persist_state, record_attempt, reset_backoff,
         reset_backoff_state, run_for_unit, run_for_unit_with_systemctl, startup_grace_elapsed,
-        warning_due, RecoveryState, UnitSnapshot, MAX_FAILED_ATTEMPTS, STARTUP_GRACE_SECONDS,
-        SYSTEMD_FIXTURE_PORT, SYSTEMD_FIXTURE_SERVICE,
+        warning_due, RecoveryState, UnitSnapshot, MAX_FAILED_ATTEMPTS, SERVICE,
+        STARTUP_GRACE_SECONDS, SYSTEMD_FIXTURE_PORT, SYSTEMD_FIXTURE_SERVICE,
     };
     use axum::{
         extract::State,
@@ -617,38 +676,124 @@ mod tests {
 
     #[test]
     fn stopped_or_disabled_unit_never_passes_recovery_guard() {
-        assert!(enabled_state_allows_recovery(Some("enabled")));
-        assert!(!enabled_state_allows_recovery(Some("disabled")));
-        assert!(!enabled_state_allows_recovery(Some("static")));
-        assert!(!enabled_state_allows_recovery(None));
+        assert_eq!(enabled_state_allows_recovery("enabled"), Ok(true));
+        assert_eq!(enabled_state_allows_recovery("enabled-runtime"), Ok(true));
+        assert_eq!(enabled_state_allows_recovery("disabled"), Ok(false));
+        assert_eq!(enabled_state_allows_recovery("static"), Ok(false));
+        assert!(enabled_state_allows_recovery("not-found").is_err());
         assert!(
             parse_unit_snapshot("ActiveState=active\nActiveEnterTimestampMonotonic=12345\n")
+                .unwrap()
                 .is_some()
         );
         assert!(
             parse_unit_snapshot("ActiveState=inactive\nActiveEnterTimestampMonotonic=12345\n")
+                .unwrap()
                 .is_none()
         );
         assert!(
-            parse_unit_snapshot("ActiveState=active\nActiveEnterTimestampMonotonic=bad\n")
-                .is_none()
+            parse_unit_snapshot("ActiveState=active\nActiveEnterTimestampMonotonic=bad\n").is_err()
         );
+        assert!(
+            parse_unit_snapshot("ActiveState=unknown\nActiveEnterTimestampMonotonic=123\n")
+                .is_err()
+        );
+        assert!(parse_unit_snapshot("ActiveState=active\n").is_err());
+        assert!(parse_unit_snapshot("ActiveState=inactive\n").is_err());
+        assert!(parse_unit_snapshot(
+            "ActiveState=active\nActiveEnterTimestampMonotonic=123\nActiveState=inactive\n"
+        )
+        .is_err());
     }
 
     #[test]
     fn enabled_state_bypass_is_limited_to_the_exact_test_fixture() {
-        assert!(super::unit_enabled_state_allows_recovery(
-            SYSTEMD_FIXTURE_SERVICE,
-            None
-        ));
+        assert!(super::unit_enabled_state_allows_recovery(SYSTEMD_FIXTURE_SERVICE, None).unwrap());
         assert!(!super::unit_enabled_state_allows_recovery(
             "deadlock-stt-server.service",
             Some("static")
-        ));
-        assert!(!super::unit_enabled_state_allows_recovery(
-            "other.service",
-            Some("transient")
-        ));
+        )
+        .unwrap());
+        assert!(
+            !super::unit_enabled_state_allows_recovery("other.service", Some("transient")).unwrap()
+        );
+        assert!(
+            super::unit_enabled_state_allows_recovery("deadlock-stt-server.service", None).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn systemctl_probe_distinguishes_disabled_inactive_and_query_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tb-stt-systemctl-probe-{nonce}"));
+        fs::create_dir(&root).unwrap();
+        let config = tb_config::stt::SttConfig {
+            port: 0,
+            ..Default::default()
+        };
+        let cases = [
+            ("disabled", "disabled", 1, "", 0, false),
+            (
+                "inactive",
+                "enabled",
+                0,
+                "ActiveState=inactive\nActiveEnterTimestampMonotonic=123\n",
+                0,
+                false,
+            ),
+            ("is-enabled-error", "", 1, "", 0, true),
+            ("show-error", "enabled", 0, "", 1, true),
+            (
+                "malformed-show",
+                "enabled",
+                0,
+                "ActiveState=active\nActiveEnterTimestampMonotonic=broken\n",
+                0,
+                true,
+            ),
+        ];
+        for (name, enabled_output, enabled_exit, show_output, show_exit, should_error) in cases {
+            let case_dir = root.join(name);
+            fs::create_dir(&case_dir).unwrap();
+            let state_path = case_dir.join("state.json");
+            let systemctl_path = case_dir.join("systemctl");
+            let script = format!(
+                "#!/bin/sh\ncase \"$3\" in\nis-enabled) printf '%s\\n' '{enabled_output}'; exit {enabled_exit} ;;\nshow) printf '%s\\n' '{show_output}'; exit {show_exit} ;;\n--no-block) printf 'attempt\\n' >> \"$0.calls\"; exit 0 ;;\n*) exit 2 ;;\nesac\n"
+            );
+            fs::write(&systemctl_path, script).unwrap();
+            fs::set_permissions(&systemctl_path, fs::Permissions::from_mode(0o700)).unwrap();
+
+            let result =
+                run_for_unit_with_systemctl(&config, &state_path, SERVICE, 0, &systemctl_path)
+                    .await;
+            if should_error {
+                assert!(result.is_err(), "{name} must be visible to the caller");
+            } else {
+                result.expect("disabled/inactive states are quiet no-ops");
+            }
+            assert!(
+                !systemctl_path.with_extension("calls").exists(),
+                "{name} must never request a restart"
+            );
+        }
+        assert!(
+            run_for_unit_with_systemctl(
+                &config,
+                &root.join("spawn-error.json"),
+                SERVICE,
+                0,
+                Path::new("/missing/systemctl"),
+            )
+            .await
+            .is_err(),
+            "systemctl spawn errors must reach the caller"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
