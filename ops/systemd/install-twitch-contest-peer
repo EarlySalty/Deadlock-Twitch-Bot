@@ -8,18 +8,63 @@ fi
 
 exec 9>/run/lock/twitch-contest-peer.lock
 flock -n 9 || exit 75
-hba=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SHOW hba_file')
+main_hba=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SHOW hba_file')
 ident=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SHOW ident_file')
-[[ -f "$hba" && -f "$ident" && ! -L "$hba" && ! -L "$ident" ]]
+resolve_peer_rule_file() {
+    local main_file=$1 metadata bot_count dash_count bot_file dash_file include_file
+    metadata=$(runuser -u postgres -- psql --no-psqlrc -d postgres -X -A -t -F $'\t' -c "
+        SELECT
+            count(*) FILTER (WHERE user_name = ARRAY['twitchbot']::text[]),
+            count(*) FILTER (WHERE user_name = ARRAY['twitchdash']::text[]),
+            min(file_name) FILTER (WHERE user_name = ARRAY['twitchbot']::text[]),
+            min(file_name) FILTER (WHERE user_name = ARRAY['twitchdash']::text[])
+        FROM pg_hba_file_rules
+        WHERE type = 'local'
+          AND database = ARRAY['all']::text[]
+          AND auth_method = 'reject'
+          AND error IS NULL
+          AND user_name && ARRAY['twitchbot','twitchdash']::text[]")
+    IFS=$'\t' read -r bot_count dash_count bot_file dash_file <<< "$metadata"
+    include_file="$(dirname -- "$main_file")/pg_hba-twitch.conf"
+    if [[ "$bot_count" != 1 || "$dash_count" != 1 || -z "$bot_file" || "$bot_file" != "$dash_file" ]]; then
+        echo "Die aktiven Twitch-Peer-Rejectregeln sind nicht eindeutig." >&2
+        return 1
+    fi
+    if [[ "$bot_file" != "$main_file" && "$bot_file" != "$include_file" ]]; then
+        echo "Die aktiven Twitch-Peerregeln liegen nicht in der Haupt- oder Twitch-HBA-Datei." >&2
+        return 1
+    fi
+    if [[ ! -f "$main_file" || -L "$main_file" || ! -f "$bot_file" || -L "$bot_file" ]]; then
+        echo "Die aktive Twitch-HBA-Regeldatei ist keine reguläre, symlinkfreie Datei." >&2
+        return 1
+    fi
+    printf '%s\n' "$bot_file"
+}
+rule_hba=$(resolve_peer_rule_file "$main_hba")
+[[ -f "$ident" && ! -L "$ident" ]]
+backup_peer_files() {
+    local main_file=$1 rule_file=$2 ident_file=$3 backup_dir=$4
+    cp -p -- "$main_file" "$backup_dir/pg_hba-main.conf"
+    if [[ "$rule_file" != "$main_file" ]]; then
+        cp -p -- "$rule_file" "$backup_dir/pg_hba-rules.conf"
+    fi
+    cp -p -- "$ident_file" "$backup_dir/pg_ident.conf"
+}
+restore_peer_files() {
+    local main_file=$1 rule_file=$2 ident_file=$3 backup_dir=$4
+    cp -p -- "$backup_dir/pg_hba-main.conf" "$main_file"
+    if [[ "$rule_file" != "$main_file" ]]; then
+        cp -p -- "$backup_dir/pg_hba-rules.conf" "$rule_file"
+    fi
+    cp -p -- "$backup_dir/pg_ident.conf" "$ident_file"
+}
 backup_dir=$(mktemp -d /var/backups/twitch-contest-peer.XXXXXXXX)
-cp -p -- "$hba" "$backup_dir/pg_hba.conf"
-cp -p -- "$ident" "$backup_dir/pg_ident.conf"
+backup_peer_files "$main_hba" "$rule_hba" "$ident" "$backup_dir"
 changed=0
 rollback() {
     local result=$?
     if [[ $result -ne 0 && $changed -eq 1 ]]; then
-        cp -p -- "$backup_dir/pg_hba.conf" "$hba"
-        cp -p -- "$backup_dir/pg_ident.conf" "$ident"
+        restore_peer_files "$main_hba" "$rule_hba" "$ident" "$backup_dir"
         runuser -u postgres -- psql --no-psqlrc -d postgres -Atc 'SELECT pg_reload_conf()' >/dev/null
         echo "Contest-Peer-Konfiguration zurückgesetzt; Sicherung: $backup_dir" >&2
     fi
@@ -65,12 +110,12 @@ install_local_peer_before_reject() {
     changed=1
     mv -- "$temporary" "$file"
 }
-install_local_peer_before_reject "$hba" deadlock twitchbot
-install_local_peer_before_reject "$hba" deadlock twitchdash
+install_local_peer_before_reject "$rule_hba" deadlock twitchbot
+install_local_peer_before_reject "$rule_hba" deadlock twitchdash
 # No role membership: an injected SQL statement in the reader pool cannot
 # become twitchcontest. Only a new local connection from OS user twitchdash can.
 install_line "$ident" 'twitch_contest_writer twitchdash twitchcontest'
-install_line "$hba" 'local twitch_analytics twitchcontest peer map=twitch_contest_writer'
+install_line "$main_hba" 'local twitch_analytics twitchcontest peer map=twitch_contest_writer'
 errors=$(runuser -u postgres -- psql --no-psqlrc -d postgres -Atc \
     "SELECT count(*) FROM (SELECT error FROM pg_hba_file_rules UNION ALL SELECT error FROM pg_ident_file_mappings) rules WHERE error IS NOT NULL")
 [[ "$errors" == 0 ]]
