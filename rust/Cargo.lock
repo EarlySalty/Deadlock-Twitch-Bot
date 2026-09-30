@@ -2100,6 +2100,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
+name = "objc2-system-configuration"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7216bd11cbda54ccabcab84d523dc93b858ec75ecfb3a7d89513fa22464da396"
+dependencies = [
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3518,6 +3536,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "url",
+ "whoami 2.1.3",
  "wiremock",
 ]
 
@@ -3539,6 +3558,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uplink-infisical-transport 0.1.0",
+ "whoami 2.1.3",
  "wiremock",
  "zeroize",
 ]
@@ -3619,6 +3639,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "whoami 2.1.3",
 ]
 
 [[package]]
@@ -3695,6 +3716,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "whoami 2.1.3",
 ]
 
 [[package]]
@@ -3991,6 +4013,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "whoami 2.1.3",
 ]
 
 [[package]]
@@ -4871,6 +4894,12 @@ name = "whoami"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "626c4bac6755d76ffc12cb01b2eac751db1996b9e0041de9aa02c8c211ddc82c"
+dependencies = [
+ "libc",
+ "libredox",
+ "objc2-system-configuration",
+ "web-sys",
+]
 
 [[package]]
 name = "winapi"
