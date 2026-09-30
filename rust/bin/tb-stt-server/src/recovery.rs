@@ -13,6 +13,10 @@ use tokio::{process::Command, time::timeout};
 use tracing::warn;
 
 const SERVICE: &str = "deadlock-stt-server.service";
+#[cfg(test)]
+const SYSTEMD_FIXTURE_SERVICE: &str = "deadlock-stt-recovery-fixture.service";
+#[cfg(test)]
+const SYSTEMD_FIXTURE_PORT: u16 = 39_481;
 const RECOVERY_FLAG: &str = "--recovery-check";
 const STATE_FLAG: &str = "--recovery-state";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
@@ -183,7 +187,7 @@ struct HealthStatus {
 
 async fn unit_snapshot_if_recoverable(service: &str) -> Option<UnitSnapshot> {
     let enabled = run_systemctl(&["is-enabled", service]).await.ok();
-    if !enabled_state_allows_recovery(enabled.as_deref()) {
+    if !unit_enabled_state_allows_recovery(service, enabled.as_deref()) {
         return None;
     }
     let properties = run_systemctl(&[
@@ -195,6 +199,23 @@ async fn unit_snapshot_if_recoverable(service: &str) -> Option<UnitSnapshot> {
     .ok();
     let properties = properties?;
     parse_unit_snapshot(&properties)
+}
+
+fn unit_enabled_state_allows_recovery(service: &str, enabled: Option<&str>) -> bool {
+    if enabled_state_allows_recovery(enabled) {
+        return true;
+    }
+    #[cfg(test)]
+    {
+        // Only the hard-coded transient fixture may bypass enablement; the
+        // subsequent ActiveState snapshot still has to prove it is active.
+        return service == SYSTEMD_FIXTURE_SERVICE;
+    }
+    #[cfg(not(test))]
+    {
+        let _ = service;
+        false
+    }
 }
 
 fn enabled_state_allows_recovery(enabled: Option<&str>) -> bool {
@@ -398,21 +419,116 @@ fn unix_time() -> u64 {
 mod tests {
     use super::{
         backoff_elapsed, enabled_state_allows_recovery, health_ok, load_state, observe_generation,
-        parse_arguments, parse_unit_snapshot, record_attempt, reset_backoff_state,
+        parse_arguments, parse_unit_snapshot, record_attempt, reset_backoff_state, run_for_unit,
         startup_grace_elapsed, warning_due, RecoveryState, UnitSnapshot, MAX_FAILED_ATTEMPTS,
-        STARTUP_GRACE_SECONDS,
+        STARTUP_GRACE_SECONDS, SYSTEMD_FIXTURE_PORT, SYSTEMD_FIXTURE_SERVICE,
     };
+    use axum::{
+        extract::State,
+        http::StatusCode,
+        response::IntoResponse,
+        routing::{get, post},
+        Json, Router,
+    };
+    use serde::Serialize;
     use std::{
         ffi::OsString,
         fs,
+        net::Ipv4Addr,
         path::PathBuf,
+        process::Stdio,
+        sync::atomic::{AtomicU64, Ordering},
+        sync::Arc,
         time::{Duration, SystemTime},
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
+        process::Command,
         time::timeout,
     };
+
+    const FIXTURE_STARTUP_DELAY: Duration = Duration::from_secs(3);
+    const FIXTURE_SLOW_REQUEST: Duration = Duration::from_secs(4);
+
+    struct FixtureUnitGuard;
+
+    impl Drop for FixtureUnitGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/usr/bin/systemctl")
+                .arg("--user")
+                .arg("--no-pager")
+                .args([
+                    "kill",
+                    "--signal=SIGCONT",
+                    "--kill-whom=main",
+                    SYSTEMD_FIXTURE_SERVICE,
+                ])
+                .stdin(Stdio::null())
+                .output();
+            let _ = std::process::Command::new("/usr/bin/systemctl")
+                .arg("--user")
+                .arg("--no-pager")
+                .args(["stop", SYSTEMD_FIXTURE_SERVICE])
+                .stdin(Stdio::null())
+                .output();
+            let _ = std::process::Command::new("/usr/bin/systemctl")
+                .arg("--user")
+                .arg("--no-pager")
+                .args(["reset-failed", SYSTEMD_FIXTURE_SERVICE])
+                .stdin(Stdio::null())
+                .output();
+        }
+    }
+
+    #[derive(Clone)]
+    struct SystemdFixtureState {
+        started: tokio::time::Instant,
+        slow_requests: Arc<AtomicU64>,
+    }
+
+    #[derive(Serialize)]
+    struct FixtureHealth {
+        status: &'static str,
+    }
+
+    async fn fixture_health(State(state): State<SystemdFixtureState>) -> impl IntoResponse {
+        if state.started.elapsed() < FIXTURE_STARTUP_DELAY {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(FixtureHealth { status: "starting" }),
+            );
+        }
+        (StatusCode::OK, Json(FixtureHealth { status: "ok" }))
+    }
+
+    async fn fixture_slow_transcription(
+        State(state): State<SystemdFixtureState>,
+    ) -> impl IntoResponse {
+        state.slow_requests.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(FIXTURE_SLOW_REQUEST).await;
+        (StatusCode::OK, "fixture-complete")
+    }
+
+    // This ignored test is executed by systemd-run as the fixture unit's main
+    // process. Keeping /health inside that process makes SIGSTOP exercise the
+    // same endpoint the recovery checker probes.
+    #[tokio::test]
+    #[ignore = "systemd-run fixture process entry; called only by the isolated recovery test"]
+    async fn systemd_fixture_http_server_entry() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, SYSTEMD_FIXTURE_PORT))
+            .await
+            .expect("isolated fixture port must be free");
+        let state = SystemdFixtureState {
+            started: tokio::time::Instant::now(),
+            slow_requests: Arc::new(AtomicU64::new(0)),
+        };
+        let app = Router::new()
+            .route("/health", get(fixture_health))
+            .route("/v1/audio/transcriptions", post(fixture_slow_transcription))
+            .with_state(state);
+        axum::serve(listener, app).await.unwrap();
+    }
 
     #[test]
     fn recovery_mode_requires_exact_arguments_and_absolute_state_path() {
@@ -494,6 +610,22 @@ mod tests {
             parse_unit_snapshot("ActiveState=active\nActiveEnterTimestampMonotonic=bad\n")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn enabled_state_bypass_is_limited_to_the_exact_test_fixture() {
+        assert!(super::unit_enabled_state_allows_recovery(
+            SYSTEMD_FIXTURE_SERVICE,
+            None
+        ));
+        assert!(!super::unit_enabled_state_allows_recovery(
+            "deadlock-stt-server.service",
+            Some("static")
+        ));
+        assert!(!super::unit_enabled_state_allows_recovery(
+            "other.service",
+            Some("transient")
+        ));
     }
 
     #[test]
@@ -614,6 +746,236 @@ mod tests {
             .await
             .is_err());
         fixture.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "uses an isolated transient systemd user unit and SIGSTOP; run only with an assigned process-test slot"]
+    async fn systemd_fixture_proves_sigstop_recovery_and_stopped_unit_guard() {
+        let executable = std::env::current_exe().unwrap();
+        let config = tb_config::stt::SttConfig {
+            port: SYSTEMD_FIXTURE_PORT,
+            ..Default::default()
+        };
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let state_path = std::env::temp_dir().join(format!(
+            "tb-stt-systemd-fixture-{}-{nonce}.json",
+            std::process::id()
+        ));
+
+        let _ = fixture_systemctl(&["stop", SYSTEMD_FIXTURE_SERVICE]).await;
+        let _ = fixture_systemctl(&["reset-failed", SYSTEMD_FIXTURE_SERVICE]).await;
+        let start = Command::new("/usr/bin/systemd-run")
+            .arg("--user")
+            .arg(format!("--unit={SYSTEMD_FIXTURE_SERVICE}"))
+            .arg("--property=Type=simple")
+            .arg("--property=Restart=no")
+            .arg("--property=TimeoutStopSec=2s")
+            .arg(executable)
+            .args([
+                "--exact",
+                "recovery::tests::systemd_fixture_http_server_entry",
+                "--ignored",
+                "--nocapture",
+            ])
+            .stdin(Stdio::null())
+            .output();
+        let output = timeout(Duration::from_secs(5), start)
+            .await
+            .expect("systemd-run should return promptly")
+            .expect("systemd-run should execute");
+        assert!(
+            output.status.success(),
+            "systemd-run failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let _fixture_guard = FixtureUnitGuard;
+
+        let original_pid = wait_for_main_pid().await;
+        assert_ne!(
+            original_pid, 0,
+            "fixture should have a running Rust process"
+        );
+
+        // The same Rust process initially answers 503, then becomes healthy.
+        // Observing its first unhealthy generation must not restart it.
+        assert!(!health_ok(&config.local_origin()).await);
+        run_for_unit(&config, &state_path, SYSTEMD_FIXTURE_SERVICE, 10)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            main_pid().await,
+            original_pid,
+            "startup grace restarted the fixture"
+        );
+        wait_for_health(&config.local_origin()).await;
+
+        // A slow transcription request must not make the cheap health endpoint
+        // fail or cause a recovery action.
+        let transcription = tokio::spawn(async move {
+            reqwest::Client::new()
+                .post(format!("{}/v1/audio/transcriptions", config.local_origin()))
+                .send()
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(health_ok(&format!("http://127.0.0.1:{SYSTEMD_FIXTURE_PORT}")).await);
+        run_for_unit(
+            &tb_config::stt::SttConfig {
+                port: SYSTEMD_FIXTURE_PORT,
+                ..Default::default()
+            },
+            &state_path,
+            SYSTEMD_FIXTURE_SERVICE,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            main_pid().await,
+            original_pid,
+            "healthy slow-request fixture restarted"
+        );
+        assert!(transcription.await.unwrap().status().is_success());
+
+        // SIGSTOP targets the actual HTTP server process. Its endpoint must
+        // stop responding before the recovery checker asks systemd to restart it.
+        fixture_systemctl(&[
+            "kill",
+            "--signal=SIGSTOP",
+            "--kill-whom=main",
+            SYSTEMD_FIXTURE_SERVICE,
+        ])
+        .await
+        .expect("SIGSTOP should target the isolated fixture main process");
+        assert!(!health_ok(&format!("http://127.0.0.1:{SYSTEMD_FIXTURE_PORT}")).await);
+        run_for_unit(
+            &tb_config::stt::SttConfig {
+                port: SYSTEMD_FIXTURE_PORT,
+                ..Default::default()
+            },
+            &state_path,
+            SYSTEMD_FIXTURE_SERVICE,
+            0,
+        )
+        .await
+        .unwrap();
+        run_for_unit(
+            &tb_config::stt::SttConfig {
+                port: SYSTEMD_FIXTURE_PORT,
+                ..Default::default()
+            },
+            &state_path,
+            SYSTEMD_FIXTURE_SERVICE,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let recovered_pid = wait_for_new_main_pid(original_pid).await;
+        assert_ne!(
+            recovered_pid, original_pid,
+            "try-restart should create a new process"
+        );
+        wait_for_health(&format!("http://127.0.0.1:{SYSTEMD_FIXTURE_PORT}")).await;
+
+        // Administrative stop is respected even though the HTTP endpoint is down.
+        fixture_systemctl(&["stop", SYSTEMD_FIXTURE_SERVICE])
+            .await
+            .expect("administrative fixture stop should succeed");
+        run_for_unit(
+            &tb_config::stt::SttConfig {
+                port: SYSTEMD_FIXTURE_PORT,
+                ..Default::default()
+            },
+            &state_path,
+            SYSTEMD_FIXTURE_SERVICE,
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            main_pid().await,
+            0,
+            "checker must not start an administratively stopped unit"
+        );
+
+        let _ = fs::remove_file(state_path);
+    }
+
+    async fn fixture_systemctl(arguments: &[&str]) -> Result<String, String> {
+        let output = timeout(
+            Duration::from_secs(5),
+            Command::new("/usr/bin/systemctl")
+                .arg("--user")
+                .arg("--no-pager")
+                .args(arguments)
+                .stdin(Stdio::null())
+                .output(),
+        )
+        .await
+        .map_err(|_| "systemctl fixture command timed out".to_owned())?
+        .map_err(|_| "systemctl fixture command could not run".to_owned())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+        }
+    }
+
+    async fn main_pid() -> u32 {
+        fixture_systemctl(&[
+            "show",
+            "--property=MainPID",
+            "--value",
+            SYSTEMD_FIXTURE_SERVICE,
+        ])
+        .await
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+    }
+
+    async fn wait_for_main_pid() -> u32 {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let pid = main_pid().await;
+                if pid != 0 {
+                    return pid;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("fixture should start")
+    }
+
+    async fn wait_for_new_main_pid(previous_pid: u32) -> u32 {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let pid = main_pid().await;
+                if pid != 0 && pid != previous_pid {
+                    return pid;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("recovery should start a new fixture process")
+    }
+
+    async fn wait_for_health(origin: &str) {
+        timeout(Duration::from_secs(10), async {
+            while !health_ok(origin).await {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("fixture HTTP health should become OK");
     }
 
     #[test]
