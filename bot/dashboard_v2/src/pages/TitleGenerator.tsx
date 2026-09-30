@@ -79,7 +79,7 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
 export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
-  const canEditSettings = streamer === authStatus?.twitchUserId;
+  const canEditSettings = Boolean(authStatus?.twitchUserId && streamer === authStatus.twitchUserId);
   const csrfToken = authStatus?.csrfToken ?? authStatus?.csrf_token;
   const [keywords, setKeywords] = useState('');
   const [includeLive, setIncludeLive] = useState(true);

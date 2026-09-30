@@ -120,19 +120,16 @@ async fn resolve_target_user_id(
     auth: &DashboardAuthLevel,
     requested: Option<&str>,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let own = own_user_id(auth)?;
-    let target = requested
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .unwrap_or(own);
-    if target == own {
-        return Ok(own.to_owned());
-    }
-    if !matches!(auth, DashboardAuthLevel::Admin { .. }) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({"error":"Du kannst nur auf deinen eigenen Twitch-Account zugreifen."})),
-        ));
+    let requested = requested.map(str::trim).filter(|id| !id.is_empty());
+    // Interne/reine Admin-Kontexte haben bewusst keinen Twitch-Actor. Ihre
+    // bestehende explizite Kanalauswahl bleibt erlaubt, jetzt ausschließlich per
+    // geprüfter Twitch-ID. Implizite eigene Ziele brauchen immer die Actor-ID.
+    let target = match (auth, requested) {
+        (DashboardAuthLevel::Admin { .. }, Some(target)) => target,
+        _ => return requested_user_id(auth, requested),
+    };
+    if own_user_id(auth).is_ok_and(|own| own == target) {
+        return Ok(target.to_owned());
     }
     if target.len() > 20 || !target.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err((
@@ -996,6 +993,24 @@ mod tests {
             "2"
         );
         assert!(requested_user_id(&DashboardAuthLevel::admin(), Some("other")).is_err());
+        assert_eq!(
+            resolve_target_user_id(&db.pool, &DashboardAuthLevel::admin(), Some("2"))
+                .await
+                .unwrap(),
+            "2"
+        );
+        for requested in [None, Some(""), Some("other"), Some("3")] {
+            assert!(
+                resolve_target_user_id(&db.pool, &DashboardAuthLevel::admin(), requested)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            resolve_target_user_id(&db.pool, &DashboardAuthLevel::None, Some("2"))
+                .await
+                .is_err()
+        );
         assert_eq!(
             resolve_target_user_id(&db.pool, &admin_actor(), None)
                 .await

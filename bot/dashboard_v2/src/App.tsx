@@ -366,13 +366,13 @@ function TitleGeneratorRoute() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const ownId = authStatus?.twitchUserId ?? null;
   const streamer = authStatus?.isAdmin ? selectedId ?? ownId : ownId;
-  const directory = useQuery({ queryKey: ['title-streamer-directory'], queryFn: fetchTitleStreamers, enabled: Boolean(authStatus?.isAdmin && ownId) });
+  const directory = useQuery({ queryKey: ['title-streamer-directory'], queryFn: fetchTitleStreamers, enabled: Boolean(authStatus?.isAdmin) });
   return (
     <DashboardShell activeRoute="title">
-      {authStatus?.isAdmin && ownId && <div className="mx-auto max-w-4xl pt-4">
+      {authStatus?.isAdmin && <div className="mx-auto max-w-4xl pt-4">
         <label htmlFor="title-streamer" className="text-sm text-text-secondary">Twitch-Kanal</label>
         <select id="title-streamer" value={streamer ?? ''} onChange={(event) => setSelectedId(event.target.value)} className="ml-3 rounded-lg border border-border bg-card px-3 py-2 text-white">
-          <option value={ownId}>Mein Kanal</option>
+          {ownId ? <option value={ownId}>Mein Kanal</option> : <option value="" disabled>Kanal auswählen</option>}
           {directory.data?.items.filter((item) => item.twitchUserId && item.twitchUserId !== ownId).map((item) => <option key={item.twitchUserId} value={item.twitchUserId!}>{item.login}</option>)}
         </select>
         {directory.isError && <p role="status" className="mt-2 text-sm text-error">Die Kanalliste ist gerade nicht verfügbar.</p>}
