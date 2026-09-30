@@ -2,10 +2,7 @@
 
 ## Problem
 
-Der Owner-Login (`earlysalty`, aus `_TWITCH_ADMIN_LOGINS`) wird beim Dashboard-Login
-zu `DashboardAuthLevel::Admin { actor: Some(..) }` promotet. `auth-status` lieferte
-für ihn früher **immer** `admin_response` → das Frontend schaltete über `isAdmin`
-sämtliche Feature-Gates frei (Plan „Erweitert (Admin)", alle Entitlements).
+Twitch-Adminrechte entstehen nur, wenn die ID aus einer verifizierten OAuth-Session mit der dauerhaft konfigurierten Betreiber-Twitch-ID übereinstimmt. Ein Twitch-Login reicht dafür nicht. `auth-status` lieferte früher für den Betreiber immer `admin_response`; dadurch schaltete das Frontend über `isAdmin` sämtliche Feature-Gates frei (Plan „Erweitert (Admin)", alle Entitlements).
 
 Folge: Der Admin sah nie die echte Nutzer-Ansicht. Ein für reale Partner/Free-User
 kaputtes oder gesperrtes Dashboard fiel ihm nicht auf, weil sein Override alles
@@ -40,7 +37,7 @@ Scope-, Plan- und Daten-Gates wie bei jedem anderen Partner; fremde
 `?streamer=`-Overrides enden zentral mit `403`.
 
 Mit aktivem Modus-Cookie sowie auf dem Admin-Host und bei internen Aufrufen bleibt
-das Auth-Level `Admin`. Einzelne Daten-Endpunkte brauchen dadurch keine eigenen
+das Auth-Level `Admin`. Die übrigen Daten-Endpunkte brauchen dadurch keine eigenen
 Admin-Modus-Sonderfälle.
 
 ### Backend (`tb-dashboard-api`)
@@ -55,13 +52,15 @@ Admin-Modus-Sonderfälle.
 | Discord-Admin | öffentlich, Modus inaktiv | `Partner` (Owner) |
 | Discord-Admin | Admin-Host / intern | `Admin { actor: None }` |
 | normaler Streamer | — | `Partner` |
-| keine gültige Session | — | `None` |
+| keine gültige Session | kein Kontext | `None` |
+
+Die drei Uplink-Wartelistenrouten (lesen, freischalten und ablehnen) erlauben zusätzlich die zentral verifizierte Twitch-Partner-Session, wenn ihre User-ID exakt der konfigurierten Betreiber-ID entspricht. Dafür ist kein Admin-Modus nötig. Gleicher Login oder ein Modus-Cookie ohne passende Session-ID reichen nicht.
 
 `handlers/auth_status.rs` serialisiert dieses effektive Level. Seine Payload trägt
 `adminEligible` und `adminMode`, damit das Frontend den Schalter darstellen kann.
 
-`handlers/admin_mode.rs` — `POST /twitch/api/v2/admin-mode`, Body `{ "enabled": bool }`.
-- Gate: Twitch-Owner oder gültige Admin-Session, sonst `403`.
+`handlers/admin_mode.rs`: `POST /twitch/api/v2/admin-mode`, Body `{ "enabled": bool }`.
+- Gate: zentrale Admin-Session oder Partner-Session, deren verifizierte Twitch-ID der konfigurierten Betreiber-ID entspricht. Login und Modus-Cookie sind kein Berechtigungsnachweis.
 - `enabled:true` → Set-Cookie `tb_admin_mode=2` (HttpOnly, SameSite=Lax, Path=/,
   Secure in prod, **kein Max-Age**). `enabled:false` → Cookie löschen.
 - Antwort `{ "adminMode": bool }`.

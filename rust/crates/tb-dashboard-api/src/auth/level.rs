@@ -75,6 +75,21 @@ impl DashboardAuthLevel {
         matches!(self, Self::Admin { .. })
     }
 
+    /// `true` wenn diese zentral authentifizierte Twitch-Partner-Session zur konfigurierten Betreiber-ID gehört.
+    pub fn is_configured_twitch_owner(&self, configured_user_id: Option<&str>) -> bool {
+        let Some(configured_user_id) = configured_user_id.filter(|id| {
+            id.bytes().all(|byte| byte.is_ascii_digit())
+                && id.parse::<u64>().is_ok_and(|parsed| parsed > 0)
+        }) else {
+            return false;
+        };
+
+        matches!(
+            self,
+            Self::Partner { twitch_user_id, .. } if twitch_user_id.as_str() == configured_user_id
+        )
+    }
+
     /// `true` wenn Admin oder Partner.
     pub fn is_authenticated(&self) -> bool {
         !matches!(self, Self::None)

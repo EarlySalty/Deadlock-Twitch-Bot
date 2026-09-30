@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use tb_transport_twitch::{HelixClient, TwitchUser};
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
-use crate::auth::{level::DashboardAuthLevel, require_admin};
+use crate::auth::{level::DashboardAuthLevel, require_admin, session::DashboardAuthState};
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -484,13 +484,41 @@ pub async fn waitlist_handler(
     Ok(Json(wert))
 }
 
-/// Gate für die Uplink-Wartelistenverwaltung. Die zentrale Auth-Kaskade entscheidet
-/// anhand einer verifizierten Admin-Session, ob der Zugriff erlaubt ist.
-fn admin_pruefen(auth: &DashboardAuthLevel) -> Result<(), Response> {
+/// Gate für die Uplink-Wartelistenverwaltung. Eine zentrale Admin-Session bleibt
+/// zugelassen. Zusätzlich darf die zentral authentifizierte Twitch-Session des
+/// konfigurierten Betreibers die Warteliste auch in der Partneransicht verwalten.
+fn admin_pruefen(
+    auth: &DashboardAuthLevel,
+    configured_user_id: Option<&str>,
+) -> Result<(), Response> {
+    if auth.is_configured_twitch_owner(configured_user_id) {
+        return Ok(());
+    }
     match require_admin(auth) {
         Some(fehler) => Err(fehler.into_response()),
         None => Ok(()),
     }
+}
+
+fn admin_warteliste_lesen_pruefen(
+    auth: &DashboardAuthLevel,
+    configured_user_id: Option<&str>,
+) -> Result<(), Response> {
+    admin_pruefen(auth, configured_user_id)
+}
+
+fn admin_warteliste_freischalten_pruefen(
+    auth: &DashboardAuthLevel,
+    configured_user_id: Option<&str>,
+) -> Result<(), Response> {
+    admin_pruefen(auth, configured_user_id)
+}
+
+fn admin_warteliste_ablehnen_pruefen(
+    auth: &DashboardAuthLevel,
+    configured_user_id: Option<&str>,
+) -> Result<(), Response> {
+    admin_pruefen(auth, configured_user_id)
 }
 
 fn admin_actor_fuer_log(auth: &DashboardAuthLevel) -> (&str, Option<&str>) {
@@ -560,12 +588,18 @@ fn mit_namen(mut wert: Value, users: &HashMap<String, TwitchUser>) -> Value {
 
 /// Wartende Uplink-Konten für die Admin-Box.
 ///
-/// Nur die zentrale Auth-Kaskade kann eine Admin-Session ausstellen. Ein Twitch-Login
-/// ohne passende konfigurierte User-ID und aktiven Admin-Modus bleibt Partner.
-/// Die Einträge tragen numerische `streamer_id`s. Namen werden für die Anzeige
-/// best-effort über Twitch-Helix nachgeladen. Bei Ausfall bleiben die IDs erhalten.
-pub async fn admin_waitlist_handler(auth: DashboardAuthLevel) -> Result<Json<Value>, Response> {
-    admin_pruefen(&auth)?;
+/// Zugriff erhalten eine zentrale Admin-Session oder die verifizierte Twitch-ID
+/// des konfigurierten Betreibers, auch ohne aktiven Admin-Modus. Die Einträge
+/// tragen numerische `streamer_id`s. Namen werden für die Anzeige best-effort über
+/// Twitch-Helix nachgeladen. Bei Ausfall bleiben die IDs erhalten.
+pub async fn admin_waitlist_handler(
+    auth: DashboardAuthLevel,
+    auth_state: Option<Extension<DashboardAuthState>>,
+) -> Result<Json<Value>, Response> {
+    let configured_user_id = auth_state
+        .as_ref()
+        .and_then(|Extension(state)| state.admin_twitch_user_id());
+    admin_warteliste_lesen_pruefen(&auth, configured_user_id)?;
     let wert = relay_json(reqwest::Method::GET, RELAY_ADMIN_WAITLIST_PFAD, None).await?;
 
     let ids = waitlist_ids(&wert);
@@ -606,9 +640,13 @@ fn freischaltung_antwort(streamer_id: i64) -> Value {
 /// bewusst verworfen, damit der Schlüssel nicht im Browser landet.
 pub async fn admin_freischalten_handler(
     auth: DashboardAuthLevel,
+    auth_state: Option<Extension<DashboardAuthState>>,
     Json(body): Json<AdminFreischaltenBody>,
 ) -> Result<Json<Value>, Response> {
-    admin_pruefen(&auth)?;
+    let configured_user_id = auth_state
+        .as_ref()
+        .and_then(|Extension(state)| state.admin_twitch_user_id());
+    admin_warteliste_freischalten_pruefen(&auth, configured_user_id)?;
     if body.streamer_id <= 0 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -648,9 +686,13 @@ fn admin_waitlist_eintrag_pfad(streamer_id: i64) -> String {
 /// bleibt sonst voll mit Anfragen, die nie beantwortet werden.
 pub async fn admin_ablehnen_handler(
     auth: DashboardAuthLevel,
+    auth_state: Option<Extension<DashboardAuthState>>,
     Path(streamer_id): Path<i64>,
 ) -> Result<Json<Value>, Response> {
-    admin_pruefen(&auth)?;
+    let configured_user_id = auth_state
+        .as_ref()
+        .and_then(|Extension(state)| state.admin_twitch_user_id());
+    admin_warteliste_ablehnen_pruefen(&auth, configured_user_id)?;
     if streamer_id <= 0 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -2024,34 +2066,75 @@ mod tests {
         assert!(twitch_identitaet(&DashboardAuthLevel::None).is_err());
     }
 
-    #[test]
-    fn wartelistenverwaltung_erfordert_zentrale_admin_session() {
-        let admin = DashboardAuthLevel::Admin { actor: None };
-        let namensgleicher_partner = DashboardAuthLevel::Partner {
+    fn assert_waitlist_gate_for_path(
+        path: &str,
+        gate: fn(&DashboardAuthLevel, Option<&str>) -> Result<(), Response>,
+    ) {
+        const OPERATOR_ID: &str = "1186925760";
+        let renamed_operator = DashboardAuthLevel::Partner {
+            twitch_login: "new_login".into(),
+            twitch_user_id: OPERATOR_ID.into(),
+            display_name: "Neuer Login".into(),
+        };
+        let reused_login = DashboardAuthLevel::Partner {
             twitch_login: "earlysalty".into(),
             twitch_user_id: "99".into(),
-            display_name: "Early".into(),
+            display_name: "Fremde Person".into(),
         };
-        let fremder_partner = DashboardAuthLevel::Partner {
+        let other_partner = DashboardAuthLevel::Partner {
             twitch_login: "someone".into(),
             twitch_user_id: "7".into(),
             display_name: "Someone".into(),
         };
+        let admin = DashboardAuthLevel::Admin { actor: None };
 
-        assert!(admin_pruefen(&admin).is_ok());
-        assert_eq!(
-            admin_pruefen(&namensgleicher_partner).unwrap_err().status(),
-            StatusCode::FORBIDDEN
+        assert!(gate(&admin, None).is_ok(), "{path}: Admin verloren");
+        assert!(
+            gate(&renamed_operator, Some(OPERATOR_ID)).is_ok(),
+            "{path}: verifizierte Betreiber-ID trotz Loginwechsel gesperrt"
         );
+        for (auth, configured_id) in [
+            (&reused_login, Some(OPERATOR_ID)),
+            (&other_partner, Some(OPERATOR_ID)),
+            (&renamed_operator, None),
+            (&renamed_operator, Some("invalid")),
+        ] {
+            assert_eq!(
+                gate(auth, configured_id).unwrap_err().status(),
+                StatusCode::FORBIDDEN,
+                "{path}: fremde oder nicht konfigurierte Identität zugelassen"
+            );
+        }
         assert_eq!(
-            admin_pruefen(&fremder_partner).unwrap_err().status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            admin_pruefen(&DashboardAuthLevel::None)
+            gate(&DashboardAuthLevel::None, Some(OPERATOR_ID))
                 .unwrap_err()
                 .status(),
-            StatusCode::UNAUTHORIZED
+            StatusCode::UNAUTHORIZED,
+            "{path}: ungeprüfte Identität zugelassen"
+        );
+    }
+
+    #[test]
+    fn wartelisten_lesen_hat_idbasierte_positive_und_negative_gates() {
+        assert_waitlist_gate_for_path(
+            "GET /twitch/api/v2/uplink/admin/waitlist",
+            admin_warteliste_lesen_pruefen,
+        );
+    }
+
+    #[test]
+    fn wartelisten_freischalten_hat_idbasierte_positive_und_negative_gates() {
+        assert_waitlist_gate_for_path(
+            "POST /twitch/api/v2/uplink/admin/users",
+            admin_warteliste_freischalten_pruefen,
+        );
+    }
+
+    #[test]
+    fn wartelisten_ablehnen_hat_idbasierte_positive_und_negative_gates() {
+        assert_waitlist_gate_for_path(
+            "DELETE /twitch/api/v2/uplink/admin/waitlist/{streamer_id}",
+            admin_warteliste_ablehnen_pruefen,
         );
     }
 
