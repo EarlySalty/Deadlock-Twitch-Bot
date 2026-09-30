@@ -209,7 +209,7 @@ fn unit_enabled_state_allows_recovery(service: &str, enabled: Option<&str>) -> b
     {
         // Only the hard-coded transient fixture may bypass enablement; the
         // subsequent ActiveState snapshot still has to prove it is active.
-        return service == SYSTEMD_FIXTURE_SERVICE;
+        service == SYSTEMD_FIXTURE_SERVICE
     }
     #[cfg(not(test))]
     {
