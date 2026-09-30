@@ -2729,7 +2729,7 @@ async fn block_auswerten(
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
-    let (modell_funde, modell_fehler) = modellfunde(&segmente).await;
+    let (modell_funde, modell_fehler, verwendete_modelle) = modellfunde(&segmente).await;
     funde.extend(modell_funde);
     // Der Abbruch der Aufnahme steht als eigenes Feld im Bericht. Frueher lief
     // er in denselben Hinweis wie ein Modellausfall: der Bericht behauptete
@@ -2758,7 +2758,7 @@ async fn block_auswerten(
         modell: transkript.model.clone(),
         transkription_lokal: tb_stream_audit::llm::ist_lokal(&stt_basis_url()),
         anbieter: endpunkt.provider.to_owned(),
-        llm_modell: endpunkt.model.clone(),
+        llm_modell: verwendete_modelle.join(", "),
         transkript_behalten: konfiguration.transkript_behalten,
         segmente: segmente.len(),
         modell_geprueft: modell_hinweis.is_none(),
@@ -2894,7 +2894,9 @@ fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
 /// Modellfunde ueber den im Bot konfigurierten Anbieter. Faellt der Aufruf aus,
 /// bleibt es bei den Regelfunden - ein Audit ohne Modell ist duenner, aber
 /// besser als keines.
-async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Option<String>) {
+async fn modellfunde(
+    segmente: &[Segment],
+) -> (Vec<tb_stream_audit::Fund>, Option<String>, Vec<String>) {
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
     if !llm::fernes_modell_erlaubt(&endpunkt.base_url) {
         return (
@@ -2904,17 +2906,20 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
                 endpunkt.provider,
                 llm::REMOTE_ERLAUBT_ENV
             )),
+            Vec::new(),
         );
     }
     if endpunkt.api_key.is_none() {
         return (
             Vec::new(),
             Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
+            Vec::new(),
         );
     }
 
     let mut raus = Vec::new();
     let mut fehler_gesehen: Option<String> = None;
+    let mut verwendete_modelle = Vec::new();
     for stapel in llm::stapel(segmente) {
         let antwort = tb_llm::complete(
             llm::USE_CASE,
@@ -2929,7 +2934,12 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
         )
         .await;
         let inhalt = match antwort {
-            Ok(antwort) => antwort.text,
+            Ok(antwort) => {
+                if !verwendete_modelle.contains(&antwort.model) {
+                    verwendete_modelle.push(antwort.model);
+                }
+                antwort.text
+            }
             // Ohne Statuspruefung sieht ein 401 oder 429 aus wie kaputtes
             // JSON - und der Bericht nennt den falschen Grund.
             // Der Eingang warnt pro Versuch selbst; hier nur noch die Spur.
@@ -2969,7 +2979,7 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             }
         }
     }
-    (raus, fehler_gesehen)
+    (raus, fehler_gesehen, verwendete_modelle)
 }
 
 /// Zeitgrenze des Modellschritts. Der gemeinsame Eingang nutzt einen einzigen
