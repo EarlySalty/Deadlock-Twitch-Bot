@@ -131,8 +131,8 @@ impl GlobalSentiment {
             tracing::info!(msgs = lines.len(), "GlobalSentiment: zu wenig Material, skip");
             return None;
         }
-        let raw = llm
-            .raw_completion(SYS, &build_user_prompt(&lines), BUILD_MAX_TOKENS, 0.4)
+        let (raw, model) = llm
+            .raw_completion_with_model(SYS, &build_user_prompt(&lines), BUILD_MAX_TOKENS, 0.4)
             .await
             .ok()?;
         let stripped = strip_think(&raw);
@@ -140,7 +140,7 @@ impl GlobalSentiment {
         if text.is_empty() {
             return None;
         }
-        self.store(text, lines.len() as i64, llm.model()).await.ok()?;
+        self.store(text, lines.len() as i64, &model).await.ok()?;
         tracing::info!(msgs = lines.len(), chars = text.chars().count(), "GlobalSentiment: neu gebaut");
         Some(text.to_string())
     }

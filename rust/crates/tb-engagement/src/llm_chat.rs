@@ -848,6 +848,20 @@ impl EngagementLlmClient {
         max_output_tokens: i64,
         temperature: f64,
     ) -> Result<String, GenerateError> {
+        self.raw_completion_with_model(system, user, max_output_tokens, temperature)
+            .await
+            .map(|(text, _)| text)
+    }
+
+    /// Wie [`Self::raw_completion`], liefert zusätzlich das tatsächlich
+    /// aufgelöste Modell für Herkunftsangaben und Persistenz.
+    pub async fn raw_completion_with_model(
+        &self,
+        system: &str,
+        user: &str,
+        max_output_tokens: i64,
+        temperature: f64,
+    ) -> Result<(String, String), GenerateError> {
         let response = self
             .call(
                 tb_llm::Request::simple(system, user)
@@ -856,7 +870,7 @@ impl EngagementLlmClient {
                     .no_ledger(),
             )
             .await?;
-        Ok(response.text)
+        Ok((response.text, response.model))
     }
 
     /// Wie [`Self::raw_completion`], verbucht aber zusätzlich den echten
