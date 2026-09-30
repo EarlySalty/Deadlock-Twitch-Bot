@@ -632,6 +632,7 @@ pub async fn try_build_api(
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
+    pub title_context: tb_chat::steam_lookup::CoStreamRuntime,
     pub discord_chat: tb_config::discord::DiscordChat,
     pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
@@ -661,6 +662,7 @@ pub async fn build_runtime(
     supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
+        title_context,
         discord_chat,
         subscription_status,
         manual_raid,
@@ -830,6 +832,7 @@ pub async fn build_runtime(
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
     )
+    .set_title_context(title_context)
     .set_sub_reminder(Arc::new(tb_chat::sub_reminder::SubReminder::new(
         pool.clone(),
         Arc::clone(&api),

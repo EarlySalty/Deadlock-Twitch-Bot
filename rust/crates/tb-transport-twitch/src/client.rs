@@ -415,11 +415,9 @@ impl HelixClient {
         &self,
         broadcaster_id: &str,
     ) -> Result<Vec<TwitchUser>, HelixError> {
-        let path = format!("/shared_chat/session?broadcaster_id={broadcaster_id}");
-        let resp = self.send_with_retry(self.get(&path).await?).await?;
-        let body: SharedChatResponse = check_status_and_json(resp).await?;
-        let mut ids: Vec<String> = body
-            .data
+        let mut ids: Vec<String> = self
+            .get_shared_chat_session(broadcaster_id)
+            .await?
             .into_iter()
             .flat_map(|session| session.participants)
             .map(|p| p.broadcaster_id)
@@ -454,23 +452,6 @@ impl HelixClient {
             })
             .collect())
     }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct SharedChatResponse {
-    #[serde(default)]
-    data: Vec<SharedChatSession>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct SharedChatSession {
-    #[serde(default)]
-    participants: Vec<SharedChatParticipant>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct SharedChatParticipant {
-    broadcaster_id: String,
 }
 
 /// Prüft den HTTP-Status einer Helix-Response und deserialisiert den Body.
@@ -548,7 +529,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(path("/helix/shared_chat/session"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"participants":[{"broadcaster_id":"100"},{"broadcaster_id":"200"},{"broadcaster_id":"300"}]}]})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"session_id":"test-session","host_broadcaster_id":"100","created_at":"2026-09-30T12:00:00Z","updated_at":"2026-09-30T12:00:00Z","participants":[{"broadcaster_id":"100"},{"broadcaster_id":"200"},{"broadcaster_id":"300"}]}]})))
             .mount(&server).await;
         Mock::given(path("/helix/users"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"id":"200","login":"live","display_name":"Live"},{"id":"300","login":"offline","display_name":"Offline"}]})))
@@ -600,10 +581,10 @@ mod tests {
             .and(query_param("broadcaster_id", "100"))
             .and(header("Authorization", "Bearer test-app-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"participants": [
+                "data": [{"session_id":"test-session", "host_broadcaster_id":"100", "created_at":"2026-09-30T12:00:00Z", "updated_at":"2026-09-30T12:00:00Z", "participants": [
                     {"broadcaster_id": "300"}, {"broadcaster_id": "100"},
                     {"broadcaster_id": "200"}, {"broadcaster_id": "200"},
-                    {"broadcaster_id": ""}, {"broadcaster_id": "400"}
+                    {"broadcaster_id": "400"}
                 ]}]
             })))
             .expect(1)

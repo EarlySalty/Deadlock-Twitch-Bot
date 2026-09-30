@@ -113,6 +113,7 @@ pub struct DashboardOptions {
     pub stripe_product_ids: BTreeMap<String, String>,
     pub discord_ref_code: String,
     pub steam_rank_url: String,
+    pub steam_title_context_url: String,
     pub steam_link_start_base_url: String,
     pub turnier_internal_base_url: String,
     pub deadlock_assets_base_url: String,
@@ -155,6 +156,7 @@ impl Default for DashboardOptions {
             stripe_product_ids: BTreeMap::new(),
             discord_ref_code: "DE-Deadlock-Discord".into(),
             steam_rank_url: "http://127.0.0.1:8783/rank".into(),
+            steam_title_context_url: "http://127.0.0.1:8783/internal/title-context".into(),
             steam_link_start_base_url: "https://deutsche-deadlock-community.de/link".into(),
             turnier_internal_base_url: "http://127.0.0.1:8900".into(),
             deadlock_assets_base_url: "https://assets.deadlock-api.com".into(),
@@ -248,6 +250,10 @@ impl DashboardOptions {
                 &self.discord_oauth_broker_url,
             ),
             ("dashboard.options.steam_rank_url", &self.steam_rank_url),
+            (
+                "dashboard.options.steam_title_context_url",
+                &self.steam_title_context_url,
+            ),
             (
                 "dashboard.options.steam_link_start_base_url",
                 &self.steam_link_start_base_url,

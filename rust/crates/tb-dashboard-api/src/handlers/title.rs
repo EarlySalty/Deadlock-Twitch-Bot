@@ -352,6 +352,7 @@ async fn resolve_title_context(
     pool: &PgPool,
     twitch_user_id: &str,
     include_live: bool,
+    runtime: Option<&steam_lookup::CoStreamRuntime>,
 ) -> TitleContext {
     let discord_id = resolve_discord_user_id(pool, twitch_user_id).await;
 
@@ -383,7 +384,7 @@ async fn resolve_title_context(
             None => None,
         };
         let co_context =
-            steam_lookup::detect_co_streamers_all(pool, twitch_user_id, discord_id).await;
+            steam_lookup::detect_co_streamers_all(pool, twitch_user_id, discord_id, runtime).await;
         co_streamers = co_context.co_streamers;
         let party_hint = co_context.party_hint;
         if steam_live.is_some() || party_hint.is_some() || !co_streamers.is_empty() {
@@ -488,6 +489,7 @@ async fn finish_suggestion(
 }
 
 pub async fn suggest_handler(
+    runtime: Option<axum::Extension<Option<steam_lookup::CoStreamRuntime>>>,
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(query): Query<TitleQuery>,
@@ -579,7 +581,13 @@ pub async fn suggest_handler(
         })
         .collect();
 
-    let context = resolve_title_context(&pool, &user_id, body.include_live).await;
+    let context = resolve_title_context(
+        &pool,
+        &user_id,
+        body.include_live,
+        runtime.as_ref().and_then(|r| r.0.as_ref()),
+    )
+    .await;
 
     let limiter = TITLE_RATE_LIMITER.get_or_init(TitleRateLimiter::default);
     match generate_title_personalized(
@@ -1193,7 +1201,7 @@ mod tests {
             return;
         };
         // Kein twitch_streamer_identities-Eintrag → discord_user_id nicht auflösbar.
-        let ctx = resolve_title_context(&pool, "999", true).await;
+        let ctx = resolve_title_context(&pool, "999", true, None).await;
         assert!(ctx.rank_display.is_none());
         assert!(ctx.live_state.is_none());
         assert!(
@@ -1225,7 +1233,7 @@ mod tests {
             "/tmp/tb_nonexistent_steam_db_for_title_test.sqlite3",
         );
 
-        let ctx = resolve_title_context(&pool, "1", true).await;
+        let ctx = resolve_title_context(&pool, "1", true, None).await;
 
         match prev {
             Some(v) => std::env::set_var("STEAM_BOT_DB_PATH", v),
@@ -1303,7 +1311,7 @@ mod tests {
         .await
         .unwrap();
 
-        let ctx = resolve_title_context(&pool, "pg-live-user", true).await;
+        let ctx = resolve_title_context(&pool, "pg-live-user", true, None).await;
 
         assert_eq!(
             ctx.live_state
@@ -1347,7 +1355,7 @@ mod tests {
         .await
         .unwrap();
 
-        let context = resolve_title_context(&pool, "pg-rank-user", false).await;
+        let context = resolve_title_context(&pool, "pg-rank-user", false, None).await;
 
         assert_eq!(context.rank_display.as_deref(), Some("Archon 3"));
     }

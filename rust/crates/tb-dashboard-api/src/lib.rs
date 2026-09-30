@@ -2077,6 +2077,13 @@ pub fn build_router_with_contest_writer(
         .ok()
     });
     let challenge_engine = handlers::challenges::ChallengeEngine(challenge_engine);
+    let title_context = challenge_settings.map(|settings| {
+        tb_chat::steam_lookup::CoStreamRuntime::new(
+            settings.dashboard.options.steam_title_context_url.clone(),
+            token.clone(),
+            helix.clone(),
+        )
+    });
     let pause_loop_router = match helix {
         Some(helix) => build_pause_loop_router(pool.clone(), helix),
         None => handlers::pause_loop::build_unavailable_pause_loop_router(),
@@ -2147,6 +2154,7 @@ pub fn build_router_with_contest_writer(
                     },
                 ),
         )
+        .layer(axum::Extension(title_context))
         .layer(CompressionLayer::new());
 
     if let Some(config) = handlers::platform_token::platform_token_config_from_runtime() {

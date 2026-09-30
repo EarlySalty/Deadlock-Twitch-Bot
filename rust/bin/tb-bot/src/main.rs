@@ -1271,6 +1271,11 @@ async fn main() {
                 handle,
                 pool.clone(),
                 chat_wiring::ChatRuntimePorts {
+                    title_context: tb_chat::steam_lookup::CoStreamRuntime::new(
+                        config.dashboard.options.steam_title_context_url.clone(),
+                        settings.internal_api.token.clone(),
+                        helix.as_ref().clone(),
+                    ),
                     discord_chat: config.discord.chat.clone(),
                     subscription_status: chat_wiring::build_subscription_status(
                         helix.as_ref().clone().map(Arc::new),

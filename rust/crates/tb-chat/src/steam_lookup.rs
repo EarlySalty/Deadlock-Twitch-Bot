@@ -70,14 +70,32 @@ pub struct CoStreamContext {
     pub party_hint: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct CoStreamRuntime {
+    url: String,
+    token: String,
+    helix: Option<tb_transport_twitch::HelixClient>,
+}
+
+impl CoStreamRuntime {
+    pub fn new(
+        url: String,
+        token: String,
+        helix: Option<tb_transport_twitch::HelixClient>,
+    ) -> Self {
+        Self { url, token, helix }
+    }
+}
+
 pub async fn detect_co_streamers_all(
     pool: &PgPool,
     twitch_user_id: &str,
     discord_user_id: Option<i64>,
+    runtime: Option<&CoStreamRuntime>,
 ) -> CoStreamContext {
     let (shared, central) = tokio::join!(
-        shared_chat_streamers(twitch_user_id),
-        central_title_context(discord_user_id)
+        shared_chat_streamers(twitch_user_id, runtime.and_then(|r| r.helix.as_ref())),
+        central_title_context(discord_user_id, runtime)
     );
     detect_co_streamers_with_shared(pool, twitch_user_id, shared, &central).await
 }
@@ -192,29 +210,16 @@ fn source_state(source: u8, failed: bool) {
     }
 }
 
-async fn central_title_context(discord_id: Option<i64>) -> CentralTitleContext {
+async fn central_title_context(
+    discord_id: Option<i64>,
+    runtime: Option<&CoStreamRuntime>,
+) -> CentralTitleContext {
     let Some(discord_id) = discord_id else {
         return CentralTitleContext::default();
     };
-    let token = [
-        "TWITCH_INTERNAL_API_TOKEN",
-        "STEAM_INTERNAL_API_TOKEN",
-        "INTERNAL_API_TOKEN",
-    ]
-    .iter()
-    .find_map(|name| {
-        std::env::var(name)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-    });
-    let result = match token {
-        Some(token) => {
-            fetch_central_title_context(
-                "http://127.0.0.1:8783/internal/title-context",
-                &token,
-                discord_id,
-            )
-            .await
+    let result = match runtime {
+        Some(runtime) => {
+            fetch_central_title_context(&runtime.url, &runtime.token, discord_id).await
         }
         None => Err(()),
     };
@@ -231,7 +236,11 @@ async fn fetch_central_title_context(
     if url.scheme() != "http"
         || !url
             .host_str()
-            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+            .and_then(|host| {
+                host.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+            })
             .is_some_and(|ip| ip.is_loopback())
         || !url.username().is_empty()
         || url.password().is_some()
@@ -241,6 +250,7 @@ async fn fetch_central_title_context(
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| ())?;
@@ -258,33 +268,16 @@ async fn fetch_central_title_context(
         .map_err(|_| ())
 }
 
-async fn shared_chat_streamers(twitch_user_id: &str) -> Vec<CoStreamer> {
-    static HELIX: tokio::sync::OnceCell<tb_transport_twitch::HelixClient> =
-        tokio::sync::OnceCell::const_new();
-    let helix = HELIX
-        .get_or_try_init(|| async {
-            let id = std::env::var("TWITCH_CLIENT_ID")
-                .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_ID"))
-                .unwrap_or_default();
-            let secret = std::env::var("TWITCH_CLIENT_SECRET")
-                .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_SECRET"))
-                .unwrap_or_default();
-            if id.trim().is_empty() || secret.trim().is_empty() {
-                return Err(());
-            }
-            tb_transport_twitch::HelixClient::new(tb_transport_twitch::HelixConfig::new(
-                id.trim(),
-                secret.trim(),
-            ))
-            .map_err(|_| ())
-        })
-        .await;
+async fn shared_chat_streamers(
+    twitch_user_id: &str,
+    helix: Option<&tb_transport_twitch::HelixClient>,
+) -> Vec<CoStreamer> {
     let result = match helix {
-        Ok(helix) => helix
+        Some(helix) => helix
             .get_shared_chat_users(twitch_user_id)
             .await
             .map_err(|_| ()),
-        Err(()) => Err(()),
+        None => Err(()),
     };
     source_state(1, result.is_err());
     result
@@ -496,9 +489,8 @@ mod tests {
                 "captured_at":chrono::Utc::now().timestamp(), "party_size":2, "party_discord_ids":["43"], "voice_discord_ids":["44"]
             }))).expect(1).mount(&server).await;
         let url = format!("{}/internal/title-context", server.uri());
-        let context = fetch_central_title_context(&url, "test-token", 42)
-            .await
-            .unwrap();
+        let runtime = CoStreamRuntime::new(url.clone(), "test-token".into(), None);
+        let context = central_title_context(Some(42), Some(&runtime)).await;
         assert_eq!(context.party_discord_ids, ["43"]);
         assert_eq!(context.voice_discord_ids, ["44"]);
         assert!(fetch_central_title_context(&url, "", 42).await.is_err());
