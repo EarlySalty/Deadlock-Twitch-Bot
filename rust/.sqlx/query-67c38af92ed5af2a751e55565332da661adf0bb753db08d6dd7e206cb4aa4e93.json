@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO twitch_lurker_pitch_log\n                 (streamer_login, chatter_identity_key, chatter_login)\n             VALUES ($1, $2, $3)\n             ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "67c38af92ed5af2a751e55565332da661adf0bb753db08d6dd7e206cb4aa4e93"
+}

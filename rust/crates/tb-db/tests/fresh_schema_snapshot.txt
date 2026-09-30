@@ -539,6 +539,7 @@ streamer_plans|expires_at|text|YES|
 streamer_plans|first_login_at|text|YES|
 streamer_plans|greeting_reply_enabled|integer|NO|0
 streamer_plans|lurk_command_enabled|integer|NO|1
+streamer_plans|lurker_pitch_enabled|integer|NO|0
 streamer_plans|lurker_tax_enabled|integer|NO|0
 streamer_plans|manual_plan_expires_at|text|YES|
 streamer_plans|manual_plan_id|text|YES|
@@ -1374,6 +1375,10 @@ twitch_login_aliases|is_current|boolean|NO|false
 twitch_login_aliases|last_seen_at|timestamp with time zone|NO|now()
 twitch_login_aliases|login|text|NO|
 twitch_login_aliases|twitch_user_id|text|NO|
+twitch_lurker_pitch_log|chatter_identity_key|text|NO|
+twitch_lurker_pitch_log|chatter_login|text|NO|
+twitch_lurker_pitch_log|mentioned_at|timestamp with time zone|NO|now()
+twitch_lurker_pitch_log|twitch_user_id|text|NO|
 twitch_moderation_settings|channel_user_id|text|NO|
 twitch_moderation_settings|global_ban_enabled|boolean|NO|true
 twitch_moderation_settings|scam_pitch_enabled|boolean|NO|true

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, lurker_pitch_enabled) VALUES ($1, $2, $3, COALESCE($4, 0)) ON CONFLICT (twitch_user_id) DO UPDATE SET lurker_tax_enabled = EXCLUDED.lurker_tax_enabled, lurker_pitch_enabled = COALESCE($4, streamer_plans.lurker_pitch_enabled), twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "379834485c7a8efc6a92e40668a13f6d6179e25b77f5b18c0899d9f71bed4528"
+}

@@ -5,6 +5,11 @@
 //! der Chat-Command `!lurkersteuer_off` schreibt (Block 9) — daher ist die
 //! Dashboard-Steuerung automatisch synchron zum Chat.
 //!
+//! Dasselbe Endpoint-Set trägt konsolidiert `lurker_pitch_enabled` (Default 0):
+//! Betreiber-Schalter für den Lurker-Discord-Pitch im Community-Kanal
+//! (`.tasks/2026-08-30-lurker-pitch`). Feld im POST optional — fehlt es,
+//! bleibt der bisherige Wert.
+//!
 //! **B9-BUILD-lurkertax-toggle-dashboard:** Toggle für ALLE Partner, **default
 //! deaktiviert** (opt-in, bewusste Zustands-Entscheidung der Grillme). Python
 //! gated den Endpoint zusätzlich hinter dem `chat.lurker_tax`-Entitlement; die
@@ -42,10 +47,16 @@ pub struct LurkerTaxQuery {
 #[derive(Deserialize)]
 pub struct LurkerTaxUpdate {
     pub lurker_tax_enabled: bool,
+    /// Optional: Lurker-Discord-Pitch (Erstansprache stiller Lurker im
+    /// Community-Kanal). Fehlt das Feld, bleibt der bisherige Wert stehen —
+    /// bestehende Dashboard-Client-POSTs bleiben kompatibel.
+    #[serde(default)]
+    pub lurker_pitch_enabled: Option<bool>,
 }
 
 /// Aktuellen Flag-Wert lesen (Login- ODER User-ID-Match).
-const SELECT_SQL: &str = "SELECT COALESCE(lurker_tax_enabled, 0) AS lt \
+const SELECT_SQL: &str = "SELECT COALESCE(lurker_tax_enabled, 0) AS lt, \
+       COALESCE(lurker_pitch_enabled, 0) AS lp \
        FROM streamer_plans \
       WHERE ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1) \
          OR ($2 <> '' AND twitch_user_id = $2) \
@@ -176,8 +187,10 @@ pub async fn get_handler(
     {
         Ok(Some(row)) => {
             let lt: i32 = row.try_get("lt").unwrap_or(0);
+            let lp: i32 = row.try_get("lp").unwrap_or(0);
             Json(json!({
                 "lurker_tax_enabled": lt != 0,
+                "lurker_pitch_enabled": lp != 0,
                 "has_moderator_read_chatters": scope_ready,
                 "reward_present": reward_present,
             }))
@@ -186,6 +199,7 @@ pub async fn get_handler(
         // Kein Plan-Eintrag → Default-Aus (kein Fehler; Dashboard zeigt Toggle aus).
         Ok(None) => Json(json!({
             "lurker_tax_enabled": false,
+            "lurker_pitch_enabled": false,
             "has_moderator_read_chatters": scope_ready,
             "reward_present": reward_present,
         }))
@@ -217,28 +231,34 @@ pub async fn post_handler(
         Err(resp) => return resp,
     };
     let flag = i32::from(body.lurker_tax_enabled);
+    // None = Feld nicht geschickt → bestehender Wert bleibt (COALESCE im SQL).
+    let pitch_flag: Option<i32> = body.lurker_pitch_enabled.map(i32::from);
 
     let result = if !user_id.is_empty() {
         // Partner (kennt User-ID) → Upsert auf den PK.
         sqlx::query!(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled) \
-             VALUES ($1, $2, $3) \
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, lurker_pitch_enabled) \
+             VALUES ($1, $2, $3, COALESCE($4, 0)) \
              ON CONFLICT (twitch_user_id) \
              DO UPDATE SET lurker_tax_enabled = EXCLUDED.lurker_tax_enabled, \
+                           lurker_pitch_enabled = COALESCE($4, streamer_plans.lurker_pitch_enabled), \
                            twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
             user_id,
             login,
-            flag
+            flag,
+            pitch_flag
         )
         .execute(&pool)
         .await
     } else {
         // Admin/Localhost über Login (keine User-ID) → reines UPDATE.
         sqlx::query!(
-            "UPDATE streamer_plans SET lurker_tax_enabled = $2 \
+            "UPDATE streamer_plans SET lurker_tax_enabled = $2, \
+                lurker_pitch_enabled = COALESCE($3, lurker_pitch_enabled) \
               WHERE LOWER(COALESCE(twitch_login, '')) = $1",
             login,
-            flag
+            flag,
+            pitch_flag
         )
         .execute(&pool)
         .await
@@ -246,7 +266,7 @@ pub async fn post_handler(
 
     match result {
         Ok(res) if res.rows_affected() > 0 => {
-            Json(json!({ "ok": true, "lurker_tax_enabled": body.lurker_tax_enabled }))
+            Json(json!({ "ok": true, "lurker_tax_enabled": body.lurker_tax_enabled, "lurker_pitch_enabled": body.lurker_pitch_enabled }))
                 .into_response()
         }
         // Login-UPDATE ohne Treffer (Admin adressiert unbekannten Plan) → 404.
@@ -355,6 +375,7 @@ mod tests {
                 Query(LurkerTaxQuery::default()),
                 Json(LurkerTaxUpdate {
                     lurker_tax_enabled: true,
+                    lurker_pitch_enabled: None,
                 }),
             )
             .await,
@@ -383,12 +404,118 @@ mod tests {
                 Query(LurkerTaxQuery::default()),
                 Json(LurkerTaxUpdate {
                     lurker_tax_enabled: false,
+                    lurker_pitch_enabled: None,
                 }),
             )
             .await,
         )
         .await;
         assert_eq!(j["lurker_tax_enabled"], false);
+    }
+
+    // Pitch-Flag: Default aus, Roundtrip an/aus, und "Feld weglassen" lässt
+    // den Wert stehen (Kompatibilität mit bestehenden Dashboard-POSTs).
+    #[tokio::test]
+    async fn pitch_flag_default_aus_und_rundtrip() {
+        let Some(pool) = make_pool("t_lurkerpitch").await else {
+            return;
+        };
+
+        // Fresh: kein Plan-Eintrag → beide Flags default false.
+        let (_s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(j["lurker_pitch_enabled"], false);
+
+        // Partner schaltet Pitch AN.
+        let (s, j) = body_of(
+            post_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+                Json(LurkerTaxUpdate {
+                    lurker_tax_enabled: false,
+                    lurker_pitch_enabled: Some(true),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["lurker_pitch_enabled"], true);
+
+        // GET liest AN.
+        let (_s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(j["lurker_pitch_enabled"], true);
+
+        // POST ohne Pitch-Feld → Wert bleibt AN, Tax-Flag wechselt normal.
+        let (_s, j) = body_of(
+            post_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+                Json(LurkerTaxUpdate {
+                    lurker_tax_enabled: true,
+                    lurker_pitch_enabled: None,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(j["lurker_tax_enabled"], true);
+
+        let (_s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(j["lurker_tax_enabled"], true);
+        assert_eq!(j["lurker_pitch_enabled"], true);
+
+        // Pitch wieder AUS.
+        let (_s, j) = body_of(
+            post_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+                Json(LurkerTaxUpdate {
+                    lurker_tax_enabled: false,
+                    lurker_pitch_enabled: Some(false),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(j["lurker_pitch_enabled"], false);
+
+        let (_s, j) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(LurkerTaxQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(j["lurker_pitch_enabled"], false);
     }
 
     /// P2.109: Readiness-Feld spiegelt den `moderator:read:chatters`-Scope wider.

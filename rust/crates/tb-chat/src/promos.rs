@@ -377,6 +377,19 @@ pub fn lurker_tax_title_matches(title: &str) -> bool {
     let normalized = title.split_whitespace().collect::<Vec<_>>().join(" ");
     normalized.to_lowercase().starts_with("lurker steuer")
 }
+
+/// Erstansprache stiller Lurker im eigenen Kanal (Contract REQ-2). Geht nur bei
+/// `lurker_pitch_enabled = 1` live, bis zum Go des Nutzers bleibt der Schalter auf 0.
+const LURKER_PITCH_REPLY: &str = "@{chatter} du hängst ja gern hier rum :) falls du mal Mitspieler suchst: {invite} da findest du jederzeit passende Leute";
+
+/// Pitch-Text für genau eine Erstansprache (eine Person pro Send, du-Form).
+fn build_lurker_pitch_text(chatter_login: &str, invite: &str) -> String {
+    LURKER_PITCH_REPLY
+        .replace("{chatter}", chatter_login)
+        .replace("{invite}", invite)
+}
+/// MiniMax-Timeout in Sekunden (targeted_promo.py:37: _MINIMAX_TIMEOUT_SEC).
+const MINIMAX_TIMEOUT_SEC: u64 = 5;
 /// Keine Promo in den ersten N Minuten nach Go-Live (constants.py: PROMO_STREAM_START_DELAY_MIN).
 const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 
@@ -2502,10 +2515,35 @@ impl PromoEngine {
             return;
         }
 
-        if !self.lurker_tax_channel_gate(channel_id).await {
+        let settings = match sqlx::query_as::<_, (Option<i32>, Option<i32>)>(
+            "SELECT lurker_tax_enabled, lurker_pitch_enabled
+               FROM streamer_plans
+              WHERE twitch_user_id = $1
+              LIMIT 1",
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                warn!(%error, broadcaster_id = channel_id, "Lurker-Tax-Einstellungen konnten nicht geladen werden");
+                return;
+            }
+        };
+        let Some((tax_enabled, pitch_enabled)) = settings else {
+            return;
+        };
+        let tax_enabled = tax_enabled.unwrap_or(0) != 0;
+        let pitch_enabled = pitch_enabled.unwrap_or(0) != 0;
+        let bot_user_id = self.api.bot_user_id().await;
+        let is_own_channel = !bot_user_id.is_empty() && channel_id == bot_user_id;
+        if !tax_enabled && !(pitch_enabled && is_own_channel) {
             return;
         }
-
+        if !self.lurker_tax_is_paid_plan(channel_id).await {
+            return;
+        }
         // has_moderator_read_chatters: Scope muss im Auth-Store vorliegen (promos.py:1410).
         // Prüft twitch_raid_auth.scopes für diesen Streamer.
         let auth_scopes = sqlx::query_scalar::<_, Option<String>>(
@@ -2523,24 +2561,26 @@ impl PromoEngine {
             return;
         }
 
-        match self.reward_checker.as_ref() {
-            Some(checker) => {
-                if !checker.active_lurker_reward_exists(channel_id).await {
+        if tax_enabled {
+            match self.reward_checker.as_ref() {
+                Some(checker) => {
+                    if !checker.active_lurker_reward_exists(channel_id).await {
+                        return;
+                    }
+                }
+                None => {
+                    if self
+                        .reward_gate_warned
+                        .insert(login.to_string(), ())
+                        .is_none()
+                    {
+                        warn!(
+                            login,
+                            "Lurker-Tax: kein Reward-Checker verdrahtet, Erinnerung wird nicht gesendet"
+                        );
+                    }
                     return;
                 }
-            }
-            None => {
-                if self
-                    .reward_gate_warned
-                    .insert(login.to_string(), ())
-                    .is_none()
-                {
-                    warn!(
-                        login,
-                        "Lurker-Tax: kein Reward-Checker verdrahtet, Erinnerung wird nicht gesendet"
-                    );
-                }
-                return;
             }
         }
 
@@ -2564,7 +2604,8 @@ impl PromoEngine {
 
         // Bereits in dieser Session erwähnte Lurker rausfiltern, dann auf MAX kappen
         // (nächstrangige rücken nach). Set wird bei Session-Wechsel geräumt.
-        let selected: Vec<String> = {
+        // Einträge sind (chatter_login, chatter_identity_key).
+        let selected: Vec<(String, String)> = {
             let state_ref = self
                 .channel_states
                 .entry(login.to_string())
@@ -2575,7 +2616,7 @@ impl PromoEngine {
             }
             candidates
                 .iter()
-                .filter(|c| !state.lurker_mentions.1.contains(*c))
+                .filter(|c| !state.lurker_mentions.1.contains(&c.0))
                 .take(LURKER_TAX_MAX_MENTIONS)
                 .cloned()
                 .collect()
@@ -2584,7 +2625,54 @@ impl PromoEngine {
             return;
         }
 
-        let text = self.build_lurker_tax_text(&selected);
+        // Lurker-Discord-Pitch (Contract REQ-2): nur eigener Kanal, nur mit
+        // Betreiber-Flag, je Person genau einmal immer (twitch_lurker_pitch_log).
+        // Trifft jeder Kandidat schon im Log zu, fällt der Pfad unten auf die
+        // bestehende Channel-Points-Erinnerung zurück.
+        if pitch_enabled && is_own_channel {
+            let keys: Vec<String> = selected.iter().map(|(_, key)| key.clone()).collect();
+            let pitched = self.already_pitched_keys(channel_id, &keys).await;
+            if let Some((chatter_login, identity_key)) =
+                selected.iter().find(|(_, key)| !pitched.contains(key))
+            {
+                let (invite, _) = self.invite_resolver.resolve_invite(login).await;
+                let text = build_lurker_pitch_text(chatter_login, &invite);
+                let sent = self
+                    .api
+                    .send_announcement(channel_id, &text, "orange")
+                    .await
+                    .unwrap_or(false);
+                if !sent {
+                    return;
+                }
+                {
+                    let state_ref = self
+                        .channel_states
+                        .entry(login.to_string())
+                        .or_insert_with(|| Mutex::new(ChannelState::new()));
+                    let mut state = state_ref.lock().await;
+                    if state.lurker_mentions.0 == session_id {
+                        state.lurker_mentions.1.insert(chatter_login.clone());
+                    }
+                }
+                self.log_lurker_pitch(channel_id, chatter_login, identity_key)
+                    .await;
+                self.mark_promo_sent(login, now, "lurker_pitch", Utc::now().timestamp() as f64)
+                    .await;
+                info!(
+                    login,
+                    chatter = %chatter_login,
+                    "Lurker-Discord-Pitch gesendet (Erstansprache)"
+                );
+                return;
+            }
+        }
+
+        if !tax_enabled {
+            return;
+        }
+        let logins: Vec<String> = selected.iter().map(|(l, _)| l.clone()).collect();
+        let text = self.build_lurker_tax_text(&logins);
         // Nur bei erfolgreichem Send merken + Cooldown belegen (Python: if ok).
         let sent = self
             .api
@@ -2601,7 +2689,10 @@ impl PromoEngine {
                 .or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             if state.lurker_mentions.0 == session_id {
-                state.lurker_mentions.1.extend(selected.iter().cloned());
+                state
+                    .lurker_mentions
+                    .1
+                    .extend(selected.iter().map(|(l, _)| l.clone()));
             }
             if state.lurker_reminded_at.0 != session_id {
                 state.lurker_reminded_at = (session_id, HashMap::new());
@@ -2650,7 +2741,8 @@ impl PromoEngine {
     }
 
     /// Lurker-Tax-Kandidaten aus DB (promos.py:408: `_get_lurker_tax_candidates`).
-    async fn get_lurker_tax_candidates(&self, broadcaster_id: &str) -> Vec<String> {
+    /// Liefert Login und stabilen Chatter-Key für das Nie-wieder-Pitch-Log.
+    async fn get_lurker_tax_candidates(&self, broadcaster_id: &str) -> Vec<(String, String)> {
         if broadcaster_id.trim().is_empty() {
             return Vec::new();
         }
@@ -2701,7 +2793,8 @@ impl PromoEngine {
                     AND COALESCE(sc.messages, 0) = 0
                     AND sc.seen_via_chatters_api = TRUE
                )
-               SELECT lc.chatter_login
+               SELECT lc.chatter_login,
+                      lc.chatter_identity_key
                  FROM historical_lurks hl
                  JOIN live_candidates lc ON lc.chatter_identity_key = hl.chatter_identity_key
                 WHERE hl.prior_lurk_sessions >= $2
@@ -2713,7 +2806,7 @@ impl PromoEngine {
             historical_bot_clause = historical_bot_clause,
             current_bot_clause = current_bot_clause,
         );
-        let mut query = sqlx::query_as::<_, (String,)>(sqlx::AssertSqlSafe(sql))
+        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
             .bind(broadcaster_id)
             .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
             .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
@@ -2722,7 +2815,7 @@ impl PromoEngine {
         for bot in crate::mention_scoring::WHITELISTED_BOTS {
             query = query.bind(bot.to_lowercase());
         }
-        let rows: Vec<(String,)> = match query.fetch_all(&self.pool).await {
+        let rows: Vec<(String, String)> = match query.fetch_all(&self.pool).await {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(
@@ -2734,7 +2827,7 @@ impl PromoEngine {
             }
         };
 
-        let mut logins: Vec<String> = rows.into_iter().map(|(l,)| l).collect();
+        let mut candidates = rows;
         let session_id: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
             "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = $1",
         )
@@ -2756,10 +2849,53 @@ impl PromoEngine {
             .unwrap_or_default();
             if !redeemed.is_empty() {
                 let redeemed: HashSet<String> = redeemed.into_iter().collect();
-                logins.retain(|l| !redeemed.contains(&l.to_lowercase()));
+                candidates.retain(|(login, _)| !redeemed.contains(&login.to_lowercase()));
             }
         }
-        logins
+        candidates
+    }
+
+    /// Bereits gepitchte Identity-Keys für diesen Kanal aus dem Nie-wieder-Log
+    /// (Contract REQ-2: je Person genau einmal immer).
+    async fn already_pitched_keys(&self, broadcaster_id: &str, keys: &[String]) -> HashSet<String> {
+        if keys.is_empty() {
+            return HashSet::new();
+        }
+        sqlx::query_scalar::<_, String>(
+            "SELECT chatter_identity_key FROM twitch_lurker_pitch_log
+              WHERE twitch_user_id = $1 AND chatter_identity_key = ANY($2)",
+        )
+        .bind(broadcaster_id)
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+    }
+
+    /// Pitch dauerhaft vermerken. Konflikt (gleicher Key schon geloggt) ist
+    /// kein Fehler: ON CONFLICT DO NOTHING.
+    async fn log_lurker_pitch(
+        &self,
+        broadcaster_id: &str,
+        chatter_login: &str,
+        identity_key: &str,
+    ) {
+        if let Err(error) = sqlx::query(
+            "INSERT INTO twitch_lurker_pitch_log
+                 (twitch_user_id, chatter_identity_key, chatter_login)
+             VALUES ($1, $2, $3)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(broadcaster_id)
+        .bind(identity_key)
+        .bind(chatter_login)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::warn!(%error, broadcaster_id, "Lurker-Pitch-Log-Eintrag fehlgeschlagen");
+        }
     }
 
     fn build_lurker_tax_text(&self, candidates: &[String]) -> String {
@@ -3812,6 +3948,22 @@ mod tests {
             lurker_reminder_ok(&text),
             "Erinnerung unvollständig: {text}"
         );
+    }
+
+    #[test]
+    fn lurker_pitch_text_format() {
+        let text = build_lurker_pitch_text("alice", "https://discord.gg/test");
+        assert!(text.contains("@alice"), "Mention fehlt");
+        assert!(
+            text.contains("https://discord.gg/test"),
+            "Invite-URL fehlt"
+        );
+        assert!(text.contains("Mitspieler"), "Nutzen fehlt");
+        assert!(
+            !text.contains("{chatter}") && !text.contains("{invite}"),
+            "Platzhalter nicht ersetzt"
+        );
+        assert!(!hat_gedankenstrich(text.as_str()), "Gedankenstrich in Pitch-Text");
     }
 
     #[tokio::test]
@@ -6973,7 +7125,12 @@ mod db_tests {
             !candidates.is_empty(),
             "Lurker-Kandidat sollte gefunden werden: {candidates:?}"
         );
-        assert!(candidates.contains(&"lurker1".to_string()));
+        assert!(
+            candidates
+                .iter()
+                .any(|(login, _)| login == "lurker1"),
+            "lurker1 fehlt: {candidates:?}"
+        );
     }
 
     #[tokio::test]
@@ -7038,7 +7195,10 @@ mod db_tests {
         .unwrap();
 
         let candidates = engine.get_lurker_tax_candidates("u-rename").await;
-        assert_eq!(candidates, vec!["newlogin".to_string()]);
+        assert_eq!(
+            candidates,
+            vec![("newlogin".to_string(), "id:same-id-1".to_string())]
+        );
     }
 
     async fn create_channel_points_table(pool: &PgPool) {

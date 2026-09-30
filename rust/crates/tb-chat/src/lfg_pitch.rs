@@ -350,6 +350,7 @@ pub enum SilentReason {
     RegisterFehlt,
     RegisterReject,
     KillSwitchOff,
+    ForeignChannel,
 }
 
 impl SilentReason {
@@ -371,6 +372,7 @@ impl SilentReason {
             Self::RegisterFehlt => "register_fehlt",
             Self::RegisterReject => "register_reject",
             Self::KillSwitchOff => "kill_switch_off",
+            Self::ForeignChannel => "foreign_channel",
         }
     }
 }
@@ -496,6 +498,10 @@ pub struct LfgPitchResponder {
     judge: Arc<dyn LfgJudge>,
     clock: Arc<dyn LfgClock>,
     enabled: bool,
+    /// Eigener Kanal der Community (Broadcaster-ID == Bot-Account-ID). Nur dort
+    /// pitcht der Bot; Fremdkanäle bleiben ohne Community-Invite (marketing
+    /// nur mit Gegenleistung, Nutzer-Entscheid 2026-08-30).
+    own_channel_broadcaster_id: String,
     promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
     recent_chat: Option<Arc<dyn RecentChatPort>>,
     zuschauer_register: Option<Arc<dyn LfgRegisterGate>>,
@@ -511,6 +517,7 @@ impl LfgPitchResponder {
         invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
         judge: Arc<dyn LfgJudge>,
         enabled: bool,
+        own_channel_broadcaster_id: String,
         promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
         recent_chat: Option<Arc<dyn RecentChatPort>>,
         invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
@@ -521,6 +528,7 @@ impl LfgPitchResponder {
             judge,
             Arc::new(SystemLfgClock),
             enabled,
+            own_channel_broadcaster_id,
             promo_block_check,
             recent_chat,
             invite_reply_notifier,
@@ -534,6 +542,7 @@ impl LfgPitchResponder {
         judge: Arc<dyn LfgJudge>,
         clock: Arc<dyn LfgClock>,
         enabled: bool,
+        own_channel_broadcaster_id: String,
         promo_block_check: Option<Arc<dyn PromoBlockCheck>>,
         recent_chat: Option<Arc<dyn RecentChatPort>>,
         invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
@@ -544,6 +553,7 @@ impl LfgPitchResponder {
             judge,
             clock,
             enabled,
+            own_channel_broadcaster_id,
             promo_block_check,
             recent_chat,
             zuschauer_register: None,
@@ -592,6 +602,14 @@ impl LfgPitchResponder {
         if !self.enabled {
             return LfgPitchDecision::silent(
                 SilentReason::KillSwitchOff,
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+            );
+        }
+        if event.broadcaster_user_id != self.own_channel_broadcaster_id {
+            return LfgPitchDecision::silent(
+                SilentReason::ForeignChannel,
                 channel_login,
                 chatter_login,
                 raw.to_string(),
@@ -1276,6 +1294,7 @@ mod tests {
             judge,
             clock_trait,
             enabled,
+            "broadcaster-id".to_string(),
             Some(Arc::new(FakePromoBlock {
                 blocked: promo_blocked,
             })),
@@ -1397,6 +1416,27 @@ mod tests {
         assert_eq!(
             decide_action(&responder, "viewer", "lfg").await,
             LfgPitchAction::Silent(SilentReason::KillSwitchOff)
+        );
+    }
+
+    #[tokio::test]
+    async fn decide_stumm_in_fremdkanal() {
+        let (responder, _, _, _, _) = responder(
+            true,
+            Some("https://discord.gg/test"),
+            false,
+            FakeJudge::new(vec![]),
+        );
+
+        // Gleiches LFG-Signal, aber der Kanal gehoert nicht dem Bot-Konto:
+        // kein Community-Invite in Fremdkanaelen (marketing nur mit Gegenleistung).
+        let mut fremd = event("viewer", "such mal mitspieler");
+        fremd.broadcaster_user_id = "fremd-kanal-id".to_string();
+        let decision = responder.decide(&fremd, "fremdkanal").await;
+
+        assert_eq!(
+            decision.action,
+            LfgPitchAction::Silent(SilentReason::ForeignChannel)
         );
     }
 

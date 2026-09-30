@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.lurker_tax_enabled AS \"lurker_tax_enabled?\",\n                    p.lurker_pitch_enabled AS \"lurker_pitch_enabled?\",\n                    COALESCE(p.twitch_user_id, '') AS \"twitch_user_id!\"\n               FROM streamer_plans p\n              WHERE LOWER(COALESCE(p.twitch_login,'')) = $1\n              LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lurker_tax_enabled?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "lurker_pitch_enabled?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "twitch_user_id!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "947e65b0180689486507f14bbada71c46bfc541bb9b9906a58835ca22da6b3c0"
+}
