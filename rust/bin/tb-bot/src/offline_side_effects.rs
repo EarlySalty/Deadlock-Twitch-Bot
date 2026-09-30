@@ -94,8 +94,9 @@ mod tests {
     use std::str::FromStr;
 
     async fn setup(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
@@ -200,7 +201,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(still_enabled, "gelowercaster Login trifft die exakte Zeile nicht");
+        assert!(
+            still_enabled,
+            "gelowercaster Login trifft die exakte Zeile nicht"
+        );
         // Sweep wurde dennoch (gelowercased) geplant.
         let sweep_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM twitch_global_ban_sweep_due WHERE broadcaster_login='mixedcase')",

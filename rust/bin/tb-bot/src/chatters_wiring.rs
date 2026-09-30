@@ -208,7 +208,14 @@ pub fn spawn_chatters_schedulers(
     fetcher: Option<Arc<dyn ChattersFetcher>>,
     provisioner: Option<Arc<dyn ModeratorProvisioner>>,
 ) {
-    spawn_collect_loop(supervisor, pool.clone(), auth, streamer_tokens, fetcher, provisioner);
+    spawn_collect_loop(
+        supervisor,
+        pool.clone(),
+        auth,
+        streamer_tokens,
+        fetcher,
+        provisioner,
+    );
     spawn_retention_loop(supervisor, pool);
 }
 

@@ -19,8 +19,7 @@ struct ScamEnforceImpl {
 impl ScamEnforcePort for ScamEnforceImpl {
     async fn enforce(&self, verdict_id: i64) -> serde_json::Value {
         let outcome = enforce_verdict(&self.pool, self.api.as_ref(), verdict_id).await;
-        serde_json::to_value(outcome)
-            .unwrap_or_else(|_| serde_json::json!({"status": "error"}))
+        serde_json::to_value(outcome).unwrap_or_else(|_| serde_json::json!({"status": "error"}))
     }
 }
 

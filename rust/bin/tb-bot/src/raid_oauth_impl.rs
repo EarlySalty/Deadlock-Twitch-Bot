@@ -1364,8 +1364,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             tb_raid::scope_profiles::normalize_scope_profile(&state_info.scope_profile);
         let title_only_flow =
             normalized_scope_profile == tb_raid::scope_profiles::TITLE_SCOPE_PROFILE;
-        let uplink_flow =
-            normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
+        let uplink_flow = normalized_scope_profile == tb_raid::scope_profiles::UPLINK_SCOPE_PROFILE;
         let activates_raid_features = !title_only_flow && !uplink_flow;
         let new_auth = tb_raid::auth_writer::NewAuth {
             twitch_user_id: twitch_user_id.clone(),
