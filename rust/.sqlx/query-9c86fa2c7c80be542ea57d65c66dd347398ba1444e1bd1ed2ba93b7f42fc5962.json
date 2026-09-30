@@ -6,27 +6,57 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "internal_home_changelog",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "entry_date",
-        "type_info": "Date"
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "internal_home_changelog",
+            "name": "entry_date"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "title",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "internal_home_changelog",
+            "name": "title"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "content",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "internal_home_changelog",
+            "name": "content"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "created_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "internal_home_changelog",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -6,47 +6,96 @@
       {
         "ordinal": 0,
         "name": "id?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "twitch_user_id?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "twitch_user_id"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "twitch_login?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "twitch_login"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "added_by?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "added_by"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "partnered_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "partnered_at"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "admin_archived_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "admin_archived_at"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "departnered_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "departnered_at"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "status?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "status"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "technical_pause_reason?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "technical_pause_reason"
+          }
+        }
       }
     ],
     "parameters": {

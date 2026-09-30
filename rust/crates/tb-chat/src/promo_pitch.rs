@@ -962,7 +962,7 @@ mod tests {
         let endpoint = tb_llm::LlmEndpoint {
             provider: "fireworks",
             base_url: server.uri(),
-            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: tb_llm::selection::configured_fireworks_model().to_string(),
             api_key: Some("k".to_string()),
         };
         let input = PitchJudgeInput {

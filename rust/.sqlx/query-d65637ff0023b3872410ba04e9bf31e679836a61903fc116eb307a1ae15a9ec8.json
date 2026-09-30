@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "status",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "status"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "admin_archived_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "admin_archived_at"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "departnered_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partners",
+            "name": "departnered_at"
+          }
+        }
       }
     ],
     "parameters": {

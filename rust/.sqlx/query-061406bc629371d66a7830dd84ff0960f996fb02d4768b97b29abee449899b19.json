@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "trigger_text",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_promo_pitch_log",
+            "name": "trigger_text"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "generated_text",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_promo_pitch_log",
+            "name": "generated_text"
+          }
+        }
       }
     ],
     "parameters": {

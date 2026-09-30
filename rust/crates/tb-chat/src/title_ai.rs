@@ -1241,7 +1241,7 @@ mod tests {
         std::env::set_var("TB_LLM_PROVIDER_TITLE_AI", "llm");
         let endpoint = tb_llm::endpoint_for("title_ai");
         assert_eq!(endpoint.provider, "fireworks");
-        assert_eq!(endpoint.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(endpoint.model, tb_llm::selection::configured_fireworks_model());
         clear_provider_env();
     }
 

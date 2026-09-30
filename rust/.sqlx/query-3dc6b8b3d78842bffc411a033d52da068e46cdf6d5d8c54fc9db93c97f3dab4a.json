@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "session_id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_session_viewers",
+            "name": "session_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "minutes_from_start",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_session_viewers",
+            "name": "minutes_from_start"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "viewer_count!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_session_viewers",
+            "name": "viewer_count"
+          }
+        }
       }
     ],
     "parameters": {

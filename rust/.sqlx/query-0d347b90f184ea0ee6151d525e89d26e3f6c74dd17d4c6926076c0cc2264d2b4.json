@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "opt_out!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_tip_settings",
+            "name": "opt_out"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "last_tip_sent_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_tip_settings",
+            "name": "last_tip_sent_at"
+          }
+        }
       }
     ],
     "parameters": {

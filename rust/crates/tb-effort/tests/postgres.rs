@@ -47,7 +47,13 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
-    tb_db::run_migrations(&pool).await.unwrap();
+    {
+        // Rollen gelten für den gesamten Testcluster, nicht pro Datenbank.
+        // Nur das Anlegen der Fixtures serialisieren; die Tests selbst bleiben parallel.
+        static MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _guard = MIGRATION_LOCK.lock().await;
+        tb_db::run_migrations(&pool).await.unwrap();
+    }
     sqlx::query("UPDATE category_collector_config SET poll_seconds=300 WHERE singleton")
         .execute(&pool)
         .await

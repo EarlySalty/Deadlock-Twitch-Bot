@@ -6,22 +6,36 @@
       {
         "ordinal": 0,
         "name": "override_json",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "streamer_layout_json",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "cam_enabled?",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_layout",
+            "name": "cam_enabled"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "mode?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_layout",
+            "name": "mode"
+          }
+        }
       }
     ],
     "parameters": {

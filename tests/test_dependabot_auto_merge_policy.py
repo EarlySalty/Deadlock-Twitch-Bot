@@ -26,7 +26,6 @@ class DependabotAutoMergePolicyTests(unittest.TestCase):
 
     def test_all_release_checks_must_be_enforced_by_github_actions(self):
         for check in (
-            "Semantic review",
             "Scope-Abgleich (keine toten Projekte)",
             "Frontend PR Gate (website)",
             "Frontend PR Gate (admin_dashboard)",

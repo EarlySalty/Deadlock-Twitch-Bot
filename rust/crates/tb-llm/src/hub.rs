@@ -311,7 +311,9 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
     };
     if let Some(endpoint) = chain.iter().find(|endpoint| {
         let standard = endpoint.provider == "fireworks"
-            && endpoint.model == crate::selection::FIREWORKS_DEFAULT_MODEL;
+            && crate::model_resolver::allowed_fireworks_model(&endpoint.model)
+            && (endpoint.base_url.trim_end_matches('/') == crate::selection::FIREWORKS_BASE_URL
+                || is_loopback_endpoint(&endpoint.base_url));
         let title_glm = use_case == "title_ai"
             && endpoint.provider == "zai"
             && endpoint.model == "glm-5.3-flash";
@@ -392,7 +394,7 @@ async fn complete_chain(
     let start = Instant::now();
 
     let mut last: Option<LlmFailure> = None;
-    for endpoint in &chain {
+    for mut endpoint in chain {
         let verbraucht = start.elapsed();
         if verbraucht >= gesamtfrist {
             tracing::warn!(
@@ -414,7 +416,7 @@ async fn complete_chain(
             break;
         }
         let frist = einzelfrist.min(gesamtfrist - verbraucht);
-        match call_endpoint(endpoint, &request, purpose.as_deref(), frist).await {
+        match call_selected_endpoint(&mut endpoint, &request, purpose.as_deref(), frist).await {
             Ok(response) => return Ok(response),
             Err(error) => {
                 // Die Warnung traegt Klasse, Status und Body-Laenge; der
@@ -449,8 +451,88 @@ async fn complete_chain(
     Err(last.expect("Kette ist nicht leer, also gab es mindestens einen Versuch"))
 }
 
+fn is_loopback_endpoint(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url).ok().is_some_and(|url| {
+        url.username().is_empty()
+            && url.password().is_none()
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+    })
+}
+
+async fn call_selected_endpoint(
+    endpoint: &mut LlmEndpoint,
+    request: &Request,
+    purpose: Option<&str>,
+    frist: Duration,
+) -> Result<Response, LlmError> {
+    // Lokale Mock-/Proxy-Pfade behalten ihre explizite Adresse. Sie dürfen
+    // niemals durch einen Test plötzlich echte Anbieteraufrufe verursachen.
+    if endpoint.provider != "fireworks" || is_loopback_endpoint(&endpoint.base_url) {
+        return call_endpoint(endpoint, request, purpose, frist).await;
+    }
+    // Vor der Auflösung ist die YAML-Mindestversion noch kein tatsächlich
+    // aufgerufenes Modell. Fehler an dieser Stelle tragen keine Modell-ID.
+    endpoint.model.clear();
+    let resolver = crate::model_resolver::global()?;
+    let operation = async {
+        // An inference request must not wait for optional ledger/cache I/O.
+        // The supervised refresh loop owns persistence and cache hydration.
+        call_with_resolver(resolver, endpoint, request, purpose, frist, None).await
+    };
+    tokio::time::timeout(frist, operation).await.map_err(|_| {
+        LlmError::Timeout("Gesamtfrist einschließlich Modellauswahl erschöpft".into())
+    })?
+}
+
+/// Dieselbe Auflösungs-/404-Strecke für Produktion und lokale Vertragstests.
+/// Die äußere Gesamtfrist umfasst Katalog, Probe, eigentlichen Call und Retry.
+pub(crate) async fn call_with_resolver(
+    resolver: &crate::model_resolver::ModelResolver,
+    endpoint: &mut LlmEndpoint,
+    request: &Request,
+    purpose: Option<&str>,
+    frist: Duration,
+    pool: Option<&sqlx::PgPool>,
+) -> Result<Response, LlmError> {
+    let key = endpoint
+        .api_key
+        .clone()
+        .ok_or_else(|| LlmError::Unavailable("Fireworks-Schlüssel fehlt".into()))?;
+    let started = Instant::now();
+    endpoint.model = resolver.resolve(&key, None, pool).await?;
+    let result = call_endpoint(
+        endpoint,
+        request,
+        purpose,
+        frist.saturating_sub(started.elapsed()),
+    )
+    .await;
+    if !matches!(
+        &result,
+        Err(LlmError::Http {
+            status: 404 | 410,
+            ..
+        })
+    ) {
+        return result;
+    }
+    let rejected = endpoint.model.clone();
+    tracing::warn!(model = %rejected, "Fireworks-Modell nicht verfügbar; einmalige Neuauflösung");
+    endpoint.model = resolver.resolve(&key, Some(&rejected), pool).await?;
+    if endpoint.model == rejected {
+        return result;
+    }
+    call_endpoint(
+        endpoint,
+        request,
+        purpose,
+        frist.saturating_sub(started.elapsed()),
+    )
+    .await
+}
+
 /// Ein Anbieter, inklusive Wiederholung bei 429.
-async fn call_endpoint(
+pub(crate) async fn call_endpoint(
     endpoint: &LlmEndpoint,
     request: &Request,
     purpose: Option<&str>,
@@ -756,7 +838,7 @@ mod tests {
         LlmEndpoint {
             provider: "fireworks",
             base_url: server.uri(),
-            model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: crate::selection::configured_fireworks_model().to_string(),
             api_key: Some("k".to_string()),
         }
     }
@@ -794,7 +876,7 @@ mod tests {
         let endpoint = LlmEndpoint {
             provider: "fireworks",
             base_url: "http://x".to_string(),
-            model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: crate::selection::configured_fireworks_model().to_string(),
             api_key: Some("k".to_string()),
         };
         let request = Request::simple("SYSTEM", sentinel).json_object();
@@ -1022,7 +1104,7 @@ mod tests {
             Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
                 provider: "fireworks",
                 base_url: "http://127.0.0.1:1".to_string(),
-                model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+                model: crate::selection::configured_fireworks_model().to_string(),
                 api_key: None,
             }),
         )
@@ -1082,7 +1164,7 @@ mod tests {
         assert_eq!(failure.provider, "fireworks");
         assert_eq!(
             failure.model,
-            crate::selection::FIREWORKS_DEFAULT_MODEL
+            crate::selection::configured_fireworks_model()
         );
         assert_eq!(
             failure.error,

@@ -6,42 +6,90 @@
       {
         "ordinal": 0,
         "name": "work_id!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "work_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "work_type!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "work_type"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "message_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "message_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "payload_json!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "payload_json"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "queued_at!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "queued_at"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "next_attempt_at!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "next_attempt_at"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "attempt_count!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "attempt_count"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "last_error",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_eventsub_processing_inbox",
+            "name": "last_error"
+          }
+        }
       }
     ],
     "parameters": {

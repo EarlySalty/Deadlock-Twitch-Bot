@@ -96,7 +96,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         assert_eq!(row.1.as_deref(), Some("engagement"));
         assert_eq!(
             row.2.as_deref(),
-            Some(tb_llm::selection::FIREWORKS_DEFAULT_MODEL)
+            Some(tb_llm::selection::configured_fireworks_model())
         );
     }
 
@@ -120,7 +120,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         assert_eq!(row.1.as_deref(), Some("chat-deep-analysis"));
         assert_eq!(
             row.2.as_deref(),
-            Some(tb_llm::selection::FIREWORKS_DEFAULT_MODEL)
+            Some(tb_llm::selection::configured_fireworks_model())
         );
     }
 

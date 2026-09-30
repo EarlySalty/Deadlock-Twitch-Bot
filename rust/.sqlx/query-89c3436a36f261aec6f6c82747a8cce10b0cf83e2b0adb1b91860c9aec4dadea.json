@@ -6,42 +6,85 @@
       {
         "ordinal": 0,
         "name": "decision",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "decision"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "response_text",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "response_text"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "model",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "model"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "prompt_tokens",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "prompt_tokens"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "completion_tokens",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "completion_tokens"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "cost_usd_estimate?",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "latency_ms",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "latency_ms"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "ts",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_log",
+            "name": "ts"
+          }
+        }
       }
     ],
     "parameters": {

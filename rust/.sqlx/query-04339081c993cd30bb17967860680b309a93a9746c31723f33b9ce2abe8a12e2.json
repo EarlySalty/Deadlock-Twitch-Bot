@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "streamer_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "streamer_login"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "started_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "started_at"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "ended_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "ended_at"
+          }
+        }
       }
     ],
     "parameters": {

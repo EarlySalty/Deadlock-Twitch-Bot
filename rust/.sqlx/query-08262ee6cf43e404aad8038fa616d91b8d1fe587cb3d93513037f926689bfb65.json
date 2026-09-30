@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "enrichment_enabled",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_category",
+            "name": "enrichment_enabled"
+          }
+        }
       }
     ],
     "parameters": {

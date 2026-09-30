@@ -6,37 +6,79 @@
       {
         "ordinal": 0,
         "name": "id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "question!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "question"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "answer!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "answer"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "grounded!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "grounded"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "flagged_injection!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "flagged_injection"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "peer",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "peer"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "created_at!",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_self_explainer_log",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {

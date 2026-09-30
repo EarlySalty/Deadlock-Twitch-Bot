@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "my_message!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_reaction_samples",
+            "name": "my_message"
+          }
+        }
       }
     ],
     "parameters": {

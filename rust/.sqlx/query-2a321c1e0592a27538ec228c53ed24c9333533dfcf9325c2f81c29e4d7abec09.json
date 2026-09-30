@@ -6,22 +6,46 @@
       {
         "ordinal": 0,
         "name": "chatter_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tb_chat_autoban_log",
+            "name": "chatter_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "chatter_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tb_chat_autoban_log",
+            "name": "chatter_login"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "content",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tb_chat_autoban_log",
+            "name": "content"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "banned_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "tb_chat_autoban_log",
+            "name": "banned_at"
+          }
+        }
       }
     ],
     "parameters": {

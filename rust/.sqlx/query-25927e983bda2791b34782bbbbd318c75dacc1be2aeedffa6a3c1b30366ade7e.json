@@ -6,32 +6,53 @@
       {
         "ordinal": 0,
         "name": "twitch_user_id?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "twitch_login?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "manual_plan_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "streamer_plans",
+            "name": "manual_plan_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "manual_plan_expires_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "streamer_plans",
+            "name": "manual_plan_expires_at"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "manual_plan_notes?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "manual_plan_updated_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "streamer_plans",
+            "name": "manual_plan_updated_at"
+          }
+        }
       }
     ],
     "parameters": {

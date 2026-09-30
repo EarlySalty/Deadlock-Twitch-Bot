@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "raid_enabled?",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_auth",
+            "name": "raid_enabled"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "needs_reauth?",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_auth",
+            "name": "needs_reauth"
+          }
+        }
       }
     ],
     "parameters": {
