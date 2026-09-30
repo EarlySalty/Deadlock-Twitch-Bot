@@ -201,14 +201,18 @@ impl RankLookup {
         let revision = link.as_ref().map(|l| l.revision);
         let text = match link.as_ref().filter(|l| l.steam_id64.is_some()) {
             Some(link) => {
-                let Some(id) = link.account_id() else { return UNAVAILABLE.into(); };
+                let Some(id) = link.account_id() else {
+                    return UNAVAILABLE.into();
+                };
                 self.account_reply(id, &target.name, false).await
             }
             None => self.legacy_reply(pool, target, explicit).await,
         };
         // Recheck all sources, including legacy/name fallback, after network I/O.
         match crate::player_links::load(pool, &target.user_id).await {
-            Ok(Some(current)) if !current.lookup_enabled => crate::player_links::DISCONNECTED_REPLY.into(),
+            Ok(Some(current)) if !current.lookup_enabled => {
+                crate::player_links::DISCONNECTED_REPLY.into()
+            }
             Ok(current) if current.as_ref().map(|l| l.revision) == revision => text,
             Ok(_) => "Die Steam-Zuordnung wurde geändert. Bitte den Rang erneut abfragen.".into(),
             Err(_) => UNAVAILABLE.into(),

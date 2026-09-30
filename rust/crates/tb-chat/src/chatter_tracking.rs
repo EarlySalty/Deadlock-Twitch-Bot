@@ -572,7 +572,6 @@ mod tests {
         assert!("  !invite".trim_start().starts_with('!'));
         assert!(!"hallo !invite".trim_start().starts_with('!'));
     }
-
 }
 
 // ---------------------------------------------------------------------------

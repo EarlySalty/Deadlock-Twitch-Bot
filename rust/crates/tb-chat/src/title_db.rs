@@ -436,7 +436,11 @@ mod tests {
     }
 
     async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-        let admin = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
         sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await

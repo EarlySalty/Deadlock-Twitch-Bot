@@ -25,7 +25,6 @@ fn render(template: &str, substitutions: &[(&str, &str)]) -> String {
     apply_substitutions(trimmed, substitutions)
 }
 
-
 /// Rendert die Terms-Seite.
 pub fn render_terms() -> String {
     render(TERMS_HTML, &[])

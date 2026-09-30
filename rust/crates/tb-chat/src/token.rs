@@ -22,7 +22,6 @@
 //! hier (`spawn_refresh_loop`). Bei 401 auf einem Helix-Call erzwingen die
 //! Aufrufer `force_refresh()` und wiederholen einmal (2-Attempt-Muster).
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,10 +63,19 @@ fn infer_mock_users_url(validate_url: &str) -> String {
 ///
 /// `access_token` darf `None`/veraltet sein (Infisical-Snapshot altert);
 /// der `refresh_token` trägt den Boot.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct SeedTokens {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
+}
+
+impl std::fmt::Debug for SeedTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeedTokens")
+            .field("access_present", &self.access_token.is_some())
+            .field("refresh_present", &self.refresh_token.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Resolviert die Bot-Seed-Tokens aus dem Provider-Chain — Port von
@@ -75,14 +83,13 @@ pub struct SeedTokens {
 ///
 /// Reihenfolge (Python-Parität):
 /// 1. `TWITCH_BOT_TOKEN` (Env) — wenn nach Trim nicht leer, ist das der Access-Seed.
-/// 2. sonst `TWITCH_BOT_TOKEN_FILE` (Env) — Pfad wird gelesen, Inhalt getrimmt;
-///    nicht-leer → Access-Seed. Leere/unlesbare Datei → still ignoriert (kein Leak).
+/// 2. Kein Datei-Fallback. Der Laufzeitpfad lädt den verschlüsselten DB-Datensatz.
 ///
 /// Der `refresh_token` kommt in beiden Fällen aus `TWITCH_BOT_REFRESH_TOKEN`
 /// (getrimmt, leer → `None`).
 ///
 /// Der keyring-Pfad (`bot/secret_store.py`) ist Windows-only und entfällt im
-/// Linux-Cutover — die Tokens leben hier ausschließlich in Env/Infisical/Datei.
+/// Linux-Cutover. Env liefert nur den einmaligen Bootstrap für den DB-Cutover.
 pub fn load_seed_tokens() -> SeedTokens {
     resolve_seed_tokens(
         std::env::var("TWITCH_BOT_TOKEN").ok().as_deref(),
@@ -109,41 +116,15 @@ fn resolve_seed_tokens(
         };
     }
 
-    let access_token = token_file
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(read_token_file)
-        .map(|t| strip_oauth_prefix(&t))
-        .filter(|s| !s.is_empty());
-
+    if token_file.is_some_and(|path| !path.trim().is_empty()) {
+        tracing::warn!("TWITCH_BOT_TOKEN_FILE wird nicht gelesen; Zugang in den verschlüsselten DB-Speicher migrieren.");
+    }
     SeedTokens {
-        access_token,
+        access_token: None,
         refresh_token,
     }
 }
 
-/// Liest die Token-Datei und trimmt; leer/unlesbar → `None` (mit Warn-Log
-/// ohne Inhalt). Python loggt hier ebenfalls nur den Fehlertyp, nie den Wert.
-fn read_token_file(path: &str) -> Option<String> {
-    match std::fs::read_to_string(Path::new(path)) {
-        Ok(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                tracing::warn!("Konfigurierte Bot-Auth-Datei ist leer.");
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                kind = %e.kind(),
-                "Konfigurierte Bot-Auth-Datei konnte nicht gelesen werden."
-            );
-            None
-        }
-    }
-}
 /// Python: Refresh-Schwelle 1 h vor Ablauf.
 const REFRESH_THRESHOLD: chrono::Duration = chrono::Duration::hours(1);
 /// Python: Loop-Intervall 30 min.
@@ -175,7 +156,7 @@ struct HelixUser {
     login: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RefreshResponse {
     access_token: String,
     #[serde(default)]
@@ -184,7 +165,7 @@ struct RefreshResponse {
     expires_in: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct TokenState {
     access_token: String,
     refresh_token: String,
@@ -193,18 +174,27 @@ struct TokenState {
 }
 
 /// Fehler des Token-Managers.
-#[derive(Debug)]
 pub enum TokenError {
     Http(reqwest::Error),
     Rejected { status: u16, body: String },
     NotInitialized,
 }
 
+impl std::fmt::Debug for TokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Providerantworten und Request-URLs sind keine sicheren Logdaten.
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
 impl std::fmt::Display for TokenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Http(e) => write!(f, "token http error: {e}"),
-            Self::Rejected { status, body } => write!(f, "token rejected: HTTP {status}: {body}"),
+            Self::Http(_) => write!(
+                f,
+                "Token-Anfrage fehlgeschlagen; keine Request-Daten ausgeben"
+            ),
+            Self::Rejected { status, .. } => write!(f, "Token abgelehnt: HTTP {status}"),
             Self::NotInitialized => write!(f, "token manager not initialized"),
         }
     }
@@ -1116,10 +1106,10 @@ mod tests {
     }
 
     #[test]
-    fn datei_greift_wenn_env_token_leer() {
+    fn datei_wird_auch_bei_leerem_env_token_nicht_gelesen() {
         let f = TempTokenFile::new("  file-access\n");
         let got = resolve_seed_tokens(Some("   "), Some("env-refresh"), Some(f.path()));
-        assert_eq!(got.access_token.as_deref(), Some("file-access"));
+        assert_eq!(got.access_token, None);
         assert_eq!(got.refresh_token.as_deref(), Some("env-refresh"));
     }
 
@@ -1360,5 +1350,24 @@ mod tests {
         assert_eq!(state.access_token, "parallel-fresh");
         assert_eq!(state.refresh_token, "parallel-refresh");
         assert!(state.expires_at > Utc::now());
+    }
+}
+
+#[cfg(test)]
+mod storage_redaction_tests {
+    use super::*;
+    #[test]
+    fn seed_debug_and_provider_errors_never_expose_tokens() {
+        let sentinel = "synthetic-private-token";
+        let seeds = SeedTokens {
+            access_token: Some(sentinel.into()),
+            refresh_token: Some(sentinel.into()),
+        };
+        let error = TokenError::Rejected {
+            status: 401,
+            body: sentinel.into(),
+        };
+        assert!(!format!("{seeds:?} {error:?} {error}").contains(sentinel));
+        assert!(error.to_string().contains("401"));
     }
 }

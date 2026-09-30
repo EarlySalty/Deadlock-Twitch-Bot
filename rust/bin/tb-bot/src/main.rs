@@ -1750,14 +1750,20 @@ async fn main() {
                 // laeuft nur zweimal taeglich und bleibt still, solange kein
                 // Kanal eingeschaltet ist. Ohne YouTube-Verbindung laedt er
                 // trotzdem lokal — das Archiv ist der Verlustschutz.
-                let vod_creds =
-                    tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
+                let vod_creds = tb_social_media::credentials::CredentialManager::new(
+                    pool.clone(),
+                    cipher.clone(),
+                );
                 let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
                 vod_config.yt_dlp = yt_dlp_path(snapshot);
-                let vod_archive =
-                    tb_vod_archive::VodArchiveWorker::new(pool.clone(), vod_config, vod_creds);
+                let vod_archive = tb_vod_archive::VodArchiveWorker::new(
+                    pool.clone(),
+                    vod_config,
+                    vod_creds,
+                    cipher,
+                );
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {

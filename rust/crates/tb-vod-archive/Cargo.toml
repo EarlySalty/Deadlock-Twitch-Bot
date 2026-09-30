@@ -13,6 +13,7 @@ chrono           = { workspace = true }
 thiserror        = { workspace = true }
 async-trait      = { workspace = true }
 tb-social-media  = { workspace = true }
+tb-crypto        = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
