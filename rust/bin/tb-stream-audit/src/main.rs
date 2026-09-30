@@ -1147,9 +1147,9 @@ async fn aufnahme_schleife(
                 // hinterher aus wie ein sauberer Tag, ist aber ein Ausfall.
                 if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
                     let text = format!(
-                        "Coaching-Audit: Twitch-Abfrage scheitert dauerhaft (seit mindestens \
-{MAX_STILLE_VERSUCHE} Anlaeufen). Laufende Aufnahmen laufen weiter, neue Sendungen werden \
-nicht erkannt."
+                        "Coaching-Audit: Twitch-Abfrage ist seit mindestens \
+{MAX_STILLE_VERSUCHE} Anläufen gestört. Laufende Aufnahmen laufen weiter. Neue Sendungen \
+werden während der Störung nicht erkannt."
                     );
                     let (schluessel, text) =
                         match offener_hinweis(&konfiguration, "helix-ausfall").await {
@@ -1200,11 +1200,11 @@ nicht erkannt."
                 continue;
             }
         };
-        if helix_fehler > 0 {
-            // Die Stoerung ist vorbei: ein noch aufgehobener Hinweis wuerde
-            // sie sonst Stunden spaeter als aktuell melden.
-            hinweis_erledigt(&konfiguration, "helix-ausfall").await;
-        }
+        // Ein erfolgreicher Twitch-Abruf widerlegt auch einen aufgehobenen
+        // Ausfallhinweis aus einem früheren Prozess. Ohne diese Bereinigung
+        // könnte der Aufräumtakt nach einem Neustart eine erledigte Störung
+        // nachträglich als aktuell melden.
+        hinweis_erledigt(&konfiguration, "helix-ausfall").await;
         helix_fehler = 0;
         helix_gemeldet = false;
         let live: Vec<String> = sendungen
@@ -3262,6 +3262,13 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
             continue;
         }
         if pfad.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        // Der Helix-Hinweis beschreibt einen aktuellen Zustand und darf nach
+        // einem Neustart nicht blind nachgesendet werden. Die Aufnahmeschleife
+        // bestätigt ihn nach fünf frischen Fehlversuchen oder entfernt ihn
+        // beim ersten erfolgreichen Twitch-Abruf.
+        if pfad.file_name().and_then(|s| s.to_str()) == Some("helix-ausfall.json") {
             continue;
         }
         // Alte Startmeldungen dürfen nicht nach Streamende oder einem späteren
@@ -5793,6 +5800,38 @@ mod tests {
         // nachgereicht.
         hinweis_erledigt(&konfiguration, "helix-ausfall").await;
         assert!(!datei.exists());
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+    }
+
+    #[tokio::test]
+    async fn helix_hinweis_wartet_auf_frische_lage() {
+        // Ein Hinweis aus dem vorigen Prozess darf beim Neustart nicht allein
+        // durch den allgemeinen Wiederholungsweg als aktuelle Störung rausgehen.
+        let wurzel = test_ordner("helix-hinweis-neustart");
+        let _ = tokio::fs::remove_dir_all(&wurzel).await;
+        tokio::fs::create_dir_all(&wurzel).await.expect("Ordner");
+        let konfiguration = test_konfiguration(&wurzel);
+
+        hinweis_aufheben(
+            &konfiguration,
+            "helix-ausfall",
+            "alter-schluessel",
+            "alter Helix-Ausfall",
+        )
+        .await;
+        let datei = hinweis_ordner(&konfiguration).join("helix-ausfall.json");
+
+        offene_hinweise_senden(&konfiguration).await;
+
+        assert!(
+            datei.exists(),
+            "der allgemeine Aufräumtakt darf den Helix-Hinweis nicht senden"
+        );
+        hinweis_erledigt(&konfiguration, "helix-ausfall").await;
+        assert!(
+            !datei.exists(),
+            "ein bestätigter Twitch-Erfolg räumt den Hinweis"
+        );
         let _ = tokio::fs::remove_dir_all(&wurzel).await;
     }
 
