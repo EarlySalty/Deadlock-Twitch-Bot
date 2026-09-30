@@ -593,7 +593,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
             .respond_with(ResponseTemplate::new(200).set_body_json(
                 json!({"access_token":"fixture","expires_in":3600,"token_type":"bearer"}),
             ))
-            .mount(&server)
+            .mount(server)
             .await;
         let mut response = if fail {
             ResponseTemplate::new(503)
@@ -610,7 +610,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         Mock::given(method("GET"))
             .and(path("/shared_chat/session"))
             .respond_with(response)
-            .mount(&server)
+            .mount(server)
             .await;
     }
 
