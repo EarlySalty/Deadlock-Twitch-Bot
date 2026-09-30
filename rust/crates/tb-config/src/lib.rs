@@ -5,6 +5,7 @@
 
 pub mod file;
 pub mod global;
+pub mod stt;
 
 pub use global::{BotConfig, BotConfigSnapshot};
 

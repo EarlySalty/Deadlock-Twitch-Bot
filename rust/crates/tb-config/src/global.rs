@@ -30,6 +30,8 @@ pub struct BotConfig {
     pub broker: Broker,
     #[serde(default)]
     pub logging: Logging,
+    #[serde(default)]
+    pub stt: crate::stt::SttConfig,
 }
 
 impl fmt::Debug for BotConfig {
@@ -271,6 +273,12 @@ impl Schema for BotConfig {
             return Err(FileError::invalid("dashboard.port"));
         }
         public_url(&self.broker.base_url, "broker.base_url", true)?;
+        self.stt.validate()?;
+        if (self.stt.host == self.internal_api.host && self.stt.port == self.internal_api.port)
+            || (self.stt.host == self.dashboard.host && self.stt.port == self.dashboard.port)
+        {
+            return Err(FileError::invalid("stt.port"));
+        }
         Ok(())
     }
 }
