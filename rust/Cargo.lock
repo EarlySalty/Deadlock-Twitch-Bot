@@ -3718,6 +3718,7 @@ dependencies = [
  "sqlx 0.9.0",
  "tb-config",
  "tb-db",
+ "tb-observability",
  "tb-transport-twitch",
  "thiserror 2.0.21",
  "tokio",
