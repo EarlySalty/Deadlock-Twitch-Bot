@@ -27,6 +27,56 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
+/// Autorisiertes Ziel eines manuellen Clips: Partner ausschließlich anhand
+/// ihrer Session-ID; nur Admins dürfen ausdrücklich einen Zielkanal wählen.
+/// Der gespeicherte Login ist Metadatum für Layout, Kontingent und Dateipfad.
+pub(crate) async fn resolve_clip_upload_target(
+    pool: &sqlx::PgPool,
+    auth: &DashboardAuthLevel,
+    requested_login: Option<&str>,
+) -> Result<(String, String), Response> {
+    let target = match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => {
+            if twitch_user_id.is_empty()
+                || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(unauthorized());
+            }
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
+            )
+            .bind(twitch_user_id)
+            .fetch_optional(pool)
+            .await
+        }
+        DashboardAuthLevel::Admin { .. } => {
+            let Some(login) = requested_login.map(str::trim).filter(|value| !value.is_empty()) else {
+                return Err((StatusCode::BAD_REQUEST, "streamer_login required").into_response());
+            };
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+            )
+            .bind(login)
+            .fetch_optional(pool)
+            .await
+        }
+        DashboardAuthLevel::None => return Err(unauthorized()),
+    }
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+    match target {
+        Some((login, Some(id)))
+            if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            Ok((login, id))
+        }
+        _ => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "unknown_streamer"})),
+        )
+            .into_response()),
+    }
+}
+
 /// Ziel für kanaleigene Einstellungen. Der Admin-Modus ändert die Rechte,
 /// aber nicht die Twitch-Identität der eigenen Verwaltung. Nur Admins dürfen
 /// ein anderes Ziel wählen; ohne Ziel gilt die ID aus der Twitch-Session.

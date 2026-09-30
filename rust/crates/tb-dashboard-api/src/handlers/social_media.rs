@@ -853,6 +853,7 @@ async fn process_uploaded_clip(
     pool: &PgPool,
     base_dir: &str,
     streamer_raw: Option<&str>,
+    twitch_user_id: &str,
     clip_id_raw: Option<&str>,
     title: Option<&str>,
     bytes: &[u8],
@@ -869,7 +870,17 @@ async fn process_uploaded_clip(
                 .into_response()
         })?
         .to_lowercase();
-    if !ensure_streamer_exists(pool, &streamer_login).await {
+    if twitch_user_id.is_empty()
+        || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit())
+        || !sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM twitch_streamers WHERE twitch_user_id = $1 AND LOWER(twitch_login) = LOWER($2))",
+        )
+        .bind(twitch_user_id)
+        .bind(&streamer_login)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?
+    {
         return Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "unknown_streamer" })),
@@ -965,15 +976,7 @@ async fn process_uploaded_clip(
             .into_response());
     }
 
-    match register_manual_upload(
-        pool,
-        &clip_id,
-        &streamer_login,
-        title,
-        &final_path,
-        duration,
-    )
-    .await
+    match register_manual_upload(pool, &clip_id, twitch_user_id, title, &final_path, duration).await
     {
         Ok((clip_db_id, retention_until)) => Ok(
             json!({ "clip_db_id": clip_db_id, "clip_id": clip_id, "retention_until": retention_until }),
@@ -1005,16 +1008,15 @@ async fn process_uploaded_clip(
     }
 }
 
-/// `POST /social-media/api/clips/upload` — Multipart-Datei-Upload (Admin).
+/// `POST /social-media/api/clips/upload` — Multipart-Datei-Upload ins autorisierte Ziel.
 pub async fn upload_clip_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     mut multipart: Multipart,
 ) -> Response {
-    let scope = match require_sm_access(&auth, &pool, None).await {
-        Ok(s) => s,
-        Err(e) => return e,
-    };
+    if let Err(error) = require_sm_access(&auth, &pool, None).await {
+        return error;
+    }
     let mut bytes: Option<Vec<u8>> = None;
     let mut streamer_login: Option<String> = None;
     let mut clip_id: Option<String> = None;
@@ -1038,27 +1040,30 @@ pub async fn upload_clip_handler(
     let title = title
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
-    // Partner laden nur in den eigenen Kanal hoch, egal was im Formular steht.
-    let streamer_login = match scope {
-        Some(own) => Some(own),
-        None => streamer_login,
-    };
+    let (streamer_login, twitch_user_id) =
+        match crate::auth::streamer_scope::resolve_clip_upload_target(
+            &pool,
+            &auth,
+            streamer_login.as_deref(),
+        )
+        .await
+        {
+            Ok(target) => target,
+            Err(error) => return error,
+        };
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
-    if let Some(ref login) = streamer_login {
-        if let Some(guard_response) = check_partner_access_guard(&pool, &auth, login).await {
-            return guard_response;
-        }
+    if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer_login).await {
+        return guard_response;
     }
     // Clip-Kontingent der Stufe: ein Upload erzeugt einen neuen Clip.
-    if let Err(resp) =
-        clip_kontingent_guard(&pool, &auth, streamer_login.as_deref().unwrap_or("")).await
-    {
+    if let Err(resp) = clip_kontingent_guard(&pool, &auth, &streamer_login).await {
         return resp;
     }
     match process_uploaded_clip(
         &pool,
         "data/clips/uploads",
-        streamer_login.as_deref(),
+        Some(&streamer_login),
+        &twitch_user_id,
         clip_id.as_deref(),
         title.as_deref(),
         &bytes,
@@ -6402,6 +6407,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_upload_session_id_ueberlebt_veralteten_login_und_admin_zielwahl() {
+        use crate::auth::streamer_scope::resolve_clip_upload_target;
+        let Some(pool) = make_pool("t_dash_sm_upload_identity").await else {
+            return;
+        };
+        // Session B heißt jetzt L; L zeigt im Bestand noch auf A.
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('reused_login', '11'), ('previous_b_login', '22')")
+            .execute(&pool).await.unwrap();
+        let session_b = DashboardAuthLevel::Partner {
+            twitch_login: "reused_login".into(),
+            twitch_user_id: "22".into(),
+            display_name: "B".into(),
+        };
+        let target = resolve_clip_upload_target(&pool, &session_b, Some("reused_login"))
+            .await
+            .unwrap();
+        assert_eq!(target, ("previous_b_login".into(), "22".into()));
+        // Auch die Dateiverarbeitung akzeptiert kein vertauschtes ID/Login-Paar.
+        let mismatch = process_uploaded_clip(
+            &pool,
+            "/unused-upload-test",
+            Some("reused_login"),
+            &target.1,
+            Some("mismatch"),
+            None,
+            b"not a video",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(mismatch.status(), StatusCode::NOT_FOUND);
+        let (id, _) =
+            register_manual_upload(&pool, "session_b_clip", &target.1, None, "/test/b.mp4", 1.0)
+                .await
+                .unwrap();
+        let owner: (String, String) = sqlx::query_as(
+            "SELECT streamer_login, twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(owner, target);
+
+        // Eine explizite Admin-Auswahl von L bleibt der autorisierte Kanal A.
+        let admin_target =
+            resolve_clip_upload_target(&pool, &DashboardAuthLevel::admin(), Some("reused_login"))
+                .await
+                .unwrap();
+        assert_eq!(admin_target, ("reused_login".into(), "11".into()));
+        let (admin_id, _) = register_manual_upload(
+            &pool,
+            "admin_target_clip",
+            &admin_target.1,
+            None,
+            "/test/a.mp4",
+            1.0,
+        )
+        .await
+        .unwrap();
+        let admin_owner: (String, String) = sqlx::query_as(
+            "SELECT streamer_login, twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(admin_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(admin_owner, admin_target);
+
+        // Ohne belegten ID-Datensatz oder gültige Session-ID kein Namensfallback.
+        for (id, expected) in [
+            ("33", StatusCode::NOT_FOUND),
+            ("", StatusCode::UNAUTHORIZED),
+        ] {
+            let unknown = DashboardAuthLevel::Partner {
+                twitch_login: "reused_login".into(),
+                twitch_user_id: id.into(),
+                display_name: "unknown".into(),
+            };
+            assert_eq!(
+                resolve_clip_upload_target(&pool, &unknown, Some("reused_login"))
+                    .await
+                    .unwrap_err()
+                    .status(),
+                expected
+            );
+            assert!(matches!(
+                register_manual_upload(&pool, "unknown_clip", id, None, "/test/unknown.mp4", 1.0)
+                    .await,
+                Err(ManualUploadError::UnknownStreamer)
+            ));
+        }
+    }
+
+    #[tokio::test]
     async fn upload_clip_validierung() {
         let Some(pool) = make_pool("t_dash_sm_upload").await else {
             return;
@@ -6419,20 +6518,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
 
         // Ungültiger Streamer-Slug → 400.
-        let resp = process_uploaded_clip(&pool, &base, Some("bad slug!"), None, None, b"xxxx")
+        let resp = process_uploaded_clip(&pool, &base, Some("bad slug!"), "1", None, None, b"xxxx")
             .await
             .unwrap_err();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Unbekannter Streamer → 404.
-        let resp = process_uploaded_clip(&pool, &base, Some("ghost"), None, None, b"xxxxftypisom")
-            .await
-            .unwrap_err();
+        let resp = process_uploaded_clip(
+            &pool,
+            &base,
+            Some("ghost"),
+            "999",
+            None,
+            None,
+            b"xxxxftypisom",
+        )
+        .await
+        .unwrap_err();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         // Bekannter Streamer, aber keine MP4 (kein ftyp) → 415.
         let resp = process_uploaded_clip(
             &pool,
             &base,
             Some("nani"),
+            "1",
             Some("c1"),
             None,
             b"not a video at all",
@@ -6447,6 +6555,7 @@ mod tests {
                 &pool,
                 &base,
                 Some("nani"),
+                "1",
                 Some("good1"),
                 Some("Mein Clip"),
                 &mp4,
@@ -6455,11 +6564,19 @@ mod tests {
             .unwrap();
             assert!(payload["clip_db_id"].as_i64().unwrap() > 0);
             assert_eq!(payload["clip_id"], "good1");
+            let saved_owner: String = sqlx::query_scalar(
+                "SELECT twitch_user_id FROM twitch_clips_social_media WHERE clip_id = 'good1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(saved_owner, "1");
             assert!(std::path::Path::new(&format!("{base}/nani/good1.mp4")).exists());
             // Duplikat → 409.
-            let resp = process_uploaded_clip(&pool, &base, Some("nani"), Some("good1"), None, &mp4)
-                .await
-                .unwrap_err();
+            let resp =
+                process_uploaded_clip(&pool, &base, Some("nani"), "1", Some("good1"), None, &mp4)
+                    .await
+                    .unwrap_err();
             assert_eq!(resp.status(), StatusCode::CONFLICT);
         }
         let _ = std::fs::remove_dir_all(&base);

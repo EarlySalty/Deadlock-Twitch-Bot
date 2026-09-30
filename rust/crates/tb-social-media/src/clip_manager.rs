@@ -30,7 +30,7 @@ pub enum ManualUploadError {
 pub async fn register_manual_upload(
     pool: &PgPool,
     clip_id: &str,
-    streamer_login: &str,
+    twitch_user_id: &str,
     title: Option<&str>,
     local_path: &str,
     duration_seconds: f64,
@@ -48,21 +48,20 @@ pub async fn register_manual_upload(
         return Err(ManualUploadError::AlreadyExists);
     }
 
-    let streamer = sqlx::query!(
-        "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
-        streamer_login
-    )
-    .fetch_optional(pool)
-    .await?;
-    let Some(row) = streamer else {
-        return Err(ManualUploadError::UnknownStreamer);
-    };
-    let twitch_user_id = row
-        .twitch_user_id
-        .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()));
-    if twitch_user_id.is_none() {
+    // Der Aufrufer übergibt die autorisierte Plattform-ID. Ein veralteter oder
+    // neu vergebener Login darf den Eigentümer niemals ändern.
+    if twitch_user_id.is_empty() || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(ManualUploadError::UnknownStreamer);
     }
+    let streamer_login = sqlx::query_scalar::<_, String>(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(streamer_login) = streamer_login else {
+        return Err(ManualUploadError::UnknownStreamer);
+    };
 
     let row = sqlx::query!(
         "INSERT INTO twitch_clips_social_media \
@@ -75,7 +74,7 @@ pub async fn register_manual_upload(
         local_path,
         title,
         streamer_login,
-        twitch_user_id.as_deref(),
+        twitch_user_id,
         &created_at,
         duration_seconds
     )
@@ -91,7 +90,7 @@ pub async fn register_manual_upload(
         .mark_kontingent_verbrauch(clip_db_id)
         .await?;
 
-    if let Err(error) = apply_default_layout(pool, clip_db_id, streamer_login).await {
+    if let Err(error) = apply_default_layout(pool, clip_db_id, &streamer_login).await {
         tracing::warn!(
             %error,
             clip_db_id,
@@ -373,16 +372,10 @@ mod tests {
         .unwrap();
 
         // Registrierung.
-        let (id, retention) = register_manual_upload(
-            &pool,
-            "m1",
-            "nani",
-            Some("Mein Upload"),
-            "/data/v.mp4",
-            30.0,
-        )
-        .await
-        .unwrap();
+        let (id, retention) =
+            register_manual_upload(&pool, "m1", "123", Some("Mein Upload"), "/data/v.mp4", 30.0)
+                .await
+                .unwrap();
         assert!(id > 0);
         assert!(!retention.is_empty());
         let (kind, path, status, layout): (String, String, String, Option<String>) = sqlx::query_as("SELECT source_kind, upload_local_path, status, layout_override_json::text FROM twitch_clips_social_media WHERE id = $1").bind(id).fetch_one(&pool).await.unwrap();
@@ -393,11 +386,11 @@ mod tests {
 
         // Duplikat + unbekannter Streamer.
         assert!(matches!(
-            register_manual_upload(&pool, "m1", "nani", None, "/x.mp4", 1.0).await,
+            register_manual_upload(&pool, "m1", "123", None, "/x.mp4", 1.0).await,
             Err(ManualUploadError::AlreadyExists)
         ));
         assert!(matches!(
-            register_manual_upload(&pool, "m2", "ghost", None, "/x.mp4", 1.0).await,
+            register_manual_upload(&pool, "m2", "999", None, "/x.mp4", 1.0).await,
             Err(ManualUploadError::UnknownStreamer)
         ));
 
