@@ -3632,10 +3632,12 @@ name = "tb-dashboard"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "sqlx 0.9.0",
  "tb-config",
  "tb-dashboard-api",
  "tb-db",
+ "tb-social-media",
  "tb-transport-twitch",
  "tokio",
  "tracing",
@@ -3770,6 +3772,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "wiremock",
 ]
@@ -3974,10 +3977,12 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx 0.9.0",
+ "tb-config",
  "tb-crypto",
  "tb-engagement",
  "tb-llm",
  "tb-transport-twitch",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

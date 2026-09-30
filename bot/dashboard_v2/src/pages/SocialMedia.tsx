@@ -98,6 +98,7 @@ import {
 
 interface SocialMediaProps {
   streamer: string;
+  twitchUserId?: string;
   /** Reports und Cross-Auswertungen sind der Verwaltung vorbehalten. */
   isAdmin?: boolean;
 }
@@ -161,7 +162,7 @@ const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: strin
   konten: SlidersHorizontal,
 };
 
-export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
+export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<QueueStage>('all');
@@ -181,9 +182,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   const [showAnalytics, setShowAnalytics] = useState(false);
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
-    queryKey: ['social-media', 'streamer-layout', streamer],
-    queryFn: () => fetchStreamerLayout(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'streamer-layout', twitchUserId],
+    queryFn: () => fetchStreamerLayout(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -191,13 +192,13 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   });
 
   const clipsQuery = useQuery({
-    queryKey: ['social-media', 'clips', streamer],
+    queryKey: ['social-media', 'clips', streamer, twitchUserId],
     queryFn: ({ signal }) =>
       loadQueueSnapshot(
-        (page) => fetchClips({ status: 'all', streamer, page, page_size: 100 }, signal),
+        (page) => fetchClips({ status: 'all', twitch_user_id: twitchUserId, page, page_size: 100 }, signal),
         signal,
       ),
-    enabled: !!streamer,
+    enabled: !!twitchUserId,
     staleTime: 30 * 1000,
     refetchOnWindowFocus: false,
     retry: (failureCount, err) => !(err instanceof SocialMediaForbiddenError) && failureCount < 2,
@@ -207,11 +208,11 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   // Statusfilter der Liste: steht der Filter auf "Veroeffentlicht" und ist dort
   // nichts drin, haette der Editor sonst kein Bild.
   const vorschauClipsQuery = useQuery({
-    queryKey: ['social-media', 'vorschau-clips', streamer],
+    queryKey: ['social-media', 'vorschau-clips', streamer, twitchUserId],
     queryFn: () =>
-      fetchClips({ status: 'all', streamer: streamer || undefined, page: 1, page_size: 12 }),
+      fetchClips({ status: 'all', twitch_user_id: twitchUserId, page: 1, page_size: 12 }),
     // Vorschauclips werden nur im fokussierten Layout-Bereich gebraucht.
-    enabled: !!streamer && activeView === 'layout',
+    enabled: !!twitchUserId && activeView === 'layout',
     staleTime: 5 * 60 * 1000,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -233,9 +234,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   );
 
   const postingPlanQuery = useQuery<PostingPlan, Error>({
-    queryKey: ['social-media', 'posting-plan', streamer],
-    queryFn: () => fetchPostingPlan(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'posting-plan', twitchUserId],
+    queryFn: () => fetchPostingPlan(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -243,9 +244,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   });
 
   const vodArchiveQuery = useQuery<VodArchiveSettings, Error>({
-    queryKey: ['social-media', 'vod-archive-settings', streamer],
-    queryFn: () => fetchVodArchiveSettings(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'vod-archive-settings', twitchUserId],
+    queryFn: () => fetchVodArchiveSettings(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -271,19 +272,19 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   }, [layoutQuery.data]);
 
   const saveLayoutMutation = useMutation({
-    mutationFn: (layout: LayoutPayload) => saveStreamerLayout({ streamer_login: streamer, layout }),
+    mutationFn: (layout: LayoutPayload) => saveStreamerLayout({ twitch_user_id: twitchUserId, layout }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'streamer-layout', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'streamer-layout', twitchUserId] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadClip({ file, streamer_login: streamer }),
+    mutationFn: (file: File) => uploadClip({ file, twitch_user_id: twitchUserId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -291,7 +292,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     mutationFn: (clipDbId: number) => discardClip(clipDbId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -300,14 +301,14 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
       setClipLayoutOverride(clipDbId, layout),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
   // Alle drei Zeitplan-Aufrufe liefern den kompletten Plan zurueck. Wir setzen
   // ihn direkt in den Cache, damit der neu berechnete Termin und die
   // Vorratsrechnung ohne zweite Abfrage sofort stehen.
-  const planKey = ['social-media', 'posting-plan', streamer];
+  const planKey = ['social-media', 'posting-plan', twitchUserId];
   const uebernehmePlan = (plan: PostingPlan) => {
     queryClient.setQueryData(planKey, plan);
   };
@@ -315,9 +316,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   // Ohne Kanal zeigt und kappt das Backend die globale Sammelverbindung. Beides
   // waere hier falsch: die Karte gehoert zum gewaehlten Kanal.
   const platformStatusQuery = useQuery({
-    queryKey: ['social-media', 'platform-status', streamer],
-    queryFn: () => fetchPlatformStatus(streamer),
-    enabled: !!streamer,
+    queryKey: ['social-media', 'platform-status', twitchUserId],
+    queryFn: () => fetchPlatformStatus(twitchUserId),
+    enabled: !!twitchUserId,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
@@ -325,18 +326,18 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
   });
 
   const disconnectMutation = useMutation({
-    mutationFn: (platform: string) => disconnectPlatform(platform, streamer),
+    mutationFn: (platform: string) => disconnectPlatform(platform, twitchUserId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', twitchUserId] });
     },
   });
 
   /** Nachschub aus Twitch holen, der einzige Ausweg aus der Vorratswarnung. */
   const clipsHolenMutation = useMutation({
-    mutationFn: () => fetchTwitchClips(streamer),
+    mutationFn: () => fetchTwitchClips(twitchUserId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
@@ -345,16 +346,16 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     mutationFn: (clipDbId: number) => cancelScheduledPost(clipDbId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
   });
 
   const vodArchiveMutation = useMutation({
     mutationFn: (payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>) =>
-      saveVodArchiveSettings(streamer, payload),
+      saveVodArchiveSettings(twitchUserId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['social-media', 'vod-archive-settings', streamer],
+        queryKey: ['social-media', 'vod-archive-settings', twitchUserId],
       });
     },
   });
@@ -371,7 +372,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
     }) => decideClipApproval({ clipDbId, decision, platforms }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', streamer] });
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
     },
     // Kein window.alert mit roher Backend-Meldung. Der Fehler geht ueber
     // `clipFehler` als Zeile in den Fuss der betroffenen Clip-Karte, genau wie
@@ -487,7 +488,8 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
       >
         {activeView === 'plan' ? (
           <PostingPlanDraft
-            key={streamer}
+            twitchUserId={twitchUserId}
+            key={twitchUserId}
             streamer={streamer}
             plan={postingPlanQuery.data ?? null}
             loading={postingPlanQuery.isLoading}
@@ -598,7 +600,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                 [
                   { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false },
                   { mode: 'pip', title: 'Facecam & Gameplay', cam: true },
-                  { mode: 'stacked', title: 'Split Screen', cam: true },
+                  { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true },
                 ] as const
               ).map((preset) => (
                 <button
@@ -612,6 +614,9 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
                       ...layoutForEditor,
                       mode: preset.mode,
                       cam_enabled: preset.cam,
+                      cam_position: preset.mode === 'stacked'
+                        ? { ...layoutForEditor.cam_position, h: DEFAULT_LAYOUT.cam_position.h }
+                        : layoutForEditor.cam_position,
                     });
                   }}
                 >
@@ -639,6 +644,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
         ) : activeView === 'konten' ? (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <PlatformConnectionsCard
+              twitchUserId={twitchUserId}
               streamer={streamer}
               platforms={platformStatusQuery.data?.platforms ?? []}
               isLoading={platformStatusQuery.isLoading}
@@ -985,7 +991,7 @@ export function SocialMedia({ streamer, isAdmin = false }: SocialMediaProps) {
           title={t('Auswertung')}
           onClose={() => setShowAnalytics(false)}
         >
-          <AnalyticsTab streamer={streamer} isAdmin={isAdmin} />
+          <AnalyticsTab streamer={streamer} twitchUserId={twitchUserId} isAdmin={isAdmin} />
         </WorkspaceDialog>
       )}
     </div>
@@ -1872,6 +1878,7 @@ function leseOauthRueckmeldung(): OauthRueckmeldung {
 
 function PlatformConnectionsCard({
   streamer,
+  twitchUserId,
   platforms,
   isLoading,
   ladeFehler,
@@ -1880,6 +1887,7 @@ function PlatformConnectionsCard({
   error,
 }: {
   streamer: string;
+  twitchUserId?: string;
   platforms: PlatformStatus[];
   isLoading: boolean;
   /** Fehler des Status-Abrufs: dann ist unbekannt, was verbunden ist. */
@@ -2007,7 +2015,7 @@ function PlatformConnectionsCard({
                 </button>
               ) : (
                 <a
-                  href={oauthStartUrl(platform, streamer)}
+                  href={oauthStartUrl(platform, twitchUserId)}
                   className="shrink-0 rounded-lg border border-ui-accent-strong/25 bg-ui-accent-strong/12 px-3 py-1.5 text-sm font-medium text-ui-accent-ink transition-colors hover:bg-ui-accent-strong/18"
                 >
                   {abgelaufen ? t('Neu verbinden') : t('Verbinden')}
@@ -2191,7 +2199,7 @@ function ClipCard({
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
   const canDecide = queueStage(clip) === 'review';
   const termine = PLATTFORMEN.flatMap((platform) =>
-    clip.scheduled_at?.[platform] && !clip.platform_status[platform]
+    clip.scheduled_at?.[platform] && !clip.platform_status[platform] && !['inbox', 'inbox_pending'].includes(clip.upload_states?.[platform] ?? '')
       ? [{ platform, zeit: clip.scheduled_at[platform] as string }]
       : [],
   );
@@ -2201,6 +2209,8 @@ function ClipCard({
   const uploadFehler = PLATTFORMEN.flatMap((platform) =>
     clip.upload_errors?.[platform] ? [{ platform, text: clip.upload_errors[platform] }] : [],
   );
+  const tiktokInbox = clip.upload_states?.tiktok === 'inbox';
+  const tiktokPending = clip.upload_states?.tiktok === 'inbox_pending';
   const initialPlatforms = clip.approval?.approved_platforms?.length
     ? clip.approval.approved_platforms
     : defaultPlatforms;
@@ -2365,12 +2375,24 @@ function ClipCard({
               ))}
             </div>
           )}
+          {tiktokInbox && (
+            <p role="status" className="text-sm text-accent">
+              {t('TikTok: Der Clip liegt in deinem Postfach. Öffne TikTok, bearbeite ihn und veröffentliche ihn dort.')}
+            </p>
+          )}
+          {tiktokPending && (
+            <p role="status" className="text-sm text-text-secondary">
+              {t('Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.')}
+            </p>
+          )}
           {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}
-          {uploadFehler.length > 0 && queueStage(clip) === 'failed' && (
-            <div className="break-words text-sm text-danger">
+          {uploadFehler.length > 0 && (
+            <div role="alert" className="break-words text-sm text-danger">
               {uploadFehler.map(({ platform, text }) => (
                 <p key={platform}>
-                  {PLATFORM_LABELS[platform]}: {text}
+                  {PLATFORM_LABELS[platform]}: {platform === 'tiktok' && text?.includes('unaudited_client_can_only_post_to_private_accounts')
+                    ? t('TikTok hat den direkten Post abgelehnt. Neue Clips gehen jetzt in dein TikTok-Postfach, wo du sie selbst veröffentlichen kannst.')
+                    : text}
                 </p>
               ))}
             </div>
@@ -2383,7 +2405,7 @@ function ClipCard({
           {cancelResult && (
             <p role="status" className="text-sm text-text-secondary">
               {cancelResult.already_running
-                ? t('Gestoppt, aber {count} Plattform war schon durch.', {
+                ? t('Geplante Posts gestoppt. Bei {count} Plattformen hat die Übertragung bereits begonnen und lässt sich hier nicht mehr stoppen.', {
                     count: cancelResult.already_running,
                   })
                 : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}

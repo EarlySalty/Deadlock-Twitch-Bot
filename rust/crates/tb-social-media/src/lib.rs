@@ -54,6 +54,8 @@ pub mod approval_worker;
 pub mod batch;
 pub mod clip;
 pub mod clip_analytics;
+pub mod clip_context;
+pub mod clip_context_harvest;
 pub mod clip_manager;
 pub mod clip_prep_worker;
 pub mod clip_queue;
@@ -87,6 +89,7 @@ pub mod settings;
 pub mod subtitles;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod tiktok_recovery;
 pub mod title_gate;
 pub mod transcription;
 pub mod upload_worker;

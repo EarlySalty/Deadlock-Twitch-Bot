@@ -17,6 +17,7 @@ tracing    = { workspace = true }
 rand       = { workspace = true }
 tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs"] }
 uuid       = { workspace = true }
+url        = { workspace = true }
 tb-crypto  = { workspace = true }
 tb-llm     = { workspace = true }
 tb-analytics = { workspace = true }

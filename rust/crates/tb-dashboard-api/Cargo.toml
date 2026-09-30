@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 tb-effort = { workspace = true }
 tb-config = { workspace = true }
+tb-db     = { workspace = true }
 # Exact experimental Brain revision; shared Rust engine, no duplicated scorer.
 dbrain-reasoner = { git = "https://github.com/EarlySalty/Deadlock-Brain.git", rev = "d8c34270868e129098e12243f53f5b52ee507b8b" }
 # ws: WebSocket-Upgrade fuer das OBS-Dock-Gateway (`GET /obs/ws`). axum bringt
@@ -69,4 +70,3 @@ tokio     = { workspace = true, features = ["net", "rt-multi-thread"] }
 tokio-tungstenite = "0.30"
 tower     = { workspace = true, features = ["util"] }
 wiremock  = { workspace = true }
-tb-db     = { workspace = true }

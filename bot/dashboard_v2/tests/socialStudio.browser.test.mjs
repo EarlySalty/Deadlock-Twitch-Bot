@@ -154,6 +154,7 @@ test(
         res.end(JSON.stringify(body));
       };
       const streamer =
+        ({ '11': 'earlysalty', '22': 'partner2' }[url.searchParams.get('twitch_user_id')]) ??
         url.searchParams.get('streamer') ?? url.searchParams.get('streamer_login') ?? 'earlysalty';
       if (!Object.hasOwn(plans, streamer)) return json({ error: 'unknown_streamer' }, 404);
       let input = {};
@@ -188,7 +189,7 @@ test(
           },
         });
       if (p === '/twitch/api/v2/streamers')
-        return json([{ login: 'earlysalty' }, { login: 'partner2' }]);
+        return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
       if (p === '/social-media/api/access/me')
         return json({ allowed: true, streamer: 'earlysalty', isAdmin: true });
       if (p === '/social-media/api/access')
@@ -371,7 +372,7 @@ test(
     await page.route('**/*', (route) =>
       route.request().url().startsWith(base) ? route.continue() : route.abort(),
     );
-    await page.goto(base + '/social-media-admin?streamer=earlysalty');
+    await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
     await page.locator('.studio-clip').first().waitFor();
     const tab = (name) => page.getByRole('tab', { name, exact: true });
     await t.test(
@@ -582,7 +583,7 @@ test(
         await page.getByLabel('Posts pro Woche', { exact: true }).first().fill('8');
         await page.getByRole('heading', { name: 'Dein Posting-Rhythmus' }).click();
         page.once('dialog', (d) => d.accept());
-        await page.getByLabel('Streamer wählen', { exact: true }).selectOption('partner2');
+        await page.getByLabel('Streamer wählen', { exact: true }).selectOption('22');
         await tab('Auto-Pilot & Zeitplan').click();
         assert.equal(
           await page.getByLabel('Posts pro Woche', { exact: true }).first().inputValue(),
@@ -645,7 +646,7 @@ test(
         for (const width of [390, 1024, 1440, 1920]) {
           await page.setViewportSize({ width, height: 1080 });
           let reference;
-          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty']) {
+          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty&twitch_user_id=11']) {
             await page.goto(base + route);
             await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
             await page.evaluate(() => document.fonts.ready);
@@ -664,7 +665,7 @@ test(
         }
       } finally {
         await fs.writeFile(path.join(evidence, 'shell-geometry.json'), JSON.stringify(measurements, null, 2));
-        await page.goto(base + '/social-media-admin?streamer=earlysalty');
+        await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
         await page.locator('.studio-clip').first().waitFor();
       }
     });
@@ -680,7 +681,7 @@ test(
         probe.remove();
         return color;
       });
-      await page.goto(base + '/social-media-admin?streamer=earlysalty');
+      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const social = await activeBackground();
       assert.equal(social, goldTint, 'Gold-Aktivzustand erwartet, erhalten: ' + social);
@@ -688,7 +689,7 @@ test(
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const home = await activeBackground();
       assert.equal(home, goldTint, 'Home traegt denselben Gold-Aktivzustand: ' + home);
-      await page.goto(base + '/social-media-admin?streamer=earlysalty');
+      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
       await page.locator('.studio-clip').first().waitFor();
     });
     await t.test('Lange Clip-Titel lassen mobile Dialoge und Schließen erreichbar', async () => {
@@ -731,3 +732,79 @@ test(
     assert.deepEqual(errors, []);
   },
 );
+
+// Enger Nachlauf: echte React-Seite, ausschließlich lokale API-Fixtures.
+test('Social Studio: stabile Kanal-ID bei widersprüchlichen Links und Kanalwechsel', { timeout: 45000 }, async (t) => {
+  const observed = [];
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const p = url.pathname;
+    const json = (body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    if (p.includes('/api/')) {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      observed.push({ path: p, query: url.search, body });
+      if (p.endsWith('/auth-status')) return json({ authenticated: true, isAdmin: true, isLocalhost: false, canViewAllStreamers: true, canAccessAnalyticsDashboard: true, adminMode: true, authLevel: 'admin', level: 'admin' });
+      if (p.endsWith('/streamers')) return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
+      if (p.endsWith('/access/me')) return json({ allowed: true, isAdmin: true });
+      if (p.endsWith('/access')) return json({ items: [] });
+      if (p.endsWith('/streamer-layout')) return json({ layout, mode: 'pip', cam_enabled: true });
+      if (p.endsWith('/posting-plan')) return json(makePlan(url.searchParams.get('streamer_login') ?? 'earlysalty'));
+      if (p.endsWith('/clips')) return json({ items: [], total: 0, page: 1, page_size: 100 });
+      if (p.endsWith('/upload')) return json({ clip_id: 'local-contract-only' });
+      return json({ items: [], total: 0 });
+    }
+    try {
+      const file = p.startsWith('/brand/fonts/') ? path.join(brandFontDir, path.basename(p))
+        : p.startsWith('/twitch/dashboard-v2/') ? path.join(dist, p.slice('/twitch/dashboard-v2/'.length)) : path.join(dist, 'index.html');
+      const type = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png', '.woff2': 'font/woff2' }[path.extname(file)];
+      const body = await fs.readFile(file);
+      res.writeHead(200, { 'content-type': type ?? 'application/octet-stream' }); res.end(body);
+    } catch { res.writeHead(404); res.end(); }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => server.close(resolve)); });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1080 }, reducedMotion: 'reduce' });
+  page.setDefaultTimeout(6000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.route('**/*', (route) => route.request().url().startsWith(base) ? route.continue() : route.abort());
+  const select = page.getByRole('combobox', { name: 'Streamer wählen' });
+  const clipRequests = () => observed.filter((entry) => entry.path.endsWith('/admin/clips'));
+  for (const query of ['?streamer=partner2&twitch_user_id=11', '?streamer=earlysalty']) {
+    observed.length = 0;
+    await page.goto(base + '/social-media-admin' + query);
+    await page.getByRole('heading', { name: 'Streamer auswählen' }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('select[aria-label="Streamer wählen"]').disabled);
+    assert.equal(await select.inputValue(), '');
+    assert.equal(clipRequests().length, 0, 'ohne eindeutige Auswahl keine Clipabfrage');
+    assert.equal(await page.locator('input[type=file]').count(), 0);
+  }
+  observed.length = 0;
+  const initialClips = page.waitForResponse((response) => response.url().includes('/admin/clips?'));
+  await page.goto(base + '/social-media-admin?twitch_user_id=11');
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Streamer wählen"]')?.value === '11');
+  await initialClips;
+  assert.ok(clipRequests().every((entry) => new URLSearchParams(entry.query).get('twitch_user_id') === '11'));
+  assert.equal(new URL(page.url()).searchParams.get('streamer'), 'earlysalty');
+  // Nur lokaler Multipart-Vertrag: kein externer Uploader und kein echtes Video.
+  await page.getByRole('button', { name: 'Clip hinzufügen', exact: true }).click();
+  await Promise.all([page.waitForResponse((response) => response.url().endsWith('/upload')), page.locator('input[type=file]').setInputFiles({ name: 'contract.mp4', mimeType: 'video/mp4', buffer: Buffer.from('local fixture') })]);
+  assert.match(observed.find((entry) => entry.path.endsWith('/upload')).body, /name="twitch_user_id"\r\n\r\n11\r\n/);
+  await page.getByRole('button', { name: 'Schließen', exact: true }).click();
+  observed.length = 0;
+  await Promise.all([page.waitForResponse((response) => response.url().includes('/admin/clips?') && response.url().includes('twitch_user_id=22')), select.selectOption('22')]);
+  assert.equal(new URL(page.url()).searchParams.get('streamer'), 'partner2');
+  assert.equal(new URL(page.url()).searchParams.get('twitch_user_id'), '22');
+  assert.ok(clipRequests().every((entry) => new URLSearchParams(entry.query).get('twitch_user_id') === '22'));
+  await page.getByRole('button', { name: 'Clip hinzufügen', exact: true }).click();
+  await Promise.all([page.waitForResponse((response) => response.url().endsWith('/upload')), page.locator('input[type=file]').setInputFiles({ name: 'contract-2.mp4', mimeType: 'video/mp4', buffer: Buffer.from('local fixture') })]);
+  assert.match(observed.find((entry) => entry.path.endsWith('/upload')).body, /name="twitch_user_id"\r\n\r\n22\r\n/);
+  await page.getByRole('button', { name: 'Schließen', exact: true }).click();
+  const screenshotDir = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-30-clip-channel-selection');
+  await fs.mkdir(screenshotDir, { recursive: true });
+  await page.screenshot({ path: path.join(screenshotDir, 'channel-selection.png'), fullPage: true });
+  assert.deepEqual(errors, []);
+});

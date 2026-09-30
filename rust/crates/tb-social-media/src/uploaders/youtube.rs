@@ -448,10 +448,7 @@ impl YouTubeUploader {
     /// Fragt den Zustand eines Videos ab. `None`, wenn YouTube die Video-ID
     /// nicht mehr kennt — das Video wurde also entfernt oder abgelehnt und
     /// aus der Liste geworfen.
-    pub async fn video_status(
-        &self,
-        video_id: &str,
-    ) -> Result<Option<VideoZustand>, UploadError> {
+    pub async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
         let resp = self.get_videos("status", video_id).await?;
         if !resp.status().is_success() {
             return Err(fehler_aus_antwort(resp, "YouTube videos.list").await);
@@ -1032,7 +1029,10 @@ mod tests {
     }
 
     async fn temp_video() -> String {
-        let p = std::env::temp_dir().join("tb_youtube_test_clip.mp4");
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p =
+            std::env::temp_dir().join(format!("tb_youtube_test_{}_{}.mp4", std::process::id(), id));
         tokio::fs::write(&p, b"fake-video-bytes").await.unwrap();
         p.to_string_lossy().into_owned()
     }

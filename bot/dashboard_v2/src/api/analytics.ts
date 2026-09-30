@@ -158,8 +158,8 @@ export async function fetchSessionEvents(
   return fetchApi<SessionEvent>(`/session/${sessionId}/events`);
 }
 
-export async function fetchStreamerList(): Promise<{ login: string; isPartner: boolean }[]> {
-  return fetchApi<{ login: string; isPartner: boolean }[]>('/streamers');
+export async function fetchStreamerList(): Promise<{ login: string; twitchUserId: string | null; isPartner: boolean }[]> {
+  return fetchApi<{ login: string; twitchUserId: string | null; isPartner: boolean }[]>('/streamers');
 }
 
 export async function fetchCategoryComparison(

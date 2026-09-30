@@ -88,6 +88,47 @@ pub struct OpenAiTranscriber {
 }
 
 impl OpenAiTranscriber {
+    /// Erzeugt einen lokalen Whisper-Client aus bereits geprüfter Laufzeitconfig.
+    /// Der Aufrufer liefert die vollständige lokale Transkriptionsadresse.
+    pub fn from_local_config(
+        endpoint: &str,
+        model: &str,
+        timeout: Duration,
+    ) -> Result<Self, &'static str> {
+        let url = reqwest::Url::parse(endpoint).map_err(|_| "STT-Adresse ist ungültig.")?;
+        let local_host = match url.host() {
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            Some(url::Host::Domain(host)) => host == "localhost",
+            None => false,
+        };
+        if url.scheme() != "http"
+            || !local_host
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || model.trim().is_empty()
+            || timeout.is_zero()
+        {
+            return Err("Clip-Kontext erlaubt nur lokalen STT-Betrieb.");
+        }
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "STT-Verbindung konnte nicht vorbereitet werden.")?;
+        Ok(Self {
+            api_key: "local".to_string(),
+            model: model.to_string(),
+            base_url: endpoint.to_string(),
+            ffmpeg_bin: "ffmpeg".to_string(),
+            http,
+            temp_dir: None,
+        })
+    }
+
     /// Aus Env: `OPENAI_WHISPER_MODEL` (Legacy, Default `whisper-1`) und
     /// `FFMPEG_BIN` (Default `ffmpeg`).
     ///
@@ -447,6 +488,30 @@ mod tests {
         ] {
             assert!(!host_is_loopback(fremd), "{fremd} ist auswaertig");
         }
+    }
+
+    #[test]
+    fn lokaler_clip_stt_akzeptiert_ipv4_und_ipv6_loopback() {
+        for endpoint in [
+            "http://127.0.0.1:8791/v1/audio/transcriptions",
+            "http://[::1]:8791/v1/audio/transcriptions",
+        ] {
+            assert!(
+                OpenAiTranscriber::from_local_config(
+                    endpoint,
+                    "local-model",
+                    Duration::from_secs(1)
+                )
+                .is_ok(),
+                "Loopback-Adresse muss erlaubt sein: {endpoint}"
+            );
+        }
+        assert!(OpenAiTranscriber::from_local_config(
+            "http://192.0.2.1:8791/v1/audio/transcriptions",
+            "local-model",
+            Duration::from_secs(1)
+        )
+        .is_err());
     }
 
     fn transcriber_with_timeout(base: &str, timeout: Duration) -> OpenAiTranscriber {

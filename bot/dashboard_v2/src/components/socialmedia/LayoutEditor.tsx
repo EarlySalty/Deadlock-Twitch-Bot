@@ -17,6 +17,7 @@ import {
   clampToFrame,
   formatBox,
   normalizeStoredCamPosition,
+  stackedGameCrop,
   withBandHeight,
 } from '@/utils/socialMediaLayout';
 
@@ -362,10 +363,10 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const t = useT();
   const bandHeight = layout.cam_position.h;
   const isStacked = mode === 'stacked';
-  const isBlurPad = mode === 'blur_pad';
+  const isBlurPad = mode === 'blur_pad' || !camEnabled;
 
   if (isBlurPad) {
-    const gameAspect = layout.game_crop.w / layout.game_crop.h;
+    const gameAspect = layout.source.width / layout.source.height;
     const frameAspect = TARGET_WIDTH / TARGET_HEIGHT;
     const passtInBreite = gameAspect >= frameAspect;
     const anzeigeBreite = passtInBreite ? TARGET_WIDTH : TARGET_HEIGHT * gameAspect;
@@ -382,7 +383,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
             <AusschnittBild
               bildUrl={bildUrl}
               quelle={layout.source}
-              crop={layout.game_crop}
+              crop={{ x: 0, y: 0, w: layout.source.width, h: layout.source.height }}
               zielBreite={TARGET_WIDTH}
               zielHoehe={TARGET_HEIGHT}
             />
@@ -401,7 +402,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
           <AusschnittBild
             bildUrl={bildUrl}
             quelle={layout.source}
-            crop={layout.game_crop}
+            crop={{ x: 0, y: 0, w: layout.source.width, h: layout.source.height }}
             zielBreite={anzeigeBreite}
             zielHoehe={anzeigeHoehe}
           />
@@ -462,11 +463,12 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const gameHoehe = isStacked && camEnabled ? TARGET_HEIGHT - bandHeight : TARGET_HEIGHT;
   const gameOben = isStacked && camEnabled ? (bandHeight / TARGET_HEIGHT) * 100 : 0;
 
+  const gameCrop = isStacked && camEnabled ? stackedGameCrop(layout.game_crop, layout.cam_crop, gameHoehe) : layout.game_crop;
   const gameFlaeche = bildUrl ? (
     <AusschnittBild
       bildUrl={bildUrl}
       quelle={layout.source}
-      crop={layout.game_crop}
+      crop={gameCrop}
       zielBreite={TARGET_WIDTH}
       zielHoehe={gameHoehe}
     />
@@ -481,6 +483,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const background = (
     <div className="absolute left-0 right-0 bottom-0 overflow-hidden" style={{ top: `${gameOben}%` }}>
       {gameFlaeche}
+      {isStacked && camEnabled && <div className="absolute left-0 right-0 top-0 h-[8px] bg-primary" />}
     </div>
   );
 
@@ -617,7 +620,7 @@ export function LayoutEditor({
       cam_crop: { ...DEFAULT_LAYOUT.cam_crop },
       cam_position: { ...DEFAULT_LAYOUT.cam_position },
       cam_enabled: true,
-      mode: 'pip',
+      mode: DEFAULT_LAYOUT.mode,
     });
   };
 

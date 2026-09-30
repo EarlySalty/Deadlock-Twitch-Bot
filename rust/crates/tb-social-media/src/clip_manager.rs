@@ -30,7 +30,7 @@ pub enum ManualUploadError {
 pub async fn register_manual_upload(
     pool: &PgPool,
     clip_id: &str,
-    streamer_login: &str,
+    twitch_user_id: &str,
     title: Option<&str>,
     local_path: &str,
     duration_seconds: f64,
@@ -48,16 +48,20 @@ pub async fn register_manual_upload(
         return Err(ManualUploadError::AlreadyExists);
     }
 
-    let streamer = sqlx::query!(
-        "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
-        streamer_login
+    // Der Aufrufer übergibt die autorisierte Plattform-ID. Ein veralteter oder
+    // neu vergebener Login darf den Eigentümer niemals ändern.
+    if twitch_user_id.is_empty() || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ManualUploadError::UnknownStreamer);
+    }
+    let streamer_login = sqlx::query_scalar::<_, String>(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
     )
+    .bind(twitch_user_id)
     .fetch_optional(pool)
     .await?;
-    let Some(row) = streamer else {
+    let Some(streamer_login) = streamer_login else {
         return Err(ManualUploadError::UnknownStreamer);
     };
-    let twitch_user_id = row.twitch_user_id;
 
     let row = sqlx::query!(
         "INSERT INTO twitch_clips_social_media \
@@ -70,7 +74,7 @@ pub async fn register_manual_upload(
         local_path,
         title,
         streamer_login,
-        twitch_user_id.as_deref(),
+        twitch_user_id,
         &created_at,
         duration_seconds
     )
@@ -86,7 +90,7 @@ pub async fn register_manual_upload(
         .mark_kontingent_verbrauch(clip_db_id)
         .await?;
 
-    if let Err(error) = apply_default_layout(pool, clip_db_id, streamer_login).await {
+    if let Err(error) = apply_default_layout(pool, clip_db_id, &streamer_login).await {
         tracing::warn!(
             %error,
             clip_db_id,
@@ -102,21 +106,24 @@ pub async fn register_manual_upload(
 pub async fn get_clips_for_dashboard(
     pool: &PgPool,
     streamer_login: Option<&str>,
+    twitch_user_id: Option<&str>,
     status: Option<&str>,
     limit: i64,
 ) -> Vec<Value> {
-    let rows = match sqlx::query!(
+    let rows = match sqlx::query_as::<_, (Option<String>, i64)>(
         "SELECT to_jsonb(c)::text AS clip, \
                 COALESCE((SELECT COUNT(*) FROM twitch_clips_upload_queue q \
-                          WHERE q.clip_id = c.id AND q.status = 'pending'), 0) AS \"pending_uploads!\" \
+                          WHERE q.clip_id = c.id AND q.status = 'pending'), 0) AS pending_uploads \
            FROM twitch_clips_social_media c \
-          WHERE ($1::text IS NULL OR LOWER(c.streamer_login) = LOWER($1)) \
+          WHERE (($4::text IS NOT NULL AND c.twitch_user_id = $4) OR \
+                 ($4::text IS NULL AND ($1::text IS NULL OR LOWER(c.streamer_login) = LOWER($1)))) \
             AND ($2::text IS NULL OR c.status = $2) \
           ORDER BY c.created_at DESC LIMIT $3",
-        streamer_login,
-        status,
-        limit
     )
+    .bind(streamer_login)
+    .bind(status)
+    .bind(limit)
+    .bind(twitch_user_id)
     .fetch_all(pool)
     .await
     {
@@ -134,8 +141,8 @@ pub async fn get_clips_for_dashboard(
 
     rows.iter()
         .map(|r| {
-            let clip_text = r.clip.clone().unwrap_or_else(|| "{}".to_string());
-            let pending = r.pending_uploads;
+            let clip_text = r.0.clone().unwrap_or_else(|| "{}".to_string());
+            let pending = r.1;
             let mut obj: Value = serde_json::from_str(&clip_text).unwrap_or_else(|_| json!({}));
             if let Some(map) = obj.as_object_mut() {
                 map.insert("pending_uploads".to_string(), json!(pending));
@@ -212,6 +219,7 @@ fn parse_json_strings(raw: Option<&str>) -> Vec<String> {
 pub async fn batch_upload_all_new(
     pool: &PgPool,
     streamer_login: &str,
+    twitch_user_id: Option<&str>,
     platforms: &[String],
     apply_default_template: bool,
 ) -> BatchUploadStats {
@@ -250,9 +258,10 @@ pub async fn batch_upload_all_new(
         };
         let clips: Vec<PendingClipRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT id, clip_title, streamer_login, game_name, custom_description, hashtags \
-             FROM twitch_clips_social_media WHERE streamer_login = $1 AND {col} = FALSE ORDER BY created_at DESC"
+             FROM twitch_clips_social_media WHERE (($2::text IS NOT NULL AND twitch_user_id = $2) OR ($2::text IS NULL AND streamer_login = $1)) AND {col} = FALSE ORDER BY created_at DESC"
         )))
         .bind(streamer_login)
+        .bind(twitch_user_id)
         .fetch_all(pool)
         .await
         .unwrap_or_default();
@@ -363,16 +372,10 @@ mod tests {
         .unwrap();
 
         // Registrierung.
-        let (id, retention) = register_manual_upload(
-            &pool,
-            "m1",
-            "nani",
-            Some("Mein Upload"),
-            "/data/v.mp4",
-            30.0,
-        )
-        .await
-        .unwrap();
+        let (id, retention) =
+            register_manual_upload(&pool, "m1", "123", Some("Mein Upload"), "/data/v.mp4", 30.0)
+                .await
+                .unwrap();
         assert!(id > 0);
         assert!(!retention.is_empty());
         let (kind, path, status, layout): (String, String, String, Option<String>) = sqlx::query_as("SELECT source_kind, upload_local_path, status, layout_override_json::text FROM twitch_clips_social_media WHERE id = $1").bind(id).fetch_one(&pool).await.unwrap();
@@ -383,22 +386,22 @@ mod tests {
 
         // Duplikat + unbekannter Streamer.
         assert!(matches!(
-            register_manual_upload(&pool, "m1", "nani", None, "/x.mp4", 1.0).await,
+            register_manual_upload(&pool, "m1", "123", None, "/x.mp4", 1.0).await,
             Err(ManualUploadError::AlreadyExists)
         ));
         assert!(matches!(
-            register_manual_upload(&pool, "m2", "ghost", None, "/x.mp4", 1.0).await,
+            register_manual_upload(&pool, "m2", "999", None, "/x.mp4", 1.0).await,
             Err(ManualUploadError::UnknownStreamer)
         ));
 
         // Dashboard-Liste.
-        let clips = get_clips_for_dashboard(&pool, Some("nani"), None, 50).await;
+        let clips = get_clips_for_dashboard(&pool, Some("nani"), None, None, 50).await;
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0]["clip_id"], "m1");
         assert_eq!(clips[0]["pending_uploads"], 0);
         // Status-Filter greift.
         assert_eq!(
-            get_clips_for_dashboard(&pool, None, Some("processing"), 50)
+            get_clips_for_dashboard(&pool, None, None, Some("processing"), 50)
                 .await
                 .len(),
             0
@@ -406,7 +409,8 @@ mod tests {
         // Pending-Upload erhöht den Zähler.
         sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending')").bind(id).execute(&pool).await.unwrap();
         assert_eq!(
-            get_clips_for_dashboard(&pool, Some("nani"), None, 50).await[0]["pending_uploads"],
+            get_clips_for_dashboard(&pool, Some("nani"), None, None, 50).await[0]
+                ["pending_uploads"],
             1
         );
     }
@@ -443,7 +447,7 @@ mod tests {
         // Clip C: schon hochgeladen → nicht eingereiht.
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, created_at) VALUES ('c', 'https://clips.test/c', 'nani', TRUE, '2026-06-08')").execute(&pool).await.unwrap();
 
-        let stats = batch_upload_all_new(&pool, "nani", &["tiktok".into()], true).await;
+        let stats = batch_upload_all_new(&pool, "nani", None, &["tiktok".into()], true).await;
         assert_eq!(stats.queued, 2);
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.skipped, 0);
