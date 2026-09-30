@@ -53,6 +53,16 @@ fn yaml_ist_die_einzige_versionsquelle() {
 }
 
 #[test]
+fn datierte_mindestversion_schliesst_aeltere_revisionen_aus() {
+    let mut dated = policy();
+    dated.bootstrap_model = model("v4p1-flash-20260910");
+    assert!(!dated.allows(&model("v4p1-flash-20260731")));
+    assert!(!dated.allows(&model("v4p1-flash")));
+    assert!(dated.allows(&model("v4p1-flash-20260920")));
+    assert!(dated.allows(&model("v4p2-flash-20260731")));
+}
+
+#[test]
 fn kaputte_und_fremde_yaml_schlaegt_geschlossen_fehl() {
     let raw = include_str!("../../../../knowledge/llm.yaml");
     for invalid in [

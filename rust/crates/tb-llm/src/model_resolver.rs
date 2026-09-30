@@ -82,8 +82,23 @@ impl ModelPolicy {
     }
 
     pub fn allows(&self, model: &str) -> bool {
+        self.allows_with_created(model, None)
+    }
+
+    fn allows_with_created(&self, model: &str, created: Option<i64>) -> bool {
         match (model_version(model), model_version(&self.bootstrap_model)) {
-            (Some(version), Some(minimum)) => version.parts >= minimum.parts,
+            (Some(version), Some(minimum)) => {
+                if version.parts != minimum.parts {
+                    return version.parts > minimum.parts;
+                }
+                if minimum.revision.is_none() {
+                    true
+                } else if version.revision.is_none() {
+                    false
+                } else {
+                    revision_date(&version, created) >= revision_date(&minimum, None)
+                }
+            }
             _ => false,
         }
     }
@@ -176,7 +191,7 @@ fn revision_date(version: &ModelVersion, created: Option<i64>) -> i64 {
 }
 
 fn newest_first(entries: &mut Vec<ModelEntry>, policy: &ModelPolicy) {
-    entries.retain(|entry| policy.allows(&entry.id));
+    entries.retain(|entry| policy.allows_with_created(&entry.id, entry.created));
     // Ein einheitlicher Sortierschlüssel bleibt auch bei gemischten fehlenden
     // Zeitstempeln transitiv. Keine paarweise wechselnden Vergleichsregeln.
     entries.sort_by_cached_key(|entry| {
