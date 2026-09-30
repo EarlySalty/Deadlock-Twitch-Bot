@@ -1595,26 +1595,23 @@ impl CommandEngine {
         {
             Ok(result) => {
                 let chatter = &event.chatter_user_login;
-                let target_login = result.target_login.as_deref().unwrap_or("");
                 let msg = match result.status.as_str() {
-                    "started" => {
-                        format!(
-                            "@{chatter} Raid auf {target_login} gestartet! (Twitch-Countdown ~90s)"
-                        )
-                    }
-                    "source_not_live" => format!(
+                    "started" => None,
+                    "source_not_live" => Some(format!(
                         "@{chatter} Kein Stream gefunden, von dem aus geraidet werden kann."
-                    ),
-                    "source_not_eligible" => format!(
+                    )),
+                    "source_not_eligible" => Some(format!(
                         "@{chatter} !raid ist nur verfügbar, wenn du gerade Deadlock streamst oder gerade erst von Deadlock auf Just Chatting gewechselt bist."
-                    ),
-                    "no_target" => format!(
+                    )),
+                    "no_target" => Some(format!(
                         "@{chatter} Weder Deadlock-Partner noch andere deutsche Deadlock-Streamer live."
-                    ),
-                    "unavailable" => format!("@{chatter} Twitch-Bot nicht verfügbar."),
-                    other => format!("@{chatter} Raid fehlgeschlagen: {other}"),
+                    )),
+                    "unavailable" => Some(format!("@{chatter} Twitch-Bot nicht verfügbar.")),
+                    other => Some(format!("@{chatter} Raid fehlgeschlagen: {other}")),
                 };
-                self.reply_plain(event, &msg).await;
+                if let Some(msg) = msg {
+                    self.reply_plain(event, &msg).await;
+                }
             }
             Err(e) => {
                 tracing::warn!(
