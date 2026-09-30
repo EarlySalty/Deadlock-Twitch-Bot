@@ -586,8 +586,8 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         Mock, MockServer, ResponseTemplate,
     };
 
-    async fn mock_server(fail: bool, delay: std::time::Duration) -> MockServer {
-        let server = MockServer::start().await;
+    async fn configure_server(server: &MockServer, fail: bool, delay: std::time::Duration) {
+        server.reset().await;
         Mock::given(method("POST"))
             .and(path("/token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -612,6 +612,11 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
             .respond_with(response)
             .mount(&server)
             .await;
+    }
+
+    async fn mock_server(fail: bool, delay: std::time::Duration) -> MockServer {
+        let server = MockServer::start().await;
+        configure_server(&server, fail, delay).await;
         server
     }
 
@@ -680,22 +685,25 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         .with_timezone(&Utc);
     insert_pair(&pool, start).await;
 
-    // Failed Helix requests must erase the writer's previous continuity. The
-    // immediate successful poll starts from zero despite a 120-second gap.
-    seed_continuity(&pool, start).await;
-    let failed_helix = mock_server(true, std::time::Duration::ZERO).await;
+    // Prime the same Engine before making Helix fail so this proves the
+    // request failure, rather than startup dirtiness, caused the reset.
+    let failed_helix = mock_server(false, std::time::Duration::ZERO).await;
     let failed_engine = engine(&pool, &failed_helix, 10);
-    mark_live_at(&pool, start + Duration::seconds(60)).await;
+    mark_live_at(&pool, start).await;
+    failed_engine.tick(start).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(0));
+    configure_server(&failed_helix, true, std::time::Duration::ZERO).await;
+    seed_continuity(&pool, start + Duration::seconds(60)).await;
+    mark_live_at(&pool, start + Duration::seconds(120)).await;
     assert!(failed_engine
-        .tick(start + Duration::seconds(60))
+        .tick(start + Duration::seconds(120))
         .await
         .is_err());
     assert_eq!(confirmed_seconds(&pool).await, None);
-    let recovered_helix = mock_server(false, std::time::Duration::ZERO).await;
-    let recovered_engine = engine(&pool, &recovered_helix, 10);
-    mark_live_at(&pool, start + Duration::seconds(120)).await;
-    recovered_engine
-        .tick(start + Duration::seconds(120))
+    configure_server(&failed_helix, false, std::time::Duration::ZERO).await;
+    mark_live_at(&pool, start + Duration::seconds(180)).await;
+    failed_engine
+        .tick(start + Duration::seconds(180))
         .await
         .unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
@@ -703,14 +711,14 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
 
     // Unknown stream state, including a missing stream ID, invalidates that
     // partner's stored observations before a later valid session is counted.
-    let state_error_at = start + Duration::seconds(180);
+    let state_error_at = start + Duration::seconds(240);
     seed_continuity(&pool, state_error_at - Duration::seconds(60)).await;
     sqlx::query("UPDATE twitch_stream_sessions SET stream_id=NULL WHERE twitch_user_id='101'")
         .execute(&pool)
         .await
         .unwrap();
     mark_live_at(&pool, state_error_at).await;
-    assert!(recovered_engine.tick(state_error_at).await.is_err());
+    assert!(failed_engine.tick(state_error_at).await.is_err());
     assert_eq!(confirmed_seconds(&pool).await, None);
     sqlx::query(
         "UPDATE twitch_stream_sessions SET stream_id='stream-101' WHERE twitch_user_id='101'",
@@ -718,24 +726,24 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     .execute(&pool)
     .await
     .unwrap();
-    let after_state_error = start + Duration::seconds(240);
+    let after_state_error = start + Duration::seconds(300);
     mark_live_at(&pool, after_state_error).await;
-    recovered_engine.tick(after_state_error).await.unwrap();
+    failed_engine.tick(after_state_error).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
     no_costream_award(&pool).await;
 
     // A new Engine starts with continuity dirty even when old rows survived a
     // process restart. Its first successful snapshot must begin at zero.
-    let restart_at = start + Duration::seconds(270);
+    let restart_at = start + Duration::seconds(330);
     seed_continuity(&pool, restart_at - Duration::seconds(60)).await;
-    let restarted_engine = engine(&pool, &recovered_helix, 10);
+    let restarted_engine = engine(&pool, &failed_helix, 10);
     mark_live_at(&pool, restart_at).await;
     restarted_engine.tick(restart_at).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
 
     // A failed reset cannot clear the in-memory dirty latch. Once PostgreSQL
     // recovers, the same Engine resets stale observations before collecting.
-    let reset_failure_at = start + Duration::seconds(330);
+    let reset_failure_at = start + Duration::seconds(390);
     seed_continuity(&pool, reset_failure_at - Duration::seconds(60)).await;
     sqlx::query("UPDATE twitch_stream_sessions SET stream_id=NULL WHERE twitch_user_id='101'")
         .execute(&pool)
@@ -747,7 +755,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         .await
         .unwrap();
     mark_live_at(&pool, reset_failure_at).await;
-    assert!(recovered_engine.tick(reset_failure_at).await.is_err());
+    assert!(failed_engine.tick(reset_failure_at).await.is_err());
     for source in ["shared_chat", "engine"] {
         let healthy: bool =
             sqlx::query_scalar("SELECT healthy FROM partner_effort_source_state WHERE source=$1")
@@ -757,10 +765,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
                 .unwrap();
         assert!(!healthy, "{source} must report the failed reset");
     }
-    assert!(recovered_engine
-        .ensure_ready(reset_failure_at)
-        .await
-        .is_err());
+    assert!(failed_engine.ensure_ready(reset_failure_at).await.is_err());
     sqlx::raw_sql("DROP TRIGGER test_fail_shared_chat_reset ON partner_effort_shared_chat_observations; DROP FUNCTION test_fail_shared_chat_reset()")
         .execute(&pool)
         .await
@@ -771,23 +776,23 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     .execute(&pool)
     .await
     .unwrap();
-    let after_reset_recovery = start + Duration::seconds(390);
+    let after_reset_recovery = start + Duration::seconds(450);
     mark_live_at(&pool, after_reset_recovery).await;
-    recovered_engine.tick(after_reset_recovery).await.unwrap();
+    failed_engine.tick(after_reset_recovery).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
 
     // A confirmed snapshot with one partner offline ends that pair's
     // observation. Returning with the same stream_id starts a new interval.
-    let partner_offline_at = start + Duration::seconds(450);
+    let partner_offline_at = start + Duration::seconds(510);
     seed_continuity(&pool, partner_offline_at - Duration::seconds(60)).await;
     sqlx::query("UPDATE twitch_live_state SET is_live=0 WHERE twitch_user_id='102'")
         .execute(&pool)
         .await
         .unwrap();
     mark_live_at(&pool, partner_offline_at).await;
-    recovered_engine.tick(partner_offline_at).await.unwrap();
+    failed_engine.tick(partner_offline_at).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, None);
-    let partner_returned_at = start + Duration::seconds(510);
+    let partner_returned_at = start + Duration::seconds(570);
     sqlx::query(
         "UPDATE twitch_live_state SET is_live=1,last_seen_at=$1 WHERE twitch_user_id='102'",
     )
@@ -796,13 +801,63 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     .await
     .unwrap();
     mark_live_at(&pool, partner_returned_at).await;
-    recovered_engine.tick(partner_returned_at).await.unwrap();
+    failed_engine.tick(partner_returned_at).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
 
-    // Hold a real observation upsert inside PostgreSQL after the source has
-    // acquired the shared write lock. The source timeout must wait for that
-    // transaction to roll back before clearing rows, so it cannot commit late.
-    let timeout_at = start + Duration::seconds(570);
+    // Pause the winning tick after it confirms a healthy Shared Chat snapshot.
+    // A cloned loser must not dirty that confirmed interval when it cannot get
+    // the tick advisory lock.
+    let contention_at = start + Duration::seconds(630);
+    sqlx::raw_sql("CREATE FUNCTION test_delay_steam_party_source_state() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.source='steam_party' THEN PERFORM pg_sleep(2); END IF; RETURN NEW; END $$;
+        CREATE TRIGGER test_delay_steam_party_source_state BEFORE INSERT OR UPDATE ON partner_effort_source_state FOR EACH ROW EXECUTE FUNCTION test_delay_steam_party_source_state();")
+        .execute(&pool)
+        .await
+        .unwrap();
+    mark_live_at(&pool, contention_at).await;
+    let winner = tokio::spawn({
+        let engine = failed_engine.clone();
+        async move { engine.tick(contention_at).await }
+    });
+    let source_state_sleep_started = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        async {
+            loop {
+                let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE state='active' AND wait_event='PgSleep' AND query LIKE '%partner_effort_source_state%')")
+                    .fetch_one(&pool).await.unwrap();
+                if active {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        },
+    )
+    .await
+    .is_ok();
+    assert!(
+        source_state_sleep_started,
+        "winner did not reach post-snapshot pause"
+    );
+    let loser_at = contention_at + Duration::seconds(60);
+    mark_live_at(&pool, loser_at).await;
+    failed_engine.clone().tick(loser_at).await.unwrap();
+    winner.await.unwrap().unwrap();
+    sqlx::raw_sql("DROP TRIGGER test_delay_steam_party_source_state ON partner_effort_source_state; DROP FUNCTION test_delay_steam_party_source_state()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let after_contention = start + Duration::seconds(750);
+    mark_live_at(&pool, after_contention).await;
+    failed_engine.tick(after_contention).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(180));
+
+    // Prime the timeout Engine before seeding the old 1,790-second row. Hold
+    // its real PostgreSQL upsert, then prove cancellation cleanup cannot allow
+    // that late write to restore the awardable observation.
+    let slow_helix = mock_server(false, std::time::Duration::ZERO).await;
+    let timeout_engine = engine(&pool, &slow_helix, 2);
+    mark_live_at(&pool, after_contention).await;
+    timeout_engine.tick(after_contention).await.unwrap();
+    let timeout_at = start + Duration::seconds(810);
     seed_continuity(&pool, timeout_at - Duration::seconds(60)).await;
     mark_live_at(&pool, timeout_at).await;
     sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(5); END IF; RETURN NEW; END $$;
@@ -810,8 +865,6 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         .execute(&pool)
         .await
         .unwrap();
-    let slow_helix = mock_server(false, std::time::Duration::ZERO).await;
-    let timeout_engine = engine(&pool, &slow_helix, 2);
     let ticking = tokio::spawn({
         let timeout_engine = timeout_engine.clone();
         async move { timeout_engine.tick(timeout_at).await }
@@ -840,15 +893,14 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
         .unwrap();
     assert_eq!(confirmed_seconds(&pool).await, None);
     no_costream_award(&pool).await;
-    let after_timeout = start + Duration::seconds(630);
+    let after_timeout = start + Duration::seconds(870);
     mark_live_at(&pool, after_timeout).await;
-    recovered_engine.tick(after_timeout).await.unwrap();
+    timeout_engine.tick(after_timeout).await.unwrap();
     assert_eq!(confirmed_seconds(&pool).await, Some(0));
     no_costream_award(&pool).await;
 
     drop(timeout_engine);
     drop(restarted_engine);
-    drop(recovered_engine);
     drop(failed_engine);
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!(

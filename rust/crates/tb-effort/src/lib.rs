@@ -66,6 +66,10 @@ impl SharedChatContinuityGuard {
         self.dirty.store(false, Ordering::Release);
         self.confirmed = true;
     }
+
+    pub(crate) fn leave_unchanged(&mut self) {
+        self.confirmed = true;
+    }
 }
 
 impl Drop for SharedChatContinuityGuard {
@@ -183,22 +187,27 @@ impl Engine {
         if !self.cfg.enabled {
             return Ok(());
         }
-        let mut shared_chat_guard =
+        let pending_shared_chat_guard =
             SharedChatContinuityGuard::new(self.shared_chat_continuity_dirty.clone());
         // Der Tick benötigt den Pool für seine Quelltransaktionen. Der globale
         // Abschluss-Lock darf deshalb auch bei pool_max=1 keinen Slot belegen.
         let mut lock_connection = PgConnection::connect_with(&self.pool.connect_options()).await?;
         let mut lock = lock_connection.begin().await?;
+        // Declare the active guard after the lock transaction so its Drop
+        // records interruptions before the transaction releases the lock.
+        let mut shared_chat_guard = pending_shared_chat_guard;
         let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(713219, 27)")
             .fetch_one(&mut *lock)
             .await?;
         if !acquired {
+            shared_chat_guard.leave_unchanged();
             return Ok(());
         }
         let result = self.collect(now, &mut shared_chat_guard).await;
         let settlement = self.settle(now).await;
         let result = result.and(settlement);
         self.source_state("engine", now, &result).await?;
+        drop(shared_chat_guard);
         lock.commit().await?;
         result
     }
