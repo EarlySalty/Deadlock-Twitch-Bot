@@ -225,6 +225,7 @@ mod tests {
         let response = set_admin_mode_handler(
             DashboardAuthLevel::admin(),
             None,
+            None,
             Json(AdminModeRequest { enabled: false }),
         )
         .await
