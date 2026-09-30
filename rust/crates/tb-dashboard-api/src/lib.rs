@@ -1890,10 +1890,12 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
+    let clip_contest_helix = helix.clone();
     let pause_loop_router = match helix {
         Some(helix) => build_pause_loop_router(pool.clone(), helix),
         None => handlers::pause_loop::build_unavailable_pause_loop_router(),
     };
+    handlers::clip_contest::spawn_monthly_finalizer(pool.clone());
 
     let mut app = build_public_router(pool.clone())
         .merge(pause_loop_router)
@@ -1911,6 +1913,11 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         .merge(build_v2_spa_pages_router(pool.clone()))
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))
+        .merge(handlers::clip_contest::build_router(
+            pool.clone(),
+            rate_limiter.clone(),
+            clip_contest_helix,
+        ))
         .merge(build_website_router())
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),

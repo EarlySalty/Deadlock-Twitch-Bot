@@ -80,6 +80,31 @@ impl HelixClipSource {
         Ok(users.get(&login.to_lowercase()).map(|u| u.id.clone()))
     }
 
+    /// Holt genau einen Twitch-Clip anhand seiner Clip-ID.
+    ///
+    /// Der öffentliche Wettbewerb validiert damit Existenz, Broadcaster,
+    /// Kategorie und Erstellzeit direkt gegen Helix statt gegen einen Cache.
+    pub async fn fetch_clip_by_id(
+        &self,
+        clip_id: &str,
+    ) -> Result<Option<ClipRecord>, HelixError> {
+        let clip_id = clip_id.trim();
+        if clip_id.is_empty() {
+            return Ok(None);
+        }
+        let req = self
+            .client
+            .get("/clips")
+            .await?
+            .query(&[("id", clip_id)]);
+        let resp: serde_json::Value = req.send().await?.json().await?;
+        Ok(resp
+            .get("data")
+            .and_then(|data| data.as_array())
+            .and_then(|data| data.first())
+            .and_then(|clip| parse_clip(clip, "")))
+    }
+
     /// Fetcht eine Seite Clips für einen Broadcaster im 14-Tage-Fenster.
     pub async fn fetch_clips_page(
         &self,

@@ -90,7 +90,7 @@ pub(crate) fn website_dist_root() -> PathBuf {
 /// Trifft der aufgelöste Pfad ein Verzeichnis, wird dessen `index.html`
 /// ausgeliefert (SPA-Routing). Symlink-Angriffe sind bei eigenem Build-Output
 /// kein reales Szenario.
-async fn serve_website_asset(dist_root: PathBuf, raw_path: &str) -> Response {
+pub(crate) async fn serve_website_asset(dist_root: PathBuf, raw_path: &str) -> Response {
     let mut candidate = dist_root;
     if !raw_path.is_empty() {
         for segment in raw_path.split('/') {
