@@ -3240,6 +3240,7 @@ dependencies = [
  "tb-chat",
  "tb-config",
  "tb-crypto",
+ "tb-dashboard-api",
  "tb-db",
  "tb-engagement",
  "tb-highlight",

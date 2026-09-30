@@ -398,6 +398,69 @@ impl HelixClient {
         }
         Ok(out)
     }
+
+    pub async fn get_shared_chat_users(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Vec<TwitchUser>, HelixError> {
+        let path = format!("/shared_chat/session?broadcaster_id={broadcaster_id}");
+        let resp = self.send_with_retry(self.get(&path).await?).await?;
+        let body: SharedChatResponse = check_status_and_json(resp).await?;
+        let mut ids = body
+            .data
+            .into_iter()
+            .flat_map(|session| session.participants)
+            .map(|participant| participant.broadcaster_id)
+            .filter(|id| !id.trim().is_empty() && id != broadcaster_id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stream_ids = ids.clone();
+        stream_ids.push(broadcaster_id.to_string());
+        let streams = self.get_streams_by_user_ids(&stream_ids, None).await?;
+        if !streams
+            .iter()
+            .any(|stream| stream.user_id == broadcaster_id)
+        {
+            return Ok(Vec::new());
+        }
+        let mut live = streams
+            .into_iter()
+            .map(|stream| (stream.user_id.clone(), stream))
+            .collect::<std::collections::HashMap<_, _>>();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| live.remove(&id))
+            .map(|stream| TwitchUser {
+                id: stream.user_id,
+                login: stream.user_login,
+                display_name: stream.user_name,
+                description: String::new(),
+                profile_image_url: None,
+                offline_image_url: None,
+            })
+            .collect())
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SharedChatResponse {
+    #[serde(default)]
+    data: Vec<SharedChatSession>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SharedChatSession {
+    #[serde(default)]
+    participants: Vec<SharedChatParticipant>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SharedChatParticipant {
+    broadcaster_id: String,
 }
 
 /// Prüft den HTTP-Status einer Helix-Response und deserialisiert den Body.
@@ -461,6 +524,57 @@ mod tests {
             token_url: token_url.to_string(),
             helix_base: helix_base.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn shared_chat_liefert_nur_laufende_partner() {
+        use wiremock::matchers::query_param;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-app-token",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"participants": [
+                    {"broadcaster_id": "300"},
+                    {"broadcaster_id": "100"},
+                    {"broadcaster_id": "200"},
+                    {"broadcaster_id": "200"},
+                    {"broadcaster_id": ""}
+                ]}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "100"))
+            .and(query_param("user_id", "200"))
+            .and(query_param("user_id", "300"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"user_id": "100", "user_login": "self", "user_name": "Self"},
+                    {"user_id": "200", "user_login": "partner", "user_name": "Partner"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let client = HelixClient::new(test_config(
+            &format!("{}/oauth2/token", server.uri()),
+            &format!("{}/helix", server.uri()),
+        ))
+        .unwrap();
+        let users = client.get_shared_chat_users("100").await.unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].id, "200");
+        assert_eq!(users[0].login, "partner");
     }
 
     #[tokio::test]
