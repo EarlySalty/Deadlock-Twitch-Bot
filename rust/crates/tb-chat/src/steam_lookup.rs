@@ -532,42 +532,56 @@ mod tests {
     #[tokio::test]
     async fn review_chunked_antwort_ueber_grenze_wird_abgewiesen() {
         use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!(
-            "http://{}/internal/title-context",
-            listener.local_addr().unwrap()
-        );
-        let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
-                .unwrap();
-            socket
-                .set_write_timeout(Some(std::time::Duration::from_secs(3)))
-                .unwrap();
-            let mut request = [0; 4096];
-            let _ = socket.read(&mut request);
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-                )
-                .unwrap();
-            for _ in 0..9 {
-                if socket.write_all(b"1000\r\n").is_err()
-                    || socket.write_all(&[b' '; 4096]).is_err()
-                    || socket.write_all(b"\r\n").is_err()
-                {
-                    break;
+        for padding in [0, 36 * 1024] {
+            let mut body = serde_json::to_vec(&serde_json::json!({
+                "captured_at": chrono::Utc::now().timestamp(), "party_size": 2,
+                "party_discord_ids": ["43"], "voice_discord_ids": ["44"]
+            }))
+            .unwrap();
+            body.resize(body.len() + padding, b' ');
+            let valid: CentralTitleContext = serde_json::from_slice(&body).unwrap();
+            assert_eq!(valid.party_discord_ids, ["43"]);
+            assert_eq!(valid.voice_discord_ids, ["44"]);
+            assert_eq!(body.len() > 32 * 1024, padding != 0);
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!(
+                "http://{}/internal/title-context",
+                listener.local_addr().unwrap()
+            );
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let _ = socket.read(&mut request);
+                socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
+                for chunk in body.chunks(4096) {
+                    if write!(socket, "{:X}\r\n", chunk.len()).is_err()
+                        || socket.write_all(chunk).is_err()
+                        || socket.write_all(b"\r\n").is_err()
+                    {
+                        break;
+                    }
                 }
+                let _ = socket.write_all(b"0\r\n\r\n");
+            });
+            let result = fetch_central_title_context(&endpoint, "synthetic-token", 42).await;
+            server.join().unwrap();
+            if padding == 0 {
+                let context = result.expect("gültige kleine Chunked-Antwort");
+                assert_eq!(context.party_discord_ids, ["43"]);
+                assert_eq!(context.voice_discord_ids, ["44"]);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "gültiges JSON über der Bodygrenze muss abgewiesen werden"
+                );
             }
-            let _ = socket.write_all(b"0\r\n\r\n");
-        });
-        assert!(
-            fetch_central_title_context(&endpoint, "synthetic-token", 42)
-                .await
-                .is_err()
-        );
-        server.join().unwrap();
+        }
     }
 
     #[tokio::test]
