@@ -34,9 +34,12 @@ test('Wochenaufgaben kommen vollständig aus der Engine ohne erfundene Ergänzun
 });
 
 test('leerer erreichbarer Quest-Pool wird als Partnerstatus angezeigt', () => {
-  assert.match(API, /'assigned' \| 'no_reachable_quests'/);
+  assert.match(API, /'pending' \| 'assigned' \| 'no_reachable_quests'/);
   assert.match(API, /quest_assignment_status: ChallengeAssignmentStatus/);
+  assert.match(PAGE, /quest_assignment_status === 'pending'/);
   assert.match(PAGE, /quest_assignment_status === 'no_reachable_quests'/);
+  assert.ok(PAGE.includes('Deine Wochenaufgaben werden gerade vorbereitet.'));
+  assert.ok(PAGE.includes('Sobald die aktuelle Woche ausgewertet ist, erscheinen sie hier.'));
   assert.ok(PAGE.includes('Diese Woche ist gerade keine Aufgabe für dich erreichbar.'));
   assert.ok(PAGE.includes('Die Monatswertung läuft unabhängig davon weiter.'));
 });

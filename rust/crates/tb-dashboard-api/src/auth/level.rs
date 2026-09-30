@@ -767,27 +767,32 @@ mod tests {
         assert!(!DashboardAuthLevel::None.is_privileged());
     }
 
-    async fn maybe_test_state() -> Option<(sqlx::PgPool, crate::auth::session::DashboardAuthState)>
-    {
-        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+    async fn test_state() -> (
+        crate::test_database::Database,
+        sqlx::PgPool,
+        crate::auth::session::DashboardAuthState,
+    ) {
+        let database = crate::test_database::Database::new().await;
         let schema = crate::auth::session::test_schema_name("auth_level");
-        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-            .execute(&admin_pool)
+            .execute(&database.pool)
             .await
-            .ok()?;
-        admin_pool.close().await;
+            .expect("auth test schema must be created");
 
-        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
-        let opts = opts.options([("search_path", schema.as_str())]);
+        let opts = database
+            .pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .options([("search_path", schema.as_str())]);
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect_with(opts)
             .await
-            .ok()?;
+            .expect("auth test schema pool must connect");
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+            CREATE TABLE dashboard_sessions (
                 session_id   TEXT NOT NULL PRIMARY KEY,
                 session_type TEXT NOT NULL,
                 payload_enc  BYTEA NOT NULL,
@@ -798,10 +803,10 @@ mod tests {
         )
         .execute(&pool)
         .await
-        .ok()?;
+        .expect("auth dashboard_sessions table must be created");
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS twitch_partners (
+            CREATE TABLE twitch_partners (
                 id BIGINT PRIMARY KEY,
                 twitch_login TEXT NOT NULL,
                 twitch_user_id TEXT NOT NULL,
@@ -815,12 +820,12 @@ mod tests {
         )
         .execute(&pool)
         .await
-        .ok()?;
+        .expect("auth twitch_partners table must be created");
         let state = crate::auth::session::DashboardAuthState::new(
             pool.clone(),
             "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
         );
-        Some((pool, state))
+        (database, pool, state)
     }
 
     async fn ensure_partner(pool: &sqlx::PgPool, id: i64, login: &str, user_id: &str) {
@@ -866,9 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn zentrale_admin_session_ignoriert_veralteten_doppel_cookie() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         let mut parts = request_parts(Some(format!(
             "{0}=veraltet; {0}=zentral-gueltig",
             crate::auth::session::ADMIN_COOKIE_NAME
@@ -915,9 +918,7 @@ mod tests {
 
     #[tokio::test]
     async fn zentrale_admin_session_faellt_bei_broker_fehler_auf_lokale_session_zurueck() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         let local = state
             .create_admin_session("discord-fallback", "Fallback Admin")
             .await
@@ -958,9 +959,7 @@ mod tests {
 
     #[tokio::test]
     async fn zentrale_admin_session_wird_kurz_gecached() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let config = crate::auth::discord_admin_login::DiscordAdminLoginConfig {
             admin_base_url: "https://admin.test".into(),
@@ -999,12 +998,11 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_ohne_mode_cookie_bleibt_partner() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
-        ensure_partner(&pool, 9062301, "earlysalty", "9062301").await;
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
+        ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let session = state
-            .create_partner_session("earlysalty", "9062301", "EarlySalty")
+            .create_partner_session("earlysalty", "9062302", "EarlySalty")
             .await
             .unwrap();
         let auth = extract_auth(
@@ -1026,7 +1024,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062301")
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302")
             .execute(&pool)
             .await
             .unwrap();
@@ -1034,9 +1032,8 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_mit_mode_cookie_wird_admin_actor() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
         ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let session = state
             .create_partner_session("earlysalty", "9062302", "EarlySalty")
@@ -1076,9 +1073,7 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_session_schlaegt_master_session() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         ensure_partner(&pool, 9062303, "earlysalty", "9062303").await;
         let partner = state
             .create_partner_session("earlysalty", "9062303", "EarlySalty")
@@ -1118,9 +1113,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_validate_bevorzugt_master_session_vor_twitch_session() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         ensure_partner(&pool, 9062305, "earlysalty", "9062305").await;
         let partner = state
             .create_partner_session("earlysalty", "9062305", "EarlySalty")
@@ -1156,10 +1149,9 @@ mod tests {
 
     #[tokio::test]
     async fn master_session_traegt_aufgeloeste_admin_user_id() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
-        ensure_partner(&pool, 1186925760, "earlysalty", "1186925760").await;
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
+        ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let admin = state
             .create_admin_session("discord-owner-uid", "Discord Admin")
             .await
@@ -1180,7 +1172,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(twitch_login, "earlysalty");
-                assert_eq!(twitch_user_id, "1186925760");
+                assert_eq!(twitch_user_id, "9062302");
             }
             other => panic!("erwartete Partner-Master-Session, war {other:?}"),
         }
@@ -1189,7 +1181,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 1186925760")
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302")
             .execute(&pool)
             .await
             .unwrap();
@@ -1197,9 +1189,8 @@ mod tests {
 
     #[tokio::test]
     async fn reine_master_session_ohne_admin_kontext_wird_partner() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
         let admin = state
             .create_admin_session("discord-9062304", "Discord Admin")
             .await
@@ -1215,7 +1206,8 @@ mod tests {
         .await;
         assert!(matches!(
             auth,
-            DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
+            DashboardAuthLevel::Partner { ref twitch_login, ref twitch_user_id, .. }
+                if twitch_login == "earlysalty" && twitch_user_id == "9062302"
         ));
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
             .bind(crate::auth::session::session_lookup_key(&admin.session_id))

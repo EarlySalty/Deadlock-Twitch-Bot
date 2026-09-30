@@ -839,6 +839,11 @@ async fn verified_discord_peer_without_streamer_profile_confirms_party_match() {
         .bind(json!({"account_id":104,"ranked_only":true}))
         .bind(json!({"ok":true,"data":{"steam_id64":null,"account_id":104,"matches":[{"match_id":501,"start_time":start.timestamp(),"match_result":0}]}}))
         .bind(finished).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE twitch_live_state SET last_seen_at=$1 WHERE twitch_user_id='101'")
+        .bind(finished.to_rfc3339())
+        .execute(&pool)
+        .await
+        .unwrap();
     engine.tick(finished).await.unwrap();
     let scored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_events WHERE event_type='party_play' AND partner_twitch_user_id='101' AND points>0")
         .fetch_one(&pool).await.unwrap();
@@ -1209,7 +1214,7 @@ async fn invite_quest_requires_a_join_that_can_qualify_during_its_week() {
 async fn unreachable_quest_pool_is_partner_local_before_berlin_week_rollover() {
     let (admin, pool, name) = fixture().await;
     let cfg = Challenges::default();
-    let now = DateTime::parse_from_rfc3339("2026-09-27T23:59:00+02:00")
+    let sunday = DateTime::parse_from_rfc3339("2026-09-27T23:59:30+02:00")
         .unwrap()
         .with_timezone(&Utc);
     sqlx::query(
@@ -1219,20 +1224,48 @@ async fn unreachable_quest_pool_is_partner_local_before_berlin_week_rollover() {
     .execute(&pool)
     .await
     .unwrap();
-    insert_invite(&pool, 777701, cfg.community_guild_id, now).await;
+    insert_invite(&pool, 777701, cfg.community_guild_id, sunday).await;
     let engine = Engine::new(pool.clone(), cfg, Some(pool.clone()), Some(idle_helix())).unwrap();
 
-    engine.ensure_ready(now).await.unwrap();
+    engine.tick(sunday).await.unwrap();
+    engine.ensure_ready(sunday).await.unwrap();
 
-    let latecomer = engine.me("104", now).await.unwrap();
-    assert!(latecomer.quests.is_empty());
+    let sunday_latecomer = engine.me("104", sunday).await.unwrap();
+    assert!(sunday_latecomer.quests.is_empty());
     assert_eq!(
-        latecomer.quest_assignment_status,
+        sunday_latecomer.quest_assignment_status,
         tb_effort::types::QuestAssignmentStatus::NoReachableQuests
     );
-    assert!(latecomer.season.active_partners > 0);
+    let sunday_healthy_partner = engine.me("101", sunday).await.unwrap();
+    assert!(!sunday_healthy_partner.quests.is_empty());
+    assert_eq!(
+        sunday_healthy_partner.quest_assignment_status,
+        tb_effort::types::QuestAssignmentStatus::Assigned
+    );
 
-    let healthy_partner = engine.me("101", now).await.unwrap();
+    let monday = DateTime::parse_from_rfc3339("2026-09-28T00:00:01+02:00")
+        .unwrap()
+        .with_timezone(&Utc);
+    engine.ensure_ready(monday).await.unwrap();
+    let pending = engine.me("104", monday).await.unwrap();
+    assert!(pending.quests.is_empty());
+    assert_eq!(
+        pending.quest_assignment_status,
+        tb_effort::types::QuestAssignmentStatus::Pending
+    );
+    assert!(pending.season.active_partners > 0);
+
+    engine.tick(monday).await.unwrap();
+    let assigned = engine.me("104", monday).await.unwrap();
+    assert_eq!(
+        assigned.quest_assignment_status,
+        tb_effort::types::QuestAssignmentStatus::Assigned
+    );
+    assert!(assigned
+        .quests
+        .iter()
+        .any(|quest| quest.key == "stream_above_average"));
+    let healthy_partner = engine.me("101", monday).await.unwrap();
     assert!(!healthy_partner.quests.is_empty());
     assert_eq!(
         healthy_partner.quest_assignment_status,

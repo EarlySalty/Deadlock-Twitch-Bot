@@ -52,7 +52,7 @@ export interface ChallengeSeason {
   active_partners: number;
 }
 
-export type ChallengeAssignmentStatus = 'assigned' | 'no_reachable_quests';
+export type ChallengeAssignmentStatus = 'pending' | 'assigned' | 'no_reachable_quests';
 
 export interface ChallengesMe {
   twitch_user_id: string;

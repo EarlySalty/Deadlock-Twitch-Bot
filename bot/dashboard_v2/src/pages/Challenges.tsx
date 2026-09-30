@@ -233,8 +233,8 @@ export function Challenges() {
 
   const countdown = useMondayCountdown(me.data?.next_reset_at);
   const quests = me.data?.quests ?? [];
-  const hasNoReachableQuests =
-    me.data?.quest_assignment_status === 'no_reachable_quests' || quests.length === 0;
+  const isAssignmentPending = me.data?.quest_assignment_status === 'pending';
+  const hasNoReachableQuests = me.data?.quest_assignment_status === 'no_reachable_quests';
   useEffect(() => {
     const resets = [me.data?.next_reset_at, me.data?.season.next_reset_at]
       .filter((value): value is string => Boolean(value))
@@ -332,7 +332,16 @@ export function Challenges() {
             </div>
           }
         />
-        {hasNoReachableQuests ? (
+        {isAssignmentPending ? (
+          <div role="status" className="panel-card rounded-2xl border border-border p-4 md:p-5">
+            <p className="font-semibold text-white">
+              Deine Wochenaufgaben werden gerade vorbereitet.
+            </p>
+            <p className="mt-1 text-sm text-text-secondary">
+              Sobald die aktuelle Woche ausgewertet ist, erscheinen sie hier.
+            </p>
+          </div>
+        ) : hasNoReachableQuests ? (
           <div
             role="status"
             className="panel-card rounded-2xl border border-border p-4 md:p-5"

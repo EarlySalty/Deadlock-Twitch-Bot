@@ -143,6 +143,12 @@ impl Engine {
             available.push(QuestKind::Clip);
         }
         if available.is_empty() {
+            sqlx::query("INSERT INTO partner_effort_weekly_quest_evaluations(partner_twitch_user_id,week_start,evaluated_at) VALUES($1,$2,$3) ON CONFLICT(partner_twitch_user_id,week_start) DO NOTHING")
+                .bind(&partner.twitch_user_id)
+                .bind(week)
+                .bind(now)
+                .execute(&self.pool)
+                .await?;
             return Ok(AssignmentOutcome::NoReachableQuests);
         }
         let selected = draw(&partner.twitch_user_id, week, &available)?;
@@ -255,10 +261,17 @@ impl Engine {
     ) -> Result<(Vec<QuestResponse>, crate::types::QuestAssignmentStatus)> {
         let assignments = self.assignments(id, week).await?;
         if assignments.is_empty() {
-            return Ok((
-                Vec::new(),
-                crate::types::QuestAssignmentStatus::NoReachableQuests,
-            ));
+            let evaluated_empty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM partner_effort_weekly_quest_evaluations WHERE partner_twitch_user_id=$1 AND week_start=$2)")
+                .bind(id)
+                .bind(week)
+                .fetch_one(&self.pool)
+                .await?;
+            let status = if evaluated_empty {
+                crate::types::QuestAssignmentStatus::NoReachableQuests
+            } else {
+                crate::types::QuestAssignmentStatus::Pending
+            };
+            return Ok((Vec::new(), status));
         }
         let mut result = Vec::new();
         for q in &assignments {
