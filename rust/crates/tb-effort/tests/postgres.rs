@@ -1625,10 +1625,18 @@ async fn unreachable_quest_pool_is_partner_local_before_berlin_week_rollover() {
         assigned.quest_assignment_status,
         tb_effort::types::QuestAssignmentStatus::Assigned
     );
-    assert!(assigned
+    let stream_quest = assigned
         .quests
         .iter()
-        .any(|quest| quest.key == "stream_above_average"));
+        .find(|quest| quest.key == "stream_above_average")
+        .unwrap();
+    assert_eq!(
+        stream_quest.text,
+        "Streame diese Woche mindestens 30 Minuten"
+    );
+    assert_eq!(stream_quest.progress, 0);
+    assert_eq!(stream_quest.goal, 30);
+    assert!(!stream_quest.completed);
     let healthy_partner = engine.me("101", monday).await.unwrap();
     assert!(!healthy_partner.quests.is_empty());
     assert_eq!(

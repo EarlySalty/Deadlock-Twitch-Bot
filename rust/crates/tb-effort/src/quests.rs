@@ -61,6 +61,17 @@ pub(crate) fn draw(id: &str, week: NaiveDate, pool: &[QuestKind]) -> Result<Vec<
     Ok(selected)
 }
 
+fn stream_extra_text(goal: i64, baseline_minutes: i64) -> String {
+    // Missing stream history is normalized to zero by Engine::stream_minutes.
+    if baseline_minutes == 0 {
+        format!("Streame diese Woche mindestens {goal} Minuten")
+    } else {
+        format!(
+            "Streame {goal} Minuten länger als dein 4-Wochen-Mittel von {baseline_minutes} Minuten"
+        )
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct Assignment {
     quest_key: String,
@@ -237,10 +248,7 @@ impl Engine {
             }
             QuestKind::Invite => "Bringe eine neue aktive Person in den Discord".into(),
             QuestKind::Clip => "Reiche einen Clip ein".into(),
-            QuestKind::StreamExtra => format!(
-                "Streame {} Minuten länger als dein 4-Wochen-Mittel von {} Minuten",
-                q.goal, q.baseline_minutes
-            ),
+            QuestKind::StreamExtra => stream_extra_text(q.goal, q.baseline_minutes),
         };
         Ok((
             QuestResponse {
@@ -370,6 +378,31 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_extra_without_history_uses_an_absolute_weekly_goal() {
+        assert_eq!(
+            stream_extra_text(30, 0),
+            "Streame diese Woche mindestens 30 Minuten"
+        );
+        assert_eq!(
+            stream_extra_text(45, 0),
+            "Streame diese Woche mindestens 45 Minuten"
+        );
+    }
+
+    #[test]
+    fn stream_extra_with_history_keeps_the_baseline_and_configured_goal() {
+        assert_eq!(
+            stream_extra_text(30, 120),
+            "Streame 30 Minuten länger als dein 4-Wochen-Mittel von 120 Minuten"
+        );
+        assert_eq!(
+            stream_extra_text(45, 1),
+            "Streame 45 Minuten länger als dein 4-Wochen-Mittel von 1 Minuten"
+        );
+    }
+
     #[test]
     fn deterministic_pool_and_impossible_pool() {
         let week = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();

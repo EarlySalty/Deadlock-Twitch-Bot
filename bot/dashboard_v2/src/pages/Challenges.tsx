@@ -69,14 +69,14 @@ function ProgressBar({
 }
 
 function useMondayCountdown(nextResetAt?: string) {
-  const [, tick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    const timer = window.setInterval(() => tick(value => value + 1), 60_000);
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
 
-  const remaining = nextResetAt ? Math.max(0, Date.parse(nextResetAt) - Date.now()) : 0;
+  const remaining = nextResetAt ? Math.max(0, Date.parse(nextResetAt) - now) : 0;
   const totalMinutes = Math.floor(remaining / 60_000);
   const dayCount = Math.floor(totalMinutes / 1_440);
   const hours = Math.floor((totalMinutes % 1_440) / 60);
@@ -114,7 +114,7 @@ function QuestCard({ quest }: { quest: ChallengeQuest }) {
       <div className="mt-5">
         <div className="mb-2 flex items-center justify-between text-xs">
           <span className="text-text-secondary">Fortschritt</span>
-          <span className="font-semibold text-white">
+          <span className="font-semibold tabular-nums text-primary">
             {Math.min(quest.progress, quest.goal)} / {quest.goal}
           </span>
         </div>
@@ -142,11 +142,11 @@ function LeaderboardRow({
   const first = rank === 1;
   return (
     <div
-      className={`grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border px-3 py-3 md:px-4 ${
-        first
+      className={`grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border px-3 py-2.5 md:px-4 ${
+        own || pinned
           ? 'border-primary/40 bg-primary/10'
-          : own || pinned
-            ? 'border-accent/25 bg-accent/5'
+          : first
+            ? 'border-primary/20 bg-primary/5'
             : 'border-border bg-black/15'
       }`}
     >
@@ -154,14 +154,14 @@ function LeaderboardRow({
         {first ? (
           <Crown className="h-5 w-5 text-primary" aria-label="Platz 1" />
         ) : (
-          <span className="text-sm font-bold text-text-secondary">#{rank}</span>
+          <span className={`text-sm font-bold tabular-nums ${own ? 'text-primary' : 'text-text-secondary'}`}>#{rank}</span>
         )}
       </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate font-semibold text-white">{name}</span>
           {own ? (
-            <span className="rounded-full border border-accent/25 bg-accent/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-accent">
+            <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
               Du
             </span>
           ) : null}
@@ -173,7 +173,7 @@ function LeaderboardRow({
           ) : null}
         </div>
       </div>
-      <div className="text-right text-sm font-bold text-white">{value}</div>
+      <div className={`text-right text-sm font-bold tabular-nums ${own ? 'text-primary' : 'text-white'}`}>{value}</div>
     </div>
   );
 }
@@ -303,11 +303,11 @@ export function Challenges() {
 
   return (
     <div className="space-y-6 pb-10">
-      <section className="panel-card min-h-[132px] rounded-2xl border border-primary/35 bg-black/25 p-5 md:min-h-[148px] md:p-7">
+      <section className="panel-card rounded-2xl border border-primary/35 bg-black/25 px-4 py-4 md:px-5">
         <p className="display-font text-xl font-bold leading-snug text-white md:text-2xl">
           {nextGoalSentence}
         </p>
-        <div className="mt-6">
+        <div className="mt-3">
           <ProgressBar current={levelCurrent} target={levelTarget} label="Fortschritt zum nächsten Ziel" />
         </div>
       </section>
@@ -365,7 +365,7 @@ export function Challenges() {
       <section className="space-y-4">
         <SectionTitle title="Mit uns erreicht" />
         <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-          <article className="panel-card rounded-2xl border border-border p-5 md:p-6">
+          <article className="panel-card flex flex-col justify-between rounded-2xl border border-border p-4 md:p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
@@ -388,25 +388,31 @@ export function Challenges() {
             </div>
           </article>
 
-          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-            <article className="panel-card rounded-2xl border border-border p-4">
-              <UserPlus className="h-5 w-5 text-primary" />
-              <div className="mt-3 text-2xl font-bold text-white">
-                {data.with_us.people_brought_in_who_stayed}
+          <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+            <article className="panel-card flex items-center gap-3 rounded-2xl border border-border px-4 py-3">
+              <UserPlus className="h-5 w-5 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <div className="text-xl font-bold tabular-nums text-white">
+                  {data.with_us.people_brought_in_who_stayed}
+                </div>
+                <div className="mt-0.5 text-xs text-text-secondary">Leute, die geblieben sind</div>
               </div>
-              <div className="mt-1 text-xs text-text-secondary">Leute, die geblieben sind</div>
             </article>
-            <article className="panel-card rounded-2xl border border-border p-4">
-              <Users className="h-5 w-5 text-primary" />
-              <div className="mt-3 text-2xl font-bold text-white">
-                {data.with_us.community_hours.toLocaleString('de-DE', { maximumFractionDigits: 1 })}
+            <article className="panel-card flex items-center gap-3 rounded-2xl border border-border px-4 py-3">
+              <Users className="h-5 w-5 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <div className="text-xl font-bold tabular-nums text-white">
+                  {data.with_us.community_hours.toLocaleString('de-DE', { maximumFractionDigits: 1 })}
+                </div>
+                <div className="mt-0.5 text-xs text-text-secondary">Stunden mit der Community</div>
               </div>
-              <div className="mt-1 text-xs text-text-secondary">Stunden mit der Community</div>
             </article>
-            <article className="panel-card rounded-2xl border border-border p-4">
-              <Zap className="h-5 w-5 text-primary" />
-              <div className="mt-3 text-2xl font-bold text-white">{data.with_us.received_raids}</div>
-              <div className="mt-1 text-xs text-text-secondary">Raids erhalten</div>
+            <article className="panel-card flex items-center gap-3 rounded-2xl border border-border px-4 py-3">
+              <Zap className="h-5 w-5 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <div className="text-xl font-bold tabular-nums text-white">{data.with_us.received_raids}</div>
+                <div className="mt-0.5 text-xs text-text-secondary">Raids erhalten</div>
+              </div>
             </article>
           </div>
         </div>
@@ -418,7 +424,7 @@ export function Challenges() {
               className={`rounded-2xl border p-4 ${
                 badge.earned
                   ? 'border-primary/30 bg-primary/10'
-                  : 'border-border bg-black/20 grayscale'
+                  : 'border-white/10 bg-black/20'
               }`}
             >
               <div className="flex items-center gap-3">
@@ -426,16 +432,16 @@ export function Challenges() {
                   className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${
                     badge.earned
                       ? 'border-primary/25 bg-primary/10 text-primary'
-                      : 'border-border bg-white/5 text-text-secondary'
+                      : 'border-white/10 bg-white/5 text-white/65'
                   }`}
                 >
                   {badge.earned ? <Trophy className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0">
-                  <h3 className={`font-semibold ${badge.earned ? 'text-white' : 'text-text-secondary'}`}>
+                  <h3 className={`font-semibold ${badge.earned ? 'text-white' : 'text-white/65'}`}>
                     {badge.title}
                   </h3>
-                  <p className="mt-1 text-xs text-text-secondary">
+                  <p className={`mt-1 text-xs ${badge.earned ? 'text-text-secondary' : 'text-white/65'}`}>
                     {badge.earned ? 'Erreicht' : badge.condition}
                   </p>
                 </div>
@@ -453,7 +459,7 @@ export function Challenges() {
               {recruiters.data.recruiters.map((recruiter, index) => (
                 <div
                   key={recruiter.twitch_user_id}
-                  className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border bg-black/15 px-3 py-3"
+                  className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border bg-black/15 px-3 py-2.5"
                 >
                   <span className="text-center text-sm font-bold text-text-secondary">#{index + 1}</span>
                   <div className="min-w-0">
@@ -469,11 +475,11 @@ export function Challenges() {
               ))}
             </div>
           ) : recruiters.isError ? (
-            <p className="px-2 py-5 text-sm text-text-secondary">Deine Werber konnten nicht geladen werden. Versuch es gleich noch einmal.</p>
+            <p className="px-2 py-2 text-sm text-text-secondary">Deine Werber konnten nicht geladen werden. Versuch es gleich noch einmal.</p>
           ) : recruiters.isLoading ? (
-            <p className="px-2 py-5 text-sm text-text-secondary">Werber werden geladen.</p>
+            <p className="px-2 py-2 text-sm text-text-secondary">Werber werden geladen.</p>
           ) : (
-            <p className="px-2 py-5 text-sm text-text-secondary">
+            <p className="px-2 py-2 text-sm text-text-secondary">
               Noch niemand hat über deinen Link aktive Leute gebracht.
             </p>
           )}
