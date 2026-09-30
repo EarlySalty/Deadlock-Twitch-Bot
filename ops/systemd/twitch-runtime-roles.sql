@@ -314,3 +314,15 @@ BEGIN
     END IF;
 END
 $weekly_quest_evaluation_roles$;
+
+DO $brain_chat_roles$
+BEGIN
+    IF to_regclass('public.tb_chat_brain_answers') IS NOT NULL THEN
+        REVOKE ALL ON public.tb_chat_brain_answers FROM twitchbot, twitchdash, twitchlegacy;
+        REVOKE ALL ON SEQUENCE public.tb_chat_brain_answers_id_seq FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, UPDATE ON public.tb_chat_brain_answers TO twitchbot;
+        GRANT USAGE, SELECT ON SEQUENCE public.tb_chat_brain_answers_id_seq TO twitchbot;
+        GRANT SELECT ON public.tb_chat_brain_answers TO twitchdash;
+    END IF;
+END
+$brain_chat_roles$;

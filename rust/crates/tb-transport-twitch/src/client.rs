@@ -448,7 +448,9 @@ impl HelixClient {
                 id: stream.user_id,
                 login: stream.user_login,
                 display_name: stream.user_name,
+                description: String::new(),
                 profile_image_url: None,
+                offline_image_url: None,
             })
             .collect())
     }
