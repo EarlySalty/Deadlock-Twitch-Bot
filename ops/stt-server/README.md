@@ -41,8 +41,14 @@ Die User-Unit liegt versioniert unter:
 
 Installation/Aktualisierung:
 
+Vorher die unten beschriebene normale Konfiguration installieren. Hauptdienst
+und Recovery lesen dieselbe Datei im Benutzerverzeichnis; die geschützte
+vollständige Bot-Konfiguration wird dafür weder kopiert noch freigegeben.
+
 ```bash
 mkdir -p ~/.local/bin ~/.config/systemd/user
+install -d -m 0700 ~/.config/deadlock-stt
+test -r ~/.config/deadlock-stt/stt.toml
 install -m 0755 rust/target/release/tb-stt-server ~/.local/bin/tb-stt-server
 cp ops/stt-server/deadlock-stt-server.service ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -57,7 +63,8 @@ Der Dienst hat keine Authentifizierung und bindet deshalb standardmäßig nur an
 
 `deadlock-stt-recovery.timer` startet alle fünf Minuten einen kurzen Healthcheck
 im vorhandenen Rust-Binary. Er fragt nur `GET /health` am Loopback-Endpunkt aus
-der normalen Bot-Konfiguration ab; Modell und Inferenz werden nicht geladen.
+der normalen Konfiguration `~/.config/deadlock-stt/stt.toml` ab; Modell und
+Inferenz werden nicht geladen.
 Eine Wiederherstellung erfolgt ausschließlich bei einer weiterhin aktivierten
 und aktiven Haupt-Unit. Der feste Aufruf nutzt `try-restart`, startet also keine
 administrativ gestoppte Unit. Ein persistenter Status in der systemd-
@@ -82,23 +89,54 @@ systemctl --user enable --now deadlock-stt-recovery.timer
 
 ## Konfiguration
 
-| Variable | Default | Bedeutung |
+Beide Units verwenden ausdrücklich `--config` mit dem absoluten, durch systemd
+aufgelösten Pfad `~/.config/deadlock-stt/stt.toml`. Die Datei gehört dem
+Dienstbenutzer und hat Modus `0600`; das Verzeichnis hat Modus `0700`.
+Umgebungsvariablen konfigurieren diese Einstellungen nicht.
+
+Der vorhandene `BotConfigSnapshot` verlangt neben `[stt]` die Schema-Version
+und drei öffentliche Twitch-Pflichtfelder. Dafür ausschließlich die bestehenden
+öffentlichen Werte übernehmen, keine Zugangsdaten oder vollständige Bot-Datei.
+Für die bestehende Installation ist der minimale Schemaumschlag:
+
+```toml
+schema_version = 1
+
+[twitch]
+bot_user_id = "1422558159"
+notify_channel_id = "1304169815505637458"
+eventsub_callback_url = "https://deutsche-deadlock-community.de/twitch/eventsub/callback"
+
+[stt]
+host = "127.0.0.1"
+port = 8791
+model = "ggml-large-v3-turbo-q5_0"
+threads = 8
+```
+
+Der STT-Dienst baut daraus keine Twitch-Verbindung auf. Fehlende optionale
+STT-Felder verwenden die bestehenden Defaults:
+
+| Feld unter `[stt]` | Default | Bedeutung |
 |---|---|---|
-| `STT_HOST` | `127.0.0.1` | Bind-Adresse |
-| `STT_PORT` | `8791` | HTTP-Port |
-| `STT_THREADS` | `8` | Whisper CPU-Threads |
-| `STT_MODEL` | `ggml-large-v3-turbo-q5_0` | Modellname in Health/API |
-| `STT_MODEL_PATH` | `~/.cache/deadlock-stt/ggml-large-v3-turbo-q5_0.bin` | lokaler Modellpfad |
-| `STT_MODEL_URL` | offizielles whisper.cpp HF-Modell | Downloadquelle |
-| `STT_MODEL_SHA256` | gepinnter Hash | Integritätsprüfung |
-| `STT_VAD_MODEL_PATH` | `~/.cache/deadlock-stt/ggml-silero-v6.2.0.bin` | lokaler VAD-Pfad |
-| `STT_LANGUAGE` | leer | leer = automatische Spracherkennung |
-| `STT_NO_SPEECH_MAX` | `0.6` | Halluzinationsfilter |
-| `STT_AVG_LOGPROB_MIN` | `-1.0` | Halluzinationsfilter |
+| `host` | `127.0.0.1` | Bind-Adresse |
+| `port` | `8791` | HTTP-Port |
+| `threads` | `8` | Whisper CPU-Threads |
+| `model` | `ggml-large-v3-turbo-q5_0` | Modellname in Health/API |
+| `language` | nicht gesetzt | automatische Spracherkennung |
+| `no_speech_max` | `0.6` | Halluzinationsfilter |
+| `avg_logprob_min` | `-1.0` | Halluzinationsfilter |
+| `max_upload_bytes` | `26214400` | Uploadgrenze in Bytes |
+| `timeout_seconds` | `60` | Anfragezeitlimit der Aufrufer |
+| `extraction_timeout_seconds` | `300` | Zeitlimit der Audioextraktion |
+
+Modelldateien liegen unter `~/.cache/deadlock-stt/`. Modellnamen, Downloadquellen
+und SHA-256-Werte sind im Rust-Dienst fest gebunden; dafür gibt es keine
+Konfigurationsfelder für beliebige Ersatzmodelle.
 
 `model` und `language` aus dem HTTP-Request werden wie beim bisherigen
 Python-Dienst aus Kompatibilitätsgründen akzeptiert. Die lokale Modellwahl kommt
-aus der Serverkonfiguration; ohne `STT_LANGUAGE` wird die Sprache automatisch
+aus der Serverkonfiguration; ohne `stt.language` wird die Sprache automatisch
 erkannt.
 
 ## Verhalten gegenüber dem alten Dienst

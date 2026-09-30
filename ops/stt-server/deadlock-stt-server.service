@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/tb-stt-server --config /var/lib/deadlock-twitch/config/bot.toml
+ExecStart=%h/.local/bin/tb-stt-server --config %h/.config/deadlock-stt/stt.toml
 Restart=on-failure
 RestartSec=3
 
