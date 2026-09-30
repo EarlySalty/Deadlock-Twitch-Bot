@@ -2231,9 +2231,10 @@ fn invalid_pagination() -> Response {
         .into_response()
 }
 
-/// `?page=&page_size=&status=&streamer=` für die Admin-Clip-Liste.
+/// `?page=&page_size=&status=&twitch_user_id=` für die Admin-Clip-Liste.
 #[derive(Debug, Deserialize)]
 pub struct AdminClipsQuery {
+    pub twitch_user_id: Option<String>,
     pub page: Option<String>,
     pub page_size: Option<String>,
     pub status: Option<String>,
@@ -2243,16 +2244,12 @@ pub struct AdminClipsQuery {
 fn push_clips_where(
     qb: &mut QueryBuilder<Postgres>,
     auth: &DashboardAuthLevel,
-    streamer: Option<&str>,
+    twitch_user_id: Option<&str>,
     status: Option<&str>,
 ) {
-    if let Some(id) = partner_identity(auth) {
+    if let Some(id) = partner_identity(auth).or(twitch_user_id) {
         qb.push(" AND twitch_user_id = ");
         qb.push_bind(id.to_string());
-    } else if let Some(s) = streamer {
-        qb.push(" AND LOWER(streamer_login) = LOWER(");
-        qb.push_bind(s.to_string());
-        qb.push(")");
     }
     if let Some(st) = status {
         if st == "discarded" {
@@ -2271,10 +2268,21 @@ pub async fn admin_clips_handler(
     State(pool): State<PgPool>,
     Query(q): Query<AdminClipsQuery>,
 ) -> Response {
-    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
-        Ok(s) => s,
-        Err(e) => return e,
-    };
+    if let Err(e) = require_sm_access(&auth, &pool, None).await {
+        return e;
+    }
+    // Partner bleiben an die echte Session-ID gebunden. Admin-Filter dürfen
+    // ausschließlich eine ID verwenden; ein Login ist keine Zielidentität.
+    let twitch_user_id = partner_identity(&auth).or(q.twitch_user_id.as_deref());
+    if twitch_user_id.is_some_and(|id| id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()))
+        || (twitch_user_id.is_none() && q.streamer.is_some())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "twitch_user_id_required" })),
+        )
+            .into_response();
+    }
     let page = match q.page.as_deref().unwrap_or("1").parse::<i64>() {
         Ok(n) => n.max(1),
         Err(_) => return invalid_pagination(),
@@ -2288,14 +2296,11 @@ pub async fn admin_clips_handler(
         .as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
-    // Filter kommt aus dem Scope, nicht roh aus der Query: bei Partnern ist das
-    // immer der eigene Login, bei Admins der angefragte.
-    let streamer = scope;
     let offset = (page - 1) * page_size;
 
     let mut qb_total =
         QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM twitch_clips_social_media WHERE 1=1");
-    push_clips_where(&mut qb_total, &auth, streamer.as_deref(), status.as_deref());
+    push_clips_where(&mut qb_total, &auth, twitch_user_id, status.as_deref());
     let total: i64 = match qb_total.build_query_scalar().fetch_one(&pool).await {
         Ok(total) => total,
         Err(e) => {
@@ -2307,7 +2312,7 @@ pub async fn admin_clips_handler(
     let mut qb = QueryBuilder::<Postgres>::new(&format!(
         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
     ));
-    push_clips_where(&mut qb, &auth, streamer.as_deref(), status.as_deref());
+    push_clips_where(&mut qb, &auth, twitch_user_id, status.as_deref());
     qb.push(" ORDER BY created_at DESC, id DESC LIMIT ");
     qb.push_bind(page_size);
     qb.push(" OFFSET ");
@@ -4524,6 +4529,7 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(AdminClipsQuery {
+                twitch_user_id: None,
                 page: None,
                 page_size: None,
                 status: None,
@@ -4598,6 +4604,7 @@ mod tests {
             sm_partner("earlysalty"),
             State(pool.clone()),
             Query(AdminClipsQuery {
+                twitch_user_id: None,
                 page: None,
                 page_size: None,
                 status: None,
@@ -5391,10 +5398,60 @@ mod tests {
 
     fn clips_query(status: Option<&str>) -> AdminClipsQuery {
         AdminClipsQuery {
+            twitch_user_id: None,
             page: None,
             page_size: None,
             status: status.map(String::from),
             streamer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_clips_identity_survives_reassigned_login_and_partner_query() {
+        let Some(pool) = make_pool("t_dash_sm_list_identity").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('old_name', '42', TRUE)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, twitch_user_id) VALUES ('konto_a', 'old_name', '42'), ('konto_b', 'reused_name', '99')")
+            .execute(&pool).await.unwrap();
+        // Dieselbe stabile ID wie beim Upload; widersprüchlicher Name wird nie Ziel.
+        for (auth, id, login, expected) in [
+            (DashboardAuthLevel::admin(), Some("42"), None, "konto_a"),
+            (
+                DashboardAuthLevel::admin(),
+                Some("42"),
+                Some("reused_name"),
+                "konto_a",
+            ),
+            (DashboardAuthLevel::admin(), Some("99"), None, "konto_b"),
+            (
+                sm_partner("old_name"),
+                Some("99"),
+                Some("reused_name"),
+                "konto_a",
+            ),
+        ] {
+            let mut query = clips_query(None);
+            query.twitch_user_id = id.map(String::from);
+            query.streamer = login.map(String::from);
+            let response = admin_clips_handler(auth, State(pool.clone()), Query(query)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            assert_eq!(body["total"], 1);
+            assert_eq!(body["items"][0]["clip_id"], expected);
+        }
+        for id in [None, Some(""), Some("not-an-id")] {
+            let mut query = clips_query(None);
+            query.twitch_user_id = id.map(String::from);
+            query.streamer = Some("reused_name".into());
+            let response = admin_clips_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Query(query),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
     }
 
@@ -6921,6 +6978,7 @@ mod tests {
                 DashboardAuthLevel::admin(),
                 State(pool.clone()),
                 Query(AdminClipsQuery {
+                    twitch_user_id: None,
                     page: None,
                     page_size: None,
                     status: None,

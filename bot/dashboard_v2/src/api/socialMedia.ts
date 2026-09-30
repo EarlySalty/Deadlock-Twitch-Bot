@@ -136,7 +136,7 @@ export async function saveStreamerLayout(input: {
 
 export interface ClipListParams {
   status?: ClipStatus | 'all';
-  streamer?: string;
+  twitch_user_id?: string;
   page?: number;
   page_size?: number;
 }
@@ -169,7 +169,7 @@ export interface ClipListResponseMitPosting extends Omit<ClipListResponse, 'item
 export async function fetchClips(params: ClipListParams = {}, signal?: AbortSignal): Promise<ClipListResponseMitPosting> {
   const qs = buildQuery({
     status: params.status && params.status !== 'all' ? params.status : undefined,
-    streamer: params.streamer,
+    twitch_user_id: params.twitch_user_id,
     page: params.page,
     page_size: params.page_size,
   });

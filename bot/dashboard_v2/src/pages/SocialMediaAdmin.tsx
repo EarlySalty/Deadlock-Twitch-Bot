@@ -14,6 +14,7 @@ import {
 } from '@/api/socialMedia';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
+import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
 
 /**
  * Eigenständiges Social-Media-Admin-Dashboard.
@@ -25,15 +26,14 @@ import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
  */
 export function SocialMediaAdminDashboard() {
   const t = useT();
-  const [streamer, setStreamer] = useState<string>('');
-  const [streamerUserId, setStreamerUserId] = useState(() => {
-    const id = new URLSearchParams(window.location.search).get('twitch_user_id');
-    return id && /^\d+$/.test(id) ? id : '';
-  });
+  const [streamerUserId, setStreamerUserId] = useState('');
+  const requestedChannel = useRef(new URLSearchParams(window.location.search));
   const hasAutoSetStreamer = useRef(false);
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
   const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
+  const selectedChannel = resolveSocialMediaChannel(streamers, streamerUserId);
+  const streamer = selectedChannel?.login.toLowerCase() ?? '';
 
   // Was diese Session darf: Admin sieht alles, Partner nur nach Freigabe.
   const { data: access, isLoading: loadingAccess } = useQuery({
@@ -73,41 +73,30 @@ export function SocialMediaAdminDashboard() {
   const isDemoMode = isDemoShell;
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlStreamer = params.get('streamer');
-    if (urlStreamer) {
-      const normalized = urlStreamer.trim().toLowerCase();
-      if (
-        !isDemoShell ||
-        dashboardRuntimeConfig.allowedDemoProfiles.length === 0 ||
-        dashboardRuntimeConfig.allowedDemoProfiles.includes(normalized)
-      ) {
-        setStreamer(normalized);
-        hasAutoSetStreamer.current = true;
-      }
-    }
-  }, [isDemoShell]);
+    if (!isAdminView || loadingStreamers || hasAutoSetStreamer.current) return;
+    const params = requestedChannel.current;
+    const hasRequestedChannel = params.has('streamer') || params.has('twitch_user_id');
+    const channel = resolveSocialMediaChannel(
+      streamers,
+      hasRequestedChannel ? params.get('twitch_user_id') : authStatus?.twitchUserId,
+      hasRequestedChannel ? params.get('streamer') : null,
+    );
+    const allowed = channel && (!isDemoShell || dashboardRuntimeConfig.allowedDemoProfiles.length === 0
+      || dashboardRuntimeConfig.allowedDemoProfiles.includes(channel.login.toLowerCase()));
+    setStreamerUserId(allowed ? channel.twitchUserId ?? '' : '');
+    hasAutoSetStreamer.current = true;
+  }, [streamers, loadingStreamers, isAdminView, authStatus?.twitchUserId, isDemoShell]);
 
   useEffect(() => {
-    const fallback =
-      authStatus?.twitchLogin ??
-      (isDemoShell ? dashboardRuntimeConfig.defaultDemoProfile : null);
-    if (!hasAutoSetStreamer.current && fallback) {
-      setStreamer(fallback);
-      setStreamerUserId(authStatus?.twitchUserId ?? '');
-      hasAutoSetStreamer.current = true;
-    }
-  }, [authStatus, isDemoShell]);
-
-  useEffect(() => {
+    if (!isAdminView || !hasAutoSetStreamer.current) return;
     const params = new URLSearchParams(window.location.search);
     if (streamer) {
       params.set('streamer', streamer);
     } else {
       params.delete('streamer');
     }
-    if (streamerUserId) {
-      params.set('twitch_user_id', streamerUserId);
+    if (selectedChannel?.twitchUserId) {
+      params.set('twitch_user_id', selectedChannel.twitchUserId);
     } else {
       params.delete('twitch_user_id');
     }
@@ -116,7 +105,7 @@ export function SocialMediaAdminDashboard() {
       ? `${window.location.pathname}?${qs}`
       : window.location.pathname;
     window.history.replaceState({}, '', newUrl);
-  }, [streamer, streamerUserId]);
+  }, [streamer, selectedChannel, isAdminView]);
 
   const AuthBadge = () => {
     const base =
@@ -203,13 +192,12 @@ export function SocialMediaAdminDashboard() {
             {isAdminView && (
               <select
                 aria-label={t('Streamer wählen')}
-                value={streamerUserId}
+                value={selectedChannel?.twitchUserId ?? ''}
                 onChange={(event) => {
                   if (document.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
                   hasAutoSetStreamer.current = true;
-                  const selected = streamers.find((channel) => channel.twitchUserId === event.target.value);
+                  const selected = resolveSocialMediaChannel(streamers, event.target.value);
                   setStreamerUserId(selected?.twitchUserId ?? '');
-                  setStreamer(selected?.login.toLowerCase() ?? '');
                 }}
                 disabled={loadingStreamers}
                 className="min-w-44 rounded-lg border border-white/[0.08] bg-ui-elevated px-3 py-2 text-sm font-medium text-ui-text outline-none transition-colors focus:border-ui-accent-strong/40"
@@ -237,13 +225,13 @@ export function SocialMediaAdminDashboard() {
           <TrialBanner />
 
           {isAdminView ? (
-            <SocialMedia key={streamerUserId} streamer={streamerUserId ? streamer : ''} twitchUserId={streamerUserId} isAdmin />
+            <SocialMedia key={selectedChannel?.twitchUserId ?? ''} streamer={streamer} twitchUserId={selectedChannel?.twitchUserId ?? undefined} isAdmin />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
               {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
-            <SocialMedia key={access.streamer ?? streamer} streamer={access.streamer ?? streamer} isAdmin={false} />
+            <SocialMedia key={access.streamer ?? authStatus?.twitchLogin ?? ''} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />

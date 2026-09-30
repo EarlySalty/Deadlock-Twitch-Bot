@@ -158,8 +158,14 @@ fn hook_lines(title: &str) -> String {
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in title.split_whitespace() {
+        let shortened = (word.chars().count() > 18)
+            .then(|| format!("{}…", word.chars().take(17).collect::<String>()));
+        let word = shortened.as_deref().unwrap_or(word);
         if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > 18 {
             if lines.len() == 2 {
+                if current.chars().count() == 18 {
+                    current.pop();
+                }
                 current.push('…');
                 break;
             }
@@ -331,8 +337,17 @@ mod tests {
         let lines = hook_lines(title);
         let parts: Vec<&str> = lines.split("\\N").collect();
         assert_eq!(parts.len(), 3);
-        assert!(parts.iter().all(|line| line.chars().count() <= 19));
+        assert!(parts.iter().all(|line| line.chars().count() <= 18));
         assert!(parts[2].ends_with('…'));
+    }
+
+    #[test]
+    fn einzelwort_hook_bleibt_auch_mit_umlauten_im_bild() {
+        let lines = hook_lines("Überraschungsüberraschungsüberraschung");
+        assert_eq!(lines.chars().count(), 18);
+        assert!(lines.ends_with('…'));
+        let lines = hook_lines(&"Ä".repeat(80));
+        assert_eq!(lines, format!("{}…", "Ä".repeat(17)));
     }
 
     #[test]

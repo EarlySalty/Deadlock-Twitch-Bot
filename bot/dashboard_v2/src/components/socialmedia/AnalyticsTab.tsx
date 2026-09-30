@@ -42,6 +42,7 @@ const VEROEFFENTLICHTE_STATI: ClipStatus[] = ['published_all', 'published_partia
 
 interface AnalyticsTabProps {
   streamer: string;
+  twitchUserId?: string;
   /** Die Report-Knoepfe sind admin-only; ein Partner bekaeme nur 403. */
   isAdmin: boolean;
 }
@@ -79,7 +80,7 @@ function normalizeChartRows(items: ClipAnalytics[]) {
   });
 }
 
-export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
+export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabProps) {
   const queryClient = useQueryClient();
   const { t, locale } = useLanguage();
   const [selectedClipId, setSelectedClipId] = useState<number | null>(null);
@@ -94,8 +95,8 @@ export function AnalyticsTab({ streamer, isAdmin }: AnalyticsTabProps) {
   // Plattformen gescheitert war.
   const publishedQueries = useQueries({
     queries: VEROEFFENTLICHTE_STATI.map((status) => ({
-      queryKey: ['social-media', 'clips', streamer, status],
-      queryFn: () => fetchClips({ status, streamer, page: 1, page_size: 100 }),
+      queryKey: ['social-media', 'clips', streamer, twitchUserId, status],
+      queryFn: () => fetchClips({ status, twitch_user_id: twitchUserId, page: 1, page_size: 100 }),
       enabled: !!streamer,
       retry: (failureCount: number, err: Error) => {
         if (err instanceof SocialMediaForbiddenError) return false;

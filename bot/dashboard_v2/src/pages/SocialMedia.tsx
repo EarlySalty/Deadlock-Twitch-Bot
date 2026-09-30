@@ -192,10 +192,10 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   });
 
   const clipsQuery = useQuery({
-    queryKey: ['social-media', 'clips', streamer],
+    queryKey: ['social-media', 'clips', streamer, twitchUserId],
     queryFn: ({ signal }) =>
       loadQueueSnapshot(
-        (page) => fetchClips({ status: 'all', streamer, page, page_size: 100 }, signal),
+        (page) => fetchClips({ status: 'all', twitch_user_id: twitchUserId, page, page_size: 100 }, signal),
         signal,
       ),
     enabled: !!streamer,
@@ -208,9 +208,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   // Statusfilter der Liste: steht der Filter auf "Veroeffentlicht" und ist dort
   // nichts drin, haette der Editor sonst kein Bild.
   const vorschauClipsQuery = useQuery({
-    queryKey: ['social-media', 'vorschau-clips', streamer],
+    queryKey: ['social-media', 'vorschau-clips', streamer, twitchUserId],
     queryFn: () =>
-      fetchClips({ status: 'all', streamer: streamer || undefined, page: 1, page_size: 12 }),
+      fetchClips({ status: 'all', twitch_user_id: twitchUserId, page: 1, page_size: 12 }),
     // Vorschauclips werden nur im fokussierten Layout-Bereich gebraucht.
     enabled: !!streamer && activeView === 'layout',
     staleTime: 5 * 60 * 1000,
@@ -989,7 +989,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
           title={t('Auswertung')}
           onClose={() => setShowAnalytics(false)}
         >
-          <AnalyticsTab streamer={streamer} isAdmin={isAdmin} />
+          <AnalyticsTab streamer={streamer} twitchUserId={twitchUserId} isAdmin={isAdmin} />
         </WorkspaceDialog>
       )}
     </div>
