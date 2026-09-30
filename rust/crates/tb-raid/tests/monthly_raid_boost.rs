@@ -69,11 +69,40 @@ async fn closer_wartet_auf_engine_lock_ohne_pool_slot_zu_belegen() {
         .execute(&mut *engine_lock)
         .await
         .unwrap();
+    let mut lock_observer = PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
 
     let store = MonthlyRaidBoostStore::new(pool.clone());
     let now = Utc.with_ymd_and_hms(2027, 2, 1, 12, 0, 0).single().unwrap();
     let closer = tokio::spawn(async move { store.close_season_ending_at(now, now).await });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let lock_wait_detected = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE locktype = 'advisory'
+                      AND classid = 713219::oid
+                      AND objid = 27::oid
+                      AND objsubid = 2
+                      AND NOT granted
+                )",
+            )
+            .fetch_one(&mut lock_observer)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    assert!(
+        lock_wait_detected,
+        "Closer muss nachweislich auf den Engine-Lock warten"
+    );
 
     let probe = tokio::time::timeout(
         std::time::Duration::from_secs(1),
