@@ -2208,7 +2208,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl DiscordLinkPort for NoopDiscordLink {
-        async fn discord_invite(&self, _channel_login: &str) -> Result<Option<String>, String> {
+        async fn discord_invite(
+            &self,
+            _channel_login: &str,
+            _chatter_id: &str,
+        ) -> Result<Option<String>, String> {
             Ok(None)
         }
     }

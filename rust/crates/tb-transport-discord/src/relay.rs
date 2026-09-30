@@ -21,6 +21,7 @@ const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
 const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
 const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
 const CREATE_INVITE_PATH: &str = "/internal/master/v1/discord/create-invite";
+const PERSONAL_INVITE_PATH: &str = "/internal/master/v1/discord/personal-invite";
 const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
@@ -69,6 +70,17 @@ pub struct InviteInfo {
     pub channel_id: u64,
     #[serde(deserialize_with = "deserialize_u64_flexible")]
     pub guild_id: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PersonalInviteInfo {
+    pub invite_url: Option<String>,
+    pub code: Option<String>,
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub channel_id: u64,
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub guild_id: u64,
+    pub fallback: bool,
 }
 
 /// Reaktionszähler einer Discord-Nachricht.
@@ -132,6 +144,14 @@ struct CreateRoleRequest {
 struct CreateInviteRequest {
     channel_id: u64,
     reason: String,
+}
+
+#[derive(serde::Serialize)]
+struct PersonalInviteRequest {
+    streamer_login: String,
+    inviter_twitch_user_id: String,
+    guild_id: u64,
+    channel_id: u64,
 }
 
 /// Antwort auf `POST /discord/role/create`. `role_id` kann je nach Broker-
@@ -369,12 +389,45 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<InviteInfo> = resp.json().await?;
-        envelope.result.filter(|_| envelope.ok).ok_or_else(|| {
-            DiscordError::BrokerError {
+        envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or_else(|| DiscordError::BrokerError {
                 status: 502,
                 body: "missing create-invite result".to_string(),
-            }
-        })
+            })
+    }
+
+    pub async fn personal_invite(
+        &self,
+        streamer_login: &str,
+        inviter_twitch_user_id: &str,
+        guild_id: u64,
+        channel_id: u64,
+    ) -> Result<PersonalInviteInfo, DiscordError> {
+        let payload = PersonalInviteRequest {
+            streamer_login: streamer_login.to_string(),
+            inviter_twitch_user_id: inviter_twitch_user_id.to_string(),
+            guild_id,
+            channel_id,
+        };
+        let key = Self::idempotency_key("personal-invite", &payload);
+        let resp = self
+            .post_with_retry(PERSONAL_INVITE_PATH, &payload, &key)
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let envelope: BrokerEnvelope<PersonalInviteInfo> = resp.json().await?;
+        envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or_else(|| DiscordError::BrokerError {
+                status: 502,
+                body: "missing personal-invite result".to_string(),
+            })
     }
 
     /// Legt eine Discord-Rolle über den Broker an
@@ -402,10 +455,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<CreateRoleResponse> = resp.json().await?;
-        let parsed = envelope.result.filter(|_| envelope.ok).ok_or(DiscordError::BrokerError {
-            status: 502,
-            body: "missing create-role result".to_string(),
-        })?;
+        let parsed = envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or(DiscordError::BrokerError {
+                status: 502,
+                body: "missing create-role result".to_string(),
+            })?;
         Ok(parsed.role_id)
     }
 
@@ -1094,7 +1150,10 @@ mod tests {
             .await;
 
         let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
-        let invite = relay.create_invite(123, "streamer-invite:test").await.unwrap();
+        let invite = relay
+            .create_invite(123, "streamer-invite:test")
+            .await
+            .unwrap();
         assert_eq!(invite.invite_url, "https://discord.gg/abc");
         assert_eq!(invite.code, "abc");
         assert_eq!(invite.channel_id, 123);
@@ -1210,7 +1269,10 @@ mod tests {
             .await;
 
         let server = server_task.await.expect("Mock-Server");
-        assert!(result.is_ok(), "zweiter Versuch muss durchkommen: {result:?}");
+        assert!(
+            result.is_ok(),
+            "zweiter Versuch muss durchkommen: {result:?}"
+        );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
@@ -1238,7 +1300,10 @@ mod tests {
             })
             .await
             .expect_err("404 ist ein Fehler");
-        assert!(matches!(error, DiscordError::BrokerError { status: 404, .. }));
+        assert!(matches!(
+            error,
+            DiscordError::BrokerError { status: 404, .. }
+        ));
         server.verify().await;
     }
 

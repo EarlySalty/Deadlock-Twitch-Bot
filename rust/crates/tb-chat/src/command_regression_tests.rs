@@ -355,7 +355,7 @@ impl RaidCommandPort for ErrorCommandPorts {
 }
 #[async_trait]
 impl DiscordLinkPort for ErrorCommandPorts {
-    async fn discord_invite(&self, _: &str) -> Result<Option<String>, String> {
+    async fn discord_invite(&self, _: &str, _: &str) -> Result<Option<String>, String> {
         Err("test unavailable".into())
     }
 }
