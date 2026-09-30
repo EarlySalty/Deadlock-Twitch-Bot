@@ -106,7 +106,7 @@ symlink_rules="$symlink_dir/pg_hba-twitch.conf"
 printf 'include pg_hba-twitch.conf\n' > "$symlink_main"
 printf 'local all twitchbot reject\nlocal all twitchdash reject\n' > "$temporary_root/external-rules.conf"
 ln -s "$temporary_root/external-rules.conf" "$symlink_rules"
-FIXTURE_METADATA="1\t1\t$symlink_rules\t$symlink_rules"
+printf -v FIXTURE_METADATA '1\t1\t%s\t%s' "$symlink_rules" "$symlink_rules"
 if resolve_peer_rule_file "$symlink_main" >/dev/null 2>&1; then
     echo 'FAIL symlinked HBA rule file was accepted' >&2
     exit 1
