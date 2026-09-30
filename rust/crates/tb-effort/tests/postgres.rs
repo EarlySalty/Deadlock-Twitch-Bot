@@ -840,6 +840,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     let loser_at = contention_at + Duration::seconds(60);
     mark_live_at(&pool, loser_at).await;
     failed_engine.clone().tick(loser_at).await.unwrap();
+    assert_eq!(confirmed_seconds(&pool).await, Some(60));
     winner.await.unwrap().unwrap();
     sqlx::raw_sql("DROP TRIGGER test_delay_steam_party_source_state ON partner_effort_source_state; DROP FUNCTION test_delay_steam_party_source_state()")
         .execute(&pool)
@@ -860,7 +861,7 @@ async fn shared_chat_failures_break_persisted_continuity_before_the_next_success
     let timeout_at = start + Duration::seconds(810);
     seed_continuity(&pool, timeout_at - Duration::seconds(60)).await;
     mark_live_at(&pool, timeout_at).await;
-    sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(5); END IF; RETURN NEW; END $$;
+    sqlx::raw_sql("CREATE FUNCTION test_delay_shared_chat_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.partner_twitch_user_id='101' THEN PERFORM pg_sleep(3); END IF; RETURN NEW; END $$;
         CREATE TRIGGER test_delay_shared_chat_observation BEFORE INSERT OR UPDATE ON partner_effort_shared_chat_observations FOR EACH ROW EXECUTE FUNCTION test_delay_shared_chat_observation();")
         .execute(&pool)
         .await
