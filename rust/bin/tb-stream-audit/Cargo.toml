@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 # `AsyncWriteExt` selbst und haette sonst gebrochen, sobald eine dieser
 # Abhaengigkeiten wegfaellt.
 tokio = { workspace = true, features = ["signal", "time", "fs", "sync", "io-util"] }
+whoami = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tb-engagement = { workspace = true }

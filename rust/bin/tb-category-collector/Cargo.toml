@@ -10,6 +10,7 @@ tb-monitoring = { workspace = true }
 tb-transport-twitch = { workspace = true }
 tokio = { workspace = true, features = ["sync", "signal", "time", "fs", "io-util"] }
 sqlx = { workspace = true }
+whoami = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
