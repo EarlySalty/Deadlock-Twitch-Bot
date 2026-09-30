@@ -386,11 +386,11 @@ mod tests {
         let admin = sqlx::PgPool::connect(&url)
             .await
             .expect("Test-DB-Verbindung fehlgeschlagen");
-        sqlx::query(crate::test_sql::drop_schema(&schema, true))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(crate::test_sql::create_schema(&schema, false))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();

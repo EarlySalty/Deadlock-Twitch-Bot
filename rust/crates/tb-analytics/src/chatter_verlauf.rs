@@ -163,11 +163,11 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(crate::test_sql::drop_schema(&schema, true))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .expect("Schema droppen");
-        sqlx::query(crate::test_sql::create_schema(&schema, false))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .expect("Schema anlegen");

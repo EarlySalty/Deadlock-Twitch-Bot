@@ -843,15 +843,15 @@ mod tests {
             .await
             .unwrap();
         let schema = "t_promo_mode_schema_contract";
-        sqlx::query(crate::test_sql::drop_schema(&schema, true))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(crate::test_sql::create_schema(&schema, false))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(crate::test_sql::search_path(&schema))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .unwrap();
@@ -869,7 +869,7 @@ mod tests {
         .unwrap();
         assert!(validate_global_promo_mode_storage(&pool).await.is_ok());
 
-        sqlx::query(crate::test_sql::drop_schema(&schema, false))
+        sqlx::query(crate::test_sql::drop_schema(schema, false))
             .execute(&pool)
             .await
             .unwrap();

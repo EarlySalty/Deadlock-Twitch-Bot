@@ -128,15 +128,15 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(crate::test_sql::drop_schema(&schema, true))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&pool)
             .await
             .expect("Schema droppen");
-        sqlx::query(crate::test_sql::create_schema(&schema, false))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(crate::test_sql::search_path(&schema))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .expect("search_path");

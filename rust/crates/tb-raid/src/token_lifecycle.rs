@@ -1962,11 +1962,11 @@ mod tests {
     async fn setup_db(schema: &str) -> PgPool {
         let url = test_db_url().expect("TB_TEST_DATABASE_URL muss gesetzt sein");
         let admin = PgPool::connect(&url).await.expect("Test-DB-Verbindung");
-        sqlx::query(crate::test_sql::drop_schema(&schema, true))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(crate::test_sql::create_schema(&schema, false))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
