@@ -28,7 +28,7 @@ async fn unlearnable_new_corpus_preserves_existing_template_and_timestamp() {
             .unwrap()
             .as_nanos()
     );
-    sqlx::query(&format!("CREATE DATABASE {db_name}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
         .execute(&admin)
         .await
         .expect("create isolated learning database");
@@ -100,7 +100,7 @@ async fn unlearnable_new_corpus_preserves_existing_template_and_timestamp() {
     assert_eq!(updated_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE {db_name}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {db_name}")))
         .execute(&admin)
         .await
         .expect("drop isolated learning database");
