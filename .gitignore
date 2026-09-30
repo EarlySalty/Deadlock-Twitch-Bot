@@ -62,6 +62,9 @@ rust/bin/tb-bot/tb-bot
 # Build-Output des Preview-Modus (vite.config.ts), wird nirgends serviert
 bot/dashboard_v2/dist-preview/
 
-# Private roadmap snapshots and the isolated browser-test dependency cache
+# Private roadmap snapshots and browser-test dependency caches
 .roadmap-test-runtime/
+tools/roadmap-history/runtime/node_modules/
+!tools/roadmap-history/runtime/package.json
+!tools/roadmap-history/runtime/package-lock.json
 !tools/roadmap-history/features.json

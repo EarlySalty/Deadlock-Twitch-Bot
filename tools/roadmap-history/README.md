@@ -150,8 +150,8 @@ vollständiger Erzeugung atomar.
 Für die Browser-Abnahme:
 
 ```sh
-npm install --prefix .roadmap-test-runtime --no-audit --no-fund --ignore-scripts playwright@1.58.2
-node .roadmap-test-runtime/node_modules/playwright/cli.js install chromium
+npm ci --prefix tools/roadmap-history/runtime --no-audit --no-fund --ignore-scripts
+node tools/roadmap-history/runtime/node_modules/playwright/cli.js install chromium
 node tools/roadmap-history/browser.test.mjs
 ```
 

@@ -274,7 +274,15 @@ mod tests {
     async fn seed_slang_only_schreibt_in_db() {
         let Some(pool) = make_pool("t_sm_seed").await else { return };
         let http = reqwest::Client::new();
-        let (written, skipped) = seed_vocab_with(&pool, &http, true, false, "http://x", "http://x").await;
+        let (written, skipped) = seed_vocab_with(
+            &pool,
+            &http,
+            true,
+            false,
+            "https://example.invalid",
+            "https://example.invalid",
+        )
+        .await;
         assert_eq!(written, 25);
         assert_eq!(skipped, 0);
         // Alle 25 Slang-Terme sind unique (lowercase) → 25 Zeilen.

@@ -4,7 +4,7 @@ import {readFile, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
-const require = createRequire(new URL('../../.roadmap-test-runtime/package.json', import.meta.url));
+const require = createRequire(new URL('./runtime/package.json', import.meta.url));
 const {chromium} = require('playwright');
 const root = resolve(new URL('../..', import.meta.url).pathname);
 const output = resolve(root, 'dist/roadmap-history');

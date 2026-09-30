@@ -40,7 +40,7 @@ async fn main() {
     let vp = VideoProcessor::default();
     let downloader = Arc::new(YtDlpDownloader::new("yt-dlp"));
 
-    println!("Rendere Clips fuer Twitch-User-ID {twitch_user_id} nach {out_dir} ...");
+    println!("Rendere Clips nach {out_dir} ...");
     let result = render_all_for_user(&pool, &vp, downloader, &twitch_user_id, &out_dir, &clips_dir).await;
 
     println!("Fertig: {} gerendert, {} fehlgeschlagen.", result.rendered.len(), result.failed.len());

@@ -16,11 +16,13 @@ async function listen(server) {
 test('bare profiles and calendar queries reach the backend without stealing existing pages', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'partner-profile-caddy-'));
   // Only isolated loopback listeners; the production Caddy admin is never used.
+  const upstreamRequests = [];
   const upstream = createServer((request, response) => {
+    upstreamRequests.push(request.url);
     response.setHeader('Cache-Control', 'no-store, max-age=0');
     response.setHeader('Content-Security-Policy', "default-src 'self'");
     response.statusCode = request.url.includes('@') || request.url.includes('inactive') ? 404 : 200;
-    response.end(`profile:${request.url}`);
+    response.end('profile');
   });
   const portReservation = createServer();
   let child;
@@ -69,7 +71,8 @@ http://127.0.0.1:${port} {
     for (const path of ['/streamer/alice', '/streamer/alice/', '/streamer/Alice_1?month=2025-01', '/streamer/alice/?month=2026-10', '/twitch/profile-assets/profile.css']) {
       const response = await fetch(base + path);
       assert.equal(response.status, 200, path);
-      assert.equal(await response.text(), `profile:${path}`);
+      assert.equal(await response.text(), 'profile');
+      assert.equal(upstreamRequests.at(-1), path);
       assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
       assert.equal(response.headers.get('content-security-policy'), "default-src 'self'");
     }
@@ -78,6 +81,7 @@ http://127.0.0.1:${port} {
       assert.equal(response.status, 404, path);
       assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
       await response.text();
+      assert.equal(upstreamRequests.at(-1), path);
     }
     for (const route of ['commands', 'help', 'faq']) {
       const response = await fetch(`${base}/streamer/${route}`);
