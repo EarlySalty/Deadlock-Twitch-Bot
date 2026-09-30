@@ -27,6 +27,15 @@ assert_unchanged() {
     [[ $(cat -- "$file") == "$expected" ]]
 }
 
+assert_precedes() {
+    local earlier=$1 later=$2 file=$3
+    awk -v earlier="$earlier" -v later="$later" '
+        $0 == earlier && earlier_line == 0 { earlier_line = NR }
+        $0 == later && later_line == 0 { later_line = NR }
+        END { exit !(earlier_line > 0 && later_line > 0 && earlier_line < later_line) }
+    ' "$file"
+}
+
 exercise_layout() {
     local layout=$1 main_file
     local rule_file ident_file backup_dir selected original_main original_rules original_ident
@@ -67,6 +76,8 @@ EOF
     install_local_peer_before_reject "$rule_file" deadlock twitchdash
     assert_contains_once 'local deadlock twitchbot peer' "$rule_file"
     assert_contains_once 'local deadlock twitchdash peer' "$rule_file"
+    assert_precedes 'local deadlock twitchbot peer' 'local all twitchbot reject' "$rule_file"
+    assert_precedes 'local deadlock twitchdash peer' 'local all twitchdash reject' "$rule_file"
     install_local_peer_before_reject "$rule_file" deadlock twitchbot
     install_local_peer_before_reject "$rule_file" deadlock twitchdash
     assert_contains_once 'local deadlock twitchbot peer' "$rule_file"
