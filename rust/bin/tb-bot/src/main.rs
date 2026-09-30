@@ -472,7 +472,8 @@ async fn main() {
         println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
         return;
     }
-    if !remaining.is_empty() {
+    let migrate_token_storage = remaining == ["--migrate-token-storage", "--apply"];
+    if !remaining.is_empty() && !migrate_token_storage {
         eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
         std::process::exit(2);
     }
@@ -480,7 +481,6 @@ async fn main() {
         .with_max_level(config.logging.level.tracing_level())
         .init();
     tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_BOT_CONFIG_V1");
-    let supervisor = task_supervisor::TaskSupervisor::start();
 
     let settings = snapshot
         .runtime_settings(&|key| std::env::var(key).ok())
@@ -493,6 +493,29 @@ async fn main() {
         tracing::error!("DB-Verbindungsfehler: {e}");
         std::process::exit(1);
     });
+
+    // Expliziter Wartungslauf: keine normalen Writer oder Hintergrundjobs starten.
+    // Die vorhandene Infisical- und Betriebsdatei-Initialisierung bleibt gemeinsam.
+    if migrate_token_storage {
+        let result = match tb_crypto::FieldCipher::from_env() {
+            Ok(cipher) => tb_vod_archive::store::migrate_resume_sessions(&pool, &cipher)
+                .await
+                .map_err(|_| ()),
+            Err(_) => Err(()),
+        };
+        pool.close().await;
+        match result {
+            Ok(count) => println!(
+                "{count} Upload-Sitzungen umgestellt. Offsets und Videozuordnungen sind erhalten."
+            ),
+            Err(()) => {
+                eprintln!("Token-Migration nicht abgeschlossen. Angehaltene Alt-Writer, Datenbank und Infisical-Schlüssel prüfen.");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    let supervisor = task_supervisor::TaskSupervisor::start();
 
     // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
     // mit kaputtem oder halb migriertem Schema darf der Bot nicht starten.
