@@ -701,6 +701,12 @@ async fn shared_chat_duration_and_completed_steam_match_are_required() {
             .unwrap();
         }
     }
+    // The real Twitch poller continues while Steam finishes the match.
+    sqlx::query("UPDATE twitch_live_state SET last_seen_at=$1")
+        .bind(finished.to_rfc3339())
+        .execute(&pool)
+        .await
+        .unwrap();
     engine.tick(finished).await.unwrap();
     engine.tick(finished + Duration::seconds(1)).await.unwrap();
     let (count,points): (i64,i64)=sqlx::query_as("SELECT COUNT(*),SUM(points)::bigint FROM partner_effort_events WHERE event_type='party_play'").fetch_one(&pool).await.unwrap();
