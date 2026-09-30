@@ -163,16 +163,20 @@ impl TimeoutTrackingChatApi {
     }
 }
 
-#[async_trait]
-impl ChatApi for TimeoutTrackingChatApi {
-    /// Sendet die Nachricht über `inner` und meldet einen Bot-Timeout-Drop an
-    /// den Guard. Das Original-Ergebnis bleibt unverändert.
-    async fn send_message(
+impl TimeoutTrackingChatApi {
+    async fn send_tracked_message(
         &self,
         broadcaster_id: &str,
         message: &str,
+        source_only: bool,
     ) -> Result<SendOutcome, String> {
-        let result = self.inner.send_message(broadcaster_id, message).await;
+        let result = if source_only {
+            self.inner
+                .send_source_only_message(broadcaster_id, message)
+                .await
+        } else {
+            self.inner.send_message(broadcaster_id, message).await
+        };
 
         // Nur im seltenen Bot-Timeout-Drop-Fall die DB für die id→login-Auflösung
         // bemühen (moderation.py:1535–1538).
@@ -206,6 +210,30 @@ impl ChatApi for TimeoutTrackingChatApi {
         }
 
         result
+    }
+
+}
+
+#[async_trait]
+impl ChatApi for TimeoutTrackingChatApi {
+    /// Sendet die Nachricht über `inner` und meldet einen Bot-Timeout-Drop an
+    /// den Guard. Das Original-Ergebnis bleibt unverändert.
+    async fn send_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.send_tracked_message(broadcaster_id, message, false)
+            .await
+    }
+
+    async fn send_source_only_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.send_tracked_message(broadcaster_id, message, true)
+            .await
     }
 
     async fn send_announcement(
@@ -338,6 +366,7 @@ mod tests {
 
     struct MockApi {
         send_calls: AtomicUsize,
+        source_only_calls: AtomicUsize,
         outcome: SendOutcome,
     }
 
@@ -345,6 +374,7 @@ mod tests {
         fn with_outcome(outcome: SendOutcome) -> Arc<Self> {
             Arc::new(Self {
                 send_calls: AtomicUsize::new(0),
+                source_only_calls: AtomicUsize::new(0),
                 outcome,
             })
         }
@@ -352,6 +382,14 @@ mod tests {
 
     #[async_trait]
     impl ChatApi for MockApi {
+        async fn send_source_only_message(
+            &self,
+            _b: &str,
+            _m: &str,
+        ) -> Result<SendOutcome, String> {
+            self.source_only_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.outcome.clone())
+        }
         async fn send_message(&self, _b: &str, _m: &str) -> Result<SendOutcome, String> {
             self.send_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.outcome.clone())
@@ -386,6 +424,21 @@ mod tests {
         async fn bot_user_id(&self) -> String {
             unimplemented!()
         }
+    }
+
+    #[tokio::test]
+    async fn source_only_notices_do_not_fall_back_to_normal_chat() {
+        let raw = MockApi::with_outcome(SendOutcome::Sent);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let api = TimeoutTrackingChatApi::new(raw.clone(), Arc::new(TimeoutGuard::new()), pool);
+        assert_eq!(
+            api.send_source_only_message("42", "Patch!").await.unwrap(),
+            SendOutcome::Sent
+        );
+        assert_eq!(raw.source_only_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(raw.send_calls.load(Ordering::SeqCst), 0);
     }
 
     /// Mock-Suppression mit fixem is_muted-Wert.

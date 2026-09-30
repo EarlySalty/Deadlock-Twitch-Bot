@@ -102,6 +102,16 @@ pub trait ChatApi: Send + Sync {
         message: &str,
     ) -> Result<SendOutcome, String>;
 
+    /// A target-local message. Unsupported adapters fail closed, never fall
+    /// back to a user-token send that fans out into Shared Chat participants.
+    async fn send_source_only_message(
+        &self,
+        _broadcaster_id: &str,
+        _message: &str,
+    ) -> Result<SendOutcome, String> {
+        Err("source_only_chat_not_supported".to_string())
+    }
+
     /// `POST /helix/whispers` — braucht `user:manage:whispers` auf dem
     /// Bot-User-Token.
     async fn send_whisper(&self, _to_user_id: &str, _message: &str) -> Result<bool, String> {

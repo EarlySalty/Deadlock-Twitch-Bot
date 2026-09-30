@@ -187,6 +187,18 @@ impl ChatApi for HelixChatClient {
         })
     }
 
+    async fn send_source_only_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        let sender_id = self.token_mgr.bot_user_id().await;
+        self.helix
+            .send_source_only_chat_message(broadcaster_id, &sender_id, message)
+            .await
+            .map_err(|_| "source_only_chat_transport_failed".to_string())
+    }
+
     /// Sendet Whisper — 2-Attempt: 401 → force_refresh → retry.
     async fn send_whisper(&self, to_user_id: &str, message: &str) -> Result<bool, String> {
         let from_user_id = self.token_mgr.bot_user_id().await;

@@ -1356,6 +1356,7 @@ async fn main() {
     // startet Token-Loop, Promo-Loop, Global-Ban-Sweeper und den
     // 30-min-Subscription-Reconcile.
     let mut scout_crew_guard = None;
+    let mut patch_chat = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match chat_api_handle {
         Some(handle) => {
             // !clip: Broadcaster-Token-Clip-Port (Fallback: Bot-Token), nur mit
@@ -1398,6 +1399,10 @@ async fn main() {
                 supervisor.clone(),
             )
             .await;
+            patch_chat = Some((
+                Arc::clone(&runtime.announcement_api),
+                Arc::clone(&runtime.announcement_suppression),
+            ));
             scout_crew_guard = Some(runtime.scout_crew_guard());
             runtime.start_background(
                 subscription_manager.clone(),
@@ -2158,7 +2163,10 @@ async fn main() {
         scam_enforce,
         bulk_reauth,
         legacy_proxy,
-    );
+    )
+    .layer(axum::Extension(
+        tb_internal_api::handlers::patch_announcement::PatchChatExt(patch_chat),
+    ));
 
     // Block 10: Split-Deployment-Härtung vor dem Bind. `role = None` liest die
     // Runtime-Rolle aus der Umgebung (kombiniertes Deployment: tb-bot fährt die

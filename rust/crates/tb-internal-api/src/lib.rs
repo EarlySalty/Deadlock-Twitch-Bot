@@ -78,6 +78,10 @@ pub fn build_internal_router(
     Router::new()
         .route(&format!("{base}/healthz"), get(healthz::healthz_handler))
         .route(
+            &format!("{base}/patch-announcement"),
+            post(handlers::patch_announcement::handler),
+        )
+        .route(
             &format!("{base}/eventsub/dispatch"),
             post(eventsub::dispatch_handler),
         )

@@ -512,6 +512,8 @@ impl ChatApiHandle {
 /// Promo-Loop, Global-Ban-Sweeper).
 pub struct ChatRuntime {
     pub hooks: Arc<dyn EventSubHooks>,
+    pub announcement_api: Arc<dyn ChatApi>,
+    pub announcement_suppression: Arc<dyn tb_chat::promos::OutboundSuppressionCheck>,
     token_manager: Arc<BotTokenManager>,
     promos: Arc<PromoEngine>,
     sweeper: Arc<GlobalBanSweeper>,
@@ -964,6 +966,8 @@ pub async fn build_runtime(
 
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
+        announcement_api: Arc::clone(&api),
+        announcement_suppression: Arc::clone(&suppression),
         hooks: Arc::new(ChatHooks {
             inner: inner_hooks,
             pipeline,

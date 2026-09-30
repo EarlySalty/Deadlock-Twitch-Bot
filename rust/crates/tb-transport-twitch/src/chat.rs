@@ -348,6 +348,49 @@ impl HelixClient {
         }
     }
 
+    /// Target-local bot notices, including during Shared Chat. The existing app
+    /// token is required: Twitch forbids for_source_only with user tokens.
+    /// No retry and no user-token fallback after an ambiguous POST.
+    pub async fn send_source_only_chat_message(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, HelixError> {
+        let response = self
+            .post("/chat/messages")
+            .await?
+            .json(&serde_json::json!({
+                "broadcaster_id": broadcaster_id,
+                "sender_id": sender_id,
+                "message": message,
+                "for_source_only": true,
+            }))
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Ok(SendOutcome::HttpError {
+                status,
+                body: String::new(),
+            });
+        }
+        let parsed: SendMessageResponse = response.json().await?;
+        let [item] = parsed.data.as_slice() else {
+            return Err(HelixError::InvalidResponse("missing chat delivery result"));
+        };
+        if item.is_sent {
+            Ok(SendOutcome::Sent)
+        } else {
+            let (code, message) = item
+                .drop_reason
+                .as_ref()
+                .map(|r| (r.code.clone(), r.message.clone()))
+                .unwrap_or_else(|| ("unknown".into(), String::new()));
+            Ok(SendOutcome::Dropped { code, message })
+        }
+    }
+
     /// Sendet einen Whisper via `POST /whispers`.
     ///
     /// Scope: `user:manage:whispers`; `from_user_id` muss zur User-Token-
@@ -750,6 +793,56 @@ mod tests {
     // -----------------------------------------------------------------------
     // send_chat_message
     // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn source_only_patch_message_uses_app_token_and_never_shared_chat_fanout() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(body_partial_json(serde_json::json!({"for_source_only": true, "broadcaster_id": "111", "sender_id": "bot1"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"message_id": "abc", "is_sent": true}]
+            })))
+            .expect(1).mount(&server).await;
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "bot1", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::Sent
+        );
+    }
+
+    #[tokio::test]
+    async fn source_only_chat_rejects_empty_success_and_never_retries_permissions_error() {
+        for status in [200, 403] {
+            let server = MockServer::start().await;
+            let client = mock_client(&server).await;
+            Mock::given(method("POST"))
+                .and(path("/helix/chat/messages"))
+                .and(header("Authorization", "Bearer app-tok"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(serde_json::json!({"data": []})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = client
+                .send_source_only_chat_message("111", "bot1", "Patch!")
+                .await;
+            if status == 200 {
+                assert!(result.is_err());
+            } else {
+                assert!(matches!(
+                    result,
+                    Ok(SendOutcome::HttpError { status: 403, .. })
+                ));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn send_chat_200_is_sent_true() {
