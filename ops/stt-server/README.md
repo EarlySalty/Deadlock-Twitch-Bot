@@ -68,7 +68,8 @@ Wiederholungen steht in der nächsten Meldung. Jede neue aktive Startgeneration
 bekommt zuerst 15 Minuten Startup-Karenz. Die Zeit beginnt bei der ersten
 ungesunden Probe dieser von systemd gemeldeten Startgeneration; ein Neustart
 setzt sie zurück. Dadurch kann die Recovery nach einem gemeldeten Neustart bis
-zu 15 Minuten zusätzlich warten.
+zu 15 Minuten zusätzlich warten. Das Backoff läuft über Recovery-Neustarts
+weiter und wird erst nach einem erfolgreichen Healthcheck zurückgesetzt.
 
 Installation neben der Haupt-Unit:
 

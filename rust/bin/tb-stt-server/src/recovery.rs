@@ -240,8 +240,6 @@ fn observe_generation(state: &mut RecoveryState, snapshot: UnitSnapshot, now: u6
     }
     state.unhealthy_generation = Some(snapshot.active_enter_monotonic_usec);
     state.unhealthy_since = Some(now);
-    state.last_attempt = None;
-    state.failed_attempts = 0;
     true
 }
 
@@ -499,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_restart_resets_stale_attempts_for_new_generation_and_keeps_warning_budget() {
+    fn admin_restart_restarts_startup_grace_without_erasing_backoff_or_warning_budget() {
         let old_generation = UnitSnapshot {
             active_enter_monotonic_usec: 100,
         };
@@ -514,8 +512,8 @@ mod tests {
             ..RecoveryState::default()
         };
         assert!(observe_generation(&mut state, old_generation, 1_000));
-        assert_eq!(state.last_attempt, None);
-        assert_eq!(state.failed_attempts, 0);
+        assert_eq!(state.last_attempt, Some(50));
+        assert_eq!(state.failed_attempts, 64);
         assert_eq!(state.unhealthy_since, Some(1_000));
         assert!(!startup_grace_elapsed(
             state.unhealthy_since,
@@ -529,6 +527,8 @@ mod tests {
         ));
         assert!(observe_generation(&mut state, restarted_generation, 1_100));
         assert_eq!(state.unhealthy_since, Some(1_100));
+        assert_eq!(state.last_attempt, Some(50));
+        assert_eq!(state.failed_attempts, 64);
         assert!(!startup_grace_elapsed(
             state.unhealthy_since,
             1_100 + STARTUP_GRACE_SECONDS - 1,
@@ -536,6 +536,35 @@ mod tests {
         ));
         assert_eq!(state.warnings, [10, 20]);
         assert_eq!(state.suppressed_warnings, 7);
+    }
+
+    #[test]
+    fn recovery_backoff_grows_across_its_own_unhealthy_restart_generations() {
+        let generations = [
+            UnitSnapshot {
+                active_enter_monotonic_usec: 10,
+            },
+            UnitSnapshot {
+                active_enter_monotonic_usec: 20,
+            },
+            UnitSnapshot {
+                active_enter_monotonic_usec: 30,
+            },
+        ];
+        let mut state = RecoveryState::default();
+        assert!(observe_generation(&mut state, generations[0], 100));
+        record_attempt(&mut state, 200);
+        assert_eq!(state.failed_attempts, 1);
+        assert!(observe_generation(&mut state, generations[1], 300));
+        assert_eq!(state.failed_attempts, 1);
+        assert!(!backoff_elapsed(&state, 200 + 5 * 60 - 1));
+        assert!(backoff_elapsed(&state, 200 + 5 * 60));
+        record_attempt(&mut state, 600);
+        assert_eq!(state.failed_attempts, 2);
+        assert!(observe_generation(&mut state, generations[2], 700));
+        assert_eq!(state.failed_attempts, 2);
+        assert!(!backoff_elapsed(&state, 600 + 10 * 60 - 1));
+        assert!(backoff_elapsed(&state, 600 + 10 * 60));
     }
 
     #[test]
