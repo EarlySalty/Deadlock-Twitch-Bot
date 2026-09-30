@@ -74,21 +74,37 @@ async fn run_for_unit(
     service: &str,
     startup_grace_seconds: u64,
 ) -> Result<(), String> {
+    run_for_unit_with_systemctl(
+        config,
+        state_path,
+        service,
+        startup_grace_seconds,
+        Path::new("/usr/bin/systemctl"),
+    )
+    .await
+}
+
+async fn run_for_unit_with_systemctl(
+    config: &SttConfig,
+    state_path: &Path,
+    service: &str,
+    startup_grace_seconds: u64,
+    systemctl_path: &Path,
+) -> Result<(), String> {
     if health_ok(&config.local_origin()).await {
-        let _ = reset_backoff(state_path);
+        reset_backoff(state_path)?;
         return Ok(());
     }
 
     let now = unix_time();
-    let Ok(mut state) = load_state(state_path) else {
-        return Ok(());
-    };
-    let Some(unit_before_probe) = unit_snapshot_if_recoverable(service).await else {
-        let _ = clear_startup_observation(state_path, &mut state);
+    let mut state = load_state(state_path)?;
+    let Some(unit_before_probe) = unit_snapshot_if_recoverable(service, systemctl_path).await
+    else {
+        clear_startup_observation(state_path, &mut state)?;
         return Ok(());
     };
     if observe_generation(&mut state, unit_before_probe, now) {
-        let _ = persist_state(state_path, &state);
+        persist_state(state_path, &state)?;
         return Ok(());
     }
     if !startup_grace_elapsed(state.unhealthy_since, now, startup_grace_seconds)
@@ -97,30 +113,31 @@ async fn run_for_unit(
         return Ok(());
     }
     if health_ok(&config.local_origin()).await {
-        let _ = reset_backoff(state_path);
+        reset_backoff(state_path)?;
         return Ok(());
     }
-    let Some(unit_before_recovery) = unit_snapshot_if_recoverable(service).await else {
-        let _ = clear_startup_observation(state_path, &mut state);
+    let Some(unit_before_recovery) = unit_snapshot_if_recoverable(service, systemctl_path).await
+    else {
+        clear_startup_observation(state_path, &mut state)?;
         return Ok(());
     };
     if observe_generation(&mut state, unit_before_recovery, unix_time()) {
-        let _ = persist_state(state_path, &state);
+        persist_state(state_path, &state)?;
         return Ok(());
     }
     if !startup_grace_elapsed(state.unhealthy_since, unix_time(), startup_grace_seconds) {
         return Ok(());
     }
     if health_ok(&config.local_origin()).await {
-        let _ = reset_backoff(state_path);
+        reset_backoff(state_path)?;
         return Ok(());
     }
-    let Some(unit_at_action) = unit_snapshot_if_recoverable(service).await else {
-        let _ = clear_startup_observation(state_path, &mut state);
+    let Some(unit_at_action) = unit_snapshot_if_recoverable(service, systemctl_path).await else {
+        clear_startup_observation(state_path, &mut state)?;
         return Ok(());
     };
     if observe_generation(&mut state, unit_at_action, unix_time()) {
-        let _ = persist_state(state_path, &state);
+        persist_state(state_path, &state)?;
         return Ok(());
     }
     if !startup_grace_elapsed(state.unhealthy_since, unix_time(), startup_grace_seconds) {
@@ -129,9 +146,7 @@ async fn run_for_unit(
 
     record_attempt(&mut state, now);
     let warning = warning_due(&mut state, now);
-    if persist_state(state_path, &state).is_err() {
-        return Ok(());
-    }
+    persist_state(state_path, &state)?;
     if let Some(suppressed) = warning {
         warn!(
             suppressed_repeats = suppressed,
@@ -139,7 +154,9 @@ async fn run_for_unit(
         );
     }
 
-    let _ = run_systemctl(&["--no-block", "try-restart", service]).await;
+    run_systemctl_at(systemctl_path, &["--no-block", "try-restart", service])
+        .await
+        .map_err(|_| "systemd hat den STT-Recovery-Neustart nicht angenommen.".to_owned())?;
     Ok(())
 }
 
@@ -185,16 +202,24 @@ struct HealthStatus {
     status: String,
 }
 
-async fn unit_snapshot_if_recoverable(service: &str) -> Option<UnitSnapshot> {
-    let enabled = run_systemctl(&["is-enabled", service]).await.ok();
+async fn unit_snapshot_if_recoverable(
+    service: &str,
+    systemctl_path: &Path,
+) -> Option<UnitSnapshot> {
+    let enabled = run_systemctl_at(systemctl_path, &["is-enabled", service])
+        .await
+        .ok();
     if !unit_enabled_state_allows_recovery(service, enabled.as_deref()) {
         return None;
     }
-    let properties = run_systemctl(&[
-        "show",
-        "--property=ActiveState,ActiveEnterTimestampMonotonic",
-        service,
-    ])
+    let properties = run_systemctl_at(
+        systemctl_path,
+        &[
+            "show",
+            "--property=ActiveState,ActiveEnterTimestampMonotonic",
+            service,
+        ],
+    )
     .await
     .ok();
     let properties = properties?;
@@ -272,8 +297,8 @@ fn record_attempt(state: &mut RecoveryState, now: u64) {
         .min(MAX_FAILED_ATTEMPTS);
 }
 
-async fn run_systemctl(arguments: &[&str]) -> Result<String, ()> {
-    let command = Command::new("/usr/bin/systemctl")
+async fn run_systemctl_at(systemctl_path: &Path, arguments: &[&str]) -> Result<String, ()> {
+    let command = Command::new(systemctl_path)
         .arg("--user")
         .arg("--no-pager")
         .args(arguments)
@@ -362,10 +387,7 @@ fn persist_state(path: &Path, state: &RecoveryState) -> Result<(), String> {
 }
 
 fn reset_backoff(path: &Path) -> Result<(), String> {
-    let mut state = match load_state(path) {
-        Ok(state) => state,
-        Err(_) => return Ok(()),
-    };
+    let mut state = load_state(path)?;
     reset_backoff_state(&mut state);
     persist_state(path, &state)
 }
@@ -419,9 +441,10 @@ fn unix_time() -> u64 {
 mod tests {
     use super::{
         backoff_elapsed, enabled_state_allows_recovery, health_ok, load_state, observe_generation,
-        parse_arguments, parse_unit_snapshot, record_attempt, reset_backoff_state, run_for_unit,
-        startup_grace_elapsed, warning_due, RecoveryState, UnitSnapshot, MAX_FAILED_ATTEMPTS,
-        STARTUP_GRACE_SECONDS, SYSTEMD_FIXTURE_PORT, SYSTEMD_FIXTURE_SERVICE,
+        parse_arguments, parse_unit_snapshot, persist_state, record_attempt, reset_backoff,
+        reset_backoff_state, run_for_unit, run_for_unit_with_systemctl, startup_grace_elapsed,
+        warning_due, RecoveryState, UnitSnapshot, MAX_FAILED_ATTEMPTS, STARTUP_GRACE_SECONDS,
+        SYSTEMD_FIXTURE_PORT, SYSTEMD_FIXTURE_SERVICE,
     };
     use axum::{
         extract::State,
@@ -435,7 +458,7 @@ mod tests {
         ffi::OsString,
         fs,
         net::Ipv4Addr,
-        path::PathBuf,
+        path::{Path, PathBuf},
         process::Stdio,
         sync::atomic::{AtomicU64, Ordering},
         sync::Arc,
@@ -989,5 +1012,106 @@ mod tests {
         fs::write(&path, b"{broken").unwrap();
         assert!(load_state(&path).is_err());
         fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn corrupt_state_errors_are_visible_and_state_is_preserved() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("tb-stt-corrupt-{nonce}.json"));
+        fs::write(&path, b"{broken").unwrap();
+
+        let reset_error = reset_backoff(&path).expect_err("corrupt state must block reset");
+        assert!(reset_error.contains("ungültig"));
+        let run_error = run_for_unit_with_systemctl(
+            &tb_config::stt::SttConfig {
+                port: 0,
+                ..Default::default()
+            },
+            &path,
+            SYSTEMD_FIXTURE_SERVICE,
+            0,
+            Path::new("/nonexistent/systemctl-fixture"),
+        )
+        .await
+        .expect_err("corrupt state must fail the recovery invocation");
+        assert!(run_error.contains("ungültig"));
+        assert_eq!(fs::read(&path).unwrap(), b"{broken");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_try_restart_is_reported_without_resetting_backoff_or_warning_budget() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("tb-stt-systemctl-reject-{nonce}"));
+        fs::create_dir(&root).unwrap();
+        let state_path = root.join("state.json");
+        let systemctl_path = root.join("systemctl");
+        fs::write(
+            &systemctl_path,
+            b"#!/bin/sh\ncase \"$3\" in\nis-enabled) printf 'enabled\\n' ;;\nshow) printf 'ActiveState=active\\nActiveEnterTimestampMonotonic=123\\n' ;;\n--no-block) printf 'attempt\\n' >> \"$0.calls\"; exit 1 ;;\n*) exit 2 ;;\nesac\n",
+        )
+        .unwrap();
+        fs::set_permissions(&systemctl_path, fs::Permissions::from_mode(0o700)).unwrap();
+        persist_state(
+            &state_path,
+            &RecoveryState {
+                unhealthy_generation: Some(123),
+                unhealthy_since: Some(1),
+                ..RecoveryState::default()
+            },
+        )
+        .unwrap();
+
+        let config = tb_config::stt::SttConfig {
+            port: 0,
+            ..Default::default()
+        };
+        let error = run_for_unit_with_systemctl(
+            &config,
+            &state_path,
+            SYSTEMD_FIXTURE_SERVICE,
+            0,
+            &systemctl_path,
+        )
+        .await
+        .expect_err("failed systemd request must reach the caller");
+        assert!(error.contains("nicht angenommen"));
+        let state = load_state(&state_path).unwrap();
+        assert_eq!(state.failed_attempts, 1);
+        assert_eq!(state.warnings.len(), 1);
+        assert_eq!(
+            fs::read_to_string(systemctl_path.with_extension("calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+
+        run_for_unit_with_systemctl(
+            &config,
+            &state_path,
+            SYSTEMD_FIXTURE_SERVICE,
+            0,
+            &systemctl_path,
+        )
+        .await
+        .expect("persisted backoff suppresses another recovery attempt");
+        assert_eq!(load_state(&state_path).unwrap().failed_attempts, 1);
+        assert_eq!(
+            fs::read_to_string(systemctl_path.with_extension("calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
