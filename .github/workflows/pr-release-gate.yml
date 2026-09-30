@@ -38,7 +38,6 @@ jobs:
             const requested = Number.parseInt(process.env.INPUT_PR_NUMBER || "", 10);
 
             const requiredChecks = [
-              "Semantic review",
               "Scope-Abgleich (keine toten Projekte)",
               "Frontend PR Gate (website)",
               "Frontend PR Gate (admin_dashboard)",

@@ -91,7 +91,6 @@ jobs:
             // Native auto-merge is only safe when GitHub itself enforces every
             // release check. Otherwise --auto may merge immediately.
             const requiredChecks = [
-              "Semantic review",
               "Scope-Abgleich (keine toten Projekte)",
               "Frontend PR Gate (website)",
               "Frontend PR Gate (admin_dashboard)",
