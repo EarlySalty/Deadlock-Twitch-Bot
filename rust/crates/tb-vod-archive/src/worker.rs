@@ -305,10 +305,9 @@ impl VodArchiveWorker {
         for einstellung in streamer {
             let zugang = self.zugang.fuer(&einstellung.streamer_login).await;
             if zugang.is_none() {
-                tracing::info!(
+                tracing::warn!(
                     kanal = %einstellung.streamer_login,
-                    "Kein eigener YouTube-Zugang hinterlegt, es wird nur lokal archiviert. \
-                     Der Upload startet, sobald die Verbindung im Dashboard steht."
+                    "YouTube-Upload wartet auf den Login. Im Streamer-Dashboard unter Social Media den YouTube-Zugang verbinden, danach holt der naechste Lauf die lokalen VODs nach."
                 );
             }
             uploader.insert(einstellung.streamer_login.clone(), zugang);
