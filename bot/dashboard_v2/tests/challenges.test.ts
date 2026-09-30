@@ -41,6 +41,7 @@ test('leerer erreichbarer Quest-Pool wird als Partnerstatus angezeigt', () => {
   assert.ok(PAGE.includes('Die Monatswertung läuft unabhängig davon weiter.'));
 });
 
+test('Challenges zeigt Ziel, Wochenfortschritt, Erfolge und Werber', () => {
   for (const text of ['Diese Woche', 'Mit uns erreicht', 'Deine Werber', 'Einsatz (Monat)']) {
     assert.ok(PAGE.includes(text), `${text} fehlt`);
   }
