@@ -439,6 +439,63 @@ const UPLINK_CAPS_FIXTURE = {
   })),
 };
 
+const UPLINK_CAST_STUDIO_FIXTURE = {
+  sources: [
+    {
+      source_id: 1,
+      label: 'Caster POV',
+      kind: 'pov',
+      enabled: true,
+      ingest_key: 'cst_11111111111111111111111111111111',
+      ingest_url: 'rtmps://uplink.example/live',
+      session: { id: 41, active: true, source_id: 1, cast_role: 'program', state: 'Medien werden empfangen', input_codec: 'av1', input_bitrate_kbps: 4100 },
+    },
+    {
+      source_id: 2,
+      label: 'Team A POV',
+      kind: 'pov',
+      enabled: true,
+      ingest_key: 'cst_22222222222222222222222222222222',
+      ingest_url: 'rtmps://uplink.example/live',
+      session: { id: 42, active: true, source_id: 2, cast_role: 'preview', state: 'Medien werden empfangen', input_codec: 'h264', input_bitrate_kbps: 6200 },
+    },
+    {
+      source_id: 3,
+      label: 'Desk Kamera',
+      kind: 'camera',
+      enabled: true,
+      ingest_key: 'cst_33333333333333333333333333333333',
+      ingest_url: 'rtmps://uplink.example/live',
+      session: { id: 43, active: true, source_id: 3, cast_role: 'standby', state: 'Medien werden empfangen', input_codec: 'h264', input_bitrate_kbps: 2800 },
+    },
+  ],
+  scenes: [
+    { scene_id: 11, name: 'Caster', source_id: 1, sort_order: 0 },
+    { scene_id: 12, name: 'Team A', source_id: 2, sort_order: 10 },
+    { scene_id: 13, name: 'Desk', source_id: 3, sort_order: 20 },
+  ],
+  program_scene_id: 11,
+  preview_scene_id: 12,
+  switch_generation: 7,
+  limits: { sources: 8, scenes: 24, online_sources: 4 },
+  preview: {
+    available: true,
+    strategy: 'compressed_browser_decode',
+    codecs: ['h264'],
+    audio: false,
+    server_encode: false,
+    standby_output: 'drop',
+  },
+  program_switch: {
+    available: true,
+    transport: 'persistent_program_mux',
+    persistent_connection: true,
+    switch_mode: 'next_keyframe',
+    requires_same_track_codecs: true,
+    seamless_media_mux: false,
+  },
+};
+
 const UPLINK_ADMIN_WAITLIST_FIXTURE = {
   entries: [
     {
@@ -529,6 +586,7 @@ export function getPreviewPathFixture(pathname: string): unknown | undefined {
   if (pathname === '/twitch/api/v2/streamer/ad-manager') return AD_MANAGER_FIXTURE;
   if (pathname === '/twitch/api/v2/engagement/settings') return ENGAGEMENT_SETTINGS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/me') return UPLINK_ME_FIXTURE;
+  if (pathname === '/twitch/api/v2/uplink/cast') return UPLINK_CAST_STUDIO_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/destinations') return UPLINK_DESTINATIONS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/caps') return UPLINK_CAPS_FIXTURE;
   if (pathname === '/twitch/api/v2/uplink/admin/waitlist') return UPLINK_ADMIN_WAITLIST_FIXTURE;

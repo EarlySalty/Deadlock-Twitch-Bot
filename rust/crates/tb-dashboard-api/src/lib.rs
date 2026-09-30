@@ -173,15 +173,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
-        dashboard_assistent, engagement_mode, engagement_settings, exp_analytics, feedback, follower_funnel,
-        greeting_settings, internal_home, leaderboard, loyalty_curve, lurk_command_settings,
-        lurker_analysis, lurker_tax_settings, moderation_settings, monetization, onboarding,
-        overview, performance, plattform_connect, raid_analytics, raid_history, rankings,
-        retention_curve, scam_guard_queue, scam_guard_settings, session_detail, silent_settings,
-        social_media, spa, stat_command_settings, stream_report, streamer_disconnect, streamers,
-        tag_analysis,
-        tip_settings, title, title_command_settings, sub_reminder_settings, title_performance, uplink, viewer_timeline,
-        viewers, watch_time,
+        dashboard_assistent, engagement_mode, engagement_settings, exp_analytics, feedback,
+        follower_funnel, greeting_settings, internal_home, leaderboard, loyalty_curve,
+        lurk_command_settings, lurker_analysis, lurker_tax_settings, moderation_settings,
+        monetization, onboarding, overview, performance, plattform_connect, raid_analytics,
+        raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings,
+        session_detail, silent_settings, social_media, spa, stat_command_settings, stream_report,
+        streamer_disconnect, streamers, sub_reminder_settings, tag_analysis, tip_settings, title,
+        title_command_settings, title_performance, uplink, viewer_timeline, viewers, watch_time,
     };
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
@@ -395,7 +394,8 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         .route(
             "/twitch/api/v2/feedback",
-            get(feedback::list).post(feedback::create)
+            get(feedback::list)
+                .post(feedback::create)
                 .layer(axum::extract::DefaultBodyLimit::max(24 * 1024)),
         )
         .route("/twitch/api/v2/feedback/counts", get(feedback::counts))
@@ -458,7 +458,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/streamer/title-command-settings",
             get(title_command_settings::get_handler).post(title_command_settings::post_handler),
         )
-        .route("/twitch/api/v2/streamer/sub-reminder-settings", get(sub_reminder_settings::get_handler).post(sub_reminder_settings::post_handler))
+        .route(
+            "/twitch/api/v2/streamer/sub-reminder-settings",
+            get(sub_reminder_settings::get_handler).post(sub_reminder_settings::post_handler),
+        )
         .route(
             "/twitch/api/v2/streamer/stat-command-settings",
             get(stat_command_settings::get_handler).post(stat_command_settings::post_handler),
@@ -530,6 +533,42 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(streamers::streamers_handler),
         )
         .route("/twitch/api/v2/uplink/me", get(uplink::me_handler))
+        .route(
+            "/twitch/api/v2/uplink/cast",
+            get(uplink::cast_studio_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/sources",
+            post(uplink::cast_source_create_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/sources/:source_id/rotate",
+            post(uplink::cast_source_rotate_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/sources/:source_id/preview",
+            get(uplink::cast_preview_ws_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/sources/:source_id",
+            axum::routing::delete(uplink::cast_source_delete_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/scenes",
+            post(uplink::cast_scene_create_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/scenes/:scene_id",
+            axum::routing::delete(uplink::cast_scene_delete_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/preview",
+            put(uplink::cast_preview_handler),
+        )
+        .route(
+            "/twitch/api/v2/uplink/cast/program",
+            put(uplink::cast_program_handler),
+        )
         .route(
             "/twitch/api/v2/uplink/reconnect-wait",
             put(uplink::put_reconnect_wait_handler),
@@ -2126,10 +2165,7 @@ mod router_wiring_tests {
                 "/twitch/verwaltung",
                 "/twitch/auth/login?next=%2Ftwitch%2Fverwaltung",
             ),
-            (
-                "/twitch/hilfe",
-                "/twitch/auth/login?next=%2Ftwitch%2Fhilfe",
-            ),
+            ("/twitch/hilfe", "/twitch/auth/login?next=%2Ftwitch%2Fhilfe"),
             (
                 "/twitch/feedback",
                 "/twitch/auth/login?next=%2Ftwitch%2Ffeedback",

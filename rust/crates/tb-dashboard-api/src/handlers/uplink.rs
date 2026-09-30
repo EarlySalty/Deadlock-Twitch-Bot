@@ -5,16 +5,21 @@
 #![allow(clippy::result_large_err)]
 
 use axum::{
-    extract::{Extension, Path, State},
-    http::StatusCode,
+    extract::{
+        Extension, Path, State,
+        ws::{Message as BrowserMessage, WebSocket, WebSocketUpgrade},
+    },
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
 use tb_transport_twitch::{HelixClient, TwitchUser};
+use zeroize::Zeroizing;
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
 use crate::auth::{
@@ -471,6 +476,273 @@ pub async fn dock_token_rotate_handler(
 /// (`Query<MeQuery>` in rs-relay `src/api/chat.rs`), nicht aus einem Body.
 fn dock_token_rotate_pfad(streamer_id: i64) -> String {
     format!("/v1/me/dock-token/rotate?streamer_id={streamer_id}")
+}
+
+pub async fn cast_studio_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::GET,
+        &format!("/v1/me/cast?streamer_id={id}"),
+        None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+#[derive(Deserialize)]
+pub struct CastSourceRequest {
+    label: String,
+    kind: String,
+}
+
+pub async fn cast_source_create_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<CastSourceRequest>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::POST,
+        "/v1/me/cast/sources",
+        Some(json!({"streamer_id":id,"label":body.label,"kind":body.kind})),
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+pub async fn cast_source_rotate_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Path(source_id): Path<u64>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::POST,
+        &format!("/v1/me/cast/sources/{source_id}/rotate"),
+        Some(json!({"streamer_id":id})),
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+async fn proxy_cast_preview(
+    mut browser: WebSocket,
+    upstream_url: String,
+    secret: Zeroizing<String>,
+) {
+    use tokio_tungstenite::tungstenite::{
+        Message as UpstreamMessage,
+        client::IntoClientRequest,
+        http::HeaderValue,
+    };
+
+    let mut request = match upstream_url.into_client_request() {
+        Ok(request) => request,
+        Err(_) => {
+            let _ = browser.send(BrowserMessage::Close(None)).await;
+            return;
+        }
+    };
+    let Ok(secret) = HeaderValue::from_str(&secret) else {
+        let _ = browser.send(BrowserMessage::Close(None)).await;
+        return;
+    };
+    request.headers_mut().insert("x-relay-auth", secret);
+    let (upstream, _) = match tokio_tungstenite::connect_async(request).await {
+        Ok(connection) => connection,
+        Err(_) => {
+            let _ = browser.send(BrowserMessage::Close(None)).await;
+            return;
+        }
+    };
+
+    let (mut browser_tx, mut browser_rx) = browser.split();
+    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    loop {
+        tokio::select! {
+            message = upstream_rx.next() => {
+                match message {
+                    Some(Ok(UpstreamMessage::Binary(bytes))) => {
+                        if browser_tx.send(BrowserMessage::Binary(bytes.to_vec())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(UpstreamMessage::Ping(bytes))) => {
+                        if upstream_tx.send(UpstreamMessage::Pong(bytes)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(UpstreamMessage::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+            message = browser_rx.next() => {
+                match message {
+                    Some(Ok(BrowserMessage::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(BrowserMessage::Ping(bytes))) => {
+                        if browser_tx.send(BrowserMessage::Pong(bytes)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+    let _ = upstream_tx.send(UpstreamMessage::Close(None)).await;
+}
+
+pub async fn cast_preview_ws_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    headers: HeaderMap,
+    Path(source_id): Path<u64>,
+    upgrade: Option<WebSocketUpgrade>,
+) -> Response {
+    let id = match partner_id(&pool, &auth).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    if !crate::auth::csrf::is_allowed_origin(&headers) {
+        return fehler(StatusCode::FORBIDDEN, "WebSocket-Herkunft wurde abgewiesen.");
+    }
+    if source_id == 0 {
+        return fehler(StatusCode::BAD_REQUEST, "Quellenidentität ist ungültig.");
+    }
+    let Some(upgrade) = upgrade else {
+        return fehler(
+            StatusCode::UPGRADE_REQUIRED,
+            "Dieser Endpunkt spricht nur WebSocket.",
+        );
+    };
+    let runtime = match crate::uplink_config::runtime() {
+        Ok(runtime) => runtime,
+        Err(_) => return fehler(StatusCode::SERVICE_UNAVAILABLE, "Uplink ist noch nicht eingerichtet."),
+    };
+    let mut url = match reqwest::Url::parse(&runtime.base) {
+        Ok(url) => url,
+        Err(_) => return fehler(StatusCode::SERVICE_UNAVAILABLE, "Uplink-Endpunkt ist ungültig."),
+    };
+    if url.set_scheme("ws").is_err() {
+        return fehler(StatusCode::SERVICE_UNAVAILABLE, "Uplink-Endpunkt ist ungültig.");
+    }
+    url.set_path(&format!("/v1/me/cast/sources/{source_id}/preview"));
+    url.query_pairs_mut()
+        .append_pair("streamer_id", &id.to_string());
+    let upstream_url = url.to_string();
+    let secret = Zeroizing::new(runtime.secret("/v1/me/cast/sources/preview").to_owned());
+    upgrade.on_upgrade(move |socket| proxy_cast_preview(socket, upstream_url, secret))
+}
+
+pub async fn cast_source_delete_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Path(source_id): Path<u64>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::DELETE,
+        &format!("/v1/me/cast/sources/{source_id}?streamer_id={id}"),
+        None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+#[derive(Deserialize)]
+pub struct CastSceneRequest {
+    name: String,
+    source_id: u64,
+}
+
+pub async fn cast_scene_create_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<CastSceneRequest>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::POST,
+        "/v1/me/cast/scenes",
+        Some(json!({"streamer_id":id,"name":body.name,"source_id":body.source_id})),
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+pub async fn cast_scene_delete_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Path(scene_id): Path<u64>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::DELETE,
+        &format!("/v1/me/cast/scenes/{scene_id}?streamer_id={id}"),
+        None,
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+#[derive(Deserialize)]
+pub struct CastPreviewRequest {
+    scene_id: Option<u64>,
+    expected_generation: i64,
+}
+
+pub async fn cast_preview_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<CastPreviewRequest>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::PUT,
+        "/v1/me/cast/preview",
+        Some(json!({
+            "streamer_id":id,
+            "scene_id":body.scene_id,
+            "expected_generation":body.expected_generation,
+        })),
+    )
+    .await?;
+    Ok(Json(wert))
+}
+
+#[derive(Deserialize)]
+pub struct CastProgramRequest {
+    scene_id: u64,
+    expected_generation: i64,
+    #[serde(default = "cast_swap_default")]
+    swap_preview: bool,
+}
+
+const fn cast_swap_default() -> bool {
+    true
+}
+
+pub async fn cast_program_handler(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(body): Json<CastProgramRequest>,
+) -> Result<Json<Value>, Response> {
+    let id = partner_id(&pool, &auth).await?;
+    let wert = relay_json(
+        reqwest::Method::PUT,
+        "/v1/me/cast/program",
+        Some(json!({
+            "streamer_id":id,
+            "scene_id":body.scene_id,
+            "expected_generation":body.expected_generation,
+            "swap_preview":body.swap_preview,
+        })),
+    )
+    .await?;
+    Ok(Json(wert))
 }
 
 pub async fn waitlist_handler(

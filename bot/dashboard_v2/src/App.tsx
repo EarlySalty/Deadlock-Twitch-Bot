@@ -15,6 +15,7 @@ import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { UplinkPage } from '@/pages/Uplink';
+import { UplinkCastStudioPage } from '@/pages/UplinkCastStudio';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
@@ -38,6 +39,7 @@ import {
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_UPLINK_ROUTE,
+  PREVIEW_UPLINK_STUDIO_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   isPreviewModeEnabled,
 } from '@/preview/routes';
@@ -365,6 +367,7 @@ export default function App() {
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
+  const isUplinkStudioRoute = path === PREVIEW_UPLINK_STUDIO_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
   const isAnalyticsRoute =
@@ -406,6 +409,10 @@ export default function App() {
             </DashboardShell>
           ) : isPricingRoute ? (
             <PricingRoute />
+          ) : isUplinkStudioRoute ? (
+            <DashboardShell activeRoute="uplink">
+              <UplinkCastStudioPage />
+            </DashboardShell>
           ) : isUplinkRoute ? (
             <DashboardShell activeRoute="uplink">
               <UplinkPage />

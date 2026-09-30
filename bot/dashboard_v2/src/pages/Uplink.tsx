@@ -36,7 +36,7 @@ import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
 import { UplinkEingang } from './UplinkEingang';
-import { PREVIEW_PRICING_ROUTE } from '@/preview/routes';
+import { PREVIEW_PRICING_ROUTE, PREVIEW_UPLINK_STUDIO_ROUTE } from '@/preview/routes';
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { obsZugang, zielBetrieb } from '@/uplinkBetrieb';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
@@ -869,6 +869,15 @@ export function UplinkPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {data?.enabled ? (
+                    <a
+                      href={PREVIEW_UPLINK_STUDIO_ROUTE}
+                      className="inline-flex min-h-8 items-center gap-2 rounded-full border border-primary/35 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary no-underline transition-colors hover:border-primary/60 hover:bg-primary/15"
+                    >
+                      <Users aria-hidden="true" className="h-3.5 w-3.5" />
+                      Casting-Studio
+                    </a>
+                  ) : null}
                   <span
                     role="status"
                     aria-live="polite"
