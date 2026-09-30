@@ -39,7 +39,7 @@ const DEFAULT_DASHBOARD_MODERATOR_ROLE_ID: u64 = 1_337_518_124_647_579_661;
 /// `1524268805424025651` = "Scrim Match Leiter".
 const DEFAULT_DASHBOARD_ADMIN_ROLE_IDS: &[u64] =
     &[1_541_055_931_079_729_302, 1_524_268_805_424_025_651];
-const BROKER_BASE_URL: &str = "http://127.0.0.1:8766";
+pub(crate) const BROKER_BASE_URL: &str = "http://127.0.0.1:8766";
 const BROKER_INITIATE_PATH: &str = "/internal/v1/discord/initiate";
 const BROKER_CONSUME_PATH: &str = "/internal/v1/discord/consume-result";
 const BROKER_VALIDATE_SESSION_PATH: &str = "/internal/twitch/v1/discord/validate-session";
@@ -1058,7 +1058,7 @@ fn non_empty_env(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn internal_token_from_env() -> Option<String> {
+pub(crate) fn internal_token_from_env() -> Option<String> {
     ["TWITCH_INTERNAL_API_TOKEN", "MASTER_BROKER_TOKEN", "MAIN_BOT_INTERNAL_TOKEN"]
         .iter()
         .find_map(|key| non_empty_env(key))

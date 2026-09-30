@@ -1032,6 +1032,8 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     };
 
     Router::new()
+        .route("/twitch/api/admin/bot-config", get(handlers::admin_bot_toml::get).post(handlers::admin_bot_toml::mutate))
+        .route("/twitch/api/admin/bot-config-editor/{name}", get(handlers::admin_bot_toml::ui))
         .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),

@@ -5,6 +5,7 @@ import { Affiliates } from '@/pages/billing/Affiliates';
 import { Gutschriften } from '@/pages/billing/Gutschriften';
 import { Subscriptions } from '@/pages/billing/Subscriptions';
 import { ChatConfig } from '@/pages/config/ChatConfig';
+import BotTomlConfig from '@/pages/config/BotTomlConfig';
 import { RaidConfig } from '@/pages/config/RaidConfig';
 import { DatabaseStats } from '@/pages/monitoring/DatabaseStats';
 import DatabaseQueryPage from '@/pages/monitoring/DatabaseQuery';
@@ -82,6 +83,7 @@ const router = createBrowserRouter(
         { path: 'config', element: <Navigate to="/content/announcements" replace /> },
         { path: 'config/raids', element: <RaidConfig /> },
         { path: 'config/chat', element: <ChatConfig /> },
+        { path: 'config/toml', element: <BotTomlConfig /> },
         { path: 'money', element: <Navigate to="/money/subscriptions" replace /> },
         { path: 'money/subscriptions', element: <Subscriptions /> },
         { path: 'money/affiliates', element: <Affiliates /> },
