@@ -292,6 +292,18 @@ fn spawn_affiliate_gutschrift_loop(pool: sqlx::PgPool) {
     });
 }
 
+fn spawn_clip_contest_finalize_loop(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+        let mut tick = tokio::time::interval(INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            tb_dashboard_api::handlers::clip_contest::finalize_due_months(&pool).await;
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     if print_build_revision() {
@@ -423,6 +435,7 @@ async fn main() {
     let token = settings.internal_api.token.clone();
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     spawn_affiliate_gutschrift_loop(pool.clone());
+    spawn_clip_contest_finalize_loop(pool.clone());
     let pause_loop_helix = pause_loop_helix_client_from_env();
     let brain_token = if config.dashboard.options.brain_client.mode
         == tb_config::dashboard_options::BrainClientMode::Legacy
