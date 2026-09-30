@@ -279,7 +279,11 @@ mod tests {
             .await
             .unwrap();
 
-        let pool = sqlx::PgPool::connect(&format!("{url}?options=-c%20search_path%3D{schema}"))
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .expect("Test-DB-Verbindung konfigurieren")
+            .options([("search_path", schema)]);
+        let pool = sqlx::PgPool::connect_with(options)
             .await
             .expect("Pool mit Schema fehlgeschlagen");
 
