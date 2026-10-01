@@ -1,44 +1,24 @@
 [Unit]
-Description=Deadlock Twitch-Bot-Ausfallwatchdog
-After=network-online.target
+Description=Deadlock Twitch Bot und Kategorie-Ausfallwatchdog
+After=network-online.target postgresql.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 User=root
 Group=root
-ExecStart=/usr/bin/python3 /usr/local/libexec/deadlock_twitch_bot_watchdog.py /etc/deadlock-twitch/bot-watchdog.conf
-LoadCredentialEncrypted=infisical-token:/etc/credstore.encrypted/deadlock-twitch-infisical.cred
-Environment=HOME=/root
-Environment=INFISICAL_CONFIG_FILE=/etc/deadlock-twitch/infisical.conf
-Environment=INFISICAL_LOADER=/usr/local/libexec/dl-infisical-env
-StateDirectory=deadlock-twitch-bot-watchdog
-StateDirectoryMode=0700
+ExecStart=/opt/deadlock/twitch/current/rust/target/release/tb-twitch-watchdog
 NoNewPrivileges=yes
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectSystem=strict
-ProtectHome=yes
-ProtectProc=invisible
-ProcSubset=pid
-ProtectClock=yes
-ProtectControlGroups=yes
-ProtectHostname=yes
-ProtectKernelLogs=yes
-ProtectKernelModules=yes
-ProtectKernelTunables=yes
-RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-RemoveIPC=yes
-KeyringMode=private
 CapabilityBoundingSet=
 AmbientCapabilities=
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 UMask=0077
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=deadlock-twitch-bot
-TimeoutStartSec=30
+SyslogIdentifier=deadlock-twitch-bot-watchdog
+TimeoutStartSec=60
+LimitCORE=0

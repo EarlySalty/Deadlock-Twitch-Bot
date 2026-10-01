@@ -3,6 +3,7 @@ use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct QuestResponse {
+    pub data_complete: bool,
     pub key: &'static str,
     pub text: String,
     pub progress: i64,
@@ -12,6 +13,7 @@ pub struct QuestResponse {
 
 #[derive(Debug, Serialize)]
 pub struct StreakResponse {
+    pub data_complete: bool,
     pub freeze_used_this_month: bool,
     pub week_qualified: bool,
     pub current: i32,
@@ -41,6 +43,7 @@ pub struct AchievementTier {
 
 #[derive(Debug, Serialize)]
 pub struct AchievementResponse {
+    pub data_complete: bool,
     pub key: &'static str,
     pub name: &'static str,
     pub progress: i64,
@@ -73,6 +76,7 @@ pub enum QuestAssignmentStatus {
 
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
+    pub category_data_complete: bool,
     pub twitch_user_id: String,
     pub week_start: chrono::NaiveDate,
     pub next_reset_at: DateTime<Utc>,

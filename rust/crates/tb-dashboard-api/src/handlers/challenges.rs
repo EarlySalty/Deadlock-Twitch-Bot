@@ -132,7 +132,7 @@ async fn handle(
             }
         };
         let now = Utc::now();
-        engine.ensure_ready(now).await?;
+        engine.ensure_display_ready(now).await?;
         if viewers {
             serde_json::to_value(engine.viewers(&id, now).await?)
                 .map_err(|_| Error::Invalid("response"))

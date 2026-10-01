@@ -11,9 +11,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 type StreakRows = Vec<(NaiveDate, bool, i32)>;
 type StreakCalculation = (i32, i32, StreakRows, Option<NaiveDate>);
 
+#[cfg(test)]
 pub(crate) fn streak_weeks(
     weeks: &BTreeMap<NaiveDate, bool>,
     current_week: NaiveDate,
+) -> StreakCalculation {
+    streak_weeks_with_gaps(weeks, current_week, &HashSet::new())
+}
+
+fn streak_weeks_with_gaps(
+    weeks: &BTreeMap<NaiveDate, bool>,
+    current_week: NaiveDate,
+    incomplete: &HashSet<NaiveDate>,
 ) -> StreakCalculation {
     let Some(first) = weeks.keys().next().copied() else {
         return (0, 0, Vec::new(), None);
@@ -31,7 +40,7 @@ pub(crate) fn streak_weeks(
             current += 1;
             longest = longest.max(current);
             last = Some(cursor);
-        } else if cursor < current_week && current > 0 {
+        } else if cursor < current_week && current > 0 && !incomplete.contains(&cursor) {
             if freezes.insert((cursor.year(), cursor.month())) {
                 frozen = true;
             } else {
@@ -51,7 +60,24 @@ impl Engine {
             .bind(id).bind(berlin_week_start(now)).fetch_all(&self.pool).await?;
         let evidence: BTreeMap<_, _> = qualified.iter().map(|(w, s, e)| (*w, (*s, *e))).collect();
         let weeks = qualified.into_iter().map(|(w, s, e)| (w, s && e)).collect();
-        let (current, longest, rows, last) = streak_weeks(&weeks, berlin_week_start(now));
+        let mut incomplete = HashSet::new();
+        if let Some(first) = evidence.keys().next().copied() {
+            let mut week = first;
+            while week <= berlin_week_start(now) {
+                if !self
+                    .category_complete_between(
+                        crate::calendar::midnight(week),
+                        now.min(crate::calendar::midnight(week + Duration::weeks(1))),
+                    )
+                    .await?
+                {
+                    incomplete.insert(week);
+                }
+                week += Duration::weeks(1);
+            }
+        }
+        let (current, longest, rows, last) =
+            streak_weeks_with_gaps(&weeks, berlin_week_start(now), &incomplete);
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,713221))")
             .bind(id)
@@ -70,11 +96,12 @@ impl Engine {
     }
 
     async fn streak(&self, id: &str, now: DateTime<Utc>) -> Result<StreakResponse> {
-        let (current,longest): (i32,i32)=sqlx::query_as("SELECT current_streak,longest_streak FROM partner_effort_streaks WHERE partner_twitch_user_id=$1").bind(id).fetch_optional(&self.pool).await?.ok_or(Error::Source("streak_not_settled"))?;
+        let (current,longest): (i32,i32)=sqlx::query_as("SELECT current_streak,longest_streak FROM partner_effort_streaks WHERE partner_twitch_user_id=$1").bind(id).fetch_optional(&self.pool).await?.unwrap_or((0,0));
         let (start, end, _) = berlin_month_bounds(now);
         let freeze_used_this_month: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM partner_effort_weeks WHERE partner_twitch_user_id=$1 AND frozen AND week_start >= ($2::timestamptz AT TIME ZONE 'Europe/Berlin')::date AND week_start < ($3::timestamptz AT TIME ZONE 'Europe/Berlin')::date)").bind(id).bind(start).bind(end).fetch_one(&self.pool).await?;
         let week_qualified: bool=sqlx::query_scalar("SELECT COALESCE((SELECT streamed AND effort FROM partner_effort_weeks WHERE partner_twitch_user_id=$1 AND week_start=$2),FALSE)").bind(id).bind(berlin_week_start(now)).fetch_one(&self.pool).await?;
         Ok(StreakResponse {
+            data_complete: true,
             current,
             longest,
             freeze_used_this_month,
@@ -115,6 +142,16 @@ impl Engine {
             i64::from(self.streak(&partner.twitch_user_id, now).await?.longest),
         );
         for (key, _, event, targets) in self.achievement_definitions() {
+            if key == "stamina"
+                && !self
+                    .category_complete_between(
+                        crate::calendar::midnight(berlin_week_start(now) - Duration::weeks(4)),
+                        now,
+                    )
+                    .await?
+            {
+                continue;
+            }
             for target in targets {
                 if counts.get(event).copied().unwrap_or(0) >= *target {
                     sqlx::query("INSERT INTO partner_effort_achievements(partner_twitch_user_id,achievement_key,target,earned_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING").bind(&partner.twitch_user_id).bind(key).bind(target).bind(now).execute(&self.pool).await?;
@@ -151,6 +188,7 @@ impl Engine {
                     })
                     .collect();
                 AchievementResponse {
+                    data_complete: key != "stamina" || streak.data_complete,
                     key,
                     name,
                     progress: counts.get(event).copied().unwrap_or(0),
@@ -182,7 +220,10 @@ impl Engine {
         let rewards: Vec<(String,i32,i32)>=sqlx::query_as("SELECT quest_key,reward_points,bonus_points FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2 ORDER BY position")
             .bind(id).bind(berlin_week_start(now)).fetch_all(&self.pool).await?;
         let reward = |key: &str| -> i64 {
-            if quests.iter().any(|q| q.key == key && !q.completed) {
+            if quests
+                .iter()
+                .any(|q| q.key == key && !q.completed && q.data_complete)
+            {
                 rewards
                     .iter()
                     .find(|(k, _, _)| k == key)
@@ -254,7 +295,7 @@ impl Engine {
         }
         if let Some(q) = quests
             .iter()
-            .find(|q| q.key == "stream_above_average" && !q.completed)
+            .find(|q| q.key == "stream_above_average" && !q.completed && q.data_complete)
         {
             let text = format!("Stream-Verlängerung um {} Minuten", q.goal - q.progress);
             routes.push(route(0, 1, &text, &text, "stream_above_average"));
@@ -345,13 +386,21 @@ impl Engine {
         }
         let partner = self.partner(id).await?;
         let (_, next_reset_at, week_start) = berlin_week_bounds(now);
-        let (quests, quest_assignment_status) = self.quests(id, week_start).await?;
-        let streak = self.streak(id, now).await?;
+        let (quests, quest_assignment_status) = self.quests(id, week_start, now).await?;
+        let category_data_complete = self
+            .category_complete_between(
+                crate::calendar::midnight(week_start - Duration::weeks(4)),
+                now,
+            )
+            .await?;
+        let mut streak = self.streak(id, now).await?;
+        streak.data_complete = category_data_complete;
         let achievements = self.achievements(id, &streak).await?;
         let (level, next_goal) = self.level(id, now, &quests).await?;
         let with_us = self.with_us(id).await?;
         let season = self.season(id, now).await?;
         Ok(MeResponse {
+            category_data_complete,
             twitch_user_id: id.into(),
             week_start,
             next_reset_at,
@@ -406,6 +455,16 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn historical_gaps_do_not_spend_freezes_or_reset_a_confirmed_streak() {
+        let a = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+        let weeks = BTreeMap::from([(a, true), (a + Duration::weeks(3), true)]);
+        let gaps = HashSet::from([a + Duration::weeks(1), a + Duration::weeks(2)]);
+        let (current, longest, rows, _) =
+            streak_weeks_with_gaps(&weeks, a + Duration::weeks(3), &gaps);
+        assert_eq!((current, longest), (2, 2));
+        assert!(rows.iter().all(|(_, f, _)| !f));
+    }
     #[test]
     fn freeze_is_not_a_free_week_or_an_ongoing_week_penalty() {
         let a = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();

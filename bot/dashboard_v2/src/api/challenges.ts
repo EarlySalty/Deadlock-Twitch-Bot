@@ -1,6 +1,7 @@
 import { fetchApi } from './core';
 
 export interface ChallengeQuest {
+  data_complete?: boolean;
   key: string;
   text: string;
   progress: number;
@@ -9,6 +10,7 @@ export interface ChallengeQuest {
 }
 
 export interface ChallengeStreak {
+  data_complete?: boolean;
   freeze_used_this_month: boolean;
   current: number;
   longest: number;
@@ -32,6 +34,7 @@ export interface AchievementTier {
 }
 
 export interface ChallengeAchievement {
+  data_complete?: boolean;
   key: string;
   name: string;
   progress: number;
@@ -55,6 +58,7 @@ export interface ChallengeSeason {
 export type ChallengeAssignmentStatus = 'pending' | 'assigned' | 'no_reachable_quests';
 
 export interface ChallengesMe {
+  category_data_complete?: boolean;
   twitch_user_id: string;
   next_reset_at: string;
   generated_at: string;
@@ -91,6 +95,7 @@ export interface EffortLeaderboardEntry {
 }
 
 export interface EffortLeaderboard {
+  category_data_complete?: boolean;
   month: string;
   entries: EffortLeaderboardEntry[];
   own_position: EffortLeaderboardEntry | null;

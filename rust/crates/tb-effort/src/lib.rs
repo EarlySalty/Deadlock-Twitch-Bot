@@ -226,6 +226,28 @@ impl Engine {
         Ok(())
     }
 
+    pub async fn ensure_display_ready(&self, now: DateTime<Utc>) -> Result<()> {
+        if !self.cfg.enabled {
+            return Err(Error::Source("disabled"));
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_source_state WHERE source=ANY($1) AND healthy AND successful_at >= $2")
+            .bind(vec!["invites", "referrals", "clips", "shared_chat", "steam_party", "engine"])
+            .bind(now - chrono::Duration::seconds(self.cfg.poll_seconds as i64 * 3 + self.cfg.source_timeout_seconds as i64 * 5))
+            .fetch_one(&self.pool).await?;
+        if count != 6 {
+            return Err(Error::Source("not_current"));
+        }
+        Ok(())
+    }
+
+    pub async fn category_data_complete(&self, now: DateTime<Utc>) -> Result<bool> {
+        match self.category_collection_coverage(now).await {
+            Ok(()) => Ok(true),
+            Err(Error::Source("category_collection_incomplete")) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) fn central(&self) -> Result<&PgPool> {
         self.central
             .as_ref()

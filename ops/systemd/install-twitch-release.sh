@@ -93,6 +93,11 @@ if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-co
   generated+=(rust/target/release/tb-category-collector)
 fi
 clip_context_expected=0
+watchdog_expected=0
+if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs" 2>/dev/null; then
+  watchdog_expected=1
+  generated+=(rust/target/release/tb-twitch-watchdog)
+fi
 if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" 2>/dev/null; then
   clip_context_expected=1
   generated+=(rust/target/release/clip_context_learn)
@@ -121,6 +126,7 @@ check_binary_revisions() {
   local binaries=(tb-bot tb-dashboard tb-stream-audit)
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
   if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
+  if [[ "$watchdog_expected" == 1 ]]; then binaries+=(tb-twitch-watchdog); fi
   for binary in "${binaries[@]}"; do
     embedded_revision="$(readelf --string-dump=.twitch_build "$source_root/rust/target/release/$binary" 2>/dev/null | awk '/\[/{print $NF}')" || embedded_revision=""
     if [[ "$embedded_revision" != "$git_sha" ]]; then
@@ -163,6 +169,9 @@ if [[ ! -e "$release" ]]; then
   fi
   if [[ "$clip_context_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/clip_context_learn" "$stage/rust/target/release/clip_context_learn"
+  fi
+  if [[ "$watchdog_expected" == 1 ]]; then
+    install -m 0755 "$checkout/rust/target/release/tb-twitch-watchdog" "$stage/rust/target/release/tb-twitch-watchdog"
   fi
 
   # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des
