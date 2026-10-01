@@ -607,7 +607,9 @@ impl LfgPitchResponder {
                 raw.to_string(),
             );
         }
-        if event.broadcaster_user_id != self.own_channel_broadcaster_id {
+        if self.own_channel_broadcaster_id.trim().is_empty()
+            || event.broadcaster_user_id != self.own_channel_broadcaster_id
+        {
             return LfgPitchDecision::silent(
                 SilentReason::ForeignChannel,
                 channel_login,
@@ -1433,6 +1435,26 @@ mod tests {
         let mut fremd = event("viewer", "such mal mitspieler");
         fremd.broadcaster_user_id = "fremd-kanal-id".to_string();
         let decision = responder.decide(&fremd, "fremdkanal").await;
+
+        assert_eq!(
+            decision.action,
+            LfgPitchAction::Silent(SilentReason::ForeignChannel)
+        );
+    }
+
+    #[tokio::test]
+    async fn decide_stumm_wenn_eigene_broadcaster_id_fehlt() {
+        let (mut responder, _, _, _, _) = responder(
+            true,
+            Some("https://discord.gg/test"),
+            false,
+            FakeJudge::new(vec![]),
+        );
+        responder.own_channel_broadcaster_id.clear();
+
+        let decision = responder
+            .decide(&event("viewer", "such mal mitspieler"), "community")
+            .await;
 
         assert_eq!(
             decision.action,

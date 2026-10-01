@@ -282,6 +282,7 @@ mod tests {
             clip_command_enabled INTEGER DEFAULT 1,
             title_command_enabled INTEGER DEFAULT 1,
             lurker_tax_enabled INTEGER DEFAULT 1,
+            lurker_pitch_enabled INTEGER DEFAULT 0,
             stat_command_settings JSONB DEFAULT '{}');
             INSERT INTO streamer_plans (twitch_user_id, twitch_login) VALUES ('99','earlysalty'), ('42','alter_name');
             CREATE TABLE twitch_partners (id SERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT, status TEXT, silent_ban INTEGER DEFAULT 0, silent_raid INTEGER DEFAULT 0);
@@ -296,12 +297,15 @@ mod tests {
             }),
         };
         macro_rules! toggle {
-            ($module:ident, $query:ident, $update:ident, $field:ident) => {{
+            ($module:ident, $query:ident, $update:ident, $field:ident) => {
+                toggle!($module, $query, $update, $field, {});
+            };
+            ($module:ident, $query:ident, $update:ident, $field:ident, { $($extra:tt)* }) => {{
                 let response = $module::post_handler(
                     auth.clone(),
                     State(pool.clone()),
                     Query($module::$query::default()),
-                    Json($module::$update { $field: false }),
+                    Json($module::$update { $field: false, $($extra)* }),
                 )
                 .await;
                 assert_eq!(response.status(), StatusCode::OK, stringify!($module));
@@ -356,7 +360,8 @@ mod tests {
             lurker_tax_settings,
             LurkerTaxQuery,
             LurkerTaxUpdate,
-            lurker_tax_enabled
+            lurker_tax_enabled,
+            { lurker_pitch_enabled: None, }
         );
         let response = silent_settings::post_handler(
             auth.clone(),

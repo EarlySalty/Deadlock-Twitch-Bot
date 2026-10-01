@@ -14,18 +14,17 @@ Datum: 2026-10-01
 
 ## Branchgruppe
 
-- PR 1035 teilt `rust/bin/tb-bot/src/chat_wiring.rs` und `rust/crates/tb-db/tests/fresh_schema_snapshot.txt` mit diesem Branch.
-- Die PR-Hunks betreffen Clip-Contest-Wiring und Community-Tabellen, nicht den Lurker-Pitch-Vertrag. Gemeinsame Pfadabnahme und Gate bleiben vor Integration erforderlich.
-- Community-Streamer-Brücke Integrator: T3-Thread `e60a2e14-1b57-4700-bb31-bc0492f4487e`.
+- Die aktuelle gemeinsame Gruppe umfasst Deadlock-Twitch-Bot PR #1035 und Deadlock-Bots PR #472. Beide PRs sind offen. Abgleich am 2026-10-01: Twitch-Head `03c69ee4990bb33df305cb9b0b3992b9dec0528f`, Bots-Head `c8ab07997dbda1d8b669fa8b35c23d7ee383b8ac`.
+- Der Gruppenintegrator ist Twitch-Branch-Luna, T3-Thread `e60a2e14-1b57-4700-bb31-bc0492f4487e`. Die frühere gemeinsame Pfadüberschneidung betrifft `chat_wiring.rs` und `fresh_schema_snapshot.txt`. Dieser Pitch-Branch bleibt separat erhalten; kein Einzelmerge oder Einzel-Gate. Unabhängige Intent-Abnahme und lokales Gate sind auf dem abgestimmten Gruppenstand auszuführen.
 - Ein unabhängiger Coaching-Pitch-Branch wurde auf Commit `4d5c899a9da2bb4d6f5215e271736db4fb9426a7` geprüft. Keine gemeinsamen Dateipfade.
 
 ## Status
 
-- Ausgangsstatus, HEAD und Branchhistorie geprüft. Arbeitsbaum war sauber.
-- `origin/main` enthält weder `lurker_pitch_enabled`, `twitch_lurker_pitch_log`, `LURKER_PITCH_REPLY` noch den ForeignChannel-Guard. PR 1035 enthält die Featureänderung ebenfalls nicht.
-- Statische Vertragsprüfung: Pitch-Kandidaten werden vollständig gegen das dauerhafte Log gefiltert, die Channel-Points-Erinnerung bleibt auf höchstens zwei Kandidaten begrenzt. Unit-Tests für die Kandidatenauswahl ergänzt. Fehler beim Pitch-Senden werden mit Rohfehler, Kanal, Chatter und Login protokolliert.
-- Fehler beim Lesen des Pitch-Logs werden mit Rohfehler und Kanal protokolliert; in diesem Fall wird kein neuer Pitch gesendet und der bestehende Channel-Points-Pfad läuft weiter.
-- Pitch-Log-Insert erfolgt nach erfolgreichem Send. Bei DB-Insertfehler ist die Einmaligkeit über Prozessneustarts nicht sicherzustellen, ohne vor dem Senden zu markieren und damit bei Sendfehlern unberechtigt dauerhaft zu sperren. Der vorhandene Fehlerpfad protokolliert den Insertfehler; keine Contract-Erweiterung vorgenommen.
-- Cargo-Checks, Builds und Review-Gate ausgesetzt, bis Ressourcenaufsicht den Host-Hold aufhebt.
-- Koordinatorstatusmeldung am 2026-10-01 versucht, aber nicht gesendet: Zielthread war beim Senden wieder aktiv; kein `--force` verwendet.
-- Main-Merge, Produktions-DDL, Deploy, Restart und Cutover gesperrt durch TokenDB-Live-Hold.
+- Ausgangsstatus und Origin-Main geprüft. `origin/main` und Merge-Base: `14bc1f479e32394fe2977f8c8ef85e6c5bff66e1`; `origin/main` ist nachweislich Vorfahr des rebasierten Branches.
+- Original-SHA `6ff725ee6808eed2235429ed4cadddfa8f0deead` bleibt im Archiv-Tag `archiv/2026-10-01/lurker-discord-pitch-pre-main-sync-b5185e93` erhalten; der Original-SHA ist Vorfahr dieses Tags. Rebase-Ergebnisse: `fdbc70df`, `a61ab02f`, `c8de263b`. Lokale Folgekorrekturen sind noch uncommittet.
+- Merge-Konflikte mit Main wurden aufgelöst, ohne die aktuellen Broadcaster-ID-, Plan-, Scope-, Reward- oder Channel-Points-Gates zu verwerfen. Pitch-Log und Migration verwenden `twitch_user_id`; Chatter-Identität bleibt `id:<id>` oder als Fallback `login:<lowercase_login>`.
+- Der Pitch-Log-Key wird vor dem Send atomar beansprucht. Nur eine eindeutige Twitch-4xx-Ablehnung gibt den Claim frei; bei Transportfehlern, 5xx und Prozessabbruch bleibt er bestehen, um mögliche Doppelnachrichten zu verhindern. Ein Abbruch zwischen Claim und Send kann die Ansprache auslassen.
+- LFG-Fremdkanäle bleiben vor Judge und Sender still; fehlende eigene Broadcaster-ID ist fail-closed. Dashboard-POSTs ohne Pitch-Feld lassen den bisherigen Pitch-Wert stehen und geben ihn nun auch in der POST-Antwort zurück.
+- Unabhängiger Review am `c8de263b` meldete vier HIGH- und einen MEDIUM-Befund. Der frische Fixreview bestätigte die Kernfixes, fand drei zusätzliche Punkte: Pitch-Testfixture ohne Migration, Race zwischen Login-/ID-Claims und Query-Makro-Vertrag. Alle drei sind korrigiert; Tests und ein weiterer unabhängiger Review stehen aus. `REVIEW.md` enthält den Verlauf.
+- Der erste Cargo-Testlauf kompilierte `tb-chat`, brach dann bei `streamer_scope.rs` wegen des neuen Update-Felds ab. Testmacro und Testschema sind angepasst. Der erneute Lauf startete nicht, weil `/tmp/deadlock-cargo-release.lock` während eines anderen Category-Tests belegt war. Geänderte Rust-Dateien bestehen den gezielten rustfmt-Check; `git diff --check` ist grün.
+- PR #1035 und PR #472 sind offene Mitglieder der aktiven gemeinsamen Gruppe. Kein Einzel-Gate oder -Merge; die gemeinsame Intent-Abnahme und das lokale Gate müssen auf dem abgestimmten Gruppenstand erfolgen. Keine Produktions-DDL, kein Push, Merge, Deploy, Restart oder Live-Cutover in dieser Fortsetzung.

@@ -235,7 +235,6 @@ pub async fn post_handler(
     let pitch_flag: Option<i32> = body.lurker_pitch_enabled.map(i32::from);
 
     let result = if !user_id.is_empty() {
-        // Partner (kennt User-ID) → Upsert auf den PK.
         sqlx::query!(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, lurker_pitch_enabled) \
              VALUES ($1, $2, $3, COALESCE($4, 0)) \
@@ -251,7 +250,6 @@ pub async fn post_handler(
         .execute(&pool)
         .await
     } else {
-        // Admin/Localhost über Login (keine User-ID) → reines UPDATE.
         sqlx::query!(
             "UPDATE streamer_plans SET lurker_tax_enabled = $2, \
                 lurker_pitch_enabled = COALESCE($3, lurker_pitch_enabled) \
@@ -265,10 +263,31 @@ pub async fn post_handler(
     };
 
     match result {
-        Ok(res) if res.rows_affected() > 0 => {
-            Json(json!({ "ok": true, "lurker_tax_enabled": body.lurker_tax_enabled, "lurker_pitch_enabled": body.lurker_pitch_enabled }))
-                .into_response()
-        }
+        Ok(res) if res.rows_affected() > 0 => match sqlx::query(SELECT_SQL)
+            .bind(&login)
+            .bind(&user_id)
+            .fetch_optional(&pool)
+            .await
+        {
+            Ok(Some(row)) => {
+                let pitch_value: i32 = row.try_get("lp").unwrap_or(0);
+                Json(json!({ "ok": true, "lurker_tax_enabled": body.lurker_tax_enabled, "lurker_pitch_enabled": pitch_value != 0 }))
+                    .into_response()
+            }
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "no plan row" })),
+            )
+                .into_response(),
+            Err(error) => {
+                tracing::error!(%error, "lurker-tax-settings POST DB-Fehler");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "db" })),
+                )
+                    .into_response()
+            }
+        },
         // Login-UPDATE ohne Treffer (Admin adressiert unbekannten Plan) → 404.
         Ok(_) => (
             StatusCode::NOT_FOUND,
@@ -478,6 +497,7 @@ mod tests {
         )
         .await;
         assert_eq!(j["lurker_tax_enabled"], true);
+        assert_eq!(j["lurker_pitch_enabled"], true);
 
         let (_s, j) = body_of(
             get_handler(
