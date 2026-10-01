@@ -1519,7 +1519,7 @@ mod tests {
             let calls = sink.calls.lock().unwrap();
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].0, "fresh");
-            assert_eq!(calls[0].1, None);
+            assert_eq!(calls[0].1.as_deref(), Some("stable-refresh"));
         }
         let state = m.state.read().await;
         assert_eq!(state.as_ref().unwrap().refresh_token, "stable-refresh");
