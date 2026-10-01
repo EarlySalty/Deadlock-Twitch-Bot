@@ -2931,8 +2931,9 @@ impl PromoEngine {
             return Some(HashSet::new());
         }
         let keys: Vec<String> = candidates.iter().map(|(_, key)| key.clone()).collect();
-        let logins: Vec<String> = candidates
+        let id_logins: Vec<String> = candidates
             .iter()
+            .filter(|(_, key)| key.starts_with("id:"))
             .map(|(login, _)| login.to_lowercase())
             .collect();
         match sqlx::query_as::<_, (String, String)>(
@@ -2940,11 +2941,12 @@ impl PromoEngine {
                FROM twitch_lurker_pitch_log candidate
               WHERE candidate.twitch_user_id = $1
                 AND (candidate.chatter_identity_key = ANY($2)
-                     OR LOWER(candidate.chatter_login) = ANY($3))",
+                     OR (candidate.chatter_identity_key LIKE 'login:%'
+                         AND LOWER(candidate.chatter_login) = ANY($3)))",
         )
         .bind(broadcaster_id)
         .bind(keys)
-        .bind(logins)
+        .bind(id_logins)
         .fetch_all(&self.pool)
         .await
         {
@@ -2953,7 +2955,10 @@ impl PromoEngine {
                 for (stored_key, stored_login) in rows {
                     pitched.insert(stored_key);
                     for (login, key) in candidates {
-                        if login.eq_ignore_ascii_case(&stored_login) {
+                        if stored_key.starts_with("login:")
+                            && key.starts_with("id:")
+                            && login.eq_ignore_ascii_case(&stored_login)
+                        {
                             pitched.insert(key.clone());
                         }
                     }
@@ -2983,7 +2988,10 @@ impl PromoEngine {
                 SELECT 1
                   FROM twitch_lurker_pitch_log
                  WHERE twitch_user_id = $1
-                   AND (chatter_identity_key = $2 OR LOWER(chatter_login) = LOWER($3))
+                   AND (chatter_identity_key = $2
+                        OR ($2 LIKE 'id:%'
+                            AND chatter_identity_key LIKE 'login:%'
+                            AND LOWER(chatter_login) = LOWER($3)))
             )",
         )
         .bind(broadcaster_id)
@@ -5086,6 +5094,20 @@ mod db_tests {
             engine.claim_lurker_pitch("community-id", "viewer2", "id:stable-viewer-id-2"),
         );
         assert_ne!(login_claim.unwrap(), id_claim.unwrap());
+        assert!(engine
+            .claim_lurker_pitch("community-id", "viewer3", "id:previous-account")
+            .await
+            .unwrap());
+        let reassigned_login = vec![("viewer3".to_string(), "id:new-account".to_string())];
+        let pitched = engine
+            .already_pitched_keys("community-id", &reassigned_login)
+            .await
+            .unwrap();
+        assert!(!pitched.contains("id:new-account"));
+        assert!(engine
+            .claim_lurker_pitch("community-id", "viewer3", "id:new-account")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
