@@ -24,4 +24,11 @@ Urteil: `gpt-6.1-sol BLOCK`, Exit 1, geprüfter Head `a634e834328ea39c08163bcb48
 1. **BLOCKING, Alert-Wiederherstellung:** `promos.rs:1055` und `promos.rs:851`. Ein fehlgeschlagener Alert nach der Announcement-Korrelation bleibt ungesendet. Der Retry findet den gebundenen Audit-Datensatz nicht mehr, puffert das Event erneut und liefert Erfolg. Im Delivery-Pfad wird derselbe Alert-Fehler nur protokolliert.
 2. **BLOCKING, Lösch-Race:** `promos.rs:1164`. Die Delete-Persistierung synchronisiert nicht mit beiden Korrelationstransaktionen. Ein paralleles Delete kann vor dem Commit der Message-ID-Zuordnung aktualisieren und dabei keinen Audit-Datensatz finden.
 
-Fixes: ausstehende Alerts werden im vorhandenen 60-Sekunden-Promo-Loop erneut versucht; wiederholte Announcement-Events prüfen gebundene Audit-IDs; Delete-Handler und beide Binder synchronisieren per Message-ID-Advisory-Lock.
+Fixes: ausstehende Alerts werden im vorhandenen 60-Sekunden-Promo-Loop erneut versucht; wiederholte Announcement-Events prüfen gebundene Audit-IDs; Announcement-Binder und Delete-Handler nehmen denselben Message-ID-Advisory-Lock vor dem Audit-Update.
+
+## Gate Review R4
+
+Quelle: `gate_hook.py --review --repo /home/nathanael/.worktrees/luna-dispatch-deadlock-twitch-bot-promo-delete-detection-20260915-364ad1c8 --base main --head codex/luna-dispatch/deadlock-twitch-bot/promo-delete-detection-20260915-364ad1c8`
+Urteil: `gpt-6.1-sol ALLOW`, geprüfter Head `c2b2116150442c3340066ea6283cf5c427a20868`.
+
+Begründung: Alert-Wiederherstellung und Synchronisierung der Löschkorrelation sind behoben; keine nachgewiesene Regression im Fix-Diff.
