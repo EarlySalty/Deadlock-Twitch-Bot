@@ -117,7 +117,7 @@ impl TeilHochlader for YouTubeUploader {
 /// Verbindung, es wird nur lokal archiviert.
 #[async_trait]
 pub trait HochladerQuelle: Send + Sync {
-    async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>>;
+    async fn fuer(&self, twitch_user_id: &str) -> Option<Arc<dyn TeilHochlader>>;
 }
 
 /// Betriebsfassung: der Zugang kommt aus den Credentials **dieses** Streamers.
@@ -131,25 +131,11 @@ pub struct StreamerZugang {
 
 #[async_trait]
 impl HochladerQuelle for StreamerZugang {
-    async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>> {
+    async fn fuer(&self, twitch_user_id: &str) -> Option<Arc<dyn TeilHochlader>> {
         let creds = self
             .credentials
-            .get_credentials("youtube", Some(streamer_login))
+            .get_channel_credentials_for_id("youtube", twitch_user_id)
             .await?;
-        let gehoert_dem_streamer = creds
-            .streamer_login
-            .as_deref()
-            .is_some_and(|login| login.eq_ignore_ascii_case(streamer_login));
-        if !gehoert_dem_streamer {
-            tracing::info!(
-                kanal = %streamer_login,
-                "Nur ein globaler YouTube-Zugang vorhanden, der gilt hier nicht"
-            );
-            return None;
-        }
-        if creds.access_token.is_empty() {
-            return None;
-        }
         Some(Arc::new(youtube_uploader(&creds)))
     }
 }
@@ -304,7 +290,7 @@ impl VodArchiveWorker {
         // Ein Kanal, dessen Liste gerade nicht abrufbar ist, darf die anderen
         // nicht mitreissen.
         for einstellung in streamer {
-            if let Err(fehler) = self.entdecke(&einstellung.streamer_login).await {
+            if let Err(fehler) = self.entdecke(einstellung).await {
                 tracing::error!(
                     kanal = %einstellung.streamer_login,
                     %fehler,
@@ -316,7 +302,10 @@ impl VodArchiveWorker {
         // Ohne YouTube-Zugang wird nur geladen. Das ist der wichtigere Teil.
         let mut uploader: HashMap<String, Option<Arc<dyn TeilHochlader>>> = HashMap::new();
         for einstellung in streamer {
-            let zugang = self.zugang.fuer(&einstellung.streamer_login).await;
+            let Some(twitch_user_id) = einstellung.twitch_user_id.as_deref() else {
+                continue;
+            };
+            let zugang = self.zugang.fuer(twitch_user_id).await;
             if zugang.is_none() {
                 tracing::info!(
                     kanal = %einstellung.streamer_login,
@@ -324,7 +313,7 @@ impl VodArchiveWorker {
                      Der Upload startet, sobald die Verbindung im Dashboard steht."
                 );
             }
-            uploader.insert(einstellung.streamer_login.clone(), zugang);
+            uploader.insert(twitch_user_id.to_owned(), zugang);
         }
 
         // Der resumable Upload meldet nur angekommene Bytes, nicht den
@@ -339,8 +328,10 @@ impl VodArchiveWorker {
             (self.config.max_downloads_per_run + self.config.max_uploads_per_run) as i64 + 10;
         let mut warteschlangen = Vec::with_capacity(streamer.len());
         for einstellung in streamer {
-            let offen =
-                store::offene_vods(&self.pool, &einstellung.streamer_login, reserve).await?;
+            let Some(twitch_user_id) = einstellung.twitch_user_id.as_deref() else {
+                continue;
+            };
+            let offen = store::offene_vods(&self.pool, twitch_user_id, reserve).await?;
             if !offen.is_empty() {
                 warteschlangen.push((einstellung, offen));
             }
@@ -365,9 +356,10 @@ impl VodArchiveWorker {
                 break;
             }
 
-            let zugang = uploader
-                .get(&einstellung.streamer_login)
-                .and_then(|u| u.clone());
+            let Some(twitch_user_id) = einstellung.twitch_user_id.as_deref() else {
+                continue;
+            };
+            let zugang = uploader.get(twitch_user_id).and_then(|u| u.clone());
             // Die Bilanz geht mit hinein, damit jeder einzelne Teil sofort
             // gegen den Deckel zaehlt. Bricht das VOD auf halbem Weg ab,
             // bleiben die bis dahin verbrauchten Einheiten trotzdem gezaehlt.
@@ -409,7 +401,13 @@ impl VodArchiveWorker {
 
     /// Traegt neue VODs eines Kanals ein. Ein laufender Stream wird
     /// ausgelassen, sein VOD waere sonst nur zur Haelfte im Archiv.
-    async fn entdecke(&self, kanal: &str) -> Result<(), VodArchiveError> {
+    async fn entdecke(&self, einstellung: &VodArchiveSettings) -> Result<(), VodArchiveError> {
+        let kanal = einstellung.streamer_login.as_str();
+        let twitch_user_id = einstellung
+            .twitch_user_id
+            .as_deref()
+            .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+            .ok_or_else(|| sqlx::Error::Protocol("twitch_user_id fehlt".into()))?;
         let mut vods = twitch::liste_vods(self.runner.as_ref(), &self.config, kanal).await?;
         if vods.is_empty() {
             tracing::info!(kanal = %kanal, "Keine VODs gefunden");
@@ -424,6 +422,7 @@ impl VodArchiveWorker {
                 &self.pool,
                 &vod.twitch_id,
                 kanal,
+                twitch_user_id,
                 &vod.title,
                 vod.duration_sec,
             )
@@ -447,19 +446,26 @@ impl VodArchiveWorker {
     ) {
         for einstellung in streamer {
             let login = einstellung.streamer_login.as_str();
-            let Some(hochlader) = uploader.get(login).cloned().flatten() else {
+            let Some(twitch_user_id) = einstellung.twitch_user_id.as_deref() else {
                 continue;
             };
-            let frische =
-                match store::frisch_hochgeladene_teile(&self.pool, login, PRUEF_FENSTER_TAGE).await
-                {
-                    Ok(frische) if frische.is_empty() => continue,
-                    Ok(frische) => frische,
-                    Err(fehler) => {
-                        tracing::warn!(kanal = login, %fehler, "Upload-Nachpruefung nicht lesbar");
-                        continue;
-                    }
-                };
+            let Some(hochlader) = uploader.get(twitch_user_id).cloned().flatten() else {
+                continue;
+            };
+            let frische = match store::frisch_hochgeladene_teile(
+                &self.pool,
+                twitch_user_id,
+                PRUEF_FENSTER_TAGE,
+            )
+            .await
+            {
+                Ok(frische) if frische.is_empty() => continue,
+                Ok(frische) => frische,
+                Err(fehler) => {
+                    tracing::warn!(kanal = login, %fehler, "Upload-Nachpruefung nicht lesbar");
+                    continue;
+                }
+            };
             tracing::info!(kanal = login, teile = frische.len(), "Upload-Nachpruefung");
             for eintrag in frische {
                 match hochlader.video_status(&eintrag.video_id).await {
@@ -1048,7 +1054,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_vod_archive_vods (id BIGSERIAL PRIMARY KEY, twitch_id TEXT NOT NULL UNIQUE, \
-             streamer_login TEXT NOT NULL, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
+             streamer_login TEXT NOT NULL, twitch_user_id TEXT, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
              recorded_at DATE, status TEXT NOT NULL DEFAULT 'new', local_path TEXT, last_error TEXT, \
              discovered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, downloaded_at TIMESTAMPTZ, \
              uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -1117,7 +1123,7 @@ mod tests {
 
     #[async_trait]
     impl HochladerQuelle for FesteQuelle {
-        async fn fuer(&self, _streamer_login: &str) -> Option<Arc<dyn TeilHochlader>> {
+        async fn fuer(&self, _twitch_user_id: &str) -> Option<Arc<dyn TeilHochlader>> {
             Some(self.0.clone())
         }
     }
@@ -1175,6 +1181,7 @@ mod tests {
     fn einstellung(login: &str) -> VodArchiveSettings {
         VodArchiveSettings {
             streamer_login: login.to_string(),
+            twitch_user_id: Some("42".to_string()),
             enabled: true,
             privacy: "unlisted".to_string(),
         }
@@ -1223,9 +1230,16 @@ mod tests {
             return;
         };
         for nummer in 0..6 {
-            store::merke_vod(&pool, &format!("v{nummer}"), "earlysalty", "Stream", 60)
-                .await
-                .unwrap();
+            store::merke_vod(
+                &pool,
+                &format!("v{nummer}"),
+                "earlysalty",
+                "42",
+                "Stream",
+                60,
+            )
+            .await
+            .unwrap();
         }
         let verzeichnis = temp_verzeichnis("deckel_download");
         let cfg = config(&verzeichnis);
@@ -1248,7 +1262,7 @@ mod tests {
         );
         assert_eq!(bilanz.hochgeladen, 2);
         // Vier VODs liegen lokal und warten auf den naechsten Lauf.
-        let offen = store::offene_vods(&pool, "earlysalty", 50).await.unwrap();
+        let offen = store::offene_vods(&pool, "42", 50).await.unwrap();
         assert_eq!(offen.len(), 4);
         assert!(offen.iter().all(|vod| !vod.braucht_download()));
 
@@ -1271,10 +1285,10 @@ mod tests {
             dateien.push(pfad.display().to_string());
         }
 
-        store::merke_vod(&pool, "v1", "earlysalty", "Langer Stream", 60_000)
+        store::merke_vod(&pool, "v1", "earlysalty", "42", "Langer Stream", 60_000)
             .await
             .unwrap();
-        let vod = store::offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = store::offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         store::setze_geladen(
             &pool,
             vod.id,
@@ -1310,7 +1324,7 @@ mod tests {
         );
         // Ein Teil fehlt noch, also ist das VOD nicht fertig und bleibt in der
         // Warteschlange.
-        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        let offen = store::offene_vods(&pool, "42", 10).await.unwrap();
         assert_eq!(offen.len(), 1);
 
         let _ = std::fs::remove_dir_all(verzeichnis);
@@ -1326,10 +1340,10 @@ mod tests {
             return;
         };
         let verzeichnis = temp_verzeichnis("ohne_teile");
-        store::merke_vod(&pool, "v1", "earlysalty", "Abgebrochen", 60)
+        store::merke_vod(&pool, "v1", "earlysalty", "42", "Abgebrochen", 60)
             .await
             .unwrap();
-        let vod = store::offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = store::offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         // Zustand nach einem Lauf, der zwischen setze_geladen und setze_teile
         // gestorben ist: Status downloaded, aber keine Teile.
         store::setze_geladen(
@@ -1354,7 +1368,7 @@ mod tests {
 
         assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 0);
         assert_eq!(bilanz.hochgeladen, 0);
-        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        let offen = store::offene_vods(&pool, "42", 10).await.unwrap();
         assert_eq!(
             offen.len(),
             1,
@@ -1381,10 +1395,10 @@ mod tests {
         let pfad = verzeichnis.join("v1.mp4");
         std::fs::write(&pfad, b"videodaten").unwrap();
 
-        store::merke_vod(&pool, "v1", "earlysalty", "Langer Stream", 60_000)
+        store::merke_vod(&pool, "v1", "earlysalty", "42", "Langer Stream", 60_000)
             .await
             .unwrap();
-        let vod = store::offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = store::offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         store::setze_geladen(&pool, vod.id, &pfad.display().to_string(), None, 60_000)
             .await
             .unwrap();
@@ -1399,10 +1413,7 @@ mod tests {
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
         assert_eq!(
-            store::offene_vods(&pool, "earlysalty", 10)
-                .await
-                .unwrap()
-                .len(),
+            store::offene_vods(&pool, "42", 10).await.unwrap().len(),
             0,
             "der Lauf kennt nur erfolgreiche Uploads, das VOD ist abgeschlossen"
         );
@@ -1430,13 +1441,7 @@ mod tests {
         // Die Auszeit greift: kein neuer Upload, das VOD bleibt offen.
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            store::offene_vods(&pool, "earlysalty", 10)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(store::offene_vods(&pool, "42", 10).await.unwrap().len(), 1);
 
         // Auszeit vorbei: der Upload geht erneut hinaus, der Grund ist weg.
         sqlx::query(
@@ -1454,7 +1459,7 @@ mod tests {
         );
         let teile = store::teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert_eq!(teile[0].status, store::TEIL_FERTIG);
-        let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        let offen = store::offene_vods(&pool, "42", 10).await.unwrap();
         assert_eq!(offen.len(), 0);
 
         let _ = std::fs::remove_dir_all(verzeichnis);

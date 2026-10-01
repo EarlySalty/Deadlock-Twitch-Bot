@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT k.category_key, k.display_name, k.enrichment_enabled, k.sort_order, COALESCE(s.auto_post, FALSE) AS \"auto_post!\" FROM social_media_category k LEFT JOIN social_media_category_settings s ON s.category_key = k.category_key AND s.twitch_user_id = $1 ORDER BY k.sort_order, k.category_key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "category_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_category",
+            "name": "category_key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_category",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "enrichment_enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_category",
+            "name": "enrichment_enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "social_media_category",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "auto_post!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "0c575ef63f22a9446d22e3f67dbe3e29d282128a69a7f8556be98827da66b32e"
+}

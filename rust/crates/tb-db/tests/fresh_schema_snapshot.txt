@@ -407,6 +407,7 @@ schema_version|version|integer|NO|
 social_media_category_settings|auto_post|boolean|NO|false
 social_media_category_settings|category_key|text|NO|
 social_media_category_settings|streamer_login|text|NO|
+social_media_category_settings|twitch_user_id|text|YES|
 social_media_category_settings|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_category_settings|updated_by|text|YES|
 social_media_category|category_key|text|NO|
@@ -449,11 +450,17 @@ social_media_clip_enrichment|transcript_lang|text|YES|
 social_media_clip_enrichment|transcript_raw|text|YES|
 social_media_clip_enrichment|transcript_segments|jsonb|YES|
 social_media_clip_enrichment|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_partner_access_unresolved|granted_at|timestamp with time zone|NO|
+social_media_partner_access_unresolved|granted_by|text|YES|
+social_media_partner_access_unresolved|granted|boolean|NO|
+social_media_partner_access_unresolved|reported_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+social_media_partner_access_unresolved|streamer_login|text|NO|
+social_media_partner_access_unresolved|twitch_user_id|text|YES|
 social_media_partner_access|granted_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_partner_access|granted_by|text|YES|
 social_media_partner_access|granted|boolean|NO|false
 social_media_partner_access|streamer_login|text|NO|
-social_media_partner_access|twitch_user_id|text|YES|
+social_media_partner_access|twitch_user_id|text|NO|
 social_media_platform_auth|access_token_enc|bytea|NO|
 social_media_platform_auth|authorized_at|text|YES|CURRENT_TIMESTAMP
 social_media_platform_auth|client_id|text|YES|
@@ -477,6 +484,7 @@ social_media_platform_schedule|platform|text|NO|
 social_media_platform_schedule|post_times|jsonb|NO|'["18:00"]'::jsonb
 social_media_platform_schedule|posts_per_week|integer|NO|4
 social_media_platform_schedule|streamer_login|text|NO|
+social_media_platform_schedule|twitch_user_id|text|YES|
 social_media_platform_schedule|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_platform_schedule|updated_by|text|YES|
 social_media_reauth_notifications|error_kind|text|NO|
@@ -508,11 +516,13 @@ social_media_streamer_settings|approval_mode|text|NO|'manual'::text
 social_media_streamer_settings|streamer_login|text|NO|
 social_media_streamer_settings|subtitles_enabled|boolean|NO|true
 social_media_streamer_settings|timezone|text|NO|'Europe/Berlin'::text
+social_media_streamer_settings|twitch_user_id|text|YES|
 social_media_streamer_settings|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_streamer_settings|updated_by|text|YES|
 social_media_vod_archive|enabled|boolean|NO|false
 social_media_vod_archive|privacy|text|NO|'private'::text
 social_media_vod_archive|streamer_login|text|NO|
+social_media_vod_archive|twitch_user_id|text|YES|
 social_media_vod_archive|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_vod_archive|updated_by|text|YES|
 streamer_dim|archived_at|timestamp with time zone|YES|
@@ -807,6 +817,15 @@ twitch_bot_ban_klassifikation|twitch_user_id|text|NO|
 twitch_bot_capabilities|has_chatters_scope|boolean|NO|true
 twitch_bot_capabilities|id|smallint|NO|1
 twitch_bot_capabilities|updated_at|timestamp with time zone|NO|now()
+twitch_bot_tokens|access_token_enc|bytea|YES|
+twitch_bot_tokens|enc_version|integer|NO|1
+twitch_bot_tokens|oauth_client_id|text|NO|
+twitch_bot_tokens|refresh_token_enc|bytea|NO|
+twitch_bot_tokens|revision|bigint|NO|0
+twitch_bot_tokens|revoked_at|timestamp with time zone|YES|
+twitch_bot_tokens|service_name|text|NO|
+twitch_bot_tokens|twitch_user_id|text|YES|
+twitch_bot_tokens|updated_at|timestamp with time zone|NO|now()
 twitch_caster_cameras|camera_id|text|NO|
 twitch_caster_cameras|consent_enabled|boolean|NO|false
 twitch_caster_cameras|created_at|timestamp with time zone|NO|now()
@@ -2217,6 +2236,7 @@ twitch_vod_archive_vods|status|text|NO|'new'::text
 twitch_vod_archive_vods|streamer_login|text|NO|
 twitch_vod_archive_vods|title|text|NO|
 twitch_vod_archive_vods|twitch_id|text|NO|
+twitch_vod_archive_vods|twitch_user_id|text|YES|
 twitch_vod_archive_vods|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_vod_archive_vods|uploaded_at|timestamp with time zone|YES|
 twitch_vod_highlights|created_at|timestamp with time zone|NO|now()

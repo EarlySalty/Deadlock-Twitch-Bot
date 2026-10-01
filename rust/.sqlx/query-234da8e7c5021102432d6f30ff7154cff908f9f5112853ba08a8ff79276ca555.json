@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "twitch_user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "234da8e7c5021102432d6f30ff7154cff908f9f5112853ba08a8ff79276ca555"
+}

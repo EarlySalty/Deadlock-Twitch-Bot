@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_platform_schedule (streamer_login, twitch_user_id, platform, auto_post, posts_per_week, max_posts_per_day, post_times, updated_at, updated_by) SELECT twitch_login, twitch_user_id, $2, $3, $4, $5, $6::text::jsonb, CURRENT_TIMESTAMP, $7 FROM twitch_streamers WHERE twitch_user_id = $1 ON CONFLICT (twitch_user_id, platform) WHERE twitch_user_id IS NOT NULL DO UPDATE SET streamer_login = EXCLUDED.streamer_login, auto_post = EXCLUDED.auto_post, posts_per_week = EXCLUDED.posts_per_week, max_posts_per_day = EXCLUDED.max_posts_per_day, post_times = EXCLUDED.post_times, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bool",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4883c4327f0efe8177cc53d4518b2829e6a69c67abe7999231bfa05738f0b91d"
+}

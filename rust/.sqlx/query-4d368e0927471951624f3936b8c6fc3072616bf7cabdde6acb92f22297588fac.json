@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_category_settings (streamer_login, twitch_user_id, category_key, auto_post, updated_by) SELECT s.twitch_login, s.twitch_user_id, k.category_key, (k.category_key = $2), 'auto_default' FROM social_media_category k CROSS JOIN twitch_streamers s WHERE s.twitch_user_id = $1 ON CONFLICT (twitch_user_id, category_key) WHERE twitch_user_id IS NOT NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4d368e0927471951624f3936b8c6fc3072616bf7cabdde6acb92f22297588fac"
+}

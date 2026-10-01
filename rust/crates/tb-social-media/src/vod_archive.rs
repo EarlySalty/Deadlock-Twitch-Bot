@@ -28,6 +28,7 @@ pub const DEFAULT_VOD_ARCHIVE_PRIVACY: &str = "private";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VodArchiveSettings {
     pub streamer_login: String,
+    pub twitch_user_id: Option<String>,
     pub enabled: bool,
     pub privacy: String,
 }
@@ -37,6 +38,7 @@ impl VodArchiveSettings {
     pub fn aus(streamer_login: &str) -> Self {
         Self {
             streamer_login: streamer_login.to_lowercase(),
+            twitch_user_id: None,
             enabled: false,
             privacy: DEFAULT_VOD_ARCHIVE_PRIVACY.to_string(),
         }
@@ -45,14 +47,14 @@ impl VodArchiveSettings {
 
 /// Liest die Einstellung eines Streamers. Fehlender Eintrag und unbekannte
 /// Sichtbarkeit fallen auf „aus, privat" zurueck statt zu scheitern.
-pub async fn get_vod_archive_settings(pool: &PgPool, streamer_login: &str) -> VodArchiveSettings {
-    let login = streamer_login.trim().to_lowercase();
+pub async fn get_vod_archive_settings(pool: &PgPool, twitch_user_id: &str) -> VodArchiveSettings {
+    let login = twitch_user_id.to_string();
     if login.is_empty() {
         return VodArchiveSettings::aus("");
     }
     let row = sqlx::query(
-        "SELECT enabled, privacy FROM social_media_vod_archive \
-         WHERE LOWER(streamer_login) = $1",
+        "SELECT streamer_login, twitch_user_id, enabled, privacy FROM social_media_vod_archive \
+         WHERE twitch_user_id = $1",
     )
     .bind(&login)
     .fetch_optional(pool)
@@ -63,7 +65,8 @@ pub async fn get_vod_archive_settings(pool: &PgPool, streamer_login: &str) -> Vo
         Some(row) => {
             let privacy: String = row.get("privacy");
             VodArchiveSettings {
-                streamer_login: login,
+                streamer_login: row.get("streamer_login"),
+                twitch_user_id: row.get("twitch_user_id"),
                 enabled: row.get("enabled"),
                 privacy: if VOD_ARCHIVE_PRIVACY_VALUES.contains(&privacy.as_str()) {
                     privacy
@@ -72,7 +75,19 @@ pub async fn get_vod_archive_settings(pool: &PgPool, streamer_login: &str) -> Vo
                 },
             }
         }
-        None => VodArchiveSettings::aus(&login),
+        None => {
+            let display = sqlx::query_scalar::<_, String>(
+                "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1",
+            )
+            .bind(&login)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            let mut defaults = VodArchiveSettings::aus(display.as_deref().unwrap_or(""));
+            defaults.twitch_user_id = Some(login);
+            defaults
+        }
     }
 }
 
@@ -89,15 +104,15 @@ pub async fn set_vod_archive_settings(
             values.privacy
         )));
     }
-    let login = values.streamer_login.trim().to_lowercase();
-    if login.is_empty() {
-        return Err(sqlx::Error::Protocol("streamer_login fehlt".to_string()));
+    let login = values.twitch_user_id.as_deref().unwrap_or("").to_string();
+    if login.is_empty() || !login.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(sqlx::Error::Protocol("twitch_user_id fehlt".to_string()));
     }
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query(
-        "INSERT INTO social_media_vod_archive (streamer_login, enabled, privacy, updated_at, updated_by) \
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) \
-         ON CONFLICT (streamer_login) DO UPDATE SET \
+        "INSERT INTO social_media_vod_archive (streamer_login, twitch_user_id, enabled, privacy, updated_at, updated_by) \
+         SELECT twitch_login, twitch_user_id, $2, $3, CURRENT_TIMESTAMP, $4 FROM twitch_streamers WHERE twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL DO UPDATE SET streamer_login = EXCLUDED.streamer_login, \
              enabled = EXCLUDED.enabled, \
              privacy = EXCLUDED.privacy, \
              updated_at = CURRENT_TIMESTAMP, \
@@ -109,11 +124,7 @@ pub async fn set_vod_archive_settings(
     .bind(updated_by)
     .execute(pool)
     .await?;
-    Ok(VodArchiveSettings {
-        streamer_login: login,
-        enabled: values.enabled,
-        privacy: values.privacy.clone(),
-    })
+    Ok(get_vod_archive_settings(pool, &login).await)
 }
 
 /// Alle Streamer mit eingeschaltetem Archiv, alphabetisch. Der Worker
@@ -122,8 +133,9 @@ pub async fn aktive_vod_archive_streamer(
     pool: &PgPool,
 ) -> Result<Vec<VodArchiveSettings>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT streamer_login, enabled, privacy FROM social_media_vod_archive \
-         WHERE enabled ORDER BY streamer_login ASC",
+        "SELECT source.twitch_login AS streamer_login, settings.twitch_user_id, settings.enabled, settings.privacy \
+         FROM social_media_vod_archive settings JOIN twitch_streamers source ON source.twitch_user_id = settings.twitch_user_id \
+         WHERE settings.enabled AND settings.twitch_user_id ~ '^[0-9]+$' ORDER BY source.twitch_login ASC",
     )
     .fetch_all(pool)
     .await?;
@@ -133,6 +145,7 @@ pub async fn aktive_vod_archive_streamer(
             let privacy: String = row.get("privacy");
             VodArchiveSettings {
                 streamer_login: row.get::<String, _>("streamer_login").to_lowercase(),
+                twitch_user_id: row.get("twitch_user_id"),
                 enabled: row.get("enabled"),
                 privacy: if VOD_ARCHIVE_PRIVACY_VALUES.contains(&privacy.as_str()) {
                     privacy
@@ -175,13 +188,22 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE social_media_vod_archive (streamer_login TEXT PRIMARY KEY, \
+            "CREATE TABLE social_media_vod_archive (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, \
              enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', \
              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('earlysalty','42'),('nani','99')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_identity ON social_media_vod_archive (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -191,15 +213,17 @@ mod tests {
             return;
         };
         // Ohne Eintrag ist das Archiv aus, egal fuer welchen Kanal.
-        assert_eq!(
-            get_vod_archive_settings(&pool, "earlysalty").await,
-            VodArchiveSettings::aus("earlysalty")
-        );
+        let defaults = get_vod_archive_settings(&pool, "42").await;
+        assert_eq!(defaults.streamer_login, "earlysalty");
+        assert_eq!(defaults.twitch_user_id.as_deref(), Some("42"));
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.privacy, "private");
 
         set_vod_archive_settings(
             &pool,
             &VodArchiveSettings {
                 streamer_login: "EarlySalty".to_string(),
+                twitch_user_id: Some("42".to_string()),
                 enabled: true,
                 privacy: "unlisted".to_string(),
             },
@@ -208,17 +232,18 @@ mod tests {
         .await
         .unwrap();
 
-        let gelesen = get_vod_archive_settings(&pool, "earlysalty").await;
+        let gelesen = get_vod_archive_settings(&pool, "42").await;
         assert!(gelesen.enabled);
         assert_eq!(gelesen.privacy, "unlisted");
         // Der zweite Kanal bleibt davon unberuehrt.
-        assert!(!get_vod_archive_settings(&pool, "nani").await.enabled);
+        assert!(!get_vod_archive_settings(&pool, "99").await.enabled);
 
         // Nur eingeschaltete Kanaele tauchen beim Worker auf.
         set_vod_archive_settings(
             &pool,
             &VodArchiveSettings {
                 streamer_login: "nani".to_string(),
+                twitch_user_id: Some("99".to_string()),
                 enabled: false,
                 privacy: "private".to_string(),
             },
@@ -229,6 +254,20 @@ mod tests {
         let aktiv = aktive_vod_archive_streamer(&pool).await.unwrap();
         assert_eq!(aktiv.len(), 1);
         assert_eq!(aktiv[0].streamer_login, "earlysalty");
+        sqlx::query(
+            "UPDATE twitch_streamers SET twitch_login = 'renamed' WHERE twitch_user_id = '42';",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('earlysalty', '100')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let aktiv = aktive_vod_archive_streamer(&pool).await.unwrap();
+        assert_eq!(aktiv.len(), 1);
+        assert_eq!(aktiv[0].streamer_login, "renamed");
+        assert_eq!(aktiv[0].twitch_user_id.as_deref(), Some("42"));
     }
 
     #[tokio::test]
@@ -240,6 +279,7 @@ mod tests {
             &pool,
             &VodArchiveSettings {
                 streamer_login: "earlysalty".to_string(),
+                twitch_user_id: Some("42".to_string()),
                 enabled: true,
                 privacy: "weltweit".to_string(),
             },
@@ -248,6 +288,6 @@ mod tests {
         .await;
         assert!(fehler.is_err());
         // Und nichts davon ist in der Tabelle gelandet.
-        assert!(!get_vod_archive_settings(&pool, "earlysalty").await.enabled);
+        assert!(!get_vod_archive_settings(&pool, "42").await.enabled);
     }
 }

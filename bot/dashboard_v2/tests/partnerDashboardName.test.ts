@@ -19,7 +19,7 @@ test('der Tab-Titel heißt Partner Dashboard', () => {
 });
 
 test('das Header-Badge trägt Partner Dashboard statt Twitch Analytics', () => {
-  const header = read('src/components/layout/Header.tsx');
+  const header = read('src/components/layout/DashboardHeader.tsx');
   assert.match(header, /t\('Partner Dashboard'\)/);
   assert.doesNotMatch(header, /Twitch Analytics/);
 });

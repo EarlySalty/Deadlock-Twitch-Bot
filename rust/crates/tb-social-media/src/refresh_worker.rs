@@ -61,7 +61,7 @@ impl TokenRefreshWorker {
         // Instagram deshalb nie ausgewaehlt: der Zugang starb nach 60 Tagen,
         // ohne dass irgendwo etwas passierte.
         let rows = sqlx::query!(
-            "SELECT platform AS \"platform!\", streamer_login, access_token_enc AS \"access_token_enc!\", \
+            "SELECT id AS \"id!\", platform AS \"platform!\", streamer_login, access_token_enc AS \"access_token_enc!\", \
                     refresh_token_enc, client_id, client_secret_enc, \
                     token_expires_at, enc_version \
              FROM social_media_platform_auth \
@@ -79,6 +79,7 @@ impl TokenRefreshWorker {
         for row in rows {
             self.refresh_one(
                 row.platform,
+                row.id,
                 row.streamer_login,
                 row.access_token_enc,
                 row.refresh_token_enc,
@@ -94,6 +95,7 @@ impl TokenRefreshWorker {
     async fn refresh_one(
         &self,
         platform: String,
+        auth_id: i32,
         streamer: Option<String>,
         access_enc: Vec<u8>,
         refresh_enc: Option<Vec<u8>>,
@@ -159,28 +161,27 @@ impl TokenRefreshWorker {
                 // geformt war; daran haette ein Streamer einen intakten Zugang
                 // neu verbunden, obwohl der Fehler bei uns lag.
                 if text.contains("invalid_grant") {
-                    self.markiere_abgelaufen(&platform, streamer_ref).await;
+                    self.markiere_abgelaufen(auth_id, &platform).await;
                 }
                 tracing::error!(platform = %platform, error = %text, "Token-Refresh fehlgeschlagen");
                 return;
             }
         };
 
-        self.save_refreshed(&platform, streamer_ref, &new_tokens)
+        self.save_refreshed(auth_id, &platform, streamer_ref, &new_tokens)
             .await;
     }
 
     /// Setzt den Ablauf auf jetzt, damit der Zustand im Dashboard als
     /// "abgelaufen" sichtbar wird. Der Eintrag bleibt `enabled = 1`, damit ein
     /// erneutes Verbinden dieselbe Zeile aktualisiert.
-    async fn markiere_abgelaufen(&self, platform: &str, streamer: Option<&str>) {
+    async fn markiere_abgelaufen(&self, auth_id: i32, platform: &str) {
         let jetzt = Utc::now().to_rfc3339();
         let result = sqlx::query!(
             "UPDATE social_media_platform_auth SET token_expires_at = $1 \
-             WHERE platform = $2 AND (streamer_login = $3 OR (streamer_login IS NULL AND $3 IS NULL))",
+             WHERE id = $2",
             &jetzt,
-            platform,
-            streamer
+            auth_id
         )
         .execute(&self.pool)
         .await;
@@ -191,6 +192,7 @@ impl TokenRefreshWorker {
 
     async fn save_refreshed(
         &self,
+        auth_id: i32,
         platform: &str,
         streamer: Option<&str>,
         new_tokens: &crate::oauth::RefreshedTokens,
@@ -212,18 +214,16 @@ impl TokenRefreshWorker {
         });
         let expires_iso = new_tokens.expires_at.to_rfc3339();
 
-        // WHERE platform AND (streamer = $ OR (streamer IS NULL AND $ IS NULL)).
         let result = if let Some(refresh_enc) = refresh_enc {
             sqlx::query!(
                 "UPDATE social_media_platform_auth \
                  SET access_token_enc = $1, refresh_token_enc = $2, token_expires_at = $3, \
                      last_refreshed_at = CURRENT_TIMESTAMP \
-                 WHERE platform = $4 AND (streamer_login = $5 OR (streamer_login IS NULL AND $5 IS NULL))",
+                 WHERE id = $4",
                 access_enc,
                 refresh_enc,
                 &expires_iso,
-                platform,
-                streamer
+                auth_id
             )
             .execute(&self.pool)
             .await
@@ -231,11 +231,10 @@ impl TokenRefreshWorker {
             sqlx::query!(
                 "UPDATE social_media_platform_auth \
                  SET access_token_enc = $1, token_expires_at = $2, last_refreshed_at = CURRENT_TIMESTAMP \
-                 WHERE platform = $3 AND (streamer_login = $4 OR (streamer_login IS NULL AND $4 IS NULL))",
+                 WHERE id = $3",
                 access_enc,
                 &expires_iso,
-                platform,
-                streamer
+                auth_id
             )
             .execute(&self.pool)
             .await

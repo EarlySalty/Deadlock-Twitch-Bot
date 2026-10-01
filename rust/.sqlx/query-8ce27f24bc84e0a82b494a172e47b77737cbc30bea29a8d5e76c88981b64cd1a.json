@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT approval_mode, timezone, subtitles_enabled FROM social_media_streamer_settings WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approval_mode",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_settings",
+            "name": "approval_mode"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "timezone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_settings",
+            "name": "timezone"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "subtitles_enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_streamer_settings",
+            "name": "subtitles_enabled"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8ce27f24bc84e0a82b494a172e47b77737cbc30bea29a8d5e76c88981b64cd1a"
+}

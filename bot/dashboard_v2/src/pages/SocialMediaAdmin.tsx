@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Sparkles, ShieldAlert, ShieldCheck, Wifi, Shield } from 'lucide-react';
+import { Clapperboard, ShieldAlert } from 'lucide-react';
+import { DashboardHeader } from '@/components/layout/DashboardHeader';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { PlanProvider } from '@/context/PlanContext';
 import { useT } from '@/context/LanguageContext';
@@ -31,7 +32,7 @@ export function SocialMediaAdminDashboard() {
   const hasAutoSetStreamer = useRef(false);
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
-  const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
+  const { data: authStatus } = useAuthStatus();
   const selectedChannel = resolveSocialMediaChannel(streamers, streamerUserId);
   const streamer = selectedChannel?.login.toLowerCase() ?? '';
 
@@ -59,6 +60,7 @@ export function SocialMediaAdminDashboard() {
       setPartnerAccess(twitchUserId, granted),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media-access-list'] });
+      queryClient.invalidateQueries({ queryKey: ['social-media-access'] });
     },
   });
 
@@ -107,67 +109,15 @@ export function SocialMediaAdminDashboard() {
     window.history.replaceState({}, '', newUrl);
   }, [streamer, selectedChannel, isAdminView]);
 
-  const AuthBadge = () => {
-    const base =
-      'inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs font-medium backdrop-blur-sm';
-    if (loadingAuth) return null;
-    if (isDemoMode) {
-      return (
-        <div className={`${base} text-ui-warning`}>
-          <Sparkles className="w-4 h-4" />
-          <span>{t('Demo-Daten')}</span>
-        </div>
-      );
-    }
-    if (authError || !authStatus?.authenticated) {
-      return (
-        <div className={`${base} text-ui-danger-soft`}>
-          <ShieldAlert className="w-4 h-4" />
-          <span>{t('Nicht authentifiziert')}</span>
-        </div>
-      );
-    }
-    if (authStatus.isLocalhost) {
-      return (
-        <div className={`${base} text-ui-success-soft`}>
-          <Wifi className="w-4 h-4" />
-          <span>{t('Localhost (Admin)')}</span>
-        </div>
-      );
-    }
-    if (authStatus.isAdmin) {
-      return (
-        <div className={`${base} text-ui-accent-ink`}>
-          <ShieldCheck className="w-4 h-4" />
-          <span>{t('Admin')}</span>
-        </div>
-      );
-    }
-    return (
-      <div className={`${base} text-ui-text-soft`}>
-        <Shield className="w-4 h-4" />
-        <span>{t('Partner')}</span>
-      </div>
-    );
-  };
-
   return (
-    <div className="social-studio space-y-6">
-      <div className="border-b border-border pb-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
-            <a className="studio-brand" href="/twitch/verwaltung">
-              <img src={`${import.meta.env.BASE_URL}brand/deadlock-d-logo.png`} alt="" />
-              <span>Deutsche Deadlock<strong>Community</strong></span>
-            </a>
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-ui-faint">{t('Arbeitsbereich')}</p>
-              <p className="mt-0.5 text-sm font-medium text-ui-text-soft">
-                {isAdminView ? t('Kanal auswählen und verwalten') : t('Dein Kanal')}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+    <div className="space-y-6">
+      <DashboardHeader
+        title={t('Social Media')}
+        icon={<Clapperboard className="w-6 h-6 text-primary" />}
+        isLoading={loadingStreamers}
+        description={t('Fokus: {focus}', { focus: isAdminView ? streamer || t('Streamer wählen') : access?.streamer || authStatus?.twitchLogin || t('Dein Kanal') })}
+      >
+        <div className="flex flex-wrap items-center gap-3">
             {isAdminView && streamer && (
               <button
                 type="button"
@@ -211,10 +161,8 @@ export function SocialMediaAdminDashboard() {
               </select>
             )}
             {accessMutation.isError && <p role="alert" className="text-sm text-ui-danger-soft">{t('Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.')}</p>}
-            <AuthBadge />
-          </div>
         </div>
-      </div>
+      </DashboardHeader>
 
       <PlanProvider
           plan={authStatus?.plan ?? null}

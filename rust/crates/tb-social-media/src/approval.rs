@@ -405,12 +405,13 @@ pub fn serialize_approval_record(record: &ApprovalRecord) -> Value {
 /// Kanal, dem dieser Clip gehoert.
 async fn clip_streamer(pool: &PgPool, clip_db_id: i32) -> Option<String> {
     sqlx::query_scalar!(
-        "SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1",
+        "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
         clip_db_id as i64
     )
     .fetch_optional(pool)
     .await
     .ok()
+    .flatten()
     .flatten()
 }
 
@@ -901,7 +902,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_clips_social_media (twitch_user_id TEXT DEFAULT '42', id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
@@ -1199,12 +1200,12 @@ mod tests {
     async fn zeitplan_tabellen(pool: &PgPool) {
         for ddl in [
             "ALTER TABLE twitch_clips_social_media ADD COLUMN streamer_login TEXT",
-            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, \
+            "CREATE TABLE social_media_streamer_settings (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, \
              approval_mode TEXT NOT NULL DEFAULT 'manual', \
              timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', \
              subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, \
              updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
-            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, \
+            "CREATE TABLE social_media_platform_schedule (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT NOT NULL, \
              platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, \
              posts_per_week INTEGER NOT NULL DEFAULT 4, \
              max_posts_per_day INTEGER NOT NULL DEFAULT 1, \

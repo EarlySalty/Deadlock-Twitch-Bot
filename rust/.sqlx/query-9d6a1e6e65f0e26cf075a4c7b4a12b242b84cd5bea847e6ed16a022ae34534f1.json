@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, streamer_login, template_name, COALESCE(description_template, '') AS \"description_template!\", hashtags, COALESCE(is_default, false) AS \"is_default!\", created_at::text, updated_at::text FROM clip_templates_streamer WHERE twitch_user_id = $1 ORDER BY is_default DESC, template_name ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "streamer_login",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "streamer_login"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "template_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "template_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description_template!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "hashtags",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "hashtags"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_default!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "9d6a1e6e65f0e26cf075a4c7b4a12b242b84cd5bea847e6ed16a022ae34534f1"
+}
