@@ -1,11 +1,12 @@
 # Zentrale, nicht geheime Modellauswahl für alle Fireworks-Aufrufe des Twitch-Bots.
-# Der Token-Cutover bewahrt die freigegebene Modellwahl des laufenden Dienstes.
-# Kein automatischer Modellwechsel durch den zusätzlich integrierten Resolver.
+# Keine feste Versionsbindung: bootstrap_model ist die Mindestversion und der
+# Startkandidat bei einem nicht erreichbaren Modellkatalog, niemals ein Pin.
+# Neue Modelle werden erst nach erfolgreicher synthetischer JSON-Probe verwendet.
 schema_version: 1
 provider: fireworks
 family: deepseek-flash
-selection: pinned
-bootstrap_model: accounts/fireworks/models/deepseek-v4-flash-0731
+selection: latest
+bootstrap_model: accounts/fireworks/models/deepseek-v4p1-flash
 refresh_seconds: 3600
 retry_seconds: 60
 max_stale_seconds: 86400

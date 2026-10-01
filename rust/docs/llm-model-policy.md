@@ -6,21 +6,14 @@ Die Datei wird mit `rust/knowledge` im Release ausgeliefert und durch
 Die übrige Betriebskonfiguration bleibt in der bestehenden TOML-Datei.
 Zugangsdaten stehen nicht in YAML, sondern bleiben im bisherigen Dienst-Loader.
 
-## Freigegebene Laufzeitwahl beim Token-Cutover
-
-Der Token-Cutover erhält mit `selection: pinned` die belegte Modellwahl des
-laufenden Releases: `accounts/fireworks/models/deepseek-v4-flash-0731`.
-Dieser Modus fragt keinen Modellkatalog ab und erzeugt keine Modellproben.
-Ein 404 führt zu einem Fehler und niemals zu einem automatischen Modellwechsel.
-Ein anderes Modell oder `latest` erfordert eine ausdrückliche Nutzerfreigabe.
-
-## Auswahl und Aktualisierung bei ausdrücklich freigegebenem Latest-Modus
+## Auswahl und Aktualisierung
 
 `selection: latest` erlaubt die neueste stabile, serverlos verfügbare
 DeepSeek-Flash-Fassung. `bootstrap_model` ist kein Pin: Es legt die
 Mindestversion und einen Startkandidaten fest, der bei einem Katalogausfall
 immer noch eine erfolgreiche synthetische Probe bestehen muss.
-Die aktuellen Dienstvorgaben aktivieren diesen Modus nicht.
+Der Stand dieses Releases verwendet als Mindestversion
+`accounts/fireworks/models/deepseek-v4p1-flash`.
 
 Der überwachte Bot-Job prüft beim Start und nach `refresh_seconds` erneut.
 Nach Fehlern gilt `retry_seconds`. Bei HTTP 404/410 im gemeinsamen KI-Eingang

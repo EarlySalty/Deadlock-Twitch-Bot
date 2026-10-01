@@ -56,7 +56,7 @@ impl ModelPolicy {
         if policy.schema_version != 1
             || policy.provider != "fireworks"
             || policy.family != "deepseek-flash"
-            || !matches!(policy.selection.as_str(), "latest" | "pinned")
+            || policy.selection != "latest"
             || model_version(&policy.bootstrap_model).is_none()
             || !(60..=86_400).contains(&policy.refresh_seconds)
             || !(1..=3_600).contains(&policy.retry_seconds)
@@ -86,9 +86,6 @@ impl ModelPolicy {
     }
 
     fn allows_with_created(&self, model: &str, created: Option<i64>) -> bool {
-        if self.selection == "pinned" {
-            return model == self.bootstrap_model;
-        }
         match (model_version(model), model_version(&self.bootstrap_model)) {
             (Some(version), Some(minimum)) => {
                 if version.parts != minimum.parts {
@@ -283,14 +280,6 @@ impl ModelResolver {
         rejected: Option<&str>,
         pool: Option<&PgPool>,
     ) -> Result<String, LlmError> {
-        if self.policy.selection == "pinned" {
-            if rejected == Some(self.policy.bootstrap_model.as_str()) {
-                return Err(unavailable(
-                    "Das freigegebene Modell ist nicht verfügbar; kein automatischer Wechsel",
-                ));
-            }
-            return Ok(self.policy.bootstrap_model.clone());
-        }
         let mut state = self.refresh.lock().await;
         let now = Instant::now();
         state.rejected.retain(|_, at| {
@@ -319,15 +308,11 @@ impl ModelResolver {
         }
         // Vor dem Netzaufruf setzen, damit auch Abbruch/Timeout keine Sturmfolge auslöst.
         state.next_attempt = Some(now + Duration::from_secs(self.policy.retry_seconds));
-        let catalog = if self.policy.selection == "pinned" {
-            Ok(Ok(Vec::new()))
-        } else {
-            tokio::time::timeout(
-                Duration::from_secs(self.policy.catalog_timeout_seconds),
-                self.fetch_models(api_key),
-            )
-            .await
-        };
+        let catalog = tokio::time::timeout(
+            Duration::from_secs(self.policy.catalog_timeout_seconds),
+            self.fetch_models(api_key),
+        )
+        .await;
         let catalog_ok = matches!(&catalog, Ok(Ok(_)));
         let mut entries = match catalog {
             Ok(Ok(entries)) => entries,
@@ -389,7 +374,7 @@ impl ModelResolver {
                         self.save_to_db(pool, &entry).await;
                     }
                     tracing::info!(model = %entry.id, family = %self.policy.family,
-                        selection = %self.policy.selection, catalog_ok,
+                        selection = "latest", catalog_ok,
                         "DeepSeek-Flash-Modell geprüft und aus YAML-Policy aufgelöst");
                     return Ok(entry.id);
                 }

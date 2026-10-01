@@ -6,26 +6,7 @@ use wiremock::{
 };
 
 fn policy() -> ModelPolicy {
-    let mut policy =
-        ModelPolicy::from_yaml(include_str!("../../../../knowledge/llm.yaml")).unwrap();
-    // Katalogtests nutzen einen ausdrücklich synthetischen Latest-Vertrag.
-    policy.selection = "latest".to_string();
-    policy.bootstrap_model = model("v4p1-flash");
-    policy
-}
-
-#[tokio::test]
-async fn shipped_policy_preserves_live_model_without_catalog_or_probe() {
-    let server = MockServer::start().await;
-    let policy = ModelPolicy::from_yaml(include_str!("../../../../knowledge/llm.yaml")).unwrap();
-    let resolver = ModelResolver::with_urls(policy, &server.uri(), &server.uri()).unwrap();
-    let selected = resolver.resolve("synthetic-key", None, None).await.unwrap();
-    assert_eq!(selected, "accounts/fireworks/models/deepseek-v4-flash-0731");
-    assert!(resolver
-        .resolve("synthetic-key", Some(&selected), None)
-        .await
-        .is_err());
-    assert!(server.received_requests().await.unwrap().is_empty());
+    ModelPolicy::from_yaml(include_str!("../../../../knowledge/llm.yaml")).unwrap()
 }
 fn model(version: &str) -> String {
     format!("accounts/fireworks/models/deepseek-{version}")
@@ -63,11 +44,11 @@ async fn successful_probe(server: &MockServer, version: &str, count: u64) {
 
 #[test]
 fn yaml_ist_die_einzige_versionsquelle() {
-    let policy = ModelPolicy::from_yaml(include_str!("../../../../knowledge/llm.yaml")).unwrap();
-    assert_eq!(policy.bootstrap_model, model("v4-flash-0731"));
-    assert_eq!(policy.selection, "pinned");
-    assert!(!policy.allows(&model("v5-flash")));
-    assert!(policy.allows(&model("v4-flash-0731")));
+    let policy = policy();
+    assert_eq!(policy.bootstrap_model, model("v4p1-flash"));
+    assert_eq!(policy.selection, "latest");
+    assert!(policy.allows(&model("v5-flash")));
+    assert!(!policy.allows(&model("v4-flash-0731")));
     assert!(ModelPolicy::load(Path::new("/nicht-vorhanden/llm.yaml")).is_err());
 }
 
@@ -86,8 +67,8 @@ fn kaputte_und_fremde_yaml_schlaegt_geschlossen_fehl() {
     let raw = include_str!("../../../../knowledge/llm.yaml");
     for invalid in [
         raw.replace("fireworks", "fremdanbieter"),
-        raw.replace("selection: pinned", "selection: unknown"),
-        raw.replace("deepseek-v4-flash", "deepseek-v4-pro"),
+        raw.replace("selection: latest", "selection: pinned"),
+        raw.replace("deepseek-v4p1-flash", "deepseek-v4p1-pro"),
         raw.replace("retry_seconds: 60", "retry_seconds: 0"),
         raw.replace("schema_version: 1", "schema_version: 2"),
         format!("{raw}\napi_key: niemals-ausgeben\n"),
@@ -204,18 +185,14 @@ async fn abgelehntes_aktuelles_modell_wird_nicht_bei_spaeterem_probe_503_zurueck
         .await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_partial_json(
-            serde_json::json!({"model": model("v4p2-flash")}),
-        ))
+        .and(body_partial_json(serde_json::json!({"model": model("v4p2-flash")})))
         .respond_with(ResponseTemplate::new(404))
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_partial_json(
-            serde_json::json!({"model": model("v4p1-flash")}),
-        ))
+        .and(body_partial_json(serde_json::json!({"model": model("v4p1-flash")})))
         .respond_with(ResponseTemplate::new(503))
         .expect(1)
         .mount(&server)
