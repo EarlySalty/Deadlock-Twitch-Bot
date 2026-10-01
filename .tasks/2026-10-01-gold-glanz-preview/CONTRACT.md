@@ -6,3 +6,5 @@
 - Markentokens, neutrale Hintergründe sowie Status- und Diagrammfarben unverändert.
 - Analyse /analyse und Home /dashboard nutzen statische Demo-Daten auch über Tailscale. Die Vorschau sendet keine Backend-Anfragen; fehlende Fixtures und Schreibversuche melden einen Fehler.
 - Branch darf nach origin gepusht werden. Merge, Deployment und Live-Änderungen sind nicht beauftragt. Worktree und Thread bleiben bis zur Entscheidung erhalten.
+
+Revision 3: Nur Poliertes Gold farblich etwas kräftiger und goldener abstimmen; gleichmäßiger Verlauf und zurückhaltende Innenkante bleiben.

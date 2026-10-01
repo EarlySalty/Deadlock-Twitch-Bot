@@ -24,3 +24,9 @@ Basis: origin/main 14bc1f47.
 - Neuer Screenshot-Satz in screenshots-v2/; Browsernachweis browser-checks-v2.txt.
 - Minimaler Kontrast zwischen Text #1a130c und den sechs Verlaufstönen: 5,56:1.
 - Implementierungscommit 8d2eb5a4. Keine Änderung an Markentokens, Statusfarben, Diagrammen oder neutralem Hintergrund.
+
+## Revision 3
+
+- Poliertes Gold auf #d6b16d, #c9a15c und #b78d49 abgestimmt: etwas kräftigeres Gold, weiterhin drei gleichmäßig verteilte Töne ohne Lichtkamm oder Bänder. Altgold und Innenkanten unverändert.
+- Preview-Build erfolgreich; build-preview-v3.txt. Neuer Screenshot-Satz screenshots-v3/; Browsernachweis browser-checks-v3.txt.
+- Minimaler Textkontrast beider Varianten weiterhin 5,56:1. Implementierungscommit b597ea01.

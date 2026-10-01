@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from '/tmp/tb-gold-tools/node_modules/playwright-core/index.mjs';
 
-const destination = new URL('./screenshots-v2/', import.meta.url).pathname;
+const destination = new URL('./screenshots-v3/', import.meta.url).pathname;
 await mkdir(destination, { recursive: true });
 const browser = await chromium.launch({
   executablePath: '/home/nathanael/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome',
@@ -68,7 +68,7 @@ try {
     await mobile.screenshot({ path: `${destination}${route}-polished-mobile.png`, fullPage: true });
     results.push(`${route}/polished-mobile: OK, kein horizontaler Überlauf`);
   }
-  await writeFile(new URL('./browser-checks-v2.txt', import.meta.url), `${results.join('\n')}\nStatusfarben, Diagrammfarben, Markentokens und Seitenhintergrund in allen Varianten identisch.\n`);
+  await writeFile(new URL('./browser-checks-v3.txt', import.meta.url), `${results.join('\n')}\nStatusfarben, Diagrammfarben, Markentokens und Seitenhintergrund in allen Varianten identisch.\n`);
 } finally {
   await browser.close();
 }

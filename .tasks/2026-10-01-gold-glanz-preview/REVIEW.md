@@ -11,3 +11,5 @@ Selbstprüfung im einzigen beauftragten Paketthread.
 - Markentokens in index.css und Diagramm-Komponenten unverändert. Kein Merge-Gate, Merge oder Deployment durchgeführt.
 
 Revision 2: Lichtkamm und Champagner entfernt. Die Verläufe laufen gleichmäßig von einem helleren zu einem dunkleren Goldton, jeweils mit drei weit verteilten Farbstufen. Neue Screenshots in screenshots-v2/ ersetzen für die Entscheidung den alten Satz.
+
+Revision 3: Sichtprüfung der neuen polierten Flächen bestätigt den etwas kräftigeren Goldton und den weiterhin ruhigen Verlauf ohne Bänder. Neue Aufnahmen in screenshots-v3/; die vorherige Poliert-Fassung bleibt als screenshots-v2/ zum Vergleich erhalten.

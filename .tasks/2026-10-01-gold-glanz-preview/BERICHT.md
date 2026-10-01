@@ -1,23 +1,11 @@
-[Fertigmeldung] Paket B, Vorschau Revision 2: Lichtkamm und helle Bänder entfernt; Champagner-Gold gestrichen. Poliertes Gold und Altgold verwenden jeweils drei gleichmäßig verteilte, weich verlaufende Töne. Nur eine dezente Innenkante bleibt.
+[Fertigmeldung] Gold-Vorschau Revision 3: Poliertes Gold etwas kräftiger und goldener abgestimmt. Der ruhige Verlauf ohne Lichtkamm oder Streifen bleibt. Altgold bleibt unverändert.
 
-| Variante | Analyse | Startseite |
-|---|---|---|
-| Original | [Öffnen](http://v50671-kde:4187/analyse?gold=original) | [Öffnen](http://v50671-kde:4187/dashboard?gold=original) |
-| Poliertes Gold | [Öffnen](http://v50671-kde:4187/analyse?gold=polished) | [Öffnen](http://v50671-kde:4187/dashboard?gold=polished) |
-| Altgold | [Öffnen](http://v50671-kde:4187/analyse?gold=antique) | [Öffnen](http://v50671-kde:4187/dashboard?gold=antique) |
+Vorschau: [Analyse](http://v50671-kde:4187/analyse?gold=polished) · [Startseite](http://v50671-kde:4187/dashboard?gold=polished). Vergleich weiterhin über `gold=antique` oder `gold=original`.
 
-Schalter bleiben `gold=polished`, `gold=antique` und `gold=original`. Ohne Parameter gilt Poliertes Gold. Alternativ ist der Host unter `100.117.29.112:4187` erreichbar.
+Neue Screenshots: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v3/analyse-polished.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v3/dashboard-polished.png). Vorherige Fassung zum Vergleich: [Analyse V2](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-polished.png) · [Startseite V2](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-polished.png).
 
-Neue Screenshots bei 1600 × 1100:
+Alle neuen Desktop-, Ganzseiten- und Mobilaufnahmen liegen unter /home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v3/.
 
-- Original: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-original.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-original.png)
-- Poliertes Gold: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-polished.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-polished.png)
-- Altgold: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-antique.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-antique.png)
+Preview-Build und sechs Desktop-/zwei Mobilprüfungen erfolgreich. Keine Backend-Anfragen oder Browserfehler in den Desktop-Vergleichen; kein Seitenüberlauf. Statusfarben, Diagrammfarben und Seitenhintergrund bleiben unverändert. Minimaler Textkontrast auf den Verläufen: 5,56:1.
 
-Absolute Screenshot-Pfade stehen in den Links; Ordner: /home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/. Vollständige Seitenaufnahmen tragen das Suffix -full.png; mobile Aufnahmen: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-polished-mobile.png) und [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-polished-mobile.png).
-
-Preview-Build erfolgreich; sieben Gestaltungstests bestanden. Sechs Desktop-Vergleiche ohne Browserfehler, Backend-Anfragen oder Seitenüberlauf; zwei Mobilansichten ohne Seitenüberlauf. Statusfarben, Diagrammfarben, Markentokens und Seitenhintergrund bleiben identisch. Minimaler Textkontrast auf den Verläufen: 5,56:1.
-
-Branch `preview/gold-glanz-20261001`, Implementierungscommit `8d2eb5a4`. Worktree `/home/nathanael/.worktrees/tb-gold-glanz-preview`.
-
-Nur statische Vorschau. **Nichts gemergt, nichts deployt.** Branch, Worktree und Paketthread bleiben bis zur nächsten Nutzerentscheidung erhalten; kein Settle.
+Branch `preview/gold-glanz-20261001`, Implementierungscommit `b597ea01`. Weiter nur Vorschau: nichts gemergt, nichts deployt. Thread und Worktree bleiben bis zur Entscheidung offen.

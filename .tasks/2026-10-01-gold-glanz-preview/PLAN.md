@@ -7,3 +7,5 @@
 5. Branch pushen und Bericht im Intent-Thread liefern; Nutzerentscheidung abwarten.
 
 Revision 2: Varianten auf Original, Poliertes Gold und Altgold reduzieren; Verläufe glätten, Build und Screenshots erneuern; Entscheidung weiter abwarten.
+
+Revision 3: Poliertes Gold etwas goldener abstimmen, Preview neu bauen und screenshots-v3/ aufnehmen.
