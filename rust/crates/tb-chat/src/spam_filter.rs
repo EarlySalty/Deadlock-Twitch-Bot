@@ -1090,8 +1090,8 @@ fn ist_domainform(token: &str) -> bool {
 pub fn kanonische_angebot_domain(pattern: &str) -> String {
     static ZUSATZ_RE: OnceLock<Regex> = OnceLock::new();
     static TRENN_RE: OnceLock<Regex> = OnceLock::new();
-    let zusatz =
-        ZUSATZ_RE.get_or_init(|| Regex::new(r"\([^)]*space[^)]*\)").expect("Zusatz-Regex konstant"));
+    let zusatz = ZUSATZ_RE
+        .get_or_init(|| Regex::new(r"\([^)]*space[^)]*\)").expect("Zusatz-Regex konstant"));
     let trenn = TRENN_RE.get_or_init(|| Regex::new(r"\s+\.\s*").expect("Trenn-Regex konstant"));
     let lowered = pattern.to_lowercase();
     let ohne_zusatz = zusatz.replace_all(&lowered, " ");
@@ -1378,7 +1378,10 @@ mod tests {
             "case-insensitiv"
         );
         assert_eq!(matches_safe_wording("goenn dir viewer"), Some("goenn"));
-        assert_eq!(matches_safe_wording("bin nur am lurken hehe"), Some("am lurken"));
+        assert_eq!(
+            matches_safe_wording("bin nur am lurken hehe"),
+            Some("am lurken")
+        );
         assert_eq!(matches_safe_wording("best viewers streamboo com"), None);
     }
 
@@ -1752,7 +1755,9 @@ mod tests {
     fn gate_lernt_angebot_plus_domain() {
         assert!(is_distinctive_spam_pattern("ai viewers twitch .ad"));
         assert!(is_distinctive_spam_pattern("ai viewers twitch.ad"));
-        assert!(is_distinctive_spam_pattern("ai viewers twitch .ad (no space)"));
+        assert!(is_distinctive_spam_pattern(
+            "ai viewers twitch .ad (no space)"
+        ));
         assert!(is_distinctive_spam_pattern(
             "best viewers eballo .com (remove the space)"
         ));
@@ -1851,7 +1856,11 @@ mod tests {
         assert!(treffer.hard_signal, "Reasons: {:?}", treffer.matched);
         for harmlos in ["die twitch ads nerven", "twitch ad break", "twitch.ad"] {
             let v = filter.evaluate(harmlos, &ctx_default());
-            assert_eq!(v.score, 0, "{harmlos:?} darf nicht treffen: {:?}", v.matched);
+            assert_eq!(
+                v.score, 0,
+                "{harmlos:?} darf nicht treffen: {:?}",
+                v.matched
+            );
         }
     }
 
@@ -1928,7 +1937,10 @@ mod tests {
             "eballo.com".to_string(),
             "phrase".to_string(),
         )]));
-        let v = filter.evaluate("Best Viewers Eballo .com (remove the space)", &ctx_default());
+        let v = filter.evaluate(
+            "Best Viewers Eballo .com (remove the space)",
+            &ctx_default(),
+        );
         assert!(v.score >= 3, "Reasons: {:?}", v.matched);
         assert_eq!(v.action, SpamAction::Ban, "Reasons: {:?}", v.matched);
         assert!(
@@ -2131,8 +2143,8 @@ mod tests {
 mod db_tests {
     use std::str::FromStr;
 
-    use sqlx::PgPool;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use sqlx::PgPool;
 
     use super::*;
 
@@ -2240,16 +2252,14 @@ mod db_tests {
 
         let lp = LearnedPatterns::load(&pool).await;
         assert_eq!(lp.spam.len(), 2);
-        assert!(
-            lp.spam
-                .iter()
-                .any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase")
-        );
-        assert!(
-            lp.spam
-                .iter()
-                .any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment")
-        );
+        assert!(lp
+            .spam
+            .iter()
+            .any(|p| p.pattern == "kaufe viewboost" && p.pattern_type == "phrase"));
+        assert!(lp
+            .spam
+            .iter()
+            .any(|p| p.pattern == "viewbots" && p.pattern_type == "fragment"));
     }
 
     #[tokio::test]
@@ -2365,12 +2375,10 @@ mod db_tests {
         f.reload(&pool).await;
         let after = f.evaluate("kaufe viewboost günstig", &SpamContext::default());
         assert_eq!(after.score, 2);
-        assert!(
-            after
-                .matched
-                .iter()
-                .any(|r| r.starts_with("Learned-Phrase"))
-        );
+        assert!(after
+            .matched
+            .iter()
+            .any(|r| r.starts_with("Learned-Phrase")));
     }
 
     // Hinweis: Der frühere NULL-Pattern-Test entfiel mit der prod-treuen DDL —

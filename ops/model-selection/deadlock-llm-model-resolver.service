@@ -1,0 +1,12 @@
+[Unit]
+Description=Geprüfte tägliche Flash-Modellauswahl für Community-Dienste
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+LoadCredential=infisical-token:/home/nathanael/.config/infisical-tokens/infisical-token-bots
+ExecStart=/home/nathanael/.local/bin/tb-model-resolver --config /home/nathanael/.config/deadlock-bots/model-selection/resolver.toml
+TimeoutStartSec=180
+NoNewPrivileges=true
+UMask=0077

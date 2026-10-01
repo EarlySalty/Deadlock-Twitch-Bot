@@ -6,6 +6,7 @@
 
 pub mod aad;
 pub mod field;
+pub mod text;
 pub mod token;
 
 pub use field::{FieldCipher, KEY_SIZE, KID, NONCE_SIZE, VERSION};

@@ -804,9 +804,15 @@ fn fallback_channel_promo_body(ctx: &ChannelPromoContext) -> &'static str {
         .any(|needle| context.contains(needle))
     {
         "Keine Lust, Valve-Changelogs selbst zu übersetzen? Neue Deadlock-Patches gibt's bei uns direkt auf Deutsch."
-    } else if ["scam", "fake server", "fake-server", "service pitch", "service-pitch"]
-        .iter()
-        .any(|needle| context.contains(needle))
+    } else if [
+        "scam",
+        "fake server",
+        "fake-server",
+        "service pitch",
+        "service-pitch",
+    ]
+    .iter()
+    .any(|needle| context.contains(needle))
     {
         "Fake-Server und dubiose Service-Pitches im Chat? Unser Bot warnt in Partner-Chats vor typischen Scam-Versuchen."
     } else if ["coaching", "coach", "replay", "feedback"]

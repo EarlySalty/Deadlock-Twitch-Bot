@@ -269,7 +269,8 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
       ctx.fillRect(0, 0, 1, 1);
       return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
     });
-    assert.ok(rgb.every(channel => channel >= 160 && channel <= 185), 'Gesperrter Text bleibt gut lesbares, neutrales Grau.');
+    assert.ok(rgb.every(channel => channel >= 200), 'Gesperrter Text bleibt gut lesbar und hell.');
+    assert.ok(await text.evaluate(el => el.classList.contains('text-zinc-300')));
   }
   assert.ok(await locked.evaluate(el => el.classList.contains('border-white/10')));
   assert.equal(await locked.locator('svg.lucide-lock-keyhole').count(), 1);
@@ -359,10 +360,10 @@ async function expectOwnRow(page, rank) {
   const ownBadge = page.getByRole('main').getByText('Du', { exact: true });
   assert.equal(await ownBadge.count(), 1);
   const row = ownBadge.locator('xpath=../../..');
-  assert.ok(await row.evaluate(el => el.classList.contains('border-primary/40')));
-  assert.ok(await row.evaluate(el => el.classList.contains('bg-primary/10')));
-  assert.equal(await row.evaluate(el => getComputedStyle(el).paddingTop), '10px');
-  assert.equal(await row.evaluate(el => getComputedStyle(el).paddingBottom), '10px');
+  assert.ok(await row.evaluate(el => el.classList.contains('border-amber-500/50')));
+  assert.ok(await row.evaluate(el => el.classList.contains('bg-amber-500/15')));
+  assert.equal(await row.evaluate(el => getComputedStyle(el).paddingTop), '8px');
+  assert.equal(await row.evaluate(el => getComputedStyle(el).paddingBottom), '8px');
   if (rank === 1) {
     assert.equal(await row.locator('svg[aria-label="Platz 1"]').count(), 1);
   } else {

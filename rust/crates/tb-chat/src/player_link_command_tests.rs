@@ -2,6 +2,9 @@
 #[tokio::test]
 async fn player_connect_command_only_shares_public_url_no_identity_token() {
     let db = crate::test_postgres::TestPostgres::start().await;
+    // Der echte Dispatcher liest auch bei !connect die kanalbezogenen
+    // Command-Namen. Dieselbe vollständige Test-DDL wie die übrigen Commands.
+    apply_ddl(&db.pool).await;
     let api = MockApi::new();
     let engine = make_engine_with_pool(db.pool.clone(), api.clone());
     assert!(engine.handle(&make_event("!connect", false, false)).await);

@@ -73,7 +73,12 @@ impl RetentionWorker {
             }
             // Die gerenderte Vorschau haengt am selben Clip und muss mitgeloescht
             // werden, sonst bleibt sie nach dem Zeilenloeschen verwaist liegen.
-            if let Some(preview) = clip.preview_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(preview) = clip
+                .preview_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 match tokio::fs::remove_file(preview).await {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

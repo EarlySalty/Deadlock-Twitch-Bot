@@ -1,0 +1,7 @@
+# Normale Konfiguration, keine Geheimnisse. Credential wird von systemd geladen.
+project_id = "2f5df3ca-12e5-4ae1-abf2-ca7fbd841705"
+environment = "prod"
+secret_path = "/"
+credential_path = "/run/user/1000/credentials/deadlock-llm-model-resolver.service/infisical-token"
+infisical_socket = "/run/uplink-infisical/api.sock"
+infisical_socket_owner_uid = 0

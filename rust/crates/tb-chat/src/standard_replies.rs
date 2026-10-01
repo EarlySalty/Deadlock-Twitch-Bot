@@ -640,7 +640,10 @@ mod tests {
             replies.maybe_respond(&zweites, "ch1", false)
         );
 
-        assert!(!a && !b, "Begrüßung bleibt ohne ausdrückliche Aktivierung aus");
+        assert!(
+            !a && !b,
+            "Begrüßung bleibt ohne ausdrückliche Aktivierung aus"
+        );
         assert!(api.sent.lock().unwrap().is_empty());
     }
 

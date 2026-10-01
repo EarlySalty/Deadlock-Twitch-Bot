@@ -455,7 +455,7 @@ async fn main() {
     let config = snapshot.settings();
     // Die Modellpolicy muss mit dem Release ausgeliefert werden. Auch die
     // bestehende --check-config-Probe prüft sie vor dem Laden von Secrets.
-    tb_llm::model_resolver::global().unwrap_or_else(|error| {
+    tb_llm::model_resolver::selected_model().unwrap_or_else(|error| {
         eprintln!("LLM-Konfiguration ungültig: {error}");
         std::process::exit(2);
     });
@@ -473,7 +473,8 @@ async fn main() {
         println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
         return;
     }
-    if !remaining.is_empty() {
+    let migrate_token_storage = remaining == ["--migrate-token-storage", "--apply"];
+    if !remaining.is_empty() && !migrate_token_storage {
         eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
         std::process::exit(2);
     }
@@ -481,7 +482,6 @@ async fn main() {
         .with_max_level(config.logging.level.tracing_level())
         .init();
     tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_BOT_CONFIG_V1");
-    let supervisor = task_supervisor::TaskSupervisor::start();
 
     let settings = snapshot
         .runtime_settings(&|key| std::env::var(key).ok())
@@ -494,6 +494,31 @@ async fn main() {
         tracing::error!("DB-Verbindungsfehler: {e}");
         std::process::exit(1);
     });
+
+    // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
+    let runtime_cipher = FieldCipher::from_env().map(Arc::new);
+    // Expliziter Wartungslauf: keine normalen Writer oder Hintergrundjobs starten.
+    // Die vorhandene Infisical- und Betriebsdatei-Initialisierung bleibt gemeinsam.
+    if migrate_token_storage {
+        let result = match &runtime_cipher {
+            Ok(cipher) => tb_vod_archive::store::migrate_resume_sessions(&pool, cipher)
+                .await
+                .map_err(|_| ()),
+            Err(_) => Err(()),
+        };
+        pool.close().await;
+        match result {
+            Ok(count) => println!(
+                "{count} Upload-Sitzungen umgestellt. Offsets und Videozuordnungen sind erhalten."
+            ),
+            Err(()) => {
+                eprintln!("Token-Migration nicht abgeschlossen. Angehaltene Alt-Writer, Datenbank und Infisical-Schlüssel prüfen.");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    let supervisor = task_supervisor::TaskSupervisor::start();
 
     // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
     // mit kaputtem oder halb migriertem Schema darf der Bot nicht starten.
@@ -509,10 +534,6 @@ async fn main() {
         tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
 
-    supervisor.spawn(
-        "llm_model_refresh",
-        tb_llm::model_resolver::run_refresh_loop(pool.clone()),
-    );
     supervisor.spawn(
         "monthly_effort_raid_boost",
         monthly_raid_boost::run(pool.clone()),
@@ -586,8 +607,13 @@ async fn main() {
         helix.as_ref().clone(),
         pool.clone(),
         config.bot.chat_enabled,
+        runtime_cipher.as_ref().ok().cloned(),
     )
-    .await;
+    .await
+    .unwrap_or_else(|error| {
+        tracing::error!(%error, "Chat-Zugang vorübergehend nicht verfügbar; Dienststart wird erneut versucht");
+        std::process::exit(1);
+    });
     let smalltalk_loop = smalltalk_loop_wiring::start(
         &supervisor,
         pool.clone(),
@@ -862,11 +888,9 @@ async fn main() {
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
-        FieldCipher::from_env(),
+        runtime_cipher,
     ) {
         (Some(manager), Some(helix_client), Ok(cipher)) => {
-            let cipher = Arc::new(cipher);
-
             // Raid-OAuth-Strecke (Welle B): StateStore + AuthWriter +
             // Token-Client zur Composition-Root verdrahten. redirect_uri wie
             // Python (TWITCH_RAID_REDIRECT_URI mit Hardcode-Default,
@@ -1756,14 +1780,20 @@ async fn main() {
                 // laeuft nur zweimal taeglich und bleibt still, solange kein
                 // Kanal eingeschaltet ist. Ohne YouTube-Verbindung laedt er
                 // trotzdem lokal — das Archiv ist der Verlustschutz.
-                let vod_creds =
-                    tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
+                let vod_creds = tb_social_media::credentials::CredentialManager::new(
+                    pool.clone(),
+                    cipher.clone(),
+                );
                 let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
                 vod_config.yt_dlp = yt_dlp_path(snapshot);
-                let vod_archive =
-                    tb_vod_archive::VodArchiveWorker::new(pool.clone(), vod_config, vod_creds);
+                let vod_archive = tb_vod_archive::VodArchiveWorker::new(
+                    pool.clone(),
+                    vod_config,
+                    vod_creds,
+                    cipher,
+                );
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {

@@ -155,6 +155,7 @@ impl HochladerQuelle for StreamerZugang {
 }
 
 pub struct VodArchiveWorker {
+    session_cipher: Arc<tb_crypto::FieldCipher>,
     pool: PgPool,
     config: VodArchiveConfig,
     zugang: Arc<dyn HochladerQuelle>,
@@ -217,8 +218,18 @@ pub fn naechste_aktion(
 }
 
 impl VodArchiveWorker {
-    pub fn new(pool: PgPool, config: VodArchiveConfig, credentials: CredentialManager) -> Self {
-        Self::mit_zugang(pool, config, Arc::new(StreamerZugang { credentials }))
+    pub fn new(
+        pool: PgPool,
+        config: VodArchiveConfig,
+        credentials: CredentialManager,
+        session_cipher: Arc<tb_crypto::FieldCipher>,
+    ) -> Self {
+        Self::mit_zugang(
+            pool,
+            config,
+            Arc::new(StreamerZugang { credentials }),
+            session_cipher,
+        )
     }
 
     /// Wie [`Self::new`], aber mit fertiger Upload-Quelle statt der
@@ -227,8 +238,10 @@ impl VodArchiveWorker {
         pool: PgPool,
         config: VodArchiveConfig,
         zugang: Arc<dyn HochladerQuelle>,
+        session_cipher: Arc<tb_crypto::FieldCipher>,
     ) -> Self {
         Self {
+            session_cipher,
             pool,
             config,
             zugang,
@@ -571,7 +584,7 @@ impl VodArchiveWorker {
             return Ok(());
         };
 
-        let teile = store::teile(&self.pool, vod.id).await?;
+        let teile = store::teile(&self.pool, vod.id, &self.session_cipher).await?;
         if teile.is_empty() {
             // Ein frueherer Lauf ist zwischen `setze_geladen` und `setze_teile`
             // gestorben. Hier "hochgeladen" einzutragen waere eine Luege: bei
@@ -776,7 +789,7 @@ impl VodArchiveWorker {
             &einstellung.privacy,
         );
         let uri = uploader.start_resumable_upload(&metadaten, groesse).await?;
-        store::setze_teil_sitzung(&self.pool, teil.id, &uri, 0).await?;
+        store::setze_teil_sitzung(&self.pool, teil.id, &uri, 0, &self.session_cipher).await?;
         Ok(uri)
     }
 
@@ -883,6 +896,9 @@ fn loesche_dateien(verzeichnis: &Path, twitch_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_cipher() -> tb_crypto::FieldCipher {
+        tb_crypto::FieldCipher::from_hex_key(&"11".repeat(32), "v1").unwrap()
+    }
 
     #[test]
     fn df_ausgabe_wird_gelesen() {
@@ -1189,8 +1205,13 @@ mod tests {
         cfg: VodArchiveConfig,
         hochlader: &Arc<ZaehlenderHochlader>,
     ) -> VodArchiveWorker {
-        VodArchiveWorker::mit_zugang(pool.clone(), cfg, Arc::new(FesteQuelle(hochlader.clone())))
-            .with_runner(Arc::new(WerkzeugAttrappe::neu()))
+        VodArchiveWorker::mit_zugang(
+            pool.clone(),
+            cfg,
+            Arc::new(FesteQuelle(hochlader.clone())),
+            Arc::new(test_cipher()),
+        )
+        .with_runner(Arc::new(WerkzeugAttrappe::neu()))
     }
 
     /// Fund 1: der Upload-Deckel griff nur auf dem reinen Upload-Pfad. Sechs
@@ -1279,7 +1300,7 @@ mod tests {
             "drei Teile duerfen bei einem Deckel von zwei nicht alle laufen"
         );
         assert_eq!(bilanz.hochgeladen, 2);
-        let teile = store::teile(&pool, vod.id).await.unwrap();
+        let teile = store::teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert_eq!(
             teile
                 .iter()
@@ -1320,7 +1341,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(store::teile(&pool, vod.id).await.unwrap().is_empty());
+        assert!(store::teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .is_empty());
 
         let hochlader = Arc::new(ZaehlenderHochlader::default());
         let bilanz = worker(&pool, config(&verzeichnis), &hochlader)
@@ -1386,7 +1410,7 @@ mod tests {
         // Jetzt sammelt YouTube den Upload wieder ein.
         *hochlader.verwerfen.lock().unwrap() = true;
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
-        let teile = store::teile(&pool, vod.id).await.unwrap();
+        let teile = store::teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert_eq!(teile[0].status, store::TEIL_ABGELEHNT);
         assert!(teile[0].upload_session_uri.is_none());
         assert_eq!(teile[0].upload_offset, 0);
@@ -1428,7 +1452,7 @@ mod tests {
             2,
             "nach der Auszeit und ohne neuen Verwerfungsgrund muss erneut hochgeladen werden"
         );
-        let teile = store::teile(&pool, vod.id).await.unwrap();
+        let teile = store::teile(&pool, vod.id, &test_cipher()).await.unwrap();
         assert_eq!(teile[0].status, store::TEIL_FERTIG);
         let offen = store::offene_vods(&pool, "earlysalty", 10).await.unwrap();
         assert_eq!(offen.len(), 0);

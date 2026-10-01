@@ -16,8 +16,8 @@
 //! # Anbieter
 //!
 //! Fireworks verwendet die neueste geprüfte **DeepSeek-Flash-Version** gemäß
-//! `rust/knowledge/llm.yaml`. Die bestehende GLM-Ausnahme für `title_ai` bleibt
-//! separat freigegeben. Ohne Schlüssel oder geprüftes Modell schlägt der
+//! der zentralen lokalen Auswahl. Auch `title_ai` nutzt diese Familie.
+//! Ohne Schlüssel oder geprüftes Modell schlägt der
 //! Connector geschlossen fehl. Modell-ENV-Overrides werden nicht verwendet.
 //!
 //! # Ledger
@@ -32,6 +32,7 @@
 //! Schlüssel kommen ausschließlich aus der Umgebung (Infisical/systemd) über
 //! den konsolidierten Resolver [`keys`] und werden NIE geloggt.
 
+pub mod daily_model_resolver;
 pub mod hub;
 pub mod keys;
 pub mod ledger;

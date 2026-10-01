@@ -767,26 +767,8 @@ pub enum GenerateTitleError {
 
 /// Anwendungsfall in der gemeinsamen Anbieterauswahl.
 const USE_CASE: &str = "title_ai";
-const ZAI_TITLE_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
-const ZAI_TITLE_MODEL: &str = "glm-5.3-flash";
-
-/// Der Titelgenerator darf GLM-5.3-Flash gezielt nutzen, ohne die zentrale
-/// Modellwahl der anderen Twitch-Bot-Anwendungsfaelle zu veraendern. Fehlt der
-/// Z.ai-Key, bleibt Fireworks der sichere Rueckfall.
+// Auch Titel verwenden ausschließlich die gemeinsame geprüfte Flash-Auswahl.
 fn title_endpoint() -> tb_llm::LlmEndpoint {
-    if let Ok(key) = std::env::var("ZAI_API_KEY") {
-        if !key.trim().is_empty() {
-            return tb_llm::LlmEndpoint {
-                provider: "zai",
-                base_url: std::env::var("ZAI_BASE_URL")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| ZAI_TITLE_BASE_URL.to_string()),
-                model: ZAI_TITLE_MODEL.to_string(),
-                api_key: Some(key),
-            };
-        }
-    }
     tb_llm::endpoint_for(USE_CASE)
 }
 
@@ -1241,7 +1223,10 @@ mod tests {
         std::env::set_var("TB_LLM_PROVIDER_TITLE_AI", "llm");
         let endpoint = tb_llm::endpoint_for("title_ai");
         assert_eq!(endpoint.provider, "fireworks");
-        assert_eq!(endpoint.model, tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            endpoint.model,
+            tb_llm::selection::configured_fireworks_model()
+        );
         clear_provider_env();
     }
 

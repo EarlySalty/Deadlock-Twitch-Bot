@@ -14,9 +14,7 @@ impl SttTranscriber {
     pub fn from_default() -> Option<Self> {
         let inner = OpenAiTranscriber::from_env()?;
         if !inner.is_local() {
-            tracing::warn!(
-                "Clip-Transkription: STT-Endpunkt ist nicht loopback, Stage bleibt aus"
-            );
+            tracing::warn!("Clip-Transkription: STT-Endpunkt ist nicht loopback, Stage bleibt aus");
             return None;
         }
         Some(Self { inner })
