@@ -3,61 +3,40 @@ title: Erste Schritte & Zugang
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
-Alles was du wissen musst, um loszulegen — von der Anmeldung bis zum ersten Blick ins Dashboard.
-
 ### Was ist Deutsche Deadlock Community?
 
-Deutsche Deadlock Community ist eine kostenlose Plattform für Deadlock-Streamer auf Twitch. Du bekommst ein Analytics-Dashboard mit Echtzeit-Daten, ein automatisches Raid-Netzwerk, Discord-Automation und KI-gestütztes Coaching — alles an einem Ort.
-
-- Über 30 Deadlock-Streamer nutzen das Netzwerk bereits.
-- Das Dashboard hat 13 Tabs mit detaillierten Auswertungen zu deinem Stream.
-- Du brauchst nur deinen Twitch-Account — keine zusätzliche Registrierung.
+Im Partnernetzwerk unterstützen sich Deadlock-Streamer mit Auto-Raids. Der Bot übernimmt Chat-Schutz und erfasst Stream-Daten für dein Dashboard. Weitere Funktionen und Einstellungen findest du nach dem Verbinden in deinem Streamer-Bereich.
 
 [Onboarding](https://deutsche-deadlock-community.de/twitch/onboarding)
-[Demo Dashboard](https://deutsche-deadlock-community.de/demo/twitch/demo/)
-
-### Wie richte ich OBS für Uplink ein?
-
-Öffne im Dashboard die Uplink-Hilfe und kopiere die SRT-Adresse in OBS. Die [Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/dashboard-v2/uplink/index.html) führt dich durch die Einrichtung und nennt die nächsten Schritte bei Störungen.
 
 ### Wie starte ich?
 
-Klick auf "Bot für deinen Kanal aktivieren" und verbinde deinen Twitch-Kanal mit dem Deadlock-Partnernetzwerk. Danach landest du direkt im Dashboard.
+Verbinde deinen Twitch-Kanal über die Partner-Anmeldung. Twitch zeigt dir die angeforderten Rechte. Im Dashboard prüfst du anschließend die Verbindung und deine Einstellungen. Für Chat-Moderation braucht der Bot die Moderator-Rolle in deinem Kanal. Auto-Raids greifen nach Deadlock-Streams, sofern die Voraussetzungen erfüllt sind.
 
-- Der gesamte Anmeldeprozess dauert weniger als 30 Sekunden.
-- Du brauchst nur deinen bestehenden Twitch-Account.
-- Auto-Raids sind für Deadlock gedacht und greifen nicht bei anderen Spielen.
+[Partner werden](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
 
-[Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
+### Wie richte ich OBS für Uplink ein?
 
-### Kostet Deutsche Deadlock Community etwas?
+Öffne die Uplink-Hilfe im Dashboard. In OBS wählst du Benutzerdefiniert und übernimmst die RTMPS-Serveradresse und den privaten Uplink-Schlüssel in die getrennten Felder. Die Hilfe erklärt auch Ausgabe und Tonspuren.
 
-Nein, du kannst kostenlos loslegen. Alle Kern-Features wie Analytics, Auto-Raid und Discord-Automation sind ohne Abo nutzbar.
+[Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/dashboard-v2/uplink/index.html)
 
-- Es gibt kein Pflicht-Abo, um die Plattform zu nutzen.
-- Premium-Features kannst du später im Dashboard entdecken, falls du möchtest.
-- Du wirst nie ungefragt in ein kostenpflichtiges Abo gesteckt.
+### Kostet die Partnerschaft etwas?
 
-### Warum sollte ich dem Discord beitreten?
+Netzwerk Free ist kostenlos. Netzwerk Plus ergänzt den vollen Analytics-Verlauf, KI-Auswertungen, werbefreien Chat und Raid-Vorrang. Du entscheidest im Dashboard, ob du einen angebotenen Bezahlplan buchen möchtest.
 
-Der Discord ist deine beste Quelle für kostenlose Reichweite. Sobald du live gehst, erscheint automatisch ein Go-Live-Post — alle Community-Mitglieder sehen, dass du streamst.
+### Wo finde ich die Community?
 
-- Go-Live-Posts werden automatisch gepostet, wenn du live gehst — ohne dass du etwas tun musst.
-- Es gibt einen eigenen Streamer-Bereich mit exklusiven Infos und direktem Austausch.
-- Pro-Tipp: Zock mit der Community! Wer mit anderen Deadlock-Spielern unterwegs ist, baut sich organisch eine treue Zuschauerschaft auf.
+Im Discord findest du andere Deadlock-Spieler und den Support. Dort können auch Go-Live-Posts der Partner erscheinen.
 
 [Discord beitreten](https://discord.gg/z5TfVHuQq2)
 
 ### Gibt es eine Demo?
 
-Ja! Es gibt ein öffentliches Demo-Dashboard, in dem du dir alle Features anschauen kannst, bevor du dich anmeldest. Kein Login nötig.
-
-- Die Demo zeigt echte Dashboard-Funktionen mit Beispieldaten.
-- Du siehst alle 13 Tabs und kannst die Oberfläche frei erkunden.
-- Ideal, um dir ein Bild zu machen, bevor du deinen eigenen Account verbindest.
+Das Demo-Dashboard zeigt Ansichten mit Beispieldaten. Es ersetzt weder deine eigenen Stream-Daten noch eine erfolgreiche Verbindung deines Kontos.
 
 [Demo Dashboard](https://deutsche-deadlock-community.de/demo/twitch/demo/)

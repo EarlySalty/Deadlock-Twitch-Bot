@@ -3,71 +3,44 @@ title: Was macht der Bot eigentlich?
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
-Die wichtigsten Aufgaben des Bots auf einen Blick — was er für dich erledigt und was nicht.
+### Welche Aufgaben übernimmt der Bot?
 
-### Welche Hauptaufgaben übernimmt der Bot für mich?
+Der Bot prüft beim Ende eines Deadlock-Streams, ob er die Zuschauer an einen geeigneten Live-Partner weiterleiten kann. Er moderiert Werbe- und Scam-Nachrichten, erfasst Stream-Zahlen und sendet bei erfüllten Voraussetzungen Community-Hinweise. Im Dashboard stellst du Kanalschalter und optionale Funktionen ein.
 
-Der Bot kümmert sich um fünf Dinge: Er leitet beim Stream-Ende deine Zuschauer automatisch an einen live Deadlock-Partner weiter (Auto-Raid), hält automatisch nervige Werbe-Bots aus deinem Chat (die dir mehr Viewer oder Follower verkaufen wollen), trackt deine Stream-Zahlen für dein Dashboard, schickt bei Bedarf eine dezente Discord-Einladung in deinen Chat und bringt optionale Extras wie Lurker-Erinnerungen oder KI-Stream-Reports mit.
-
-- Auto-Raid läuft ohne Setup — der Bot wählt den passenden Partner aus.
-- Die Chat-Moderation gegen diese Werbe-Bots läuft automatisch im Hintergrund, ohne dass du Filterlisten oder Befehle pflegen musst.
-- Analytics werden im Hintergrund erfasst, du musst nichts konfigurieren.
-- Chat-Werbung kannst du im Dashboard steuern oder mit dem Werbefrei-Plan komplett abschalten.
-- Stream-Reports (KI) und Lurker-Tax sind optionale Premium-Features.
+KI-Auswertungen, werbefreier Chat, Raid-Vorrang und Lurker-Erinnerungen gehören zu Netzwerk Plus.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
 ### Wie funktioniert Uplink?
 
-Uplink nimmt deinen OBS-Stream entgegen und schickt ihn an die verbundenen Plattformen. Start und Stop machst du in OBS. Die [Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/dashboard-v2/uplink/index.html) erklärt den Ablauf und die Einrichtung.
+Uplink nimmt deinen OBS-Stream entgegen und schickt ihn an die verbundenen Plattformen. Start und Stopp machst du in OBS. Die Uplink-Hilfe erklärt die RTMPS-Verbindung, Ausgabe und Tonspuren.
 
-### Moderiert der Bot auch meinen Chat?
+[Uplink-Hilfe](https://deutsche-deadlock-community.de/twitch/dashboard-v2/uplink/index.html)
 
-Ja. Der Bot räumt automatisch die nervigen Werbe-Bots aus dem Chat, die dir mehr Viewer oder Follower verkaufen wollen — die kennt jeder Streamer, und sie sehen im Chat einfach mies aus. Das läuft im Hintergrund, ohne dass du Wörter sperren oder Mod-Regeln pflegen musst.
+### Moderiert der Bot meinen Chat?
 
-- Erkennt gezielt diese Werbe-Bots, nicht pauschal alles — normale Chatter und Links bleiben unangetastet.
-- Anders als klassische Mod-Bots (Nightbot & Co.) musst du keine Befehle oder Filterlisten einrichten.
-- Auf Treffsicherheit ausgelegt: ein versehentlicher Bann ist praktisch ausgeschlossen.
-- Die Moderation ist aktiv, sobald dein Kanal verbunden ist — unabhängig davon, welches Spiel du gerade streamst.
+Der Bot prüft Nachrichten auf Werbe- und Scam-Signale. Die Moderation arbeitet unabhängig von der Spielkategorie. Sie braucht die erforderlichen Twitch-Rechte und die Moderator-Rolle. Regeln, gelernte Phrasen und bei Bedarf eine KI-Bewertung helfen bei der Erkennung.
 
-### Welche Rechte braucht der Bot in meinem Kanal?
+Fehlentscheidungen sind möglich. Broadcaster und Mods können den letzten gespeicherten Auto-Ban mit `!unban` oder `!uban` zurücknehmen. `!explain` erklärt einen vorhandenen Scam-Befund.
 
-Der Bot meldet sich per Twitch-Login an und fordert nur die Rechte an, die seine einzelnen Funktionen brauchen. Auto-Raid, Clips und optionale Chatter-Auswertungen verwenden getrennte, zweckgebundene Twitch-Berechtigungen; die Moderator-Rolle des Bot-Accounts ist für konkrete Chat-Aktionen nötig.
+### Welche Rechte braucht der Bot?
 
-- Du autorisierst den Bot über deinen Twitch-Account — kein extra Passwort.
-- Als Mod kann der Bot Ankündigungen senden und erkannte Werbe-Bots entfernen. Ohne diese Rolle funktionieren diese Chat-Aktionen nicht.
-- Du kannst die Verbindung jederzeit in deinen Twitch-Einstellungen widerrufen.
-
-[Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
+Twitch zeigt dir beim Verbinden die angeforderten Rechte. Auto-Raids, Clips und Chatter-Auswertungen benötigen die passenden Freigaben. Die Moderator-Rolle erlaubt konkrete Chat-Aktionen. Im Dashboard prüfst du, ob die Verbindung und die Rechte für eine Funktion vorhanden sind.
 
 ### Was passiert, wenn ich kein Deadlock mehr streame?
 
-Streamst du zwei Monate lang kein Deadlock, gibt der Bot seine Moderator-Rechte in deinem Kanal von allein ab. Deine Partnerschaft und deine Einstellungen bleiben dabei bestehen. Streamst du wieder Deadlock, moddet er sich automatisch zurück, ohne dass du etwas tun musst.
-
-- Du bekommst eine Discord-Nachricht, wenn der Bot sich entmoddet. Kommt er später zurück, läuft das still im Hintergrund.
-- Voraussetzung fürs Zurückkommen ist eine gültige Twitch-Verbindung; ist die abgelaufen, verbinde deinen Kanal einmal neu.
-- Willst du dauerhaft aufhören, trenn den Bot lieber ganz: das geht im Dashboard unter Bot-Einstellungen.
+Nach zwei Monaten ohne Deadlock gibt der Bot seine Moderator-Rolle ab. Partnerschaft und Einstellungen bleiben erhalten. Für die automatische Rückkehr bei einem neuen Deadlock-Stream braucht er eine gültige Twitch-Verbindung. Falls sie fehlt, verbinde deinen Kanal neu. Möchtest du ganz aufhören, trenne den Bot in den Bot-Einstellungen.
 
 [Bot-Einstellungen](https://deutsche-deadlock-community.de/twitch/verwaltung#bot)
 
 ### Was passiert, wenn ich offline bin?
 
-Der Bot bleibt erreichbar, schickt aber keine Chat-Aktionen mehr — Werbung, Lurker-Erinnerungen und ähnliches greifen nur, wenn dein Stream läuft. Sobald dein Stream endet, prüft der Bot, ob er deine Zuschauer per Auto-Raid weiterleiten kann.
+Werbung und Lurker-Erinnerungen setzen einen laufenden Stream voraus. Einige Chat-Befehle und die Moderation sind auch offline verfügbar. Beim Stream-Ende prüft der Bot die Auto-Raid-Voraussetzungen. Die erfassten Analytics bleiben entsprechend deinem Zugang im Dashboard abrufbar.
 
-- Während du offline bist, ruhen alle Chat-Trigger.
-- Der Auto-Raid wird genau einmal pro Stream-Ende ausgelöst.
-- Deine Analytics-Daten werden weiter im Dashboard zugänglich gemacht.
+### Wo sehe ich Aktionen und Einstellungen?
 
-### Bekomme ich mit, was der Bot in meinem Chat sendet?
-
-Ja — jede vom Bot gesendete Nachricht steht klar erkennbar in deinem Chat mit dem Bot-Account als Absender. Im Dashboard kannst du außerdem die letzten Aktivitäten einsehen und ggf. Werbung deaktivieren oder den Text anpassen.
-
-- Alle Bot-Nachrichten laufen unter einem dedizierten Bot-Account.
-- Im Dashboard siehst du jüngste Aktionen und kannst Einstellungen ändern.
-- Mit dem Werbefrei-Plan unterbindest du die Discord-Einladungen komplett.
-
-[Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
+Bot-Nachrichten erscheinen unter dem Bot-Account im Chat. Im Dashboard findest du Aktivitäten und Einstellungen. Netzwerk Plus enthält den werbefreien Chat und unterbindet die Community-Werbung des Bots.

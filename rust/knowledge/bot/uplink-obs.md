@@ -3,7 +3,7 @@ title: "Uplink: OBS einrichten"
 namespace: bot
 category: setup
 audience: streamer
-last_updated: 2026-09-12
+last_updated: 2026-10-02
 source: Uplink-Dashboard
 tip_eligible: false
 ---
@@ -28,7 +28,7 @@ Für Twitch verwendet Uplink immer zwei getrennte OBS-Mischungen: **OBS-Spur 1 i
 
 Wenn **Twitch-VOD-Spur** unter Einstellungen → Ausgabe → Erweitert → Stream bereits sichtbar ist, ist keine Dateiänderung nötig. Setze dann direkt den normalen Audiotrack auf **1** und Twitch-VOD-Spur auf **2**.
 
-Fehlt das Feld, OBS vollständig beenden – auch im Infobereich/Tray – und `user.ini` öffnen. Unter Windows: **Win + R** drücken, `%APPDATA%\obs-studio` eingeben, Enter drücken und `user.ini` mit einem Texteditor öffnen. Standardpfade:
+Fehlt das Feld, OBS vollständig beenden, auch im Infobereich/Tray, und `user.ini` öffnen. Unter Windows: **Win + R** drücken, `%APPDATA%\obs-studio` eingeben, Enter drücken und `user.ini` mit einem Texteditor öffnen. Standardpfade:
 
 - Windows: `%APPDATA%\obs-studio\user.ini`
 - macOS: `~/Library/Application Support/obs-studio/user.ini`

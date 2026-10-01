@@ -3,46 +3,28 @@ title: Community, Discord & Netzwerk
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
-Discord-Automation, Chat-Commands, Affiliate-Links und alles was die Community zusammenhält.
-
 ### Wie funktionieren die Go-Live-Posts?
 
-Sobald du auf Twitch live gehst, postet der Bot automatisch eine Benachrichtigung im Discord. Alle Community-Mitglieder sehen sofort, dass du streamst — ohne dass du selbst etwas tun musst.
-
-- Die Posts enthalten deinen Stream-Titel, das Spiel und einen direkten Link zu deinem Stream.
-- Du musst nichts konfigurieren — die Posts erscheinen automatisch.
-- Das gibt dir kostenlose Reichweite bei jedem einzelnen Stream.
+Der Bot kann deinen Stream im Community-Discord ankündigen. Die Nachricht enthält den Stream-Titel und einen Link zum Kanal. Ob ein Post erscheint, hängt von der gültigen Verbindung und den Voraussetzungen der Ankündigung ab. Ein Post garantiert keine Benachrichtigung jedes Discord-Mitglieds.
 
 [Discord beitreten](https://discord.gg/z5TfVHuQq2)
 
-### Welche Chat-Commands gibt es?
+### Welche Chat-Befehle gibt es?
 
-Der wichtigste Command ist !twl — er zeigt deinen Zuschauern, welche anderen Deadlock-Streamer gerade live sind. So können Viewer zwischen Streams wechseln und das Netzwerk wächst.
-
-- !twl listet alle aktuell live streamenden Partner im Deadlock-Netzwerk.
-- Der Command funktioniert in jedem Twitch-Chat, in dem der Bot aktiv ist.
-- Weitere Commands werden laufend ergänzt.
+Mit `!commands` bekommst du den Link zur aktuellen Befehlsübersicht. `!help <thema>` verlinkt die passende Hilfe. Für Deadlock-Statistiken gibt es unter anderem `!rank`, `!wins` und `!lastmatch`; mit `!connect` verbindest du Twitch und Steam. Die Voraussetzungen und Kanalschalter stehen in der Befehlsübersicht.
 
 ### Was ist das Affiliate-System?
 
-Du kannst im Dashboard eigene Affiliate-Links erstellen und deren Klicks in Echtzeit tracken. Ideal, um Produkte oder Services zu bewerben und den Erfolg direkt zu messen.
-
-- Erstelle Links direkt im Dashboard — kein externes Tool nötig.
-- Klick-Statistiken zeigen dir, welche Links am besten performen.
-- Du kannst Links jederzeit bearbeiten, pausieren oder löschen.
+Das Vertriebler-Programm ordnet geworbene Streamer einem Affiliate zu. Bei einer bezahlten Streamer-Rechnung wird die Provision mit dem für das Affiliate-Konto hinterlegten Satz berechnet. Der Standardsatz beträgt 30 %. Die Auszahlung erfolgt über Stripe Connect; ohne verbundenes Auszahlungskonto gelten die Grenzen für offene Provisionen.
 
 [Affiliate](https://deutsche-deadlock-community.de/twitch/affiliate)
 
-### Was ist das Viewer-Leaderboard?
+### Was zeigt die Zuschauer-Auswertung?
 
-Das Leaderboard zeigt dir, wer deine treuesten Zuschauer sind. Es trackt, wie oft und wie lange Viewer in deinem Stream sind, und erstellt daraus ein Ranking.
-
-- Erkenne deine loyalsten Community-Mitglieder auf einen Blick.
-- Das Leaderboard basiert auf echten Viewing-Daten, nicht auf Chat-Aktivität allein.
-- Ein tolles Tool, um deine Community besser kennenzulernen und wertzuschätzen.
+Die Auswertung zeigt erfasste Anwesenheiten und Chat-Aktivität. Daraus lassen sich häufige Besucher und aktive Chatter erkennen. Die erfasste Anwesenheit ist keine lückenlose Messung der tatsächlichen Sehzeit.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)

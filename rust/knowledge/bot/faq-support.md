@@ -3,7 +3,7 @@ title: Hilfe, Konto & Rechtliches
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
@@ -11,10 +11,10 @@ Antworten zu Support, Account-Verwaltung und rechtlichen Informationen.
 
 ### Wo bekomme ich Hilfe?
 
-Der schnellste Weg ist der Discord — dort gibt es einen Support-Bereich, in dem dir direkt geholfen wird. Alternativ findest du Antworten in dieser FAQ oder im Onboarding.
+Im Discord findest du den Support-Bereich. Alternativ findest du Antworten in dieser FAQ oder im Onboarding.
 
 - Im Discord antworten erfahrene Community-Mitglieder und das Team.
-- Die FAQ deckt die häufigsten Fragen ab — nutze die Suche oben.
+- In der FAQ kannst du nach häufigen Fragen suchen.
 - Das Onboarding erklärt den Einstieg Schritt für Schritt.
 
 [Discord beitreten](https://discord.gg/z5TfVHuQq2)
@@ -33,7 +33,7 @@ Der saubere Weg führt über das Dashboard: unter Bot-Einstellungen sitzt ganz u
 
 ### Wo finde ich Impressum, Datenschutz und AGB?
 
-Impressum, Datenschutzerklärung und AGB sind öffentlich auf der Website verfügbar — kein Login nötig.
+Impressum, Datenschutzerklärung und AGB sind öffentlich auf der Website verfügbar und benötigen keinen Login.
 
 - Alle rechtlichen Dokumente sind jederzeit ohne Anmeldung einsehbar.
 - Die Links findest du auch im Footer jeder Seite.
