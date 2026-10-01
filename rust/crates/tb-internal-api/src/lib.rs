@@ -70,7 +70,7 @@ pub fn build_internal_router(
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
-        chat_command, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
+        chat_command, community_points, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
         partner_signup_block, python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all,
         scam_guard, self_explainer_log, session_detail, spam_learning, stats_native,
         streamer_analytics_native, streamer_link, streamers, telemetry_routes,
@@ -95,6 +95,16 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/streamer-invites"),
             get(discord_invite::list_all_handler),
+        )
+        // Community-Punkte (Paket B der Community-Streamer-Brücke): reine
+        // Lese-Endpunkte für den Sync in Deadlock-Bots, Cursor `updated_since`.
+        .route(
+            &format!("{base}/community-points/viewers"),
+            get(community_points::viewers_handler),
+        )
+        .route(
+            &format!("{base}/community-points/streamers"),
+            get(community_points::streamers_handler),
         )
         .route(&format!("{base}/chat/command"), post(chat_command::handler))
         .route(&format!("{base}/globalban"), get(global_ban::list_handler))

@@ -17,6 +17,7 @@ mod category_followers;
 mod chat_typen_wiring;
 mod chat_wiring;
 mod chatters_wiring;
+mod community_points_wiring;
 mod confirm_resolver;
 mod crew_archive;
 mod eventsub_hooks;
@@ -2007,6 +2008,10 @@ async fn main() {
     }
 
     irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone(), irc_lurker_tracker);
+
+    // Community-Punkte (Community-Streamer-Brücke, Paket B): Tageswerte alle
+    // 5 Minuten idempotent aus Presence-Ticks, Chat und Raids neu berechnen.
+    community_points_wiring::spawn_community_points_aggregation(&supervisor, pool.clone());
 
     let addr = SocketAddr::new(config.internal_api.host, port);
     let token = settings.internal_api.token.clone();

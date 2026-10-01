@@ -3892,6 +3892,7 @@ dependencies = [
  "tb-analytics",
  "tb-chat",
  "tb-config",
+ "tb-db",
  "tb-domain",
  "tb-error",
  "tb-http-core",
