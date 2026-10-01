@@ -145,6 +145,12 @@ const RUECKGRIFF_RUNDEN: u32 =
 
 pub struct OptionalWebSocketUpgrade(Option<WebSocketUpgrade>);
 
+impl OptionalWebSocketUpgrade {
+    pub fn into_inner(self) -> Option<WebSocketUpgrade> {
+        self.0
+    }
+}
+
 impl<S> FromRequestParts<S> for OptionalWebSocketUpgrade
 where
     S: Send + Sync,

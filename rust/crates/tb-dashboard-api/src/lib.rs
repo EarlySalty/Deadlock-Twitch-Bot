@@ -619,15 +619,15 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(uplink::cast_source_create_handler),
         )
         .route(
-            "/twitch/api/v2/uplink/cast/sources/:source_id/rotate",
+            "/twitch/api/v2/uplink/cast/sources/{source_id}/rotate",
             post(uplink::cast_source_rotate_handler),
         )
         .route(
-            "/twitch/api/v2/uplink/cast/sources/:source_id/preview",
+            "/twitch/api/v2/uplink/cast/sources/{source_id}/preview",
             get(uplink::cast_preview_ws_handler),
         )
         .route(
-            "/twitch/api/v2/uplink/cast/sources/:source_id",
+            "/twitch/api/v2/uplink/cast/sources/{source_id}",
             axum::routing::delete(uplink::cast_source_delete_handler),
         )
         .route(
@@ -635,7 +635,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(uplink::cast_scene_create_handler),
         )
         .route(
-            "/twitch/api/v2/uplink/cast/scenes/:scene_id",
+            "/twitch/api/v2/uplink/cast/scenes/{scene_id}",
             axum::routing::delete(uplink::cast_scene_delete_handler),
         )
         .route(

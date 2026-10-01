@@ -7,7 +7,7 @@
 use axum::{
     extract::{
         Extension, Path, State,
-        ws::{Message as BrowserMessage, WebSocket, WebSocketUpgrade},
+        ws::{Message as BrowserMessage, WebSocket},
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
 use crate::auth::{level::DashboardAuthLevel, require_admin, session::DashboardAuthState};
+use crate::obs::ws::OptionalWebSocketUpgrade;
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -586,7 +587,7 @@ async fn proxy_cast_preview(
             message = upstream_rx.next() => {
                 match message {
                     Some(Ok(UpstreamMessage::Binary(bytes))) => {
-                        if browser_tx.send(BrowserMessage::Binary(bytes.to_vec())).await.is_err() {
+                        if browser_tx.send(BrowserMessage::Binary(bytes)).await.is_err() {
                             break;
                         }
                     }
@@ -620,7 +621,7 @@ pub async fn cast_preview_ws_handler(
     auth: DashboardAuthLevel,
     headers: HeaderMap,
     Path(source_id): Path<u64>,
-    upgrade: Option<WebSocketUpgrade>,
+    upgrade: OptionalWebSocketUpgrade,
 ) -> Response {
     let id = match partner_id(&pool, &auth).await {
         Ok(id) => id,
@@ -632,7 +633,7 @@ pub async fn cast_preview_ws_handler(
     if source_id == 0 {
         return fehler(StatusCode::BAD_REQUEST, "Quellenidentität ist ungültig.");
     }
-    let Some(upgrade) = upgrade else {
+    let Some(upgrade) = upgrade.into_inner() else {
         return fehler(
             StatusCode::UPGRADE_REQUIRED,
             "Dieser Endpunkt spricht nur WebSocket.",
