@@ -1,0 +1,1 @@
+OK: Zeitraum 7d, Tage-Enter 120, Sprachwechsel DE/EN, dunkle Schrift im aktiven Tage-Feld, Hilfe öffnen, Home-Navigation mit Variantenerhalt; keine API-Aufrufe. Geprüft auf http://v50671-kde:4187/analyse?gold=champagne.

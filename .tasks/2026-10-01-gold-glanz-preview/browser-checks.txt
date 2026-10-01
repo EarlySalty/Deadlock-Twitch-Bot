@@ -1,0 +1,11 @@
+analyse/original: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+analyse/polished: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+analyse/champagne: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+analyse/antique: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+dashboard/original: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+dashboard/polished: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+dashboard/champagne: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+dashboard/antique: OK, keine API-Aufrufe, keine Browserfehler, kein horizontaler Überlauf
+analyse/polished-mobile: OK, kein horizontaler Überlauf
+dashboard/polished-mobile: OK, kein horizontaler Überlauf
+Statusfarben, Diagrammfarben, Markentokens und Seitenhintergrund in allen Varianten identisch.
