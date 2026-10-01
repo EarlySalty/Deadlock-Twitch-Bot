@@ -12,7 +12,7 @@ Den ursprünglichen Auftrag des Branches `feat/coaching-context-pitch` abschlie�
 - Kein passender offener Coaching-PR gefunden. Die temporäre Regression-Patchdatei gehört laut Dateieigentümer `nathanael` und benennt denselben Testpfad, lässt sich auf dem Source-Head aber nicht anwenden. Sie bleibt unangetastet.
 
 ## Grenzen
-Nur auftragsbezogene Änderungen im isolierten Branch. Keine Secrets/ENV lesen, keine fremden Source-Worktrees verändern, keine Builds oder schweren Cargo-Checks bis zur Ressourcenfreigabe. Keine Integration oder Produktionsaktion während des TokenDB-Holds.
+Nur auftragsbezogene Änderungen im isolierten Branch. Keine Secrets/ENV lesen und keine fremden Worktrees verändern. Schwere Checks/Builds seriell unter `/tmp/deadlock-cargo-release.lock` und nur bei freiem Lock und ausreichendem RAM. Vor Deploy prüfen, ob der stets gestartete Migrator ausstehende TokenDB-Migrationen anwenden könnte; TokenDB-Owner bleibt exklusiv für seine Runtimeänderungen.
 
 ## Abschlusskriterien
 Lokales Review-Gate aufgerufen, unabhängige Intent-Abnahme organisiert, Statusdatei aktualisiert. Gate-Deny wird nicht umgangen.
