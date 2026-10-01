@@ -388,6 +388,15 @@ fn build_lurker_pitch_text(chatter_login: &str, invite: &str) -> String {
         .replace("{chatter}", chatter_login)
         .replace("{invite}", invite)
 }
+
+fn next_unpitched_lurker<'a>(
+    candidates: &'a [(String, String)],
+    pitched_keys: &HashSet<String>,
+) -> Option<&'a (String, String)> {
+    candidates
+        .iter()
+        .find(|(_, identity_key)| !pitched_keys.contains(identity_key))
+}
 /// MiniMax-Timeout in Sekunden (targeted_promo.py:37: _MINIMAX_TIMEOUT_SEC).
 const MINIMAX_TIMEOUT_SEC: u64 = 5;
 /// Keine Promo in den ersten N Minuten nach Go-Live (constants.py: PROMO_STREAM_START_DELAY_MIN).
@@ -2605,7 +2614,7 @@ impl PromoEngine {
         // Bereits in dieser Session erwähnte Lurker rausfiltern, dann auf MAX kappen
         // (nächstrangige rücken nach). Set wird bei Session-Wechsel geräumt.
         // Einträge sind (chatter_login, chatter_identity_key).
-        let selected: Vec<(String, String)> = {
+        let (selected, pitch_candidates): (Vec<(String, String)>, Vec<(String, String)>) = {
             let state_ref = self
                 .channel_states
                 .entry(login.to_string())
@@ -2614,12 +2623,17 @@ impl PromoEngine {
             if state.lurker_mentions.0 != session_id {
                 state.lurker_mentions = (session_id, HashSet::new());
             }
-            candidates
+            let pitch_candidates: Vec<(String, String)> = candidates
                 .iter()
                 .filter(|c| !state.lurker_mentions.1.contains(&c.0))
+                .cloned()
+                .collect();
+            let selected = pitch_candidates
+                .iter()
                 .take(LURKER_TAX_MAX_MENTIONS)
                 .cloned()
-                .collect()
+                .collect();
+            (selected, pitch_candidates)
         };
         if selected.is_empty() {
             return;
@@ -2630,41 +2644,54 @@ impl PromoEngine {
         // Trifft jeder Kandidat schon im Log zu, fällt der Pfad unten auf die
         // bestehende Channel-Points-Erinnerung zurück.
         if pitch_enabled && is_own_channel {
-            let keys: Vec<String> = selected.iter().map(|(_, key)| key.clone()).collect();
-            let pitched = self.already_pitched_keys(channel_id, &keys).await;
-            if let Some((chatter_login, identity_key)) =
-                selected.iter().find(|(_, key)| !pitched.contains(key))
-            {
-                let (invite, _) = self.invite_resolver.resolve_invite(login).await;
-                let text = build_lurker_pitch_text(chatter_login, &invite);
-                let sent = self
-                    .api
-                    .send_announcement(channel_id, &text, "orange")
-                    .await
-                    .unwrap_or(false);
-                if !sent {
+            let keys: Vec<String> = pitch_candidates.iter().map(|(_, key)| key.clone()).collect();
+            if let Some(pitched) = self.already_pitched_keys(channel_id, &keys).await {
+                if let Some((chatter_login, identity_key)) =
+                    next_unpitched_lurker(&pitch_candidates, &pitched)
+                {
+                    let (invite, _) = self.invite_resolver.resolve_invite(login).await;
+                    let text = build_lurker_pitch_text(chatter_login, &invite);
+                    let sent = match self
+                        .api
+                        .send_announcement(channel_id, &text, "orange")
+                        .await
+                    {
+                        Ok(sent) => sent,
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                login,
+                                channel_id,
+                                chatter = %chatter_login,
+                                "Lurker-Discord-Pitch konnte nicht gesendet werden"
+                            );
+                            false
+                        }
+                    };
+                    if !sent {
+                        return;
+                    }
+                    {
+                        let state_ref = self
+                            .channel_states
+                            .entry(login.to_string())
+                            .or_insert_with(|| Mutex::new(ChannelState::new()));
+                        let mut state = state_ref.lock().await;
+                        if state.lurker_mentions.0 == session_id {
+                            state.lurker_mentions.1.insert(chatter_login.clone());
+                        }
+                    }
+                    self.log_lurker_pitch(channel_id, chatter_login, identity_key)
+                        .await;
+                    self.mark_promo_sent(login, now, "lurker_pitch", Utc::now().timestamp() as f64)
+                        .await;
+                    info!(
+                        login,
+                        chatter = %chatter_login,
+                        "Lurker-Discord-Pitch gesendet (Erstansprache)"
+                    );
                     return;
                 }
-                {
-                    let state_ref = self
-                        .channel_states
-                        .entry(login.to_string())
-                        .or_insert_with(|| Mutex::new(ChannelState::new()));
-                    let mut state = state_ref.lock().await;
-                    if state.lurker_mentions.0 == session_id {
-                        state.lurker_mentions.1.insert(chatter_login.clone());
-                    }
-                }
-                self.log_lurker_pitch(channel_id, chatter_login, identity_key)
-                    .await;
-                self.mark_promo_sent(login, now, "lurker_pitch", Utc::now().timestamp() as f64)
-                    .await;
-                info!(
-                    login,
-                    chatter = %chatter_login,
-                    "Lurker-Discord-Pitch gesendet (Erstansprache)"
-                );
-                return;
             }
         }
 
@@ -2857,11 +2884,15 @@ impl PromoEngine {
 
     /// Bereits gepitchte Identity-Keys für diesen Kanal aus dem Nie-wieder-Log
     /// (Contract REQ-2: je Person genau einmal immer).
-    async fn already_pitched_keys(&self, broadcaster_id: &str, keys: &[String]) -> HashSet<String> {
+    async fn already_pitched_keys(
+        &self,
+        broadcaster_id: &str,
+        keys: &[String],
+    ) -> Option<HashSet<String>> {
         if keys.is_empty() {
-            return HashSet::new();
+            return Some(HashSet::new());
         }
-        sqlx::query_scalar::<_, String>(
+        match sqlx::query_scalar::<_, String>(
             "SELECT chatter_identity_key FROM twitch_lurker_pitch_log
               WHERE twitch_user_id = $1 AND chatter_identity_key = ANY($2)",
         )
@@ -2869,9 +2900,13 @@ impl PromoEngine {
         .bind(keys)
         .fetch_all(&self.pool)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+        {
+            Ok(rows) => Some(rows.into_iter().collect()),
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Lurker-Pitch-Log-Abfrage fehlgeschlagen");
+                None
+            }
+        }
     }
 
     /// Pitch dauerhaft vermerken. Konflikt (gleicher Key schon geloggt) ist
@@ -3964,6 +3999,31 @@ mod tests {
             "Platzhalter nicht ersetzt"
         );
         assert!(!hat_gedankenstrich(text.as_str()), "Gedankenstrich in Pitch-Text");
+    }
+
+    #[test]
+    fn lurker_pitch_waehlt_erstes_nicht_bereits_gepitchtes_publikum() {
+        let candidates = vec![
+            ("lurker1".to_string(), "id:1".to_string()),
+            ("lurker2".to_string(), "id:2".to_string()),
+            ("lurker3".to_string(), "id:3".to_string()),
+        ];
+        let pitched = ["id:1".to_string(), "id:2".to_string()]
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            next_unpitched_lurker(&candidates, &pitched).map(|(login, _)| login.as_str()),
+            Some("lurker3")
+        );
+    }
+
+    #[test]
+    fn lurker_pitch_ohne_neuen_kandidaten_faellt_zurueck() {
+        let candidates = vec![("lurker1".to_string(), "id:1".to_string())];
+        let pitched = ["id:1".to_string()].into_iter().collect();
+
+        assert!(next_unpitched_lurker(&candidates, &pitched).is_none());
     }
 
     #[tokio::test]
