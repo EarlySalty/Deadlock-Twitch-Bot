@@ -3,51 +3,26 @@ title: Dashboard & Analytics
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
-Alles über dein persönliches Analytics-Dashboard — von Viewer-Trends bis KI-Empfehlungen.
-
 ### Was zeigt mir das Dashboard?
 
-Dein Dashboard ist dein persönliches Cockpit mit 13 Tabs: Viewer-Trends, Heatmaps, Session-Details, Streamer-Rankings, Zuschauer-Segmente, Chat-Analysen und vieles mehr.
-
-- Die Overview zeigt dir die wichtigsten Kennzahlen auf einen Blick.
-- Heatmaps verraten dir, an welchen Tagen und zu welchen Uhrzeiten dein Stream am besten performt.
-- Session-Details schlüsseln jeden einzelnen Stream nach Viewern, Dauer und Verlauf auf.
-- Rankings zeigen dir, wo du im Vergleich zu anderen Deadlock-Streamern stehst.
+Im Dashboard findest du Stream-Zahlen, Zeitverläufe, Session-Details und Auswertungen zu Zuschauern, Chat und Raids. Welche Ansichten und Zeiträume du nutzen kannst, hängt vom Plan und den vorhandenen Daten ab. Netzwerk Free zeigt die Tagesform des letzten Streams; Netzwerk Plus ergänzt den vollen Verlauf und Zeitraumvergleiche.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
-[Demo](https://deutsche-deadlock-community.de/demo/twitch/demo/)
 
 ### Wie aktuell sind die Daten?
 
-Die Viewer-Daten werden alle 15 Sekunden aktualisiert. Dein Dashboard zeigt dir also nahezu in Echtzeit, was in deinem Stream passiert.
-
-- Viewer-Zahlen werden im 15-Sekunden-Takt erfasst und gespeichert.
-- Session-Daten werden automatisch nach Stream-Ende zusammengefasst.
-- Historische Daten stehen dir dauerhaft zur Verfügung — nichts wird gelöscht.
-
-[Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
+Die Erfassung läuft regelmäßig. Der Standardabstand der Stream-Abfrage beträgt 15 Sekunden und ist einstellbar. Das ist keine Garantie, dass jede Ansicht alle 15 Sekunden neue Daten zeigt: Twitch-Antworten, Verarbeitung und die Aktualisierung der jeweiligen Ansicht kommen hinzu. Nach Stream-Ende werden Session-Daten zusammengefasst.
 
 ### Kann ich mich mit anderen Streamern vergleichen?
 
-Ja! Das Ranking-System zeigt dir, wo du im Deadlock-Streamer-Netzwerk stehst. Du kannst deine Zahlen direkt mit anderen vergleichen.
-
-- Vergleiche Viewer-Zahlen, Stream-Dauer und Wachstum mit anderen Deadlock-Streamern.
-- Das Ranking wird regelmäßig aktualisiert und basiert auf echten Daten.
-- Du siehst auch Trends — ob du im Vergleich zum Netzwerk wächst oder stagnierst.
-
-[Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
+Die Netzwerk-Auswertungen ermöglichen Vergleiche anhand erfasster Stream-Daten. Achte auf den Zeitraum und die Datenbasis; unterschiedliche Stream-Dauer und fehlende Messungen können einen Vergleich beeinflussen.
 
 ### Was ist das KI-Coaching?
 
-Das KI-Coaching analysiert deine Stream-Daten und gibt dir personalisierte Empfehlungen: Beste Streaming-Zeiten, welche Titel gut funktionieren, wie du Zuschauer länger hältst.
-
-- Die KI wertet deine historischen Daten aus und erkennt Muster.
-- Du bekommst konkrete Tipps, z. B. wann die besten Uhrzeiten für deinen Stream sind.
-- Titel-Performance zeigt dir, welche Stream-Titel mehr Zuschauer anziehen.
-- Retention-Analyse verrät, wie lange Zuschauer im Schnitt bleiben.
+Die KI-Auswertung arbeitet mit den verfügbaren Stream-Daten und kann Empfehlungen zu Zeiten, Titeln und Zuschauerbindung geben. Die Ergebnisse hängen von der Datenlage ab. Sie garantieren kein Wachstum. Die vollständige KI-Auswertung gehört zu Netzwerk Plus.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)

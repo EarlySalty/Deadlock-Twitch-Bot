@@ -3,7 +3,7 @@ title: Chat-Werbung des Bots
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-09-13
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
@@ -52,24 +52,18 @@ Die persönliche Discord-Antwort greift nur, wenn der Partnerstream läuft, Dead
 
 ### Wie schalte ich die Chat-Werbung komplett ab?
 
-Mit dem Werbefrei-Plan (3,99 €/Monat) oder einem der Bundles, die ihn enthalten. Sobald der Plan aktiv ist, sendet der Bot in deinem Chat keinerlei Werbung mehr — auch nicht, wenn andere Trigger eigentlich greifen würden.
-
-- Werbefrei: 3,99 €/Monat, einziger Effekt ist Werbung-aus.
-- Werbefrei + Raid Boost (Combo): 5,99 €/Monat.
-- Großes Bundle (Erweitert + Raid Boost + Werbefrei): 11,49 €/Monat.
-- Plan im Dashboard buchen, Effekt greift sofort.
+Netzwerk Plus enthält den werbefreien Chat. Der aktuelle Katalog nennt 4,99 € pro Monat oder 49,90 € pro Jahr. Bei aktivem Recht für werbefreien Chat sind persönliche Community-Hinweise und periodische Einladungen gesperrt, auch bei einem globalen Aktions-Text.
 
 [Pläne ansehen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fabbo)
 
-### Gilt 'Werbefrei' auch bei Sonder-Events vom Admin?
+### Gilt werbefreier Chat auch bei Sonder-Events vom Admin?
 
-Ja. Wenn ein Admin global einen Aktions-Text aktiviert (z. B. zu einem Community-Event), gilt das ausdrücklich nicht für Streamer mit Werbefrei-Plan. Der Plan überschreibt jeden globalen Werbe-Override — komplett kein Bot-Werbungstext in deinem Chat, ohne Ausnahme.
+Ja. Wenn ein Admin global einen Aktions-Text aktiviert (z. B. zu einem Community-Event), gilt das ausdrücklich nicht für Streamer mit werbefreiem Chat. Der aktive Zugang zu werbefreiem Chat sperrt auch diese Community-Werbung.
 
-- Werbefrei-Streamer bekommen auch bei aktivem globalem Sonder-Text nichts gesendet.
-- Die Sperre greift in jedem Trigger-Pfad — Chat-Aktivität, Viewer-Anstieg oder Zeitplan.
-- Du kannst dich darauf verlassen, dass 'Werbefrei' wirklich werbefrei ist.
+- Streamer mit werbefreiem Chat bekommen auch bei aktivem globalem Sonder-Text nichts gesendet.
+- Die Sperre gilt bei Chat-Aktivität, Viewer-Anstieg und zeitgesteuerten Einladungen.
 
-### Kann ich nur den Werbe-Text anpassen, ohne Werbefrei zu buchen?
+### Kann ich den Werbe-Text ohne Netzwerk Plus anpassen?
 
 Ja. Im Dashboard kannst du den Text der periodischen Einladung durch einen eigenen ersetzen. Dann postet der Bot in der periodischen Einladung deinen Text statt des frei geschriebenen. Das ist kostenlos und für alle Pläne verfügbar. Den Discord-Link kannst du als Platzhalter einbauen. Persönliche Antworten an einzelne Zuschauer bleiben davon unberührt und tragen weiterhin keinen Link.
 
