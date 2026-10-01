@@ -182,13 +182,25 @@ pub async fn effort_leaderboard_handler(
         )
             .into_response();
     };
-    if engine.ensure_ready(chrono::Utc::now()).await.is_err() {
+    if engine
+        .ensure_display_ready(chrono::Utc::now())
+        .await
+        .is_err()
+    {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error":"not_current"})),
         )
             .into_response();
     }
+
+    let category_data_complete = match engine.category_data_complete(chrono::Utc::now()).await {
+        Ok(complete) => complete,
+        Err(error) => {
+            tracing::warn!(%error, "effort leaderboard coverage query failed");
+            return analytics_error();
+        }
+    };
 
     let sql = r#"
         WITH bounds AS (
@@ -306,6 +318,7 @@ pub async fn effort_leaderboard_handler(
 
     Json(json!({
         "month": month,
+        "category_data_complete": category_data_complete,
         "entries": entries,
         "own_position": own_position,
     }))

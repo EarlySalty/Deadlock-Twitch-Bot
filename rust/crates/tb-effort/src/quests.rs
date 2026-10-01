@@ -121,7 +121,12 @@ impl Engine {
         Ok(available)
     }
 
-    async fn assign(&self, partner: &Partner, now: DateTime<Utc>) -> Result<AssignmentOutcome> {
+    async fn assign(
+        &self,
+        partner: &Partner,
+        now: DateTime<Utc>,
+        category_complete: bool,
+    ) -> Result<AssignmentOutcome> {
         let (_, _, week) = berlin_week_bounds(now);
         let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_weekly_quests WHERE partner_twitch_user_id=$1 AND week_start=$2")
             .bind(&partner.twitch_user_id).bind(week).fetch_one(&self.pool).await?;
@@ -141,7 +146,9 @@ impl Engine {
         let (_, end, _) = berlin_week_bounds(now);
         let remaining_minutes = (end - now).num_minutes();
         let mut available = Vec::new();
-        if baseline + self.cfg.stream_extra_minutes - current <= remaining_minutes {
+        if category_complete
+            && baseline + self.cfg.stream_extra_minutes - current <= remaining_minutes
+        {
             available.push(QuestKind::StreamExtra);
         }
         if self.invite_available(partner, week).await? {
@@ -258,6 +265,7 @@ impl Engine {
         };
         Ok((
             QuestResponse {
+                data_complete: true,
                 key: kind.key(),
                 text,
                 progress: progress.min(q.goal),
@@ -272,6 +280,7 @@ impl Engine {
         &self,
         id: &str,
         week: NaiveDate,
+        now: DateTime<Utc>,
     ) -> Result<(Vec<QuestResponse>, crate::types::QuestAssignmentStatus)> {
         let assignments = self.assignments(id, week).await?;
         if assignments.is_empty() {
@@ -289,9 +298,35 @@ impl Engine {
         }
         let mut result = Vec::new();
         for q in &assignments {
-            result.push(self.quest_progress(id, week, q).await?.0);
+            let mut response = self.quest_progress(id, week, q).await?.0;
+            if q.quest_key == "stream_above_average" {
+                response.data_complete = self
+                    .category_complete_between(
+                        midnight(week - Duration::weeks(4)),
+                        now.min(midnight(week + Duration::weeks(1))),
+                    )
+                    .await?;
+                if !response.data_complete {
+                    response.completed = self
+                        .quest_rewarded_at(id, week, &q.quest_key)
+                        .await?
+                        .is_some();
+                    response.data_complete = response.completed;
+                }
+            }
+            result.push(response);
         }
         Ok((result, crate::types::QuestAssignmentStatus::Assigned))
+    }
+
+    async fn quest_rewarded_at(
+        &self,
+        id: &str,
+        week: NaiveDate,
+        key: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        Ok(sqlx::query_scalar("SELECT occurred_at FROM partner_effort_events WHERE partner_twitch_user_id=$1 AND event_type='quest_done' AND source_id=$2")
+            .bind(id).bind(format!("quest:{id}:{week}:{key}")).fetch_optional(&self.pool).await?)
     }
 
     async fn reward_quests(&self, id: &str, week: NaiveDate, now: DateTime<Utc>) -> Result<()> {
@@ -301,6 +336,19 @@ impl Engine {
         }
         let mut done = Vec::new();
         for q in &assignments {
+            if q.quest_key == "stream_above_average"
+                && !self
+                    .category_complete_between(
+                        midnight(week - Duration::weeks(4)),
+                        now.min(midnight(week + Duration::weeks(1))),
+                    )
+                    .await?
+            {
+                if let Some(at) = self.quest_rewarded_at(id, week, &q.quest_key).await? {
+                    done.push((q, at));
+                }
+                continue;
+            }
             let (progress, at) = self.quest_progress(id, week, q).await?;
             if progress.completed {
                 done.push((q, at.ok_or(Error::Invalid("quest_completion_time"))?));
@@ -359,10 +407,14 @@ impl Engine {
         let coverage = self.category_collection_coverage(now).await;
         self.source_state("category_collection", now, &coverage)
             .await?;
-        coverage?;
+        let category_complete = match coverage {
+            Ok(()) => true,
+            Err(Error::Source("category_collection_incomplete")) => false,
+            Err(error) => return Err(error),
+        };
         self.refresh_stream_evidence(now).await?;
         for partner in self.active_partners().await? {
-            match self.assign(&partner, now).await? {
+            match self.assign(&partner, now, category_complete).await? {
                 AssignmentOutcome::AlreadyAssigned | AssignmentOutcome::Assigned => {}
                 // Kein erreichbarer Pool ist ein Zustand dieses Partners, kein
                 // Quellenfehler. Das Settlement für weitere Partner läuft weiter.
@@ -374,7 +426,9 @@ impl Engine {
                 self.reward_quests(&partner.twitch_user_id, week, now)
                     .await?;
             }
-            self.refresh_streak(&partner, now).await?;
+            if category_complete {
+                self.refresh_streak(&partner, now).await?;
+            }
             self.award_achievements(&partner, now).await?;
         }
         Ok(())

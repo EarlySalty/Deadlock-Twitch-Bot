@@ -113,7 +113,7 @@ function QuestCard({ quest }: { quest: ChallengeQuest }) {
       </div>
       <div className="mt-5">
         <div className="mb-2 flex items-center justify-between text-xs">
-          <span className="text-text-secondary">Fortschritt</span>
+          <span className="text-text-secondary">{quest.data_complete === false ? 'Wertung ausgesetzt' : 'Fortschritt'}</span>
           <span className="font-semibold tabular-nums text-primary">
             {Math.min(quest.progress, quest.goal)} / {quest.goal}
           </span>
@@ -305,6 +305,11 @@ export function Challenges() {
 
   return (
     <div className="space-y-6 pb-10">
+      {data.category_data_complete === false && (
+        <div role="status" className="panel-card rounded-2xl border border-primary/30 p-4 text-sm text-text-secondary">
+          Deine Punkte und Erfolge bleiben erhalten. Wegen einer Datenlücke sind betroffene Stream-Aufgaben und die Ausdauer-Wertung ausgesetzt. Die Rangliste zeigt die bisher bestätigten Punkte. Vollständig erfasste Zeiträume werden automatisch wieder gewertet.
+        </div>
+      )}
       <section className="panel-card rounded-2xl border border-primary/35 bg-black/25 px-4 py-3 md:px-5">
         <p className="display-font text-xl font-bold leading-snug text-white md:text-2xl">
           {nextGoalSentence}
@@ -325,7 +330,7 @@ export function Challenges() {
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-3 py-1.5 font-semibold text-primary">
                 <Flame className="h-3.5 w-3.5" />
-                {data.streak.current} Wochen
+                {data.streak.current} Wochen{data.streak.data_complete === false ? ' (letzter bestätigter Stand)' : ''}
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-accent">
                 <Snowflake className="h-3.5 w-3.5" />

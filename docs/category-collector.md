@@ -48,11 +48,15 @@ Die Seite zeigt Sprachen, Stundenverlauf, Top-Kanäle nach Zuschauerstunden und 
 
 ## Installation und Prüfung
 
-Der vorhandene Release-Weg baut alle vier Rust-Binaries aus demselben sauberen SHA: `tb-bot`, `tb-dashboard`, `tb-stream-audit` und `tb-category-collector`, dazu die bestehenden Frontends. Herkunftsnachweis: ELF-Sektion `.twitch_build`. Die aktualisierten, geprüften Wrapper unter `ops/systemd/deploy-twitch-release` und `ops/systemd/install-twitch-release.sh` müssen installiert sein; ältere Host-Wrapper kennen den Collector noch nicht.
+Der vorhandene Release-Weg baut `tb-bot`, `tb-dashboard`, `tb-stream-audit`, `tb-category-collector`, `tb-twitch-watchdog` und `clip_context_learn` aus demselben sauberen SHA, dazu die bestehenden Frontends. Herkunftsnachweis: ELF-Sektion `.twitch_build`. Die aktualisierten, geprüften Wrapper unter `ops/systemd/deploy-twitch-release` und `ops/systemd/install-twitch-release.sh` müssen installiert sein, damit auch der Watchdog als geprüftes Release-Artefakt installiert wird.
 
 `deploy-twitch-release` wendet Migrationen als postgres an. Danach richtet die root-eigene Kopie von `ops/systemd/install-category-collector.py` im versiegelten Release Benutzer, Peer-Zugang, eingeschränkte Rollen, Credentials, Unit und Caddy-Matcher ein. Dieser vorhandene Installationshelfer ist ein Einmalwerkzeug; die Sammlerlaufzeit selbst ist Rust. Neue Caddy-Regeln werden vor Reload validiert, bestehende Regeln nicht ersetzt.
 
-Die Unit hat 512 MiB Speicherlimit, CPU-Begrenzung und eine getrennte OnFailure-Benachrichtigung. Die neue Migration und Rollenmatrix müssen vor dem Collector-Start angewandt sein, damit er ausschließlich gezielte Moderationsereignisse entfernen kann.
+Die Unit hat 512 MiB Speicherlimit und CPU-Begrenzung. Bei einem Fehler versucht systemd den Start jede Minute erneut, ohne Startlimit. OnFailure und der vorhandene 30-Sekunden-Watchdog-Timer benutzen `deadlock-twitch-bot-watchdog.service`. Seine Rust-Laufzeit prüft Bot, Collector, Heartbeat und neue Collector-Läufe. Der vorhandene lokale Discord-Broker erhält eine Meldung je Vorfall mit stabilem Idempotenzschlüssel. Zustellfehler werden erneut versucht; Vorfälle bleiben in `twitch_watchdog_incidents` in Postgres gespeichert. Auch übersehene Collector-Lücken aus den letzten zwei Tagen werden nachgetragen.
+
+Der externe Watchdog benötigt keine systemd-Mount-Namespaces und kein LoadCredential-Setup. Er entschlüsselt den bestehenden verschlüsselten Infrastruktur-Schlüssel nur für einen fälligen Zustellversuch im Speicher. Die Collector-Unit behält ihre eigene Sandbox. Die Migration `20261001220000_twitch_watchdog_incidents.sql` muss vor dem neuen Watchdog aktiv sein.
+
+Eine historische Collector-Lücke schaltet Rangliste und Erfolge nicht ab. Betroffene Stream-Aufgaben und Ausdauer bleiben ausgesetzt, während bestätigte Punkte und unabhängige Aufgaben sichtbar bleiben. Das Dashboard kennzeichnet die Teilwertung. Monatsboosts verlangen weiterhin alle sieben gesunden Effort-Quellen.
 
 ```sh
 systemctl status tb-category-collector.service

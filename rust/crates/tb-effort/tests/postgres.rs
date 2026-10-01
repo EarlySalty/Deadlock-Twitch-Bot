@@ -1442,7 +1442,7 @@ async fn technical_pause_defers_source_receipts_until_partner_is_eligible() {
 }
 
 #[tokio::test]
-async fn missing_category_coverage_blocks_settlement_and_readiness() {
+async fn missing_category_coverage_keeps_display_and_independent_settlement_ready() {
     let (admin, pool, name) = fixture().await;
     let engine = Engine::new(
         pool.clone(),
@@ -1459,13 +1459,18 @@ async fn missing_category_coverage_blocks_settlement_and_readiness() {
         .await
         .unwrap();
 
-    assert!(engine.tick(now).await.is_err());
+    engine.tick(now).await.unwrap();
     assert!(engine.ensure_ready(now).await.is_err());
+    engine.ensure_display_ready(now).await.unwrap();
+    let me = engine.me("101", now).await.unwrap();
+    assert!(!me.category_data_complete);
+    assert!(!me.streak.data_complete);
+    assert!(me.quests.iter().all(|q| q.key != "stream_above_average"));
     let assigned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_weekly_quests")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(assigned, 0);
+    assert!(assigned > 0);
     let state: (bool, Option<String>) = sqlx::query_as("SELECT healthy,error_code FROM partner_effort_source_state WHERE source='category_collection'")
         .fetch_one(&pool)
         .await
@@ -1477,7 +1482,7 @@ async fn missing_category_coverage_blocks_settlement_and_readiness() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(engine.tick(now + Duration::seconds(1)).await.is_err());
+    engine.tick(now + Duration::seconds(1)).await.unwrap();
     assert!(engine
         .ensure_ready(now + Duration::seconds(1))
         .await
@@ -1486,7 +1491,7 @@ async fn missing_category_coverage_blocks_settlement_and_readiness() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(assigned, 0);
+    assert!(assigned > 0);
 
     let since = DateTime::parse_from_rfc3339("2026-09-27T22:00:00Z")
         .unwrap()
@@ -1518,6 +1523,92 @@ async fn missing_category_coverage_blocks_settlement_and_readiness() {
         .await
         .is_ok());
 
+    pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn historical_gap_suspends_only_stream_reward_and_bonus_then_recovers() {
+    let (admin, pool, name) = fixture().await;
+    let now = DateTime::parse_from_rfc3339("2026-10-26T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let week = berlin_week_start(now);
+    let engine = Engine::new(
+        pool.clone(),
+        Challenges::default(),
+        Some(pool.clone()),
+        Some(idle_helix()),
+    )
+    .unwrap();
+    for (position, key, goal) in [
+        (1i16, "stream_above_average", 30i64),
+        (2, "active_discord_invite", 1),
+        (3, "community_match", 1),
+    ] {
+        sqlx::query("INSERT INTO partner_effort_weekly_quests(partner_twitch_user_id,week_start,position,quest_key,goal,baseline_minutes,reward_points,bonus_points,rules_hash,assigned_at) VALUES('101',$1,$2,$3,$4,0,10,20,'fixture',$5)")
+            .bind(week).bind(position).bind(key).bind(goal).bind(now).execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO partner_effort_stream_weeks(partner_twitch_user_id,stream_id,week_start,deadlock_seconds,observed_through) VALUES('101','gap-stream',$1,7200,$2)")
+        .bind(week).bind(now).execute(&pool).await.unwrap();
+    for (kind, source) in [
+        (EventKind::QualifiedInvite, "gap-invite"),
+        (EventKind::PartyPlay, "gap-party"),
+    ] {
+        engine
+            .append(&event("101", kind, source, now), now)
+            .await
+            .unwrap();
+    }
+    let gap_start = now - Duration::days(10);
+    let gap_end = gap_start + Duration::hours(2);
+    sqlx::query(
+        "DELETE FROM category_collection_runs WHERE snapshot_at >= $1 AND snapshot_at <= $2",
+    )
+    .bind(gap_start)
+    .bind(gap_end)
+    .execute(&pool)
+    .await
+    .unwrap();
+    engine.tick(now).await.unwrap();
+    engine.ensure_display_ready(now).await.unwrap();
+    assert!(engine.ensure_ready(now).await.is_err());
+    let me = engine.me("101", now).await.unwrap();
+    let stream = me
+        .quests
+        .iter()
+        .find(|q| q.key == "stream_above_average")
+        .unwrap();
+    assert!(!stream.data_complete && !stream.completed);
+    assert!(me
+        .quests
+        .iter()
+        .filter(|q| q.key != "stream_above_average")
+        .all(|q| q.data_complete && q.completed));
+    let rewards: Vec<String> = sqlx::query_scalar("SELECT source_id FROM partner_effort_events WHERE partner_twitch_user_id='101' AND event_type='quest_done' ORDER BY source_id")
+        .fetch_all(&pool).await.unwrap();
+    assert_eq!(rewards.len(), 2);
+    assert!(rewards
+        .iter()
+        .all(|s| !s.ends_with("all_three") && !s.ends_with("stream_above_average")));
+    sqlx::query("INSERT INTO category_collection_runs(snapshot_at,completed_at,streams,viewers,poll_seconds) SELECT at,at,0,0,300 FROM generate_series($1::timestamptz,$2::timestamptz,INTERVAL '5 minutes') AS at")
+        .bind(gap_start).bind(gap_end).execute(&pool).await.unwrap();
+    engine.tick(now + Duration::seconds(1)).await.unwrap();
+    engine
+        .ensure_ready(now + Duration::seconds(1))
+        .await
+        .unwrap();
+    assert!(engine.me("101", now).await.unwrap().category_data_complete);
+    engine.tick(now + Duration::seconds(2)).await.unwrap();
+    let rewards: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM partner_effort_events WHERE partner_twitch_user_id='101' AND event_type='quest_done'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(rewards, 4);
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP DATABASE {name} WITH (FORCE)"
@@ -1784,7 +1875,15 @@ async fn single_connection_tick_and_concurrent_readiness_keep_working() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(engine.tick(now + Duration::seconds(1)).await.is_err());
+    engine.tick(now + Duration::seconds(1)).await.unwrap();
+    engine
+        .ensure_display_ready(now + Duration::seconds(1))
+        .await
+        .unwrap();
+    assert!(!engine
+        .category_data_complete(now + Duration::seconds(1))
+        .await
+        .unwrap());
     assert!(engine
         .ensure_ready(now + Duration::seconds(1))
         .await

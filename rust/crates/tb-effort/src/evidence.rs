@@ -53,6 +53,14 @@ impl Engine {
     pub(crate) async fn category_collection_coverage(&self, now: DateTime<Utc>) -> Result<()> {
         let week = berlin_week_start(now);
         let baseline_since = midnight(week - Duration::weeks(4));
+        self.category_coverage_between(baseline_since, now).await
+    }
+
+    pub(crate) async fn category_coverage_between(
+        &self,
+        baseline_since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<()> {
         let since: DateTime<Utc> = sqlx::query_scalar(
             "SELECT GREATEST($1,started_at) FROM partner_effort_program WHERE singleton",
         )
@@ -92,13 +100,25 @@ impl Engine {
             LEFT JOIN settings ON TRUE",
         )
         .bind(since)
-        .bind(now)
+        .bind(until)
         .fetch_one(&self.pool)
         .await?;
         if covered {
             Ok(())
         } else {
             Err(crate::Error::Source("category_collection_incomplete"))
+        }
+    }
+
+    pub(crate) async fn category_complete_between(
+        &self,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<bool> {
+        match self.category_coverage_between(since, until).await {
+            Ok(()) => Ok(true),
+            Err(crate::Error::Source("category_collection_incomplete")) => Ok(false),
+            Err(error) => Err(error),
         }
     }
 

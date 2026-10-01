@@ -259,6 +259,14 @@ async fn catchup_waits_for_sources_and_uses_credit_month_without_backdating_gran
             .await
             .unwrap();
     assert_eq!(count, 0);
+    sqlx::query("UPDATE partner_effort_source_state SET healthy=(source <> 'category_collection')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.close_season_ending_at(cutoffs[0], now).await.unwrap(),
+        SeasonCloseOutcome::SourceUnavailable { .. }
+    ));
     sqlx::query("UPDATE partner_effort_source_state SET healthy=TRUE")
         .execute(&pool)
         .await

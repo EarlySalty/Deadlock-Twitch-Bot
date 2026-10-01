@@ -13,6 +13,7 @@ const ARTIFACTS = process.env.CHALLENGES_ARTIFACTS ?? path.join(REPO, 'docs', 's
 let questAssignmentStatus = 'assigned';
 let ownRank = 14;
 let emptyRecruiters = false;
+let categoryComplete = true;
 
 const AUTH = {
   authenticated: true,
@@ -155,7 +156,11 @@ function payloadFor(pathname) {
   if (pathname.endsWith('/challenges/me')) {
     return questAssignmentStatus !== 'assigned'
       ? { ...CHALLENGES_ME, quests: [], quest_assignment_status: questAssignmentStatus }
-      : { ...CHALLENGES_ME, quest_assignment_status: 'assigned' };
+      : { ...CHALLENGES_ME, category_data_complete: categoryComplete,
+          streak: { ...CHALLENGES_ME.streak, data_complete: categoryComplete },
+          quests: CHALLENGES_ME.quests.map(quest => ({ ...quest,
+            data_complete: quest.key !== 'stream_above_average' || categoryComplete })),
+          quest_assignment_status: 'assigned' };
   }
   if (pathname.endsWith('/challenges/viewers')) {
     return emptyRecruiters ? { ...CHALLENGE_VIEWERS, recruiters: [] } : CHALLENGE_VIEWERS;
@@ -347,6 +352,19 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-pending-mobile.png'), fullPage: true });
 
+  categoryComplete = false;
+  questAssignmentStatus = 'assigned';
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
+  await page.getByRole('status').getByText(/Wegen einer Datenlücke/).waitFor();
+  await page.getByText('Wertung ausgesetzt', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('heading', { name: 'Rangliste und Erfolge konnten nicht geladen werden' }).count(), 0);
+  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
+  await page.getByText('Deine Position').waitFor();
+  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-partial-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-partial-mobile.png'), fullPage: true });
   assert.deepEqual(consoleErrors, []);
   await context.close();
 });

@@ -1,0 +1,3 @@
+# Vertrag
+
+Die Challenges-API liefert bei alleiniger Kategorie-Lücke den Teilzustand mit bestätigten Punkten und Erfolgen. Andere Quellen müssen aktuell sein. Nicht vollständig belegte Stream-Aufgaben erzeugen keine Belohnung, keine Dreier-Boni und keinen behaupteten Abschluss. Ausdauer bleibt im letzten bestätigten Zustand. Der Monatsboost schließt bei ungesunder Kategorie-Quelle weiter nicht ab. systemd versucht Collector-Neustarts dauerhaft im Minutenabstand. Der bestehende Watchdog erkennt Dienst- und Datenausfälle, entprellt Vorfälle in Postgres und benutzt den vorhandenen lokalen Discord-Broker. Liveconfig und Brain-Shadow bleiben erhalten. Keine Unter-Agenten.
