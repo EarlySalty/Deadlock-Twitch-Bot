@@ -32,3 +32,13 @@ Quelle: `gate_hook.py --review --repo /home/nathanael/.worktrees/luna-dispatch-d
 Urteil: `gpt-6.1-sol ALLOW`, geprüfter Head `c2b2116150442c3340066ea6283cf5c427a20868`.
 
 Begründung: Alert-Wiederherstellung und Synchronisierung der Löschkorrelation sind behoben; keine nachgewiesene Regression im Fix-Diff.
+
+## Gate Review R5
+
+Quelle: `gate_hook.py --review --repo /home/nathanael/.worktrees/luna-dispatch-deadlock-twitch-bot-promo-delete-detection-20260915-364ad1c8 --base main --head codex/luna-dispatch/deadlock-twitch-bot/promo-delete-detection-20260915-364ad1c8`
+Urteil: `gpt-6.1-sol BLOCK`, Exit 1, geprüft nach Commit `dd7e9e64`.
+
+1. **BLOCKING, nicht persistierte Zustellung:** `promos.rs:758`. `record_promo_delivery` protokolliert DB-Fehler und verwirft die angenommene Lieferung. Bei transientem DB-Fehler bleibt kein Audit-Datensatz; das gepufferte Announcement kann ihn nicht wiederherstellen. Betroffen sind alle drei Aufrufer: `reason`, `timeout_pitch` und `lurker_tax`.
+2. **BLOCKING, doppelte Announcement-ID:** `observe_announcement_notification`. Der Handler bindet erst einen offenen Delivery-Datensatz und prüft danach die vorhandene Message-ID. Bei einem zweiten passenden offenen Datensatz kann die Wiederholung am Unique-Index scheitern, bevor sie den bestehenden Alert-Retry erreicht.
+
+Die unabhängige Intent-Abnahme von Commit `c2b21161` erfolgte vor diesem Gate-Befund und ist für die aktuelle Runde nicht abschließend.
