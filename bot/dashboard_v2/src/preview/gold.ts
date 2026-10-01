@@ -1,7 +1,7 @@
 import { isPreviewModeEnabled } from './routes';
 import './gold.css';
 
-const GOLD_VARIANTS = new Set(['polished', 'champagne', 'antique']);
+const GOLD_VARIANTS = new Set(['polished', 'antique']);
 
 export function applyGoldPreview() {
   if (!isPreviewModeEnabled()) return;

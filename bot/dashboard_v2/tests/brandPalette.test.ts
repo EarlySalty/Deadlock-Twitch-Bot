@@ -54,9 +54,8 @@ const ALLOWED_HEX = new Set([
 ]);
 
 const PREVIEW_GOLD_HEX = new Set([
-  '#ac8750', '#c4a373', '#e5d1ac', '#f6ebd4', '#d8bd87', '#b78f53', '#d1b27c', '#e2c797',
-  '#aa8e66', '#d2b996', '#e6d6be', '#f4ead8', '#e0caae', '#b7986e', '#dbc5a3', '#e8d7ba',
-  '#a18354', '#b79b71', '#c9b38e', '#e4d1ae', '#c8ad7b', '#a78955', '#c2a575', '#cbb18b', '#1a130c',
+  '#c4a373', '#b78f53', '#d1b27c', '#e2c797',
+  '#b79b71', '#a78955', '#c2a575', '#cbb18b', '#1a130c',
 ]);
 
 /* Tailwind-Standardpaletten. Sie tragen keine Hex-Werte im Code und rutschen

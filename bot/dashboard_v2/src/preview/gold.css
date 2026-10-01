@@ -1,22 +1,17 @@
 :root[data-gold="polished"] {
-  --gold-metal: linear-gradient(168deg, #ac8750 0%, #c4a373 18%, #e5d1ac 29%, #f6ebd4 33%, #d8bd87 41%, #b78f53 66%, #d1b27c 100%);
+  --gold-metal: linear-gradient(150deg, #d1b27c 0%, #c4a373 50%, #b78f53 100%);
   --gold-edge: #e2c797;
 }
 
-:root[data-gold="champagne"] {
-  --gold-metal: linear-gradient(168deg, #aa8e66 0%, #d2b996 19%, #e6d6be 30%, #f4ead8 35%, #e0caae 43%, #b7986e 69%, #dbc5a3 100%);
-  --gold-edge: #e8d7ba;
-}
-
 :root[data-gold="antique"] {
-  --gold-metal: linear-gradient(168deg, #a18354 0%, #b79b71 22%, #c9b38e 33%, #e4d1ae 37%, #c8ad7b 43%, #a78955 72%, #c2a575 100%);
+  --gold-metal: linear-gradient(150deg, #c2a575 0%, #b79b71 50%, #a78955 100%);
   --gold-edge: #cbb18b;
 }
 
 :root[data-gold] :is(.gold-surface, .assistent-knopf, .feedback-primary, button.bg-primary, a.bg-primary, button.gradient-accent, a.gradient-accent) {
   background: var(--gold-metal);
   color: #1a130c;
-  box-shadow: inset 0 1px 0 rgba(255, 250, 235, 0.75), inset 0 0 0 1px rgba(255, 244, 217, 0.28), inset 0 -1px 0 rgba(43, 28, 12, 0.32) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 250, 235, 0.35), inset 0 0 0 1px rgba(255, 244, 217, 0.16), inset 0 -1px 0 rgba(43, 28, 12, 0.22) !important;
 }
 
 :root[data-gold] .gold-ink,
@@ -27,7 +22,7 @@
 :root[data-gold] :is(a, button).gold-surface:hover,
 :root[data-gold] .assistent-knopf:hover {
   background: var(--gold-metal);
-  box-shadow: inset 0 1px 0 rgba(255, 250, 235, 0.9), inset 0 0 0 1px rgba(255, 244, 217, 0.48), inset 0 -1px 0 rgba(43, 28, 12, 0.32) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 250, 235, 0.45), inset 0 0 0 1px rgba(255, 244, 217, 0.24), inset 0 -1px 0 rgba(43, 28, 12, 0.22) !important;
 }
 
 :root[data-gold] :is(.gold-surface, .gold-ink, .assistent-knopf):focus-visible {
@@ -39,7 +34,7 @@
   background: var(--gold-metal);
   border-color: var(--gold-edge);
   color: #1a130c;
-  box-shadow: inset 0 1px 0 rgba(255, 250, 235, 0.65), inset 0 -1px 0 rgba(43, 28, 12, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 250, 235, 0.35), inset 0 -1px 0 rgba(43, 28, 12, 0.22);
 }
 
 :root[data-gold] .gold-rank-title {
