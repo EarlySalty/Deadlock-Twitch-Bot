@@ -54,7 +54,7 @@ const ALLOWED_HEX = new Set([
 ]);
 
 const PREVIEW_GOLD_HEX = new Set([
-  '#c4a373', '#b78f53', '#d1b27c', '#e2c797',
+  '#d6b16d', '#c9a15c', '#b78d49', '#e2c797',
   '#b79b71', '#a78955', '#c2a575', '#cbb18b', '#1a130c',
 ]);
 
