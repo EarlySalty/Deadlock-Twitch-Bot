@@ -66,7 +66,9 @@ async fn resume_migration_preserves_offsets_and_rolls_back_on_invalid_ciphertext
             .await
             .unwrap();
     assert!(!encoded.contains("https://"));
-    assert!(tb_crypto::text::decrypt(&cipher, &encoded, &session_aad(b)).is_err());
+    assert!(tb_crypto::text::decrypt(&cipher, &encoded, &session_aad(b, "synthetic-vod")).is_err());
+    assert!(tb_crypto::text::decrypt(&cipher, &encoded, &session_aad(a, "other-vod")).is_err());
+    assert!(!format!("{:?}", restored[0]).contains("synthetic.invalid"));
     setze_teil_fertig(&pool, a, "synthetic-second-video")
         .await
         .unwrap();

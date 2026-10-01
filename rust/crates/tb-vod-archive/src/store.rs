@@ -54,7 +54,7 @@ impl Vod {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Teil {
     pub id: i64,
     pub part_index: i32,
@@ -64,6 +64,19 @@ pub struct Teil {
     pub upload_offset: i64,
     pub youtube_video_id: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl std::fmt::Debug for Teil {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Teil")
+            .field("id", &self.id)
+            .field("part_index", &self.part_index)
+            .field("status", &self.status)
+            .field("upload_session_present", &self.upload_session_uri.is_some())
+            .field("upload_offset", &self.upload_offset)
+            .field("youtube_video_id", &self.youtube_video_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Teil {
@@ -234,9 +247,10 @@ pub async fn teile(
     cipher: &FieldCipher,
 ) -> Result<Vec<Teil>, VodArchiveError> {
     let rows = sqlx::query(
-        "SELECT id, part_index, file_path, status, upload_session_uri, upload_offset, \
-                youtube_video_id, updated_at \
-         FROM twitch_vod_archive_parts WHERE vod_id = $1 ORDER BY part_index ASC",
+        "SELECT p.id, p.part_index, p.file_path, p.status, p.upload_session_uri, p.upload_offset, \
+                p.youtube_video_id, p.updated_at, v.twitch_id AS vod_twitch_id \
+         FROM twitch_vod_archive_parts p JOIN twitch_vod_archive_vods v ON v.id=p.vod_id \
+         WHERE p.vod_id = $1 ORDER BY p.part_index ASC",
     )
     .bind(vod_id)
     .fetch_all(pool)
@@ -244,10 +258,11 @@ pub async fn teile(
     rows.into_iter()
         .map(|row| -> Result<Teil, VodArchiveError> {
             let id: i64 = row.get("id");
+            let vod_twitch_id: String = row.get("vod_twitch_id");
             let stored: Option<String> = row.get("upload_session_uri");
             let session = stored
                 .map(|encoded| {
-                    tb_crypto::text::decrypt(cipher, &encoded, &session_aad(id))
+                    tb_crypto::text::decrypt(cipher, &encoded, &session_aad(id, &vod_twitch_id))
                         .map_err(|_| VodArchiveError::SessionCrypto)
                 })
                 .transpose()?;
@@ -274,8 +289,12 @@ pub async fn setze_teil_sitzung(
     offset: i64,
     cipher: &FieldCipher,
 ) -> Result<(), VodArchiveError> {
-    let session_uri_enc = tb_crypto::text::encrypt(cipher, session_uri, &session_aad(teil_id))
-        .map_err(|_| VodArchiveError::SessionCrypto)?;
+    let mut tx = pool.begin().await?;
+    let vod_twitch_id: String = sqlx::query_scalar("SELECT v.twitch_id FROM twitch_vod_archive_parts p JOIN twitch_vod_archive_vods v ON v.id=p.vod_id WHERE p.id=$1 FOR UPDATE OF p,v")
+        .bind(teil_id).fetch_one(&mut *tx).await?;
+    let session_uri_enc =
+        tb_crypto::text::encrypt(cipher, session_uri, &session_aad(teil_id, &vod_twitch_id))
+            .map_err(|_| VodArchiveError::SessionCrypto)?;
     sqlx::query(
         "UPDATE twitch_vod_archive_parts \
          SET upload_session_uri = $2, upload_offset = $3, status = 'uploading', \
@@ -285,8 +304,9 @@ pub async fn setze_teil_sitzung(
     .bind(teil_id)
     .bind(session_uri_enc)
     .bind(offset)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -502,8 +522,8 @@ pub async fn markiere_archiviert(pool: &PgPool, id: i64) -> Result<(), VodArchiv
     Ok(())
 }
 
-fn session_aad(part_id: i64) -> String {
-    format!("twitch_vod_archive_parts|upload_session_uri|{part_id}|1")
+fn session_aad(part_id: i64, vod_twitch_id: &str) -> String {
+    format!("twitch_vod_archive_parts|upload_session_uri|{part_id}|{vod_twitch_id}|1")
 }
 
 /// Einmaliger, transaktionaler Cutover. Niemals automatisch aus einem Upload
@@ -514,23 +534,24 @@ pub async fn migrate_resume_sessions(
     cipher: &FieldCipher,
 ) -> Result<u64, VodArchiveError> {
     let mut tx = pool.begin().await?;
-    let rows = sqlx::query("SELECT id, status, upload_session_uri FROM twitch_vod_archive_parts WHERE upload_session_uri IS NOT NULL ORDER BY id FOR UPDATE")
+    let rows = sqlx::query("SELECT p.id, p.status, p.upload_session_uri, v.twitch_id AS vod_twitch_id FROM twitch_vod_archive_parts p JOIN twitch_vod_archive_vods v ON v.id=p.vod_id WHERE p.upload_session_uri IS NOT NULL ORDER BY p.id FOR UPDATE OF p,v")
         .fetch_all(&mut *tx).await?;
     let mut changed = 0;
     for row in rows {
         let id: i64 = row.get("id");
+        let vod_twitch_id: String = row.get("vod_twitch_id");
         let status: String = row.get("status");
         let old: String = row.get("upload_session_uri");
         let next = if status == TEIL_FERTIG {
             None
         } else if old.starts_with(tb_crypto::text::PREFIX) {
-            tb_crypto::text::decrypt(cipher, &old, &session_aad(id))
+            tb_crypto::text::decrypt(cipher, &old, &session_aad(id, &vod_twitch_id))
                 .map_err(|_| VodArchiveError::SessionCrypto)?;
             continue;
         } else {
-            let encoded = tb_crypto::text::encrypt(cipher, &old, &session_aad(id))
+            let encoded = tb_crypto::text::encrypt(cipher, &old, &session_aad(id, &vod_twitch_id))
                 .map_err(|_| VodArchiveError::SessionCrypto)?;
-            if tb_crypto::text::decrypt(cipher, &encoded, &session_aad(id))
+            if tb_crypto::text::decrypt(cipher, &encoded, &session_aad(id, &vod_twitch_id))
                 .map_err(|_| VodArchiveError::SessionCrypto)?
                 != old
             {
