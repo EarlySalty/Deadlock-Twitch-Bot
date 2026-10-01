@@ -247,7 +247,7 @@ async fn generate_gutschriften_payload(
     };
 
     let force = payload_bool(&payload, "force");
-    let cipher = FieldCipher::from_env().map_err(|error| {
+    let cipher = FieldCipher::from_runtime().map_err(|error| {
         tracing::error!("affiliate-gutschriften: FieldCipher unavailable: {error}");
         ApiError::internal()
     })?;
@@ -269,7 +269,7 @@ pub async fn run_pending_gutschriften_for_background(
     pool: &PgPool,
 ) -> Result<Vec<GenerateGutschriftResult>, String> {
     let cipher =
-        FieldCipher::from_env().map_err(|error| format!("FieldCipher unavailable: {error}"))?;
+        FieldCipher::from_runtime().map_err(|error| format!("FieldCipher unavailable: {error}"))?;
     run_gutschrift_job(pool, &cipher, None, None, None, false)
         .await
         .map_err(|error| error.to_string())
@@ -384,7 +384,7 @@ pub async fn detail_handler(
             json!({ "error": "invalid_login" }),
         ));
     };
-    let cipher = match FieldCipher::from_env() {
+    let cipher = match FieldCipher::from_runtime() {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("affiliate-detail: kein Field-Cipher ({e})");
@@ -420,7 +420,7 @@ pub async fn gutschriften_for_login_handler(
             json!({ "error": "invalid_login" }),
         ));
     };
-    let cipher = match FieldCipher::from_env() {
+    let cipher = match FieldCipher::from_runtime() {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("affiliate-gutschriften-for-login: kein Field-Cipher ({e})");

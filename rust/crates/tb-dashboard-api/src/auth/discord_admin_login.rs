@@ -351,6 +351,41 @@ pub fn discord_admin_login_config_from_env() -> Option<DiscordAdminLoginConfig> 
     })
 }
 
+pub fn discord_admin_login_config_from_snapshot() -> Option<DiscordAdminLoginConfig> {
+    let options = &tb_config::runtime::settings().ok()?.dashboard.options;
+    let token = [
+        "TWITCH_INTERNAL_API_TOKEN",
+        "MASTER_BROKER_TOKEN",
+        "MAIN_BOT_INTERNAL_TOKEN",
+    ]
+    .iter()
+    .find_map(|name| tb_config::private::secret(name).ok())?;
+    let admin_base_url = normalize_base_url(
+        options
+            .admin_public_url
+            .as_deref()
+            .unwrap_or(DEFAULT_ADMIN_BASE_URL),
+    )?;
+    let domain = options
+        .shared_admin_cookie_domain
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    let cookie_domain = (!domain.is_empty()).then_some(domain);
+    let client =
+        BrokerDiscordAdminOAuthClient::new(options.discord_oauth_broker_url.clone(), token)?;
+    Some(DiscordAdminLoginConfig {
+        admin_base_url,
+        cookie_secure: !options.cookie_insecure,
+        cookie_domain,
+        owner_user_id: options.admin_owner_user_id,
+        moderator_role_id: DEFAULT_DASHBOARD_MODERATOR_ROLE_ID,
+        admin_role_ids: DEFAULT_DASHBOARD_ADMIN_ROLE_IDS.to_vec(),
+        admin_guild_ids: options.admin_guild_ids.clone(),
+        client: Arc::new(client),
+    })
+}
+
 /// `GET /twitch/auth/discord/login`
 pub async fn login_handler(
     state: Option<Extension<DashboardAuthState>>,

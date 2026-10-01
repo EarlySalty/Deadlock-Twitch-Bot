@@ -292,8 +292,8 @@ pub fn build_clip_port(
 /// onboardeten Token aus `twitch_engagement_sender_auth` (Tabelle wird hier
 /// idempotent angelegt).
 async fn build_engagement_stealth(pool: PgPool) -> Option<Arc<StealthSender>> {
-    let cipher = Arc::new(FieldCipher::from_env().ok()?);
-    let client_id = std::env::var("TWITCH_CLIENT_ID")
+    let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())?;
@@ -625,8 +625,8 @@ pub async fn try_build_api(
         return Ok(None);
     };
     let (Ok(client_id), Ok(client_secret)) = (
-        std::env::var("TWITCH_CLIENT_ID"),
-        std::env::var("TWITCH_CLIENT_SECRET"),
+        tb_config::private::secret("TWITCH_CLIENT_ID"),
+        tb_config::private::secret("TWITCH_CLIENT_SECRET"),
     ) else {
         tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_CLIENT_ID/SECRET fehlen");
         return Ok(None);

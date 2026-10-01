@@ -108,6 +108,21 @@ pub fn billing_page_config_from_env() -> Option<BillingPageConfig> {
     })
 }
 
+pub fn billing_page_config_from_snapshot() -> Option<BillingPageConfig> {
+    let options = &tb_config::runtime::settings().ok()?.dashboard.options;
+    let secret = ["STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"]
+        .iter()
+        .find_map(|name| tb_config::private::secret(name).ok())?;
+    Some(BillingPageConfig {
+        client: Arc::new(StripeClient::new(secret).ok()?),
+        public_origin: options
+            .billing_public_origin
+            .as_deref()
+            .and_then(origin_of)
+            .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_owned()),
+    })
+}
+
 /// Leitet den Public-Origin aus den konfigurierten URLs ab (Origin-Teil) oder
 /// fällt auf den Default zurück. Spiegelt `_billing_configured_public_origin`.
 fn resolve_public_origin() -> String {

@@ -92,9 +92,9 @@ impl std::fmt::Debug for SeedTokens {
 /// Linux-Cutover. Env liefert nur den einmaligen Bootstrap für den DB-Cutover.
 pub fn load_seed_tokens() -> SeedTokens {
     resolve_seed_tokens(
-        std::env::var("TWITCH_BOT_TOKEN").ok().as_deref(),
-        std::env::var("TWITCH_BOT_REFRESH_TOKEN").ok().as_deref(),
-        std::env::var("TWITCH_BOT_TOKEN_FILE").ok().as_deref(),
+        tb_config::private::value("TWITCH_BOT_TOKEN"),
+        tb_config::private::value("TWITCH_BOT_REFRESH_TOKEN"),
+        None,
     )
 }
 

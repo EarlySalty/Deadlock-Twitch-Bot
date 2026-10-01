@@ -291,11 +291,11 @@ pub struct AvatarCache {
 
 impl AvatarCache {
     pub fn from_env() -> Option<Self> {
-        let client_id = std::env::var("TWITCH_CLIENT_ID")
+        let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+        let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());

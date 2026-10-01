@@ -70,6 +70,24 @@ pub fn stripe_webhook_config_from_env() -> Option<StripeWebhookConfig> {
     })
 }
 
+pub fn stripe_webhook_config_from_snapshot() -> Option<StripeWebhookConfig> {
+    let webhook_secret = [
+        "STRIPE_WEBHOOK_SECRET",
+        "TWITCH_BILLING_STRIPE_WEBHOOK_SECRET",
+    ]
+    .iter()
+    .find_map(|name| tb_config::private::secret(name).ok())?;
+    let client = ["STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"]
+        .iter()
+        .find_map(|name| tb_config::private::secret(name).ok())
+        .and_then(|key| StripeClient::new(key).ok())
+        .map(Arc::new);
+    Some(StripeWebhookConfig {
+        webhook_secret,
+        client,
+    })
+}
+
 /// Erster nicht-leerer Env-Wert aus einer Alias-Liste (getrimmt).
 fn non_empty_env(keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {

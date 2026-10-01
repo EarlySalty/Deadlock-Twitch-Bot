@@ -82,7 +82,7 @@ fn non_empty_config(key: &str) -> Option<String> {
 pub fn platform_token_config_from_runtime() -> Option<PlatformTokenConfig> {
     let client_id = non_empty_config("TWITCH_CLIENT_ID")?;
     let client_secret = non_empty_config("TWITCH_CLIENT_SECRET")?;
-    let cipher = match FieldCipher::from_hex_key(&non_empty_config("DB_MASTER_KEY_V1")?, "v1") {
+    let cipher = match FieldCipher::from_runtime() {
         Ok(c) => Arc::new(c),
         Err(e) => {
             tracing::warn!(error = %e, "platform_token: Feldschluessel fehlt, Route bleibt zu");
@@ -868,10 +868,7 @@ mod tests {
             headers.insert(INTERNAL_TOKEN_HEADER, "synthetisch".parse().unwrap());
             let response = internal_platform_token_handler(
                 State(pool.clone()),
-                OptionalConnectInfo(Some(ConnectInfo(SocketAddr::from((
-                    [127, 0, 0, 1],
-                    40000,
-                ))))),
+                OptionalConnectInfo(Some(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))))),
                 Some(Extension(ExpectedToken("synthetisch".into()))),
                 Some(Extension(config_mit(Arc::new(FakeTokenClient::neu())))),
                 headers,

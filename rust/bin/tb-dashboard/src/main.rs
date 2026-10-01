@@ -79,8 +79,8 @@ fn pause_loop_helix_config_from_values(
 
 fn pause_loop_helix_config_from_env() -> Option<HelixConfig> {
     pause_loop_helix_config_from_values(
-        std::env::var("TWITCH_CLIENT_ID").ok(),
-        std::env::var("TWITCH_CLIENT_SECRET").ok(),
+        tb_config::private::secret("TWITCH_CLIENT_ID").ok(),
+        tb_config::private::secret("TWITCH_CLIENT_SECRET").ok(),
     )
 }
 
@@ -370,6 +370,25 @@ async fn main() {
         return;
     }
     let config = snapshot.settings();
+    let mut remaining = remaining;
+    let wait_private_stop = remaining
+        .last()
+        .is_some_and(|argument| argument == "--wait-for-stop");
+    if wait_private_stop {
+        remaining.pop();
+    }
+    let check_private_config = remaining
+        .last()
+        .is_some_and(|argument| argument == "--check-private-config");
+    if wait_private_stop && !check_private_config {
+        eprintln!("Die Warteprüfung benötigt --check-private-config.");
+        std::process::exit(2);
+    }
+    let remaining = if check_private_config {
+        remaining[..remaining.len() - 1].to_vec()
+    } else {
+        remaining
+    };
     tracing_subscriber::fmt()
         .with_max_level(config.logging.level.tracing_level())
         .init();
@@ -378,10 +397,29 @@ async fn main() {
         "TWITCH_DASHBOARD_CONFIG_V1"
     );
 
+    tb_config::private::load(snapshot.source()).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1);
+    });
+    tb_llm::keys::install_private_getter(|name| tb_config::private::secret(name).ok())
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(1);
+        });
+    tb_config::private::value("DB_MASTER_KEY_V1")
+        .and_then(|key| tb_crypto::FieldCipher::install_runtime_key(key).ok())
+        .unwrap_or_else(|| {
+            eprintln!("Privater Verschlüsselungsschlüssel fehlt oder ist ungültig.");
+            std::process::exit(1);
+        });
+
     // Nur Uplink migriert hier auf normale Konfiguration und Infisical-FD.
     // Bestehende benachbarte Dashboarddienste behalten ihren eigenen Startvertrag.
-    let configured = match tb_dashboard_api::uplink_config::load_arguments(remaining).await {
+    let configured = match tb_dashboard_api::uplink_config::load_shared_arguments(remaining).await {
         Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
+        Ok(None) if check_private_config => {
+            Err("Private Dashboardprüfung benötigt die bestehende Uplink-Konfiguration.")
+        }
         Ok(None) => Ok(()),
         Err(error) => Err(error),
     };
@@ -391,11 +429,26 @@ async fn main() {
     }
 
     let settings = snapshot
-        .runtime_settings(&|key| std::env::var(key).ok())
+        .runtime_settings(&|key| tb_config::private::service_secret(key, "dashboard"))
         .unwrap_or_else(|e| {
             tracing::error!("Konfigurationsfehler: {e}");
             std::process::exit(1);
         });
+
+    if check_private_config {
+        let mut stop = wait_private_stop
+            .then(|| tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()))
+            .transpose()
+            .unwrap_or_else(|_| {
+                eprintln!("Privates Prüfsignal ist nicht verfügbar.");
+                std::process::exit(1);
+            });
+        println!("TWITCH_PRIVATE_CONFIG_VALID role=dashboard snapshot_reads=1 master_key_valid=true service_dsn_present=true uplink_same_snapshot=true");
+        if let Some(stop) = &mut stop {
+            stop.recv().await;
+        }
+        return;
+    }
 
     let pool = tb_db::connect(&settings.db).await.unwrap_or_else(|e| {
         tracing::error!("DB-Verbindungsfehler: {e}");
@@ -498,7 +551,7 @@ async fn main() {
 
     // Welle D: Session-Auth (Fernet) — Partner-/Admin-Level für native
     // v2-Routen. Ohne Key bleibt der Extractor fail-closed (Localhost/None).
-    match tb_dashboard_api::DashboardAuthState::fernet_key_from_env() {
+    match tb_config::private::secret("SESSIONS_ENCRYPTION_KEY").ok() {
         Some(key) => {
             let auth_state = tb_dashboard_api::DashboardAuthState::new(pool.clone(), key)
                 .with_admin_twitch_user_id(config.dashboard.options.admin_twitch_user_id.clone());
@@ -521,7 +574,7 @@ async fn main() {
     // TWITCH_DASHBOARD_AUTH_REDIRECT_URI bleibt er aus → /twitch/auth/* liefert
     // 503 (statt in den toten Python-Proxy zu fallen). Secrets aus Env (Infisical),
     // nie geloggt.
-    match tb_dashboard_api::oauth_login_config_from_env() {
+    match tb_dashboard_api::oauth_login_config_from_snapshot() {
         Some(config) => {
             app = app.layer(axum::Extension(config));
             tracing::info!("Nativer Twitch-OAuth-Login aktiv");
@@ -536,7 +589,7 @@ async fn main() {
     // Native Discord-Admin-OAuth-Ausstellung für master_dash_session. Der eigentliche
     // Discord-Code-Tausch läuft wie in Python über den lokalen Broker; Secret-Werte
     // werden nur aus Env gelesen und nie geloggt.
-    match tb_dashboard_api::discord_admin_login_config_from_env() {
+    match tb_dashboard_api::discord_admin_login_config_from_snapshot() {
         Some(config) => {
             app = app.layer(axum::Extension(config));
             tracing::info!("Nativer Discord-Admin-Login aktiv");
@@ -552,7 +605,7 @@ async fn main() {
     // Ohne STRIPE_WEBHOOK_SECRET bleibt er aus → der Webhook-Pfad liefert 503
     // (statt in den toten Python-Proxy zu fallen). Secret aus Env (Infisical),
     // nie geloggt.
-    match tb_dashboard_api::stripe_webhook_config_from_env() {
+    match tb_dashboard_api::stripe_webhook_config_from_snapshot() {
         Some(config) => {
             app = app.layer(axum::Extension(config));
             tracing::info!("Nativer Stripe-Webhook aktiv");
@@ -568,7 +621,7 @@ async fn main() {
     // Ohne STRIPE_SECRET_KEY bleibt der Stripe-Client aus → Checkout/Cancel
     // leiten auf die Pricing-Seite mit reason=... um (kein 500), Katalog/
     // Readiness melden checkout_ready=false. Secret aus Env (Infisical), nie geloggt.
-    match tb_dashboard_api::billing_page_config_from_env() {
+    match tb_dashboard_api::billing_page_config_from_snapshot() {
         Some(config) => {
             app = app.layer(axum::Extension(config));
             tracing::info!("Nativer Abo-/Billing-Bezahlpfad aktiv");

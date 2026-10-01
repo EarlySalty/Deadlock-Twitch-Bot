@@ -1416,10 +1416,10 @@ pub async fn queue_upload_handler(
 /// aufgenommenen Clips gegen sein Monatskontingent. Der Hintergrund-Fetcher
 /// baut sich seinen Service ueber `build_clip_fetch_task` und bucht nichts.
 fn build_clip_fetch_service(pool: PgPool, limit: u32) -> Option<ClipFetchService> {
-    let client_id = std::env::var("TWITCH_CLIENT_ID")
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
         .ok()
         .filter(|s| !s.is_empty())?;
-    let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+    let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET")
         .ok()
         .filter(|s| !s.is_empty())?;
     let helix = HelixClient::new(HelixConfig::new(client_id, client_secret)).ok()?;
@@ -1815,7 +1815,7 @@ pub async fn vocab_seed_handler(
 /// Baut den CredentialManager inline aus dem Master-Key (Pattern wie
 /// engagement::build_sender_store). `None`, wenn kein Key im Env.
 fn build_credential_manager(pool: PgPool) -> Option<CredentialManager> {
-    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
     Some(CredentialManager::new(pool, cipher))
 }
 
@@ -3616,7 +3616,7 @@ fn redirect_found(url: &str) -> Response {
 
 /// Baut den OAuthManager inline aus dem Master-Key.
 fn build_oauth_manager(pool: PgPool) -> Option<OAuthManager> {
-    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
     Some(OAuthManager::new(pool, cipher))
 }
 

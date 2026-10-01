@@ -455,7 +455,7 @@ async fn update_settings(
 /// Baut den SenderAuthStore aus Env (DB_MASTER_KEY_V1 + TWITCH_CLIENT_ID/SECRET).
 /// `None`, wenn Krypto-Key oder App-Credentials fehlen.
 fn build_sender_store(pool: PgPool) -> Option<SenderAuthStore> {
-    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
     SenderAuthStore::from_env(pool, cipher)
 }
 

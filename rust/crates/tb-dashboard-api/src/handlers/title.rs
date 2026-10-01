@@ -248,7 +248,7 @@ enum TitleSetError {
 }
 
 async fn set_channel_title(pool: &PgPool, user_id: &str, title: &str) -> Result<(), TitleSetError> {
-    let Ok(cipher) = FieldCipher::from_env() else {
+    let Ok(cipher) = FieldCipher::from_runtime() else {
         return Err(TitleSetError::TokenStoreUnavailable);
     };
     let store = RaidAuthStore::new(pool.clone(), Arc::new(cipher));

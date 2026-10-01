@@ -21,6 +21,8 @@ tracing-subscriber = { workspace = true }
 sqlx              = { workspace = true }
 whoami            = { workspace = true }
 tb-config         = { workspace = true }
+tb-crypto         = { workspace = true }
+tb-llm            = { workspace = true }
 tb-db             = { workspace = true }
 tb-dashboard-api  = { workspace = true }
 tb-social-media   = { workspace = true }

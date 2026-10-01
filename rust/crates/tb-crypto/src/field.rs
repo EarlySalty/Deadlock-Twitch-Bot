@@ -3,8 +3,32 @@
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::TryRng;
+use std::sync::OnceLock;
 use tb_error::CryptoError;
 use zeroize::Zeroizing;
+
+static RUNTIME_KEY: OnceLock<Zeroizing<Vec<u8>>> = OnceLock::new();
+
+#[cfg(test)]
+#[test]
+fn runtime_key_is_once_only_and_matches_existing_cipher() {
+    assert!(FieldCipher::from_runtime().is_err());
+    assert!(FieldCipher::install_runtime_key("bad-key").is_err());
+    let key = "12".repeat(KEY_SIZE);
+    FieldCipher::install_runtime_key(&key).expect("Synthetic runtime key fixture");
+    assert!(FieldCipher::install_runtime_key(&"34".repeat(KEY_SIZE)).is_err());
+    let original = FieldCipher::from_hex_key(&key, KID).expect("Synthetic original cipher fixture");
+    let blob = original
+        .encrypt_field("synthetic-secret", "fixture-aad")
+        .expect("Synthetic encrypted fixture");
+    assert_eq!(
+        FieldCipher::from_runtime()
+            .expect("Synthetic runtime cipher fixture")
+            .decrypt_field(&blob, "fixture-aad")
+            .expect("Synthetic decrypt fixture"),
+        "synthetic-secret"
+    );
+}
 
 /// Format-Version (erstes Blob-Byte). Entspricht `FieldCrypto.VERSION = 1`.
 pub const VERSION: u8 = 1;
@@ -22,6 +46,28 @@ pub struct FieldCipher {
 }
 
 impl FieldCipher {
+    /// Einmaliger Startwert aus dem bereits gelesenen privaten Snapshot.
+    /// Fehlerhafte und wiederholte Installation bleiben gesperrt.
+    pub fn install_runtime_key(hex_key: &str) -> Result<(), CryptoError> {
+        let bytes =
+            Zeroizing::new(hex::decode(hex_key.trim()).map_err(|_| CryptoError::KeyMissing)?);
+        if bytes.len() != KEY_SIZE {
+            return Err(CryptoError::KeyMissing);
+        }
+        RUNTIME_KEY.set(bytes).map_err(|_| CryptoError::KeyMissing)
+    }
+
+    /// Alle gestarteten Verbraucher verwenden denselben Schlüssel ohne zweite Quelle.
+    pub fn from_runtime() -> Result<Self, CryptoError> {
+        let bytes = RUNTIME_KEY.get().ok_or(CryptoError::KeyMissing)?;
+        let key =
+            <&Key<Aes256Gcm>>::try_from(bytes.as_slice()).map_err(|_| CryptoError::KeyMissing)?;
+        Ok(Self {
+            cipher: Aes256Gcm::new(key),
+            kid: KID.to_string(),
+        })
+    }
+
     /// Lädt den Master-Key aus `DB_MASTER_KEY_V1` (Hex, exakt 32 Byte).
     /// Kein KDF, kein base64 — byte-identisch zu `FieldCrypto._load_keys`.
     pub fn from_env() -> Result<Self, CryptoError> {

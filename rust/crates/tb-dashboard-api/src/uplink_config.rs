@@ -408,6 +408,12 @@ fn redirect_uri(configured: Option<&str>, fallback: &str) -> Result<String, &'st
 }
 
 pub async fn load(path: &Path) -> Result<UplinkRuntime, &'static str> {
+    let config = read_configuration(path).await?;
+    let token = credential(config.credential_fd).await?;
+    fetch(&config, &token).await
+}
+
+async fn read_configuration(path: &Path) -> Result<UplinkConfig, &'static str> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut data = Vec::new();
     let file = std::fs::OpenOptions::new()
@@ -431,11 +437,57 @@ pub async fn load(path: &Path) -> Result<UplinkRuntime, &'static str> {
     if data.len() > 65536 {
         return Err("Uplink-Konfiguration ist zu groß.");
     }
-    let config: UplinkConfig =
-        serde_json::from_slice(&data).map_err(|_| "Uplink-Konfiguration ist ungültig.")?;
-    // Schützt den Original-FD vor dem ersten möglichen Start eines Fremdprozesses.
-    let token = credential(config.credential_fd).await?;
-    fetch(&config, &token).await
+    serde_json::from_slice(&data).map_err(|_| "Uplink-Konfiguration ist ungültig.")
+}
+
+/// Der Dashboardstart verwendet genau den schon geladenen FD3-Snapshot.
+/// Kein Credentialread und kein zweiter Connector bei der Uplinkinitialisierung.
+async fn load_shared(path: &Path) -> Result<UplinkRuntime, &'static str> {
+    let config = read_configuration(path).await?;
+    if config.infisical_base_url != uplink_infisical_transport::BASE_URL
+        || config.infisical_socket_owner_uid != 0
+        || !tb_config::private::matches_source(
+            &config.project_id,
+            &config.environment,
+            &config.secret_path,
+            &config.infisical_socket_path,
+        )
+    {
+        return Err("Uplink und privater Dienstsnapshot verwenden verschiedene Quellen.");
+    }
+    let mut values: HashMap<String, Zeroizing<String>> = tb_config::private::values()?
+        .map(|(name, value)| (name.to_owned(), Zeroizing::new(value.to_owned())))
+        .collect();
+    let dsn = tb_config::private::service_secret("TWITCH_ANALYTICS_DSN", "dashboard")
+        .ok_or("Privater Dashboard-Datenbankzugang fehlt.")?;
+    values.insert("TWITCH_ANALYTICS_DSN".to_owned(), Zeroizing::new(dsn));
+    let api = required(&mut values, "RS_RELAY_API_SECRET")?;
+    let admin = required(&mut values, "RS_RELAY_ADMIN_SECRET")?;
+    let helix = match (
+        values.get("TWITCH_CLIENT_ID"),
+        values.get("TWITCH_CLIENT_SECRET"),
+    ) {
+        (Some(id), Some(secret)) if !id.trim().is_empty() && !secret.trim().is_empty() => Some(
+            HelixClient::new(HelixConfig::new(id.trim(), secret.trim()))
+                .map_err(|_| "Twitch-Anschluss für Uplink ist ungültig.")?,
+        ),
+        _ => None,
+    };
+    Ok(UplinkRuntime {
+        base: local_origin(&config.relay_base_url)?,
+        api,
+        admin,
+        helix,
+        platform: values,
+        kick_redirect_uri: redirect_uri(
+            config.kick_redirect_uri.as_deref(),
+            "https://deutsche-deadlock-community.de/callback/kick",
+        )?,
+        youtube_redirect_uri: redirect_uri(
+            config.youtube_redirect_uri.as_deref(),
+            "https://deutsche-deadlock-community.de/callback/youtube",
+        )?,
+    })
 }
 
 /// Verwendet denselben begrenzten FD-/Infisical-Leser. Keine DSN in Argumenten,
@@ -549,6 +601,25 @@ pub async fn load_arguments(
         return Err("Unbekanntes oder doppeltes Dashboard-Startargument.");
     }
     load(Path::new(&path)).await.map(Some)
+}
+
+pub async fn load_shared_arguments(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Result<Option<UplinkRuntime>, &'static str> {
+    let mut arguments = arguments.into_iter();
+    let Some(argument) = arguments.next() else {
+        return Ok(None);
+    };
+    if argument != "--uplink-config" {
+        return Err("Unbekanntes Dashboard-Startargument.");
+    }
+    let path = arguments
+        .next()
+        .ok_or("Der Pfad der Uplink-Konfiguration fehlt.")?;
+    if arguments.next().is_some() {
+        return Err("Unbekanntes oder doppeltes Dashboard-Startargument.");
+    }
+    load_shared(Path::new(&path)).await.map(Some)
 }
 
 #[cfg(test)]

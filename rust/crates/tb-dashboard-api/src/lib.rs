@@ -22,7 +22,10 @@ pub use auth::csrf::csrf_protect;
 
 #[cfg(test)]
 pub(crate) mod test_database;
-pub use auth::discord_admin_login::{discord_admin_login_config_from_env, DiscordAdminLoginConfig};
+pub use auth::discord_admin_login::{
+    discord_admin_login_config_from_env, discord_admin_login_config_from_snapshot,
+    DiscordAdminLoginConfig,
+};
 pub use auth::level::DashboardAuthLevel;
 pub use auth::oauth_login::{HelixOAuthClient, TwitchIdentity, TwitchOAuthClient};
 pub use auth::security::{require_internal, RateLimiter};
@@ -35,9 +38,15 @@ pub use handlers::affiliate::{
     affiliate_oauth_config_from_env, affiliate_stripe_config_from_env, AffiliateOAuthConfig,
     AffiliateStripeConfig,
 };
-pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
-pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig};
-pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
+pub use handlers::auth_login::{
+    oauth_login_config_from_env, oauth_login_config_from_snapshot, OAuthLoginConfig,
+};
+pub use handlers::billing_page::{
+    billing_page_config_from_env, billing_page_config_from_snapshot, BillingPageConfig,
+};
+pub use handlers::billing_webhook::{
+    stripe_webhook_config_from_env, stripe_webhook_config_from_snapshot, StripeWebhookConfig,
+};
 pub use handlers::health_probe::{
     analytics_db_fingerprint_startup_check, AnalyticsDbFingerprintStartup,
 };

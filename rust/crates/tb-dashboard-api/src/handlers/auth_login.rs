@@ -350,9 +350,15 @@ async fn callback_handler_inner(
 
     // Same OAuth state, client, token exchange and identity validation as the
     // dashboard. A viewer login for /clips must not activate or grant a partnership.
-    if login_state.next_path.split(['?', '#']).next().is_some_and(|path| matches!(path, "/clips" | "/clips/")) {
-        let response = super::clip_contest::complete_twitch_login(
-            &state, &identity, config.cookie_secure).await;
+    if login_state
+        .next_path
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|path| matches!(path, "/clips" | "/clips/"))
+    {
+        let response =
+            super::clip_contest::complete_twitch_login(&state, &identity, config.cookie_secure)
+                .await;
         return no_store(clear_context_and_respond(config.cookie_secure, response));
     }
 
@@ -804,6 +810,38 @@ fn no_store(mut response: Response) -> Response {
 /// `TWITCH_DASHBOARD_AUTH_REDIRECT_URI` fehlen oder leer sind — dann bleibt der
 /// native Login deaktiviert (Routen liefern 503 statt zu raten). Secrets werden
 /// NICHT geloggt.
+pub fn oauth_login_config_from_snapshot() -> Option<OAuthLoginConfig> {
+    let config = tb_config::runtime::settings().ok()?;
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID").ok()?;
+    let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET").ok()?;
+    let redirect_uri = config.dashboard.options.oauth_redirect_uri.clone()?;
+    validate_oauth_redirect_uri(&redirect_uri).ok()?;
+    let client =
+        crate::auth::oauth_login::HelixOAuthClient::new(&client_id, &client_secret).ok()?;
+    let endpoint_url = raid_oauth_callback_endpoint(&format!(
+        "http://{}:{}",
+        config.internal_api.host, config.internal_api.port
+    ))?;
+    let internal_token = tb_config::private::secret("TWITCH_INTERNAL_API_TOKEN").ok()?;
+    let callback_client = reqwest::Client::builder()
+        .timeout(RAID_OAUTH_CALLBACK_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .ok()?;
+    Some(OAuthLoginConfig {
+        client_id,
+        redirect_uri,
+        cookie_secure: !config.dashboard.options.cookie_insecure,
+        client: Arc::new(client),
+        raid_callback: Some(RaidOAuthCallbackConfig {
+            endpoint_url,
+            internal_token,
+            client: callback_client,
+        }),
+    })
+}
+
 pub fn oauth_login_config_from_env() -> Option<OAuthLoginConfig> {
     let client_id = non_empty_env("TWITCH_CLIENT_ID")?;
     let client_secret = non_empty_env("TWITCH_CLIENT_SECRET")?;

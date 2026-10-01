@@ -36,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             operation_arguments.push(argument);
         }
     }
-    let uplink_runtime = tb_dashboard_api::uplink_config::load_arguments(uplink_arguments)
+    tb_config::private::load(snapshot.source())?;
+    let uplink_runtime = tb_dashboard_api::uplink_config::load_shared_arguments(uplink_arguments)
         .await?
         .ok_or("Die Uplink-Konfiguration fehlt.")?;
     tb_dashboard_api::uplink_config::install(uplink_runtime)?;

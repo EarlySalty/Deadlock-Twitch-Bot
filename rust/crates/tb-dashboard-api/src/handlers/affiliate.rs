@@ -796,7 +796,7 @@ async fn upsert_account_and_pii(
         .await?;
     }
     if !identity.email.trim().is_empty() {
-        let cipher = FieldCipher::from_env().map_err(AffiliatePersistError::Crypto)?;
+        let cipher = FieldCipher::from_runtime().map_err(AffiliatePersistError::Crypto)?;
         let input = PiiInput {
             email: Some(identity.email.trim().to_string()),
             ..PiiInput::default()
@@ -1162,7 +1162,7 @@ fn resolve_cipher(
     if let Some(Extension(cipher)) = cipher {
         return Ok(cipher);
     }
-    FieldCipher::from_env().map(Arc::new)
+    FieldCipher::from_runtime().map(Arc::new)
 }
 
 fn build_affiliate_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> String {

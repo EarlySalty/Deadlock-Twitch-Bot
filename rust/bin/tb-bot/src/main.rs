@@ -473,7 +473,9 @@ async fn main() {
         return;
     }
     let migrate_token_storage = remaining == ["--migrate-token-storage", "--apply"];
-    if !remaining.is_empty() && !migrate_token_storage {
+    let wait_private_stop = remaining == ["--check-private-config", "--wait-for-stop"];
+    let check_private_config = remaining == ["--check-private-config"] || wait_private_stop;
+    if !remaining.is_empty() && !migrate_token_storage && !check_private_config {
         eprintln!("Der Bot-Start akzeptiert nur --config mit absolutem Dateipfad.");
         std::process::exit(2);
     }
@@ -482,12 +484,43 @@ async fn main() {
         .init();
     tracing::info!(fingerprint = snapshot.fingerprint(), "TWITCH_BOT_CONFIG_V1");
 
+    tb_config::private::load(snapshot.source()).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1);
+    });
+    tb_llm::keys::install_private_getter(|name| tb_config::private::secret(name).ok())
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(1);
+        });
+    tb_config::private::value("DB_MASTER_KEY_V1")
+        .and_then(|key| FieldCipher::install_runtime_key(key).ok())
+        .unwrap_or_else(|| {
+            eprintln!("Privater Verschlüsselungsschlüssel fehlt oder ist ungültig.");
+            std::process::exit(1);
+        });
+
     let settings = snapshot
-        .runtime_settings(&|key| std::env::var(key).ok())
+        .runtime_settings(&|key| tb_config::private::service_secret(key, "bot"))
         .unwrap_or_else(|e| {
             tracing::error!("Konfigurationsfehler: {e}");
             std::process::exit(1);
         });
+
+    if check_private_config {
+        let mut stop = wait_private_stop
+            .then(|| tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()))
+            .transpose()
+            .unwrap_or_else(|_| {
+                eprintln!("Privates Prüfsignal ist nicht verfügbar.");
+                std::process::exit(1);
+            });
+        println!("TWITCH_PRIVATE_CONFIG_VALID role=bot snapshot_reads=1 master_key_valid=true service_dsn_present=true");
+        if let Some(stop) = &mut stop {
+            stop.recv().await;
+        }
+        return;
+    }
 
     let pool = tb_db::connect(&settings.db).await.unwrap_or_else(|e| {
         tracing::error!("DB-Verbindungsfehler: {e}");
@@ -495,7 +528,7 @@ async fn main() {
     });
 
     // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
-    let runtime_cipher = FieldCipher::from_env().map(Arc::new);
+    let runtime_cipher = FieldCipher::from_runtime().map(Arc::new);
     // Expliziter Wartungslauf: keine normalen Writer oder Hintergrundjobs starten.
     // Die vorhandene Infisical- und Betriebsdatei-Initialisierung bleibt gemeinsam.
     if migrate_token_storage {
@@ -547,8 +580,8 @@ async fn main() {
 
     // HelixClient aus Env bauen — optional, Bot startet auch ohne Helix
     let helix: Arc<Option<HelixClient>> = {
-        let client_id = std::env::var("TWITCH_CLIENT_ID").ok();
-        let client_secret = std::env::var("TWITCH_CLIENT_SECRET").ok();
+        let client_id = tb_config::private::secret("TWITCH_CLIENT_ID").ok();
+        let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET").ok();
         match (client_id, client_secret) {
             (Some(id), Some(secret)) => match HelixClient::new(HelixConfig::new(id, secret)) {
                 Ok(c) => {
@@ -691,7 +724,7 @@ async fn main() {
     // Scout-Konstruktion liegt danach und hätte sonst keinen Zugriff mehr.
     let scout_tracker = tracker.clone();
 
-    let webhook_secret = std::env::var("TWITCH_WEBHOOK_SECRET")
+    let webhook_secret = tb_config::private::secret("TWITCH_WEBHOOK_SECRET")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
@@ -895,7 +928,7 @@ async fn main() {
             // Python (TWITCH_RAID_REDIRECT_URI mit Hardcode-Default,
             // runtime_bootstrap.py:341).
             let raid_redirect_uri = config.bot.raid_redirect_uri.trim().to_string();
-            if let Ok(client_id) = std::env::var("TWITCH_CLIENT_ID") {
+            if let Ok(client_id) = tb_config::private::secret("TWITCH_CLIENT_ID") {
                 // Followup-Service: Discord via Master-Broker, Moderator via
                 // Helix, Chat-Begrüßung via Legacy-Python (8779).
                 let followup_relay = match BrokerRelay::new(&settings.broker) {
@@ -1289,7 +1322,7 @@ async fn main() {
             // Helix + Krypto-Key.
             let clip_port = chat_wiring::build_clip_port(
                 helix.as_ref().clone().map(Arc::new),
-                FieldCipher::from_env().ok().map(Arc::new),
+                FieldCipher::from_runtime().ok().map(Arc::new),
                 pool.clone(),
                 handle.bot_token_manager(),
                 &config.bot.clip_raid_redirect_uri,
@@ -1456,7 +1489,7 @@ async fn main() {
     // Caddy proxyt /twitch/eventsub/callback hierher — ersetzt die
     // Python-Bridge-Strecke (8765 → HTTP-Hop → 8776), die Notifications auf
     // stillen Pfaden verlor. Signatur = Auth; Dedup = persistenter Guard.
-    if let Ok(secret) = std::env::var("TWITCH_WEBHOOK_SECRET") {
+    if let Ok(secret) = tb_config::private::secret("TWITCH_WEBHOOK_SECRET") {
         let secret = secret.trim().to_string();
         if !secret.is_empty() {
             let receiver_port: u16 = config.bot.eventsub_receiver_port;
@@ -1729,7 +1762,7 @@ async fn main() {
         // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur
         // die cipher-freien Worker — die Token-abhängigen bleiben aus statt zu
         // paniken.
-        match tb_crypto::FieldCipher::from_env() {
+        match tb_crypto::FieldCipher::from_runtime() {
             Ok(cipher) => {
                 let cipher = Arc::new(cipher);
                 let upload_creds = tb_social_media::credentials::CredentialManager::new(
@@ -2211,7 +2244,7 @@ fn build_telemetry_sub_auth(
     pool: sqlx::PgPool,
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<(Arc<TokenProvider>, RaidAuthStore)> {
-    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
     let redirect_uri = tb_config::runtime::settings()
         .ok()?
         .bot
@@ -2294,7 +2327,7 @@ fn build_moderator_token_provider(
     pool: sqlx::PgPool,
     helix_client: tb_transport_twitch::HelixClient,
 ) -> Option<Arc<TokenProvider>> {
-    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
     let redirect_uri = tb_config::runtime::settings()
         .ok()?
         .bot

@@ -301,7 +301,7 @@ impl LegacyChatGreeter {
     /// 8779), `token` = `TWITCH_INTERNAL_API_TOKEN` (gleicher Token wie die
     /// interne API selbst).
     pub fn from_runtime() -> Option<Self> {
-        let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
+        let token = tb_config::private::secret("TWITCH_INTERNAL_API_TOKEN")
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())?;

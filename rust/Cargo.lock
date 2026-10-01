@@ -904,6 +904,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dl-token-secrets"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "filedescriptor",
+ "nix 0.29.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "uplink-infisical-transport 0.1.0",
+ "zeroize",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3586,7 +3600,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uplink-infisical-transport 0.1.0",
+ "uplink-infisical-transport 0.1.1",
  "whoami 2.1.3",
  "wiremock",
  "zeroize",
@@ -3629,6 +3643,7 @@ dependencies = [
 name = "tb-config"
 version = "0.1.0"
 dependencies = [
+ "dl-token-secrets",
  "libc",
  "proc-macro2",
  "quote",
@@ -3637,10 +3652,12 @@ dependencies = [
  "sha2 0.11.0",
  "syn 3.0.6",
  "tb-error",
+ "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "toml_edit 0.25.15+spec-1.1.0",
  "tracing",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -3665,8 +3682,10 @@ dependencies = [
  "chrono",
  "sqlx 0.9.0",
  "tb-config",
+ "tb-crypto",
  "tb-dashboard-api",
  "tb-db",
+ "tb-llm",
  "tb-social-media",
  "tb-transport-twitch",
  "tokio",
@@ -3727,7 +3746,7 @@ dependencies = [
  "tower",
  "tower-http 0.7.1",
  "tracing",
- "uplink-infisical-transport 0.1.0",
+ "uplink-infisical-transport 0.1.1",
  "url",
  "uuid",
  "wiremock",
@@ -3906,7 +3925,7 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
- "uplink-infisical-transport 0.1.0",
+ "uplink-infisical-transport 0.1.1",
  "wiremock",
  "zeroize",
 ]
@@ -4680,7 +4699,6 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 name = "uplink-infisical-transport"
 version = "0.1.0"
 dependencies = [
- "nix 0.31.3",
  "reqwest",
 ]
 
@@ -4689,6 +4707,14 @@ name = "uplink-infisical-transport"
 version = "0.1.0"
 source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b#d8c34270868e129098e12243f53f5b52ee507b8b"
 dependencies = [
+ "reqwest",
+]
+
+[[package]]
+name = "uplink-infisical-transport"
+version = "0.1.1"
+dependencies = [
+ "nix 0.31.3",
  "reqwest",
 ]
 
