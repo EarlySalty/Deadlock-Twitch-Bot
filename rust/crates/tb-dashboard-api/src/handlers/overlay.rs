@@ -1448,12 +1448,19 @@ mod tests {
 
     // Der Parent delegiert genau diesen Test an ein env_clear-Child. Der Child
     // erhält ausschließlich normale Config auf stdin; ohne diese Bindung ist
-    // ein direkter --exact-Aufruf ein harter Fehler vor Optionsinitialisierung.
+    // ein ungebundener Child-Aufruf ein harter Fehler vor Optionsinitialisierung.
     fn isolated_overlay_child(fixture: &str) -> Option<OverlayScratchConfig> {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
 
-        if std::env::args().any(|argument| argument == "--exact") {
+        const CHILD_MARKER: &str = "__tokendb_overlay_fixture_child_v1__";
+        let arguments: Vec<_> = std::env::args().collect();
+        // Libtest akzeptiert den Marker als Ausschlussfilter für einen nicht
+        // existierenden Test. --exact bleibt eine normale Harness-Option.
+        let child_mode = arguments
+            .windows(2)
+            .any(|pair| pair[0] == "--skip" && pair[1] == CHILD_MARKER);
+        if child_mode {
             let mut bytes = Vec::new();
             std::io::stdin()
                 .take(4097)
@@ -1488,7 +1495,15 @@ mod tests {
         let bytes = serde_json::to_vec(&config).expect("Normale Child-Testconfig serialisieren");
         let mut child = Command::new(std::env::current_exe().expect("Eigenes Testbinary auflösen"))
             .env_clear()
-            .args([fixture, "--exact", "--test-threads=1", "--nocapture"])
+            .args([
+                fixture,
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+                "--nocapture",
+                "--skip",
+                CHILD_MARKER,
+            ])
             .stdin(Stdio::piped())
             .spawn()
             .expect("Isolierten Overlay-Testchild starten");
@@ -1604,6 +1619,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Benötigt die ausdrücklich aktivierte isolierte Overlay-Scratch-DB"]
     async fn overlay_api_cache_hit_innerhalb_ttl_nutzt_keinen_zweiten_steam_abruf() {
         let Some(config) = isolated_overlay_child("handlers::overlay::tests::overlay_api_cache_hit_innerhalb_ttl_nutzt_keinen_zweiten_steam_abruf") else { return; };
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
@@ -1737,6 +1753,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Benötigt die ausdrücklich aktivierte isolierte Overlay-Scratch-DB"]
     async fn overlay_api_unbekannter_streamer_liefert_ok_false_ohne_steam_abruf() {
         let Some(config) = isolated_overlay_child("handlers::overlay::tests::overlay_api_unbekannter_streamer_liefert_ok_false_ohne_steam_abruf") else { return; };
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
