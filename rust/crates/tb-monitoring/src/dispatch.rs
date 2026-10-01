@@ -227,11 +227,21 @@ pub trait EventSubHooks: Send + Sync {
     /// `channel.chat.message_delete`: konkrete, von einem Moderator entfernte
     /// Chat-Nachricht. Der Event-Body enthält die gelöschte `message_id` und den
     /// ursprünglichen Autor (`target_user_id`).
-    async fn on_chat_message_delete(&self, _event: &Value, _message_id: Option<&str>) {}
+    async fn on_chat_message_delete(
+        &self,
+        _event: &Value,
+        _message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        Ok(())
+    }
 
-    /// `channel.chat.notification` mit `notice_type=announcement`: liefert die
-    /// Message-ID eines zuvor via Send Chat Announcement akzeptierten Sends.
-    async fn on_chat_announcement_notification(&self, _event: &Value, _message_id: Option<&str>) {}
+    async fn on_chat_announcement_notification(
+        &self,
+        _event: &Value,
+        _message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        Ok(())
+    }
 
     /// Routing-Punkt B8-00: `channel.chat.notification` mit Sub/Resub/Gift-
     /// `notice_type` (Sub-Telemetrie-Fallback, B8-01). `kind` ist die
@@ -369,14 +379,22 @@ impl EventSubHooks for ChatSubscriptionTelemetryHooks {
         self.inner.on_chat_message(event, message_id).await;
     }
 
-    async fn on_chat_message_delete(&self, event: &Value, message_id: Option<&str>) {
-        self.inner.on_chat_message_delete(event, message_id).await;
+    async fn on_chat_message_delete(
+        &self,
+        event: &Value,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        self.inner.on_chat_message_delete(event, message_id).await
     }
 
-    async fn on_chat_announcement_notification(&self, event: &Value, message_id: Option<&str>) {
+    async fn on_chat_announcement_notification(
+        &self,
+        event: &Value,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
         self.inner
             .on_chat_announcement_notification(event, message_id)
-            .await;
+            .await
     }
 
     async fn on_chat_subscription_notification(
@@ -851,13 +869,13 @@ impl EventSubDispatcher {
             "channel.chat.message_delete" => {
                 self.hooks
                     .on_chat_message_delete(&context.event, message_id)
-                    .await;
+                    .await?;
                 outcome.processed = true;
             }
             "channel.chat.notification" => {
                 outcome.processed = self
                     .route_chat_notification(message_id, &context.event)
-                    .await;
+                    .await?;
             }
             "channel.moderate" => {
                 let now = epoch_to_datetime((self.clock)());
@@ -902,7 +920,11 @@ impl EventSubDispatcher {
     /// Foundation-Hinweis: Die Hook-Ziele sind bis B8-01/B7 Default-No-ops —
     /// dieser Zweig baut nur den Demux + die Routing-Punkte, nicht die volle
     /// Telemetrie-/Korrelations-Persistenz.
-    async fn route_chat_notification(&self, message_id: Option<&str>, event: &Value) -> bool {
+    async fn route_chat_notification(
+        &self,
+        message_id: Option<&str>,
+        event: &Value,
+    ) -> Result<bool, sqlx::Error> {
         let notice_type = event
             .get("notice_type")
             .and_then(Value::as_str)
@@ -912,7 +934,7 @@ impl EventSubDispatcher {
                 notice_type,
                 "channel.chat.notification: unbekannter notice_type ignoriert"
             );
-            return false;
+            return Ok(false);
         };
         match kind {
             ChatNotificationKind::Raid => {
@@ -928,7 +950,7 @@ impl EventSubDispatcher {
             ChatNotificationKind::Announcement => {
                 self.hooks
                     .on_chat_announcement_notification(event, message_id)
-                    .await;
+                    .await?;
             }
             sub_kind => {
                 self.hooks
@@ -936,7 +958,7 @@ impl EventSubDispatcher {
                     .await;
             }
         }
-        true
+        Ok(true)
     }
 
     /// Subscription-Lifecycle-Fehler werden vor dem Ack propagiert. Übrige

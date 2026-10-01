@@ -1040,7 +1040,7 @@ async fn chat_subscribe_lurker_mit_raid_auth_subscribed_normal() {
             .ensure_chat_subscriptions("902", "BOTID", "raider")
             .await
     );
-    assert_eq!(transport.creates.lock().unwrap().len(), 2);
+    assert_eq!(transport.creates.lock().unwrap().len(), 3);
     assert!(manager.chat_subscription_states("raider").is_empty());
 }
 

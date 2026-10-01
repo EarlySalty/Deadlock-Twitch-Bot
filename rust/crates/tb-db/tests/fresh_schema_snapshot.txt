@@ -568,6 +568,12 @@ twitch_bits_events|message|text|YES|
 twitch_bits_events|received_at|timestamp with time zone|NO|now()
 twitch_bits_events|session_id|bigint|YES|
 twitch_bits_events|twitch_user_id|text|NO|
+twitch_bot_announcement_events|broadcaster_user_id|text|NO|
+twitch_bot_announcement_events|channel_login|text|NO|
+twitch_bot_announcement_events|chatter_user_id|text|NO|
+twitch_bot_announcement_events|message_text|text|NO|
+twitch_bot_announcement_events|seen_at|timestamp with time zone|NO|now()
+twitch_bot_announcement_events|twitch_message_id|text|NO|
 twitch_bot_ban_klassifikation|klassifikation|text|NO|
 twitch_bot_ban_klassifikation|letzte_meldung|timestamp with time zone|NO|now()
 twitch_bot_ban_klassifikation|meldungen|integer|NO|1

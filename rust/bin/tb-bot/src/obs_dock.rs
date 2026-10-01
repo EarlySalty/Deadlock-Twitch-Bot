@@ -883,6 +883,26 @@ impl EventSubHooks for ObsDockHooks {
         self.inner.on_chat_message(event, message_id).await;
     }
 
+    async fn on_chat_message_delete(
+        &self,
+        event: &Value,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        self.inner
+            .on_chat_message_delete(event, message_id)
+            .await
+    }
+
+    async fn on_chat_announcement_notification(
+        &self,
+        event: &Value,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        self.inner
+            .on_chat_announcement_notification(event, message_id)
+            .await
+    }
+
     async fn on_chat_subscription_notification(
         &self,
         kind: ChatNotificationKind,
@@ -953,6 +973,8 @@ mod tests {
         offline: AtomicU64,
         live_mit_stream_id: Mutex<Vec<(String, String, Option<String>)>>,
         unraid: AtomicU64,
+        promo_deletes: AtomicU64,
+        promo_announcements: AtomicU64,
     }
 
     #[async_trait]
@@ -963,6 +985,22 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((event.clone(), message_id.map(str::to_string)));
+        }
+        async fn on_chat_message_delete(
+            &self,
+            _event: &Value,
+            _message_id: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
+            self.promo_deletes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn on_chat_announcement_notification(
+            &self,
+            _event: &Value,
+            _message_id: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
+            self.promo_announcements.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
         async fn on_channel_raid(&self, _event: &Value, _message_id: Option<&str>) {
             self.raids.fetch_add(1, Ordering::SeqCst);
@@ -1043,6 +1081,25 @@ mod tests {
     /// StreamerLoginStore und damit eine echte Postgres-Verbindung; ihn hier
     /// mitzustarten haette den Test an `TB_TEST_DATABASE_URL` gehaengt, ohne
     /// ueber den Wrapper mehr auszusagen.
+    #[tokio::test]
+    async fn promo_hooks_werden_durch_obs_wrapper_delegiert() {
+        let sink = Arc::new(MerkendeSink::default());
+        let inner = Arc::new(MerkendeHooks::default());
+        let hooks = wrap_eventsub_hooks(inner.clone(), sink);
+        let event = chat_nutzlast();
+
+        assert!(hooks
+            .on_chat_message_delete(&event, Some("delete-1"))
+            .await
+            .is_ok());
+        assert!(hooks
+            .on_chat_announcement_notification(&event, Some("announcement-1"))
+            .await
+            .is_ok());
+        assert_eq!(inner.promo_deletes.load(Ordering::SeqCst), 1);
+        assert_eq!(inner.promo_announcements.load(Ordering::SeqCst), 1);
+    }
+
     #[tokio::test]
     async fn chat_nachricht_erzeugt_genau_eine_zeile_und_delegiert_unveraendert() {
         let sink = Arc::new(MerkendeSink::default());

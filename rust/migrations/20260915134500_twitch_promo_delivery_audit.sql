@@ -43,3 +43,15 @@ CREATE TABLE IF NOT EXISTS public.twitch_bot_message_delete_events (
 
 CREATE INDEX IF NOT EXISTS idx_twitch_bot_message_delete_channel_time
     ON public.twitch_bot_message_delete_events (broadcaster_user_id, deleted_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.twitch_bot_announcement_events (
+    twitch_message_id   TEXT PRIMARY KEY,
+    broadcaster_user_id TEXT NOT NULL,
+    channel_login       TEXT NOT NULL,
+    chatter_user_id     TEXT NOT NULL,
+    message_text        TEXT NOT NULL,
+    seen_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_twitch_bot_announcement_events_match
+    ON public.twitch_bot_announcement_events (broadcaster_user_id, channel_login, seen_at DESC);

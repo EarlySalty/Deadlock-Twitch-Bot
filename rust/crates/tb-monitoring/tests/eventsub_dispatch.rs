@@ -44,6 +44,8 @@ struct RecordingHooks {
     chat_unraid: AtomicU64,
     chat_announcement: AtomicU64,
     chat_message_delete: AtomicU64,
+    fail_announcement_once: AtomicBool,
+    fail_message_delete_once: AtomicBool,
     /// Klassifizierte Sub-Notifications (in Reihenfolge des Eintreffens).
     chat_sub_kinds: Mutex<Vec<ChatNotificationKind>>,
 }
@@ -101,11 +103,23 @@ impl EventSubHooks for RecordingHooks {
         &self,
         _event: &serde_json::Value,
         _message_id: Option<&str>,
-    ) {
+    ) -> Result<(), sqlx::Error> {
         self.chat_announcement.fetch_add(1, Ordering::SeqCst);
+        if self.fail_announcement_once.swap(false, Ordering::SeqCst) {
+            return Err(sqlx::Error::Protocol("announcement retry".into()));
+        }
+        Ok(())
     }
-    async fn on_chat_message_delete(&self, _event: &serde_json::Value, _message_id: Option<&str>) {
+    async fn on_chat_message_delete(
+        &self,
+        _event: &serde_json::Value,
+        _message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
         self.chat_message_delete.fetch_add(1, Ordering::SeqCst);
+        if self.fail_message_delete_once.swap(false, Ordering::SeqCst) {
+            return Err(sqlx::Error::Protocol("message delete retry".into()));
+        }
+        Ok(())
     }
 }
 
@@ -1303,6 +1317,60 @@ async fn chat_notification_demuxt_nach_notice_type() {
         ],
         "Sub-Notices in Reihenfolge an den Sub-Routing-Punkt"
     );
+}
+
+#[tokio::test]
+async fn promo_hook_fehler_bleibt_retrybar() {
+    let pool = pool_or_skip!("t4d_promo_hook_retry");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, _store) = build_stack(&pool, hooks.clone());
+    hooks.fail_announcement_once.store(true, Ordering::SeqCst);
+    hooks.fail_message_delete_once.store(true, Ordering::SeqCst);
+
+    let announcement = serde_json::json!({
+        "subscription": {"type": "channel.chat.notification"},
+        "event": {"broadcaster_user_id": "42", "notice_type": "announcement"}
+    });
+    assert!(dispatcher
+        .dispatch(
+            "channel.chat.notification",
+            Some("cn-announcement-retry"),
+            &announcement,
+        )
+        .await
+        .is_err());
+    assert!(dispatcher
+        .dispatch(
+            "channel.chat.notification",
+            Some("cn-announcement-retry"),
+            &announcement,
+        )
+        .await
+        .unwrap()
+        .processed);
+
+    let deletion = serde_json::json!({
+        "subscription": {"type": "channel.chat.message_delete"},
+        "event": {"broadcaster_user_id": "42", "message_id": "promo-msg", "target_user_id": "bot"}
+    });
+    assert!(dispatcher
+        .dispatch(
+            "channel.chat.message_delete",
+            Some("cn-delete-retry"),
+            &deletion,
+        )
+        .await
+        .is_err());
+    assert!(dispatcher
+        .dispatch(
+            "channel.chat.message_delete",
+            Some("cn-delete-retry"),
+            &deletion,
+        )
+        .await
+        .unwrap()
+        .processed);
+    runtime.shutdown().await;
 }
 
 /// 65.3 Readiness-Gate: `ensure_dispatch_ready` lehnt VOR dem Dispatch ab,

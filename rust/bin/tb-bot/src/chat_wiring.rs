@@ -1801,16 +1801,26 @@ impl EventSubHooks for ChatHooks {
         }
     }
 
-    async fn on_chat_message_delete(&self, event: &Value, message_id: Option<&str>) {
-        self.inner.on_chat_message_delete(event, message_id).await;
-        self.promos.observe_message_delete(event).await;
+    async fn on_chat_message_delete(
+        &self,
+        event: &Value,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        self.inner
+            .on_chat_message_delete(event, message_id)
+            .await?;
+        self.promos.observe_message_delete(event).await
     }
 
-    async fn on_chat_announcement_notification(&self, event: &Value, message_id: Option<&str>) {
+    async fn on_chat_announcement_notification(
+        &self,
+        event: &Value,
+        message_id: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
         self.inner
             .on_chat_announcement_notification(event, message_id)
-            .await;
-        self.promos.observe_announcement_notification(event).await;
+            .await?;
+        self.promos.observe_announcement_notification(event).await
     }
 
     // B7: chat.notification-Raid/Unraid an die Raid-Schicht durchreichen (der
