@@ -86,6 +86,11 @@ use tb_transport_twitch::{HelixClient, HelixConfig};
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::resolve_streamer_scope;
 
+// Knopf "Für Clip-Contest einreichen" (Paket E der Community-Streamer-Brücke).
+#[path = "social_media_clip_contest.rs"]
+mod clip_contest_forward;
+pub use clip_contest_forward::submit_clip_contest_handler;
+
 fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, message.to_string()).into_response()
 }

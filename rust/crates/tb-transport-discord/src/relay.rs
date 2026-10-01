@@ -26,6 +26,8 @@ const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
 const MESSAGE_REACTIONS_PATH: &str = "/internal/master/v1/discord/message-reactions";
+/// Clip-Contest-Einreichung (Community-Streamer-Brücke, Paket D/E).
+pub const CLIP_SUBMIT_PATH: &str = "/internal/master/v1/clips/submit";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: u32 = 2;
@@ -211,6 +213,17 @@ where
     }
 }
 
+/// Ergebnis von `POST /internal/master/v1/clips/submit` (Feld `result` im
+/// Broker-Envelope): `status` ist `accepted`, `duplicate` oder `rejected`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ClipSubmitResult {
+    pub status: String,
+    #[serde(default)]
+    pub submission_id: Option<i64>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PersonalInvite {
     pub invite_url: String,
@@ -253,7 +266,9 @@ impl BrokerRelay {
             || url.query().is_some()
             || url.fragment().is_some()
             || url.path() != "/"
-            || !(path.starts_with("/internal/master/v1/discord/") || path == PERSONAL_INVITE_PATH)
+            || !(path.starts_with("/internal/master/v1/discord/")
+                || path == PERSONAL_INVITE_PATH
+                || path == CLIP_SUBMIT_PATH)
             || path.contains(['?', '#', '\\'])
             || path.split('/').any(|part| part == "." || part == "..")
         {
@@ -512,6 +527,40 @@ impl BrokerRelay {
             .ok_or_else(|| DiscordError::BrokerError {
                 status: 502,
                 body: "Ungültige Discord-Einladungsantwort".into(),
+            })
+    }
+
+    /// Reicht einen Twitch-Clip für den wöchentlichen Clip-Contest ein
+    /// (`POST /internal/master/v1/clips/submit`). Der Payload folgt dem
+    /// Vertrag aus dem Bauplan; `idempotency_key` ist zugleich der
+    /// `X-Idempotency-Key`, damit ein Retry nach Verbindungsabbruch beim
+    /// Broker dieselbe Einreichung trifft.
+    pub async fn submit_twitch_clip<T: serde::Serialize>(
+        &self,
+        payload: &T,
+        idempotency_key: &str,
+    ) -> Result<ClipSubmitResult, DiscordError> {
+        let response = self
+            .post_with_retry(CLIP_SUBMIT_PATH, payload, idempotency_key)
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let envelope: BrokerEnvelope<ClipSubmitResult> = response.json().await?;
+        envelope
+            .result
+            .filter(|result| {
+                envelope.ok
+                    && matches!(
+                        result.status.as_str(),
+                        "accepted" | "duplicate" | "rejected"
+                    )
+            })
+            .ok_or_else(|| DiscordError::BrokerError {
+                status: 502,
+                body: "Ungültige Clip-Contest-Antwort".into(),
             })
     }
 
@@ -784,6 +833,75 @@ mod tests {
             let url = relay.request_url(SEND_PATH).unwrap();
             assert_eq!(url.path(), SEND_PATH);
         }
+    }
+
+    #[tokio::test]
+    async fn clip_submit_sendet_planvertrag_und_liest_envelope() {
+        let server = MockServer::start().await;
+        let payload = serde_json::json!({
+            "source": "twitch",
+            "clip_url": "https://clips.twitch.tv/AbcDef",
+            "streamer_twitch_user_id": "456",
+            "streamer_login": "name",
+            "submitted_by_twitch_user_id": "456",
+            "title": "Titel",
+            "idempotency_key": "twitch-clip-AbcDef",
+        });
+        Mock::given(method("POST"))
+            .and(path(CLIP_SUBMIT_PATH))
+            .and(header("X-Internal-Token", "test-token"))
+            .and(header("X-Idempotency-Key", "twitch-clip-AbcDef"))
+            .and(wiremock::matchers::body_json(payload.clone()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "request_id": "r", "idempotency_key": "twitch-clip-AbcDef",
+                "cached": false,
+                "result": {"status": "accepted", "submission_id": 123, "reason": null},
+                "error": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let result = relay
+            .submit_twitch_clip(&payload, "twitch-clip-AbcDef")
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            ClipSubmitResult {
+                status: "accepted".into(),
+                submission_id: Some(123),
+                reason: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn clip_submit_fehler_und_unbekannter_status_sind_fehler() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(CLIP_SUBMIT_PATH))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(CLIP_SUBMIT_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": {"status": "vielleicht"}
+            })))
+            .mount(&server)
+            .await;
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let payload = serde_json::json!({"source": "twitch"});
+        assert!(matches!(
+            relay.submit_twitch_clip(&payload, "k").await,
+            Err(DiscordError::BrokerError { status: 503, .. })
+        ));
+        assert!(matches!(
+            relay.submit_twitch_clip(&payload, "k").await,
+            Err(DiscordError::BrokerError { status: 502, .. })
+        ));
     }
 
     #[tokio::test]

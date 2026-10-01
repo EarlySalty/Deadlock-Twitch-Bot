@@ -895,6 +895,17 @@ twitch_clip_contest_effort_outbox|occurred_at|timestamp with time zone|NO|
 twitch_clip_contest_effort_outbox|partner_twitch_user_id|text|NO|
 twitch_clip_contest_effort_outbox|source_id|text|NO|
 twitch_clip_contest_effort_outbox|streamer_login|text|NO|
+twitch_clip_contest_forwards|broadcaster_login|text|NO|
+twitch_clip_contest_forwards|broadcaster_twitch_id|text|NO|
+twitch_clip_contest_forwards|broker_submission_id|bigint|YES|
+twitch_clip_contest_forwards|clip_id|text|NO|
+twitch_clip_contest_forwards|clip_url|text|NO|
+twitch_clip_contest_forwards|created_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_forwards|reason|text|YES|
+twitch_clip_contest_forwards|status|text|NO|
+twitch_clip_contest_forwards|submitted_by_twitch_id|text|YES|
+twitch_clip_contest_forwards|updated_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_forwards|via|text|NO|
 twitch_clip_contest_hall_of_fame|contest_month|date|NO|
 twitch_clip_contest_hall_of_fame|finalized_at|timestamp with time zone|NO|clock_timestamp()
 twitch_clip_contest_hall_of_fame|rank|smallint|NO|

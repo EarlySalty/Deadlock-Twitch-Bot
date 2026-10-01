@@ -276,3 +276,34 @@ Zuschauer-Zeile: `twitch_user_id`, `twitch_login`, `channel_twitch_user_id`,
 Streamer-Zeile: `streamer_twitch_user_id`, `streamer_login`, `discord_user_id`
 (oder `null`), `day`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`,
 `updated_at`.
+
+## Clip-Contest aus Twitch (Community-Streamer-Brücke, Paket E)
+
+Streamer reichen Clips ihres Kanals für den wöchentlichen Clip-Contest im
+Discord ein. Ein Dienst für beide Wege:
+`rust/crates/tb-chat/src/clip_contest_submit.rs`.
+
+| Weg | Auslöser | Datei |
+|-----|----------|-------|
+| Chat | `!clipcontest [clip-url]` im eigenen Kanal (nur Broadcaster und Mods) | rust/crates/tb-chat/src/commands.rs |
+| Dashboard | `POST /social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
+
+Weitergabe an den Master-Broker von Deadlock-Bots über den vorhandenen
+`BrokerRelay` (Basis-URL der Betriebskonfiguration, bestehendes interne Token):
+
+`POST /internal/master/v1/clips/submit`
+`{"source":"twitch","clip_url":"https://clips.twitch.tv/<id>","streamer_twitch_user_id":"456","streamer_login":"name","submitted_by_twitch_user_id":"456","title":"...","idempotency_key":"twitch-clip-<clip_id>"}`
+mit `X-Idempotency-Key` = `idempotency_key`. Erwartet wird der Broker-Envelope
+`{"ok":true,"result":{"status":"accepted"|"duplicate"|"rejected","submission_id":123,"reason":null}}`.
+
+Regeln: Kanal aktiver Partner; Clip-URL nur `clips.twitch.tv/<slug>` oder
+`(www.|m.)twitch.tv/<kanal>/clip/<slug>`; Clip muss per Helix `GET /clips?id=`
+existieren und zum Kanal gehören; ohne URL der jüngste Clip der laufenden
+Session (`twitch_clip_command_events`, `twitch_clips_social_media`); höchstens
+3 Einreichungen je Kanal und Berliner Tag; eine laufende Einreichung desselben
+Clips wird nicht doppelt gesendet.
+
+Dashboard-Antwort `{"status":"...","message":"...","clip_url":...}`. HTTP 200
+für `accepted` und `already_in`; 422 `rejected`/`not_twitch_clip`, 404
+`clip_not_found`, 403 `foreign_clip`/`not_partner`, 429 `rate_limited`, 409
+`in_flight`, 503 `broker_unavailable`/`twitch_unavailable`/`unavailable`.
