@@ -14,3 +14,13 @@ Basis: origin/main 14bc1f47.
 - Zeitraum, Tage-Enter, Sprachwechsel, Hilfe öffnen und Variantenerhalt bei Home-Navigation erfolgreich; interaction-checks.txt.
 - Statische Vorschau rekonstruieren: npm run build:preview im Dashboard; /usr/local/bin/node node_modules/vite/bin/vite.js preview --mode preview --host 100.117.29.112 --port 4187 --strictPort.
 - Screenshot-Werkzeug: npm install --prefix /tmp/tb-gold-tools playwright-core@1.63.0; node .tasks/2026-10-01-gold-glanz-preview/capture.mjs im Worktree.
+
+## Revision 2
+
+- Nutzerentscheidung aus NUTZERENTSCHEIDUNG-V2.md umgesetzt: Lichtkamm und helle Bänder vollständig entfernt, Champagner als Variante entfernt.
+- Zwei ruhige Verläufe mit je drei Tönen an 0 %, 50 % und 100 %; keine lokalen Helligkeitsspitzen. Innenkanten abgeschwächt.
+- npm run build:preview erfolgreich; build-preview-v2.txt.
+- Sieben vorhandene Gestaltungstests erfolgreich; look-tests-v2.txt.
+- Neuer Screenshot-Satz in screenshots-v2/; Browsernachweis browser-checks-v2.txt.
+- Minimaler Kontrast zwischen Text #1a130c und den sechs Verlaufstönen: 5,56:1.
+- Implementierungscommit 8d2eb5a4. Keine Änderung an Markentokens, Statusfarben, Diagrammen oder neutralem Hintergrund.

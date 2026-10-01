@@ -1,38 +1,23 @@
-[Fertigmeldung] Paket B: Gold-Glanz als reine Vorschau bereit.
-
-Die Vorschau läuft unter http://v50671-kde:4187. Alternativ: http://100.117.29.112:4187. Es sind ausschließlich statische Demo-Daten hinterlegt.
-
-| Variante | Analyse-Übersicht | Startseite |
-|---|---|---|
-| Original | [Öffnen](http://v50671-kde:4187/analyse?gold=original) | [Öffnen](http://v50671-kde:4187/dashboard?gold=original) |
-| Poliertes Gold | [Öffnen](http://v50671-kde:4187/analyse?gold=polished) | [Öffnen](http://v50671-kde:4187/dashboard?gold=polished) |
-| Champagner-Gold | [Öffnen](http://v50671-kde:4187/analyse?gold=champagne) | [Öffnen](http://v50671-kde:4187/dashboard?gold=champagne) |
-| Altgold mit Glanzkante | [Öffnen](http://v50671-kde:4187/analyse?gold=antique) | [Öffnen](http://v50671-kde:4187/dashboard?gold=antique) |
-
-Schalter: `gold=original`, `gold=polished`, `gold=champagne`, `gold=antique`; ohne Parameter gilt poliertes Gold. Die gewählte Variante bleibt beim Wechsel zwischen Home und Analyse erhalten. Original zeigt die bestehenden Akzentflächen mit denselben Demo-Daten.
-
-Empfehlung: **Champagner-Gold**. Der helle Lichtkamm und der ruhigere Grund wirken am edelsten und am wenigsten gelb. Poliertes Gold wirkt kräftiger, Altgold zurückhaltender. Alle Varianten verwenden nur feine Innenkanten; kein Gold-Schein im Hintergrund und kein Glow an Avatar oder Icons.
-
-Branch: `preview/gold-glanz-20261001`, Basis `origin/main` (`14bc1f47`). Implementierungscommit: `c39ecfbf`. Worktree: `/home/nathanael/.worktrees/tb-gold-glanz-preview`.
-
-Screenshots, Desktop 1600 × 1100:
+[Fertigmeldung] Paket B, Vorschau Revision 2: Lichtkamm und helle Bänder entfernt; Champagner-Gold gestrichen. Poliertes Gold und Altgold verwenden jeweils drei gleichmäßig verteilte, weich verlaufende Töne. Nur eine dezente Innenkante bleibt.
 
 | Variante | Analyse | Startseite |
 |---|---|---|
-| Original | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-original.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-original.png) | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-original.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-original.png) |
-| Poliertes Gold | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-polished.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-polished.png) | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-polished.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-polished.png) |
-| Champagner-Gold | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-champagne.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-champagne.png) | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-champagne.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-champagne.png) |
-| Altgold mit Glanzkante | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-antique.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-antique.png) | [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-antique.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-antique.png) |
+| Original | [Öffnen](http://v50671-kde:4187/analyse?gold=original) | [Öffnen](http://v50671-kde:4187/dashboard?gold=original) |
+| Poliertes Gold | [Öffnen](http://v50671-kde:4187/analyse?gold=polished) | [Öffnen](http://v50671-kde:4187/dashboard?gold=polished) |
+| Altgold | [Öffnen](http://v50671-kde:4187/analyse?gold=antique) | [Öffnen](http://v50671-kde:4187/dashboard?gold=antique) |
 
-Die vollständigen Seitenaufnahmen liegen im selben Ordner mit dem Suffix `-full.png`. Mobile Aufnahmen bei 390 × 844:
+Schalter bleiben `gold=polished`, `gold=antique` und `gold=original`. Ohne Parameter gilt Poliertes Gold. Alternativ ist der Host unter `100.117.29.112:4187` erreichbar.
 
-- [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-polished-mobile.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/analyse-polished-mobile.png)
-- [/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-polished-mobile.png](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots/dashboard-polished-mobile.png)
+Neue Screenshots bei 1600 × 1100:
 
-Prüfungen: Preview-Build erfolgreich; acht Desktop- und zwei Mobilprüfungen ohne Browserfehler oder Seitenüberlauf. Keine Backend-Anfragen auf den beiden Vergleichsseiten. Statusfarben, Diagrammfarben, Markentokens und Seitenhintergrund in allen Varianten identisch. Minimaler Textkontrast auf Gold: 5,16:1. Zeitraum, Tage-Enter, Sprachwechsel, Hilfe öffnen und Navigation geprüft.
+- Original: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-original.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-original.png)
+- Poliertes Gold: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-polished.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-polished.png)
+- Altgold: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-antique.png) · [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-antique.png)
 
-48 gezielte bestehende Tests: 44 erfolgreich; die vier verbleibenden Fehler bestehen identisch schon auf dem unveränderten Basiscommit. Vergleich und Logs liegen in `tests-summary.txt`, `tests.tap` und `baseline-tests.tap`. Browser-Skill hatte keine Verbindung; der erste Headless-Chromium-Versuch war erfolgreich, ohne Änderungen an Flags.
+Absolute Screenshot-Pfade stehen in den Links; Ordner: /home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/. Vollständige Seitenaufnahmen tragen das Suffix -full.png; mobile Aufnahmen: [Analyse](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/analyse-polished-mobile.png) und [Startseite](/home/nathanael/repos/Deadlock-Twitch-Bot/.tasks/2026-10-01-gold-glanz-preview/screenshots-v2/dashboard-polished-mobile.png).
 
-Die Vorschau umfasst Home und die Analyse-Übersicht. Weitere Ansichten können fehlende Demo-Daten melden; Schreiben ist in der statischen Vorschau gesperrt. Der Vite-Prozess bleibt als User-Service `tb-gold-glanz-preview.service` aktiv.
+Preview-Build erfolgreich; sieben Gestaltungstests bestanden. Sechs Desktop-Vergleiche ohne Browserfehler, Backend-Anfragen oder Seitenüberlauf; zwei Mobilansichten ohne Seitenüberlauf. Statusfarben, Diagrammfarben, Markentokens und Seitenhintergrund bleiben identisch. Minimaler Textkontrast auf den Verläufen: 5,56:1.
 
-**Nichts gemergt, nichts deployt, nichts an der Live-Seite geändert. Keine Unter-Threads oder Unter-Agenten. Branch und Worktree bleiben erhalten; Paketthread wartet auf die Nutzerentscheidung und wird nicht gesettelt.**
+Branch `preview/gold-glanz-20261001`, Implementierungscommit `8d2eb5a4`. Worktree `/home/nathanael/.worktrees/tb-gold-glanz-preview`.
+
+Nur statische Vorschau. **Nichts gemergt, nichts deployt.** Branch, Worktree und Paketthread bleiben bis zur nächsten Nutzerentscheidung erhalten; kein Settle.

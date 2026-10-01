@@ -9,3 +9,5 @@ Selbstprüfung im einzigen beauftragten Paketthread.
 - Preview-Build darf Demo-Fixtures auf dem Tailscale-Host benutzen. Backend-Aufrufe werden im Preview blockiert.
 - Tests für Demo-Sidebar und Hilfe erlauben die ausdrücklich beauftragte lokale Vorschau. Neue Metallfarben sind im Palettentest ausschließlich für preview/gold.css freigegeben.
 - Markentokens in index.css und Diagramm-Komponenten unverändert. Kein Merge-Gate, Merge oder Deployment durchgeführt.
+
+Revision 2: Lichtkamm und Champagner entfernt. Die Verläufe laufen gleichmäßig von einem helleren zu einem dunkleren Goldton, jeweils mit drei weit verteilten Farbstufen. Neue Screenshots in screenshots-v2/ ersetzen für die Entscheidung den alten Satz.

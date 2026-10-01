@@ -5,3 +5,5 @@
 3. Vorschau mit lokalen Demo-Daten auf Tailscale bereitstellen.
 4. Beide Seiten mit allen Varianten aufnehmen und Funktion, Kontrast und unveränderte Farben prüfen.
 5. Branch pushen und Bericht im Intent-Thread liefern; Nutzerentscheidung abwarten.
+
+Revision 2: Varianten auf Original, Poliertes Gold und Altgold reduzieren; Verläufe glätten, Build und Screenshots erneuern; Entscheidung weiter abwarten.

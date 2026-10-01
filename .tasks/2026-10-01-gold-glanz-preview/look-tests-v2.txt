@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: Karten bleiben neutral und verzichten auf Nieten und Streifen
+ok 1 - Karten bleiben neutral und verzichten auf Nieten und Streifen
+  ---
+  duration_ms: 1.437839
+  type: 'test'
+  ...
+# Subtest: die animierte Gold-Aura der Shell ist entfernt
+ok 2 - die animierte Gold-Aura der Shell ist entfernt
+  ---
+  duration_ms: 0.191067
+  type: 'test'
+  ...
+# Subtest: die Shell rendert keine BackgroundBlobs mehr
+ok 3 - die Shell rendert keine BackgroundBlobs mehr
+  ---
+  duration_ms: 0.135513
+  type: 'test'
+  ...
+# Subtest: Raster und neutrale Grundtöne bleiben dezent
+ok 4 - Raster und neutrale Grundtöne bleiben dezent
+  ---
+  duration_ms: 0.162744
+  type: 'test'
+  ...
+# Subtest: das Raster wird nicht zu den Raendern hin ausgeblendet
+ok 5 - das Raster wird nicht zu den Raendern hin ausgeblendet
+  ---
+  duration_ms: 0.271627
+  type: 'test'
+  ...
+# Subtest: Gold bleibt an der Kartenkante, Tiefe entsteht durch neutralen Schatten
+ok 6 - Gold bleibt an der Kartenkante, Tiefe entsteht durch neutralen Schatten
+  ---
+  duration_ms: 0.176975
+  type: 'test'
+  ...
+# Subtest: Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring
+ok 7 - Avatar und Icon-Kacheln tragen keinen Gold-Glow mehr, nur den feinen Ring
+  ---
+  duration_ms: 0.164647
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 229.852714
