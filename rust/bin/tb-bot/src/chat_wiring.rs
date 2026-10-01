@@ -672,6 +672,7 @@ pub async fn try_build_api(
             e,
             tb_chat::token::TokenError::PersistenceFailed
                 | tb_chat::token::TokenError::ValidationPending
+                | tb_chat::token::TokenError::ValidationExpired
         ) {
             tracing::error!("Bot-Token-Boot wartet auf Datenbank und Identitätsprüfung; Chat bleibt bis dahin gesperrt");
             // Der Anbieter hat bereits rotiert. Den einzigen neuen Refresh

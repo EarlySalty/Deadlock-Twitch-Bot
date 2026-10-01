@@ -175,7 +175,6 @@ struct TokenState {
 
 struct PendingRotation {
     tokens: TokenState,
-    refresh_changed: bool,
     persisted: bool,
 }
 
@@ -186,6 +185,8 @@ pub enum TokenError {
     NotInitialized,
     PersistenceFailed,
     ValidationPending,
+    ValidationExpired,
+    CredentialRejected,
 }
 
 impl std::fmt::Debug for TokenError {
@@ -210,6 +211,14 @@ impl std::fmt::Display for TokenError {
             Self::ValidationPending => write!(
                 f,
                 "Bot-Zugang wartet auf Identitätsprüfung; Verwendung gesperrt"
+            ),
+            Self::ValidationExpired => write!(
+                f,
+                "Gespeicherter Zugang abgelaufen; erneute Rotation erforderlich"
+            ),
+            Self::CredentialRejected => write!(
+                f,
+                "Bot-Zugang widerrufen, ersetzt oder einem anderen Konto zugeordnet"
             ),
         }
     }
@@ -322,7 +331,10 @@ impl BotTokenManager {
 
     /// Aktueller Access-Token; refresht lazy wenn < 1 h Restlaufzeit.
     pub async fn access_token(&self) -> Result<String, TokenError> {
-        self.persist_pending().await?;
+        match self.persist_pending().await {
+            Err(TokenError::ValidationExpired) => self.force_refresh().await?,
+            result => result?,
+        }
         {
             let guard = self.state.read().await;
             if let Some(ref s) = *guard {
@@ -343,8 +355,14 @@ impl BotTokenManager {
     pub async fn force_refresh(&self) -> Result<(), TokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
         let had_pending = self.pending.lock().await.is_some();
-        self.persist_pending().await?;
-        if had_pending {
+        let expired = match self.persist_pending().await {
+            Err(TokenError::ValidationExpired) => true,
+            result => {
+                result?;
+                false
+            }
+        };
+        if had_pending && !expired {
             return Ok(());
         }
         let refresh_token = {
@@ -481,9 +499,13 @@ impl BotTokenManager {
 
     async fn refresh_with(&self, refresh_token: &str) -> Result<(), TokenError> {
         if let Some(sink) = &self.sink {
-            sink.prepare_refresh()
-                .await
-                .map_err(|_| TokenError::PersistenceFailed)?;
+            sink.prepare_refresh().await.map_err(|_| {
+                if sink.terminal_failure() {
+                    TokenError::CredentialRejected
+                } else {
+                    TokenError::PersistenceFailed
+                }
+            })?;
         }
         let refresh_token = strip_oauth_prefix(refresh_token);
         let refresh_token = refresh_token.as_str();
@@ -514,7 +536,6 @@ impl BotTokenManager {
         let access_token = refreshed.access_token;
         // Rotation in RAM erhalten, bis die verbindliche Senke bestätigt hat.
         // Während eines DB-Ausfalls wird kein neuer Token verwendet oder rotiert.
-        let refresh_changed = new_refresh != refresh_token;
         *self.pending.lock().await = Some(PendingRotation {
             tokens: TokenState {
                 access_token,
@@ -522,7 +543,6 @@ impl BotTokenManager {
                 expires_at: Utc::now() + chrono::Duration::seconds(refreshed.expires_in.max(60)),
                 scopes: Vec::new(),
             },
-            refresh_changed,
             persisted: false,
         });
         self.persist_pending().await?;
@@ -540,23 +560,44 @@ impl BotTokenManager {
             if let Some(sink) = &self.sink {
                 sink.persist_checked(
                     &next.tokens.access_token,
-                    next.refresh_changed
-                        .then_some(next.tokens.refresh_token.as_str()),
+                    Some(next.tokens.refresh_token.as_str()),
                 )
                 .await
-                .map_err(|_| TokenError::PersistenceFailed)?;
+                .map_err(|_| {
+                    if sink.terminal_failure() {
+                        TokenError::CredentialRejected
+                    } else {
+                        TokenError::PersistenceFailed
+                    }
+                })?;
             }
             next.persisted = true;
         }
         // Erst nach Sicherung der Anbieterantwort kommt ein weiterer Netzaufruf.
         // Ein Validate-/Helix-Ausfall lässt die neue Rotation unverändert erhalten.
-        let validated = self
+        let validated = match self
             .validate_with_user_fallback(&next.tokens.access_token)
             .await
-            .map_err(|_| TokenError::ValidationPending)?;
+        {
+            Ok(value) => value,
+            Err(TokenError::Rejected { status: 401, .. }) => {
+                // Der neue Refresh ist bereits dauerhaft gesichert. Ein während
+                // des Ausfalls abgelaufener Access darf ihn nicht blockieren.
+                *self.bootstrap_refresh.write().await = Some(next.tokens.refresh_token.clone());
+                *self.state.write().await = None;
+                pending.take();
+                return Err(TokenError::ValidationExpired);
+            }
+            Err(TokenError::Rejected { status, .. })
+                if (400..500).contains(&status) && status != 429 =>
+            {
+                return Err(TokenError::CredentialRejected)
+            }
+            Err(_) => return Err(TokenError::ValidationPending),
+        };
         let identity = self.bot_user_id.read().await;
         if !identity.is_empty() && *identity != validated.user_id {
-            return Err(TokenError::ValidationPending);
+            return Err(TokenError::CredentialRejected);
         }
         drop(identity);
         next.tokens.scopes = validated.scopes;
@@ -575,6 +616,67 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type PersistedTokenCall = (String, Option<String>);
+
+    #[tokio::test]
+    async fn persisted_pending_access_expiry_rotates_saved_refresh() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("authorization", "OAuth synthetic-expired"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST")).and(path("/token"))
+            .and(body_string_contains("refresh_token=synthetic-saved-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"access_token":"synthetic-live","refresh_token":"synthetic-next-refresh","expires_in":14000})))
+            .expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("authorization", "OAuth synthetic-live"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let manager = manager(&server).await;
+        *manager.pending.lock().await = Some(PendingRotation {
+            tokens: TokenState {
+                access_token: "synthetic-expired".into(),
+                refresh_token: "synthetic-saved-refresh".into(),
+                expires_at: Utc::now(),
+                scopes: vec![],
+            },
+            persisted: true,
+        });
+        assert_eq!(manager.access_token().await.unwrap(), "synthetic-live");
+        assert!(manager.pending.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_identity_mismatch_is_terminal_without_token_use() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .mount(&server)
+            .await;
+        let manager = manager(&server).await;
+        *manager.bot_user_id.write().await = "different-user".into();
+        *manager.pending.lock().await = Some(PendingRotation {
+            tokens: TokenState {
+                access_token: "synthetic-access".into(),
+                refresh_token: "synthetic-refresh".into(),
+                expires_at: Utc::now(),
+                scopes: vec![],
+            },
+            persisted: true,
+        });
+        assert!(matches!(
+            manager.access_token().await,
+            Err(TokenError::CredentialRejected)
+        ));
+        assert!(manager.state.read().await.is_none());
+    }
 
     #[tokio::test]
     async fn rotated_reply_survives_validation_failure_and_is_saved_before_validation() {

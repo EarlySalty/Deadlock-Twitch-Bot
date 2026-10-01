@@ -29,6 +29,11 @@ const SECRET_BOT_REFRESH: &str = "TWITCH_BOT_REFRESH_TOKEN";
 /// (und damit den Chat) nie kippt.
 #[async_trait::async_trait]
 pub trait SecretSink: Send + Sync {
+    /// Ein widerrufener oder konkurrierend ersetzter Datensatz darf nicht
+    /// wie eine vorübergehend unerreichbare Datenbank wiederholt werden.
+    fn terminal_failure(&self) -> bool {
+        false
+    }
     /// Verbindliche DB-Senken prüfen vor einer Anbieterrotation den Schreibpfad.
     async fn prepare_refresh(&self) -> Result<(), ()> {
         Ok(())

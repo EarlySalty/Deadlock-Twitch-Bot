@@ -64,7 +64,16 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
         .persist("synthetic-access-2", Some("synthetic-refresh-2"))
         .await
         .unwrap();
+    // Simuliert das verlorene ACK eines bereits committed Updates.
+    *first.revision.lock().await -= 1;
+    first
+        .persist("synthetic-access-2", Some("synthetic-refresh-2"))
+        .await
+        .unwrap();
+    assert_eq!(*first.revision.lock().await, 1);
+    assert!(!first.terminal_failure());
     assert!(stale.persist("synthetic-stale", None).await.is_err());
+    assert!(stale.terminal_failure());
     assert!(stale.prepare_refresh().await.is_err());
     let current = first.seed_and_load(seeds).await.unwrap();
     assert_eq!(

@@ -14,7 +14,9 @@ pub struct DatabaseTokenStore {
     cipher: Arc<FieldCipher>,
     client_id: String,
     revision: Mutex<i64>,
+    identity: Mutex<Option<String>>,
     healthy: AtomicBool,
+    terminal: AtomicBool,
 }
 impl DatabaseTokenStore {
     pub fn new(pool: PgPool, cipher: Arc<FieldCipher>, client_id: String) -> Self {
@@ -23,7 +25,9 @@ impl DatabaseTokenStore {
             cipher,
             client_id,
             revision: Mutex::new(0),
+            identity: Mutex::new(None),
             healthy: AtomicBool::new(false),
+            terminal: AtomicBool::new(false),
         }
     }
     fn aad(&self, field: &str) -> String {
@@ -50,7 +54,7 @@ impl DatabaseTokenStore {
             sqlx::query("INSERT INTO twitch_bot_tokens(service_name,oauth_client_id,access_token_enc,refresh_token_enc) VALUES('twitch-chat',$1,$2,$3) ON CONFLICT(service_name) DO NOTHING")
                 .bind(&self.client_id).bind(access_enc).bind(refresh_enc).execute(&self.pool).await.map_err(|_|"Bot-Token-Datenbank nicht verfügbar")?;
         }
-        let row=sqlx::query("SELECT access_token_enc,refresh_token_enc,revision FROM twitch_bot_tokens WHERE service_name='twitch-chat' AND oauth_client_id=$1 AND revoked_at IS NULL")
+        let row=sqlx::query("SELECT access_token_enc,refresh_token_enc,revision,twitch_user_id FROM twitch_bot_tokens WHERE service_name='twitch-chat' AND oauth_client_id=$1 AND revoked_at IS NULL")
             .bind(&self.client_id).fetch_optional(&self.pool).await.map_err(|_|"Bot-Token-Datenbank nicht verfügbar")?.ok_or("Bot-Zugang fehlt oder wurde widerrufen")?;
         let access: Option<Vec<u8>> = row.get("access_token_enc");
         let refresh: Vec<u8> = row.get("refresh_token_enc");
@@ -66,6 +70,7 @@ impl DatabaseTokenStore {
             ),
         };
         *self.revision.lock().await = row.get("revision");
+        *self.identity.lock().await = row.get("twitch_user_id");
         self.healthy.store(true, Ordering::Release);
         Ok(result)
     }
@@ -79,6 +84,7 @@ impl DatabaseTokenStore {
         if n != 1 {
             return Err("Bot-Zugang gehört zu einem anderen Konto");
         }
+        *self.identity.lock().await = Some(user_id.to_string());
         Ok(())
     }
 
@@ -95,6 +101,36 @@ impl DatabaseTokenStore {
         let n=sqlx::query("UPDATE twitch_bot_tokens SET access_token_enc=$1,refresh_token_enc=COALESCE($2,refresh_token_enc),revision=revision+1,updated_at=now() WHERE service_name='twitch-chat' AND oauth_client_id=$3 AND revision=$4 AND revoked_at IS NULL")
             .bind(access_enc).bind(refresh_enc).bind(&self.client_id).bind(*revision).execute(&self.pool).await.map_err(|_|"Bot-Token-Datenbank nicht verfügbar")?.rows_affected();
         if n != 1 {
+            // Ein verlorenes Commit-ACK lässt die lokale Revision unverändert.
+            // Nur genau die nächste Revision mit denselben logischen Werten
+            // darf als eigene bereits bestätigte Rotation gelten.
+            let row = sqlx::query("SELECT revision,access_token_enc,refresh_token_enc,twitch_user_id FROM twitch_bot_tokens WHERE service_name='twitch-chat' AND oauth_client_id=$1 AND revoked_at IS NULL")
+                .bind(&self.client_id).fetch_optional(&self.pool).await
+                .map_err(|_| "Bot-Token-Datenbank nicht verfügbar")?;
+            if let Some(row) = row {
+                let stored_access: Option<Vec<u8>> = row.get("access_token_enc");
+                let stored_refresh: Vec<u8> = row.get("refresh_token_enc");
+                let same_access = stored_access
+                    .as_deref()
+                    .and_then(|v| self.cipher.decrypt_field(v, &self.aad("access_token")).ok())
+                    .is_some_and(|v| v == access);
+                let same_refresh = refresh.is_some_and(|expected| {
+                    self.cipher
+                        .decrypt_field(&stored_refresh, &self.aad("refresh_token"))
+                        .is_ok_and(|v| v == expected)
+                });
+                let same_identity =
+                    row.get::<Option<String>, _>("twitch_user_id") == *self.identity.lock().await;
+                if row.get::<i64, _>("revision") == *revision + 1
+                    && same_access
+                    && same_refresh
+                    && same_identity
+                {
+                    *revision += 1;
+                    return Ok(());
+                }
+            }
+            self.terminal.store(true, Ordering::Release);
             return Err("Bot-Zugang wurde gleichzeitig geändert oder widerrufen");
         }
         *revision += 1;
@@ -107,11 +143,23 @@ mod tests;
 
 #[async_trait::async_trait]
 impl SecretSink for DatabaseTokenStore {
+    fn terminal_failure(&self) -> bool {
+        self.terminal.load(Ordering::Acquire)
+    }
     async fn prepare_refresh(&self) -> Result<(), ()> {
         let revision = self.revision.lock().await;
         let result = sqlx::query("UPDATE twitch_bot_tokens SET updated_at=updated_at WHERE service_name='twitch-chat' AND oauth_client_id=$1 AND revision=$2 AND revoked_at IS NULL")
             .bind(&self.client_id).bind(*revision).execute(&self.pool).await;
-        let healthy = result.is_ok_and(|result| result.rows_affected() == 1);
+        let healthy = match result {
+            Ok(result) => {
+                let healthy = result.rows_affected() == 1;
+                if !healthy {
+                    self.terminal.store(true, Ordering::Release);
+                }
+                healthy
+            }
+            Err(_) => false,
+        };
         self.healthy.store(healthy, Ordering::Release);
         healthy.then_some(()).ok_or(())
     }
