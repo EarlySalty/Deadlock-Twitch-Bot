@@ -8,3 +8,5 @@
 - Branch darf nach origin gepusht werden. Merge, Deployment und Live-Änderungen sind nicht beauftragt. Worktree und Thread bleiben bis zur Entscheidung erhalten.
 
 Revision 3: Nur Poliertes Gold farblich etwas kräftiger und goldener abstimmen; gleichmäßiger Verlauf und zurückhaltende Innenkante bleiben.
+
+Nutzergrenze nach Annahme V3: Nur die Goldfarbe/der ruhige Verlauf wird übernommen. Layout und Styling des tatsächlichen Dashboards bleiben erhalten. Vorschau-Daten, Schriften, Shell-Schalter und Routing sind keine Freigabe für die Übernahme; kein pauschaler Merge dieses Vorschau-Branches.
