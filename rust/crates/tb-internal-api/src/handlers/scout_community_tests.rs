@@ -77,8 +77,7 @@ async fn migrated_pool(db_name: &str) -> Option<PgPool> {
         .execute(&pool)
         .await
         .ok();
-    static MIGRATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _guard = MIGRATE_LOCK.lock().await;
+    let _guard = crate::handlers::TEST_MIGRATE_LOCK.lock().await;
     tb_db::migrate::MIGRATOR
         .run(&pool)
         .await

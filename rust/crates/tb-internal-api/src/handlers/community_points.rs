@@ -171,10 +171,7 @@ mod tests {
             .execute(&pool)
             .await
             .ok();
-        // Migrationen legen globale Rollen an: parallel laufende Tests würden
-        // sich dabei gegenseitig stören ("tuple concurrently updated").
-        static MIGRATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-        let _guard = MIGRATE_LOCK.lock().await;
+        let _guard = crate::handlers::TEST_MIGRATE_LOCK.lock().await;
         tb_db::migrate::MIGRATOR
             .run(&pool)
             .await

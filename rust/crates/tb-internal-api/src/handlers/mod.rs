@@ -25,3 +25,9 @@ pub mod streamer_analytics_native;
 pub mod streamer_link;
 pub mod streamers;
 pub mod telemetry_routes;
+
+/// Gemeinsame Sperre fuer DB-Tests, die Migrationen laufen lassen: die
+/// Migrationen legen globale Rollen an, parallel laufende Testmodule stoeren
+/// sich sonst gegenseitig ("tuple concurrently updated").
+#[cfg(test)]
+pub(crate) static TEST_MIGRATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
