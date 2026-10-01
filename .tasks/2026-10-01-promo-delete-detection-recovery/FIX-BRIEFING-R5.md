@@ -33,7 +33,8 @@ Exakt diese zwei R5-Befunde, kein Refactoring und kein Formatieren des Gesamt-Re
 
 - Repo/Worktree: `/home/nathanael/.worktrees/luna-dispatch-deadlock-twitch-bot-promo-delete-detection-20260915-364ad1c8`
 - Branch: `codex/luna-dispatch/deadlock-twitch-bot/promo-delete-detection-20260915-364ad1c8`
-- Übergabe-HEAD: `dd7e9e64ccf2856c2fcd34da084d5d2d36f9bee6`
+- Gate R5 prüfte Code-Commit: `dd7e9e64ccf2856c2fcd34da084d5d2d36f9bee6`
+- Aktueller Übergabe-HEAD: `68aea565`; dieser Commit ergänzt nur Review-Artefakte.
 - Änderungen gehören ausschließlich auf diesen Branch. Commit und Push auf diesen Branch sind erlaubt. Niemals nach `main` mergen.
 
 ## Ablauf
