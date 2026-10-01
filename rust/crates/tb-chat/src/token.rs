@@ -1393,7 +1393,20 @@ mod tests {
                 "refresh_token": "parallel-refresh",
                 "expires_in": 14000
             })))
-            .expect(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        // Der zweite Aufruf wartet auf die erste Rotation und verwendet
+        // deshalb deren neuen Refresh statt noch einmal den alten Wert.
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=parallel-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "parallel-fresh",
+                "refresh_token": "parallel-refresh",
+                "expires_in": 14000
+            })))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
