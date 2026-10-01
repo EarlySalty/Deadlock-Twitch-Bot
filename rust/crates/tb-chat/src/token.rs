@@ -331,6 +331,13 @@ impl BotTokenManager {
 
     /// Aktueller Access-Token; refresht lazy wenn < 1 h Restlaufzeit.
     pub async fn access_token(&self) -> Result<String, TokenError> {
+        if self
+            .sink
+            .as_ref()
+            .is_some_and(|sink| sink.terminal_failure())
+        {
+            return Err(TokenError::CredentialRejected);
+        }
         match self.persist_pending().await {
             Err(TokenError::ValidationExpired) => self.force_refresh().await?,
             result => result?,
@@ -1305,8 +1312,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_ohne_rotation_schreibt_refresh_nicht() {
-        // Twitch liefert keinen neuen Refresh-Token → nur Access persistieren.
+    async fn refresh_ohne_rotation_bewahrt_vollstaendiges_tokenpaar() {
+        // Idempotente Bestätigung braucht auch den unveränderten Refresh.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/validate"))
@@ -1332,8 +1339,9 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "fresh");
         assert_eq!(
-            calls[0].1, None,
-            "unveränderter Refresh-Token darf nicht erneut geschrieben werden"
+            calls[0].1.as_deref(),
+            Some("stable-refresh"),
+            "unveränderter Refresh-Token bleibt Teil des bestätigten Paars"
         );
     }
 
