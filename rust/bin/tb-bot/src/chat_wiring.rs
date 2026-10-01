@@ -668,15 +668,22 @@ pub async fn try_build_api(
         .initialize(seed_access.as_deref(), &refresh_token)
         .await
     {
-        if matches!(e, tb_chat::token::TokenError::PersistenceFailed) {
-            tracing::error!("Bot-Token-Boot wartet auf Datenbank-Rückschreibung; Chat bleibt bis dahin gesperrt");
+        if matches!(
+            e,
+            tb_chat::token::TokenError::PersistenceFailed
+                | tb_chat::token::TokenError::ValidationPending
+        ) {
+            tracing::error!("Bot-Token-Boot wartet auf Datenbank und Identitätsprüfung; Chat bleibt bis dahin gesperrt");
             // Der Anbieter hat bereits rotiert. Den einzigen neuen Refresh
             // nicht durch Verwerfen des Managers verlieren oder erneut rotieren.
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 match token_manager.access_token().await {
                     Ok(_) => break,
-                    Err(tb_chat::token::TokenError::PersistenceFailed) => continue,
+                    Err(
+                        tb_chat::token::TokenError::PersistenceFailed
+                        | tb_chat::token::TokenError::ValidationPending,
+                    ) => continue,
                     Err(error) => {
                         tracing::error!(%error, "Bot-Token-Boot nach Rückschreibung fehlgeschlagen");
                         return None;

@@ -173,12 +173,19 @@ struct TokenState {
     scopes: Vec<String>,
 }
 
+struct PendingRotation {
+    tokens: TokenState,
+    refresh_changed: bool,
+    persisted: bool,
+}
+
 /// Fehler des Token-Managers.
 pub enum TokenError {
     Http(reqwest::Error),
     Rejected { status: u16, body: String },
     NotInitialized,
     PersistenceFailed,
+    ValidationPending,
 }
 
 impl std::fmt::Debug for TokenError {
@@ -200,6 +207,10 @@ impl std::fmt::Display for TokenError {
             Self::PersistenceFailed => {
                 write!(f, "Bot-Zugang nicht gespeichert; Verwendung gesperrt")
             }
+            Self::ValidationPending => write!(
+                f,
+                "Bot-Zugang wartet auf Identitätsprüfung; Verwendung gesperrt"
+            ),
         }
     }
 }
@@ -220,7 +231,8 @@ pub struct BotTokenManager {
     bot_user_id: RwLock<String>,
     bot_login: RwLock<String>,
     state: RwLock<Option<TokenState>>,
-    pending: Mutex<Option<(TokenState, bool)>>,
+    pending: Mutex<Option<PendingRotation>>,
+    bootstrap_refresh: RwLock<Option<String>>,
     refresh_lock: Mutex<()>,
     /// URLs für Tests überschreibbar.
     validate_url: String,
@@ -243,6 +255,7 @@ impl BotTokenManager {
             bot_login: RwLock::new(String::new()),
             state: RwLock::new(None),
             pending: Mutex::new(None),
+            bootstrap_refresh: RwLock::new(None),
             refresh_lock: Mutex::new(()),
             validate_url: VALIDATE_URL.to_string(),
             token_url: TOKEN_URL.to_string(),
@@ -273,6 +286,12 @@ impl BotTokenManager {
         seed_access_token: Option<&str>,
         seed_refresh_token: &str,
     ) -> Result<(), TokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        let has_pending = self.pending.lock().await.is_some();
+        if has_pending {
+            return self.persist_pending().await;
+        }
+        *self.bootstrap_refresh.write().await = Some(strip_oauth_prefix(seed_refresh_token));
         let stripped_access = seed_access_token.map(strip_oauth_prefix);
         if let Some(access) = stripped_access.as_deref().filter(|s| !s.is_empty()) {
             match self.validate_with_user_fallback(access).await {
@@ -290,6 +309,7 @@ impl BotTokenManager {
                         expires_at: Utc::now() + chrono::Duration::seconds(v.expires_in),
                         scopes: v.scopes,
                     });
+                    *self.bootstrap_refresh.write().await = None;
                     return Ok(());
                 }
                 Err(e) => {
@@ -322,12 +342,17 @@ impl BotTokenManager {
     /// Erzwingt einen Refresh (z. B. nach Helix-401).
     pub async fn force_refresh(&self) -> Result<(), TokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
+        let had_pending = self.pending.lock().await.is_some();
         self.persist_pending().await?;
+        if had_pending {
+            return Ok(());
+        }
         let refresh_token = {
             let guard = self.state.read().await;
             guard
                 .as_ref()
                 .map(|s| s.refresh_token.clone())
+                .or(self.bootstrap_refresh.read().await.clone())
                 .ok_or(TokenError::NotInitialized)?
         };
         self.refresh_with(&refresh_token).await
@@ -482,11 +507,6 @@ impl BotTokenManager {
             });
         }
         let refreshed: RefreshResponse = resp.json().await?;
-        let validate = self
-            .validate_with_user_fallback(&refreshed.access_token)
-            .await?;
-        *self.bot_user_id.write().await = validate.user_id.clone();
-        *self.bot_login.write().await = validate.login.clone();
         let new_refresh = refreshed
             .refresh_token
             .filter(|t| !t.trim().is_empty())
@@ -495,39 +515,55 @@ impl BotTokenManager {
         // Rotation in RAM erhalten, bis die verbindliche Senke bestätigt hat.
         // Während eines DB-Ausfalls wird kein neuer Token verwendet oder rotiert.
         let refresh_changed = new_refresh != refresh_token;
-        *self.pending.lock().await = Some((
-            TokenState {
+        *self.pending.lock().await = Some(PendingRotation {
+            tokens: TokenState {
                 access_token,
                 refresh_token: new_refresh,
                 expires_at: Utc::now() + chrono::Duration::seconds(refreshed.expires_in.max(60)),
-                scopes: validate.scopes,
+                scopes: Vec::new(),
             },
             refresh_changed,
-        ));
+            persisted: false,
+        });
         self.persist_pending().await?;
-        tracing::info!(
-            login = %validate.login,
-            expires_in = refreshed.expires_in,
-            "Bot-Token refresht"
-        );
+        tracing::info!(expires_in = refreshed.expires_in, "Bot-Token refresht");
 
         Ok(())
     }
 
     async fn persist_pending(&self) -> Result<(), TokenError> {
         let mut pending = self.pending.lock().await;
-        let Some((next, refresh_changed)) = pending.as_ref() else {
+        let Some(next) = pending.as_mut() else {
             return Ok(());
         };
-        if let Some(sink) = &self.sink {
-            sink.persist_checked(
-                &next.access_token,
-                refresh_changed.then_some(next.refresh_token.as_str()),
-            )
-            .await
-            .map_err(|_| TokenError::PersistenceFailed)?;
+        if !next.persisted {
+            if let Some(sink) = &self.sink {
+                sink.persist_checked(
+                    &next.tokens.access_token,
+                    next.refresh_changed
+                        .then_some(next.tokens.refresh_token.as_str()),
+                )
+                .await
+                .map_err(|_| TokenError::PersistenceFailed)?;
+            }
+            next.persisted = true;
         }
-        *self.state.write().await = pending.take().map(|(state, _)| state);
+        // Erst nach Sicherung der Anbieterantwort kommt ein weiterer Netzaufruf.
+        // Ein Validate-/Helix-Ausfall lässt die neue Rotation unverändert erhalten.
+        let validated = self
+            .validate_with_user_fallback(&next.tokens.access_token)
+            .await
+            .map_err(|_| TokenError::ValidationPending)?;
+        let identity = self.bot_user_id.read().await;
+        if !identity.is_empty() && *identity != validated.user_id {
+            return Err(TokenError::ValidationPending);
+        }
+        drop(identity);
+        next.tokens.scopes = validated.scopes;
+        *self.bot_user_id.write().await = validated.user_id;
+        *self.bot_login.write().await = validated.login;
+        *self.state.write().await = pending.take().map(|rotation| rotation.tokens);
+        *self.bootstrap_refresh.write().await = None;
         Ok(())
     }
 }
@@ -539,6 +575,103 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type PersistedTokenCall = (String, Option<String>);
+
+    #[tokio::test]
+    async fn rotated_reply_survives_validation_failure_and_is_saved_before_validation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token":"synthetic-new-access", "refresh_token":"synthetic-new-refresh", "expires_in":14000
+            }))).expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let sink = CapturingSink::default();
+        let manager = manager(&server).await.with_sink(Arc::new(sink.clone()));
+        assert!(matches!(
+            manager.initialize(None, "synthetic-seed-refresh").await,
+            Err(TokenError::ValidationPending)
+        ));
+        assert!(manager.state.read().await.is_none());
+        assert!(manager.bot_user_id().await.is_empty());
+        assert!(manager.scopes().await.is_empty());
+        assert!(manager.pending.lock().await.is_some());
+        assert_eq!(
+            sink.calls.lock().unwrap().as_slice(),
+            &[(
+                "synthetic-new-access".into(),
+                Some("synthetic-new-refresh".into())
+            )]
+        );
+        assert_eq!(
+            manager.access_token().await.unwrap(),
+            "synthetic-new-access"
+        );
+        assert_eq!(
+            sink.calls.lock().unwrap().len(),
+            1,
+            "Validation-Retry schreibt dieselbe Rotation nicht doppelt"
+        );
+        assert!(manager.pending.lock().await.is_none());
+        assert!(!manager.bot_user_id().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn boot_preflight_outage_retains_seed_and_recovers_without_process_restart() {
+        struct PreflightSink(std::sync::atomic::AtomicBool);
+        #[async_trait::async_trait]
+        impl SecretSink for PreflightSink {
+            async fn persist_bot_tokens(&self, _: &str, _: Option<&str>) {}
+            async fn prepare_refresh(&self) -> Result<(), ()> {
+                self.0
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then_some(())
+                    .ok_or(())
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/token"))
+            .and(body_string_contains("refresh_token=synthetic-seed-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token":"synthetic-new-access", "refresh_token":"synthetic-new-refresh", "expires_in":14000
+            }))).expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let sink = Arc::new(PreflightSink(std::sync::atomic::AtomicBool::new(false)));
+        let manager = manager(&server).await.with_sink(sink.clone());
+        assert!(matches!(
+            manager.initialize(None, "synthetic-seed-refresh").await,
+            Err(TokenError::PersistenceFailed)
+        ));
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(manager.pending.lock().await.is_none());
+        assert_eq!(
+            manager.bootstrap_refresh.read().await.as_deref(),
+            Some("synthetic-seed-refresh")
+        );
+        sink.0.store(true, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            manager.access_token().await.unwrap(),
+            "synthetic-new-access"
+        );
+        assert!(manager.bootstrap_refresh.read().await.is_none());
+    }
 
     #[tokio::test]
     async fn failed_persistence_blocks_access_and_retries_rotated_token_without_new_refresh() {
