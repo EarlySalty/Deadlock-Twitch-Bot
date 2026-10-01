@@ -4131,9 +4131,11 @@ dependencies = [
  "sqlx 0.9.0",
  "tb-crypto",
  "tb-social-media",
+ "tb-transport-twitch",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

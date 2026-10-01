@@ -146,6 +146,7 @@ pub struct VodArchiveWorker {
     config: VodArchiveConfig,
     zugang: Arc<dyn HochladerQuelle>,
     runner: Arc<dyn CommandRunner>,
+    twitch_client: Option<tb_transport_twitch::HelixClient>,
     /// Zaehlt die Laeufe, damit der Startplatz der Warteschlange wandert.
     laeufe: AtomicUsize,
 }
@@ -232,6 +233,7 @@ impl VodArchiveWorker {
             config,
             zugang,
             runner: Arc::new(twitch::TokioCommandRunner),
+            twitch_client: None,
             laeufe: AtomicUsize::new(0),
         }
     }
@@ -239,6 +241,11 @@ impl VodArchiveWorker {
     /// Tauscht den Prozess-Starter aus (Tests).
     pub fn with_runner(mut self, runner: Arc<dyn CommandRunner>) -> Self {
         self.runner = runner;
+        self
+    }
+
+    pub fn with_twitch_client(mut self, client: Option<tb_transport_twitch::HelixClient>) -> Self {
+        self.twitch_client = client;
         self
     }
 
@@ -408,12 +415,30 @@ impl VodArchiveWorker {
             .as_deref()
             .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
             .ok_or_else(|| sqlx::Error::Protocol("twitch_user_id fehlt".into()))?;
-        let mut vods = twitch::liste_vods(self.runner.as_ref(), &self.config, kanal).await?;
+        let client =
+            self.twitch_client
+                .as_ref()
+                .ok_or(tb_transport_twitch::HelixError::InvalidResponse(
+                    "Twitch-Client fehlt",
+                ))?;
+        let mut vods = crate::discovery::liste_vods(client, twitch_user_id).await?;
         if vods.is_empty() {
             tracing::info!(kanal = %kanal, "Keine VODs gefunden");
             return Ok(());
         }
-        if twitch::ist_live(self.runner.as_ref(), &self.config, kanal).await {
+        let streams = client
+            .get_streams_by_user_ids(&[twitch_user_id.to_string()], None)
+            .await?;
+        if streams
+            .iter()
+            .any(|stream| stream.user_id != twitch_user_id)
+        {
+            return Err(tb_transport_twitch::HelixError::InvalidResponse(
+                "Live-Antwort enthält eine fremde Twitch-ID",
+            )
+            .into());
+        }
+        if !streams.is_empty() {
             tracing::info!(kanal = %kanal, "Kanal ist live, das neueste VOD wartet auf das Streamende");
             vods.remove(0);
         }

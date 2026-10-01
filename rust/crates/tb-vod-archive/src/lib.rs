@@ -7,10 +7,6 @@
 //!
 //! Drei Dinge sind Absicht:
 //!
-//! * **Je Streamer.** Kanal, Zustand, Ablage und YouTube-Zugang haengen am
-//!   Streamer-Login, nicht an einer globalen Einstellung. Ein Upload nutzt nur
-//!   die Credentials genau dieses Streamers; einen globalen Rueckfall gibt es
-//!   nicht, er wuerde fremde VODs auf den falschen Kanal schieben.
 //! * **Lokal zuerst.** Der Download laeuft auch ohne YouTube-Verbindung. Ein
 //!   fehlender Login verschiebt nur den Upload; das lokale Archiv ist der
 //!   eigentliche Verlustschutz.
@@ -27,6 +23,7 @@
 //! Partnerkanals nach einem Stream in ein Google Drive und loescht sie lokal.
 
 pub mod config;
+mod discovery;
 pub mod error;
 pub mod metadata;
 pub mod store;

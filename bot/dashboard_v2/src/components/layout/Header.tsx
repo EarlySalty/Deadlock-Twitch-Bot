@@ -131,7 +131,7 @@ export function Header({
       description={<>{t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}<span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}</>}
     >
         {/* Controls */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex w-full min-w-0 flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
           {canPreviewExtended && (
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
               {viewOptions.map(option => (
@@ -161,7 +161,7 @@ export function Header({
           <div className="relative">
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="w-full sm:w-auto min-w-[220px] flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl border border-border bg-background/70 hover:border-border-hover soft-elevate"
+              className="w-full sm:w-auto min-w-0 sm:min-w-[220px] flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl border border-border bg-background/70 hover:border-border-hover soft-elevate"
             >
               <span className="text-white font-medium truncate">{streamer || allLabel}</span>
               <ChevronDown className="w-4 h-4 text-text-secondary" />
@@ -268,7 +268,7 @@ export function Header({
           </div>
 
           {/* Time Range Selector */}
-          <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
+          <div className="flex flex-wrap items-center bg-background/70 rounded-xl border border-border p-1.5">
             <div className="px-2 text-text-secondary">
               <SlidersHorizontal className="w-4 h-4" />
             </div>
