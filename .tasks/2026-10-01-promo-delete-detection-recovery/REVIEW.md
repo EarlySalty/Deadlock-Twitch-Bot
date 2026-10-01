@@ -42,3 +42,10 @@ Urteil: `gpt-6.1-sol BLOCK`, Exit 1, geprüft nach Commit `dd7e9e64`.
 2. **BLOCKING, doppelte Announcement-ID:** `observe_announcement_notification`. Der Handler bindet erst einen offenen Delivery-Datensatz und prüft danach die vorhandene Message-ID. Bei einem zweiten passenden offenen Datensatz kann die Wiederholung am Unique-Index scheitern, bevor sie den bestehenden Alert-Retry erreicht.
 
 Die unabhängige Intent-Abnahme von Commit `c2b21161` erfolgte vor diesem Gate-Befund und ist für die aktuelle Runde nicht abschließend.
+
+## Gate Review R6
+
+Quelle: `gate_hook.py --review --repo /home/nathanael/.worktrees/luna-dispatch-deadlock-twitch-bot-promo-delete-detection-20260915-364ad1c8 --base main --head codex/luna-dispatch/deadlock-twitch-bot/promo-delete-detection-20260915-364ad1c8`
+Urteil: `gpt-6.1-sol BLOCK`, Exit 1, geprüfter Head `9c6b3a4ec417a76762f0d00ac34a941eef54f5d5`.
+
+1. **BLOCKING, Retry-Ablauf:** `promos.rs:826`. Der begrenzte In-Memory-Puffer verwirft angenommene Promo-Sends nach zehn Minuten. Bleibt die Datenbank über das Korrelationsfenster hinweg nicht verfügbar, wird kein Audit-Datensatz angelegt und eine spätere Löschmeldung bleibt dauerhaft unmöglich.
