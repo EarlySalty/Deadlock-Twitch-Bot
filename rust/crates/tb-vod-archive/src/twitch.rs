@@ -1,9 +1,5 @@
 //! Die Twitch-Seite des Archivs: VODs finden, laden, messen, schneiden.
 //!
-//! Alles laeuft ueber yt-dlp und ffmpeg statt ueber die Twitch-API. Das spart
-//! einen zweiten Token-Pfad und liefert nebenbei die `info.json` mit dem echten
-//! Aufnahmedatum, das die API so nicht hergibt.
-//!
 //! Jeder Unterprozess bekommt eine harte Zeitgrenze. Ein haengendes yt-dlp
 //! wuerde sonst den Worker fuer immer blockieren, und weil der Worker nur
 //! zweimal taeglich laeuft, faellt das erst Tage spaeter auf.

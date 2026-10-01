@@ -384,7 +384,7 @@ test(
         assert.ok(!requests.some((r) => r.includes('/preview')));
         assert.ok((await page.locator('.studio-metrics').innerText()).includes('2'));
         assert.equal(await page.locator('.studio-brand').count(), 0);
-        assert.equal(await page.locator('main > div > header.panel-card').count(), 1);
+        assert.equal(await page.locator('main header.panel-card').count(), 1);
         assert.equal(await page.getByRole('heading', { name: 'Social Media', exact: true }).count(), 1);
         assert.equal(await page.getByText('Partner', { exact: true }).count(), 0);
         assert.ok(await page.evaluate(() => document.fonts.check('14px "Studio Manrope"')));
@@ -397,12 +397,21 @@ test(
         await analysis.goto(base + '/analyse?streamer=earlysalty');
         await analysis.locator('main header.panel-card').waitFor();
         await analysis.evaluate(() => document.fonts.ready);
-        const socialBox = await page.locator('main header.panel-card').boundingBox();
-        const analysisBox = await analysis.locator('main header.panel-card').boundingBox();
-        assert.equal(socialBox.height, analysisBox.height);
-        await analysis.screenshot({ path: path.join(evidence, 'analyse-1440.png'), fullPage: true });
+        for (const width of [320, 390, 768, 1024, 1440]) {
+          await page.setViewportSize({ width, height: 1080 });
+          await analysis.setViewportSize({ width, height: 1080 });
+          const socialBox = await page.locator('main header.panel-card').boundingBox();
+          const analysisBox = await analysis.locator('main header.panel-card').boundingBox();
+          assert.equal(socialBox.height, analysisBox.height, `${width}px: Social ${socialBox.height}, Analyse ${analysisBox.height}`);
+          for (const [name, current] of [['Social Media', page], ['Analyse', analysis]]) {
+            const overflow = await current.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+            assert.equal(overflow, 0, `${name} @ ${width}px`);
+          }
+          await analysis.screenshot({ path: path.join(evidence, `analyse-${width}.png`), fullPage: true });
+        }
       } finally {
         await analysis.close();
+        await page.setViewportSize({ width: 1440, height: 1080 });
       }
     });
     await t.test('gemeinsamer Rahmen: volle Breite, 240px Navigation und gleiche Abstände', async () => {

@@ -117,7 +117,7 @@ export function SocialMediaAdminDashboard() {
         isLoading={loadingStreamers}
         description={t('Fokus: {focus}', { focus: isAdminView ? streamer || t('Streamer wählen') : access?.streamer || authStatus?.twitchLogin || t('Dein Kanal') })}
       >
-        <div className="flex flex-wrap items-center gap-3">
+        {isAdminView && <div className="flex flex-wrap items-center gap-3">
             {isAdminView && streamer && (
               <button
                 type="button"
@@ -161,7 +161,7 @@ export function SocialMediaAdminDashboard() {
               </select>
             )}
             {accessMutation.isError && <p role="alert" className="text-sm text-ui-danger-soft">{t('Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.')}</p>}
-        </div>
+        </div>}
       </DashboardHeader>
 
       <PlanProvider

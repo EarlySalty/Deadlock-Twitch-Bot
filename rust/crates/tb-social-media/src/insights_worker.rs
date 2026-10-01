@@ -24,6 +24,8 @@ const INTERVAL_SECS: u64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 75;
 const BATCH_SIZE: i64 = 18;
 
+type InsightsClientCache = HashMap<(String, Option<String>), Option<Arc<dyn PlatformUploader>>>;
+
 /// Ein fälliges Analytics-Ziel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyticsTarget {
@@ -33,6 +35,12 @@ pub struct AnalyticsTarget {
     pub platform: String,
     pub platform_video_id: String,
     pub bucket: String,
+}
+
+impl AnalyticsTarget {
+    fn client_cache_key(&self) -> (String, Option<String>) {
+        (self.platform.clone(), self.twitch_user_id.clone())
+    }
 }
 
 /// Wartezeit bis zum nächsten Pull bei Erfolg (Python `SUCCESS_POLL_DELAYS`).
@@ -202,10 +210,9 @@ impl InsightsWorker {
         if targets.is_empty() {
             return;
         }
-        let mut client_cache: HashMap<(String, String), Option<Arc<dyn PlatformUploader>>> =
-            HashMap::new();
+        let mut client_cache = InsightsClientCache::new();
         for target in targets {
-            let key = (target.platform.clone(), target.streamer_login.clone());
+            let key = target.client_cache_key();
             let client = match client_cache.get(&key) {
                 Some(c) => c.clone(),
                 None => {
@@ -279,6 +286,34 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    #[test]
+    fn client_cache_trennt_ids_bei_gleichem_historischen_login() {
+        let mut owner = AnalyticsTarget {
+            clip_db_id: 1,
+            streamer_login: "alter_name".into(),
+            twitch_user_id: Some("42".into()),
+            platform: "tiktok".into(),
+            platform_video_id: "video".into(),
+            bucket: "24h".into(),
+        };
+        let mut other = owner.clone();
+        other.twitch_user_id = Some("99".into());
+        let mut cache = HashMap::new();
+        cache.insert(owner.client_cache_key(), None);
+        assert!(!cache.contains_key(&other.client_cache_key()));
+        let client: Arc<dyn PlatformUploader> = Arc::new(TikTokUploader::new("test"));
+        cache.insert(other.client_cache_key(), Some(client.clone()));
+        assert!(cache[&owner.client_cache_key()].is_none());
+        assert!(Arc::ptr_eq(
+            cache[&other.client_cache_key()].as_ref().unwrap(),
+            &client
+        ));
+        owner.streamer_login = "neuer_name".into();
+        assert!(cache.contains_key(&owner.client_cache_key()));
+        other.twitch_user_id = None;
+        assert!(!cache.contains_key(&other.client_cache_key()));
+    }
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;

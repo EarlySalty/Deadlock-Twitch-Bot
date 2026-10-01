@@ -11,13 +11,13 @@ export function DashboardHeader({ title, icon, description, isLoading, children 
 }) {
   const t = useT();
   return (
-    <header className="panel-card rounded-2xl p-4 md:p-6 mb-8 min-h-[212px]">
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+    <div className="mb-8 space-y-4">
+      <header className="panel-card rounded-2xl p-4 md:p-6 min-h-[212px]">
         <div className="flex items-start gap-4">
-          <div className="p-3 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/25 border border-primary/25 shadow-lg shadow-primary/10">
+          <div className="shrink-0 p-3 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/25 border border-primary/25 shadow-lg shadow-primary/10">
             {icon}
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="inline-flex items-center gap-2 rounded-full border border-border bg-black/20 px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-text-secondary mb-2">
               <Sparkles className="w-3 h-3 text-accent" />
               {t('Partner Dashboard')}
@@ -29,8 +29,8 @@ export function DashboardHeader({ title, icon, description, isLoading, children 
             <p className="text-text-secondary text-sm md:text-base mt-1">{description}</p>
           </div>
         </div>
-        {children}
-      </div>
-    </header>
+      </header>
+      {children && <div className="flex flex-wrap items-center gap-3">{children}</div>}
+    </div>
   );
 }
