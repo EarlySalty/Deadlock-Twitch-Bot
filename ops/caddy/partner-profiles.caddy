@@ -1,0 +1,12 @@
+# Import INSIDE the existing handle /streamer* block, before its fallback.
+# Reserved pages and file assets keep their existing handlers.
+@partner_profile {
+    path_regexp partner_profile ^/streamer/@?[A-Za-z0-9_]{1,25}/?$
+    not path /streamer/commands /streamer/commands/ /streamer/help /streamer/help/ /streamer/faq /streamer/faq/ /streamer/vergleich /streamer/vergleich/ /streamer/v1 /streamer/v1/ /streamer/v2 /streamer/v2/ /streamer/v3 /streamer/v3/ /streamer/onboarding /streamer/onboarding/ /streamer/vertriebler /streamer/vertriebler/ /streamer/assets /streamer/assets/ /streamer/fonts /streamer/fonts/ /streamer/brand /streamer/brand/
+}
+handle @partner_profile {
+    reverse_proxy 127.0.0.1:8769 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}

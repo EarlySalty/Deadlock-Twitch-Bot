@@ -279,28 +279,54 @@ pub fn remux_args(quelle: &Path, ziel: &Path) -> Vec<String> {
     ]
 }
 
-fn remux_ziel(pfad: &Path) -> PathBuf {
-    pfad.with_extension("remux.mp4")
+pub async fn ist_mpegts(runner: &dyn CommandRunner, cfg: &VodArchiveConfig, pfad: &Path) -> bool {
+    let args = vec![
+        "-v".to_string(),
+        "error".to_string(),
+        "-show_entries".to_string(),
+        "format=format_name".to_string(),
+        "-of".to_string(),
+        "default=nw=1:nk=1".to_string(),
+        pfad.display().to_string(),
+    ];
+    runner
+        .run(&cfg.ffprobe, &args, Duration::from_secs(300))
+        .await
+        .ok()
+        .filter(|output| output.success)
+        .map(|output| output.stdout.split(',').any(|name| name.trim() == "mpegts"))
+        .unwrap_or(false)
 }
 
 async fn remux_mpegts_nach_mp4(
     runner: &dyn CommandRunner,
     cfg: &VodArchiveConfig,
     pfad: &Path,
-) -> Result<(), VodArchiveError> {
-    let ziel = remux_ziel(pfad);
-    let output = runner
-        .run(&cfg.ffmpeg, &remux_args(pfad, &ziel), cfg.download_timeout)
-        .await?;
+) -> Result<PathBuf, VodArchiveError> {
+    let endziel = pfad.with_extension("mp4");
+    let temp = pfad.with_extension("remux.mp4");
+    let ergebnis = runner
+        .run(&cfg.ffmpeg, &remux_args(pfad, &temp), cfg.download_timeout)
+        .await;
+    let output = match ergebnis {
+        Ok(output) => output,
+        Err(fehler) => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(fehler);
+        }
+    };
     if !output.success {
-        let _ = tokio::fs::remove_file(&ziel).await;
+        let _ = tokio::fs::remove_file(&temp).await;
         return Err(VodArchiveError::Werkzeug {
             schritt: "Remux".to_string(),
             meldung: kurzfassung(&output.stderr),
         });
     }
-    tokio::fs::rename(&ziel, pfad).await?;
-    Ok(())
+    if endziel != pfad {
+        let _ = tokio::fs::remove_file(pfad).await;
+    }
+    tokio::fs::rename(&temp, &endziel).await?;
+    Ok(endziel)
 }
 
 /// Laedt ein VOD in das Verzeichnis des Streamers.
@@ -313,7 +339,6 @@ pub async fn lade_vod(
     tokio::fs::create_dir_all(verzeichnis).await?;
     let args = download_args(cfg, verzeichnis, twitch_id);
     let mut output = runner.run(&cfg.yt_dlp, &args, cfg.download_timeout).await?;
-    let mut ffmpeg_fallback = false;
     if !output.success && output.stderr.contains(FFMPEG_FALLBACK_MELDUNG) {
         tracing::info!(
             twitch_id = %twitch_id,
@@ -323,7 +348,6 @@ pub async fn lade_vod(
         output = runner
             .run(&cfg.yt_dlp, &fallback, cfg.download_timeout)
             .await?;
-        ffmpeg_fallback = true;
     }
     if !output.success {
         return Err(VodArchiveError::Werkzeug {
@@ -331,9 +355,13 @@ pub async fn lade_vod(
             meldung: kurzfassung(&output.stderr),
         });
     }
-    let pfad = finde_mediendatei(verzeichnis, twitch_id)?;
-    if ffmpeg_fallback {
-        remux_mpegts_nach_mp4(runner, cfg, &pfad).await?;
+    let mut pfad = finde_mediendatei(verzeichnis, twitch_id)?;
+    if ist_mpegts(runner, cfg, &pfad).await {
+        tracing::info!(
+            twitch_id = %twitch_id,
+            "geladene Datei ist mpegts, wird zu mp4 remuxt"
+        );
+        pfad = remux_mpegts_nach_mp4(runner, cfg, &pfad).await?;
     }
     Ok(Download {
         aufgenommen_am: lies_aufnahmedatum(verzeichnis, twitch_id),
@@ -765,9 +793,14 @@ mod tests {
         std::fs::write(&ffmpeg, ffmpeg_inhalt).unwrap();
         std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+        let ffprobe = tmp.join("ffprobe");
+        std::fs::write(&ffprobe, "#!/usr/bin/env bash\necho mpegts\nexit 0\n").unwrap();
+        std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
+
         let cfg = VodArchiveConfig {
             yt_dlp: skript.clone(),
             ffmpeg: ffmpeg.clone(),
+            ffprobe: ffprobe.clone(),
             ..VodArchiveConfig::default()
         };
         let runner = TokioCommandRunner;
@@ -792,6 +825,105 @@ mod tests {
         let fehler = tokio_test_block(lade_vod(&runner, &cfg, &tmp, "v1")).unwrap_err();
         assert!(fehler.to_string().contains("Download"));
         assert_eq!(runner.aufrufe.lock().unwrap().len(), 1);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn schreibe_ausfuehrbar(pfad: &Path, inhalt: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(pfad, inhalt).unwrap();
+        std::fs::set_permissions(pfad, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn remux_fehler_bleibt_download_fehler() {
+        let tmp = std::env::temp_dir().join(format!("vod-remux-fehler-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let ytdlp = tmp.join("yt-dlp");
+        schreibe_ausfuehrbar(
+            &ytdlp,
+            "#!/usr/bin/env bash\n\
+                 out=\"\"; prev=\"\"\n\
+                 for a in \"$@\"; do\n\
+                   if [ \"$prev\" = -o ]; then out=\"$a\"; fi\n\
+                   prev=\"$a\"\n\
+                 done\n\
+                 ziel=$(echo \"$out\" | sed 's/%(ext)s/mp4/')\n\
+                 echo mpegts > \"$ziel\"\n\
+                 exit 0\n",
+        );
+        let ffprobe = tmp.join("ffprobe");
+        schreibe_ausfuehrbar(&ffprobe, "#!/usr/bin/env bash\necho mpegts\nexit 0\n");
+        let ffmpeg = tmp.join("ffmpeg");
+        schreibe_ausfuehrbar(
+            &ffmpeg,
+            "#!/usr/bin/env bash\necho 'remux kaputt' >&2\nexit 1\n",
+        );
+
+        let cfg = VodArchiveConfig {
+            yt_dlp: ytdlp,
+            ffmpeg,
+            ffprobe,
+            ..VodArchiveConfig::default()
+        };
+        let runner = TokioCommandRunner;
+        let fehler = tokio_test_block(lade_vod(&runner, &cfg, &tmp, "v7")).unwrap_err();
+        assert!(fehler.to_string().contains("Remux"));
+        assert!(!tmp.join("v7.remux.mp4").exists());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn sauberer_mp4_download_wird_nicht_remuxt() {
+        let tmp = std::env::temp_dir().join(format!("vod-kein-remux-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let ytdlp = tmp.join("yt-dlp");
+        schreibe_ausfuehrbar(
+            &ytdlp,
+            "#!/usr/bin/env bash\n\
+                 out=\"\"; prev=\"\"\n\
+                 for a in \"$@\"; do\n\
+                   if [ \"$prev\" = -o ]; then out=\"$a\"; fi\n\
+                   prev=\"$a\"\n\
+                 done\n\
+                 ziel=$(echo \"$out\" | sed 's/%(ext)s/mp4/')\n\
+                 echo sauber > \"$ziel\"\n\
+                 exit 0\n",
+        );
+        let ffprobe = tmp.join("ffprobe");
+        schreibe_ausfuehrbar(
+            &ffprobe,
+            "#!/usr/bin/env bash\necho 'mov,mp4,m4a,3gp,3g2,mj2'\nexit 0\n",
+        );
+        let ffmpeg = tmp.join("ffmpeg");
+        let ffmpeg_marke = tmp.join("ffmpeg-lief");
+        schreibe_ausfuehrbar(
+            &ffmpeg,
+            &format!(
+                "#!/usr/bin/env bash\ntouch {marke}\nexit 0\n",
+                marke = ffmpeg_marke.display()
+            ),
+        );
+
+        let cfg = VodArchiveConfig {
+            yt_dlp: ytdlp,
+            ffmpeg,
+            ffprobe,
+            ..VodArchiveConfig::default()
+        };
+        let runner = TokioCommandRunner;
+        let ergebnis = tokio_test_block(lade_vod(&runner, &cfg, &tmp, "v8")).unwrap();
+        assert_eq!(ergebnis.pfad, tmp.join("v8.mp4"));
+        assert_eq!(
+            std::fs::read_to_string(&ergebnis.pfad).unwrap().trim(),
+            "sauber"
+        );
+        assert!(!ffmpeg_marke.exists());
+
         std::fs::remove_dir_all(&tmp).ok();
     }
 

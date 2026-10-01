@@ -1,3 +1,6 @@
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -7,9 +10,7 @@ use chrono::{Duration, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_chat::types::{ChatBadge, ChatMessageEvent};
-use tb_chat::zuschauer_register::{
-    GateOutcome, MemberIndexSource, MemberLite, ZuschauerRegister,
-};
+use tb_chat::zuschauer_register::{GateOutcome, MemberIndexSource, MemberLite, ZuschauerRegister};
 
 macro_rules! pool_or_skip {
     ($schema:expr) => {{
@@ -30,11 +31,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(schema, false))
         .execute(&admin)
         .await
         .unwrap();
@@ -113,7 +114,12 @@ impl MemberIndexSource for NoMembers {
     }
 }
 
-fn event(channel: &str, chatter_id: &str, chatter_login: &str, mod_badge: bool) -> ChatMessageEvent {
+fn event(
+    channel: &str,
+    chatter_id: &str,
+    chatter_login: &str,
+    mod_badge: bool,
+) -> ChatMessageEvent {
     let badges = if mod_badge {
         vec![ChatBadge {
             set_id: "moderator".to_string(),
@@ -161,7 +167,10 @@ async fn gate_lehnt_ohne_register_eintrag_ab() {
     let pool = pool_or_skip!("tb_zr_kein_eintrag");
     let register = ZuschauerRegister::new(pool.clone(), Arc::new(NoMembers));
     let ev = event("somechannel", "u1", "neuling", false);
-    assert_eq!(register.gate(&ev).await, GateOutcome::Reject("register_fehlt"));
+    assert_eq!(
+        register.gate(&ev).await,
+        GateOutcome::Reject("register_fehlt")
+    );
 }
 
 #[tokio::test]
@@ -194,7 +203,10 @@ async fn gate_lehnt_alt_bekannten_ab() {
         .unwrap();
     let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
     let ev = event("somechannel", "u3", "altgast", false);
-    assert_eq!(register.gate(&ev).await, GateOutcome::Reject("kein_neuling"));
+    assert_eq!(
+        register.gate(&ev).await,
+        GateOutcome::Reject("kein_neuling")
+    );
 }
 
 #[tokio::test]
@@ -214,7 +226,11 @@ async fn gate_lehnt_partner_streamer_raid_denylist_blacklist_outreach_ab() {
         let now = Utc::now();
         insert_register(&pool, uid, 0.2, now, now).await;
         seed_live_session(&pool, "somechannel", now - Duration::hours(2)).await;
-        sqlx::query(insert_sql).bind(uid).execute(&pool).await.unwrap();
+        sqlx::query(*insert_sql)
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
         let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
         let ev = event("somechannel", uid, "kandidat", false);
         assert_eq!(
@@ -242,12 +258,14 @@ async fn gate_lehnt_mod_und_bot_ab() {
 }
 
 async fn seed_live_session(pool: &PgPool, channel: &str, started_at: chrono::DateTime<Utc>) {
-    sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (501, $1, $2)")
-        .bind(channel)
-        .bind(started_at)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (501, $1, $2)",
+    )
+    .bind(channel)
+    .bind(started_at)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO twitch_live_state (streamer_login, active_session_id, is_live) VALUES ($1, 501, 1)")
         .bind(channel)
         .execute(pool)
@@ -269,7 +287,10 @@ async fn gate_lehnt_ohne_live_session_ab() {
     let pool = pool_or_skip!("tb_zr_keine_session");
     let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
     let ev = event("somechannel", "u_ns", "keinesession", false);
-    assert_eq!(register.gate(&ev).await, GateOutcome::Reject("kein_neuling"));
+    assert_eq!(
+        register.gate(&ev).await,
+        GateOutcome::Reject("kein_neuling")
+    );
 }
 
 #[tokio::test]
@@ -339,7 +360,10 @@ async fn gate_lehnt_bei_ladefehler_ab_und_legt_nichts_an() {
 
     let register = ZuschauerRegister::new(pool.clone(), Arc::new(TestMembers(Vec::new())));
     let ev = event("somechannel", "u_err", "fehler", false);
-    assert_eq!(register.gate(&ev).await, GateOutcome::Reject("register_fehlt"));
+    assert_eq!(
+        register.gate(&ev).await,
+        GateOutcome::Reject("register_fehlt")
+    );
 
     let nachher: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_zuschauer_register")
         .fetch_one(&pool)
@@ -422,7 +446,12 @@ async fn ensure_current_erneuert_nach_sieben_tagen_ohne_first_seen_zu_aendern() 
         .ensure_current("u8", "u8", "somechannel")
         .await
         .expect("entry");
-    assert!((entry.first_seen_at.unwrap() - first_seen).num_seconds().abs() <= 1);
+    assert!(
+        (entry.first_seen_at.unwrap() - first_seen)
+            .num_seconds()
+            .abs()
+            <= 1
+    );
     assert!((Utc::now() - entry.computed_at).num_seconds() < 60);
 }
 
@@ -450,10 +479,16 @@ async fn ensure_current_lehnt_bei_upsert_fehler_ab() {
         .ensure_current("u_upsert_fehler", "neuergast", "somechannel")
         .await;
 
-    assert!(entry.is_none(), "fehlgeschlagener Upsert muss fail-closed sein");
+    assert!(
+        entry.is_none(),
+        "fehlgeschlagener Upsert muss fail-closed sein"
+    );
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_zuschauer_register")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 0, "fehlgeschlagener Upsert darf keinen Eintrag hinterlassen");
+    assert_eq!(
+        count, 0,
+        "fehlgeschlagener Upsert darf keinen Eintrag hinterlassen"
+    );
 }

@@ -79,7 +79,7 @@ pub async fn link_start_handler(auth: DashboardAuthLevel, Query(q): Query<LinkQu
 
     let payload = json!({
         "scope": "identify",
-        "redirect_after": "/twitch/auth/discord/link/complete",
+        "redirect_after": "https://deutsche-deadlock-community.de/twitch/auth/discord/link/complete",
         "requesting_service": "twitch-dashboard-link",
         "metadata": {
             "next_path": next_path,
@@ -313,7 +313,7 @@ pub(crate) fn broker_token_from(
 }
 
 /// POST an den Broker (JSON + `X-Internal-Token`). `None` bei Nicht-200/Fehler.
-async fn broker_post(path: &str, token: &str, payload: &Value) -> Option<Value> {
+pub(crate) async fn broker_post(path: &str, token: &str, payload: &Value) -> Option<Value> {
     let url = format!("{}{}", BROKER_BASE_URL.trim_end_matches('/'), path);
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())

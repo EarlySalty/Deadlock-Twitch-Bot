@@ -1,0 +1,810 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import http from 'node:http';
+import test from 'node:test';
+const { chromium } = await import(process.env.STUDIO_PLAYWRIGHT_MODULE ?? 'playwright-core');
+
+function firstExisting(options) {
+  return options.filter(Boolean).find((option) => existsSync(option));
+}
+
+/** Neueste Chromium-Binaerdatei aus dem Playwright-Cache, falls installiert. */
+function findPlaywrightChromium() {
+  const cache = path.join(process.env.HOME ?? '', '.cache', 'ms-playwright');
+  try {
+    const versions = readdirSync(cache)
+      .filter((entry) => entry.startsWith('chromium-'))
+      .sort()
+      .reverse();
+    for (const version of versions)
+      for (const binary of ['chrome-linux64/chrome', 'chrome-linux/chrome']) {
+        const candidate = path.join(cache, version, binary);
+        if (existsSync(candidate)) return candidate;
+      }
+  } catch {
+    // Cache fehlt oder ist unlesbar: die Pruefung unten meldet das klar.
+  }
+  return undefined;
+}
+
+const chromiumPath = firstExisting([
+  process.env.CHROMIUM_PATH,
+  process.env.STUDIO_BROWSER,
+  findPlaywrightChromium(),
+]);
+if (!chromiumPath)
+  throw new Error(
+    'Kein Chromium gefunden: CHROMIUM_PATH auf die Chrome-Binaerdatei setzen oder Playwright-Browser installieren (npx playwright install chromium).',
+  );
+
+// dl-brand-Fonts: ENV, Schwester-Repo des Checkouts, Heimat-Verzeichnis.
+const brandFontDir = firstExisting([
+  process.env.BRAND_FONTS_DIR,
+  path.resolve(import.meta.dirname, '../../../../Website/dl-brand/fonts'),
+  path.join(process.env.HOME ?? '', 'repos/Website/dl-brand/fonts'),
+]);
+if (!brandFontDir)
+  throw new Error(
+    'dl-brand-Fonts nicht gefunden: BRAND_FONTS_DIR auf das dl-brand/fonts-Verzeichnis setzen.',
+  );
+
+const dist = path.resolve(import.meta.dirname, '../../analytics/dashboard_v2/dist');
+const evidence = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-22-social-dashboard-shell-size/browser');
+const layout = {
+  version: 1,
+  source: { width: 1920, height: 1080 },
+  game_crop: { x: 420, y: 0, w: 1080, h: 1080 },
+  cam_crop: { x: 1500, y: 50, w: 380, h: 380 },
+  cam_position: { x: 712, y: 48, w: 320, h: 320 },
+  cam_enabled: true,
+  mode: 'pip',
+};
+const platforms = ['youtube', 'tiktok', 'instagram'];
+const makePlan = (streamer) => ({
+  streamer_login: streamer,
+  approval_mode: 'manual',
+  approval_modes: ['manual', 'veto_window', 'full_auto'],
+  timezone: 'Europe/Berlin',
+  subtitles_enabled: true,
+  platforms: platforms.map((platform) => ({
+    platform,
+    auto_post: platform !== 'instagram',
+    posts_per_week: 3,
+    max_posts_per_day: 1,
+    post_times: ['18:00'],
+    next_slot: '2026-09-25T16:00:00Z',
+  })),
+  categories: [
+    {
+      category_key: 'deadlock',
+      display_name: 'Deadlock',
+      enrichment_enabled: true,
+      auto_post: true,
+    },
+    {
+      category_key: 'other',
+      display_name: 'Andere Spiele',
+      enrichment_enabled: false,
+      auto_post: false,
+    },
+  ],
+  pool: {
+    verfuegbare_clips: 25,
+    aktive_plattformen: 2,
+    reicht_fuer_posts: 50,
+    posts_pro_woche: 6,
+    reicht_fuer_tage: 58,
+    warnung: false,
+  },
+});
+const makeClips = (streamer) =>
+  Array.from({ length: 105 }, (_, i) => ({
+    clip_db_id: i + 1,
+    clip_id: `fixture-${i + 1}`,
+    title:
+      i === 104
+        ? 'Letzte Seite Bebop'
+        : i === 0
+          ? 'Bebop überlebt den Teamfight'
+          : `Community-Clip ${i + 1}`,
+    thumbnail_url: null,
+    clip_url: null,
+    streamer_login: streamer,
+    created_at: '2026-09-21T12:00:00Z',
+    duration_seconds: 34,
+    view_count: 2800,
+    game_name: 'Deadlock',
+    status: i < 3 ? 'awaiting_approval' : i === 3 ? 'failed' : i === 104 ? 'approved' : 'pending',
+    source_kind: 'twitch',
+    upload_local_path: null,
+    retention_until: '2026-10-01T12:00:00Z',
+    discarded_at: null,
+    platform_status: { youtube: false, tiktok: false, instagram: false },
+    effective_layout: layout,
+    layout_override: null,
+    approval: {
+      state: i < 3 ? 'awaiting_approval' : 'approved',
+      approved_platforms: ['youtube', 'tiktok'],
+      not_scheduled: [],
+    },
+    scheduled_at:
+      i === 104 ? { youtube: '2026-09-25T16:00:00Z', tiktok: '2026-09-25T18:00:00Z' } : {},
+  }));
+
+test(
+  'Social Studio: Produktionsbundle mit isoliertem API-Vertrag',
+  { timeout: 120000 },
+  async (t) => {
+    const plans = { earlysalty: makePlan('earlysalty'), partner2: makePlan('partner2') };
+    const clips = { earlysalty: makeClips('earlysalty'), partner2: makeClips('partner2') };
+    const writes = [];
+    const requests = [];
+    const errors = [];
+    let failTarget = '';
+    let fremdAenderung = null;
+    let failQueue = false;
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      const p = url.pathname;
+      requests.push(req.method + ' ' + req.url);
+      const json = (body, status = 200) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      const streamer =
+        ({ '11': 'earlysalty', '22': 'partner2' }[url.searchParams.get('twitch_user_id')]) ??
+        url.searchParams.get('streamer') ?? url.searchParams.get('streamer_login') ?? 'earlysalty';
+      if (!Object.hasOwn(plans, streamer)) return json({ error: 'unknown_streamer' }, 404);
+      let input = {};
+      if (req.method !== 'GET') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        try {
+          input = JSON.parse(body);
+        } catch {}
+        writes.push({ p, streamer, input });
+      }
+      if (failTarget && req.method !== 'GET' && p.includes(failTarget))
+        return json({ error: 'save_failed' }, 503);
+      if (p === '/twitch/api/v2/auth-status')
+        return json({
+          authenticated: true,
+          level: 'admin',
+          authLevel: 'admin',
+          isAdmin: true,
+          adminEligible: true,
+          adminMode: true,
+          isLocalhost: false,
+          twitchLogin: null,
+          canViewAllStreamers: true,
+          canAccessAnalyticsDashboard: true,
+          plan: {
+            planId: 'analysis_dashboard',
+            planName: 'Admin',
+            tier: 'extended',
+            isExtended: true,
+            entitlements: [],
+          },
+        });
+      if (p === '/twitch/api/v2/streamers')
+        return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
+      if (p === '/social-media/api/access/me')
+        return json({ allowed: true, streamer: 'earlysalty', isAdmin: true });
+      if (p === '/social-media/api/access')
+        return json({ items: [{ streamer_login: 'earlysalty', granted: true }] });
+      if (p.endsWith('/streamer-layout'))
+        return json({
+          streamer_login: streamer,
+          layout,
+          cam_enabled: true,
+          mode: 'pip',
+          is_default: false,
+        });
+      if (p === '/social-media/api/admin/clips') {
+        if (failQueue) return json({ error: 'offline' }, 503);
+        const page = Number(url.searchParams.get('page') || 1),
+          size = Number(url.searchParams.get('page_size') || 100);
+        return json({
+          items: clips[streamer].slice((page - 1) * size, page * size),
+          total: clips[streamer].length,
+          page,
+          page_size: size,
+        });
+      }
+      if (p.includes('/settings/posting-plan')) {
+        const plan = plans[streamer];
+        if (req.method !== 'GET') {
+          if (!input || typeof input !== 'object' || Array.isArray(input))
+            return json({ error: 'invalid_patch' }, 400);
+          // Fixture updates model the API fields, not arbitrary JSON object merging.
+          // Never copy attacker-selected keys such as __proto__ or constructor.
+          let target = plan;
+          let fields = ['approval_mode', 'timezone', 'subtitles_enabled'];
+          if (p.includes('/platform/')) {
+            target = plan.platforms.find((item) => item.platform === p.split('/').at(-1));
+            fields = ['auto_post', 'posts_per_week', 'max_posts_per_day', 'post_times'];
+          } else if (p.includes('/category/')) {
+            target = plan.categories.find((item) => item.category_key === p.split('/').at(-1));
+            fields = ['enrichment_enabled', 'auto_post'];
+          }
+          if (!target) return json({ error: 'unknown_target' }, 404);
+          for (const field of fields) {
+            if (Object.hasOwn(input, field)) target[field] = input[field];
+          }
+          if (fremdAenderung) {
+            fremdAenderung();
+            fremdAenderung = null;
+          }
+        }
+        return json(plan);
+      }
+      if (p.includes('vod-archive'))
+        return json({
+          streamer_login: streamer,
+          enabled: false,
+          privacy: 'private',
+          privacy_options: ['private'],
+          privacy_forced: true,
+        });
+      if (p.includes('/platforms/status'))
+        return json({
+          platforms: platforms.map((platform) => ({
+            platform,
+            connected: platform !== 'instagram',
+            username: streamer,
+            expired: false,
+          })),
+        });
+      if (/\/approval\/\d+\/decision$/.test(p)) {
+        const id = Number(p.split('/').at(-2));
+        const clip = clips.earlysalty.find((c) => c.clip_db_id === id);
+        clip.status = input.decision === 'approve' ? 'approved' : 'skipped';
+        clip.approval.state = clip.status;
+        clip.approval.approved_platforms = input.platforms;
+        return json({ clip_db_id: id, clip, approval: clip.approval });
+      }
+      if (p.endsWith('/preview')) return json({ clip_db_id: 1, status: 'ready', ready: true });
+      if (p.endsWith('/enrichment'))
+        return json({
+          clip_db_id: 1,
+          transcript_raw: 'Bebop!',
+          transcript_corrected: 'Bebop!',
+          status: 'done',
+          detected_terms: [],
+          hashtags_youtube: [],
+          hashtags_tiktok: [],
+          hashtags_instagram: [],
+          transcript_segments: [],
+        });
+      if (p === '/twitch/api/v2/internal-home') return json({
+        profile: { twitch_login: streamer, twitch_user_id: '42', display_name: streamer },
+        status: { authenticated: true, streamer_bound: true, period_days: 30,
+          oauth: { connected: true, status: 'connected', granted_scopes: [], missing_scopes: [] },
+          discord: { connected: true }, raid_status: { state: 'active' },
+          partner: { status: 'active' }, access: { landing: true, analytics: true } },
+        kpis: { streams_count: 0, avg_viewers: 0, follower_delta: 0, bot_bans_keyword_count: 0 },
+        recent_streams: [], last_stream_summary: null, health_score: null,
+        week_comparison: null, live_status: null, bot_impact: { events: [], summary: {} },
+        bot_activity: { events: [] }, links: {}, changelog: { entries: [] },
+      });
+      if (p === '/twitch/api/v2/uplink/me') return json({
+        enabled: false, waitlisted: false, ingest_key: '', service_status: 'ready',
+        live_status: 'aus', session: null, reconnect_wait_s: 0, reconnect_wait_max_s: 300,
+        verbindungen: [],
+      });
+      if (p.startsWith('/twitch/api/v2/uplink/')) return json([]);
+      if (p.includes('/api/')) return json({ items: [], total: 0 });
+      try {
+        let file;
+        if (p.startsWith('/brand/fonts/')) file = path.join(brandFontDir, path.basename(p));
+        else if (p.startsWith('/twitch/dashboard-v2/'))
+          file = path.join(dist, p.slice('/twitch/dashboard-v2/'.length));
+        else file = path.join(dist, 'index.html');
+        const body = await fs.readFile(file);
+        const ext = path.extname(file);
+        res.writeHead(200, {
+          'content-type':
+            {
+              '.js': 'text/javascript',
+              '.css': 'text/css',
+              '.png': 'image/png',
+              '.woff2': 'font/woff2',
+              '.html': 'text/html',
+            }[ext] ?? 'application/octet-stream',
+        });
+        res.end(body);
+      } catch {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const browser = await chromium.launch({
+      executablePath: chromiumPath,
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    });
+    t.after(async () => {
+      await browser.close();
+      await new Promise((resolve) => server.close(resolve));
+    });
+    await t.test('Fixture-API weist fremde Konten ab und kopiert keine Prototyp-Schlüssel', async () => {
+      const endpoint = base + '/social-media/api/settings/posting-plan';
+      const before = JSON.stringify(plans.earlysalty);
+      const malicious = '{"__proto__":{"fixturePolluted":true},"constructor":{"prototype":{"fixturePolluted":true}}}';
+      const patched = await fetch(endpoint + '?streamer=earlysalty', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: malicious,
+      });
+      assert.equal(patched.status, 200);
+      await patched.json();
+      assert.equal(JSON.stringify(plans.earlysalty), before);
+      assert.equal(Object.getPrototypeOf(plans.earlysalty), Object.prototype);
+      assert.equal(Object.hasOwn(plans.earlysalty, 'constructor'), false);
+      assert.equal(plans.earlysalty.fixturePolluted, undefined);
+      for (const streamer of ['__proto__', 'constructor', 'unknown']) {
+        const rejected = await fetch(endpoint + '?streamer=' + streamer, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' }, body: malicious,
+        });
+        assert.equal(rejected.status, 404);
+        await rejected.json();
+      }
+      assert.equal(Object.prototype.fixturePolluted, undefined);
+      // The UI write-count assertions below start from an empty observation log.
+      writes.length = 0;
+      requests.length = 0;
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 1080 },
+      reducedMotion: 'reduce',
+    });
+    page.setDefaultTimeout(6000);
+    t.after(async () => {
+      await fs.mkdir(evidence, { recursive: true });
+      await fs.writeFile(
+        path.join(evidence, 'browser-state.json'),
+        JSON.stringify({ writes, requests, errors }, null, 2),
+      );
+    });
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.route('**/*', (route) =>
+      route.request().url().startsWith(base) ? route.continue() : route.abort(),
+    );
+    await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+    await page.locator('.studio-clip').first().waitFor();
+    const tab = (name) => page.getByRole('tab', { name, exact: true });
+    await t.test(
+      'vollständige Kennzahlen, keine Vorschau-Requests beim Laden und echtes Logo',
+      async () => {
+        assert.equal(await page.locator('.studio-clip').count(), 24);
+        assert.ok(requests.some((r) => r.includes('page=2')));
+        assert.ok(!requests.some((r) => r.includes('/preview')));
+        assert.ok((await page.locator('.studio-metrics').innerText()).includes('2'));
+        assert.ok(
+          await page
+            .locator('.studio-brand img')
+            .evaluate((img) => img.complete && img.naturalWidth > 0),
+        );
+        assert.ok(await page.evaluate(() => document.fonts.check('14px "Studio Manrope"')));
+      },
+    );
+    await t.test('gemeinsamer Rahmen: volle Breite, 240px Navigation und gleiche Abstände', async () => {
+      for (const width of [1024, 1280, 1440, 1920, 2560]) {
+        await page.setViewportSize({ width, height: 1080 });
+        const geometry = await page.evaluate(() => {
+          const main = document.querySelector('main').getBoundingClientRect();
+          const sidebar = document.querySelector('aside').getBoundingClientRect();
+          return { mainX: main.x, mainWidth: main.width, sidebarX: sidebar.x, sidebarWidth: sidebar.width, top: sidebar.y };
+        });
+        const left = 24;
+        assert.equal(geometry.sidebarWidth, 240, JSON.stringify({ width, geometry }));
+        assert.equal(geometry.sidebarX, left);
+        assert.equal(geometry.mainX, left + 240 + 20);
+        assert.equal(geometry.mainWidth, width - 48 - 240 - 20);
+        assert.equal(geometry.top, 20);
+        assert.equal(await page.getByRole('button', { name: 'Menü', exact: true }).count(), 0);
+      }
+      await page.setViewportSize({ width: 1440, height: 1080 });
+    });
+    await t.test('Listen- und Kartenansicht zeigen die aktive Auswahl sichtbar an', async () => {
+      const list = page.getByRole('button', { name: 'Listenansicht', exact: true });
+      const grid = page.getByRole('button', { name: 'Kartenansicht', exact: true });
+      const background = (button) => button.evaluate((node) => getComputedStyle(node).backgroundColor);
+      assert.notEqual(await background(list), await background(grid));
+      await grid.click();
+      assert.equal(await grid.getAttribute('aria-pressed'), 'true');
+      assert.notEqual(await background(list), await background(grid));
+      await list.click();
+    });
+    await t.test('Kennzahlen und Vorratshinweis kleben nicht aneinander', async () => {
+      const gap = await page.locator('.studio-metrics').evaluate((node) =>
+        node.nextElementSibling.getBoundingClientRect().top - node.getBoundingClientRect().bottom,
+      );
+      assert.ok(gap >= 12, 'Abstand: ' + gap);
+    });
+    await t.test('Suche erreicht Seite 2 und Freigabe sendet Plattformen', async () => {
+      await page.getByRole('searchbox').fill('Letzte Seite');
+      assert.equal(await page.locator('.studio-clip').count(), 1);
+      await page.getByRole('searchbox').fill('Bebop überlebt');
+      await page
+        .locator('.studio-clip')
+        .getByRole('button', { name: 'Clip freigeben', exact: true })
+        .click();
+      await page.waitForFunction(
+        () => !document.querySelector('.studio-clip button.studio-primary'),
+      );
+      assert.deepEqual(writes.find((w) => w.p.endsWith('/decision')).input.platforms, [
+        'youtube',
+        'tiktok',
+      ]);
+      await page.getByRole('searchbox').fill('');
+    });
+    await t.test('Dialog hat Fokus, Escape schließt, Layoutfehler bleibt sichtbar', async () => {
+      await page.locator('.studio-clip').nth(1).getByLabel('Weitere Aktionen').click();
+      await page.getByRole('button', { name: 'Layout anpassen', exact: true }).click();
+      await page.getByRole('dialog').waitFor();
+      for (let i = 0; i < 35; i++) await page.keyboard.press('Tab');
+      assert.ok(await page.getByRole('dialog').evaluate((d) => d.contains(document.activeElement)));
+      await page.getByRole('button', { name: 'Cam an', exact: true }).click();
+      failTarget = '/layout';
+      await page.getByRole('button', { name: 'Override speichern', exact: true }).click();
+      await page.getByRole('dialog').getByRole('alert').waitFor();
+      assert.equal(await page.getByRole('dialog').count(), 1);
+      failTarget = '';
+      await page.keyboard.press('Escape');
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      assert.ok(await page.evaluate(() => document.activeElement?.tagName === 'SUMMARY'));
+    });
+    await t.test(
+      'Zeitplan sendet vor Speichern nichts und behält Entwurf bei Teilfehler',
+      async () => {
+        await tab('Auto-Pilot & Zeitplan').click();
+        const count = writes.length;
+        await page.getByLabel('Posts pro Woche', { exact: true }).nth(0).fill('4');
+        await page.getByLabel('Posts pro Woche', { exact: true }).nth(1).fill('5');
+        await page.getByRole('heading', { name: 'Dein Posting-Rhythmus' }).click();
+        assert.equal(writes.length, count);
+        failTarget = '/platform/tiktok';
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText(/Teilweise gespeichert/).waitFor();
+        assert.equal(
+          await page.getByLabel('Posts pro Woche', { exact: true }).nth(1).inputValue(),
+          '5',
+        );
+        assert.equal(plans.earlysalty.platforms[0].posts_per_week, 4);
+        assert.equal(plans.earlysalty.platforms[1].posts_per_week, 3);
+        failTarget = '';
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+        assert.equal(plans.earlysalty.platforms[1].posts_per_week, 5);
+      },
+    );
+    await t.test('Enter übernimmt auch das gerade bearbeitete Zeitplanfeld', async () => {
+      const field = page.getByLabel('Höchstens pro Tag', { exact: true }).first();
+      await field.fill('2');
+      await field.press('Enter');
+      await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+      assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 2);
+    });
+    await t.test('ungültige Zeiten und Zahlen lösen keinen Schreibaufruf aus', async () => {
+      const count = writes.length;
+      await page.getByLabel('Posts pro Woche', { exact: true }).first().fill('999');
+      await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+      assert.equal(writes.length, count);
+      await page.getByRole('button', { name: 'Verwerfen', exact: true }).click();
+      await page.getByLabel('Uhrzeiten, mit Komma getrennt', { exact: true }).first().fill('25:99');
+      await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+      assert.equal(writes.length, count);
+      await page.getByRole('button', { name: 'Verwerfen', exact: true }).click();
+    });
+    await t.test('Fremdänderung zwischen Laden und Speichern wird nicht zurückgeschrieben', async () => {
+      await page.getByLabel('Höchstens pro Tag', { exact: true }).nth(1).fill('2');
+      fremdAenderung = () => {
+        plans.earlysalty.platforms[0].max_posts_per_day = 3;
+      };
+      const vor = writes.length;
+      await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+      await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+      const zielSchreibungen = writes
+        .slice(vor)
+        .filter((w) => /\/settings\/posting-plan\/platform\//.test(w.p))
+        .map((w) => w.p.split('/').at(-1));
+      assert.deepEqual(zielSchreibungen, ['tiktok']);
+      assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 3);
+      assert.equal(plans.earlysalty.platforms[1].max_posts_per_day, 2);
+    });
+    await t.test(
+      'Retry nach fehlgeschlagenem Schreiben lässt fremde Felder unberührt',
+      async () => {
+        await page.getByLabel('Posts pro Woche', { exact: true }).nth(1).fill('6');
+        // Fremder Akteur ändert ein Feld, das der Entwurf nicht berührt, bevor
+        // der Fehlerpfad neu liest.
+        plans.earlysalty.platforms[0].max_posts_per_day = 7;
+        failTarget = '/platform/tiktok';
+        const vor = writes.length;
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText(/Speichern fehlgeschlagen/).waitFor();
+        failTarget = '';
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+        const zielSchreibungen = writes
+          .slice(vor)
+          .filter((w) => /\/settings\/posting-plan\/platform\//.test(w.p))
+          .map((w) => w.p.split('/').at(-1));
+        assert.deepEqual(zielSchreibungen, ['tiktok', 'tiktok']);
+        assert.deepEqual(writes.findLast((w) => w.p.endsWith('/platform/tiktok')).input, {
+          posts_per_week: 6,
+        });
+        assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 7);
+        assert.equal(plans.earlysalty.platforms[1].posts_per_week, 6);
+      },
+    );
+    await t.test(
+      'Abschalten der Vollautomatik wird vor den Zielen wirksam und übersteht Teilfehler',
+      async () => {
+        plans.earlysalty.approval_mode = 'full_auto';
+        await page.reload();
+        await tab('Auto-Pilot & Zeitplan').click();
+        await page.getByRole('button', { name: /Vollautomatik/ }).waitFor();
+        await page.getByRole('button', { name: /Nur nach Freigabe/ }).click();
+        await page.getByLabel('Höchstens pro Tag', { exact: true }).nth(0).fill('4');
+        failTarget = '/platform/youtube';
+        const vor = writes.length;
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText(/Teilweise gespeichert/).waitFor();
+        const neu = writes.slice(vor);
+        const einstellungen = neu.findIndex((w) => w.p.endsWith('/settings/posting-plan'));
+        const ziel = neu.findIndex((w) => w.p.endsWith('/platform/youtube'));
+        assert.ok(einstellungen !== -1 && ziel !== -1 && einstellungen < ziel);
+        assert.equal(neu[einstellungen].input.approval_mode, 'manual');
+        assert.equal(plans.earlysalty.approval_mode, 'manual');
+        failTarget = '';
+        await page.getByRole('button', { name: 'Änderungen speichern', exact: true }).click();
+        await page.getByText('Änderungen gespeichert.', { exact: true }).waitFor();
+        assert.equal(plans.earlysalty.platforms[0].max_posts_per_day, 4);
+        assert.equal(plans.earlysalty.approval_mode, 'manual');
+      },
+    );
+    await t.test('Template-Auswahl lässt sich ohne zusätzliche Änderung speichern', async () => {
+      await tab('Templates & Layouts').click();
+      await page.getByRole('button', { name: 'Gameplay mit Hintergrund Layout anpassen' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Layout für earlysalty speichern', exact: true }).click();
+      await page.getByRole('dialog').waitFor({ state: 'detached' });
+      const payload = writes.findLast(write => write.p.endsWith('/streamer-layout')).input;
+      assert.equal(payload.layout.mode, 'blur_pad');
+      assert.equal(payload.layout.cam_enabled, false);
+      await tab('Auto-Pilot & Zeitplan').click();
+    });
+    await t.test(
+      'Kanalwechsel verwirft nach Bestätigung alten Entwurf und Editorzustand',
+      async () => {
+        await page.getByLabel('Posts pro Woche', { exact: true }).first().fill('8');
+        await page.getByRole('heading', { name: 'Dein Posting-Rhythmus' }).click();
+        page.once('dialog', (d) => d.accept());
+        await page.getByLabel('Streamer wählen', { exact: true }).selectOption('22');
+        await tab('Auto-Pilot & Zeitplan').click();
+        assert.equal(
+          await page.getByLabel('Posts pro Woche', { exact: true }).first().inputValue(),
+          '3',
+        );
+        assert.equal(plans.earlysalty.platforms[0].posts_per_week, 4);
+      },
+    );
+    await t.test(
+      'Alle Bereiche bleiben von 320 bis 2560 Pixel ohne Seitenüberlauf',
+      async () => {
+        await fs.mkdir(evidence, { recursive: true });
+        for (const width of [320, 390, 768, 1024, 1280, 1440, 1920, 2560]) {
+          await page.setViewportSize({ width, height: 1080 });
+          for (const name of [
+            'Pipeline',
+            'Auto-Pilot & Zeitplan',
+            'Templates & Layouts',
+            'Konten & Einstellungen',
+          ]) {
+            await tab(name).click();
+            await page.waitForTimeout(100);
+            const size = await page.evaluate(() => ({
+              width: document.documentElement.clientWidth,
+              doc: document.documentElement.scrollWidth,
+            }));
+            assert.ok(size.doc <= size.width, `${name} @ ${width}: ${JSON.stringify(size)}`);
+          }
+          await tab('Pipeline').click();
+          await page.screenshot({ path: path.join(evidence, `studio-${width}.png`) });
+        }
+        await tab('Auto-Pilot & Zeitplan').click();
+        await page.screenshot({ path: path.join(evidence, 'studio-autopilot.png') });
+      },
+    );
+    await t.test('Karten und Aktionsmenüs passen auch neben die gemeinsame Sidebar', async () => {
+      await tab('Pipeline').click();
+      for (const width of [320, 390, 768, 1024, 1280, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const view of ['Listenansicht', 'Kartenansicht']) {
+          await page.getByRole('button', { name: view, exact: true }).click();
+          const card = page.locator('.studio-clip').first();
+          const bounds = await card.boundingBox();
+          const actions = await card.locator('.studio-clip-actions').boundingBox();
+          assert.ok(actions.x >= bounds.x && actions.x + actions.width <= bounds.x + bounds.width + 1);
+          await card.getByLabel('Weitere Aktionen').click();
+          const menuBounds = await card.locator('.studio-menu').boundingBox();
+          assert.ok(menuBounds.x >= 0 && menuBounds.x + menuBounds.width <= width + 1, view + ' @ ' + width);
+          await page.keyboard.press('Escape');
+          assert.ok(await card.locator('summary').evaluate(node => node === document.activeElement));
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+          assert.equal(overflow, 0, view + ' @ ' + width);
+        }
+      }
+      await page.getByRole('button', { name: 'Listenansicht', exact: true }).click();
+    });
+    await t.test('Home, Uplink und Social Media behalten identische Rahmengeometrie und Sidebar-Stile', async () => {
+      const measurements = [];
+      try {
+        for (const width of [390, 1024, 1440, 1920]) {
+          await page.setViewportSize({ width, height: 1080 });
+          let reference;
+          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty&twitch_user_id=11']) {
+            await page.goto(base + route);
+            await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            const geometry = await page.evaluate(() => {
+              const sidebar = document.querySelector('aside');
+              const main = document.querySelector('main').getBoundingClientRect();
+              const box = sidebar.getBoundingClientRect();
+              const style = getComputedStyle(sidebar);
+              return { x: box.x, y: box.y, width: box.width, mainX: main.x, mainWidth: main.width,
+                font: style.fontFamily, padding: style.padding, background: style.backgroundColor, borderRadius: style.borderRadius };
+            });
+            measurements.push({ viewportWidth: width, route, ...geometry });
+            if (!reference) reference = geometry;
+            else assert.deepEqual(geometry, reference, route + ' @ ' + width);
+          }
+        }
+      } finally {
+        await fs.writeFile(path.join(evidence, 'shell-geometry.json'), JSON.stringify(measurements, null, 2));
+        await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+        await page.locator('.studio-clip').first().waitFor();
+      }
+    });
+    await t.test('Aktiver Sidebar-Punkt traegt das Marken-Gold auf jeder Route', async () => {
+      const activeBackground = () =>
+        page.locator('aside a[aria-current="page"]').evaluate((node) => getComputedStyle(node).backgroundColor);
+      const goldTint = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.className = 'bg-primary/10';
+        probe.style.display = 'none';
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      });
+      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+      await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
+      const social = await activeBackground();
+      assert.equal(social, goldTint, 'Gold-Aktivzustand erwartet, erhalten: ' + social);
+      await page.goto(base + '/twitch/dashboard?streamer=earlysalty');
+      await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
+      const home = await activeBackground();
+      assert.equal(home, goldTint, 'Home traegt denselben Gold-Aktivzustand: ' + home);
+      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+      await page.locator('.studio-clip').first().waitFor();
+    });
+    await t.test('Lange Clip-Titel lassen mobile Dialoge und Schließen erreichbar', async () => {
+      const previousTitle = clips.earlysalty[0].title;
+      clips.earlysalty[0].title = 'SehrLangerClipTitel'.repeat(30);
+      try {
+        for (const width of [320, 390]) {
+          await page.setViewportSize({ width, height: 600 });
+          await page.reload();
+          const card = page.locator('.studio-clip').first();
+          await card.waitFor();
+          await card.getByLabel('Weitere Aktionen').click();
+          await page.getByRole('button', { name: 'Layout anpassen', exact: true }).click();
+          const dialog = page.getByRole('dialog');
+          await dialog.waitFor();
+          const bounds = await dialog.boundingBox();
+          const content = await dialog.locator('.studio-dialog-content').boundingBox();
+          assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
+          assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 600);
+          assert.ok(content.height > 0 && content.y + content.height <= bounds.y + bounds.height);
+          await dialog.locator('header').getByRole('button', { name: 'Schließen', exact: true }).click();
+          await dialog.waitFor({ state: 'detached' });
+        }
+      } finally {
+        clips.earlysalty[0].title = previousTitle;
+        await page.setViewportSize({ width: 1440, height: 1080 });
+      }
+    });
+    await t.test('Fehlgeschlagene Pipeline wird nicht als leerer Bestand angezeigt', async () => {
+      failQueue = true;
+      await page.reload();
+      await page
+        .getByText('Die Pipeline konnte nicht vollständig geladen werden.', { exact: true })
+        .waitFor({ timeout: 15000 });
+      assert.equal(
+        await page.getByText('Keine Clips für diesen Filter', { exact: true }).count(),
+        0,
+      );
+    });
+    assert.deepEqual(errors, []);
+  },
+);
+
+// Enger Nachlauf: echte React-Seite, ausschließlich lokale API-Fixtures.
+test('Social Studio: stabile Kanal-ID bei widersprüchlichen Links und Kanalwechsel', { timeout: 45000 }, async (t) => {
+  const observed = [];
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const p = url.pathname;
+    const json = (body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    if (p.includes('/api/')) {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      observed.push({ path: p, query: url.search, body });
+      if (p.endsWith('/auth-status')) return json({ authenticated: true, isAdmin: true, isLocalhost: false, canViewAllStreamers: true, canAccessAnalyticsDashboard: true, adminMode: true, authLevel: 'admin', level: 'admin' });
+      if (p.endsWith('/streamers')) return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
+      if (p.endsWith('/access/me')) return json({ allowed: true, isAdmin: true });
+      if (p.endsWith('/access')) return json({ items: [] });
+      if (p.endsWith('/streamer-layout')) return json({ layout, mode: 'pip', cam_enabled: true });
+      if (p.endsWith('/posting-plan')) return json(makePlan(url.searchParams.get('streamer_login') ?? 'earlysalty'));
+      if (p.endsWith('/clips')) return json({ items: [], total: 0, page: 1, page_size: 100 });
+      if (p.endsWith('/upload')) return json({ clip_id: 'local-contract-only' });
+      return json({ items: [], total: 0 });
+    }
+    try {
+      const file = p.startsWith('/brand/fonts/') ? path.join(brandFontDir, path.basename(p))
+        : p.startsWith('/twitch/dashboard-v2/') ? path.join(dist, p.slice('/twitch/dashboard-v2/'.length)) : path.join(dist, 'index.html');
+      const type = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png', '.woff2': 'font/woff2' }[path.extname(file)];
+      const body = await fs.readFile(file);
+      res.writeHead(200, { 'content-type': type ?? 'application/octet-stream' }); res.end(body);
+    } catch { res.writeHead(404); res.end(); }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => server.close(resolve)); });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1080 }, reducedMotion: 'reduce' });
+  page.setDefaultTimeout(6000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.route('**/*', (route) => route.request().url().startsWith(base) ? route.continue() : route.abort());
+  const select = page.getByRole('combobox', { name: 'Streamer wählen' });
+  const clipRequests = () => observed.filter((entry) => entry.path.endsWith('/admin/clips'));
+  for (const query of ['?streamer=partner2&twitch_user_id=11', '?streamer=earlysalty']) {
+    observed.length = 0;
+    await page.goto(base + '/social-media-admin' + query);
+    await page.getByRole('heading', { name: 'Streamer auswählen' }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('select[aria-label="Streamer wählen"]').disabled);
+    assert.equal(await select.inputValue(), '');
+    assert.equal(clipRequests().length, 0, 'ohne eindeutige Auswahl keine Clipabfrage');
+    assert.equal(await page.locator('input[type=file]').count(), 0);
+  }
+  observed.length = 0;
+  const initialClips = page.waitForResponse((response) => response.url().includes('/admin/clips?'));
+  await page.goto(base + '/social-media-admin?twitch_user_id=11');
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Streamer wählen"]')?.value === '11');
+  await initialClips;
+  assert.ok(clipRequests().every((entry) => new URLSearchParams(entry.query).get('twitch_user_id') === '11'));
+  assert.equal(new URL(page.url()).searchParams.get('streamer'), 'earlysalty');
+  // Nur lokaler Multipart-Vertrag: kein externer Uploader und kein echtes Video.
+  await page.getByRole('button', { name: 'Clip hinzufügen', exact: true }).click();
+  await Promise.all([page.waitForResponse((response) => response.url().endsWith('/upload')), page.locator('input[type=file]').setInputFiles({ name: 'contract.mp4', mimeType: 'video/mp4', buffer: Buffer.from('local fixture') })]);
+  assert.match(observed.find((entry) => entry.path.endsWith('/upload')).body, /name="twitch_user_id"\r\n\r\n11\r\n/);
+  await page.getByRole('button', { name: 'Schließen', exact: true }).click();
+  observed.length = 0;
+  await Promise.all([page.waitForResponse((response) => response.url().includes('/admin/clips?') && response.url().includes('twitch_user_id=22')), select.selectOption('22')]);
+  assert.equal(new URL(page.url()).searchParams.get('streamer'), 'partner2');
+  assert.equal(new URL(page.url()).searchParams.get('twitch_user_id'), '22');
+  assert.ok(clipRequests().every((entry) => new URLSearchParams(entry.query).get('twitch_user_id') === '22'));
+  await page.getByRole('button', { name: 'Clip hinzufügen', exact: true }).click();
+  await Promise.all([page.waitForResponse((response) => response.url().endsWith('/upload')), page.locator('input[type=file]').setInputFiles({ name: 'contract-2.mp4', mimeType: 'video/mp4', buffer: Buffer.from('local fixture') })]);
+  assert.match(observed.find((entry) => entry.path.endsWith('/upload')).body, /name="twitch_user_id"\r\n\r\n22\r\n/);
+  await page.getByRole('button', { name: 'Schließen', exact: true }).click();
+  const screenshotDir = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-30-clip-channel-selection');
+  await fs.mkdir(screenshotDir, { recursive: true });
+  await page.screenshot({ path: path.join(screenshotDir, 'channel-selection.png'), fullPage: true });
+  assert.deepEqual(errors, []);
+});

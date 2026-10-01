@@ -1,15 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clampDays, parseDaysParam, streamerAusUrlErlaubt } from '../src/utils/zeitraum';
+import { analyticsMonthsForDays, clampDays, parseDaysParam, streamerAusUrlErlaubt } from '../src/utils/zeitraum';
 
-test('clampDays deckelt auf 7 bis 365', () => {
+test('clampDays erlaubt mehr als ein Jahr und deckelt bei zehn Jahren', () => {
   assert.equal(clampDays(7), 7);
   assert.equal(clampDays(365), 365);
+  assert.equal(clampDays(730), 730);
+  assert.equal(clampDays(3650), 3650);
   assert.equal(clampDays(30), 30);
   assert.equal(clampDays(3), 7);
   assert.equal(clampDays(0), 7);
-  assert.equal(clampDays(400), 365);
+  assert.equal(clampDays(5000), 3650);
   assert.equal(clampDays(-10), 7);
 });
 
@@ -23,16 +25,17 @@ test('clampDays faellt bei ungueltiger Zahl auf 30', () => {
   assert.equal(clampDays(Number.POSITIVE_INFINITY), 30);
 });
 
-test('parseDaysParam akzeptiert ganze Zahlen 7 bis 365', () => {
+test('parseDaysParam akzeptiert ganze Zahlen auch ueber einem Jahr', () => {
   assert.equal(parseDaysParam('7'), 7);
   assert.equal(parseDaysParam('14'), 14);
   assert.equal(parseDaysParam('90'), 90);
   assert.equal(parseDaysParam('365'), 365);
+  assert.equal(parseDaysParam('730'), 730);
 });
 
 test('parseDaysParam deckelt Werte ausserhalb des Bereichs', () => {
   assert.equal(parseDaysParam('1'), 7);
-  assert.equal(parseDaysParam('5000'), 365);
+  assert.equal(parseDaysParam('5000'), 3650);
 });
 
 test('parseDaysParam faellt bei Unsinn auf 30', () => {
@@ -45,6 +48,12 @@ test('parseDaysParam faellt bei Unsinn auf 30', () => {
 
 test('parseDaysParam ignoriert umgebende Leerzeichen', () => {
   assert.equal(parseDaysParam('  45  '), 45);
+});
+
+test('Monatsstatistik folgt auch Zeitraeumen ueber einem Jahr', () => {
+  assert.equal(analyticsMonthsForDays(365), 12);
+  assert.equal(analyticsMonthsForDays(730), 24);
+  assert.equal(analyticsMonthsForDays(3650), 120);
 });
 
 test('streamerAusUrlErlaubt lässt ausserhalb der Demo-Shell jeden Streamer zu', () => {

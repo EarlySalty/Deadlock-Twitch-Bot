@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO brain.hero_item_stats(\n              hero_id, item_id, bracket, prevalence_builds, wins, losses, matches, players,\n              avg_buy_time_relative, lift_pp, patch_tag, updated_at\n            )\n            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())\n            ON CONFLICT(hero_id, item_id, bracket, patch_tag) DO UPDATE SET\n              prevalence_builds=excluded.prevalence_builds,\n              wins=excluded.wins,\n              losses=excluded.losses,\n              matches=excluded.matches,\n              players=excluded.players,\n              avg_buy_time_relative=excluded.avg_buy_time_relative,\n              lift_pp=excluded.lift_pp,\n              updated_at=excluded.updated_at\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Float8",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ef4e77c986ff8ffa50109946926a19a82014939b757381b152369b97cc69418b"
+}

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+tb-config = { workspace = true }
 async-trait = { workspace = true }
 axum         = { workspace = true }
 hex          = { workspace = true }
@@ -23,6 +24,7 @@ url          = { workspace = true }
 # UUID → str (Block-10-Serializer-Parität, json_default).
 uuid         = { workspace = true }
 tb-analytics        = { workspace = true }
+tb-raid             = { workspace = true }
 # Distinktivitäts-Gate für gelernte Spam-Muster (spam_filter) — ein Gate,
 # beide Schreibwege (AI-Reviewer + interner Lern-Endpoint).
 tb-chat             = { workspace = true }
@@ -36,3 +38,4 @@ tb-transport-twitch = { workspace = true }
 tempfile = "3"
 tokio     = { workspace = true }
 tower     = { workspace = true, features = ["util"] }
+wiremock  = { workspace = true }

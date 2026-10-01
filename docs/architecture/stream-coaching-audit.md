@@ -81,8 +81,8 @@ Audit, das darauf baut, faellt still aus.
 | Modellschritt faellt aus | Der Bericht sagt "NICHT GELAUFEN", die Aufnahme bleibt liegen. Gemeldet wird gedrosselt: beim ersten betroffenen Block und danach bei jedem zwanzigsten. |
 | Block ohne gesprochenes Wort | Normalfall, keine Meldung, Aufnahme weg. Ab 20 stummen Bloecken am Stueck je Kanal: DM bei jedem Vielfachen, und die Aufnahmen bleiben liegen. |
 | streamlink liefert nichts | Nach fuenf Anlaeufen je Kanal eine DM. |
-| Helix antwortet nicht | Nach fuenf Anlaeufen eine DM. Laufende Aufnahmen laufen weiter; nur neue Kanaele werden nicht erkannt und beendete nicht aufgeraeumt. |
-| Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. |
+| Helix antwortet nicht | Nach fuenf Anlaeufen eine DM. Laufende Aufnahmen laufen weiter; nur neue Kanaele werden nicht erkannt und beendete nicht aufgeraeumt. Ein Helix-Hinweis, den der Broker nicht nahm, wird beim Start und im Aufraeumtakt verworfen statt nachgereicht: läuft Helix wieder, wäre die alte Störung als aktuell angekommen, und läuft sie noch, wiederholt die Schleife die Meldung selbst und löscht den Hinweis bei erfolgreicher Abfrage. Nach einem Reboot startet die System-Unit von allein, weil sie enabled ist. |
+| Broker nimmt eine Ausfallmeldung nicht an | Der Hinweis landet in `offene-hinweise/` und wird stuendlich erneut versucht. Ausnahme ist `helix-ausfall`: er wird verworfen, weil die Helix-Schleife ihre eigene Meldung erneut versucht. |
 | Schleife stirbt | Prozess endet mit Code 1, `Restart=on-failure` greift. |
 
 ## 6. Datenschutz

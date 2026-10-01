@@ -1,0 +1,327 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT twitch_user_id, twitch_login, avg_duration_sec,\n                   time_pattern_score_base, received_successful_raids_total,\n                   is_new_partner_preferred, new_partner_multiplier,\n                   raid_boost_multiplier, is_live, current_started_at,\n                   current_uptime_sec, duration_score, time_pattern_score,\n                   base_score, final_score, today_received_raids,\n                   last_computed_at, readiness_score, fairness_score,\n                   COALESCE(viewer_fairness_score, 0.5) AS \"viewer_fairness_score!\",\n                   internal_sent_raids_30d, internal_received_raids_7d,\n                   internal_received_raids_30d,\n                   COALESCE(sent_viewers_30d, 0) AS \"sent_viewers_30d!\",\n                   COALESCE(received_viewers_30d, 0) AS \"received_viewers_30d!\",\n                   COALESCE(courtesy_score, 1.0) AS \"courtesy_score!\",\n                   courtesy_class,\n                   COALESCE(courtesy_observed, 0) AS \"courtesy_observed!\"\n            FROM twitch_partner_raid_scores\n            WHERE twitch_user_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "twitch_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "twitch_login",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "twitch_login"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_duration_sec",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "avg_duration_sec"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "time_pattern_score_base",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "time_pattern_score_base"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "received_successful_raids_total",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "received_successful_raids_total"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_new_partner_preferred",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "is_new_partner_preferred"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "new_partner_multiplier",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "new_partner_multiplier"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "raid_boost_multiplier",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "raid_boost_multiplier"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "is_live",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "is_live"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "current_started_at",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "current_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "current_uptime_sec",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "current_uptime_sec"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "duration_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "duration_score"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "time_pattern_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "time_pattern_score"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "base_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "base_score"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "final_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "final_score"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "today_received_raids",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "today_received_raids"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "last_computed_at",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "last_computed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "readiness_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "readiness_score"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "fairness_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "fairness_score"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "viewer_fairness_score!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 20,
+        "name": "internal_sent_raids_30d",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "internal_sent_raids_30d"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "internal_received_raids_7d",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "internal_received_raids_7d"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "internal_received_raids_30d",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "internal_received_raids_30d"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "sent_viewers_30d!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 24,
+        "name": "received_viewers_30d!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 25,
+        "name": "courtesy_score!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 26,
+        "name": "courtesy_class",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_partner_raid_scores",
+            "name": "courtesy_class"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "courtesy_observed!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      true,
+      null
+    ]
+  },
+  "hash": "40b836626088612ed946d98e3819af4f6d79a186311ccc4cee37fd00254293e9"
+}

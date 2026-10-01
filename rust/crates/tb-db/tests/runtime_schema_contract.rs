@@ -80,11 +80,13 @@ async fn requirements_dedupe_migration_laeuft_zweimal_ohne_fehler() {
         .connect(&dsn)
         .await
         .expect("Testdatenbank verbinden");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&pool)
-        .await
-        .expect("altes Testschema entfernen");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&pool)
+    .await
+    .expect("altes Testschema entfernen");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&pool)
         .await
         .expect("Testschema anlegen");
@@ -97,11 +99,11 @@ async fn requirements_dedupe_migration_laeuft_zweimal_ohne_fehler() {
         "public.twitch_raid_requirements_dm_dedupe",
         &format!("{schema}.twitch_raid_requirements_dm_dedupe"),
     );
-    sqlx::raw_sql(&migration)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(migration.clone()))
         .execute(&pool)
         .await
         .expect("erste Anwendung der Migration");
-    sqlx::raw_sql(&migration)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(migration.clone()))
         .execute(&pool)
         .await
         .expect("zweite Anwendung der Migration");
@@ -116,7 +118,7 @@ async fn requirements_dedupe_migration_laeuft_zweimal_ohne_fehler() {
     .expect("Spalten zählen");
     assert_eq!(spalten, 10);
 
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&pool)
         .await
         .expect("Testschema entfernen");

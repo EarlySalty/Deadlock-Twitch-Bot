@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::client::{check_status_and_json, HelixClient, HelixError};
@@ -21,6 +22,14 @@ pub struct HelixClip {
     pub broadcaster_name: String,
     #[serde(default)]
     pub title: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub thumbnail_url: String,
+    #[serde(default)]
+    pub view_count: i64,
+    #[serde(default)]
+    pub created_at: String,
     #[serde(default)]
     pub duration: f64,
     #[serde(default)]
@@ -58,9 +67,40 @@ impl HelixClient {
         broadcaster_id: &str,
         limit: usize,
     ) -> Result<Vec<HelixClip>, HelixError> {
+        self.get_clips_by_broadcaster_window(broadcaster_id, None, None, limit)
+            .await
+    }
+
+    /// Holt die meistgesehenen Clips eines Broadcasters innerhalb eines UTC-Zeitfensters.
+    pub async fn get_clips_by_broadcaster_range(
+        &self,
+        broadcaster_id: &str,
+        started_at: DateTime<Utc>,
+        ended_at: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<HelixClip>, HelixError> {
+        self.get_clips_by_broadcaster_window(
+            broadcaster_id,
+            Some(started_at),
+            Some(ended_at),
+            limit,
+        )
+        .await
+    }
+
+    async fn get_clips_by_broadcaster_window(
+        &self,
+        broadcaster_id: &str,
+        started_at: Option<DateTime<Utc>>,
+        ended_at: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<Vec<HelixClip>, HelixError> {
         let broadcaster_id = broadcaster_id.trim();
         let limit = capped_clip_limit(limit);
         if broadcaster_id.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        if started_at.zip(ended_at).is_some_and(|(start, end)| end <= start) {
             return Ok(Vec::new());
         }
 
@@ -75,6 +115,12 @@ impl HelixClient {
                 ("broadcaster_id", broadcaster_id.to_string()),
                 ("first", first),
             ];
+            if let Some(started_at) = started_at {
+                params.push(("started_at", started_at.to_rfc3339()));
+            }
+            if let Some(ended_at) = ended_at {
+                params.push(("ended_at", ended_at.to_rfc3339()));
+            }
             if let Some(cursor) = &after {
                 params.push(("after", cursor.clone()));
             }
@@ -139,6 +185,10 @@ mod tests {
             "id": id,
             "broadcaster_name": "Nani",
             "title": format!("Clip {id}"),
+            "url": format!("https://clips.twitch.tv/{id}"),
+            "thumbnail_url": format!("https://static-cdn.jtvnw.net/clips/{id}.jpg"),
+            "view_count": 42,
+            "created_at": "2026-09-18T10:00:00Z",
             "duration": 12.5,
             "game_id": "142"
         })
@@ -176,6 +226,10 @@ mod tests {
                 id: "abc".to_string(),
                 broadcaster_name: "Nani".to_string(),
                 title: "Clip abc".to_string(),
+                url: "https://clips.twitch.tv/abc".to_string(),
+                thumbnail_url: "https://static-cdn.jtvnw.net/clips/abc.jpg".to_string(),
+                view_count: 42,
+                created_at: "2026-09-18T10:00:00Z".to_string(),
                 duration: 12.5,
                 game_id: "142".to_string(),
             }]
@@ -297,6 +351,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["first", "second"]
         );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn clips_zeitfenster_wird_an_helix_gesendet() {
+        let server = MockServer::start().await;
+        let client = client_with_token(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/clips"))
+            .and(query_param("broadcaster_id", "42"))
+            .and(query_param("first", "3"))
+            .and(query_param("started_at", "2026-08-21T10:00:00+00:00"))
+            .and(query_param("ended_at", "2026-09-20T10:00:00+00:00"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [clip_json("window")],
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let start = "2026-08-21T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let end = "2026-09-20T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let clips = client
+            .get_clips_by_broadcaster_range("42", start, end, 3)
+            .await
+            .unwrap();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].id, "window");
         server.verify().await;
     }
 

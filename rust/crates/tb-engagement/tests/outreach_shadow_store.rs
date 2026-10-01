@@ -1,3 +1,6 @@
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 
 use chrono::{Duration, TimeZone, Utc};
@@ -331,11 +334,11 @@ async fn test_pool(schema: &str) -> Option<PgPool> {
         .await
         .expect("Testdatenbank administrativ verbinden");
     admin
-        .execute(format!("DROP SCHEMA IF EXISTS {schema} CASCADE").as_str())
+        .execute(test_sql::drop_schema(schema, true))
         .await
         .expect("altes Testschema löschen");
     admin
-        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .execute(test_sql::create_schema(schema, false))
         .await
         .expect("Testschema anlegen");
     pool.execute(

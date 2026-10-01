@@ -6,57 +6,93 @@
       {
         "ordinal": 0,
         "name": "raid_id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_retention",
+            "name": "raid_id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "from_broadcaster_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_retention",
+            "name": "from_broadcaster_login"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "to_broadcaster_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_retention",
+            "name": "to_broadcaster_login"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "viewer_count_sent!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "executed_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_retention",
+            "name": "executed_at"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "target_session_id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_raid_retention",
+            "name": "target_session_id"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "chatters_at_plus5m",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "chatters_at_plus15m",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 8,
         "name": "chatters_at_plus30m",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "new_chatters",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 10,
         "name": "known_from_raider",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {

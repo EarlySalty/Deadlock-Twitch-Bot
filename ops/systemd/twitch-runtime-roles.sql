@@ -106,6 +106,14 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Profile gehören zur Dashboard-Selbstverwaltung. Kein Bot überschreibt
+    -- Texte oder Termine und keine Routine löscht Entwürfe.
+    IF to_regclass('public.twitch_partner_profiles') IS NOT NULL THEN
+        REVOKE ALL ON twitch_partner_profiles FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT ON twitch_partner_profiles TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE ON twitch_partner_profiles TO twitchdash;
+    END IF;
+
     -- Die Planprüfung des Bots braucht nur diese fünf Abo-Merkmale.
     -- Stripe-IDs, Zahlungsereignisse und sämtliche Schreibrechte bleiben gesperrt.
     IF to_regclass('public.twitch_billing_subscriptions') IS NOT NULL THEN
@@ -120,6 +128,15 @@ BEGIN
         GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_sub_reminders TO twitchbot;
         GRANT SELECT ON TABLE public.twitch_sub_reminders TO twitchdash;
         GRANT UPDATE (ended_at, end_message_id) ON TABLE public.twitch_sub_reminders TO twitchdash;
+    END IF;
+
+    -- Smalltalk eligibility is measured by the bot's Helix preflight only.
+    -- Dashboard/legacy readers must not fabricate live/follower evidence.
+    IF to_regclass('public.twitch_smalltalk_candidate_state') IS NOT NULL THEN
+        REVOKE ALL PRIVILEGES ON TABLE public.twitch_smalltalk_candidate_state
+            FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_smalltalk_candidate_state TO twitchbot;
+        GRANT SELECT ON TABLE public.twitch_smalltalk_candidate_state TO twitchdash, twitchlegacy;
     END IF;
 
     -- EventSub-Transporttabellen werden ausschließlich vom Bot geschrieben.
@@ -193,3 +210,138 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
     REVOKE ALL ON TABLES FROM twitchbot, twitchdash, twitchlegacy;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
     REVOKE ALL ON SEQUENCES FROM twitchbot, twitchdash, twitchlegacy;
+
+-- Kanalgebundene Ankündigungsverwaltung: Bot liest, Dashboard bearbeitet.
+DO $$ BEGIN
+    IF to_regclass('public.twitch_community_announcements') IS NOT NULL THEN
+        REVOKE ALL ON twitch_community_announcements FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT ON twitch_community_announcements TO twitchbot;
+        GRANT SELECT, UPDATE ON twitch_community_announcements TO twitchdash;
+    END IF;
+END $$;
+
+-- Voluntary player links: only the authenticated web flow may assign Steam IDs.
+DO $$
+BEGIN
+    IF to_regclass('public.twitch_player_steam_links') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_player_steam_links FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT ON public.twitch_player_steam_links TO twitchbot;
+        GRANT INSERT (twitch_user_id, lookup_enabled, revision)
+            ON public.twitch_player_steam_links TO twitchbot;
+        GRANT UPDATE (lookup_enabled, revision, updated_at)
+            ON public.twitch_player_steam_links TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE ON public.twitch_player_steam_links TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_player_steam_accounts') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_player_steam_accounts FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, DELETE ON public.twitch_player_steam_accounts TO twitchbot;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON public.twitch_player_steam_accounts TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_steam_openid_nonces') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_steam_openid_nonces FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, DELETE ON public.twitch_steam_openid_nonces TO twitchdash;
+    END IF;
+END;
+$$;
+
+-- Global category permissions are narrowed after the broad legacy grants.
+\ir category-runtime-roles.sql
+
+DO $patch_announcement_roles$
+BEGIN
+    IF to_regclass('public.twitch_patch_announcements') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_announcements FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_announcements TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_announcements TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_announcement_deliveries') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_announcement_deliveries FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_announcement_deliveries TO twitchbot;
+        GRANT UPDATE (status, attempted_at, drop_code, http_status, uncertainty_reason)
+            ON public.twitch_patch_announcement_deliveries TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_announcement_deliveries TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_feed_state') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_feed_state FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_feed_state TO twitchbot;
+        GRANT UPDATE (singleton, bootstrapped_at, last_successful_index_at)
+            ON public.twitch_patch_feed_state TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_feed_state TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_feed_observations') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_feed_observations FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_feed_observations TO twitchbot;
+        GRANT UPDATE (status, finalized_at) ON public.twitch_patch_feed_observations TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_feed_observations TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_patch_announcement_recipients') IS NOT NULL THEN
+        REVOKE ALL ON public.twitch_patch_announcement_recipients FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.twitch_patch_announcement_recipients TO twitchbot;
+        GRANT SELECT ON public.twitch_patch_announcement_recipients TO twitchdash;
+    END IF;
+END
+$patch_announcement_roles$;
+
+-- Reapply the integrated feature permissions after the broad legacy matrix.
+-- The migration owns this single definition so deploy cannot widen it again.
+DO $partner_challenge_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_partner_challenge_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_partner_challenge_roles();
+    END IF;
+END
+$partner_challenge_roles$;
+
+-- The additive weekly evaluation record stays append-only for the bot and
+-- read-only for dashboard readers after the broad legacy grants above.
+DO $weekly_quest_evaluation_roles$
+DECLARE role_name text;
+BEGIN
+    IF to_regclass('public.partner_effort_weekly_quest_evaluations') IS NOT NULL THEN
+        FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcontest'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('REVOKE ALL ON TABLE public.partner_effort_weekly_quest_evaluations FROM %I', role_name);
+            END IF;
+        END LOOP;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+            GRANT SELECT, INSERT ON public.partner_effort_weekly_quest_evaluations TO twitchbot;
+        END IF;
+        FOREACH role_name IN ARRAY ARRAY['twitchdash','twitchlegacy'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('GRANT SELECT ON TABLE public.partner_effort_weekly_quest_evaluations TO %I', role_name);
+            END IF;
+        END LOOP;
+    END IF;
+END
+$weekly_quest_evaluation_roles$;
+
+DO $brain_chat_roles$
+BEGIN
+    IF to_regclass('public.tb_chat_brain_answers') IS NOT NULL THEN
+        REVOKE ALL ON public.tb_chat_brain_answers FROM twitchbot, twitchdash, twitchlegacy;
+        REVOKE ALL ON SEQUENCE public.tb_chat_brain_answers_id_seq FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, UPDATE ON public.tb_chat_brain_answers TO twitchbot;
+        GRANT USAGE, SELECT ON SEQUENCE public.tb_chat_brain_answers_id_seq TO twitchbot;
+        GRANT SELECT ON public.tb_chat_brain_answers TO twitchdash;
+    END IF;
+END
+$brain_chat_roles$;
+
+-- Das eigene Chat-Konto hat ausschließlich den Bot als Leser und Writer.
+-- Nach allen breiten Kompatibilitätsrechten ausführen, damit weder Dashboard
+-- noch alte Hilfsdienste die Kontoablage lesen oder verändern können.
+DO $bot_token_roles$
+DECLARE role_name text;
+BEGIN
+    IF to_regclass('public.twitch_bot_tokens') IS NOT NULL THEN
+        FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcontest'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('REVOKE ALL ON TABLE public.twitch_bot_tokens FROM %I', role_name);
+            END IF;
+        END LOOP;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+            GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_bot_tokens TO twitchbot;
+        END IF;
+    END IF;
+END
+$bot_token_roles$;

@@ -1,6 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StatCommandRows } from '../src/components/verwaltung/StatCommandSection';
+import { CommandNamesProvider } from '../src/components/verwaltung/CommandNameSection';
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { STAT_COMMANDS, fetchStatCommandSettings, toggleStatCommand } from '../src/api/statCommands';
@@ -12,7 +13,7 @@ afterEach(() => { globalThis.fetch = originalFetch; });
 
 test('acht getrennte Statistikschalter, keine geschützten Befehle', () => {
   assert.deepEqual(STAT_COMMANDS.map(entry => entry.command), ['rank', 'wins', 'winrate', 'mmr', 'live', 'lastmatch', 'streak', 'mostplayed']);
-  for (const alias of ['!climb', '!last', '!main']) assert.ok(STAT_COMMANDS.some(entry => entry.description.includes(alias)));
+  assert.ok(STAT_COMMANDS.every(entry => !entry.description.includes('Gilt auch für')));
 });
 
 test('lädt acht Schalter mit Sessioncookie und schreibt nur den geänderten Schlüssel', async () => {
@@ -43,11 +44,11 @@ test('Fehler beim Laden oder Speichern werden nicht als Erfolg behandelt', async
 
 test('zeigt acht unabhängige Schalter und sperrt nur die gerade gespeicherte Reihe', () => {
   const commands = Object.fromEntries(STAT_COMMANDS.map(({command}) => [command, command !== 'rank'])) as import('../src/api/statCommands').StatCommandSettings;
-  const html = renderToStaticMarkup(<StatCommandRows settings={commands} pending={{rank:true}} messages={{rank:'Gespeichert.'}} onToggle={() => {}} />);
+  const html = renderToStaticMarkup(<CommandNamesProvider><StatCommandRows settings={commands} pending={{rank:true}} messages={{rank:'Gespeichert.'}} onToggle={() => {}} /></CommandNamesProvider>);
   assert.equal((html.match(/<button /g) ?? []).length, 8);
   assert.equal((html.match(/disabled=""/g) ?? []).length, 1);
-  assert.ok(html.includes('aria-label="!rank aktivieren"'));
-  assert.ok(html.includes('aria-label="!wins deaktivieren"'));
+  assert.ok(html.includes('aria-label="Dein aktueller Rang aktivieren"'));
+  assert.ok(html.includes('aria-label="Deine Siege deaktivieren"'));
   assert.ok(html.includes('role="status"'));
-  for (const alias of ['!climb', '!last', '!main']) assert.ok(html.includes(alias));
+  assert.equal((html.match(/Befehl wird geladen/g) ?? []).length, 8);
 });

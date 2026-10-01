@@ -57,6 +57,50 @@ export interface WeekdayStats {
   totalFollowers: number;
 }
 
+export type RaidSortKey =
+  | 'toBroadcaster'
+  | 'viewersSent'
+  | 'chattersAt5m'
+  | 'chattersAt15m'
+  | 'chattersAt30m'
+  | 'retention30mPct'
+  | 'newChatters';
+
+export type RaidSortDirection = 'asc' | 'desc';
+
+export function filterAndSortRaids(
+  raids: RaidRetentionEntry[],
+  query: string,
+  sortKey: RaidSortKey,
+  direction: RaidSortDirection,
+): RaidRetentionEntry[] {
+  const q = query.trim().toLowerCase();
+  const gefiltert = q
+    ? raids.filter((raid) => raid.toBroadcaster.toLowerCase().includes(q))
+    : raids.slice();
+  const richtung = direction === 'asc' ? 1 : -1;
+  return gefiltert.sort((a, b) => {
+    if (sortKey === 'toBroadcaster') {
+      return a.toBroadcaster.localeCompare(b.toBroadcaster, 'de') * richtung;
+    }
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    const an = av === null ? Number.NEGATIVE_INFINITY : av;
+    const bn = bv === null ? Number.NEGATIVE_INFINITY : bv;
+    if (an === bn) return 0;
+    return (an < bn ? -1 : 1) * richtung;
+  });
+}
+
+export function wochentagBalkenHoehe(avgViewers: number, min: number, max: number): number {
+  if (max <= min) {
+    return 100;
+  }
+  const anteil = (avgViewers - min) / (max - min);
+  const hoehe = 15 + 85 * anteil;
+  return Math.max(15, Math.min(100, hoehe));
+}
+
 export interface HourlyHeatmapData {
   weekday: number;
   hour: number;
@@ -1011,6 +1055,24 @@ export interface AutoVsManual {
   manual_count: number;
 }
 
+export interface MomentImpactData {
+  avg_net_drop_pct: number | null;
+  count: number;
+  enough_data: boolean;
+}
+
+export interface NetHorizon {
+  avg_net_drop_pct: number | null;
+  count: number;
+}
+
+export interface NetEffect {
+  avg_net_drop_pct: number | null;
+  sample: number;
+  by_horizon: { plus_1: NetHorizon; plus_3: NetHorizon; plus_5: NetHorizon };
+  moment_impact: Record<string, MomentImpactData>;
+}
+
 export interface MonetizationStats {
   ads: {
     total: number;
@@ -1026,6 +1088,7 @@ export interface MonetizationStats {
     best_ad_time?: string | null;
     avg_recovery_min?: number | null;
     recovery_by_duration?: Record<string, RecoveryBucketData>;
+    net_effect?: NetEffect;
     recommendations?: string[];
   };
   hype_train: {

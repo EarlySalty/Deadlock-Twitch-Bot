@@ -6,47 +6,101 @@
       {
         "ordinal": 0,
         "name": "customer_reference",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "customer_reference"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "recipient_name",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "recipient_name"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "recipient_email",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "recipient_email"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "company_name",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "company_name"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "street_line1",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "street_line1"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "postal_code",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "postal_code"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "city",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "city"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "country_code",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "country_code"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "vat_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_billing_profiles",
+            "name": "vat_id"
+          }
+        }
       }
     ],
     "parameters": {

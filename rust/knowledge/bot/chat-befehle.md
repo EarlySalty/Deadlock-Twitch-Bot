@@ -3,7 +3,7 @@ title: Twitch-Chat-Befehle
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-09-09
+last_updated: 2026-09-18
 source: rust/crates/tb-chat/src/catalog.rs
 tip_eligible: false
 ---
@@ -15,7 +15,15 @@ Der Twitch-Bot läuft vor allem automatisch. Befehle brauchst du, wenn du im Cha
 
 ### Warum antwortet der Bot manchmal nicht auf `!rank`?
 
-Die acht Spielstatistikbefehle lassen sich im Dashboard einzeln abschalten. Sie zeigen die Daten des Streamers, wenn dessen Steam-Account verknüpft ist. Sie funktionieren auch offline und in anderen Kategorien. Außerdem gelten die normale Chatmoderation und die Teilnahme des Kanals am Bot.
+Die acht Spielstatistikbefehle lassen sich im Dashboard einzeln abschalten. Ohne Ziel zeigen sie die Daten des Streamers, mit @user die Daten der genannten Person. Dafür wird deren Steam-Verknüpfung verwendet; !rank bietet zusätzlich einen öffentlichen API-Fallback. Sie funktionieren auch offline und in anderen Kategorien. Außerdem gelten die normale Chatmoderation und die Teilnahme des Kanals am Bot.
+
+### Twitch und Steam direkt verbinden
+
+`!connect` verlinkt unsere Seite `/twitch/connect`. Dort bestätigst du zuerst dein Twitch-Konto und meldest dich anschließend bei Steam an. Kein Discord-Konto und keine Streamer-Partnerschaft nötig. Gespeichert werden die stabile Twitch-ID und die von Steam bestätigte Steam-ID; ein gleicher Anzeigename ist nicht erforderlich.
+
+Danach nutzt `!rank @deinname` diesen Account über die Deadlock API. Die Verbindung bestätigt den Account, nicht die Verfügbarkeit oder Aktualität von Rangdaten. Ohne @name zeigt `!rank` weiterhin den Rang des Streamers. Weitere Spielstatistiken benötigen vorerst zusätzlich die bestehende Discord-/Steam-Verknüpfung zum selben Steam-Account. Watchtime braucht keine Steam-Verknüpfung.
+
+`!unconnect` (auch `!disconnect`) entfernt deine direkte Steam-Zuordnung und löscht daraus die Steam-ID. Nur deine Twitch-ID bleibt mit einem Abschaltvermerk gespeichert: Die automatische Zuordnung über Discord und Namenssuche bleibt deaktiviert, bis du selbst erneut verbindest. Der Befehl funktioniert ausschließlich für das eigene Konto, niemals mit @user. Auf der Kontoseite gibt es dafür ebenfalls „Verknüpfung entfernen“. Die separate Discord-Verknüpfung und öffentliche Steam-/Deadlock-Daten werden dadurch nicht gelöscht. Ein bereits gestarteter Steam-Rücksprung kann die Trennung nicht rückgängig machen.
 
 ### Welche Befehle können normale Zuschauer nutzen?
 
@@ -25,10 +33,20 @@ Die acht Spielstatistikbefehle lassen sich im Dashboard einzeln abschalten. Sie 
 - `!discord`, `!dldc` und `!dlde` zeigen den hinterlegten Discord-Link. `!invite` zeigt einen Einladungslink. Diese Befehle funktionieren auch offline.
 - `!sub` zeigt den Abo-Link dieses Kanals. `!sub erinnerung an/aus/status` verwaltet deine freiwillige Abo-Erinnerung.
 - `!lurk` sagt dem Chat, dass du still weiterschaust, sofern der Kanal den Befehl eingeschaltet hat.
-- `!commands` verlinkt die Befehlsübersicht, `!help <thema>` die passende Hilfe und `!ping` prüft, ob der Bot antwortet.
+- `!commands` verlinkt die Befehlsübersicht, `!dashboard` öffnet dein Twitch-Dashboard, `!help <thema>` die passende Hilfe und `!ping` prüft, ob der Bot antwortet.
 - `!raid_status` und `!raid_history` zeigen den Raidstatus und die letzten Raids.
 
 Kurze Wiederholungssperren verhindern doppelte Antworten oder Aktionen.
+
+### Kann ich die Werte einer anderen Person abfragen?
+
+Ja: `!watchtime @username` zeigt die erfasste Zuschauerzeit dieser Person **im aktuellen Kanal**. Ohne Namen zeigt `!watchtime` weiterhin deine eigene Zeit. Ein Twitch-Name ohne `@` funktioniert ebenfalls; pro Aufruf ist genau ein Ziel erlaubt.
+
+Auch `!rank`, `!wins`, `!winrate`, `!mmr`, `!live`, `!lastmatch`, `!streak` und `!mostplayed` akzeptieren `@username`, ebenso ihre Aliase `!climb`, `!last` und `!main`. Ohne Ziel bleiben sie auf den Streamer bezogen. Die Einstellungen des aktuellen Kanals gelten weiterhin.
+
+Eine direkte Verbindung über `!connect` hat Vorrang: `!rank @username` verwendet diesen bestätigten Account über die Deadlock API. Ohne direkte Verbindung nutzt der Befehl zuerst die bestehende Discord-/Steam-Zuordnung und unseren Steam-Bot. Fehlen dort Rangdaten oder die Bot-Freundschaft, wird der öffentliche Rang des bestätigten Accounts über die Deadlock API abgefragt. Gibt es keine Verknüpfung, sucht der Bot nach dem Twitch-Namen auf Steam. Ein eindeutiger exakter Namensfund wird ausdrücklich als **unbestätigte Twitch-Zuordnung** markiert. Bei mehreren oder nur ähnlichen Treffern gibt es Vorschläge, keinen geratenen Rang. Über `!rank steam:<Account-ID>` oder `!rank steam:<SteamID64>` lässt sich ein Steam-Account eindeutig auswählen. Das speichert keine neue Verknüpfung.
+
+API-Ränge werden als Stand des letzten erfassten Ranked-Matches gekennzeichnet. Fehlende Rangdaten sind kein Beweis dafür, dass jemand noch nie gerankt war. Die anderen Spielstatistiken brauchen weiterhin die hinterlegte Steam-Verknüpfung.
 
 ### Welche Befehle sind für Broadcaster und Mods gedacht?
 

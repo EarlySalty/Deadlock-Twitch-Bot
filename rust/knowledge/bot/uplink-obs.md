@@ -3,33 +3,44 @@ title: "Uplink: OBS einrichten"
 namespace: bot
 category: setup
 audience: streamer
-last_updated: 2026-09-08
+last_updated: 2026-09-12
 source: Uplink-Dashboard
 tip_eligible: false
 ---
 
-### Verbindung aus dem Dashboard übernehmen
+### Schritt 1: Verbindung aus dem Dashboard übernehmen
 
 Öffne in OBS Einstellungen → Stream und wähle Benutzerdefiniert. Kopiere die öffentliche RTMPS-Serveradresse aus dem Dashboard in Server. Deinen privaten Uplink-Schlüssel kopierst du getrennt in Streamschlüssel. Er gehört weder in die Serveradresse noch in den Stream.
 
-### Ausgabe einstellen
+### Schritt 2: Ausgabe einstellen
 
 Öffne Einstellungen → Ausgabe und wähle Erweitert. AV1 ist bevorzugt, H.264 wird ebenfalls unterstützt. Wähle einen Encoder, den deine OBS-Version für diesen RTMPS-Dienst anbietet. HEVC verwendest du nur mit einem dafür freigegebenen Eingangsprofil. Uplink prüft die tatsächlich empfangenen Eigenschaften.
 
-### Bitrate und Qualität
+### Schritt 3: Bitrate und Qualität
 
 Verwende CBR und plane Audio sowie Reserve innerhalb deines gemessenen Uploadbudgets ein. Die gewünschte Bitrate einer Plattform ist keine Vorgabe für deinen Upload. Auflösung, Bewegung und Encoder beeinflussen die Bildqualität; eine feste Einsparung ist nicht garantiert. Als Keyframe-Intervall wählst du 2 s.
 
-### Live- und VOD-Ton
+### Schritt 4: Live- und VOD-Ton
 
-Wenn dein VOD anderen Ton benötigt, bereite Live-Mix und VOD-Mix als getrennte Audiospuren in OBS vor. Eine Stereo-Spur ersetzt keine zwei Mischungen. Ob beide Spuren über deinen OBS-Dienst ankommen, muss der Eingangsstatus bestätigen. Fehlenden erforderlichen VOD-Ton ersetzt Uplink nicht still durch den Live-Mix.
+Für Twitch verwendet Uplink immer zwei getrennte OBS-Mischungen: **OBS-Spur 1 ist der Livestream, OBS-Spur 2 ist das Twitch-VOD.** Dafür gibt es im Dashboard keine Audiowahl mehr. Uplink prüft beim Streamstart, ob beide Spuren wirklich ankommen. Fehlt Spur 2, wird nur der Twitch-Ausgang angehalten; der Live-Mix wird niemals still als VOD-Ersatz kopiert.
 
-Beim Dienst Benutzerdefiniert ist die zweite Tonspur im geprüften OBS-Quellstand an eine globale Einstellung gebunden. In dessen `user.ini` muss im vorhandenen Abschnitt `[General]` die Zeile `EnableCustomServerVodTrack=true` stehen. OBS dafür vollständig beenden, nur diese Einstellung ergänzen und neu starten. Ein Streamprofil-Import setzt diesen globalen Wert nicht. Ältere OBS-Stände verwendeten eine andere Konfigurationsaufteilung; die Anleitung ist kein Nachweis für jede historische Version.
+### Schritt 5: Twitch-VOD-Spur bei Benutzerdefiniert freischalten
 
-Danach unter Einstellungen → Ausgabe → Erweitert die VOD-Tonspur aktivieren und für Livestream und VOD unterschiedliche Spurnummern auswählen. Die Audioquellen in den erweiterten Audioeigenschaften den beiden Mischungen zuordnen. Die Bezeichnung kann weiterhin Twitch-VOD-Spur lauten. Ist die Auswahl nicht vorhanden, bleibt die Zweispur-Einrichtung offen; nicht einfach dieselbe Spur zweimal auswählen.
+Wenn **Twitch-VOD-Spur** unter Einstellungen → Ausgabe → Erweitert → Stream bereits sichtbar ist, ist keine Dateiänderung nötig. Setze dann direkt den normalen Audiotrack auf **1** und Twitch-VOD-Spur auf **2**.
 
-„Twitch“ mit eigener Serveradresse ist kein belegter AV1-Ersatz: Der gewöhnliche Twitch-Dienst schränkt die Codec-Auswahl ein. AV1 setzt einen passenden Encoder im Dienst Benutzerdefiniert voraus. Dieser anhand des Quellcodes erklärte Weg ist noch kein vollständiger OBS-/Twitch-Live- und VOD-Nachweis. Quellen und geprüfter OBS-Commit stehen im technischen Dashboardvertrag; es wird keine lokale Erweiterung vorausgesetzt.
+Fehlt das Feld, OBS vollständig beenden – auch im Infobereich/Tray – und `user.ini` öffnen. Unter Windows: **Win + R** drücken, `%APPDATA%\obs-studio` eingeben, Enter drücken und `user.ini` mit einem Texteditor öffnen. Standardpfade:
 
-### Schritt 5: Fenster einrichten
+- Windows: `%APPDATA%\obs-studio\user.ini`
+- macOS: `~/Library/Application Support/obs-studio/user.ini`
+- Linux: `~/.config/obs-studio/user.ini`
+- Flatpak: `~/.var/app/com.obsproject.Studio/config/obs-studio/user.ini`
+
+Bei Portable-OBS liegt die Datei im verwendeten lokalen OBS-Konfigurationsordner. Im **bereits vorhandenen** Abschnitt `[General]` genau die Zeile `EnableCustomServerVodTrack=true` ergänzen. Keinen zweiten `[General]`-Abschnitt anlegen. Datei speichern und OBS neu starten. Ein Streamprofil-Import setzt diese globale Einstellung nicht.
+
+Danach unter Einstellungen → Ausgabe → Erweitert → Stream den normalen Audiotrack auf **1** und **Twitch-VOD-Spur** auf **2** setzen. Die Audioquellen in den erweiterten Audioeigenschaften den beiden Mischungen zuordnen. Musik, die nicht ins VOD soll, bleibt zum Beispiel nur auf Spur 1. Nicht dieselbe Spur für Live und VOD auswählen.
+
+Der Dienst Benutzerdefiniert bleibt absichtlich erhalten, damit OBS den AV1-Eingang an Uplink senden kann. Der native Twitch-Dienst ist im geprüften OBS-Dienstprofil auf H.264 beschränkt. Uplink übernimmt danach die Twitch-Ausgabe und ordnet die beiden Audiomischungen serverseitig den Twitch-Rollen Live und VOD zu.
+
+### Schritt 6: Fenster einrichten
 
 Verbinde deine Plattformen in ihren Dashboard-Karten. Gespeicherte Wunschprofile werden anhand des Eingangs und des Kanalzugangs geprüft; das tatsächlich aktive Profil wird getrennt angezeigt. Profiländerungen gelten zunächst für den nächsten Stream. Die privaten, dauerhaft gespeicherten Dockadressen findest du im selben Dashboard. Danach startest du in OBS wie gewohnt.

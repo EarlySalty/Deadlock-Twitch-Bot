@@ -22,7 +22,7 @@ use crate::auth::level::DashboardAuthLevel;
 #[derive(Deserialize)]
 pub struct OverviewParams {
     pub streamer: Option<String>,
-    /// Zeitraum in Tagen. Default 30, min 7, max 365.
+    /// Zeitraum in Tagen. Default 30, min 7, max 3650.
     #[serde(default = "default_days")]
     pub days: i64,
 }
@@ -72,7 +72,6 @@ pub struct DataQuality {
     pub bot_filter_applied: bool,
 }
 
-/// Health-Scores (Python `_calculate_health_scores`), je 0–100.
 #[derive(Serialize)]
 pub struct HealthScores {
     pub total: i64,
@@ -84,13 +83,10 @@ pub struct HealthScores {
     pub network: i64,
 }
 
-/// Berechnet die Health-Scores exakt nach Python `_calculate_health_scores`.
-/// `int()`-Truncation = `as i64` (positive Werte); `min(100,..)`/`max(0,..)`
-/// wie Python. `category_percentile=None` → avg_viewers/5-Fallback (Reach).
 #[allow(clippy::too_many_arguments)]
 fn calculate_health_scores(
     avg_viewers: f64,
-    retention_10m_pct: f64,
+    bindung_pct: f64,
     retention_sample_count: i64,
     engagement_rate: f64,
     chat_sample_count: i64,
@@ -107,7 +103,7 @@ fn calculate_health_scores(
     let retention = if retention_sample_count < 3 {
         50
     } else {
-        ((retention_10m_pct * 1.5) as i64).min(100)
+        (bindung_pct as i64).min(100)
     };
     let engagement = if chat_sample_count < 3 {
         50
@@ -120,10 +116,13 @@ fn calculate_health_scores(
         let weighted = mon.sub_events * 3 + mon.bits_events + mon.hype_trains * 5;
         (((weighted as f64 / sc as f64) * 10.0) as i64).clamp(0, 100)
     };
-    let network = {
-        let total = net.sent + net.received;
-        let reciprocity = net.sent.min(net.received) * 10;
-        (total * 8 + reciprocity).clamp(0, 100)
+    let network = if session_count <= 0 {
+        0
+    } else {
+        let sessions = session_count as f64;
+        let sent = ((net.sent as f64 / sessions * 50.0).round() as i64).min(50);
+        let received = ((net.received as f64 / sessions * 50.0).round() as i64).min(50);
+        sent + received
     };
     let total = (reach as f64 * 0.2
         + retention as f64 * 0.25
@@ -180,25 +179,47 @@ fn generate_insights(
     let mut out = Vec::new();
     // Retention
     if retention_sample_count < 3 {
-        out.push(Finding { kind: "info", title: "Retention-Daten unzureichend",
-            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Retention-Werte.".into() });
+        out.push(Finding {
+            kind: "info",
+            title: "Retention-Daten unzureichend",
+            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Retention-Werte.".into(),
+        });
     } else if ret_10m_pct < RETENTION_LOW {
-        out.push(Finding { kind: "neg", title: "Niedrige Retention",
-            text: format!("10-Min Retention bei {ret_10m_pct:.1}%. Verbessere den Stream-Einstieg.") });
+        out.push(Finding {
+            kind: "neg",
+            title: "Niedrige Retention",
+            text: format!(
+                "10-Min Retention bei {ret_10m_pct:.1}%. Verbessere den Stream-Einstieg."
+            ),
+        });
     } else if ret_10m_pct > RETENTION_HIGH {
-        out.push(Finding { kind: "pos", title: "Starke Retention",
-            text: format!("Exzellente {ret_10m_pct:.1}% Retention. Dein Content fesselt!") });
+        out.push(Finding {
+            kind: "pos",
+            title: "Starke Retention",
+            text: format!("Exzellente {ret_10m_pct:.1}% Retention. Dein Content fesselt!"),
+        });
     }
     // Chat
     if chat_sample_count < 3 {
-        out.push(Finding { kind: "info", title: "Chat-Daten unzureichend",
-            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Chat-Metriken.".into() });
+        out.push(Finding {
+            kind: "info",
+            title: "Chat-Daten unzureichend",
+            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Chat-Metriken.".into(),
+        });
     } else if chat_100 < CHAT_LOW {
-        out.push(Finding { kind: "warn", title: "Niedrige Chat-Aktivitat",
-            text: format!("Nur {chat_100:.1} Chatter/100 Peak-Viewer (Proxy). Mehr Interaktion fordern!") });
+        out.push(Finding {
+            kind: "warn",
+            title: "Niedrige Chat-Aktivitat",
+            text: format!(
+                "Nur {chat_100:.1} Chatter/100 Peak-Viewer (Proxy). Mehr Interaktion fordern!"
+            ),
+        });
     } else if chat_100 > CHAT_HIGH {
-        out.push(Finding { kind: "pos", title: "Aktive Community",
-            text: format!("{chat_100:.1} Chatter/100 Peak-Viewer (Proxy) - sehr engagiert!") });
+        out.push(Finding {
+            kind: "pos",
+            title: "Aktive Community",
+            text: format!("{chat_100:.1} Chatter/100 Peak-Viewer (Proxy) - sehr engagiert!"),
+        });
     }
     // Followers
     if follower_valid_count > 0 {
@@ -206,11 +227,19 @@ fn generate_insights(
             out.push(Finding { kind: "neg", title: "Follower-Verlust",
                 text: format!("Netto {followers_per_hour:.2} Follower/Stunde ({total_followers:+} gesamt). Gewonnen: {gained_followers_per_hour:.2}/h. Unfollows uberwiegen.") });
         } else if followers_per_hour < 0.5 {
-            out.push(Finding { kind: "warn", title: "Langsames Follower-Wachstum",
-                text: format!("Nur {followers_per_hour:.2} Follower/Stunde. Regelmaig an Follows erinnern!") });
+            out.push(Finding {
+                kind: "warn",
+                title: "Langsames Follower-Wachstum",
+                text: format!(
+                    "Nur {followers_per_hour:.2} Follower/Stunde. Regelmaig an Follows erinnern!"
+                ),
+            });
         } else if followers_per_hour > 3.0 {
-            out.push(Finding { kind: "pos", title: "Starkes Wachstum",
-                text: format!("{followers_per_hour:.1} Follower/Stunde - ausgezeichnet!") });
+            out.push(Finding {
+                kind: "pos",
+                title: "Starkes Wachstum",
+                text: format!("{followers_per_hour:.1} Follower/Stunde - ausgezeichnet!"),
+            });
         }
     }
     out
@@ -227,19 +256,28 @@ fn generate_actions(
 ) -> Vec<ActionItem> {
     let mut out = Vec::new();
     if retention_sample_count >= 3 && ret_10m_pct < RETENTION_LOW {
-        out.push(ActionItem { tag: "Retention",
-            text: "Starte mit einem starken Hook in den ersten 2 Minuten.", priority: "high" });
+        out.push(ActionItem {
+            tag: "Retention",
+            text: "Starte mit einem starken Hook in den ersten 2 Minuten.",
+            priority: "high",
+        });
     }
     if chat_sample_count >= 3 && chat_100 < CHAT_LOW {
-        out.push(ActionItem { tag: "Engagement",
-            text: "Stelle alle 5-10 Minuten eine direkte Frage an den Chat.", priority: "medium" });
+        out.push(ActionItem {
+            tag: "Engagement",
+            text: "Stelle alle 5-10 Minuten eine direkte Frage an den Chat.",
+            priority: "medium",
+        });
     }
     if follower_valid_count > 0 && followers_per_hour < 0.0 {
         out.push(ActionItem { tag: "Growth",
             text: "Follower-Verlust! Prufe ob Content-Wechsel oder lange Pausen Unfollows verursachen.", priority: "high" });
     } else if follower_valid_count > 0 && followers_per_hour < 1.0 {
-        out.push(ActionItem { tag: "Growth",
-            text: "Erinnere alle 20-30 Minuten an Follow mit konkretem Grund.", priority: "medium" });
+        out.push(ActionItem {
+            tag: "Growth",
+            text: "Erinnere alle 20-30 Minuten an Follow mit konkretem Grund.",
+            priority: "medium",
+        });
     }
     out
 }
@@ -461,8 +499,8 @@ pub async fn overview_handler(
         return Err(ApiError::unauthorized());
     }
 
-    // days: clip to [7, 365]
-    let days = params.days.clamp(7, 365);
+    // days: clip to [7, 3650]
+    let days = params.days.clamp(7, crate::query_int::MAX_ANALYTICS_DAYS);
     // Partner darf nur eigene Daten sehen. Admin/Localhost kann beliebigen
     // Streamer über den Query-Param abfragen.
     let login = match &auth {
@@ -549,12 +587,25 @@ pub async fn overview_handler(
     let gained = metrics.gained_followers.unwrap_or(0);
     let curr_ret = metrics.avg_retention_10m.unwrap_or(0.0) * 100.0;
     let curr_ret_sample = metrics.retention_sample_count.unwrap_or(0);
-    let per_hour = |n: i64| if airtime > 0.0 { n as f64 / airtime } else { 0.0 };
+    let per_hour = |n: i64| {
+        if airtime > 0.0 {
+            n as f64 / airtime
+        } else {
+            0.0
+        }
+    };
 
     let prev_avg = prev.as_ref().and_then(|p| p.avg_avg_viewers).unwrap_or(0.0);
     let prev_fol = prev.as_ref().and_then(|p| p.total_followers).unwrap_or(0);
-    let prev_ret = prev.as_ref().and_then(|p| p.avg_retention_10m).unwrap_or(0.0) * 100.0;
-    let prev_ret_sample = prev.as_ref().and_then(|p| p.retention_sample_count).unwrap_or(0);
+    let prev_ret = prev
+        .as_ref()
+        .and_then(|p| p.avg_retention_10m)
+        .unwrap_or(0.0)
+        * 100.0;
+    let prev_ret_sample = prev
+        .as_ref()
+        .and_then(|p| p.retention_sample_count)
+        .unwrap_or(0);
 
     let avg_viewers_trend = calc_trend(metrics.avg_avg_viewers.unwrap_or(0.0), prev_avg);
     // Python: bei |curr|<5 UND |prev|<5 unterdrücken, sonst auf ±999 kappen.
@@ -572,7 +623,7 @@ pub async fn overview_handler(
 
     let scores = calculate_health_scores(
         metrics.avg_avg_viewers.unwrap_or(0.0),
-        curr_ret,
+        metrics.avg_bindung.unwrap_or(0.0) * 100.0,
         curr_ret_sample,
         chatter.engagement_rate,
         metrics.chat_sample_count.unwrap_or(0),
@@ -675,9 +726,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -692,15 +741,17 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path setzen fehlgeschlagen");
@@ -811,11 +862,14 @@ mod tests {
         let res = overview_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(OverviewParams { streamer: Some("nobody".into()), days: 30 }),
+            Query(OverviewParams {
+                streamer: Some("nobody".into()),
+                days: 30,
+            }),
         )
-            .await
-            .unwrap()
-            .into_response();
+        .await
+        .unwrap()
+        .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 256).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
@@ -832,8 +886,12 @@ mod tests {
                 (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
                  duration_seconds, follower_delta, followers_start, followers_end, retention_10m)
             VALUES
-                (1, 'streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
-                 100.0, 200, 3600, 5, 1000, 1005, 0.6)
+                (1, 'streamer_x', NOW() - INTERVAL '1 day',
+                 NOW() - INTERVAL '1 day' + INTERVAL '1 hour', 120.0, 200, 3600, 5, 1000, 1005, 0.9),
+                (2, 'streamer_x', NOW() - INTERVAL '2 days',
+                 NOW() - INTERVAL '2 days' + INTERVAL '1 hour', 120.0, 200, 3600, 5, 1000, 1005, 0.9),
+                (3, 'streamer_x', NOW() - INTERVAL '3 days',
+                 NOW() - INTERVAL '3 days' + INTERVAL '1 hour', 120.0, 200, 3600, 5, 1000, 1005, 0.9)
             "#,
         )
         .execute(&pool)
@@ -851,8 +909,10 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_raid_history (from_broadcaster_login, to_broadcaster_login, viewer_count, success, executed_at)
-            VALUES ('streamer_x', 'p_a', 30, TRUE, NOW() - INTERVAL '1 hour'),
-                   ('p_b', 'streamer_x', 5, TRUE, NOW() - INTERVAL '2 hours')
+            VALUES ('streamer_x', 'p_a', 10, TRUE, NOW() - INTERVAL '1 hour'),
+                   ('streamer_x', 'p_b', 10, TRUE, NOW() - INTERVAL '2 hours'),
+                   ('streamer_x', 'p_c', 10, TRUE, NOW() - INTERVAL '3 hours'),
+                   ('p_x', 'streamer_x', 5, TRUE, NOW() - INTERVAL '4 hours')
             "#,
         )
         .execute(&pool)
@@ -862,57 +922,50 @@ mod tests {
         let res = overview_handler(
             DashboardAuthLevel::admin(),
             State(pool),
-            Query(OverviewParams { streamer: Some("streamer_x".into()), days: 30 }),
+            Query(OverviewParams {
+                streamer: Some("streamer_x".into()),
+                days: 30,
+            }),
         )
-            .await
-            .unwrap()
-            .into_response();
+        .await
+        .unwrap()
+        .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 100.0).abs() < 0.001);
-        assert_eq!(v["summary"]["totalSessions"], 1);
-        // P1.27: streamCount-Alias muss identisch zu totalSessions emittiert werden.
-        assert_eq!(v["summary"]["streamCount"], 1);
+        assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 120.0).abs() < 0.001);
+        assert_eq!(v["summary"]["totalSessions"], 3);
+        assert_eq!(v["summary"]["streamCount"], 3);
         assert_eq!(v["summary"]["streamCount"], v["summary"]["totalSessions"]);
-        // B16-FIX-OVERVIEW-WINDOW: Admin-Token → volles Fenster, nicht limitiert.
         assert_eq!(v["window"], "full");
         assert_eq!(v["windowLimited"], false);
-        // Neue session-abgeleitete Summary-Felder.
-        assert_eq!(v["summary"]["followersGained"], 5);
-        assert!((v["summary"]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
-        assert_eq!(v["summary"]["retentionReliable"], false); // nur 1 Sample (<3)
-        // Chatter-Felder (nightbot=Bot raus, bob nur via API).
+        assert_eq!(v["summary"]["followersGained"], 15);
+        assert!((v["summary"]["retention10m"].as_f64().unwrap() - 90.0).abs() < 0.01);
+        assert_eq!(v["summary"]["retentionReliable"], true);
         assert_eq!(v["summary"]["activeChatters"], 1);
         assert_eq!(v["summary"]["uniqueViewers"], 2);
         assert_eq!(v["summary"]["uniqueChatters"], 1);
         assert!((v["summary"]["engagementRate"].as_f64().unwrap() - 50.0).abs() < 0.001);
-        // Netzwerk-Kachel.
-        assert_eq!(v["network"]["sent"], 1);
+        assert_eq!(v["network"]["sent"], 3);
         assert_eq!(v["network"]["sentViewers"], 30);
         assert_eq!(v["network"]["received"], 1);
-        // Health-Scores: reach=avg/5=20, retention/engagement=50 (sample<3),
-        // growth=min(100, fph*20)=100 (5 Follower / 1h), monetization=0 (keine
-        // Event-Tabellen), network: total=2*8 + recip=10 = 26.
-        assert_eq!(v["scores"]["reach"], 20);
-        assert_eq!(v["scores"]["retention"], 50);
+        assert_eq!(v["scores"]["reach"], 24);
+        assert_eq!(v["scores"]["retention"], 60);
         assert_eq!(v["scores"]["engagement"], 50);
         assert_eq!(v["scores"]["growth"], 100);
         assert_eq!(v["scores"]["monetization"], 0);
-        assert_eq!(v["scores"]["network"], 26);
-        assert_eq!(v["scores"]["total"], 44);
-        // Findings: Retention-Sample<3 (info), Chat-Sample<3 (info), fph=5>3 (pos).
+        assert_eq!(v["scores"]["network"], 67);
+        assert_eq!(v["scores"]["total"], 51);
         assert_eq!(v["findings"].as_array().unwrap().len(), 3);
+        assert_eq!(v["findings"][0]["type"], "pos");
+        assert_eq!(v["findings"][1]["type"], "info");
         assert_eq!(v["findings"][2]["type"], "pos");
-        // Actions: keine (Samples <3, fph nicht <1).
         assert_eq!(v["actions"].as_array().unwrap().len(), 0);
-        // Sessions-Liste: 1 Session, alice als einziger Nicht-Bot-Chatter (returning).
-        assert_eq!(v["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(v["sessions"].as_array().unwrap().len(), 3);
         assert_eq!(v["sessions"][0]["id"], 1);
-        assert!((v["sessions"][0]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
+        assert!((v["sessions"][0]["retention10m"].as_f64().unwrap() - 90.0).abs() < 0.01);
         assert_eq!(v["sessions"][0]["uniqueChatters"], 1);
         assert_eq!(v["sessions"][0]["peakViewers"], 200);
-        // Correlations: nur 1 Session (<3) → 0. dataQuality-Konstante.
         assert_eq!(v["correlations"]["durationVsViewers"], 0.0);
         assert_eq!(v["correlations"]["chatVsRetention"], 0.0);
         assert_eq!(v["dataQuality"]["botFilterApplied"], true);
@@ -958,24 +1011,124 @@ mod tests {
     }
 
     #[test]
-    fn health_scores_formel_exakt() {
-        // category_percentile gesetzt → reach = 20 + 0.5*80 = 60.
+    fn retention_score_saettigt_nicht_bei_88_prozent() {
         let s = calculate_health_scores(
-            100.0, 40.0, 5, 12.0, 5, 2.0, 4,
+            50.0,
+            58.5,
+            44,
+            10.0,
+            44,
+            1.0,
+            44,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 25,
+                received: 15,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(s.retention, 58);
+        assert_eq!(s.network, 45);
+    }
+
+    #[test]
+    fn health_scores_formel_exakt() {
+        let s = calculate_health_scores(
+            100.0,
+            58.5,
+            5,
+            12.0,
+            5,
+            2.0,
+            4,
             Some(0.5),
-            OverviewMonetization { sub_events: 2, bits_events: 0, hype_trains: 1 },
-            OverviewNetworkStats { sent: 3, received: 1, sent_viewers: 0 },
+            OverviewMonetization {
+                sub_events: 2,
+                bits_events: 0,
+                hype_trains: 1,
+            },
+            OverviewNetworkStats {
+                sent: 3,
+                received: 1,
+                sent_viewers: 0,
+            },
         );
         assert_eq!(s.reach, 60);
-        assert_eq!(s.retention, 60); // min(100, 40*1.5)
-        assert_eq!(s.engagement, 60); // min(100, 12*5)
-        assert_eq!(s.growth, 40); // min(100, 2*20)
-        // weighted = 2*3 + 0 + 1*5 = 11; sc=max(1,4)=4; (11/4)*10=27.5 -> 27.
+        assert_eq!(s.retention, 58);
+        assert_eq!(s.engagement, 60);
+        assert_eq!(s.growth, 40);
         assert_eq!(s.monetization, 27);
-        // total=3+1=4; recip=min(3,1)*10=10; 4*8+10=42.
-        assert_eq!(s.network, 42);
-        // total = 60*.2+60*.25+60*.2+40*.15+27*.1+42*.1 = 12+15+12+6+2.7+4.2=51.9 -> 51.
-        assert_eq!(s.total, 51);
+        assert_eq!(s.network, 51);
+        assert_eq!(s.total, 52);
+
+        let wenige_samples = calculate_health_scores(
+            100.0,
+            58.5,
+            2,
+            12.0,
+            5,
+            2.0,
+            4,
+            Some(0.5),
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 3,
+                received: 1,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(wenige_samples.retention, 50);
+
+        let ohne_sessions = calculate_health_scores(
+            100.0,
+            58.5,
+            5,
+            12.0,
+            5,
+            2.0,
+            0,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 5,
+                received: 5,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(ohne_sessions.network, 0);
+
+        let network_gedeckelt = calculate_health_scores(
+            100.0,
+            58.5,
+            5,
+            12.0,
+            5,
+            2.0,
+            2,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats {
+                sent: 10,
+                received: 10,
+                sent_viewers: 0,
+            },
+        );
+        assert_eq!(network_gedeckelt.network, 100);
+
+        let hohe_bindung = calculate_health_scores(
+            100.0,
+            88.0,
+            5,
+            0.0,
+            0,
+            0.0,
+            4,
+            None,
+            OverviewMonetization::default(),
+            OverviewNetworkStats::default(),
+        );
+        assert_eq!(hohe_bindung.retention, 88);
     }
 
     #[test]
@@ -1009,11 +1162,25 @@ mod tests {
 
         fn sess(duration: i64, avg: f64, chatters: i64, ret: f64) -> OverviewSession {
             OverviewSession {
-                id: 0, date: String::new(), start_time: String::new(),
-                duration, start_viewers: 0, peak_viewers: 0, end_viewers: 0,
-                avg_viewers: avg, retention_5m: 0.0, retention_10m: ret, retention_20m: 0.0,
-                dropoff_pct: 0.0, unique_chatters: chatters, total_chatter_sessions: chatters, first_time_chatters: 0,
-                returning_chatters: 0, followers_start: 0, followers_end: 0, title: String::new(),
+                id: 0,
+                date: String::new(),
+                start_time: String::new(),
+                duration,
+                start_viewers: 0,
+                peak_viewers: 0,
+                end_viewers: 0,
+                avg_viewers: avg,
+                retention_5m: 0.0,
+                retention_10m: ret,
+                retention_20m: 0.0,
+                dropoff_pct: 0.0,
+                unique_chatters: chatters,
+                total_chatter_sessions: chatters,
+                first_time_chatters: 0,
+                returning_chatters: 0,
+                followers_start: 0,
+                followers_end: 0,
+                title: String::new(),
                 hold_pct: 0.0,
             }
         }
@@ -1045,11 +1212,20 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_overview_window_resolve").await;
         // Localhost/Admin (privilegiert) → Full, egal welcher Streamer.
-        assert_eq!(resolve_read_window(&pool, true, Some("nani")).await, WindowMode::Full);
+        assert_eq!(
+            resolve_read_window(&pool, true, Some("nani")).await,
+            WindowMode::Full
+        );
         // Kein Streamer-Kontext → Full.
-        assert_eq!(resolve_read_window(&pool, false, None).await, WindowMode::Full);
+        assert_eq!(
+            resolve_read_window(&pool, false, None).await,
+            WindowMode::Full
+        );
         // Partner ohne Plan (unbekannter Streamer) → LastStream (Paywall).
-        assert_eq!(resolve_read_window(&pool, false, Some("ghost_free")).await, WindowMode::LastStream);
+        assert_eq!(
+            resolve_read_window(&pool, false, Some("ghost_free")).await,
+            WindowMode::LastStream
+        );
     }
 
     /// `window_since_dates(LastStream)` → since = MAX(started_at) der beendeten
@@ -1067,9 +1243,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let (since, prev) = window_since_dates(&pool, Some("nani"), 30, WindowMode::LastStream).await;
+        let (since, prev) =
+            window_since_dates(&pool, Some("nani"), 30, WindowMode::LastStream).await;
         assert_eq!(since, prev, "last_stream: prev == since (keine Trends)");
-        assert!(since.starts_with("2026-02-01"), "MAX(started_at) der beendeten Sessions, war {since}");
+        assert!(
+            since.starts_with("2026-02-01"),
+            "MAX(started_at) der beendeten Sessions, war {since}"
+        );
         // Full: prev liegt vor since.
         let (fs, fp) = window_since_dates(&pool, Some("nani"), 30, WindowMode::Full).await;
         assert!(fp < fs, "full: prev_since vor since");

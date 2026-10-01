@@ -1,0 +1,14 @@
+{
+  "name": "social-studio-handoff-checks",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated browser and source checks for the handoff reference, not the product app.",
+  "scripts": {
+    "check": "node verify-sources.mjs",
+    "test": "node browser-check.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.58.2"
+  }
+}

@@ -67,6 +67,10 @@ pub enum OutputMode {
     /// Antwort wird für fremde Kanäle erzeugt und ausschließlich ausgewertet.
     /// Das Partner-Gate entfällt, der Twitch-Sendepfad bleibt gesperrt.
     Test,
+    /// Kontrollierter Live-Smalltalk in genau einer aktiven Testsession.
+    /// Nutzt den Test-Prompt (kein Pitch/Link), darf aber über den separaten
+    /// Engagement-Sender in den fremden Kanal schreiben.
+    SmalltalkLive,
 }
 
 impl OutputMode {
@@ -77,6 +81,7 @@ impl OutputMode {
             OutputMode::Shadow => "shadow",
             OutputMode::Live => "live",
             OutputMode::Test => "test",
+            OutputMode::SmalltalkLive => "smalltalk_live",
         }
     }
 
@@ -87,6 +92,7 @@ impl OutputMode {
             "live" => OutputMode::Live,
             "shadow" => OutputMode::Shadow,
             "test" => OutputMode::Test,
+            "smalltalk_live" => OutputMode::SmalltalkLive,
             _ => OutputMode::Off,
         }
     }
@@ -195,6 +201,7 @@ mod tests {
             OutputMode::Shadow,
             OutputMode::Live,
             OutputMode::Test,
+            OutputMode::SmalltalkLive,
         ] {
             assert_eq!(OutputMode::from_db(m.as_str()), m);
         }
@@ -202,6 +209,7 @@ mod tests {
         assert_eq!(OutputMode::Shadow.as_str(), "shadow");
         assert_eq!(OutputMode::Live.as_str(), "live");
         assert_eq!(OutputMode::Test.as_str(), "test");
+        assert_eq!(OutputMode::SmalltalkLive.as_str(), "smalltalk_live");
     }
 
     #[test]
@@ -213,5 +221,9 @@ mod tests {
         assert_eq!(OutputMode::from_db("LIVE"), OutputMode::Live);
         assert_eq!(OutputMode::from_db("  Shadow "), OutputMode::Shadow);
         assert_eq!(OutputMode::from_db(" Test "), OutputMode::Test);
+        assert_eq!(
+            OutputMode::from_db(" Smalltalk_Live "),
+            OutputMode::SmalltalkLive
+        );
     }
 }

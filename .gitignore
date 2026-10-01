@@ -1,3 +1,4 @@
+.consumer-ci-reports/
 # Secrets & Environment
 .env
 *.env
@@ -61,3 +62,10 @@ rust/bin/tb-bot/tb-bot
 
 # Build-Output des Preview-Modus (vite.config.ts), wird nirgends serviert
 bot/dashboard_v2/dist-preview/
+
+# Private roadmap snapshots and the isolated browser-test dependency cache
+.roadmap-test-runtime/
+!tools/roadmap-history/features.json
+
+# Local PostgreSQL test configuration; never production credentials.
+rust/test-database.json

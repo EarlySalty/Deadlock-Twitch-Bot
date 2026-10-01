@@ -1,0 +1,126 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", clip_id, streamer_login, source_kind, upload_local_path, local_file_path, preview_path, retention_until::text, discarded_at::text, status FROM twitch_clips_social_media WHERE retention_until IS NOT NULL AND retention_until <= $1::text::timestamptz ORDER BY retention_until ASC, id ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "clip_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "clip_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "streamer_login",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "streamer_login"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "source_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "source_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "upload_local_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "upload_local_path"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "local_file_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "local_file_path"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "preview_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "preview_path"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "retention_until",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "discarded_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "9e774a83d55f456cb58593c8318622f2ce2271129d7b6f038945bdbb32f222b5"
+}

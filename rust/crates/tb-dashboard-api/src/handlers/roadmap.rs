@@ -270,7 +270,7 @@ pub async fn update_handler(
         "UPDATE twitch_roadmap_items SET {} WHERE id = ${n}",
         sets.join(", ")
     );
-    let mut q = sqlx::query(&sql);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for b in binds {
         q = match b {
             Bind::Str(s) => q.bind(s),
@@ -409,11 +409,13 @@ CREATE TABLE twitch_roadmap_items (
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .ok()?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;
@@ -448,7 +450,7 @@ CREATE TABLE twitch_roadmap_items (
         Router::new()
             .route("/twitch/api/v2/roadmap", post(create_handler))
             .route(
-                "/twitch/api/v2/roadmap/:id",
+                "/twitch/api/v2/roadmap/{id}",
                 patch(update_handler).delete(delete_handler),
             )
             .with_state(pool)

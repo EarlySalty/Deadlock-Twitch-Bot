@@ -1,3 +1,4 @@
+import { EditableCommandName } from './CommandNameSection';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Power, PowerOff } from 'lucide-react';
@@ -62,10 +63,10 @@ export function ClipCommandSection() {
           Chat-Befehl
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          !clip-Command
+          Clip-Befehl
         </h2>
         <p className="text-sm text-text-secondary">
-          Steuert, ob dein Chat per !clip einen Twitch-Clip erstellen kann. Aus heißt: der
+          Steuert, ob dein Chat per Befehl einen Twitch-Clip erstellen kann. Aus heißt: der
           Bot legt keinen Clip mehr an und antwortet auch nicht darauf.
         </p>
       </div>
@@ -95,21 +96,23 @@ export function ClipCommandSection() {
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="min-w-0">
+              <EditableCommandName command="clip" className="mb-2" />
               <p
                 className={`text-base font-bold ${
                   enabled ? 'text-success' : 'text-text-secondary'
                 }`}
               >
-                {enabled ? '!clip ist aktiv' : '!clip ist aus'}
+                {enabled ? 'Befehl ist aktiv' : 'Befehl ist aus'}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
-                  ? 'Dein Chat kann per !clip einen Clip erstellen.'
-                  : 'Der Bot erstellt auf !clip nichts mehr und bleibt stumm.'}
+                  ? 'Dein Chat kann per Befehl einen Clip erstellen.'
+                  : 'Der Bot erstellt damit nichts mehr und bleibt stumm.'}
               </p>
             </div>
             <button
               type="button"
+              aria-label={`Clip-Befehl ${enabled ? 'deaktivieren' : 'aktivieren'}`}
               disabled={pending}
               onClick={() => void onToggle()}
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${
@@ -125,7 +128,7 @@ export function ClipCommandSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? '!clip deaktivieren' : '!clip aktivieren'}
+              {enabled ? 'Deaktivieren' : 'Aktivieren'}
             </button>
           </div>
         </div>

@@ -79,6 +79,95 @@ ai_analyses|model|text|NO|
 ai_analyses|points|jsonb|NO|
 ai_analyses|streamer|text|NO|
 ai_analyses|twitch_user_id|text|YES|
+category_channels|broadcaster_language|text|NO|'und'::text
+category_channels|broadcaster_type|text|NO|''::text
+category_channels|created_at|timestamp with time zone|YES|
+category_channels|description|text|NO|''::text
+category_channels|display_name|text|NO|''::text
+category_channels|first_seen|timestamp with time zone|NO|now()
+category_channels|followers_checked_at|timestamp with time zone|YES|
+category_channels|followers_http_status|integer|YES|
+category_channels|followers_total|bigint|YES|
+category_channels|last_seen|timestamp with time zone|NO|now()
+category_channels|login|text|NO|
+category_channels|profile_checked_at|timestamp with time zone|YES|
+category_channels|profile_image_url|text|NO|''::text
+category_channels|user_id|text|NO|
+category_chat_dirty|hour_at|timestamp with time zone|NO|
+category_chat_dirty|language|text|NO|
+category_chat_dirty|room_user_id|text|NO|
+category_chat_messages|chatter_login|text|NO|
+category_chat_messages|chatter_user_id|text|NO|
+category_chat_messages|detected_lang|text|NO|
+category_chat_messages|emote_count|integer|NO|0
+category_chat_messages|language_confidence|double precision|NO|
+category_chat_messages|message_id|text|NO|
+category_chat_messages|message_len|integer|NO|
+category_chat_messages|message_text|text|NO|
+category_chat_messages|received_at|timestamp with time zone|NO|
+category_chat_messages|room_user_id|text|NO|
+category_chat_messages|sent_at|timestamp with time zone|NO|
+category_chat_messages|shared_chat_copy|boolean|NO|false
+category_chat_messages|stream_language|text|NO|
+category_chat_messages|tags|jsonb|NO|'{}'::jsonb
+category_chat_redactions|message_id|text|NO|
+category_chat_redactions|observed_at|timestamp with time zone|NO|now()
+category_chat_redactions|room_user_id|text|NO|
+category_chat_rollup|avg_len|double precision|NO|
+category_chat_rollup|distinct_chatter|bigint|NO|
+category_chat_rollup|hour_at|timestamp with time zone|NO|
+category_chat_rollup|language|text|NO|
+category_chat_rollup|messages|bigint|NO|
+category_chat_rollup|room_user_id|text|NO|
+category_chat_rollup|total_chars|bigint|NO|
+category_chat_rollup|updated_at|timestamp with time zone|NO|now()
+category_chat_user_redactions|chatter_user_id|text|NO|
+category_chat_user_redactions|ended_at|timestamp with time zone|NO|
+category_chat_user_redactions|room_user_id|text|NO|
+category_chat_user_redactions|started_at|timestamp with time zone|NO|
+category_collection_runs|completed_at|timestamp with time zone|NO|
+category_collection_runs|poll_seconds|integer|NO|
+category_collection_runs|snapshot_at|timestamp with time zone|NO|
+category_collection_runs|streams|integer|NO|
+category_collection_runs|viewers|bigint|NO|
+category_collector_config|enabled|boolean|NO|true
+category_collector_config|media_enabled|boolean|NO|true
+category_collector_config|min_free_bytes|bigint|NO|'10737418240'::bigint
+category_collector_config|poll_seconds|integer|NO|60
+category_collector_config|preserve_raw_data|boolean|NO|true
+category_collector_config|raw_budget_bytes|bigint|NO|'21474836480'::bigint
+category_collector_config|singleton|boolean|NO|true
+category_collector_config|updated_at|timestamp with time zone|NO|now()
+category_collector_status|details|jsonb|NO|'{}'::jsonb
+category_collector_status|heartbeat_at|timestamp with time zone|NO|now()
+category_collector_status|singleton|boolean|NO|true
+category_media_jobs|cursor|text|YES|
+category_media_jobs|kind|text|NO|
+category_media_jobs|last_error|text|YES|
+category_media_jobs|next_at|timestamp with time zone|NO|now()
+category_media_jobs|pages|integer|NO|0
+category_media_jobs|user_id|text|NO|
+category_media_jobs|window_end|timestamp with time zone|NO|now()
+category_media_jobs|window_start|timestamp with time zone|NO|(now() - '7 days'::interval)
+category_media|category_verified|boolean|NO|false
+category_media|first_seen|timestamp with time zone|NO|now()
+category_media|kind|text|NO|
+category_media|last_seen|timestamp with time zone|NO|now()
+category_media|media_id|text|NO|
+category_media|metadata|jsonb|NO|
+category_media|user_id|text|NO|
+category_stream_snapshots|is_mature|boolean|NO|
+category_stream_snapshots|language|text|NO|
+category_stream_snapshots|sample_seconds|double precision|NO|
+category_stream_snapshots|snapshot_at|timestamp with time zone|NO|
+category_stream_snapshots|started_at|timestamp with time zone|NO|
+category_stream_snapshots|stream_id|text|NO|
+category_stream_snapshots|tags|ARRAY|NO|'{}'::text[]
+category_stream_snapshots|thumbnail_url|text|NO|''::text
+category_stream_snapshots|title|text|NO|
+category_stream_snapshots|user_id|text|NO|
+category_stream_snapshots|user_login|text|NO|
+category_stream_snapshots|viewer_count|bigint|NO|
 clip_fetch_history|clips_found|integer|YES|0
 clip_fetch_history|clips_new|integer|YES|0
 clip_fetch_history|error|text|YES|
@@ -222,6 +311,84 @@ obs_dock_events|created_at|timestamp with time zone|NO|now()
 obs_dock_events|dedupe_key|text|YES|
 obs_dock_events|id|bigint|NO|nextval('obs_dock_events_id_seq'::regclass)
 obs_dock_events|payload|jsonb|NO|
+partner_effort_achievements|achievement_key|text|NO|
+partner_effort_achievements|earned_at|timestamp with time zone|NO|
+partner_effort_achievements|partner_twitch_user_id|text|NO|
+partner_effort_achievements|target|bigint|NO|
+partner_effort_events|created_at|timestamp with time zone|NO|now()
+partner_effort_events|credited_at|timestamp with time zone|NO|
+partner_effort_events|event_type|text|NO|
+partner_effort_events|id|bigint|NO|nextval('partner_effort_events_id_seq'::regclass)
+partner_effort_events|metadata|jsonb|NO|'{}'::jsonb
+partner_effort_events|occurred_at|timestamp with time zone|NO|
+partner_effort_events|partner_login|text|NO|
+partner_effort_events|partner_twitch_user_id|text|NO|
+partner_effort_events|points|integer|NO|
+partner_effort_events|rules_hash|text|NO|
+partner_effort_events|source_id|text|NO|
+partner_effort_events|viewer_twitch_user_id|text|YES|
+partner_effort_party_observations|discord_id|bigint|NO|
+partner_effort_party_observations|match_started_at|timestamp with time zone|NO|
+partner_effort_party_observations|observed_at|timestamp with time zone|NO|
+partner_effort_party_observations|other_discord_id|bigint|NO|
+partner_effort_party_observations|other_steam_id|text|NO|
+partner_effort_party_observations|partner_twitch_user_id|text|NO|
+partner_effort_party_observations|party_id|text|NO|
+partner_effort_party_observations|steam_id|text|NO|
+partner_effort_party_observations|stream_id|text|NO|
+partner_effort_party_observations|stream_started_at|timestamp with time zone|NO|
+partner_effort_program|singleton|boolean|NO|true
+partner_effort_program|started_at|timestamp with time zone|NO|now()
+partner_effort_shared_chat_observations|confirmed_seconds|bigint|NO|0
+partner_effort_shared_chat_observations|first_seen_at|timestamp with time zone|NO|
+partner_effort_shared_chat_observations|last_seen_at|timestamp with time zone|NO|
+partner_effort_shared_chat_observations|other_partner_twitch_user_id|text|NO|
+partner_effort_shared_chat_observations|partner_twitch_user_id|text|NO|
+partner_effort_shared_chat_observations|shared_chat_session_id|text|NO|
+partner_effort_shared_chat_observations|stream_id|text|NO|
+partner_effort_source_cursors|completed_once|boolean|NO|false
+partner_effort_source_cursors|lane|text|NO|
+partner_effort_source_cursors|occurred_at|timestamp with time zone|NO|
+partner_effort_source_cursors|source_id|text|NO|''::text
+partner_effort_source_cursors|source|text|NO|
+partner_effort_source_receipts|received_at|timestamp with time zone|NO|now()
+partner_effort_source_receipts|source_id|text|NO|
+partner_effort_source_receipts|source|text|NO|
+partner_effort_source_state|checked_at|timestamp with time zone|NO|
+partner_effort_source_state|error_code|text|YES|
+partner_effort_source_state|healthy|boolean|NO|false
+partner_effort_source_state|source|text|NO|
+partner_effort_source_state|successful_at|timestamp with time zone|YES|
+partner_effort_streaks|current_streak|integer|NO|0
+partner_effort_streaks|last_qualified_week|date|YES|
+partner_effort_streaks|longest_streak|integer|NO|0
+partner_effort_streaks|partner_twitch_user_id|text|NO|
+partner_effort_streaks|updated_at|timestamp with time zone|NO|
+partner_effort_stream_weeks|deadlock_seconds|bigint|NO|
+partner_effort_stream_weeks|observed_through|timestamp with time zone|NO|
+partner_effort_stream_weeks|partner_twitch_user_id|text|NO|
+partner_effort_stream_weeks|stream_id|text|NO|
+partner_effort_stream_weeks|week_start|date|NO|
+partner_effort_weekly_quest_evaluations|evaluated_at|timestamp with time zone|NO|
+partner_effort_weekly_quest_evaluations|partner_twitch_user_id|text|NO|
+partner_effort_weekly_quest_evaluations|week_start|date|NO|
+partner_effort_weekly_quests|assigned_at|timestamp with time zone|NO|now()
+partner_effort_weekly_quests|baseline_minutes|bigint|NO|0
+partner_effort_weekly_quests|bonus_points|integer|NO|
+partner_effort_weekly_quests|goal|bigint|NO|
+partner_effort_weekly_quests|partner_twitch_user_id|text|NO|
+partner_effort_weekly_quests|position|smallint|NO|
+partner_effort_weekly_quests|quest_key|text|NO|
+partner_effort_weekly_quests|reward_points|integer|NO|
+partner_effort_weekly_quests|rules_hash|text|NO|
+partner_effort_weekly_quests|week_start|date|NO|
+partner_effort_weeks|effort|boolean|NO|false
+partner_effort_weeks|evaluated_at|timestamp with time zone|NO|
+partner_effort_weeks|frozen|boolean|NO|false
+partner_effort_weeks|partner_twitch_user_id|text|NO|
+partner_effort_weeks|streak|integer|NO|0
+partner_effort_weeks|streamed|boolean|NO|false
+partner_effort_weeks|week_start|date|NO|
 platform_connections|access_token_enc|bytea|NO|
 platform_connections|created_at|timestamp with time zone|NO|now()
 platform_connections|enc_kid|text|NO|'v1'::text
@@ -286,6 +453,7 @@ social_media_partner_access|granted_at|timestamp with time zone|NO|CURRENT_TIMES
 social_media_partner_access|granted_by|text|YES|
 social_media_partner_access|granted|boolean|NO|false
 social_media_partner_access|streamer_login|text|NO|
+social_media_partner_access|twitch_user_id|text|YES|
 social_media_platform_auth|access_token_enc|bytea|NO|
 social_media_platform_auth|authorized_at|text|YES|CURRENT_TIMESTAMP
 social_media_platform_auth|client_id|text|YES|
@@ -331,13 +499,14 @@ social_media_settings|updated_by|text|YES|
 social_media_settings|value|jsonb|NO|
 social_media_streamer_layout|cam_enabled|boolean|NO|true
 social_media_streamer_layout|layout_json|jsonb|NO|
-social_media_streamer_layout|mode|text|NO|'pip'::text
+social_media_streamer_layout|mode|text|NO|'stacked'::text
 social_media_streamer_layout|streamer_login|text|NO|
 social_media_streamer_layout|twitch_user_id|text|YES|
 social_media_streamer_layout|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_streamer_layout|updated_by|text|YES|
 social_media_streamer_settings|approval_mode|text|NO|'manual'::text
 social_media_streamer_settings|streamer_login|text|NO|
+social_media_streamer_settings|subtitles_enabled|boolean|NO|true
 social_media_streamer_settings|timezone|text|NO|'Europe/Berlin'::text
 social_media_streamer_settings|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_streamer_settings|updated_by|text|YES|
@@ -365,9 +534,10 @@ streamer_onboarding|twitch_user_id|text|NO|
 streamer_onboarding|updated_at|timestamp with time zone|NO|now()
 streamer_plans|activated_at|text|NO|CURRENT_TIMESTAMP
 streamer_plans|clip_command_enabled|integer|NO|1
+streamer_plans|command_name_overrides|jsonb|NO|'{}'::jsonb
 streamer_plans|expires_at|text|YES|
 streamer_plans|first_login_at|text|YES|
-streamer_plans|greeting_reply_enabled|integer|NO|1
+streamer_plans|greeting_reply_enabled|integer|NO|0
 streamer_plans|lurk_command_enabled|integer|NO|1
 streamer_plans|lurker_tax_enabled|integer|NO|0
 streamer_plans|manual_plan_expires_at|text|YES|
@@ -397,11 +567,33 @@ tb_chat_autoban_log|id|bigint|NO|nextval('tb_chat_autoban_log_id_seq'::regclass)
 tb_chat_autoban_log|reason|text|YES|
 tb_chat_autoban_log|score|real|YES|
 tb_chat_autoban_log|source_path|text|YES|
+tb_chat_brain_answers|answer|text|NO|''::text
+tb_chat_brain_answers|broadcaster_login|text|NO|
+tb_chat_brain_answers|broadcaster_user_id|text|NO|
+tb_chat_brain_answers|chatter_user_id|text|NO|
+tb_chat_brain_answers|created_at|timestamp with time zone|NO|now()
+tb_chat_brain_answers|delivery_status|text|NO|'Pending'::text
+tb_chat_brain_answers|duration_ms|bigint|YES|
+tb_chat_brain_answers|finished_at|timestamp with time zone|YES|
+tb_chat_brain_answers|id|bigint|NO|nextval('tb_chat_brain_answers_id_seq'::regclass)
+tb_chat_brain_answers|message_id|text|NO|
+tb_chat_brain_answers|question|text|NO|
+tb_chat_brain_answers|status|text|NO|
 tb_schema_ownership|component|text|NO|
 tb_schema_ownership|details_json|jsonb|NO|'{}'::jsonb
 tb_schema_ownership|marker_version|integer|NO|
 tb_schema_ownership|schema_owner|text|NO|
 tb_schema_ownership|updated_at|timestamp with time zone|NO|now()
+title_generator_feedback|alternatives|jsonb|NO|'[]'::jsonb
+title_generator_feedback|created_at|timestamp with time zone|NO|now()
+title_generator_feedback|edited_title|text|YES|
+title_generator_feedback|feedback_at|timestamp with time zone|YES|
+title_generator_feedback|feedback|text|YES|
+title_generator_feedback|generation_id|text|NO|
+title_generator_feedback|keywords|text|NO|''::text
+title_generator_feedback|primary_title|text|NO|
+title_generator_feedback|selected_title|text|YES|
+title_generator_feedback|twitch_user_id|text|NO|
 title_generator_insights|generated_at|timestamp with time zone|NO|now()
 title_generator_insights|id|integer|NO|nextval('title_generator_insights_id_seq'::regclass)
 title_generator_insights|patterns|text|YES|
@@ -424,12 +616,28 @@ title_generator_knowledge|relative_perf|double precision|NO|
 title_generator_knowledge|source_streamer|text|YES|
 title_generator_knowledge|streamer_size|text|YES|
 title_generator_knowledge|title|text|NO|
+title_generator_preferences|experimental_auto_set|boolean|NO|false
+title_generator_preferences|never_words|text|NO|''::text
+title_generator_preferences|style_preference|text|NO|''::text
+title_generator_preferences|twitch_user_id|text|NO|
+title_generator_preferences|updated_at|timestamp with time zone|NO|now()
+twitch_ad_break_events|chat_msgs_last_5min|integer|YES|
+twitch_ad_break_events|chat_msgs_last_min|integer|YES|
+twitch_ad_break_events|decision_id|bigint|YES|
 twitch_ad_break_events|duration_seconds|integer|YES|
+twitch_ad_break_events|first_chatter_in_window|boolean|YES|
 twitch_ad_break_events|id|bigint|NO|nextval('twitch_ad_break_events_id_seq'::regclass)
+twitch_ad_break_events|in_window|boolean|YES|
 twitch_ad_break_events|is_automatic|boolean|YES|false
+twitch_ad_break_events|match_state|text|YES|
+twitch_ad_break_events|raid_in_window|boolean|YES|
+twitch_ad_break_events|seconds_since_match_end|integer|YES|
+twitch_ad_break_events|seconds_since_match_start|integer|YES|
 twitch_ad_break_events|session_id|bigint|YES|
+twitch_ad_break_events|source|text|YES|
 twitch_ad_break_events|started_at|timestamp with time zone|NO|now()
 twitch_ad_break_events|twitch_user_id|text|NO|
+twitch_ad_break_events|viewers_before|integer|YES|
 twitch_ad_manager_actions|action|text|NO|
 twitch_ad_manager_actions|attempt_count|integer|NO|0
 twitch_ad_manager_actions|completed_at|timestamp with time zone|YES|
@@ -453,20 +661,33 @@ twitch_ad_manager_actions|status|text|NO|'pending'::text
 twitch_ad_manager_actions|twitch_login|text|NO|
 twitch_ad_manager_actions|twitch_user_id|text|NO|
 twitch_ad_manager_actions|updated_at|timestamp with time zone|NO|now()
+twitch_ad_manager_decisions|block_seconds|integer|YES|
+twitch_ad_manager_decisions|decided_at|timestamp with time zone|NO|now()
+twitch_ad_manager_decisions|decision|text|NO|
+twitch_ad_manager_decisions|detail|text|YES|
+twitch_ad_manager_decisions|id|bigint|NO|nextval('twitch_ad_manager_decisions_id_seq'::regclass)
+twitch_ad_manager_decisions|reason|text|NO|
+twitch_ad_manager_decisions|session_id|bigint|YES|
+twitch_ad_manager_decisions|twitch_user_id|text|NO|
 twitch_ad_manager_settings|action_lead_seconds|integer|NO|60
 twitch_ad_manager_settings|ad_duration_seconds|integer|NO|90
+twitch_ad_manager_settings|budget_minutes_per_hour|integer|NO|3
+twitch_ad_manager_settings|chat_notice_before_ad|boolean|NO|true
 twitch_ad_manager_settings|created_at|timestamp with time zone|NO|now()
 twitch_ad_manager_settings|enabled|boolean|NO|false
 twitch_ad_manager_settings|min_interval_minutes|integer|NO|30
 twitch_ad_manager_settings|quiet_window_minutes|integer|NO|5
 twitch_ad_manager_settings|startup_delay_minutes|integer|NO|15
-twitch_ad_manager_settings|strategy|text|NO|'monitor'::text
+twitch_ad_manager_settings|strategy|text|NO|'smart'::text
 twitch_ad_manager_settings|twitch_login|text|NO|
 twitch_ad_manager_settings|twitch_user_id|text|NO|
 twitch_ad_manager_settings|updated_at|timestamp with time zone|NO|now()
 twitch_ad_manager_settings|worker_lease_token|text|YES|
 twitch_ad_manager_settings|worker_lease_until|timestamp with time zone|YES|
 twitch_ad_manager_state|active_session_id|bigint|YES|
+twitch_ad_manager_state|avg_match_seconds|integer|YES|
+twitch_ad_manager_state|avg_queue_seconds|integer|YES|
+twitch_ad_manager_state|budget_used_seconds|integer|YES|
 twitch_ad_manager_state|duration_seconds|integer|YES|
 twitch_ad_manager_state|is_live|boolean|NO|false
 twitch_ad_manager_state|last_action_at|timestamp with time zone|YES|
@@ -476,9 +697,19 @@ twitch_ad_manager_state|last_action_outcome|text|YES|
 twitch_ad_manager_state|last_ad_at|timestamp with time zone|YES|
 twitch_ad_manager_state|last_decision_reason|text|YES|
 twitch_ad_manager_state|last_decision|text|YES|
+twitch_ad_manager_state|last_hint_at|timestamp with time zone|YES|
+twitch_ad_manager_state|last_hint_key|text|YES|
+twitch_ad_manager_state|last_hint_variant|smallint|YES|
 twitch_ad_manager_state|last_history_at|timestamp with time zone|YES|
+twitch_ad_manager_state|match_active|boolean|NO|false
+twitch_ad_manager_state|match_ended_at|timestamp with time zone|YES|
+twitch_ad_manager_state|match_started_at|timestamp with time zone|YES|
 twitch_ad_manager_state|next_ad_at|timestamp with time zone|YES|
 twitch_ad_manager_state|observed_at|timestamp with time zone|YES|
+twitch_ad_manager_state|plan_block_seconds|integer|YES|
+twitch_ad_manager_state|plan_blocks_per_hour|integer|YES|
+twitch_ad_manager_state|plan_fit|text|YES|
+twitch_ad_manager_state|plan_next_block_at|timestamp with time zone|YES|
 twitch_ad_manager_state|preroll_free_seconds|integer|YES|
 twitch_ad_manager_state|snooze_count|integer|YES|
 twitch_ad_manager_state|snooze_refresh_at|timestamp with time zone|YES|
@@ -576,6 +807,17 @@ twitch_bot_ban_klassifikation|twitch_user_id|text|NO|
 twitch_bot_capabilities|has_chatters_scope|boolean|NO|true
 twitch_bot_capabilities|id|smallint|NO|1
 twitch_bot_capabilities|updated_at|timestamp with time zone|NO|now()
+twitch_caster_cameras|camera_id|text|NO|
+twitch_caster_cameras|consent_enabled|boolean|NO|false
+twitch_caster_cameras|created_at|timestamp with time zone|NO|now()
+twitch_caster_cameras|label|text|NO|
+twitch_caster_cameras|last_connected_at|timestamp with time zone|YES|
+twitch_caster_cameras|owner_login|text|NO|
+twitch_caster_cameras|publish_token_hash|text|NO|
+twitch_caster_cameras|revoked_at|timestamp with time zone|YES|
+twitch_caster_overlay|id|boolean|NO|true
+twitch_caster_overlay|revision|bigint|NO|0
+twitch_caster_overlay|scene|jsonb|NO|'{"slots": [null, null], "roster": []}'::jsonb
 twitch_channel_match_state|channel_login|text|NO|
 twitch_channel_match_state|channel_user_id|text|YES|
 twitch_channel_match_state|hero_id|integer|YES|
@@ -638,6 +880,97 @@ twitch_chatter_rollup|last_seen_at|timestamp with time zone|NO|
 twitch_chatter_rollup|streamer_login|text|NO|
 twitch_chatter_rollup|total_messages|integer|YES|0
 twitch_chatter_rollup|total_sessions|integer|YES|0
+twitch_clip_command_events|clip_id|text|NO|
+twitch_clip_command_events|moment_offset_s|integer|YES|
+twitch_clip_command_events|requested_at|timestamp with time zone|NO|
+twitch_clip_command_events|resolution_status|text|NO|
+twitch_clip_command_events|streamer_login|text|NO|
+twitch_clip_command_events|twitch_user_id|text|NO|
+twitch_clip_command_events|vod_id|text|YES|
+twitch_clip_command_events|vod_offset_s|integer|YES|
+twitch_clip_contest_effort_outbox|event_type|text|NO|
+twitch_clip_contest_effort_outbox|id|bigint|NO|nextval('twitch_clip_contest_effort_outbox_id_seq'::regclass)
+twitch_clip_contest_effort_outbox|metadata|jsonb|NO|'{}'::jsonb
+twitch_clip_contest_effort_outbox|occurred_at|timestamp with time zone|NO|
+twitch_clip_contest_effort_outbox|partner_twitch_user_id|text|NO|
+twitch_clip_contest_effort_outbox|source_id|text|NO|
+twitch_clip_contest_effort_outbox|streamer_login|text|NO|
+twitch_clip_contest_hall_of_fame|contest_month|date|NO|
+twitch_clip_contest_hall_of_fame|finalized_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_hall_of_fame|rank|smallint|NO|
+twitch_clip_contest_hall_of_fame|submission_id|bigint|NO|
+twitch_clip_contest_hall_of_fame|vote_count|integer|NO|
+twitch_clip_contest_moderation|actor|text|NO|
+twitch_clip_contest_moderation|created_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_moderation|hidden|boolean|NO|
+twitch_clip_contest_moderation|id|bigint|NO|nextval('twitch_clip_contest_moderation_id_seq'::regclass)
+twitch_clip_contest_moderation|reason|text|NO|''::text
+twitch_clip_contest_moderation|submission_id|bigint|NO|
+twitch_clip_contest_months|contest_month|date|NO|
+twitch_clip_contest_months|finalized_at|timestamp with time zone|YES|
+twitch_clip_contest_submissions|broadcaster_login|text|NO|
+twitch_clip_contest_submissions|broadcaster_name|text|YES|
+twitch_clip_contest_submissions|broadcaster_twitch_id|text|NO|
+twitch_clip_contest_submissions|clip_created_at|timestamp with time zone|NO|
+twitch_clip_contest_submissions|clip_db_id|bigint|YES|
+twitch_clip_contest_submissions|clip_thumbnail_url|text|YES|
+twitch_clip_contest_submissions|clip_title|text|NO|
+twitch_clip_contest_submissions|clip_url|text|NO|
+twitch_clip_contest_submissions|contest_month|date|NO|
+twitch_clip_contest_submissions|creator_twitch_id|text|YES|
+twitch_clip_contest_submissions|game_id|text|NO|
+twitch_clip_contest_submissions|hidden_at|timestamp with time zone|YES|
+twitch_clip_contest_submissions|hidden_by|text|YES|
+twitch_clip_contest_submissions|id|bigint|NO|nextval('twitch_clip_contest_submissions_id_seq'::regclass)
+twitch_clip_contest_submissions|submission_slot|smallint|NO|
+twitch_clip_contest_submissions|submitted_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_submissions|submitter_aliases|ARRAY|NO|
+twitch_clip_contest_submissions|submitter_display_name|text|NO|
+twitch_clip_contest_submissions|submitter_person_key|text|NO|
+twitch_clip_contest_submissions|submitter_provider|text|NO|
+twitch_clip_contest_submissions|submitter_user_id|text|NO|
+twitch_clip_contest_submissions|twitch_clip_id|text|NO|
+twitch_clip_contest_votes|contest_month|date|NO|
+twitch_clip_contest_votes|id|bigint|NO|nextval('twitch_clip_contest_votes_id_seq'::regclass)
+twitch_clip_contest_votes|submission_id|bigint|NO|
+twitch_clip_contest_votes|vote_slot|smallint|NO|
+twitch_clip_contest_votes|voted_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_votes|voter_discord_id|text|NO|
+twitch_clip_context_runs|analyzed_at|timestamp with time zone|NO|now()
+twitch_clip_context_runs|clip_duration_s|double precision|NO|
+twitch_clip_context_runs|clip_id|text|NO|
+twitch_clip_context_runs|clip_url|text|NO|
+twitch_clip_context_runs|moment_offset_s|integer|NO|
+twitch_clip_context_runs|peak_s|integer|YES|
+twitch_clip_context_runs|recommended_end_s|integer|YES|
+twitch_clip_context_runs|recommended_start_s|integer|YES|
+twitch_clip_context_runs|streamer_login|text|NO|
+twitch_clip_context_runs|stt_status|text|NO|
+twitch_clip_context_runs|visual_status|text|NO|
+twitch_clip_context_runs|vod_id|text|NO|
+twitch_clip_context_runs|window_end_s|integer|NO|
+twitch_clip_context_runs|window_start_s|integer|NO|
+twitch_clip_context_seconds|chat_messages|integer|NO|0
+twitch_clip_context_seconds|clip_id|text|NO|
+twitch_clip_context_seconds|death_screen|boolean|YES|
+twitch_clip_context_seconds|exclamation|boolean|YES|
+twitch_clip_context_seconds|kill_feed|text|YES|
+twitch_clip_context_seconds|laughter|boolean|YES|
+twitch_clip_context_seconds|lufs|double precision|YES|
+twitch_clip_context_seconds|objective|boolean|YES|
+twitch_clip_context_seconds|ocr_sampled|boolean|NO|false
+twitch_clip_context_seconds|peak_dbfs|double precision|YES|
+twitch_clip_context_seconds|scene_change|boolean|YES|
+twitch_clip_context_seconds|soul_jump|integer|YES|
+twitch_clip_context_seconds|souls|integer|YES|
+twitch_clip_context_seconds|speech|text|YES|
+twitch_clip_context_seconds|vod_second|integer|NO|
+twitch_clip_cut_templates|lead_seconds|integer|NO|
+twitch_clip_cut_templates|name|text|NO|
+twitch_clip_cut_templates|sample_count|integer|NO|
+twitch_clip_cut_templates|trail_seconds|integer|NO|
+twitch_clip_cut_templates|updated_at|timestamp with time zone|NO|now()
+twitch_clip_cut_templates|weights|jsonb|NO|
 twitch_clip_form_submissions|clip_id|integer|NO|
 twitch_clip_form_submissions|created_at|timestamp with time zone|NO|now()
 twitch_clip_form_submissions|error|text|YES|
@@ -646,6 +979,16 @@ twitch_clip_form_submissions|http_status|integer|YES|
 twitch_clip_form_submissions|id|integer|NO|nextval('twitch_clip_form_submissions_id_seq'::regclass)
 twitch_clip_form_submissions|status|text|NO|'pending'::text
 twitch_clip_form_submissions|submitted_at|timestamp with time zone|YES|
+twitch_clip_merkmale|clip_id|text|NO|
+twitch_clip_merkmale|created_at|timestamp with time zone|NO|now()
+twitch_clip_merkmale|dauer_s|double precision|YES|
+twitch_clip_merkmale|ersteller|text|YES|
+twitch_clip_merkmale|id|bigint|NO|nextval('twitch_clip_merkmale_id_seq'::regclass)
+twitch_clip_merkmale|offset_vom_ende_s|double precision|YES|
+twitch_clip_merkmale|signal|text|NO|
+twitch_clip_merkmale|streamer_twitch_id|text|YES|
+twitch_clip_merkmale|views|integer|YES|
+twitch_clip_merkmale|wert|double precision|YES|
 twitch_clips_social_analytics|bucket|text|YES|
 twitch_clips_social_analytics|clip_id|bigint|NO|
 twitch_clips_social_analytics|comments|integer|YES|0
@@ -678,6 +1021,7 @@ twitch_clips_social_media|created_at|timestamp with time zone|NO|now()
 twitch_clips_social_media|custom_description|text|YES|
 twitch_clips_social_media|custom_title|text|YES|
 twitch_clips_social_media|discarded_at|timestamp with time zone|YES|
+twitch_clips_social_media|download_failed_at|timestamp with time zone|YES|
 twitch_clips_social_media|downloaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|duration_seconds|double precision|YES|
 twitch_clips_social_media|game_id|text|YES|
@@ -691,6 +1035,10 @@ twitch_clips_social_media|last_analytics_sync|timestamp with time zone|YES|
 twitch_clips_social_media|layout_override_json|jsonb|YES|
 twitch_clips_social_media|local_file_path|text|YES|
 twitch_clips_social_media|music_track|text|YES|
+twitch_clips_social_media|preview_error|text|YES|
+twitch_clips_social_media|preview_path|text|YES|
+twitch_clips_social_media|preview_status|text|YES|
+twitch_clips_social_media|preview_updated_at|timestamp with time zone|YES|
 twitch_clips_social_media|retention_until|timestamp with time zone|YES|
 twitch_clips_social_media|source_kind|text|NO|'twitch'::text
 twitch_clips_social_media|status|text|YES|'pending'::text
@@ -703,6 +1051,8 @@ twitch_clips_social_media|uploaded_instagram|boolean|YES|false
 twitch_clips_social_media|uploaded_tiktok|boolean|YES|false
 twitch_clips_social_media|uploaded_youtube|boolean|YES|false
 twitch_clips_social_media|view_count|integer|YES|0
+twitch_clips_social_media|vod_id|text|YES|
+twitch_clips_social_media|vod_offset_s|integer|YES|
 twitch_clips_social_media|youtube_uploaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|youtube_video_id|text|YES|
 twitch_clips_upload_queue|attempts|integer|YES|0
@@ -719,7 +1069,12 @@ twitch_clips_upload_queue|priority|integer|YES|0
 twitch_clips_upload_queue|quota_deferrals|integer|NO|0
 twitch_clips_upload_queue|scheduled_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|status|text|YES|'pending'::text
+twitch_clips_upload_queue|tiktok_publish_id|text|YES|
 twitch_clips_upload_queue|title|text|YES|
+twitch_community_announcements|broadcaster_id|text|NO|
+twitch_community_announcements|revision|bigint|NO|0
+twitch_community_announcements|settings|jsonb|NO|
+twitch_community_announcements|updated_at|timestamp with time zone|NO|now()
 twitch_confirmed_external_recruitment_raids|confirmation_signal|text|YES|
 twitch_confirmed_external_recruitment_raids|confirmed_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_confirmed_external_recruitment_raids|from_broadcaster_id|text|YES|
@@ -954,6 +1309,7 @@ twitch_global_ban_sweep_due|broadcaster_id|text|NO|
 twitch_global_ban_sweep_due|broadcaster_login|text|NO|
 twitch_global_ban_sweep_due|run_after|timestamp with time zone|NO|
 twitch_global_ban_sweep_due|scheduled_at|timestamp with time zone|NO|now()
+twitch_global_promo_modes|announcement_color|text|NO|'purple'::text
 twitch_global_promo_modes|config_key|text|NO|
 twitch_global_promo_modes|custom_message|text|YES|
 twitch_global_promo_modes|ends_at|text|YES|
@@ -1078,6 +1434,18 @@ twitch_outreach_shadow_sessions|processor_claim_until|timestamp with time zone|Y
 twitch_outreach_shadow_sessions|stage|text|NO|'watch'::text
 twitch_outreach_shadow_sessions|started_at|timestamp with time zone|NO|
 twitch_outreach_shadow_sessions|streamer_user_id|text|NO|
+twitch_partner_effort_season_closures|closed_at|timestamp with time zone|NO|
+twitch_partner_effort_season_closures|season_ended_at|timestamp with time zone|NO|
+twitch_partner_effort_season_closures|season_key|text|NO|
+twitch_partner_effort_season_closures|season_started_at|timestamp with time zone|NO|
+twitch_partner_effort_season_results|closed_at|timestamp with time zone|NO|
+twitch_partner_effort_season_results|points|bigint|NO|
+twitch_partner_effort_season_results|qualified_invites|bigint|NO|0
+twitch_partner_effort_season_results|rank|integer|NO|
+twitch_partner_effort_season_results|score_reached_at|timestamp with time zone|YES|
+twitch_partner_effort_season_results|season_key|text|NO|
+twitch_partner_effort_season_results|twitch_login|text|NO|''::text
+twitch_partner_effort_season_results|twitch_user_id|text|NO|
 twitch_partner_outreach_audit|correlation_id|uuid|YES|
 twitch_partner_outreach_audit|event_kind|text|NO|
 twitch_partner_outreach_audit|id|bigint|NO|nextval('twitch_partner_outreach_audit_id_seq'::regclass)
@@ -1114,6 +1482,30 @@ twitch_partner_outreach|status|text|YES|'pending'::text
 twitch_partner_outreach|streamer_login|text|NO|
 twitch_partner_outreach|streamer_user_id|text|YES|
 twitch_partner_outreach|twitch_user_id|text|YES|
+twitch_partner_profiles|content|jsonb|NO|'{}'::jsonb
+twitch_partner_profiles|published|boolean|NO|false
+twitch_partner_profiles|revision|bigint|NO|1
+twitch_partner_profiles|twitch_user_id|text|NO|
+twitch_partner_profiles|updated_at|timestamp with time zone|NO|now()
+twitch_partner_raid_boost_grants|expires_at|timestamp with time zone|NO|
+twitch_partner_raid_boost_grants|granted_at|timestamp with time zone|NO|
+twitch_partner_raid_boost_grants|id|bigint|NO|nextval('twitch_partner_raid_boost_grants_id_seq'::regclass)
+twitch_partner_raid_boost_grants|multiplier|double precision|NO|1.15
+twitch_partner_raid_boost_grants|season_key|text|NO|
+twitch_partner_raid_boost_grants|streams_remaining|smallint|NO|2
+twitch_partner_raid_boost_grants|streams_total|smallint|NO|2
+twitch_partner_raid_boost_grants|twitch_login|text|NO|''::text
+twitch_partner_raid_boost_grants|twitch_user_id|text|NO|
+twitch_partner_raid_boost_streams|consumed_at|timestamp with time zone|YES|
+twitch_partner_raid_boost_streams|deadlock_seconds|integer|YES|
+twitch_partner_raid_boost_streams|grant_id|bigint|NO|
+twitch_partner_raid_boost_streams|id|bigint|NO|nextval('twitch_partner_raid_boost_streams_id_seq'::regclass)
+twitch_partner_raid_boost_streams|qualified|boolean|YES|
+twitch_partner_raid_boost_streams|reserved_at|timestamp with time zone|NO|
+twitch_partner_raid_boost_streams|session_id|bigint|NO|
+twitch_partner_raid_boost_streams|stream_ended_at|timestamp with time zone|YES|
+twitch_partner_raid_boost_streams|stream_started_at|timestamp with time zone|NO|
+twitch_partner_raid_boost_streams|twitch_user_id|text|NO|
 twitch_partner_raid_score_tracking|base_score|double precision|YES|
 twitch_partner_raid_score_tracking|confirmed_at|text|NO|CURRENT_TIMESTAMP
 twitch_partner_raid_score_tracking|deadlock_continued_sec|integer|YES|
@@ -1160,11 +1552,14 @@ twitch_partner_raid_scores|new_partner_multiplier|double precision|NO|1.0
 twitch_partner_raid_scores|raid_boost_multiplier|double precision|NO|1.0
 twitch_partner_raid_scores|readiness_score|double precision|NO|0.5
 twitch_partner_raid_scores|received_successful_raids_total|integer|NO|0
+twitch_partner_raid_scores|received_viewers_30d|bigint|NO|0
+twitch_partner_raid_scores|sent_viewers_30d|bigint|NO|0
 twitch_partner_raid_scores|time_pattern_score_base|double precision|NO|0.5
 twitch_partner_raid_scores|time_pattern_score|double precision|NO|0.5
 twitch_partner_raid_scores|today_received_raids|integer|NO|0
 twitch_partner_raid_scores|twitch_login|text|NO|
 twitch_partner_raid_scores|twitch_user_id|text|NO|
+twitch_partner_raid_scores|viewer_fairness_score|double precision|NO|0.5
 twitch_partner_signup_denylist|added_at|timestamp with time zone|NO|now()
 twitch_partner_signup_denylist|added_by|text|NO|
 twitch_partner_signup_denylist|partner_paused_by_block|boolean|NO|false
@@ -1172,6 +1567,12 @@ twitch_partner_signup_denylist|public_message|text|YES|
 twitch_partner_signup_denylist|reason|text|NO|
 twitch_partner_signup_denylist|twitch_login|text|NO|
 twitch_partner_signup_denylist|twitch_user_id|text|NO|
+twitch_partner_signup_tag_blocks|added_at|timestamp with time zone|NO|now()
+twitch_partner_signup_tag_blocks|added_by|text|NO|
+twitch_partner_signup_tag_blocks|display_tag|text|NO|
+twitch_partner_signup_tag_blocks|public_message|text|YES|
+twitch_partner_signup_tag_blocks|reason|text|NO|
+twitch_partner_signup_tag_blocks|tag|text|NO|
 twitch_partners_all_state|archived_at|text|YES|
 twitch_partners_all_state|created_at|text|YES|
 twitch_partners_all_state|departnered_at|text|YES|
@@ -1212,6 +1613,7 @@ twitch_partners|live_ping_role_id|bigint|YES|
 twitch_partners|manual_partner_opt_out|integer|YES|0
 twitch_partners|next_link_check_at|text|YES|
 twitch_partners|partnered_at|text|YES|CURRENT_TIMESTAMP
+twitch_partners|raid_admin_enabled|boolean|NO|true
 twitch_partners|raid_bot_enabled|integer|YES|0
 twitch_partners|require_discord_link|integer|YES|0
 twitch_partners|silent_ban|integer|YES|0
@@ -1221,11 +1623,47 @@ twitch_partners|technical_pause_reason|text|YES|
 twitch_partners|twitch_login|text|NO|
 twitch_partners|twitch_user_id|text|NO|
 twitch_partners|verified|boolean|NO|false
+twitch_patch_announcement_deliveries|attempted_at|timestamp with time zone|YES|
+twitch_patch_announcement_deliveries|broadcaster_id|text|NO|
+twitch_patch_announcement_deliveries|drop_code|text|YES|
+twitch_patch_announcement_deliveries|event_id|text|NO|
+twitch_patch_announcement_deliveries|http_status|smallint|YES|
+twitch_patch_announcement_deliveries|status|text|NO|'pending'::text
+twitch_patch_announcement_deliveries|stream_id|text|NO|
+twitch_patch_announcement_deliveries|uncertainty_reason|text|YES|
+twitch_patch_announcement_recipients|broadcaster_id|text|NO|
+twitch_patch_announcement_recipients|patch_id|bigint|NO|
+twitch_patch_announcement_recipients|stream_id|text|NO|
+twitch_patch_announcements|article_url|text|NO|
+twitch_patch_announcements|created_at|timestamp with time zone|NO|now()
+twitch_patch_announcements|detected_at|timestamp with time zone|NO|
+twitch_patch_announcements|event_id|text|NO|
+twitch_patch_announcements|message|text|NO|
+twitch_patch_announcements|source_url|text|NO|
+twitch_patch_feed_observations|finalized_at|timestamp with time zone|YES|
+twitch_patch_feed_observations|observed_at|timestamp with time zone|NO|
+twitch_patch_feed_observations|patch_id|bigint|NO|
+twitch_patch_feed_observations|status|text|NO|
+twitch_patch_feed_state|bootstrapped_at|timestamp with time zone|YES|
+twitch_patch_feed_state|last_successful_index_at|timestamp with time zone|NO|
+twitch_patch_feed_state|singleton|boolean|NO|true
+twitch_player_steam_accounts|is_primary|boolean|NO|false
+twitch_player_steam_accounts|linked_at|timestamp with time zone|NO|now()
+twitch_player_steam_accounts|steam_id64|bigint|NO|
+twitch_player_steam_accounts|twitch_user_id|text|NO|
+twitch_player_steam_accounts|updated_at|timestamp with time zone|NO|now()
+twitch_player_steam_links|lookup_enabled|boolean|NO|true
+twitch_player_steam_links|revision|bigint|NO|0
+twitch_player_steam_links|steam_id64|bigint|YES|
+twitch_player_steam_links|twitch_user_id|text|NO|
+twitch_player_steam_links|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|cooldown_type|text|NO|
 twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|
 twitch_promo_cooldowns|updated_at|timestamp with time zone|NO|now()
 twitch_promo_cooldowns|wall_ts|double precision|NO|
+twitch_promo_pitch_log|bewertet_at|timestamp with time zone|YES|
+twitch_promo_pitch_log|bewertung|text|YES|
 twitch_promo_pitch_log|channel_login|text|NO|
 twitch_promo_pitch_log|created_at|timestamp with time zone|NO|now()
 twitch_promo_pitch_log|generated_text|text|YES|
@@ -1233,9 +1671,13 @@ twitch_promo_pitch_log|id|bigint|NO|nextval('twitch_promo_pitch_log_id_seq'::reg
 twitch_promo_pitch_log|occasion|text|YES|
 twitch_promo_pitch_log|pfad|text|NO|
 twitch_promo_pitch_log|reject_reason|text|YES|
+twitch_promo_pitch_log|review_message_id|bigint|YES|
 twitch_promo_pitch_log|sent_at|timestamp with time zone|YES|
 twitch_promo_pitch_log|target_user_id|text|YES|
 twitch_promo_pitch_log|trigger_text|text|YES|
+twitch_promo_timer_settings|settings|jsonb|NO|
+twitch_promo_timer_settings|singleton|boolean|NO|true
+twitch_promo_timer_settings|updated_at|timestamp with time zone|NO|now()
 twitch_raid_arrival_tracking|classification|text|NO|
 twitch_raid_arrival_tracking|confirmation_signals|text|NO|''::text
 twitch_raid_arrival_tracking|correlation_detail|text|YES|
@@ -1463,6 +1905,16 @@ twitch_smalltalk_bench_runs|note|text|YES|
 twitch_smalltalk_bench_runs|sample_count|integer|NO|0
 twitch_smalltalk_bench_runs|started_at|timestamp with time zone|NO|now()
 twitch_smalltalk_bench_runs|variant|text|NO|
+twitch_smalltalk_candidate_state|channel_login|text|NO|
+twitch_smalltalk_candidate_state|checked_at|timestamp with time zone|YES|
+twitch_smalltalk_candidate_state|cooldown_until|timestamp with time zone|YES|
+twitch_smalltalk_candidate_state|follower_count|integer|YES|
+twitch_smalltalk_candidate_state|last_error|text|YES|
+twitch_smalltalk_candidate_state|live_checked_at|timestamp with time zone|YES|
+twitch_smalltalk_candidate_state|live_deadlock|boolean|NO|false
+twitch_smalltalk_candidate_state|next_refresh_at|timestamp with time zone|NO|now()
+twitch_smalltalk_candidate_state|source|text|YES|
+twitch_smalltalk_candidate_state|twitch_user_id|text|NO|
 twitch_smalltalk_messages|channel_login|text|NO|
 twitch_smalltalk_messages|channel_user_id|text|YES|
 twitch_smalltalk_messages|created_at|timestamp with time zone|NO|now()
@@ -1491,6 +1943,7 @@ twitch_smalltalk_sessions|ended_at|timestamp with time zone|YES|
 twitch_smalltalk_sessions|expires_at|timestamp with time zone|NO|(now() + '6 mons'::interval)
 twitch_smalltalk_sessions|id|uuid|NO|
 twitch_smalltalk_sessions|last_provider_error|text|YES|
+twitch_smalltalk_sessions|live_test|boolean|NO|false
 twitch_smalltalk_sessions|previous_enabled|boolean|NO|
 twitch_smalltalk_sessions|previous_irc_read|boolean|NO|
 twitch_smalltalk_sessions|previous_output_mode|text|NO|
@@ -1535,6 +1988,8 @@ twitch_stats_tracked|tags|text|YES|
 twitch_stats_tracked|ts_utc|timestamp with time zone|NO|
 twitch_stats_tracked|twitch_user_id|text|YES|
 twitch_stats_tracked|viewer_count|integer|YES|
+twitch_steam_openid_nonces|expires_at|timestamp with time zone|NO|
+twitch_steam_openid_nonces|nonce_hash|text|NO|
 twitch_stream_ai_reports|error|text|YES|
 twitch_stream_ai_reports|finished_at|timestamp with time zone|YES|
 twitch_stream_ai_reports|generated_at|timestamp with time zone|YES|now()
@@ -1625,6 +2080,15 @@ twitch_streamer_invites|invite_url|text|NO|
 twitch_streamer_invites|last_sent_at|text|YES|
 twitch_streamer_invites|streamer_login|text|NO|
 twitch_streamer_invites|twitch_user_id|text|YES|
+twitch_streamer_referral_credits|credited_at|timestamp with time zone|NO|
+twitch_streamer_referral_credits|event_type|text|NO|'streamer_referral'::text
+twitch_streamer_referral_credits|referred_login|text|NO|
+twitch_streamer_referral_credits|referred_twitch_user_id|text|NO|
+twitch_streamer_referral_credits|source_claimed_at|timestamp with time zone|NO|
+twitch_streamer_referral_credits|source_id|text|NO|
+twitch_streamer_referral_credits|source_type|text|NO|'affiliate_streamer_claim'::text
+twitch_streamer_referral_credits|streamer_login|text|NO|
+twitch_streamer_referral_credits|streamer_twitch_user_id|text|NO|
 twitch_streamers_partner_state|archived_at|text|YES|
 twitch_streamers_partner_state|created_at|text|YES|
 twitch_streamers_partner_state|discord_display_name|text|YES|
@@ -1755,14 +2219,29 @@ twitch_vod_archive_vods|title|text|NO|
 twitch_vod_archive_vods|twitch_id|text|NO|
 twitch_vod_archive_vods|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_vod_archive_vods|uploaded_at|timestamp with time zone|YES|
+twitch_vod_highlights|created_at|timestamp with time zone|NO|now()
+twitch_vod_highlights|end_s|double precision|NO|
+twitch_vod_highlights|id|bigint|NO|nextval('twitch_vod_highlights_id_seq'::regclass)
+twitch_vod_highlights|score|double precision|NO|
+twitch_vod_highlights|signale|jsonb|NO|'{}'::jsonb
+twitch_vod_highlights|start_s|double precision|NO|
+twitch_vod_highlights|status|text|NO|'neu'::text
+twitch_vod_highlights|streamer_twitch_id|text|NO|
+twitch_vod_highlights|vod_id|text|NO|
 twitch_zuschauer_register|community_probability|double precision|NO|
 twitch_zuschauer_register|computed_at|timestamp with time zone|NO|now()
 twitch_zuschauer_register|discord_user_id|text|YES|
 twitch_zuschauer_register|first_partner_channel|text|YES|
 twitch_zuschauer_register|first_seen_at|timestamp with time zone|YES|
+twitch_zuschauer_register|historie_geprueft_am|timestamp with time zone|YES|
+twitch_zuschauer_register|radar_meldung_am|timestamp with time zone|YES|
+twitch_zuschauer_register|radar_vorherige_meldung_am|timestamp with time zone|YES|
+twitch_zuschauer_register|radar_wiederholungen|bigint|NO|0
 twitch_zuschauer_register|signals|jsonb|NO|'{}'::jsonb
 twitch_zuschauer_register|twitch_login|text|YES|
 twitch_zuschauer_register|twitch_user_id|text|NO|
+twitch_zuschauer_register|unauffaellig_seit|timestamp with time zone|YES|
+twitch_zuschauer_register|vertrauen_widerrufen_am|timestamp with time zone|YES|
 uplink_target_generations|disconnect_pending|boolean|NO|false
 uplink_target_generations|enabled|boolean|NO|
 uplink_target_generations|generation|bigint|NO|

@@ -12,7 +12,6 @@ updates:
           - "github/codeql-action*"
     labels:
       - "dependencies"
-      - "github-actions"
     commit-message:
       prefix: "deps"
 
@@ -29,6 +28,10 @@ updates:
       - dependency-name: "eslint"
         versions:
           - ">=10"
+      # TypeScript 7 ist ein Compiler-Major und wird separat/migrationsbewusst angehoben.
+      - dependency-name: "typescript"
+        versions:
+          - ">=7"
 
   - package-ecosystem: "npm"
     directory: "/bot/admin_dashboard"
@@ -39,6 +42,11 @@ updates:
       - "javascript"
     commit-message:
       prefix: "deps"
+    ignore:
+      # TypeScript 7 ist ein Compiler-Major und wird separat/migrationsbewusst angehoben.
+      - dependency-name: "typescript"
+        versions:
+          - ">=7"
 
   - package-ecosystem: "npm"
     directory: "/website"
@@ -49,6 +57,11 @@ updates:
       - "javascript"
     commit-message:
       prefix: "deps"
+    ignore:
+      # TypeScript 7 ist ein Compiler-Major und wird separat/migrationsbewusst angehoben.
+      - dependency-name: "typescript"
+        versions:
+          - ">=7"
 
   - package-ecosystem: "cargo"
     directory: "/rust"

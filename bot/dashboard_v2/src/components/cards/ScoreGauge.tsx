@@ -4,6 +4,7 @@ import { getScoreColor } from '@/utils/formatters';
 interface ScoreGaugeProps {
   score: number;
   label: string;
+  hint?: string;
   size?: 'small' | 'medium' | 'large';
   showLabel?: boolean;
 }
@@ -11,6 +12,7 @@ interface ScoreGaugeProps {
 export function ScoreGauge({
   score,
   label,
+  hint,
   size = 'medium',
   showLabel = true,
 }: ScoreGaugeProps) {
@@ -72,6 +74,11 @@ export function ScoreGauge({
       {showLabel && (
         <span className="mt-2 text-text-secondary font-medium tracking-wide uppercase text-xs">
           {label}
+        </span>
+      )}
+      {showLabel && hint && (
+        <span className="mt-1 max-w-[10rem] text-center text-[11px] leading-tight text-text-secondary/80">
+          {hint}
         </span>
       )}
     </div>

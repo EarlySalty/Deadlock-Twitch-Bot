@@ -10,17 +10,20 @@ use std::{
 
 use sqlx::postgres::PgPoolOptions;
 
+#[path = "../../../test-support/database.rs"]
+mod test_database;
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
-const FRESH_SCHEMA_QUERY: &str = "SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default,'') FROM information_schema.columns WHERE table_schema='public' AND table_name <> '_sqlx_migrations'";
+// Daily category partitions inherit the checked parent schema. Their date-based
+// physical names vary by test day and are covered by the partition lifecycle test.
+const FRESH_SCHEMA_QUERY: &str = "SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default,'') FROM information_schema.columns WHERE table_schema='public' AND table_name <> '_sqlx_migrations' AND table_name !~ '^category_chat_messages_p[0-9]{8}$'";
 const SCHEMA_SNAPSHOT: &str = include_str!("fresh_schema_snapshot.txt");
 
 /// Test-DSN aus der Umgebung. `TB_TEST_DATABASE_URL` ist die Konvention im
 /// restlichen Workspace; ohne diesen Namen ueberspringt der Test still und
 /// meldet grün, obwohl er nie gelaufen ist.
 fn test_dsn() -> Option<String> {
-    std::env::var("TB_TEST_DATABASE_URL")
-        .or_else(|_| std::env::var("TEST_DATABASE_URL"))
-        .ok()
+    test_database::database_url()
 }
 
 async fn fresh_schema_lines(pool: &sqlx::PgPool) -> BTreeSet<String> {

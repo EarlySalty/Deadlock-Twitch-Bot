@@ -102,7 +102,7 @@ pub async fn admin_path_handler(auth: DashboardAuthLevel, Path(raw_path): Path<S
     if let Some(denied) = admin_auth_gate(&auth) {
         return denied;
     }
-    // axum 0.7 liefert bei `/*path` den Wert mit führendem `/`.
+    // axum 0.7 liefert bei `/{*path}` den Wert mit führendem `/`.
     let trimmed = raw_path.trim_start_matches('/');
     if path_should_serve_index(trimmed) {
         serve_admin_index().await

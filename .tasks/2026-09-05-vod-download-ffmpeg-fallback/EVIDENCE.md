@@ -34,3 +34,17 @@
 - Sabotage-Gegencheck: `+faststart` im Fix zu `faststartKAPUTT` verfaelscht -> Test rot mit `Werkzeug { schritt: "Remux", meldung: "kein faststart" }`; Fix danach wiederhergestellt.
 - Gruen: `cargo test -p tb-vod-archive` (SQLX_OFFLINE=true, Wegwerf-Postgres) -> `test result: ok. 39 passed; 0 failed`.
 - `rustfmt --check` sauber, `cargo clippy -p tb-vod-archive --tests` ohne Warnung in der Crate.
+
+## Review-BLOCK behoben: Remux-Entscheidung am Container statt am Prozess-Flag
+
+- Review-Befund (BLOCKING): der Remux hing an `ffmpeg_fallback` (nur in diesem Aufruf). Scheitert der Remux einmal (Platte, Zeitgrenze, Neustart), bleibt die mpegts-Datei unter `v<id>.mp4` liegen; beim naechsten Lauf sieht yt-dlp die fertige Datei ("already been downloaded", Exit 0), `ffmpeg_fallback == false`, kein Remux, und der kaputte Container wird hochgeladen. Der Zustand heilt nie und betrifft auch die vom Koordinator bereits von Hand geladene 13-GB-Datei.
+- Ursachen-Fix: `lade_vod` entscheidet den Remux jetzt am tatsaechlichen Container. Nach jedem erfolgreichen Download prueft `ist_mpegts` (ffprobe `format=format_name`), ob `mpegts` gemeldet wird; nur dann laeuft der Remux. Damit heilt der Zustand von selbst (eine liegengebliebene mpegts-Datei wird beim naechsten Lauf erkannt und geremuxt), ein sauberer mp4-Download wird nie geremuxt (REQ-8-Absicht erfuellt). Das Prozess-Flag ist raus.
+- Weitere Review-NITs mitbehoben: Temp-Datei wird jetzt auf allen Fehlerpfaden geloescht (auch Zeitgrenze/Spawn-Fehler, NIT 2); der Remux schreibt fest nach `<stamm>.mp4` und entfernt eine abweichende Quelldatei, damit kein mp4-Inhalt unter `.ts` liegen bleibt (NIT 4).
+- Tests: `zweiter_ext_x_map_loest_ffmpeg_fallback_aus` bekommt ein Fake-ffprobe (meldet `mpegts`). Neu `remux_fehler_bleibt_download_fehler` (REQ-7: ffmpeg exit 1 -> Fehler Schritt "Remux", Temp geloescht) und `sauberer_mp4_download_wird_nicht_remuxt` (REQ-8: ffprobe meldet `mov,mp4,...` -> ffmpeg wird nie aufgerufen, Originaldatei bleibt).
+- Sabotage-Gegencheck: `ist_mpegts` fest auf `true` gezwungen -> `sauberer_mp4_download_wird_nicht_remuxt` rot (ffmpeg-Marke entsteht); danach wiederhergestellt.
+- Gruen: `cargo test -p tb-vod-archive` (SQLX_OFFLINE=true, Wegwerf-Postgres) -> `test result: ok. 41 passed; 0 failed`. `rustfmt --check` sauber, `cargo clippy -p tb-vod-archive --tests` ohne Warnung in der Crate.
+- Hinweis zu den offenen NITs 1 (ffmpeg-Downloader ignoriert `--limit-rate`) und 3 (kein Platz-Vorabcheck vor dem Remux): NIT 3 ist durch die Selbstheilung entschaerft (ein am Platz gescheiterter Remux wird beim naechsten Lauf erneut versucht); NIT 1 bleibt als Live-Verifikationspunkt.
+
+## Zwischenfall: Worktree und Branch extern geloescht
+
+- Waehrend der Arbeit wurden Worktree `~/.worktrees/tb-vod-ffmpeg-fallback` und Branch `fix/vod-download-ffmpeg-fallback` von aussen entfernt (vermutlich ein Cleanup-Hook/Peer). Die Commit-Objekte b30ca725, d41d3960, 4b9961f3 blieben erhalten; Branch und Worktree aus 4b9961f3 rekonstruiert, danach der Container-Fix erneut angewandt.

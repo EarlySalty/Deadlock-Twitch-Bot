@@ -310,20 +310,23 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
         }
     };
     if let Some(endpoint) = chain.iter().find(|endpoint| {
-        endpoint.provider != "fireworks"
-            || endpoint.model != crate::selection::FIREWORKS_DEFAULT_MODEL
-    })
-    {
+        let standard = endpoint.provider == "fireworks"
+            && crate::model_resolver::allowed_fireworks_model(&endpoint.model)
+            && (endpoint.base_url.trim_end_matches('/') == crate::selection::FIREWORKS_BASE_URL
+                || is_loopback_endpoint(&endpoint.base_url));
+        !standard
+    }) {
         tracing::warn!(
             use_case,
             provider = endpoint.provider,
+            model = %endpoint.model,
             "nicht freigegebener LLM-Anbieter abgewiesen"
         );
         return Err(LlmFailure {
             provider: endpoint.provider.to_string(),
             model: endpoint.model.clone(),
             error: LlmError::Unavailable(
-                "der Twitch-Bot darf ausschließlich das freigegebene Fireworks-Modell verwenden"
+                "LLM-Endpunkt ist fuer diesen Twitch-Bot-Anwendungsfall nicht freigegeben"
                     .to_string(),
             ),
         });
@@ -388,7 +391,7 @@ async fn complete_chain(
     let start = Instant::now();
 
     let mut last: Option<LlmFailure> = None;
-    for endpoint in &chain {
+    for mut endpoint in chain {
         let verbraucht = start.elapsed();
         if verbraucht >= gesamtfrist {
             tracing::warn!(
@@ -410,7 +413,7 @@ async fn complete_chain(
             break;
         }
         let frist = einzelfrist.min(gesamtfrist - verbraucht);
-        match call_endpoint(endpoint, &request, purpose.as_deref(), frist).await {
+        match call_selected_endpoint(&mut endpoint, &request, purpose.as_deref(), frist).await {
             Ok(response) => return Ok(response),
             Err(error) => {
                 // Die Warnung traegt Klasse, Status und Body-Laenge; der
@@ -445,8 +448,31 @@ async fn complete_chain(
     Err(last.expect("Kette ist nicht leer, also gab es mindestens einen Versuch"))
 }
 
+fn is_loopback_endpoint(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url).ok().is_some_and(|url| {
+        url.username().is_empty()
+            && url.password().is_none()
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+    })
+}
+
+async fn call_selected_endpoint(
+    endpoint: &mut LlmEndpoint,
+    request: &Request,
+    purpose: Option<&str>,
+    frist: Duration,
+) -> Result<Response, LlmError> {
+    // Lokale Mock-/Proxy-Pfade behalten ihre explizite Adresse. Sie dürfen
+    // niemals durch einen Test plötzlich echte Anbieteraufrufe verursachen.
+    if endpoint.provider != "fireworks" || is_loopback_endpoint(&endpoint.base_url) {
+        return call_endpoint(endpoint, request, purpose, frist).await;
+    }
+    endpoint.model = crate::model_resolver::selected_model()?;
+    call_endpoint(endpoint, request, purpose, frist).await
+}
+
 /// Ein Anbieter, inklusive Wiederholung bei 429.
-async fn call_endpoint(
+pub(crate) async fn call_endpoint(
     endpoint: &LlmEndpoint,
     request: &Request,
     purpose: Option<&str>,
@@ -588,7 +614,14 @@ fn openai_compatible_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
     if request.reasoning_off {
-        body["reasoning_effort"] = serde_json::json!("none");
+        // GLM-5.3-Flash akzeptiert low/high/max statt "none". Fuer den kurzen
+        // Titel-Use-Case ist "low" der kostenguensige, latenzarme Modus.
+        body["reasoning_effort"] =
+            if endpoint.provider == "zai" && endpoint.model == "glm-5.3-flash" {
+                serde_json::json!("low")
+            } else {
+                serde_json::json!("none")
+            };
     }
     body
 }
@@ -623,29 +656,68 @@ async fn send_openai_compatible(
 /// Status pruefen, Body lesen, JSON parsen.
 async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
     let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let bytes = match bounded_response(response).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let detail = "Anbieterantwort ist nicht vollständig innerhalb des Größenlimits lesbar";
+            if status.as_u16() == 429 {
+                return Err(RawError::TooManyRequests {
+                    retry_after,
+                    body: detail.into(),
+                });
+            }
+            if !status.is_success() {
+                return Err(RawError::Fehler(LlmError::Http {
+                    status: status.as_u16(),
+                    body: detail.into(),
+                }));
+            }
+            return Err(RawError::Fehler(error));
+        }
+    };
     if status.as_u16() == 429 {
-        let retry_after = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        let body = response.text().await.unwrap_or_default();
         return Err(RawError::TooManyRequests {
             retry_after,
-            body: kurz(&body),
+            body: kurz(&String::from_utf8_lossy(&bytes)),
         });
     }
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
         return Err(RawError::Fehler(LlmError::Http {
             status: status.as_u16(),
-            body: kurz(&body),
+            body: kurz(&String::from_utf8_lossy(&bytes)),
         }));
     }
-    response
-        .json::<Value>()
-        .await
-        .map_err(|error| RawError::Fehler(transport_error(&error)))
+    serde_json::from_slice(&bytes).map_err(|_| {
+        RawError::Fehler(LlmError::Unparsable(
+            "Anbieterantwort ist kein gültiges JSON".into(),
+        ))
+    })
+}
+async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
+    const MAX_RESPONSE: usize = 8 * 1024 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE as u64)
+    {
+        return Err(LlmError::Unparsable(
+            "Anbieterantwort überschreitet Größenlimit".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| transport_error(&e))? {
+        if bytes.len() + chunk.len() > MAX_RESPONSE {
+            return Err(LlmError::Unparsable(
+                "Anbieterantwort überschreitet Größenlimit".into(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Anbieter-Body auf 500 Zeichen gekuerzt: genug fuer "credit balance is too
@@ -720,6 +792,7 @@ fn http_client() -> Result<reqwest::Client, LlmError> {
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
+                .no_proxy()
                 // Keine Gesamtfrist im Client: die legt `call_endpoint` per
                 // `tokio::time::timeout` um jeden Request. Nur der
                 // Verbindungsaufbau hat eine feste Grenze.
@@ -740,12 +813,47 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    #[tokio::test]
+    async fn bounded_body_preserves_error_status_and_retry_after() {
+        for status in [200, 429, 503] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .insert_header("Retry-After", "17")
+                        .set_body_string("x".repeat(8 * 1024 * 1024 + 1)),
+                )
+                .mount(&server)
+                .await;
+            let response = reqwest::Client::new()
+                .get(server.uri())
+                .send()
+                .await
+                .unwrap();
+            let error = finish(response)
+                .await
+                .err()
+                .expect("Große Antwort muss abgewiesen werden");
+            match (status, error) {
+                (
+                    429,
+                    RawError::TooManyRequests {
+                        retry_after: Some(17),
+                        ..
+                    },
+                ) => (),
+                (503, RawError::Fehler(LlmError::Http { status: 503, .. })) => (),
+                (200, RawError::Fehler(LlmError::Unparsable(_))) => (),
+                _ => panic!("Status oder Retry-After verloren"),
+            }
+        }
+    }
 
     fn endpoint(server: &MockServer, _provider: &'static str) -> LlmEndpoint {
         LlmEndpoint {
             provider: "fireworks",
             base_url: server.uri(),
-            model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: crate::selection::configured_fireworks_model().to_string(),
             api_key: Some("k".to_string()),
         }
     }
@@ -783,7 +891,7 @@ mod tests {
         let endpoint = LlmEndpoint {
             provider: "fireworks",
             base_url: "http://x".to_string(),
-            model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: crate::selection::configured_fireworks_model().to_string(),
             api_key: Some("k".to_string()),
         };
         let request = Request::simple("SYSTEM", sentinel).json_object();
@@ -846,7 +954,37 @@ mod tests {
         .expect_err("MiniMax muss bereits im zentralen Hub abgewiesen werden");
 
         assert!(matches!(error, LlmError::Unavailable(_)));
-        assert!(error.to_string().contains("freigegebene Fireworks-Modell"));
+        assert!(error.to_string().contains("nicht freigegeben"));
+    }
+
+    #[tokio::test]
+    async fn title_ai_weist_glm_ohne_nutzerfreigabe_ab() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("\"model\":\"glm-5.3-flash\""))
+            .and(body_string_contains("\"reasoning_effort\":\"low\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "{\"primary_title\":\"X\"}"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let error = complete(
+            "title_ai",
+            Request::prompt("titel")
+                .denken_aus()
+                .no_ledger()
+                .endpoint(LlmEndpoint {
+                    provider: "zai",
+                    base_url: server.uri(),
+                    model: "glm-5.3-flash".to_string(),
+                    api_key: Some("k".to_string()),
+                }),
+        )
+        .await
+        .expect_err("GLM ist kein freigegebenes Flash-Modell");
+        assert!(matches!(error, LlmError::Unavailable(_)));
     }
 
     #[tokio::test]
@@ -864,7 +1002,7 @@ mod tests {
         .expect_err("ein anderes Fireworks-Modell darf nicht aufgerufen werden");
 
         assert!(matches!(error, LlmError::Unavailable(_)));
-        assert!(error.to_string().contains("freigegebene Fireworks-Modell"));
+        assert!(error.to_string().contains("nicht freigegeben"));
     }
 
     #[tokio::test]
@@ -980,7 +1118,7 @@ mod tests {
             Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
                 provider: "fireworks",
                 base_url: "http://127.0.0.1:1".to_string(),
-                model: crate::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+                model: crate::selection::configured_fireworks_model().to_string(),
                 api_key: None,
             }),
         )
@@ -1040,7 +1178,7 @@ mod tests {
         assert_eq!(failure.provider, "fireworks");
         assert_eq!(
             failure.model,
-            crate::selection::FIREWORKS_DEFAULT_MODEL
+            crate::selection::configured_fireworks_model()
         );
         assert_eq!(
             failure.error,

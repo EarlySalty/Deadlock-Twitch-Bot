@@ -29,9 +29,28 @@ const SECRET_BOT_REFRESH: &str = "TWITCH_BOT_REFRESH_TOKEN";
 /// (und damit den Chat) nie kippt.
 #[async_trait::async_trait]
 pub trait SecretSink: Send + Sync {
+    /// Ein widerrufener oder konkurrierend ersetzter Datensatz darf nicht
+    /// wie eine vorübergehend unerreichbare Datenbank wiederholt werden.
+    fn terminal_failure(&self) -> bool {
+        false
+    }
+    /// Verbindliche DB-Senken prüfen vor einer Anbieterrotation den Schreibpfad.
+    async fn prepare_refresh(&self) -> Result<(), ()> {
+        Ok(())
+    }
     /// Schreibt den Access-Token immer; den Refresh-Token nur wenn `Some`
     /// (der Aufrufer übergibt ihn nur bei tatsächlicher Rotation).
     async fn persist_bot_tokens(&self, access_token: &str, refresh_token: Option<&str>);
+    /// Verbindliche DB-Senken propagieren Fehler vor Nutzung der neuen Tokens.
+    /// Legacy-Senken behalten ihren bisherigen Vertrag.
+    async fn persist_checked(
+        &self,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> Result<(), ()> {
+        self.persist_bot_tokens(access_token, refresh_token).await;
+        Ok(())
+    }
 }
 
 /// Fehler eines einzelnen Secret-Writes (nie mit Token-Wert).

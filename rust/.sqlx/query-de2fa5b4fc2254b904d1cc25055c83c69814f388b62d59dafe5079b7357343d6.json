@@ -6,37 +6,79 @@
       {
         "ordinal": 0,
         "name": "streamer_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "streamer_login"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "is_live",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "is_live"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "last_game",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_game"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "had_deadlock_in_session",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "had_deadlock_in_session"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "last_deadlock_seen_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_deadlock_seen_at"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "last_viewer_count",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_viewer_count"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "last_started_at",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_started_at"
+          }
+        }
       }
     ],
     "parameters": {

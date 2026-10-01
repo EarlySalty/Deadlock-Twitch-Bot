@@ -43,22 +43,22 @@ const LOYALTY_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const TOPIC_COLORS: Record<string, string> = {
-  heroes: '#C5A059',
-  builds: '#00D9FF',
-  ranked: '#FF5A3C',
-  meta: '#00C46A',
-  gameplay: '#B5A488',
-  backseat: 'var(--color-warning)',
-  commands: '#C5A059',
-  social: '#00D9FF',
-  smalltalk: '#FF5A3C',
-  greeting: '#00C46A',
-  community: '#B5A488',
-  reaction: 'var(--color-warning)',
-  hype: '#C5A059',
-  feedback: '#00D9FF',
-  technical: '#FF5A3C',
-  other: '#00C46A',
+  heroes: 'var(--color-chart-1)',
+  builds: 'var(--color-chart-2)',
+  ranked: 'var(--color-chart-3)',
+  meta: 'var(--color-chart-4)',
+  gameplay: 'var(--color-chart-5)',
+  backseat: 'var(--color-primary)',
+  commands: 'var(--color-accent)',
+  social: 'var(--color-warning)',
+  smalltalk: 'var(--color-chart-1)',
+  greeting: 'var(--color-chart-2)',
+  community: 'var(--color-chart-3)',
+  reaction: 'var(--color-chart-4)',
+  hype: 'var(--color-chart-5)',
+  feedback: 'var(--color-primary)',
+  technical: 'var(--color-accent)',
+  other: 'var(--color-warning)',
 };
 
 const TOPIC_LABELS: Record<string, string> = {
@@ -306,7 +306,7 @@ export function StimmungTopicsSection({ data, windowStart }: { data: ChatContent
   const donutData = topicEntries.map(([key, value]) => ({
     name: TOPIC_LABELS[key] || key,
     value,
-    color: TOPIC_COLORS[key] || '#B5A488',
+    color: TOPIC_COLORS[key] || 'var(--color-chart-3)',
   }));
 
   return (
@@ -373,10 +373,10 @@ export function StimmungTopicsSection({ data, windowStart }: { data: ChatContent
             <div>
               <h3 className="mb-2 text-sm font-medium text-text-secondary">Topic-Verteilung</h3>
               <div className="flex items-center gap-4">
-                <div className="h-[120px] w-[120px]">
+                <div className="h-[160px] w-[160px] shrink-0">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={donutData} innerRadius={30} outerRadius={50} dataKey="value" stroke="none">
+                      <Pie data={donutData} innerRadius={45} outerRadius={78} dataKey="value" stroke="none">
                         {donutData.map((entry, index) => (
                           <Cell key={index} fill={entry.color} />
                         ))}
@@ -621,7 +621,7 @@ export function ChatDeepLlmSection({
   const donutData = topicEntries.map(([key, value]) => ({
     name: TOPIC_LABELS[key] || key,
     value: value as number,
-    color: TOPIC_COLORS[key.toLowerCase()] || '#B5A488',
+    color: TOPIC_COLORS[key.toLowerCase()] || 'var(--color-chart-3)',
   }));
 
   return (
@@ -697,10 +697,10 @@ export function ChatDeepLlmSection({
           <div>
             <h3 className="mb-4 text-sm font-medium text-text-secondary">KI-Kategorisierung</h3>
             <div className="flex items-center gap-6">
-              <div className="h-[160px] w-[160px]">
+              <div className="h-[160px] w-[160px] shrink-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={donutData} innerRadius={45} outerRadius={65} dataKey="value" stroke="none">
+                    <Pie data={donutData} innerRadius={45} outerRadius={78} dataKey="value" stroke="none">
                       {donutData.map((entry, index) => (
                         <Cell key={index} fill={entry.color} />
                       ))}

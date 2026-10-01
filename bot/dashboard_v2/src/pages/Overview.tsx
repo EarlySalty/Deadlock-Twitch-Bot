@@ -151,10 +151,10 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Score Gauges */}
         <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <ScoreGauge score={scores.growth} label="Growth" />
-          <ScoreGauge score={scores.monetization} label="Revenue" />
-          <ScoreGauge score={scores.network} label="Network" />
-          <ScoreGauge score={scores.retention} label="Retention" />
+          <ScoreGauge score={scores.growth} label="Growth" hint="Neue Follower je Stunde" />
+          <ScoreGauge score={scores.monetization} label="Revenue" hint="Subs, Bits und Hype Trains je Stream" />
+          <ScoreGauge score={scores.network} label="Network" hint="Raids je Stream, gesendet und erhalten" />
+          <ScoreGauge score={scores.retention} label="Retention" hint="Ø Zuschauer im Verhältnis zum Peak" />
         </div>
 
         {/* Network Activity */}

@@ -1,0 +1,33 @@
+{
+  "source_transfer_sha256": "30bcd53938c2bf02f3020c433c01dc292b5754eeb3166fa0f3ab45753320e4a0",
+  "files": {
+    "BRAND.md": "e9c38731952fe87a6424c1544ae0bd1875976225603c576a0c811a4f7fb33713",
+    "INTEGRATION.md": "c4fefe2f6690b52b37c86ea1e5ec81ce795ba8207167144459cec1713d07ba72",
+    "README.md": "68a1d7b7ba881d82e788dab84488f0c4e7b51a140e9c4c091d21d3bc1f1857b8",
+    "assets/deadlock-d-logo.webp": "d6ee8c4862e96df8789aec9cc7dd292a847a94fb7dfdf831958cbbfb7e550170",
+    "build-css.cjs": "5cf2921a685e151c7e0d3f9d6970101bdc6ec7fe11891674e54137cee04146f6",
+    "index.html": "41b8311bd88d850956babb20789ebc451e3ecb0e80a6d2753d9c084ae8521ae5",
+    "package.json": "a3ae439fcd2a7514f9df0a24ee82857519d91dced6da6f1103a85cdfa5c7964e",
+    "src/app.js": "6550b18bc64e32fa80c1e2f553d74bd7e0c2d9396e76a9030268f07ac7160bb5",
+    "src/brand-theme.css": "016afe140b6584e0a5efb874a42751ea60dfa9721cf874494f0e3949072e11f3",
+    "src/brand.js": "dd8ee863e871dd59c43e97ce1e1f06d07f46588e9c61aad7c938b455f8c87e63",
+    "src/icons.js": "fe1e0e3609aae3cc32f132f5f697b27b3384f43804947c10c3f9ac2b23909add",
+    "src/model.js": "7ec9591ce2ff8cc510e34bbcd3c59e0884be3349612aee61d3cdb17d91062918",
+    "src/react/AutoPilotSchedule.jsx": "c97b91f4671da064e14875371e8b89cfaa7b5d1a2b9288d10d92d8a57434c3c9",
+    "src/react/ClipQueueCard.jsx": "6eac01d0951c0c3651c47d22d36b73466dd73b9a6597de83340d3fde221b4de5",
+    "src/react/CommunityBrand.jsx": "4b2e27cd024f42b88149ece048289a9bed43ee9e10ac06e4851f195415eceb72",
+    "src/react/DashboardShell.jsx": "a6baf3d30d9dfe52ca71963e0e53813c51e7eee6789e1d6c64010d9b36502af5",
+    "src/react/Example.jsx": "d78f4073224ba7210b861d3725801264dc19a8802f069ffb4cc493deb612f737",
+    "src/react/Icon.jsx": "e47a5997343e30c8532b9a31a8b45a92e6a273e1d00b110dc2e2b20716ae8f48",
+    "src/react/WorkspaceDialog.jsx": "68dc0db490b44c266f4c7c773142cb2efe6acf1d3c3ae138c59fcf12b1ad85ae",
+    "src/react/index.js": "ccdba43f01ab2f369db9522af49fbf4ca4a3cde9d68c200d9b9db27be0fc4646",
+    "src/styles.css": "52bd1e7600586d8e0699f55a339e6e0f3567633e7460f763d72e9bab183d3774",
+    "tests/README.md": "1e0f999024b481cae3f2a947c8e14abb77005fcfa29733e89a3425da2039e18d",
+    "tests/brand.test.js": "906c0f74c96cce3945736023bfb3cf9bcec63d35fbb0052b0318a542daf373fb",
+    "tests/browser-results.json": "1195747b0ae5f63a09acb0825d34d0c218c1c8efee98760d8698c57450b63b88",
+    "tests/browser_check.py": "0f35ebb2ea9061c6d2746bf4ec6323d44d6e4158b20aad59de1cf2fe45a5caf9",
+    "tests/check-react.cjs": "41f1693c9428a9e449e5b3785c481f798688f3c1b8b5d9ef425b450f29e904a2",
+    "tests/model.test.js": "df4b318c383b42f37a0fbd3d32e3873f7aa34afa1a6173275657857e92cfc5d2",
+    "tests/syntax-results.json": "f4fcd030c0c43d97f0fc4141b75e2ce75608f93255f992874d2e37a7596d5215"
+  }
+}

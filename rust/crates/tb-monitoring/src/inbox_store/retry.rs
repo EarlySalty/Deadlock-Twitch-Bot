@@ -48,19 +48,12 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Lädt die Politik aus denselben Env-Variablen wie Python; fehlende oder
-    /// ungültige Werte fallen auf [`RetryPolicy::default`] zurück.
-    pub fn from_env() -> Self {
-        let d = Self::default();
+    /// Übernimmt ausschließlich die validierte TOML-Momentaufnahme.
+    pub fn from_config(config: &tb_config::reliability::TransactionRetry) -> Self {
         Self {
-            max_attempts: env_u32_min("TWITCH_ANALYTICS_TX_RETRY_ATTEMPTS", 1)
-                .unwrap_or(d.max_attempts),
-            base_delay: env_secs_f64_min("TWITCH_ANALYTICS_TX_RETRY_BASE_DELAY_SECONDS", 0.01)
-                .map(Duration::from_secs_f64)
-                .unwrap_or(d.base_delay),
-            max_delay: env_secs_f64_min("TWITCH_ANALYTICS_TX_RETRY_MAX_DELAY_SECONDS", 0.05)
-                .map(Duration::from_secs_f64)
-                .unwrap_or(d.max_delay),
+            max_attempts: config.attempts,
+            base_delay: Duration::from_secs_f64(config.base_delay_seconds),
+            max_delay: Duration::from_secs_f64(config.max_delay_seconds),
         }
     }
 
@@ -131,76 +124,15 @@ where
     unreachable!("retry loop must return within max_attempts")
 }
 
-fn env_u32(key: &str) -> Option<u32> {
-    match std::env::var(key) {
-        Ok(raw) if raw.trim().is_empty() => None,
-        Ok(raw) => match raw.trim().parse() {
-            Ok(value) => Some(value),
-            Err(_) => {
-                tracing::warn!(
-                    setting = key,
-                    value = %raw,
-                    "Ungültiger optionaler Inbox-Retry-Env-Wert; Default wird verwendet"
-                );
-                None
-            }
-        },
-        Err(_) => None,
-    }
-}
-
-fn env_secs_f64(key: &str) -> Option<f64> {
-    match std::env::var(key) {
-        Ok(raw) if raw.trim().is_empty() => None,
-        Ok(raw) => match raw.trim().parse::<f64>() {
-            Ok(value) if value.is_finite() => Some(value),
-            _ => {
-                tracing::warn!(
-                    setting = key,
-                    value = %raw,
-                    "Ungültiger optionaler Inbox-Retry-Env-Wert; Default wird verwendet"
-                );
-                None
-            }
-        },
-        Err(_) => None,
-    }
-}
-
-fn env_u32_min(key: &str, min: u32) -> Option<u32> {
-    env_u32(key).map(|value| {
-        if value < min {
-            tracing::warn!(
-                setting = key,
-                value,
-                minimum = min,
-                "Optionaler Inbox-Retry-Env-Wert unter Minimum; Minimum wird verwendet"
-            );
-            min
-        } else {
-            value
-        }
-    })
-}
-
-fn env_secs_f64_min(key: &str, min: f64) -> Option<f64> {
-    env_secs_f64(key).map(|value| {
-        if value < min {
-            tracing::warn!(
-                setting = key,
-                value,
-                minimum = min,
-                "Optionaler Inbox-Retry-Env-Wert unter Minimum; Minimum wird verwendet"
-            );
-            min
-        } else {
-            value
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    mod test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
+
     use super::*;
     use sqlx::PgPool;
     use std::cell::Cell;
@@ -238,17 +170,32 @@ mod tests {
     }
 
     async fn make_pool() -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .ok()
+        let Some(dsn) = test_database::database_url() else {
+            assert!(
+                !test_database::required(),
+                "isolierte Testdatenbank muss konfiguriert sein"
+            );
+            eprintln!("SKIP: keine isolierte Testdatenbank konfiguriert");
+            return None;
+        };
+        Some(
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&dsn)
+                .await
+                .expect("isolierte Testdatenbank muss erreichbar sein"),
+        )
     }
 
     async fn raise_sqlstate(pool: &PgPool, code: &str) -> sqlx::Error {
-        let sql = format!("DO $$ BEGIN RAISE SQLSTATE '{code}'; END $$");
-        match sqlx::query(&sql).execute(pool).await {
+        assert!(
+            code.len() == 5
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        );
+        let sql = format!("DO $body$ BEGIN RAISE SQLSTATE '{code}'; END; $body$");
+        match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
             Ok(_) => panic!("RAISE SQLSTATE {code} unexpectedly succeeded"),
             Err(err) => err,
         }
@@ -263,6 +210,13 @@ mod tests {
             "08000", "08001", "08003", "08004", "08006", "57P01", "57P02", "57P03", "53300",
         ] {
             let err = raise_sqlstate(&pool, code).await;
+            assert_eq!(
+                err.as_database_error()
+                    .and_then(|database_error| database_error.code())
+                    .as_deref(),
+                Some(code),
+                "PostgreSQL muss exakt SQLSTATE {code} liefern"
+            );
             assert!(is_retryable(&err), "{code} muss retrybar sein");
         }
     }

@@ -9,8 +9,9 @@
 //!
 //! Trennung der Transporte:
 //! - **Lesen**: anonymes IRC (`irc.chat.twitch.tv:6667`, CAP `tags`+`commands`).
-//! - **Schreiben**: absichtlich nicht möglich; der anonyme Reader besitzt
-//!   keinen Twitch-Schreib-Transport.
+//! - **Schreiben**: ausschließlich im `smalltalk_live`-Testmodus über den
+//!   separat autorisierten Engagement-Sender. Der Sender prüft die offene
+//!   Session und die <50-Follower-Grenze vor jedem HTTP-Call erneut.
 //!
 //! Kanalquelle: `twitch_engagement_settings` mit `enabled = TRUE AND irc_read =
 //! TRUE`. Die Kanal-Menge ist disjunkt zum EventSub-Pfad → kein Doppel-Processing.
@@ -30,12 +31,12 @@ use tokio::net::TcpStream;
 
 use crate::irc_message::{build_incoming, parse_privmsg};
 use crate::pipeline::EngagementPipeline;
-use crate::sender_auth::SENDER_LOGIN;
+use crate::stealth_sender::StealthSender;
 
 const IRC_HOST: &str = "irc.chat.twitch.tv";
 const IRC_PORT: u16 = 6667;
 const ANON_NICK: &str = "justinfan13371337";
-const CHANNEL_REFRESH_SECONDS: u64 = 300;
+const CHANNEL_REFRESH_SECONDS: u64 = 5;
 const CONNECT_BACKOFF_SECONDS: u64 = 30;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -97,20 +98,33 @@ async fn load_irc_channels(pool: &PgPool) -> Result<HashSet<String>, sqlx::Error
     .collect())
 }
 
+/// Login des aktuell autorisierten Engagement-Senders. Die Identität kommt
+/// direkt aus der OAuth-Tabelle und kann dadurch ohne Codeänderung wechseln.
+async fn load_sender_login(pool: &PgPool) -> Result<String, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT twitch_login FROM twitch_engagement_sender_auth ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_default()
+    .trim()
+    .to_lowercase())
+}
+
 /// Anonymer IRC-Reader, der Chat in die Engagement-Pipeline speist.
 pub struct EngagementIrcReader {
     pool: PgPool,
     pipeline: Arc<EngagementPipeline>,
-    self_login: String,
+    sender: Option<Arc<StealthSender>>,
 }
 
 impl EngagementIrcReader {
-    pub fn new(pool: PgPool, pipeline: Arc<EngagementPipeline>) -> Self {
-        Self {
-            pool,
-            pipeline,
-            self_login: SENDER_LOGIN.to_lowercase(),
-        }
+    pub fn new(
+        pool: PgPool,
+        pipeline: Arc<EngagementPipeline>,
+        sender: Option<Arc<StealthSender>>,
+    ) -> Self {
+        Self { pool, pipeline, sender }
     }
 
     /// Startet den Reader. Sind noch keine `irc_read`-Kanäle konfiguriert,
@@ -126,6 +140,17 @@ impl EngagementIrcReader {
             );
             return;
         }
+        let mut self_login = match load_sender_login(&self.pool).await {
+            Ok(login) => login,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    event = "engagement_irc.sender_login_load_failed",
+                    "Engagement-IRC: Sender-Login nicht lesbar; Echo-Guard startet leer"
+                );
+                String::new()
+            }
+        };
         let pool = self.pool.clone();
         let mut channels = wait_for_channels(Duration::from_secs(CHANNEL_REFRESH_SECONDS), || {
             let pool = pool.clone();
@@ -135,7 +160,7 @@ impl EngagementIrcReader {
         tracing::info!(channels = ?sorted(&channels), "Engagement-IRC-Reader gestartet");
         loop {
             match self.connect().await {
-                Some((reader, writer)) => self.serve(reader, writer, &mut channels).await,
+                Some((reader, writer)) => self.serve(reader, writer, &mut channels, &mut self_login).await,
                 None => tokio::time::sleep(Duration::from_secs(CONNECT_BACKOFF_SECONDS)).await,
             }
         }
@@ -205,6 +230,7 @@ impl EngagementIrcReader {
         mut reader: BufReader<OwnedReadHalf>,
         mut writer: OwnedWriteHalf,
         channels: &mut HashSet<String>,
+        self_login: &mut String,
     ) {
         for ch in channels.iter() {
             join(&mut writer, ch).await;
@@ -223,7 +249,7 @@ impl EngagementIrcReader {
                             tracing::warn!(%error, "Engagement-IRC: Read fehlgeschlagen");
                             break;
                         }
-                        Ok(_) => self.handle_line(line.trim_end(), &mut writer).await,
+                        Ok(_) => self.handle_line(line.trim_end(), &mut writer, self_login).await,
                     }
                 }
                 _ = refresh.tick() => {
@@ -245,12 +271,20 @@ impl EngagementIrcReader {
                             );
                         }
                     }
+                    match load_sender_login(&self.pool).await {
+                        Ok(latest_login) => *self_login = latest_login,
+                        Err(error) => tracing::warn!(
+                            %error,
+                            event = "engagement_irc.sender_login_refresh_failed",
+                            "Engagement-IRC: Sender-Login nicht aktualisiert; letzter Wert bleibt aktiv"
+                        ),
+                    }
                 }
             }
         }
     }
 
-    async fn handle_line(&self, msg: &str, writer: &mut OwnedWriteHalf) {
+    async fn handle_line(&self, msg: &str, writer: &mut OwnedWriteHalf, self_login: &str) {
         if msg.is_empty() {
             return;
         }
@@ -261,15 +295,48 @@ impl EngagementIrcReader {
         let Some(parsed) = parse_privmsg(msg) else {
             return;
         };
-        let Some(incoming) = build_incoming(&parsed, &self.self_login) else {
+        let Some(incoming) = build_incoming(&parsed, self_login) else {
             return;
         };
-        // Lurker bleibt Lurker: Der anonyme Reader kann die Pipeline speisen,
-        // besitzt aber absichtlich keinen Schreib-Transport.
         let pipeline = Arc::clone(&self.pipeline);
+        let sender = self.sender.clone();
         let channel = incoming.channel_login.clone();
+        let broadcaster_id = incoming.channel_user_id.clone();
         match tokio::spawn(async move { pipeline.handle(&incoming).await }).await {
-            Ok(_) => {}
+            Ok(result) => {
+                let Some(text) = result.response_text else {
+                    return;
+                };
+                let Some(sender) = sender else {
+                    tracing::warn!(
+                        event = "smalltalk_loop.send_skipped",
+                        channel = %channel,
+                        reason = "sender_unavailable",
+                    );
+                    return;
+                };
+                match sender
+                    .send_smalltalk_live(&broadcaster_id, &channel, &text)
+                    .await
+                {
+                    Some(true) => tracing::info!(
+                        event = "smalltalk_loop.message_sent",
+                        channel = %channel,
+                        broadcaster_id = %broadcaster_id,
+                        latency_ms = result.latency_ms,
+                    ),
+                    Some(false) => tracing::warn!(
+                        event = "smalltalk_loop.send_failed",
+                        channel = %channel,
+                        broadcaster_id = %broadcaster_id,
+                    ),
+                    None => tracing::warn!(
+                        event = "smalltalk_loop.send_skipped",
+                        channel = %channel,
+                        reason = "sender_not_onboarded",
+                    ),
+                }
+            }
             Err(error) => {
                 tracing::error!(channel = %channel, %error, "Engagement-IRC: Pipeline-Task fehlgeschlagen");
             }
@@ -397,15 +464,15 @@ mod tests {
             .await
             .unwrap();
         let schema = "t_eng_irc_schema_contract";
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .unwrap();
@@ -423,7 +490,7 @@ mod tests {
         .await
         .unwrap();
         assert!(validate_schema(&pool).await.is_ok());
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, false))
             .execute(&pool)
             .await
             .unwrap();
@@ -517,7 +584,7 @@ mod tests {
     fn incoming_aus_privmsg() {
         let line = "@room-id=99;user-id=42;id=m1 :viewer!v@v PRIVMSG #Nani :lohnt sich haze";
         let p = parse_privmsg(line).unwrap();
-        let im = build_incoming(&p, "iamspyingthroughtyourcam").unwrap();
+        let im = build_incoming(&p, "testsender").unwrap();
         assert_eq!(im.channel_login, "nani"); // kleingeschrieben
         assert_eq!(im.twitch_user_id, "42");
         assert_eq!(im.twitch_login, "viewer");
@@ -528,16 +595,16 @@ mod tests {
     #[test]
     fn skip_eigener_account() {
         let line =
-            "@room-id=9;user-id=1 :iamspyingthroughtyourcam!s@s PRIVMSG #nani :test nachricht";
+            "@room-id=9;user-id=1 :testsender!s@s PRIVMSG #nani :test nachricht";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
     }
 
     #[test]
     fn skip_bekannter_bot() {
         let line = "@room-id=9;user-id=1 :nightbot!n@n PRIVMSG #nani :!command output";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
     }
 
     #[test]
@@ -545,17 +612,17 @@ mod tests {
         // Fehlende room-id.
         let line = "@user-id=1 :viewer!v@v PRIVMSG #nani :hallo welt";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
         // Fehlende user-id.
         let line2 = "@room-id=9 :viewer!v@v PRIVMSG #nani :hallo welt";
         let p2 = parse_privmsg(line2).unwrap();
-        assert!(build_incoming(&p2, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p2, "testsender").is_none());
     }
 
     #[test]
     fn skip_leerer_text() {
         let line = "@room-id=9;user-id=1 :viewer!v@v PRIVMSG #nani :   ";
         let p = parse_privmsg(line).unwrap();
-        assert!(build_incoming(&p, "iamspyingthroughtyourcam").is_none());
+        assert!(build_incoming(&p, "testsender").is_none());
     }
 }

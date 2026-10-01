@@ -31,6 +31,7 @@ pub mod partner_gate;
 pub mod partner_login;
 pub mod security;
 pub mod session;
+pub mod steam_openid;
 pub(crate) mod streamer_scope;
 
 #[cfg(test)]

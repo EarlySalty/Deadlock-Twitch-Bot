@@ -398,6 +398,62 @@ impl HelixClient {
         }
         Ok(out)
     }
+
+    pub async fn get_shared_chat_logins(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Vec<String>, HelixError> {
+        Ok(self
+            .get_shared_chat_users(broadcaster_id)
+            .await?
+            .into_iter()
+            .map(|user| user.login.to_lowercase())
+            .collect())
+    }
+
+    pub async fn get_shared_chat_users(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Vec<TwitchUser>, HelixError> {
+        let mut ids: Vec<String> = self
+            .get_shared_chat_session(broadcaster_id)
+            .await?
+            .into_iter()
+            .flat_map(|session| session.participants)
+            .map(|p| p.broadcaster_id)
+            .filter(|id| !id.trim().is_empty() && id != broadcaster_id)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stream_ids = ids.clone();
+        stream_ids.push(broadcaster_id.to_string());
+        let streams = self.get_streams_by_user_ids(&stream_ids, None).await?;
+        if !streams
+            .iter()
+            .any(|stream| stream.user_id == broadcaster_id)
+        {
+            return Ok(Vec::new());
+        }
+        let mut live: std::collections::HashMap<_, _> = streams
+            .into_iter()
+            .map(|stream| (stream.user_id.clone(), stream))
+            .collect();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| live.remove(&id))
+            .map(|stream| TwitchUser {
+                id: stream.user_id,
+                login: stream.user_login,
+                display_name: stream.user_name,
+                description: String::new(),
+                profile_image_url: None,
+                offline_image_url: None,
+            })
+            .collect())
+    }
 }
 
 /// Prüft den HTTP-Status einer Helix-Response und deserialisiert den Body.
@@ -423,7 +479,11 @@ pub struct TwitchUser {
     pub login: String,
     pub display_name: String,
     #[serde(default)]
+    pub description: String,
+    #[serde(default)]
     pub profile_image_url: Option<String>,
+    #[serde(default)]
+    pub offline_image_url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -457,6 +517,134 @@ mod tests {
             token_url: token_url.to_string(),
             helix_base: helix_base.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn review_shared_chat_nur_mit_laufenden_streams() {
+        let server = MockServer::start().await;
+        Mock::given(path("/oauth2/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"access_token":"test-token", "expires_in":3600}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/helix/shared_chat/session"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"session_id":"test-session","host_broadcaster_id":"100","created_at":"2026-09-30T12:00:00Z","updated_at":"2026-09-30T12:00:00Z","participants":[{"broadcaster_id":"100"},{"broadcaster_id":"200"},{"broadcaster_id":"300"}]}]})))
+            .mount(&server).await;
+        Mock::given(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"id":"200","login":"live","display_name":"Live"},{"id":"300","login":"offline","display_name":"Offline"}]})))
+            .mount(&server).await;
+        let client = HelixClient::new(test_config(
+            &format!("{}/oauth2/token", server.uri()),
+            &format!("{}/helix", server.uri()),
+        ))
+        .unwrap();
+        let live = Mock::given(path("/helix/streams"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{"user_id":"100","user_login":"self"},{"user_id":"200","user_login":"live"}]})))
+            .mount_as_scoped(&server).await;
+        let users = client.get_shared_chat_users("100").await.unwrap();
+        assert_eq!(
+            users.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),
+            ["200"]
+        );
+        drop(live);
+        Mock::given(path("/helix/streams"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"data":[{"user_id":"200","user_login":"live"}]}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        assert!(client
+            .get_shared_chat_users("100")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn nachtrag3_shared_chat_behaelt_ids_ohne_namensabgleich() {
+        use wiremock::matchers::query_param;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-app-token", "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "100"))
+            .and(header("Authorization", "Bearer test-app-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"session_id":"test-session", "host_broadcaster_id":"100", "created_at":"2026-09-30T12:00:00Z", "updated_at":"2026-09-30T12:00:00Z", "participants": [
+                    {"broadcaster_id": "300"}, {"broadcaster_id": "100"},
+                    {"broadcaster_id": "200"}, {"broadcaster_id": "200"},
+                    {"broadcaster_id": "400"}
+                ]}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("user_id", "100"))
+            .and(query_param("user_id", "200"))
+            .and(query_param("user_id", "300"))
+            .and(query_param("user_id", "400"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"user_id": "100", "user_login": "myself"},
+                    {"user_id": "300", "user_login": "renamed", "user_name": "Someone Else"},
+                    {"user_id": "200", "user_login": "shared", "user_name": "renamed"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = HelixClient::new(test_config(
+            &format!("{}/oauth2/token", server.uri()),
+            &format!("{}/helix", server.uri()),
+        ))
+        .unwrap();
+        let users = client.get_shared_chat_users("100").await.unwrap();
+        assert_eq!(
+            users
+                .iter()
+                .map(|u| (u.id.as_str(), u.login.as_str()))
+                .collect::<Vec<_>>(),
+            [("200", "shared"), ("300", "renamed")]
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "500"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(client
+            .get_shared_chat_users("500")
+            .await
+            .unwrap()
+            .is_empty());
+        Mock::given(method("GET"))
+            .and(path("/helix/shared_chat/session"))
+            .and(query_param("broadcaster_id", "600"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            client.get_shared_chat_users("600").await,
+            Err(HelixError::Status { status: 401 })
+        ));
     }
 
     #[tokio::test]

@@ -20,14 +20,25 @@ pub struct ChatBadge {
     pub info: String,
 }
 
+/// Aufgelöster Mention-Verweis (`event.message.fragments[].mention`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MentionRef {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub user_login: String,
+}
+
 /// Nachrichten-Fragment (`event.message.fragments[]`) — Typ `text`,
 /// `cheermote`, `emote` oder `mention`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct MessageFragment {
     #[serde(rename = "type")]
     pub fragment_type: String,
     #[serde(default)]
     pub text: String,
+    #[serde(default)]
+    pub mention: Option<MentionRef>,
 }
 
 /// `event.message` von `channel.chat.message`.
@@ -37,6 +48,16 @@ pub struct ChatMessageBody {
     pub text: String,
     #[serde(default)]
     pub fragments: Vec<MessageFragment>,
+}
+
+/// `event.reply` von `channel.chat.message`: gesetzt, wenn die Nachricht eine
+/// Antwort auf eine andere Nachricht ist.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChatReply {
+    #[serde(default)]
+    pub parent_user_id: String,
+    #[serde(default)]
+    pub parent_user_login: String,
 }
 
 /// EventSub `channel.chat.message` (v1) — die für uns relevanten Felder.
@@ -68,6 +89,8 @@ pub struct ChatMessageEvent {
     pub source_broadcaster_user_login: Option<String>,
     #[serde(default)]
     pub source_message_id: Option<String>,
+    #[serde(default)]
+    pub reply: Option<ChatReply>,
 }
 
 impl ChatMessageEvent {
@@ -160,6 +183,7 @@ mod tests {
             source_broadcaster_user_id: None,
             source_broadcaster_user_login: None,
             source_message_id: None,
+            reply: None,
         }
     }
 
@@ -229,5 +253,70 @@ mod tests {
         });
         let ev2: ChatMessageEvent = serde_json::from_value(without).unwrap();
         assert!(ev2.source_broadcaster_user_id.is_none());
+    }
+
+    #[test]
+    fn deserialisiert_reply_block_und_mention_fragment() {
+        let payload = serde_json::json!({
+            "broadcaster_user_id": "100",
+            "broadcaster_user_login": "marcy",
+            "broadcaster_user_name": "Marcy",
+            "chatter_user_id": "200",
+            "chatter_user_login": "viewer",
+            "chatter_user_name": "Viewer",
+            "message_id": "abc",
+            "message": {
+                "text": "@marcy schön eingeranked?",
+                "fragments": [
+                    {
+                        "type": "mention",
+                        "text": "@marcy",
+                        "mention": {
+                            "user_id": "1",
+                            "user_login": "marcy",
+                            "user_name": "Marcy"
+                        }
+                    }
+                ]
+            },
+            "reply": {
+                "parent_message_id": "p1",
+                "parent_message_body": "hi",
+                "parent_user_id": "1",
+                "parent_user_login": "marcy",
+                "parent_user_name": "Marcy",
+                "thread_message_id": "t1",
+                "thread_user_id": "1",
+                "thread_user_login": "marcy",
+                "thread_user_name": "Marcy"
+            }
+        });
+        let ev: ChatMessageEvent = serde_json::from_value(payload).unwrap();
+        let reply = ev.reply.expect("reply-Block muss deserialisieren");
+        assert_eq!(reply.parent_user_id, "1");
+        assert_eq!(reply.parent_user_login, "marcy");
+        let fragment = &ev.message.fragments[0];
+        assert_eq!(fragment.fragment_type, "mention");
+        let mention = fragment.mention.as_ref().expect("mention-Objekt");
+        assert_eq!(mention.user_id, "1");
+        assert_eq!(mention.user_login, "marcy");
+    }
+
+    #[test]
+    fn deserialisiert_ohne_reply_und_mention_ist_none() {
+        let payload = serde_json::json!({
+            "broadcaster_user_id": "100",
+            "broadcaster_user_login": "marcy",
+            "chatter_user_id": "200",
+            "chatter_user_login": "viewer",
+            "message_id": "abc",
+            "message": {
+                "text": "hallo",
+                "fragments": [{"type": "text", "text": "hallo"}]
+            }
+        });
+        let ev: ChatMessageEvent = serde_json::from_value(payload).unwrap();
+        assert!(ev.reply.is_none());
+        assert!(ev.message.fragments[0].mention.is_none());
     }
 }

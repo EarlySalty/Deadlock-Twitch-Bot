@@ -201,7 +201,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(body_string_contains(
-                tb_llm::selection::FIREWORKS_DEFAULT_MODEL,
+                tb_llm::selection::configured_fireworks_model(),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "choices": [{"message": {"content": inner_json()}}],
@@ -212,13 +212,13 @@ mod tests {
         let provider = FireworksProvider::for_test(tb_llm::LlmEndpoint {
             provider: "fireworks",
             base_url: server.uri(),
-            model: tb_llm::selection::FIREWORKS_DEFAULT_MODEL.to_string(),
+            model: tb_llm::selection::configured_fireworks_model().to_string(),
             api_key: Some("test-key".to_string()),
         });
 
         let response = provider.generate(&LlmRequest::default()).await.unwrap();
         assert_eq!(response.provider, "fireworks");
-        assert_eq!(response.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(response.model, tb_llm::selection::configured_fireworks_model());
         assert_eq!(response.youtube.title.as_deref(), Some("YT"));
         assert_eq!(response.cost_usd_estimate, Some(0.0018));
     }

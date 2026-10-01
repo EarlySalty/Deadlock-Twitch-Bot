@@ -15,9 +15,10 @@
 //!
 //! # Anbieter
 //!
-//! Ausschließlich **DeepSeek V4 Flash bei Fireworks**. Ohne Fireworks-Schlüssel
-//! schlägt der Connector geschlossen fehl. Altanbieter, Provider-Overrides und
-//! Modell-Overrides werden nicht verwendet.
+//! Fireworks verwendet die neueste geprüfte **DeepSeek-Flash-Version** gemäß
+//! der zentralen lokalen Auswahl. Auch `title_ai` nutzt diese Familie.
+//! Ohne Schlüssel oder geprüftes Modell schlägt der
+//! Connector geschlossen fehl. Modell-ENV-Overrides werden nicht verwendet.
 //!
 //! # Ledger
 //!
@@ -31,9 +32,11 @@
 //! Schlüssel kommen ausschließlich aus der Umgebung (Infisical/systemd) über
 //! den konsolidierten Resolver [`keys`] und werden NIE geloggt.
 
+pub mod daily_model_resolver;
 pub mod hub;
 pub mod keys;
 pub mod ledger;
+pub mod model_resolver;
 pub mod selection;
 
 #[cfg(feature = "local-eval")]

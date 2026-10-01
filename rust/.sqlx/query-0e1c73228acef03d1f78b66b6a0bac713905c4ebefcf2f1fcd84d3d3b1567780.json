@@ -6,47 +6,101 @@
       {
         "ordinal": 0,
         "name": "id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "twitch_user_id!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "twitch_user_id"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "twitch_login!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "twitch_login"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "channel_login",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "channel_login"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "thread_type!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "thread_type"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "summary!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "summary"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "due_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "due_at"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "status!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "status"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "last_referenced_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_user_threads",
+            "name": "last_referenced_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -300,15 +300,17 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");

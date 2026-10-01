@@ -14,7 +14,7 @@
 
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::collections::HashSet;
 
 pub const PROMO_MODE_STANDARD: &str = "standard";
@@ -36,6 +36,7 @@ fn is_allowed_placeholder(root: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromoModeConfig {
     pub mode: String,
+    pub announcement_color: String,
     pub custom_message: String,
     pub starts_at: Option<String>,
     pub ends_at: Option<String>,
@@ -49,6 +50,7 @@ impl PromoModeConfig {
     pub fn default_config() -> Self {
         Self {
             mode: PROMO_MODE_STANDARD.to_string(),
+            announcement_color: "purple".to_string(),
             custom_message: String::new(),
             starts_at: None,
             ends_at: None,
@@ -62,6 +64,7 @@ impl PromoModeConfig {
     pub fn to_json(&self) -> Value {
         json!({
             "mode": self.mode,
+            "announcement_color": self.announcement_color,
             "custom_message": self.custom_message,
             "starts_at": self.starts_at,
             "ends_at": self.ends_at,
@@ -208,6 +211,11 @@ pub fn normalize_global_promo_mode_config(raw: &Value) -> PromoModeConfig {
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim()
+        .to_string();
+    config.announcement_color = obj
+        .get("announcement_color")
+        .and_then(Value::as_str)
+        .unwrap_or("purple")
         .to_string();
     config.starts_at = to_iso_utc(obj.get("starts_at").and_then(value_as_str).as_deref());
     config.ends_at = to_iso_utc(obj.get("ends_at").and_then(value_as_str).as_deref());
@@ -377,6 +385,18 @@ pub fn validate_streamer_promo_message(message: &str) -> Vec<ValidationIssue> {
 pub fn validate_global_promo_mode_config(raw: &Value) -> (PromoModeConfig, Vec<ValidationIssue>) {
     let config = normalize_global_promo_mode_config(raw);
     let mut issues: Vec<ValidationIssue> = Vec::new();
+    if raw.get("announcement_color").is_some_and(|color| {
+        !matches!(
+            color.as_str(),
+            Some("primary" | "blue" | "green" | "orange" | "purple")
+        )
+    }) {
+        issues.push(ValidationIssue::new(
+            "announcement_color",
+            "Erlaubte Farben: Kanalfarbe, Blau, Grün, Orange und Lila.",
+            "invalid_color",
+        ));
+    }
 
     let raw_mode = raw
         .as_object()
@@ -488,7 +508,7 @@ pub fn evaluate_global_promo_mode(raw: &Value, now: Option<DateTime<Utc>>) -> Pr
 async fn validate_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "SELECT config_key, mode, custom_message, starts_at, ends_at, is_enabled, \
-                updated_at, updated_by \
+                updated_at, updated_by, announcement_color \
          FROM twitch_global_promo_modes LIMIT 0",
     )
     .execute(pool)
@@ -499,11 +519,11 @@ async fn validate_global_promo_mode_storage(pool: &PgPool) -> Result<(), sqlx::E
 /// Lädt den Singleton-Datensatz, normalisiert (Python `load_global_promo_mode`).
 pub async fn load_global_promo_mode(pool: &PgPool) -> Result<PromoModeConfig, sqlx::Error> {
     validate_global_promo_mode_storage(pool).await?;
-    let row = sqlx::query!(
-        "SELECT mode AS \"mode!\", custom_message, starts_at, ends_at, is_enabled AS \"is_enabled!\", updated_at, updated_by \
-         FROM twitch_global_promo_modes WHERE config_key = $1 LIMIT 1",
-        PROMO_MODE_SINGLETON_KEY
+    let row = sqlx::query(
+        "SELECT mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by, announcement_color \
+         FROM twitch_global_promo_modes WHERE config_key = $1 LIMIT 1"
     )
+    .bind(PROMO_MODE_SINGLETON_KEY)
     .fetch_optional(pool)
     .await?;
 
@@ -511,13 +531,14 @@ pub async fn load_global_promo_mode(pool: &PgPool) -> Result<PromoModeConfig, sq
         return Ok(PromoModeConfig::default_config());
     };
     let raw = json!({
-        "mode": row.mode,
-        "custom_message": row.custom_message,
-        "starts_at": row.starts_at,
-        "ends_at": row.ends_at,
-        "is_enabled": row.is_enabled,
-        "updated_at": row.updated_at,
-        "updated_by": row.updated_by,
+        "mode": row.try_get::<String, _>("mode")?,
+        "custom_message": row.try_get::<Option<String>, _>("custom_message")?,
+        "starts_at": row.try_get::<Option<String>, _>("starts_at")?,
+        "ends_at": row.try_get::<Option<String>, _>("ends_at")?,
+        "is_enabled": row.try_get::<i32, _>("is_enabled")?,
+        "updated_at": row.try_get::<Option<String>, _>("updated_at")?,
+        "updated_by": row.try_get::<Option<String>, _>("updated_by")?,
+        "announcement_color": row.try_get::<String, _>("announcement_color")?,
     });
     Ok(normalize_global_promo_mode_config(&raw))
 }
@@ -547,6 +568,20 @@ impl From<sqlx::Error> for SavePromoModeError {
 }
 
 /// Validiert + speichert die Config (Python `save_global_promo_mode`).
+fn is_color_only_update(raw: &Value) -> bool {
+    raw.get("announcement_color").is_some()
+        && [
+            "mode",
+            "custom_message",
+            "starts_at",
+            "ends_at",
+            "is_enabled",
+        ]
+        .iter()
+        .all(|key| raw.get(key).is_none())
+}
+
+/// Speichert Vollkonfiguration oder eine isolierte Farbanpassung.
 pub async fn save_global_promo_mode(
     pool: &PgPool,
     raw_config: &Value,
@@ -558,6 +593,25 @@ pub async fn save_global_promo_mode(
         return Err(SavePromoModeError::Validation(first.message.clone()));
     }
 
+    // Eine reine Farbanpassung berührt weder Text, Modus noch das Zeitfenster.
+    // Das Teilupdate bewahrt auch parallele Änderungen anderer Admin-Sessions.
+    if is_color_only_update(raw_config) {
+        sqlx::query(
+            "INSERT INTO twitch_global_promo_modes \
+             (config_key, announcement_color, updated_at, updated_by) VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (config_key) DO UPDATE SET \
+             announcement_color = EXCLUDED.announcement_color, \
+             updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by",
+        )
+        .bind(PROMO_MODE_SINGLETON_KEY)
+        .bind(&normalized.announcement_color)
+        .bind(iso_seconds(&Utc::now()))
+        .bind(updated_by.trim())
+        .execute(pool)
+        .await?;
+        return Ok(load_global_promo_mode(pool).await?);
+    }
+
     let updated_at = iso_seconds(&Utc::now());
     let updated_by = updated_by.trim();
     let custom_message = if normalized.custom_message.is_empty() {
@@ -565,11 +619,12 @@ pub async fn save_global_promo_mode(
     } else {
         Some(normalized.custom_message.as_str())
     };
-    sqlx::query!(
+    let requested_color = raw_config.get("announcement_color").and_then(Value::as_str);
+    let row = sqlx::query(
         r#"
         INSERT INTO twitch_global_promo_modes (
-            config_key, mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            config_key, mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by, announcement_color
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'purple'))
         ON CONFLICT (config_key) DO UPDATE SET
             mode = EXCLUDED.mode,
             custom_message = EXCLUDED.custom_message,
@@ -577,26 +632,30 @@ pub async fn save_global_promo_mode(
             ends_at = EXCLUDED.ends_at,
             is_enabled = EXCLUDED.is_enabled,
             updated_at = EXCLUDED.updated_at,
-            updated_by = EXCLUDED.updated_by
-        "#,
-        PROMO_MODE_SINGLETON_KEY,
-        &normalized.mode,
-        custom_message,
-        normalized.starts_at.as_deref(),
-        normalized.ends_at.as_deref(),
-        if normalized.is_enabled { 1_i32 } else { 0_i32 },
-        &updated_at,
-        if updated_by.is_empty() {
+            updated_by = EXCLUDED.updated_by,
+            announcement_color = COALESCE($9, twitch_global_promo_modes.announcement_color)
+        RETURNING announcement_color
+        "#
+    )
+    .bind(PROMO_MODE_SINGLETON_KEY)
+    .bind(&normalized.mode)
+    .bind(custom_message)
+    .bind(normalized.starts_at.as_deref())
+    .bind(normalized.ends_at.as_deref())
+    .bind(if normalized.is_enabled { 1_i32 } else { 0_i32 })
+    .bind(&updated_at)
+    .bind(if updated_by.is_empty() {
             None
         } else {
             Some(updated_by)
-        }
-    )
-    .execute(pool)
+        })
+    .bind(requested_color)
+    .fetch_one(pool)
     .await?;
 
     let raw = json!({
         "mode": normalized.mode,
+        "announcement_color": row.try_get::<String, _>("announcement_color")?,
         "custom_message": normalized.custom_message,
         "starts_at": normalized.starts_at,
         "ends_at": normalized.ends_at,
@@ -610,6 +669,46 @@ pub async fn save_global_promo_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn farbteilupdate_erkennt_nur_farbe_auch_mit_csrf() {
+        assert!(is_color_only_update(
+            &json!({"announcement_color": "blue", "csrf_token": "test"})
+        ));
+        for key in [
+            "mode",
+            "custom_message",
+            "starts_at",
+            "ends_at",
+            "is_enabled",
+        ] {
+            let mut request = json!({"announcement_color": "blue"});
+            request[key] = Value::Null;
+            assert!(!is_color_only_update(&request), "{key}");
+        }
+        assert!(!is_color_only_update(&json!({})));
+    }
+
+    #[test]
+    fn announcement_farben_nur_twitch_werte() {
+        for color in ["primary", "blue", "green", "orange", "purple"] {
+            let (config, issues) =
+                validate_global_promo_mode_config(&json!({"announcement_color": color}));
+            assert!(issues.is_empty(), "{color}: {issues:?}");
+            assert_eq!(config.to_json()["announcement_color"], color);
+        }
+        for color in [json!("#ff0000"), json!("RED"), json!(null), json!(3)] {
+            let (_, issues) =
+                validate_global_promo_mode_config(&json!({"announcement_color": color}));
+            assert!(issues
+                .iter()
+                .any(|issue| issue.field == "announcement_color"));
+        }
+        assert_eq!(
+            normalize_global_promo_mode_config(&json!({})).announcement_color,
+            "purple"
+        );
+    }
 
     #[test]
     fn default_ist_standard_inaktiv() {
@@ -744,15 +843,15 @@ mod tests {
             .await
             .unwrap();
         let schema = "t_promo_mode_schema_contract";
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .unwrap();
@@ -761,7 +860,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE twitch_global_promo_modes (\
                 config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', \
-                custom_message TEXT, starts_at TEXT, ends_at TEXT, \
+                custom_message TEXT, announcement_color TEXT NOT NULL DEFAULT 'purple', starts_at TEXT, ends_at TEXT, \
                 is_enabled INTEGER NOT NULL DEFAULT 0, \
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
         )
@@ -770,7 +869,7 @@ mod tests {
         .unwrap();
         assert!(validate_global_promo_mode_storage(&pool).await.is_ok());
 
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, false))
             .execute(&pool)
             .await
             .unwrap();

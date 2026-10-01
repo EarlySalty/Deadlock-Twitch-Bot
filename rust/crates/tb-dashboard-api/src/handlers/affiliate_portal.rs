@@ -357,11 +357,13 @@ mod tests {
             .connect(&dsn)
             .await
             .ok()?;
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .ok()?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;

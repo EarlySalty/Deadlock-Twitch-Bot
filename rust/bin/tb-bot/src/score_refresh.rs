@@ -17,7 +17,10 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use chrono_tz::Europe::Berlin;
 use sqlx::PgPool;
 use tb_raid::courtesy_store::CourtesyStore;
-use tb_raid::{compute_scores, PartnerRaidScoreUpsert, ScoreStore, ScoringInputs};
+use tb_raid::{
+    combined_raid_boost_enabled, compute_final_score, compute_scores, MonthlyRaidBoostStore,
+    PartnerRaidScoreUpsert, ScoreStore, ScoringInputs,
+};
 
 /// Anzahl Tage Lookback für Sessions (identisch zu Python LOOKBACK_DAYS = 45, Z. 19).
 const LOOKBACK_DAYS: i64 = 45;
@@ -63,6 +66,8 @@ struct InternalMetrics {
     sent_30d: i64,
     received_30d: i64,
     received_7d: i64,
+    sent_viewers_30d: i64,
+    received_viewers_30d: i64,
 }
 
 /// Boost-Zeile aus `streamer_plans` für einen Partner.
@@ -112,16 +117,19 @@ pub struct ScoreRefreshResolver {
     pool: PgPool,
     score_store: ScoreStore,
     courtesy_store: CourtesyStore,
+    monthly_boost_store: MonthlyRaidBoostStore,
 }
 
 impl ScoreRefreshResolver {
     pub fn new(pool: PgPool) -> Self {
         let score_store = ScoreStore::new(pool.clone());
         let courtesy_store = CourtesyStore::new(pool.clone());
+        let monthly_boost_store = MonthlyRaidBoostStore::new(pool.clone());
         Self {
             pool,
             score_store,
             courtesy_store,
+            monthly_boost_store,
         }
     }
 
@@ -138,7 +146,9 @@ impl ScoreRefreshResolver {
         partner_user_ids: &[(String, String)],
         now: DateTime<Utc>,
     ) -> Result<usize, sqlx::Error> {
-        let upserts = self.compute_upserts(partner_user_ids, now).await?;
+        let upserts = self
+            .compute_upserts_internal(partner_user_ids, now, true)
+            .await?;
         let mut written = 0usize;
         for upsert in &upserts {
             self.score_store.upsert(upsert).await?;
@@ -147,13 +157,23 @@ impl ScoreRefreshResolver {
         Ok(written)
     }
 
-    /// Compute-only-Pfad: berechnet die Score-Zeilen ohne zu schreiben.
-    /// Genutzt vom `refresh_scores`-Schreibpfad und vom read-only
-    /// Prod-Cross-Check (Pre-Cutover-Gate).
+    /// Compute-only-Pfad: liest den persistierten Boost, ohne Streams zu
+    /// reservieren oder zu verbrauchen. Auch mit read-only DB-Rolle nutzbar.
+    /// Genutzt vom Prod-Cross-Check (Pre-Cutover-Gate).
     pub async fn compute_upserts(
         &self,
         partner_user_ids: &[(String, String)],
         now: DateTime<Utc>,
+    ) -> Result<Vec<PartnerRaidScoreUpsert>, sqlx::Error> {
+        self.compute_upserts_internal(partner_user_ids, now, false)
+            .await
+    }
+
+    async fn compute_upserts_internal(
+        &self,
+        partner_user_ids: &[(String, String)],
+        now: DateTime<Utc>,
+        reconcile_streams: bool,
     ) -> Result<Vec<PartnerRaidScoreUpsert>, sqlx::Error> {
         if partner_user_ids.is_empty() {
             return Ok(Vec::new());
@@ -224,11 +244,22 @@ impl ScoreRefreshResolver {
                 .get(user_id.as_str())
                 .copied()
                 .unwrap_or_default();
-            let boost = boost_flags
+            let plan_boost = boost_flags
                 .iter()
                 .find(|b| b.twitch_user_id == *user_id)
                 .map(|b| boost_active(b, now))
                 .unwrap_or(false);
+            let seasonal_boost_active = if reconcile_streams {
+                self.monthly_boost_store
+                    .reconcile_partner(user_id, login, now)
+                    .await?
+                    .stream_boost_active
+            } else {
+                self.monthly_boost_store
+                    .reserved_stream_boost_active(user_id)
+                    .await?
+            };
+            let boost = combined_raid_boost_enabled(plan_boost, seasonal_boost_active);
 
             let courtesy = courtesy_by_id
                 .get(user_id.as_str())
@@ -261,6 +292,7 @@ impl ScoreRefreshResolver {
                 time_pattern_score,
                 readiness_score,
                 fairness_score,
+                viewer_fairness_score,
                 base_score,
                 final_score,
             ) = match (is_live_flag, cached) {
@@ -272,8 +304,19 @@ impl ScoreRefreshResolver {
                         c.time_pattern_score,
                         c.readiness_score,
                         c.fairness_score,
+                        c.viewer_fairness_score,
                         c.base_score,
-                        c.final_score,
+                        if (c.raid_boost_multiplier - scores.raid_boost_multiplier).abs()
+                            > f64::EPSILON
+                        {
+                            compute_final_score(
+                                c.base_score,
+                                c.new_partner_multiplier,
+                                scores.raid_boost_multiplier,
+                            )
+                        } else {
+                            c.final_score
+                        },
                     )
                 }
                 _ => (
@@ -281,6 +324,7 @@ impl ScoreRefreshResolver {
                     scores.time_pattern_score,
                     scores.readiness_score,
                     scores.fairness_score,
+                    scores.viewer_fairness_score,
                     scores.base_score,
                     scores.final_score,
                 ),
@@ -306,11 +350,14 @@ impl ScoreRefreshResolver {
                 time_pattern_score,
                 readiness_score,
                 fairness_score,
+                viewer_fairness_score,
                 base_score,
                 final_score,
                 internal_sent_raids_30d: metrics.sent_30d as i32,
                 internal_received_raids_30d: metrics.received_30d as i32,
                 internal_received_raids_7d: metrics.received_7d as i32,
+                sent_viewers_30d: metrics.sent_viewers_30d,
+                received_viewers_30d: metrics.received_viewers_30d,
                 today_received_raids: inputs.today_received_raids as i32,
                 last_computed_at: now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
                 // Courtesy hängt an der Raid-Historie, nicht am Live-Zustand:
@@ -409,6 +456,8 @@ fn build_scoring_inputs(ctx: &PartnerBuildCtx<'_>) -> ScoringInputs {
         internal_received_raids_7d: metrics.received_7d,
         today_received_raids: today_received_raids as i64,
         courtesy_score: ctx.courtesy_score,
+        sent_viewers_30d: metrics.sent_viewers_30d,
+        received_viewers_30d: metrics.received_viewers_30d,
     }
 }
 
@@ -669,9 +718,10 @@ async fn load_internal_metrics(
     let cutoff_30d = now - chrono::Duration::days(30);
     let cutoff_7d = now - chrono::Duration::days(7);
 
-    // Query 1: sent_30d — wer hat wie viele Raids gesendet?
-    let sent_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT from_broadcaster_id, COUNT(*)::bigint AS cnt \
+    // Query 1: sent_30d — wer hat wie viele Raids (und Zuschauer) gesendet?
+    let sent_rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT from_broadcaster_id, COUNT(*)::bigint AS cnt, \
+                COALESCE(SUM(viewer_count), 0)::bigint AS viewers \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE \
            AND from_broadcaster_id = ANY($1) \
@@ -683,15 +733,17 @@ async fn load_internal_metrics(
     .bind(cutoff_30d)
     .fetch_all(pool)
     .await?;
-    for (uid, cnt) in sent_rows {
+    for (uid, cnt, viewers) in sent_rows {
         if let Some(m) = map.get_mut(&uid) {
             m.sent_30d = cnt;
+            m.sent_viewers_30d = viewers;
         }
     }
 
     // Query 2: received_30d
-    let recv_30d_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT to_broadcaster_id, COUNT(*)::bigint AS cnt \
+    let recv_30d_rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT to_broadcaster_id, COUNT(*)::bigint AS cnt, \
+                COALESCE(SUM(viewer_count), 0)::bigint AS viewers \
          FROM twitch_raid_history \
          WHERE COALESCE(success, FALSE) IS TRUE \
            AND from_broadcaster_id = ANY($1) \
@@ -703,9 +755,10 @@ async fn load_internal_metrics(
     .bind(cutoff_30d)
     .fetch_all(pool)
     .await?;
-    for (uid, cnt) in recv_30d_rows {
+    for (uid, cnt, viewers) in recv_30d_rows {
         if let Some(m) = map.get_mut(&uid) {
             m.received_30d = cnt;
+            m.received_viewers_30d = viewers;
         }
     }
 
@@ -852,9 +905,8 @@ mod tests {
         // geprüft über den Override-Ablauf, der Parser selbst liegt jetzt in
         // tb-analytics (`parse_datetime_value`).
         let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
-        let abgelaufen = |raw: &str| {
-            !boost_active(&boost_row(0, "", "bundle_komplett", Some(raw)), now)
-        };
+        let abgelaufen =
+            |raw: &str| !boost_active(&boost_row(0, "", "bundle_komplett", Some(raw)), now);
         assert!(abgelaufen("2026-01-01T00:00:00+00:00"));
         assert!(abgelaufen("2026-01-01T00:00:00Z"));
         assert!(abgelaufen("2026-01-01T00:00:00"));
@@ -1035,11 +1087,11 @@ mod tests {
             .connect(&url)
             .await
             .expect("DB-Verbindung fehlgeschlagen");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -1110,6 +1162,7 @@ mod tests {
                 id                   BIGSERIAL PRIMARY KEY,
                 from_broadcaster_id  TEXT NOT NULL,
                 to_broadcaster_id    TEXT NOT NULL,
+                viewer_count         INTEGER DEFAULT 0,
                 executed_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 success              BOOLEAN
             )
@@ -1152,11 +1205,14 @@ mod tests {
                 time_pattern_score           DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 readiness_score              DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 fairness_score               DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                viewer_fairness_score        DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 base_score                   DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 final_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
                 internal_sent_raids_30d      INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_30d  INTEGER NOT NULL DEFAULT 0,
                 internal_received_raids_7d   INTEGER NOT NULL DEFAULT 0,
+                sent_viewers_30d             BIGINT NOT NULL DEFAULT 0,
+                received_viewers_30d         BIGINT NOT NULL DEFAULT 0,
                 today_received_raids         INTEGER NOT NULL DEFAULT 0,
                 last_computed_at             TEXT NOT NULL DEFAULT '',
                 courtesy_score               DOUBLE PRECISION NOT NULL DEFAULT 1.0,

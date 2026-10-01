@@ -5,15 +5,16 @@
 //!
 //! **Nicht automatisch starten** — Start ist user-gated (erfordert echtes DSN).
 
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use tb_config::Settings;
-use tb_dashboard_api::build_router_with_helix;
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
+#[cfg(test)]
 const DASHBOARD_SERVICE_PORT: u16 = 8765;
 const MASTER_API_RESERVED_PORT: u16 = 8766;
 const ROLE_DASHBOARD: &str = "dashboard";
@@ -52,31 +53,6 @@ fn optional_env_bool(name: &str, default: bool) -> bool {
         }
         Err(_) => default,
     }
-}
-
-fn optional_env_u16(name: &str, default: u16) -> Option<u16> {
-    match std::env::var(name) {
-        Ok(value) if value.trim().is_empty() => None,
-        Ok(value) => match value.trim().parse::<u16>() {
-            Ok(parsed) if parsed > 0 => Some(parsed),
-            _ => {
-                tracing::warn!(
-                    setting = name,
-                    value = %value,
-                    default,
-                    "Ungültiger optionaler Port-Env-Wert; Default wird verwendet"
-                );
-                Some(default)
-            }
-        },
-        Err(_) => None,
-    }
-}
-
-fn dashboard_port_from_env() -> u16 {
-    optional_env_u16("DASHBOARD_PORT", DASHBOARD_SERVICE_PORT)
-        .or_else(|| optional_env_u16("TWITCH_DASHBOARD_PORT", DASHBOARD_SERVICE_PORT))
-        .unwrap_or(DASHBOARD_SERVICE_PORT)
 }
 
 fn split_runtime_enforced() -> bool {
@@ -315,14 +291,43 @@ fn spawn_affiliate_gutschrift_loop(pool: sqlx::PgPool) {
     });
 }
 
+fn spawn_clip_contest_finalize_loop(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+        let mut tick = tokio::time::interval(INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            tb_dashboard_api::handlers::clip_contest::finalize_due_months(&pool).await;
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
+    if print_build_revision() {
+        return;
+    }
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if arguments
         .iter()
         .any(|argument| argument == "--uplink-migrate")
     {
         let result = async {
+            // Der Dienstwrapper ergänzt --config. Der reine Uplink-Migrator
+            // startet keinen Dashboardprozess und benötigt keinen Snapshot.
+            let arguments = if arguments.iter().any(|argument| {
+                argument == "--config"
+                    || argument
+                        .to_str()
+                        .is_some_and(|value| value.starts_with("--config="))
+            }) {
+                tb_config::file::ConfigArguments::parse(arguments.clone())
+                    .map_err(|_| "Ungültiger Konfigurationspfad für den Uplink-Migrator.")?
+                    .remaining
+            } else {
+                arguments.clone()
+            };
             if arguments.len() != 3
                 || arguments[0] != "--uplink-config"
                 || arguments[2] != "--uplink-migrate"
@@ -356,25 +361,41 @@ async fn main() {
         }
         return;
     }
-    tracing_subscriber::fmt::init();
+    let (snapshot, remaining) = tb_config::runtime::start(arguments).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
+    if remaining.len() == 1 && remaining[0] == "--check-config" {
+        println!("TWITCH_CONFIG_VALID fingerprint={}", snapshot.fingerprint());
+        return;
+    }
+    let config = snapshot.settings();
+    tracing_subscriber::fmt()
+        .with_max_level(config.logging.level.tracing_level())
+        .init();
+    tracing::info!(
+        fingerprint = snapshot.fingerprint(),
+        "TWITCH_DASHBOARD_CONFIG_V1"
+    );
 
     // Nur Uplink migriert hier auf normale Konfiguration und Infisical-FD.
     // Bestehende benachbarte Dashboarddienste behalten ihren eigenen Startvertrag.
-    let configured =
-        match tb_dashboard_api::uplink_config::load_arguments(std::env::args_os().skip(1)).await {
-            Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
-            Ok(None) => Ok(()),
-            Err(error) => Err(error),
-        };
+    let configured = match tb_dashboard_api::uplink_config::load_arguments(remaining).await {
+        Ok(Some(runtime)) => tb_dashboard_api::uplink_config::install(runtime),
+        Ok(None) => Ok(()),
+        Err(error) => Err(error),
+    };
     if let Err(error) = configured {
         tracing::error!("{error}");
         std::process::exit(1);
     }
 
-    let settings = Settings::from_env().unwrap_or_else(|e| {
-        tracing::error!("Konfigurationsfehler: {e}");
-        std::process::exit(1);
-    });
+    let settings = snapshot
+        .runtime_settings(&|key| std::env::var(key).ok())
+        .unwrap_or_else(|e| {
+            tracing::error!("Konfigurationsfehler: {e}");
+            std::process::exit(1);
+        });
 
     let pool = tb_db::connect(&settings.db).await.unwrap_or_else(|e| {
         tracing::error!("DB-Verbindungsfehler: {e}");
@@ -383,7 +404,7 @@ async fn main() {
 
     // Native sqlx-Migrationen anwenden. Schema-/Migrationsfehler sind fatal:
     // mit kaputtem oder halb migriertem Schema darf das Dashboard nicht starten.
-    if optional_env_bool("TB_DB_MIGRATE", true) {
+    if config.dashboard.run_database_migrations {
         match tb_db::run_migrations(&pool).await {
             Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
             Err(e) => {
@@ -392,13 +413,13 @@ async fn main() {
             }
         }
     } else {
-        tracing::warn!("DB-Migrationen deaktiviert (TB_DB_MIGRATE=0)");
+        tracing::warn!("DB-Migrationen laut Betriebskonfiguration deaktiviert");
     }
 
     // Startzeit-Timestamp so früh wie möglich setzen
     let _ = tb_dashboard_api::process_info::uptime_secs();
 
-    let port: u16 = dashboard_port_from_env();
+    let port = config.dashboard.port;
 
     match enforce_dashboard_runtime(None, port) {
         Ok(role) => {
@@ -415,15 +436,45 @@ async fn main() {
             std::process::exit(1);
         });
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::new(config.dashboard.host, port);
     let token = settings.internal_api.token.clone();
     let readiness_fingerprint = tb_dashboard_api::analytics_db_fingerprint_startup_check().await;
     spawn_affiliate_gutschrift_loop(pool.clone());
+    let contest_writer = tb_dashboard_api::contest_writer_pool(&settings.db)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::error!("Clip-Wettbewerb: Schreibzugang konnte nicht aufgebaut werden");
+            std::process::exit(1);
+        });
+    spawn_clip_contest_finalize_loop(contest_writer.clone());
     let pause_loop_helix = pause_loop_helix_client_from_env();
-    let mut app = build_router_with_helix(pool.clone(), token, pause_loop_helix);
+    let brain_token = if config.dashboard.options.brain_client.mode
+        == tb_config::dashboard_options::BrainClientMode::Legacy
+    {
+        None
+    } else {
+        tb_dashboard_api::uplink_config::brain_service_token()
+    };
+    let brain_runtime =
+        tb_dashboard_api::handlers::self_explainer::SelfExplainerBrainRuntime::from_config(
+            &config.dashboard.options.brain_client,
+            brain_token.as_deref(),
+        );
+    let mut app = tb_dashboard_api::build_router_with_contest_writer(
+        pool.clone(),
+        contest_writer,
+        token,
+        pause_loop_helix,
+        brain_runtime,
+    );
     app = app.layer(axum::Extension(readiness_fingerprint));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));
+    }
+    if let Some(profile_cache) =
+        tb_dashboard_api::handlers::partner_profiles::TwitchProfileCache::from_env()
+    {
+        app = app.layer(axum::Extension(profile_cache));
     }
 
     // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
@@ -449,7 +500,13 @@ async fn main() {
     // v2-Routen. Ohne Key bleibt der Extractor fail-closed (Localhost/None).
     match tb_dashboard_api::DashboardAuthState::fernet_key_from_env() {
         Some(key) => {
-            let auth_state = tb_dashboard_api::DashboardAuthState::new(pool.clone(), key);
+            let auth_state = tb_dashboard_api::DashboardAuthState::new(pool.clone(), key)
+                .with_admin_twitch_user_id(config.dashboard.options.admin_twitch_user_id.clone());
+            if auth_state.admin_twitch_user_id().is_none() {
+                tracing::warn!(
+                    "dashboard.options.admin_twitch_user_id fehlt oder ist ungültig; Twitch-Admin-Promotion bleibt deaktiviert"
+                );
+            }
             app = app.layer(axum::Extension(auth_state));
             tracing::info!("Dashboard-Session-Auth aktiv (Fernet-Key geladen)");
         }

@@ -49,6 +49,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use super::fernet;
+mod player;
+pub use player::{PlayerSession, PlayerSteamFlow, PLAYER_COOKIE_NAME, PLAYER_SESSION_TTL};
 
 /// Payload einer geladenen Twitch-Partner-Session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -334,6 +336,7 @@ impl<T: Clone> TimedCache<T> {
 }
 
 const CACHE_TTL_SECS: u64 = 5;
+const CENTRAL_ADMIN_VALIDATION_CACHE_TTL_SECS: u64 = 30;
 
 /// Admin-Session-TTL beim Sliding-Refresh (Python: server_v2.py:330, 14 Tage).
 pub const ADMIN_SESSION_TTL_SECS: u64 = 14 * 24 * 3600;
@@ -431,11 +434,12 @@ pub struct DashboardAuthState {
     fernet_key: String,
     /// Cache für Admin-Sessions (discord_admin).
     admin_cache: Arc<Mutex<TimedCache<bool>>>,
+    /// Kurzzeit-Cache für erfolgreiche Validierungen beim zentralen Discord-Broker.
+    central_admin_validation_cache: Arc<Mutex<TimedCache<bool>>>,
     /// Cache für Partner-Sessions (twitch).
     partner_cache: Arc<Mutex<TimedCache<PartnerSession>>>,
-    /// Cache für die aus `twitch_partners` aufgelöste `twitch_user_id` eines
-    /// Admin-Logins (Owner-/Master-Session), keyed auf den kleingeschriebenen Login.
-    admin_user_id_cache: Arc<Mutex<TimedCache<String>>>,
+    /// Unveränderliche Twitch-User-ID des Betreibers aus der normalen Konfiguration.
+    admin_twitch_user_id: Option<String>,
 }
 
 impl DashboardAuthState {
@@ -447,50 +451,53 @@ impl DashboardAuthState {
             pool,
             fernet_key,
             admin_cache: Arc::new(Mutex::new(TimedCache::default())),
+            central_admin_validation_cache: Arc::new(Mutex::new(TimedCache::default())),
             partner_cache: Arc::new(Mutex::new(TimedCache::default())),
-            admin_user_id_cache: Arc::new(Mutex::new(TimedCache::default())),
+            admin_twitch_user_id: None,
         }
     }
 
-    /// Löst die `twitch_user_id` eines aktiven Partners für den gegebenen Login auf.
-    ///
-    /// Dient der Owner-/Master-Session, die aus dem Discord-Admin-Cookie entsteht
-    /// und keine eigene Twitch-Identität trägt. Handler, die auf die Twitch-User-ID
-    /// schlüsseln, bekommen so die echte ID statt einer leeren. Ergebnis wird mit
-    /// `CACHE_TTL_SECS` gecacht, damit nicht jeder Request eine DB-Abfrage auslöst.
-    /// Kein Treffer oder DB-Fehler → leerer String (fail-open wie bisher).
-    pub async fn resolve_admin_user_id(&self, login: &str) -> String {
-        let login = login.trim().to_lowercase();
-        if login.is_empty() {
-            return String::new();
+    /// Bindet Twitch-Adminrechte an eine konfigurierte, positive Twitch-User-ID.
+    /// Ungültige oder fehlende IDs bleiben fail-closed.
+    pub fn with_admin_twitch_user_id(mut self, user_id: Option<String>) -> Self {
+        self.admin_twitch_user_id = user_id.filter(|id| {
+            id.bytes().all(|byte| byte.is_ascii_digit())
+                && id.parse::<u64>().is_ok_and(|parsed| parsed > 0)
+        });
+        self
+    }
+
+    pub fn admin_twitch_user_id(&self) -> Option<&str> {
+        self.admin_twitch_user_id.as_deref()
+    }
+
+    /// Prüft, ob diese zentrale Discord-Admin-Session in den letzten 30 Sekunden
+    /// bereits erfolgreich beim Broker validiert wurde.
+    pub async fn central_admin_validation_cached(&self, session_id: &str) -> bool {
+        if session_id.is_empty() {
+            return false;
         }
         let now = unix_now();
-        {
-            let cache = self.admin_user_id_cache.lock().await;
-            if let Some(user_id) = cache.get(&login, now) {
-                return user_id.clone();
-            }
+        let mut cache = self.central_admin_validation_cache.lock().await;
+        cache.prune(now);
+        cache.get(session_id, now).copied().unwrap_or(false)
+    }
+
+    /// Merkt eine erfolgreiche Broker-Validierung kurzzeitig. Der lokale
+    /// `discord_admin`-Datensatz bleibt weiterhin die eigentliche Session-Kopie.
+    pub async fn cache_central_admin_validation(&self, session_id: &str) {
+        if session_id.is_empty() {
+            return;
         }
-        let resolved: Option<String> = sqlx::query_scalar(
-            "SELECT twitch_user_id FROM twitch_partners \
-             WHERE LOWER(twitch_login) = $1 AND COALESCE(status, '') = 'active' \
-             ORDER BY COALESCE(departnered_at, admin_archived_at, partnered_at) DESC \
-             LIMIT 1",
-        )
-        .bind(&login)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or_else(|err| {
-            tracing::warn!(error = %err, login = %login, "Admin-user_id-Lookup fehlgeschlagen");
-            None
-        });
-        let user_id = resolved.unwrap_or_default();
-        {
-            let mut cache = self.admin_user_id_cache.lock().await;
-            cache.prune(now);
-            cache.insert(login, user_id.clone(), CACHE_TTL_SECS, now);
-        }
-        user_id
+        let now = unix_now();
+        let mut cache = self.central_admin_validation_cache.lock().await;
+        cache.prune(now);
+        cache.insert(
+            session_id.to_string(),
+            true,
+            CENTRAL_ADMIN_VALIDATION_CACHE_TTL_SECS,
+            now,
+        );
     }
 
     /// Referenz auf den DB-Pool (für Resolver, die ihn brauchen, z. B. der
@@ -521,6 +528,80 @@ impl DashboardAuthState {
     /// Bei DB-Fehler `Err`: anders als der Sliding-Refresh (Komfort) ist das Anlegen
     /// der Session der Login selbst — ohne persistierte Session kann sich der User
     /// nicht anmelden, also fail-closed statt stiller Erfolg.
+    /// Public contest identities share the encrypted dashboard session store.
+    /// This session type is deliberately never accepted by the partner/admin gates.
+    pub async fn create_clip_contest_session(
+        &self,
+        provider: &str,
+        user_id: &str,
+        display_name: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        if !matches!(provider, "discord" | "twitch")
+            || user_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
+        {
+            return Err(sqlx::Error::InvalidArgument(
+                "invalid contest identity".into(),
+            ));
+        }
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + 30.0 * 24.0 * 3600.0;
+        let payload = serde_json::json!({
+            "provider": provider, "user_id": user_id, "display_name": display_name,
+            "identity_version": 1, "csrf_token": csrf_token,
+            "created_at": now as f64, "expires_at": expires_at,
+        });
+        self.persist_new_session(
+            &session_id,
+            "clip_contest",
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await?;
+        Ok(SessionCreation {
+            session_id,
+            csrf_token,
+        })
+    }
+
+    pub async fn load_clip_contest_session(
+        &self,
+        token: &str,
+    ) -> Result<Option<(String, String, String)>, sqlx::Error> {
+        if !(20..=128).contains(&token.len()) {
+            return Ok(None);
+        }
+        let now = unix_now();
+        let Some(payload) = self
+            .fetch_session_payload(token, "clip_contest", now)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if payload_expired(&payload, now)
+            || payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1)
+        {
+            return Ok(None);
+        }
+        let field = |name: &str| {
+            payload
+                .get(name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let provider = field("provider");
+        let user_id = field("user_id");
+        if !matches!(provider.as_str(), "discord" | "twitch")
+            || user_id.parse::<u64>().ok().filter(|id| *id > 0).is_none()
+        {
+            return Ok(None);
+        }
+        Ok(Some((provider, user_id, field("display_name"))))
+    }
+
     pub async fn create_partner_session(
         &self,
         twitch_login: &str,
@@ -1438,6 +1519,10 @@ impl DashboardAuthState {
         }
         {
             let mut cache = self.admin_cache.lock().await;
+            cache.entries.remove(session_id);
+        }
+        {
+            let mut cache = self.central_admin_validation_cache.lock().await;
             cache.entries.remove(session_id);
         }
     }
@@ -2530,7 +2615,7 @@ mod integration_tests {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let schema = test_schema_name("auth_session");
         let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin_pool)
             .await
             .ok()?;
@@ -3482,10 +3567,12 @@ print(f.encrypt(payload.encode()).decode(), end='')
         // unqualifizierten Table-Refs in fetch_session_payload landen so im Schema.
         let schema = format!("fp_test_{}", unix_now());
         let admin_pool = sqlx::PgPool::connect(&url).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
-            .execute(&admin_pool)
-            .await
-            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE SCHEMA IF NOT EXISTS {schema}"
+        )))
+        .execute(&admin_pool)
+        .await
+        .unwrap();
 
         let opts: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
         let opts = opts.options([("search_path", schema.as_str())]);
@@ -3495,7 +3582,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .await
             .unwrap();
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"CREATE TABLE {schema}.dashboard_sessions (
                 session_id   TEXT NOT NULL PRIMARY KEY,
                 session_type TEXT NOT NULL,
@@ -3503,7 +3590,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
                 created_at   DOUBLE PRECISION NOT NULL,
                 expires_at   DOUBLE PRECISION NOT NULL
             )"#
-        ))
+        )))
         .execute(&pool)
         .await
         .unwrap();
@@ -3515,9 +3602,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
             now + 3600.0
         );
         let fernet_bytes = make_test_fernet_payload(&json_str);
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {schema}.dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at) VALUES ($1,$2,$3,$4,$5)"
-        ))
+        )))
         .bind(session_lookup_key(&session_id))
         .bind("discord_admin")
         .bind(fernet_bytes)
@@ -3545,7 +3632,7 @@ print(f.encrypt(payload.encode()).decode(), end='')
         assert!(!fp.verify("203.0.113.7", "wrong-fp"));
 
         drop(pool);
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin_pool)
             .await
             .ok();

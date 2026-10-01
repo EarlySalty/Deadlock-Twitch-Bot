@@ -1,19 +1,18 @@
 //! Sessiongebundener Toggle für die Admin-Präsentation im Dashboard.
 //!
-//! Dieser Endpoint steuert, ob ein admin-eligibler Twitch-Login als normaler
-//! Partner oder mit Admin-Vollzugriff präsentiert wird. Die Route läuft bewusst NICHT durch
-//! `csrf_protect`: Das Streamer-Dashboard (`dashboard_v2`) bekommt von
-//! `auth-status` kein CSRF-Token (`csrfToken: null`) und könnte den
-//! Header-Schutz nie erfüllen. Geschützt ist der rein präsentationssteuernde
-//! Toggle durch die Auth-Prüfung auf einen admin-eligiblen Twitch-Login plus das
-//! `SameSite=Lax`-Session-Cookie.
+//! Toggle-Berechtigung kommt von der zentral geladenen Twitch-Session-ID und der
+//! konfigurierten Betreiber-ID. Das Modus-Cookie wählt ausschließlich die Ansicht.
+//! Die Route läuft bewusst NICHT durch `csrf_protect`: Das Streamer-Dashboard
+//! (`dashboard_v2`) bekommt von `auth-status` kein CSRF-Token (`csrfToken: null`)
+//! und könnte den Header-Schutz nie erfüllen. Das `SameSite=Lax`-Session-Cookie
+//! schützt den präsentationssteuernden Toggle zusätzlich vor Cross-Site-Requests.
 
 use axum::{
-    Json, Router,
     extract::Extension,
-    http::{HeaderValue, header::SET_COOKIE},
+    http::{header::SET_COOKIE, HeaderValue},
     response::{IntoResponse, Response},
     routing::post,
+    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -21,8 +20,10 @@ use tb_http_core::ApiError;
 
 use crate::{
     auth::{
-        level::{DashboardAuthLevel, is_admin_login},
-        session::{SameSite, build_transient_session_cookie, clear_session_cookie},
+        level::DashboardAuthLevel,
+        session::{
+            build_transient_session_cookie, clear_session_cookie, DashboardAuthState, SameSite,
+        },
     },
     handlers::{auth_login::OAuthLoginConfig, auth_status::ADMIN_MODE_COOKIE},
 };
@@ -33,19 +34,22 @@ pub struct AdminModeRequest {
     enabled: bool,
 }
 
+fn admin_mode_toggle_erlaubt(auth: &DashboardAuthLevel, configured_user_id: Option<&str>) -> bool {
+    auth.is_privileged() || auth.is_configured_twitch_owner(configured_user_id)
+}
+
 /// `POST /twitch/api/v2/admin-mode` — Admin-Präsentation für diese Browser-
 /// Session aktivieren oder deaktivieren.
 pub async fn set_admin_mode_handler(
     auth: DashboardAuthLevel,
+    auth_state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
     Json(body): Json<AdminModeRequest>,
 ) -> Response {
-    let allowed = auth.is_privileged()
-        || matches!(
-            &auth,
-            DashboardAuthLevel::Partner { twitch_login, .. } if is_admin_login(twitch_login)
-        );
-    if !allowed {
+    let configured_user_id = auth_state
+        .as_ref()
+        .and_then(|Extension(state)| state.admin_twitch_user_id());
+    if !admin_mode_toggle_erlaubt(&auth, configured_user_id) {
         return ApiError::forbidden_generic().into_response();
     }
 
@@ -86,9 +90,9 @@ mod tests {
     use super::*;
     use crate::auth::level::AdminActor;
     use axum::{
-        Json,
-        http::{StatusCode, header::SET_COOKIE},
+        http::{header::SET_COOKIE, StatusCode},
         response::IntoResponse,
+        Json,
     };
 
     fn twitch_admin() -> DashboardAuthLevel {
@@ -116,10 +120,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn twitch_toggle_erfordert_die_verifizierte_konfigurierte_id() {
+        let umbenannter_betreiber = DashboardAuthLevel::Partner {
+            twitch_login: "new_login".to_string(),
+            twitch_user_id: "1186925760".to_string(),
+            display_name: "Neuer Login".to_string(),
+        };
+        let wiedervergebener_login = DashboardAuthLevel::Partner {
+            twitch_login: "earlysalty".to_string(),
+            twitch_user_id: "99".to_string(),
+            display_name: "Fremde Person".to_string(),
+        };
+
+        assert!(admin_mode_toggle_erlaubt(
+            &umbenannter_betreiber,
+            Some("1186925760")
+        ));
+        assert!(!admin_mode_toggle_erlaubt(
+            &wiedervergebener_login,
+            Some("1186925760")
+        ));
+        assert!(!admin_mode_toggle_erlaubt(&umbenannter_betreiber, None));
+        assert!(!admin_mode_toggle_erlaubt(
+            &umbenannter_betreiber,
+            Some("invalid")
+        ));
+        assert!(admin_mode_toggle_erlaubt(&twitch_admin(), None));
+        assert!(!admin_mode_toggle_erlaubt(
+            &DashboardAuthLevel::None,
+            Some("1186925760")
+        ));
+    }
+
     #[tokio::test]
     async fn enabled_setzt_session_cookie_ohne_ablaufzeit() {
         let response = set_admin_mode_handler(
             twitch_admin(),
+            None,
             None,
             Json(AdminModeRequest { enabled: true }),
         )
@@ -152,6 +190,7 @@ mod tests {
         let response = set_admin_mode_handler(
             twitch_admin(),
             None,
+            None,
             Json(AdminModeRequest { enabled: false }),
         )
         .await
@@ -168,22 +207,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_partner_darf_toggle_setzen() {
+    async fn admin_partner_ohne_config_id_darf_toggle_nicht_setzen() {
         let response = set_admin_mode_handler(
             admin_partner(),
+            None,
             None,
             Json(AdminModeRequest { enabled: true }),
         )
         .await
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn discord_admin_darf_admin_modus_beenden() {
         let response = set_admin_mode_handler(
             DashboardAuthLevel::admin(),
+            None,
             None,
             Json(AdminModeRequest { enabled: false }),
         )
@@ -204,7 +245,7 @@ mod tests {
     async fn nicht_admin_partner_und_unauth_erhalten_403() {
         for auth in [partner(), DashboardAuthLevel::None] {
             let response =
-                set_admin_mode_handler(auth, None, Json(AdminModeRequest { enabled: true }))
+                set_admin_mode_handler(auth, None, None, Json(AdminModeRequest { enabled: true }))
                     .await
                     .into_response();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);

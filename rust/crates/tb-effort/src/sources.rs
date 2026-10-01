@@ -1,0 +1,340 @@
+mod cursor;
+mod live;
+
+use crate::{Engine, Error, Event, EventKind, Result};
+use chrono::{DateTime, Utc};
+use serde_json::{json, Value};
+use sqlx::Row;
+use std::{collections::HashSet, sync::atomic::Ordering};
+
+#[derive(sqlx::FromRow)]
+struct QualificationStatus {
+    last_completed_at: DateTime<Utc>,
+    last_successful_at: Option<DateTime<Utc>>,
+    evaluation_interval_seconds: i32,
+    healthy: bool,
+}
+
+fn qualification_status_is_fresh(status: Option<QualificationStatus>, now: DateTime<Utc>) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    if !status.healthy || !(1..=86_400).contains(&status.evaluation_interval_seconds) {
+        return false;
+    }
+    let Some(last_successful_at) = status.last_successful_at else {
+        return false;
+    };
+    status.last_completed_at == last_successful_at
+        && last_successful_at
+            >= now - chrono::Duration::seconds(i64::from(status.evaluation_interval_seconds) * 3)
+        && last_successful_at <= now
+}
+
+impl Engine {
+    pub(crate) async fn collect(
+        &self,
+        now: DateTime<Utc>,
+        shared_chat_guard: &mut crate::SharedChatContinuityGuard,
+    ) -> Result<()> {
+        if self.shared_chat_continuity_dirty.load(Ordering::Acquire) {
+            if let Err(error) = self.interrupt_shared_chat_observations().await {
+                self.source_state("shared_chat", now, &Err(Error::Source("continuity_reset")))
+                    .await?;
+                return Err(error);
+            }
+        }
+        let mut failure = None;
+        for source in [
+            "invites",
+            "referrals",
+            "clips",
+            "shared_chat",
+            "steam_party",
+        ] {
+            let work = async {
+                match source {
+                    "invites" => self.invites(now).await,
+                    "referrals" => self.referrals(now).await,
+                    "clips" => self.clips(now).await,
+                    "shared_chat" => self.shared_chat(now).await,
+                    _ => self.party_play(now).await,
+                }
+            };
+            let result = match tokio::time::timeout(
+                std::time::Duration::from_secs(self.cfg.source_timeout_seconds),
+                work,
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(Error::Source("timeout")),
+            };
+            if source == "shared_chat" {
+                if result.is_err() {
+                    self.shared_chat_continuity_dirty
+                        .store(true, Ordering::Release);
+                    self.source_state(source, now, &result).await?;
+                    self.interrupt_shared_chat_observations().await?;
+                } else {
+                    self.source_state(source, now, &result).await?;
+                }
+                shared_chat_guard.confirm();
+            } else {
+                self.source_state(source, now, &result).await?;
+            }
+            if let Err(error) = result {
+                failure = Some(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    async fn seen(&self, source: &str, ids: &[String]) -> Result<HashSet<String>> {
+        let rows: Vec<String>=sqlx::query_scalar("SELECT source_id FROM partner_effort_source_receipts WHERE source=$1 AND source_id=ANY($2)")
+            .bind(source).bind(ids).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn consume(
+        &self,
+        source: &str,
+        source_id: &str,
+        event: Event,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let points = self.points(&event)?;
+        match self
+            .append_tx(&mut tx, &event, points, &self.rules_hash, now)
+            .await
+        {
+            Ok(_) => {}
+            Err(Error::NotFound) => {
+                let paused: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_partners WHERE twitch_user_id=$1 AND COALESCE(trim(technical_pause_reason),'')<>'')")
+                    .bind(&event.partner_twitch_user_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                if paused {
+                    return Ok(false);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        self.receipt(&mut tx, source, source_id).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    async fn invites(&self, now: DateTime<Utc>) -> Result<()> {
+        let status: Option<QualificationStatus> = sqlx::query_as(
+            "SELECT last_completed_at,last_successful_at,evaluation_interval_seconds,healthy
+             FROM bot.twitch_invite_qualification_status WHERE singleton=TRUE",
+        )
+        .fetch_optional(self.central()?)
+        .await?;
+        // Readiness is a wall-clock heartbeat, not the historical data cutoff.
+        if !qualification_status_is_fresh(status, Utc::now()) {
+            return Err(Error::Source("invites_producer_not_ready"));
+        }
+
+        let mut ready = true;
+        for lane in ["recent", "reconcile"] {
+            let cursor = self.cursor("invites", lane, now).await?;
+            let rows = self.source_page("invites", lane, &cursor, now).await?;
+            let count = rows.len();
+            let ids: Vec<String> = rows
+                .iter()
+                .map(|row| row.try_get::<String, _>("cursor_id"))
+                .collect::<std::result::Result<_, _>>()?;
+            let seen = self.seen("invites", &ids).await?;
+            for row in rows {
+                let join: String = row.try_get("cursor_id")?;
+                let at: DateTime<Utc> = row.try_get("qualified_at")?;
+                if !seen.contains(&join) {
+                    let id: Option<String> = row.try_get("streamer_twitch_user_id")?;
+                    let Some(id) = id.filter(|id| crate::valid_id(id)) else {
+                        let mut tx = self.pool.begin().await?;
+                        self.receipt(&mut tx, "invites", &join).await?;
+                        tx.commit().await?;
+                        tracing::warn!(join_id = %join, "qualified invite has no valid streamer ID");
+                        self.advance_cursor("invites", lane, &join, at).await?;
+                        continue;
+                    };
+                    let viewer: Option<String> = row.try_get("inviter_twitch_user_id")?;
+                    if viewer.as_deref().is_some_and(|v| !crate::valid_id(v)) {
+                        tracing::warn!(join_id = %join, "qualified invite has an invalid inviter ID");
+                    }
+                    let event = Event {
+                        partner_twitch_user_id: id.clone(),
+                        kind: EventKind::QualifiedInvite,
+                        source_id: format!("discord-join:{join}"),
+                        occurred_at: at,
+                        viewer_twitch_user_id: viewer.filter(|v| v != &id && crate::valid_id(v)),
+                        metadata: json!({"join_id":join,"guild_id":row.try_get::<i64,_>("guild_id")?,"discord_user_id":row.try_get::<i64,_>("user_id")?}),
+                    };
+                    self.consume("invites", &join, event, now).await?;
+                }
+                self.advance_cursor("invites", lane, &join, at).await?;
+            }
+            ready &= self
+                .finish_page("invites", lane, count, cursor.completed_once)
+                .await?;
+        }
+        if !ready {
+            return Err(Error::Source("invites_backfill_pending"));
+        }
+        Ok(())
+    }
+
+    async fn referrals(&self, now: DateTime<Utc>) -> Result<()> {
+        let mut ready = true;
+        for lane in ["recent", "reconcile"] {
+            let cursor = self.cursor("referrals", lane, now).await?;
+            let rows = self.source_page("referrals", lane, &cursor, now).await?;
+            let count = rows.len();
+            let ids: Vec<String> = rows
+                .iter()
+                .map(|row| row.try_get::<String, _>("cursor_id"))
+                .collect::<std::result::Result<_, _>>()?;
+            let seen = self.seen("referrals", &ids).await?;
+            for row in rows {
+                let referred: String = row.try_get("cursor_id")?;
+                let at: DateTime<Utc> = row.try_get("credited_at")?;
+                if !seen.contains(&referred) {
+                    let id: String = row.try_get("streamer_twitch_user_id")?;
+                    let source_id: String = row.try_get("source_id")?;
+                    if !crate::valid_id(&id)
+                        || !crate::valid_id(&referred)
+                        || id == referred
+                        || source_id != format!("streamer_referral:{referred}")
+                    {
+                        return Err(Error::Invalid("referral_identity"));
+                    }
+                    let event = Event {
+                        partner_twitch_user_id: id,
+                        kind: EventKind::StreamerReferral,
+                        source_id,
+                        occurred_at: at,
+                        viewer_twitch_user_id: None,
+                        metadata: json!({"referred_twitch_user_id":referred}),
+                    };
+                    self.consume("referrals", &referred, event, now).await?;
+                }
+                self.advance_cursor("referrals", lane, &referred, at)
+                    .await?;
+            }
+            ready &= self
+                .finish_page("referrals", lane, count, cursor.completed_once)
+                .await?;
+        }
+        if !ready {
+            return Err(Error::Source("referrals_backfill_pending"));
+        }
+        Ok(())
+    }
+
+    async fn clips(&self, now: DateTime<Utc>) -> Result<()> {
+        let mut deferred = Vec::new();
+        loop {
+            let rows=sqlx::query("SELECT o.id,o.event_type,o.source_id,o.occurred_at,o.metadata,s.broadcaster_twitch_id FROM twitch_clip_contest_effort_outbox o JOIN twitch_clip_contest_submissions s ON s.id=(o.metadata->>'submission_id')::bigint WHERE o.occurred_at <= $1 AND NOT EXISTS(SELECT 1 FROM partner_effort_source_receipts r WHERE r.source='clips' AND r.source_id=o.id::text) AND NOT (o.id=ANY($3)) ORDER BY o.occurred_at,o.id LIMIT $2")
+                .bind(now).bind(self.cfg.source_batch_size).bind(&deferred).fetch_all(&self.pool).await?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                let outbox: i64 = row.try_get("id")?;
+                let kind = match row.try_get::<String, _>("event_type")?.as_str() {
+                    "clip_submitted" => EventKind::ClipSubmitted,
+                    "clip_top3" => EventKind::ClipTop3,
+                    _ => return Err(Error::Invalid("clip_event_type")),
+                };
+                let metadata: Value = row.try_get("metadata")?;
+                let event = Event {
+                    partner_twitch_user_id: row.try_get("broadcaster_twitch_id")?,
+                    kind,
+                    source_id: row.try_get("source_id")?,
+                    occurred_at: row.try_get("occurred_at")?,
+                    viewer_twitch_user_id: None,
+                    metadata,
+                };
+                if !self
+                    .consume("clips", &outbox.to_string(), event, now)
+                    .await?
+                {
+                    deferred.push(outbox);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn successful_status(at: DateTime<Utc>, interval: i32) -> QualificationStatus {
+        QualificationStatus {
+            last_completed_at: at,
+            last_successful_at: Some(at),
+            evaluation_interval_seconds: interval,
+            healthy: true,
+        }
+    }
+
+    #[test]
+    fn missing_or_failed_qualification_is_not_ready() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(!qualification_status_is_fresh(None, now));
+        assert!(!qualification_status_is_fresh(
+            Some(QualificationStatus {
+                last_completed_at: now,
+                last_successful_at: Some(now - chrono::Duration::seconds(300)),
+                evaluation_interval_seconds: 300,
+                healthy: false,
+            }),
+            now
+        ));
+    }
+
+    #[test]
+    fn successful_empty_cycle_marker_is_ready_without_invites() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(qualification_status_is_fresh(
+            Some(successful_status(now, 300)),
+            now
+        ));
+    }
+
+    #[test]
+    fn future_success_is_not_fresh() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(!qualification_status_is_fresh(
+            Some(successful_status(now + chrono::Duration::seconds(1), 300)),
+            now
+        ));
+    }
+
+    #[test]
+    fn freshness_tracks_three_configured_qualification_intervals() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        assert!(qualification_status_is_fresh(
+            Some(successful_status(now - chrono::Duration::seconds(900), 300)),
+            now
+        ));
+        assert!(!qualification_status_is_fresh(
+            Some(successful_status(now - chrono::Duration::seconds(901), 300)),
+            now
+        ));
+    }
+
+    #[test]
+    fn mismatched_completion_and_success_times_fail_closed() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let mut status = successful_status(now, 300);
+        status.last_completed_at += chrono::Duration::seconds(1);
+
+        assert!(!qualification_status_is_fresh(Some(status), now));
+    }
+}

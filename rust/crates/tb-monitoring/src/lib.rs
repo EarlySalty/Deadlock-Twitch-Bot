@@ -72,7 +72,7 @@ pub use live_state::{
 };
 pub use observability_retention::{
     cleanup_observability_events, cleanup_observability_events_before,
-    observability_retention_days, OBSERVABILITY_RETENTION_DEFAULT_DAYS,
+    OBSERVABILITY_RETENTION_DEFAULT_DAYS,
 };
 pub use poller::{
     AnnouncementSink, NoopAnnouncementSink, NoopPollHooks, PollConfig, PollEngine, PollHooks,
@@ -100,3 +100,9 @@ pub use subscriptions::{
     SubscriptionManager, SubscriptionTransport, EVENTSUB_CORE_SUB_TYPES,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
+
+pub mod anonymous_chat;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

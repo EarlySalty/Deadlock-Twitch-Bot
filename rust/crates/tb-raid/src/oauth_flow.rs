@@ -11,7 +11,8 @@ use async_trait::async_trait;
 use url::Url;
 
 use crate::scope_profiles::{
-    scopes_for_profile, BASE_SCOPE_PROFILE, DASHBOARD_REAUTH_SCOPE_PROFILE, UPLINK_SCOPE_PROFILE,
+    scopes_for_profile, BASE_SCOPE_PROFILE, DASHBOARD_REAUTH_SCOPE_PROFILE, TITLE_SCOPE_PROFILE,
+    UPLINK_SCOPE_PROFILE,
 };
 use crate::state_store::RaidOAuthState;
 
@@ -108,6 +109,9 @@ async fn resolve_scope_profile(
     }
     if normalized == BASE_SCOPE_PROFILE {
         return BASE_SCOPE_PROFILE;
+    }
+    if normalized == TITLE_SCOPE_PROFILE {
+        return TITLE_SCOPE_PROFILE;
     }
     if normalized == UPLINK_SCOPE_PROFILE {
         return UPLINK_SCOPE_PROFILE;
@@ -384,6 +388,21 @@ mod tests {
         let state =
             build_state_info(&resolver, "dragscope", "dashboard_reauth", None, None, None).await;
         assert_eq!(state.scope_profile, "dashboard_reauth");
+    }
+
+    #[tokio::test]
+    async fn explizites_title_profil_bleibt_erhalten() {
+        let resolver = StubResolver::new(&[]);
+        let state = build_state_info(&resolver, "dragscope", "title", None, None, None).await;
+        assert_eq!(state.scope_profile, "title");
+    }
+
+    #[test]
+    fn authorize_url_title_fragt_broadcast_aber_keine_dashboard_extras() {
+        let url = build_authorize_url("cid", "https://example.com/cb", "title", "tok");
+        assert!(url.contains("channel%3Amanage%3Abroadcast"));
+        assert!(!url.contains("channel%3Aread%3Asubscriptions"));
+        assert!(!url.contains("channel%3Amanage%3Aads"));
     }
 
     #[tokio::test]

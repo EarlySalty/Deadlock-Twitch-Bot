@@ -40,6 +40,7 @@ const response: AdManagerResponse = {
     enabled: true,
     strategy: 'smart',
     adDurationSeconds: 90,
+    budgetMinutesPerHour: 3,
     minIntervalMinutes: 45,
     startupDelayMinutes: 20,
     quietWindowMinutes: 8,
@@ -58,6 +59,15 @@ const response: AdManagerResponse = {
     workerHealthy: true,
     workerHeartbeatAt: '2026-09-01T09:59:58Z',
     lastAction: null,
+    plan: {
+      source: 'own',
+      fit: 'good',
+      nextBlockAt: '2026-09-01T10:12:00Z',
+      blockSeconds: 30,
+      blocksPerHour: 6,
+      budgetUsedSecondsThisHour: 60,
+    },
+    currentReason: 'in_queue',
     scopes: { read: true, snooze: true, commercial: true },
     steam: {
       linked: true,
@@ -110,8 +120,8 @@ test('Steam-Status ist verpflichtender Teil des Statusvertrags', async () => {
 test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Steuerung', () => {
   assert.match(
     adManagerSectionSource,
-    /Match-Status \(Steam\)/,
-    'die Status-Karte für die Steam-Anbindung muss existieren',
+    /Match-Status/,
+    'die Status-Kachel für die Steam-Anbindung muss existieren',
   );
   assert.match(
     adManagerSectionSource,
@@ -129,13 +139,31 @@ test('Werbemanager-UI trennt passives Snoozen klar von der empfohlenen Smart-Ste
   assert.match(adManagerSectionSource, /Empfohlen/);
   assert.match(adManagerSectionSource, /Im Match: Werbung verschieben/);
   assert.match(adManagerSectionSource, /Queue oder Menü: Werbung starten/);
-  assert.match(adManagerSectionSource, /Ohne Steam: ruhige Chat-Phase nutzen/);
+  assert.match(adManagerSectionSource, /Ohne frischen Steam-Status: keine eigene Werbung/);
+  assert.match(adManagerSectionSource, /Matchstatus nicht verfügbar/);
+  assert.doesNotMatch(adManagerSectionSource, /Ohne Steam: ruhige Chat-Phase nutzen/);
   assert.doesNotMatch(adManagerSectionSource, /Werbung möglichst verschieben/);
   assert.doesNotMatch(adManagerSectionSource, />Intelligent steuern</);
   assert.match(
     adManagerSectionSource,
-    /vorerst die Chat-Ruhe/,
-    'der Fallback bei veraltetem Status muss benannt sein',
+    /Eigene Werbestarts warten auf einen frischen Matchstatus/,
+    'ein veralteter Status muss als Sperre für eigene Werbestarts benannt sein',
+  );
+});
+
+test('Werbemanager-UI nutzt die zweispaltige Konfiguration-und-Live-Struktur ohne panel-inset Verschachtelung', () => {
+  assert.match(
+    adManagerSectionSource,
+    /xl:grid-cols-\[minmax\(0,13fr\)_minmax\(20rem,7fr\)\]/,
+    'Desktop muss Konfiguration und Live-Status im 65-zu-35-Layout trennen',
+  );
+  assert.match(adManagerSectionSource, />Konfiguration</);
+  assert.match(adManagerSectionSource, />Live-Status</);
+  assert.match(adManagerSectionSource, /role="radiogroup"/);
+  assert.doesNotMatch(
+    adManagerSectionSource,
+    /panel-inset/,
+    'verschachtelte panel-inset Boxen sollen im Werbemanager nicht zurückkehren',
   );
 });
 
@@ -190,6 +218,7 @@ test('speichert nur normalisierte Eingabefelder ohne Server-Zeitstempel', async 
     enabled: true,
     strategy: 'snooze',
     adDurationSeconds: 77,
+    budgetMinutesPerHour: 12,
     minIntervalMinutes: 999,
     startupDelayMinutes: -4,
     quietWindowMinutes: 8.6,
@@ -203,10 +232,12 @@ test('speichert nur normalisierte Eingabefelder ohne Server-Zeitstempel', async 
     enabled: true,
     strategy: 'snooze',
     adDurationSeconds: 90,
+    budgetMinutesPerHour: 8,
     minIntervalMinutes: 180,
     startupDelayMinutes: 0,
     quietWindowMinutes: 9,
     actionLeadSeconds: 10,
+    chatNoticeBeforeAd: true,
   });
 });
 
@@ -285,8 +316,9 @@ test('normalisiert alle Zahlen auf sichere und von Twitch unterstützte Werte', 
   assert.deepEqual(
     normalizeAdManagerSettings({
       enabled: false,
-      strategy: 'monitor',
+      strategy: 'smart',
       adDurationSeconds: Number.NaN,
+      budgetMinutesPerHour: 0,
       minIntervalMinutes: 7.7,
       startupDelayMinutes: 22.4,
       quietWindowMinutes: 70,
@@ -294,20 +326,22 @@ test('normalisiert alle Zahlen auf sichere und von Twitch unterstützte Werte', 
     }),
     {
       enabled: false,
-      strategy: 'monitor',
+      strategy: 'smart',
       adDurationSeconds: 90,
+      budgetMinutesPerHour: 1,
       minIntervalMinutes: 8,
       startupDelayMinutes: 22,
       quietWindowMinutes: 60,
       actionLeadSeconds: 88,
+      chatNoticeBeforeAd: true,
     },
   );
   assert.equal(
     normalizeAdManagerSettings({
       ...response.settings,
-      strategy: 'unbekannt' as 'monitor',
+      strategy: 'monitor' as 'snooze',
     }).strategy,
-    'monitor',
+    'smart',
   );
 });
 

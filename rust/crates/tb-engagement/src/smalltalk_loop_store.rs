@@ -1,4 +1,11 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+const LIVE_CANDIDATES_SQL: &str = include_str!("smalltalk_live_candidates.sql");
+#[path = "smalltalk_live_store.rs"]
+mod live;
+pub(crate) use live::live_send_allowed;
+pub use live::LivePreflightTarget;
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -9,6 +16,8 @@ use crate::stream_transcripts::StreamTranscriptSegment;
 
 pub const SESSION_DURATION: Duration = Duration::minutes(60);
 pub const CHANNEL_COOLDOWN: Duration = Duration::hours(24);
+/// Live-Smalltalk wird fuer die erste Erprobung nur bei wirklich kleinen Kanaelen freigegeben.
+pub const SMALLTALK_FOLLOWER_LIMIT: i32 = 50;
 const DISCORD_CLAIM_TTL: Duration = Duration::minutes(2);
 const DISCORD_RETRY_DELAY: Duration = Duration::seconds(30);
 const DISCORD_DELETE_RETRY_DELAY: Duration = Duration::hours(1);
@@ -27,6 +36,10 @@ pub struct SmalltalkLoopStore {
     /// Nur Log-Drosselung, kein fachlicher Zustand: zuletzt gemeldete Lage und
     /// wann. Der Loop teilt sich den Store per `clone`, deshalb `Arc`.
     last_no_candidate: NoCandidateLogState,
+    /// `false` behaelt den historischen Shadow/Testbetrieb. Nur das Wiring setzt
+    /// dies fuer den expliziten Live-Test auf `true`.
+    live_send: bool,
+    live_started_once: Arc<AtomicBool>,
 }
 
 /// Zuletzt gemeldete Lage und Zeitpunkt, geteilt über alle Klone des Stores.
@@ -115,6 +128,7 @@ struct CandidateRow {
     is_live: bool,
     game: Option<String>,
     viewer_count: Option<i32>,
+    follower_count: Option<i32>,
     cooldown_until: Option<String>,
     partner_table: bool,
     partner_state: bool,
@@ -154,7 +168,14 @@ impl SmalltalkLoopStore {
         Self {
             pool,
             last_no_candidate: Arc::new(Mutex::new(None)),
+            live_send: false,
+            live_started_once: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn with_live_send(mut self, live_send: bool) -> Self {
+        self.live_send = live_send;
+        self
     }
 
     /// Meldet, dass diese Runde keinen Kanal gefunden hat, und warum nicht.
@@ -175,6 +196,8 @@ impl SmalltalkLoopStore {
             partner = stats.partner,
             blacklisted = stats.blacklisted,
             cooldown = stats.cooldown,
+            followers_unknown = stats.followers_unknown,
+            followers_too_large = stats.followers_too_large,
             eligible = stats.eligible,
         );
     }
@@ -183,8 +206,14 @@ impl SmalltalkLoopStore {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Option<SmalltalkSession>, StoreError> {
+        if self.live_send && self.live_started_once.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         let mut tx = self.pool.begin().await?;
         lock_global(&mut tx).await?;
+        if self.live_send && self.live_started_once.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         sqlx::query("LOCK TABLE twitch_partners IN SHARE MODE")
             .execute(&mut *tx)
             .await?;
@@ -200,8 +229,15 @@ impl SmalltalkLoopStore {
             return Ok(None);
         }
 
-        let rows = sqlx::query_as::<_, CandidateRow>(
-            "SELECT LOWER(BTRIM(o.streamer_login)) AS channel_login,
+        let rows = if self.live_send {
+            sqlx::query_as::<_, CandidateRow>(LIVE_CANDIDATES_SQL)
+                .bind(now)
+                .bind(None::<&str>)
+                .fetch_all(&mut *tx)
+                .await?
+        } else {
+            sqlx::query_as::<_, CandidateRow>(
+                "SELECT LOWER(BTRIM(o.streamer_login)) AS channel_login,
                     COALESCE(
                         NULLIF(BTRIM(o.streamer_user_id), ''),
                         ls.twitch_user_id
@@ -209,6 +245,15 @@ impl SmalltalkLoopStore {
                     COALESCE(ls.is_live, 0) <> 0 AS is_live,
                     ls.last_game AS game,
                     ls.last_viewer_count AS viewer_count,
+                    (
+                        SELECT COALESCE(s.followers_end, s.followers_start)
+                        FROM twitch_stream_sessions s
+                        WHERE LOWER(s.streamer_login) = LOWER(o.streamer_login)
+                          AND COALESCE(s.followers_end, s.followers_start) IS NOT NULL
+                          AND s.started_at >= NOW() - INTERVAL '12 hours'
+                        ORDER BY s.started_at DESC NULLS LAST
+                        LIMIT 1
+                    ) AS follower_count,
                     NULLIF(BTRIM(o.cooldown_until), '') AS cooldown_until,
                     EXISTS (
                         SELECT 1
@@ -257,9 +302,10 @@ impl SmalltalkLoopStore {
                     NULLIF(BTRIM(ls.twitch_user_id), '')
                ) IS NOT NULL
              FOR UPDATE OF o SKIP LOCKED",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        };
         let mut stats = CandidateStats::default();
         let mut eligible = Vec::new();
         for row in rows {
@@ -273,7 +319,20 @@ impl SmalltalkLoopStore {
                 }
                 parsed
             });
-            let reason = exclusion_reason(&row, cooldown_until, now);
+            let mut reason = exclusion_reason(&row, cooldown_until, now);
+            if row.cooldown_until.is_some() && cooldown_until.is_none() {
+                reason = Some("cooldown");
+            }
+            if self.live_send
+                && row
+                    .last_observed_at
+                    .is_some_and(|at| now - at < CHANNEL_COOLDOWN)
+            {
+                reason = Some("cooldown");
+            }
+            if reason.is_none() && self.live_send {
+                reason = follower_exclusion_reason(row.follower_count);
+            }
             stats.count(reason);
             if reason.is_none() {
                 eligible.push(Candidate {
@@ -318,7 +377,17 @@ impl SmalltalkLoopStore {
         .await?;
         if let Some((key, _, _, _)) = &previous {
             if key != &candidate.channel_login {
-                set_cooldown(&mut tx, &candidate.channel_login, now).await?;
+                if self.live_send {
+                    live::set_live_cooldown(
+                        &mut tx,
+                        &candidate.streamer_user_id,
+                        &candidate.channel_login,
+                        now,
+                    )
+                    .await?;
+                } else {
+                    set_cooldown(&mut tx, &candidate.channel_login, now).await?;
+                }
                 tx.commit().await?;
                 tracing::warn!(
                     event = "smalltalk_loop.candidate_skipped",
@@ -345,8 +414,8 @@ impl SmalltalkLoopStore {
             "INSERT INTO twitch_smalltalk_sessions
                 (id, channel_login, streamer_user_id, started_at, viewer_count,
                  settings_existed, previous_enabled, previous_irc_read,
-                 previous_output_mode)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 previous_output_mode, live_test)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(session.id)
         .bind(&session.channel_login)
@@ -357,18 +426,30 @@ impl SmalltalkLoopStore {
         .bind(previous_enabled)
         .bind(previous_irc_read)
         .bind(&previous_output_mode)
+        .bind(self.live_send)
         .execute(&mut *tx)
         .await?;
+        let session_output_mode = if self.live_send {
+            "smalltalk_live"
+        } else {
+            "test"
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_settings
                 (channel_login, enabled, irc_read, output_mode)
-             VALUES ($1, TRUE, TRUE, 'test')
+             VALUES ($1, TRUE, TRUE, $2)
              ON CONFLICT (channel_login) DO UPDATE
-             SET enabled = TRUE, irc_read = TRUE, output_mode = 'test'",
+             SET enabled = TRUE, irc_read = TRUE, output_mode = EXCLUDED.output_mode",
         )
         .bind(&session.channel_login)
+        .bind(session_output_mode)
         .execute(&mut *tx)
         .await?;
+        // Even an ambiguous commit failure consumes the live slot: never risk
+        // opening a second session after a successful-but-unacknowledged commit.
+        if self.live_send {
+            self.live_started_once.store(true, Ordering::Release);
+        }
         tx.commit().await?;
         tracing::info!(
             event = "smalltalk_loop.session_started",
@@ -428,6 +509,16 @@ impl SmalltalkLoopStore {
             Some("session_timeout")
         } else if !live_deadlock {
             Some("stream_ended")
+        } else if self.live_send
+            && !live_send_allowed(
+                &self.pool,
+                &session.streamer_user_id,
+                &session.channel_login,
+                now,
+            )
+            .await?
+        {
+            Some("eligibility_changed")
         } else {
             None
         };
@@ -898,11 +989,16 @@ async fn close_locked(
     .bind(session.id)
     .execute(&mut **tx)
     .await?;
+    // Nur die von dieser Sitzung gesetzten Testwerte gehören dem Testlauf.
+    // Ein Dashboard-Toggle setzt live/off und übernimmt damit die Settings.
+    // Das Prädikat wird unter dem UPDATE-Zeilenlock geprüft, sodass auch ein
+    // gleichzeitiger Admin-Write nach dem Sitzungsende erhalten bleibt.
     if session.settings_existed {
         sqlx::query(
             "UPDATE twitch_engagement_settings
              SET enabled = $1, irc_read = $2, output_mode = $3
-             WHERE LOWER(channel_login) = LOWER($4)",
+             WHERE LOWER(channel_login) = LOWER($4)
+               AND enabled = TRUE AND irc_read = TRUE AND output_mode IN ('test', 'smalltalk_live')",
         )
         .bind(session.previous_enabled)
         .bind(session.previous_irc_read)
@@ -919,13 +1015,23 @@ async fn close_locked(
     } else {
         sqlx::query(
             "DELETE FROM twitch_engagement_settings
-             WHERE LOWER(channel_login) = LOWER($1) AND output_mode = 'test'",
+             WHERE LOWER(channel_login) = LOWER($1)
+               AND enabled = TRUE AND irc_read = TRUE AND output_mode IN ('test', 'smalltalk_live')",
         )
         .bind(&session.channel_login)
         .execute(&mut **tx)
         .await?;
     }
-    set_cooldown(tx, &session.channel_login, now).await?;
+    let live_test: bool =
+        sqlx::query_scalar("SELECT live_test FROM twitch_smalltalk_sessions WHERE id = $1")
+            .bind(session.id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if live_test {
+        live::set_live_cooldown(tx, &session.streamer_user_id, &session.channel_login, now).await?;
+    } else {
+        set_cooldown(tx, &session.channel_login, now).await?;
+    }
     tracing::info!(
         event = "smalltalk_loop.session_closed",
         session_id = %session.id,
@@ -1002,6 +1108,16 @@ fn exclusion_reason(
     None
 }
 
+/// Zusaetzliches Live-Gate: nur bekannte Followerzahlen 0..49. Unbekannte
+/// Werte duerfen im Shadow-Test weiterlaufen, aber niemals echten Chat ausloesen.
+fn follower_exclusion_reason(follower_count: Option<i32>) -> Option<&'static str> {
+    match follower_count {
+        Some(count) if (0..SMALLTALK_FOLLOWER_LIMIT).contains(&count) => None,
+        Some(_) => Some("followers_too_large"),
+        None => Some("followers_unknown"),
+    }
+}
+
 /// Aufteilung der geprüften Kanäle einer Loop-Runde.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct CandidateStats {
@@ -1011,6 +1127,8 @@ struct CandidateStats {
     partner: u32,
     blacklisted: u32,
     cooldown: u32,
+    followers_unknown: u32,
+    followers_too_large: u32,
     eligible: u32,
 }
 
@@ -1023,6 +1141,8 @@ impl CandidateStats {
             Some("partner") => self.partner += 1,
             Some("blacklisted") => self.blacklisted += 1,
             Some("cooldown") => self.cooldown += 1,
+            Some("followers_unknown") => self.followers_unknown += 1,
+            Some("followers_too_large") => self.followers_too_large += 1,
             Some(_) => {}
             None => self.eligible += 1,
         }
@@ -1095,6 +1215,7 @@ mod tests {
             is_live: true,
             game: Some("Deadlock".to_string()),
             viewer_count: Some(12),
+            follower_count: Some(12),
             cooldown_until: None,
             partner_table: false,
             partner_state: false,

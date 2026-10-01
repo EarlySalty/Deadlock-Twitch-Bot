@@ -10,7 +10,14 @@ const ALLOWED_FILES: &[&str] = &[
     "rust/crates/tb-llm/tests/no_minimax_identifiers.rs",
 ];
 
-const SKIP_DIRS: &[&str] = &["target", ".sqlx", "migrations", "docs", "node_modules", "dist"];
+const SKIP_DIRS: &[&str] = &[
+    "target",
+    ".sqlx",
+    "migrations",
+    "docs",
+    "node_modules",
+    "dist",
+];
 
 const SCAN_EXTS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "sql", "toml", "txt"];
 

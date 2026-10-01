@@ -63,10 +63,12 @@ Restdienste folgt zusammen mit den späteren getrennten Infisical-Bereichen.
    und kopiert root-eigen nach
    `/opt/deadlock/twitch/releases/<sha>` und wechselt `current` atomar.
 3. Die Regeln aus `pg_hba-twitch.conf` vor den allgemeinen Local- und
-   Host-Regeln einfügen und PostgreSQL neu laden. Positiv gegen
-   `twitch_analytics` sowie negativ gegen `postgres` und eine weitere lokale
-   Datenbank prüfen. Dadurch können weder die Peer-Rollen noch `twitchlegacy`
-   eine andere lokale Datenbank öffnen.
+   Host-Regeln einfügen und PostgreSQL neu laden. `twitchbot` und `twitchdash`
+   dürfen lokal jeweils `twitch_analytics` und `deadlock` per Peer öffnen;
+   `twitchcollector` bleibt auf `twitch_analytics` begrenzt. Positiv gegen die
+   jeweils erlaubten Datenbanken sowie negativ gegen `postgres` und eine
+   weitere lokale Datenbank prüfen. Dadurch können die Peer-Rollen und
+   `twitchlegacy` keine nicht freigegebene lokale Datenbank öffnen.
 4. Alle drei alten User-Dienste stoppen und deaktivieren. Verifizieren, dass keine
    alten `tb-bot`-/`tb-dashboard`-/`tb-stream-audit`-Prozesse und keine zugehörigen
    PostgreSQL-Backends mit der Superuser-Rolle mehr leben.

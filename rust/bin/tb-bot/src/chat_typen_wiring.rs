@@ -147,10 +147,16 @@ mod tests {
 
     #[test]
     fn nur_nichtleere_other_gehen_ans_modell() {
-        assert!(ist_modellkandidat(Nachrichtentyp::Other, "irgendein spam text"));
+        assert!(ist_modellkandidat(
+            Nachrichtentyp::Other,
+            "irgendein spam text"
+        ));
         assert!(!ist_modellkandidat(Nachrichtentyp::Other, "   "));
         assert!(!ist_modellkandidat(Nachrichtentyp::Question, "warum?"));
-        assert!(!ist_modellkandidat(Nachrichtentyp::GameRelated, "phantom 6"));
+        assert!(!ist_modellkandidat(
+            Nachrichtentyp::GameRelated,
+            "phantom 6"
+        ));
         assert!(!ist_modellkandidat(Nachrichtentyp::System, "nightbot text"));
     }
 

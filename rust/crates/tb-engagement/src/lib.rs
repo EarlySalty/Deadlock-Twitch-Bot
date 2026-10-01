@@ -16,8 +16,6 @@ pub mod auto_off;
 pub mod background;
 pub mod channel_background;
 pub mod conversation;
-pub mod crew_review;
-pub mod crew_review_store;
 pub mod deadlock_patches;
 pub mod deadlock_stats;
 pub mod deadlock_wiki;
@@ -26,9 +24,9 @@ pub mod global_sentiment;
 pub mod irc_message;
 pub mod irc_reader;
 pub mod learn_irc_reader;
+pub mod llm_chat;
 pub mod lurker_signal;
 pub mod match_context;
-pub mod llm_chat;
 pub mod outreach_shadow;
 pub mod outreach_shadow_store;
 pub mod persona;
@@ -47,4 +45,6 @@ pub mod threads;
 pub mod transcribe;
 pub mod types;
 
-pub use crew_review::CrewReviewTrigger;
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

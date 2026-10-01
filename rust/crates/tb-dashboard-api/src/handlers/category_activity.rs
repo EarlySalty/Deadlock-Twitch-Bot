@@ -35,7 +35,7 @@ pub async fn category_activity_series_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
@@ -62,11 +62,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

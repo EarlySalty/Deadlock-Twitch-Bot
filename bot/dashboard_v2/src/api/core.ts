@@ -165,7 +165,8 @@ export async function fetchJson<T>(
 export async function fetchApi<T>(
   endpoint: string,
   params: Record<string, string | number | boolean> = {},
-  timeoutMs?: number
+  timeoutMs?: number,
+  signal?: AbortSignal
 ): Promise<T> {
   if (isPreviewLocalhost()) {
     const fixture = getPreviewApiFixture(endpoint, params);
@@ -177,16 +178,23 @@ export async function fetchApi<T>(
   const url = buildApiUrl(endpoint, params);
   const abortCtrl = timeoutMs ? new AbortController() : null;
   const timer = abortCtrl ? setTimeout(() => abortCtrl.abort(), timeoutMs!) : null;
+  // Preserve timeout callers while also allowing queries to cancel obsolete requests.
+  const forwardAbort = () => abortCtrl?.abort(signal?.reason);
+  if (abortCtrl && signal) {
+    if (signal.aborted) forwardAbort();
+    else signal.addEventListener('abort', forwardAbort, { once: true });
+  }
 
   try {
     return await fetchJson<T>(
       url,
       withCookieCredentials({
         headers: { Accept: 'application/json' },
-        signal: abortCtrl?.signal,
+        signal: abortCtrl?.signal ?? signal,
       })
     );
   } finally {
     if (timer) clearTimeout(timer);
+    if (abortCtrl && signal) signal.removeEventListener('abort', forwardAbort);
   }
 }

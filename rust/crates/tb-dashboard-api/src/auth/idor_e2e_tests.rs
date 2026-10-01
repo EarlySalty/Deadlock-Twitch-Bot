@@ -18,20 +18,20 @@
 //! Gated auf `TB_TEST_DATABASE_URL` (echte Postgres-Verbindung nötig).
 
 use axum::{
-    Extension, Router,
     body::Body,
     extract::ConnectInfo,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
     routing::{get, post},
+    Extension, Router,
 };
-use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tower::ServiceExt;
 
 use crate::auth::csrf::csrf_protect;
-use crate::auth::session::{ADMIN_COOKIE_NAME, DashboardAuthState, PARTNER_COOKIE_NAME};
+use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME};
 use crate::handlers::{auth_status, engagement_mode, performance};
 
 const TEST_FERNET_KEY: &str = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=";
@@ -58,11 +58,13 @@ async fn make_pool(schema: &str) -> Option<PgPool> {
         .connect(&dsn)
         .await
         .expect("connect test-db");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .expect("Schema droppen");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&admin)
+    .await
+    .expect("Schema droppen");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .expect("Schema anlegen");

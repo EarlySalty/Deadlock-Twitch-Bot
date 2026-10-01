@@ -6,22 +6,36 @@
       {
         "ordinal": 0,
         "name": "session_id!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "started_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "started_at"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "total_present_min!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "chat_messages!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {

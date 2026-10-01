@@ -28,6 +28,6 @@ test('fällt bei unbekanntem oder leerem Hash auf den ersten Tab zurück', () =>
 });
 
 test('jede Sektion liegt in genau einem Tab', () => {
-  assert.deepEqual(VERWALTUNG_TAB_IDS, ['konto', 'chat', 'bot', 'overlay', 'werbung']);
+  assert.deepEqual(VERWALTUNG_TAB_IDS, ['konto', 'profil', 'chat', 'bot', 'overlay', 'werbung']);
   assert.equal(new Set(VERWALTUNG_TAB_IDS).size, VERWALTUNG_TAB_IDS.length);
 });

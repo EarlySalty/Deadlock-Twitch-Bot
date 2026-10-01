@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE twitch_partners p\n               SET raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END\n              FROM twitch_raid_auth a\n             WHERE a.twitch_user_id = p.twitch_user_id\n               AND LOWER(TRIM(COALESCE(p.status, ''))) = 'active'\n               AND COALESCE(p.raid_bot_enabled, 0) = 0\n               AND p.raid_admin_enabled\n               AND COALESCE(p.manual_partner_opt_out, 0) = 0\n               AND COALESCE(TRIM(p.technical_pause_reason), '') = ''\n               AND a.raid_enabled IS TRUE\n               AND COALESCE(a.needs_reauth, TRUE) = FALSE\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "9e4d76ca263259b0158f7ea3576d960f5d3f0d780857464117bf429ac5f2a4cc"
+}

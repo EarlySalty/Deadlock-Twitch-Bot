@@ -3,6 +3,9 @@
 //! Fokus: Chatters/Presence braucht Broadcaster-Tokens ohne `raid_enabled`-Gate,
 //! aber nur mit dem zwingenden `moderator:read:chatters`-Scope.
 
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -33,11 +36,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(schema, false))
         .execute(&admin)
         .await
         .unwrap();

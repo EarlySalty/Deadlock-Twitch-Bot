@@ -12,10 +12,31 @@ import {
   clampCamPositionToTarget,
   clampToFrame,
   normalizeStoredCamPosition,
+  stackedGameCrop,
   toEvenSize,
   withBandHeight,
 } from '../src/utils/socialMediaLayout';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
+
+test('Stacked-Gameplay füllt den Restframe ohne Facecam im Quellcrop', () => {
+  const full = { x: 0, y: 0, w: 1920, h: 1080 };
+  assert.deepEqual(stackedGameCrop(full, { x: 41, y: 237, w: 303, h: 336 }, 1320), {
+    x: 519, y: 0, w: 882, h: 1080,
+  });
+  assert.deepEqual(stackedGameCrop({ x: 400, y: 0, w: 1000, h: 1080 }, { x: 41, y: 237, w: 303, h: 336 }, 1320), {
+    x: 459, y: 0, w: 882, h: 1080,
+  });
+  const cam = { x: 700, y: 0, w: 350, h: 500 };
+  const crop = stackedGameCrop(full, cam, 1320);
+  assert.ok(crop.x + crop.w <= cam.x || crop.x >= cam.x + cam.w || crop.y + crop.h <= cam.y || crop.y >= cam.y + cam.h);
+  assert.ok(Math.abs(crop.x + crop.w / 2 - 960) < 200);
+});
+
+test('Stacked-Gleichstand bevorzugt links wie der Rust-Renderer', () => {
+  assert.deepEqual(stackedGameCrop({ x: 0, y: 0, w: 1920, h: 1080 }, { x: 900, y: 0, w: 120, h: 1080 }, 1320), {
+    x: 10, y: 0, w: 882, h: 1080,
+  });
+});
 
 // Der Zielframe ist der Vertrag zwischen Editor und Renderer
 // (rust/crates/tb-social-media/src/layout.rs: TARGET_WIDTH/TARGET_HEIGHT).
@@ -26,14 +47,11 @@ test('Zielframe ist 1080x1920', () => {
 
 // Driftschutz: das Default-Layout muss dem Rust-Default entsprechen, sonst
 // zeigt die Vorschau etwas anderes als FFmpeg rendert.
-test('Default-cam_position ist die PiP-Kachel rechts oben', () => {
-  assert.deepEqual(DEFAULT_LAYOUT.cam_position, { x: 712, y: 48, w: 320, h: 320 });
-  assert.deepEqual(DEFAULT_LAYOUT.cam_position, DEFAULT_PIP_TILE);
-  // 1080 - 320 - 48 = 712: gleicher Rand rechts wie oben.
-  assert.equal(
-    TARGET_WIDTH - DEFAULT_LAYOUT.cam_position.w - DEFAULT_LAYOUT.cam_position.x,
-    DEFAULT_LAYOUT.cam_position.y,
-  );
+test('Default-cam_position ist der volle obere Kamerastreifen', () => {
+  assert.equal(DEFAULT_LAYOUT.mode, 'stacked');
+  assert.deepEqual(DEFAULT_LAYOUT.game_crop, { x: 0, y: 0, w: 1920, h: 1080 });
+  assert.deepEqual(DEFAULT_LAYOUT.cam_position, { x: 0, y: 0, w: TARGET_WIDTH, h: 600 });
+  assert.deepEqual(DEFAULT_PIP_TILE, { x: 712, y: 48, w: 320, h: 320 });
 });
 
 test('clampToFrame haelt Boxen im Rahmen und erzwingt eine Mindestgroesse', () => {

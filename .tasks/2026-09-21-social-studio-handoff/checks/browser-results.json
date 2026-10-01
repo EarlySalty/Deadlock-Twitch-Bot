@@ -1,0 +1,86 @@
+{
+  "passed": 13,
+  "checks": [
+    "Desktop: three review cards, brand colors, dark text on gold and loaded community logo",
+    "Settled viewport screenshots for the four work areas",
+    "Approval moves one demo clip to the scheduled filter after successful save",
+    "Search and empty-state handling",
+    "Grid and list switch",
+    "Dialog focus containment, Escape and return to trigger",
+    "Failed approval retains the clip and shows a local error",
+    "Invalid schedule values rejected, valid draft saved",
+    "Failed save preserves draft; reset restores last successful demo state",
+    "Tabs support arrow keys, Home and End",
+    "Schematic layout demo saves and restores local settings",
+    "Four mobile work areas at 390px and 320px, loaded logo, no document overflow",
+    "No JavaScript errors or network requests; no product APIs used"
+  ],
+  "browser": "145.0.7632.6",
+  "target": "../reference/preview.html only",
+  "font_rendering": "system fallback; not proof of product fonts",
+  "screenshots": "new viewport captures on the project host, not original chat PNGs",
+  "js_errors": 0,
+  "network_requests": 0,
+  "widths": [
+    {
+      "view": "desktop-queue",
+      "viewport": 1440,
+      "document": 1440
+    },
+    {
+      "view": "desktop-autopilot",
+      "viewport": 1440,
+      "document": 1440
+    },
+    {
+      "view": "desktop-templates",
+      "viewport": 1440,
+      "document": 1440
+    },
+    {
+      "view": "desktop-accounts",
+      "viewport": 1440,
+      "document": 1440
+    },
+    {
+      "view": "390-queue",
+      "viewport": 390,
+      "document": 390
+    },
+    {
+      "view": "390-autopilot",
+      "viewport": 390,
+      "document": 390
+    },
+    {
+      "view": "390-templates",
+      "viewport": 390,
+      "document": 390
+    },
+    {
+      "view": "390-accounts",
+      "viewport": 390,
+      "document": 390
+    },
+    {
+      "view": "320-queue",
+      "viewport": 320,
+      "document": 320
+    },
+    {
+      "view": "320-autopilot",
+      "viewport": 320,
+      "document": 320
+    },
+    {
+      "view": "320-templates",
+      "viewport": 320,
+      "document": 320
+    },
+    {
+      "view": "320-accounts",
+      "viewport": 320,
+      "document": 320
+    }
+  ]
+}

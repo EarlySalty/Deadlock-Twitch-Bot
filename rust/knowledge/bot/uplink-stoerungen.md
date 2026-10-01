@@ -6,6 +6,7 @@ audience: streamer
 last_updated: 2026-09-08
 source: Uplink-Dashboard
 tip_eligible: false
+tip_flags: [uplink, stoerung, obs, stream-info, live]
 ---
 
 ### OBS sendet, aber auf der Plattform kommt nichts an

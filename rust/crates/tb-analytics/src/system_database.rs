@@ -58,10 +58,11 @@ pub async fn database_stats(pool: &PgPool, tables: &[&str]) -> Result<DatabaseSt
             // befüllte, nie analysierte Tabellen. Identifier wird quote-escaped;
             // die Quelle ist der verifizierte pg_class.relname (keine Injection).
             let quoted = format!("\"{}\"", relname.replace('"', "\"\""));
-            let (count,): (i64,) =
-                sqlx::query_as(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
-                    .fetch_one(pool)
-                    .await?;
+            let (count,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT COUNT(*)::BIGINT FROM {quoted}"
+            )))
+            .fetch_one(pool)
+            .await?;
 
             let size_result = sqlx::query_scalar!(
                 "SELECT pg_total_relation_size($1::text::regclass)::BIGINT AS \"size_bytes!\"",
@@ -101,11 +102,11 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, true))
             .execute(&pool)
             .await
             .expect("Schema");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .expect("search_path");

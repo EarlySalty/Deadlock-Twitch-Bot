@@ -5,7 +5,7 @@
 //!   (`vorgeschlagen` + `pausiert`) plus die persönliche Besuchsliste
 //!   (`persoenlich`, nach Potenzial sortiert); der GET führt vorher einen
 //!   Erkennungs-Lauf aus, damit die Liste den aktuellen Bestand zeigt.
-//! - `POST /twitch/api/admin/scout/candidates/:login/decision` → Entscheidung
+//! - `POST /twitch/api/admin/scout/candidates/{login}/decision` → Entscheidung
 //!   `approve` | `uebersprungen` | `pausiert` | `persoenlich` |
 //!   `bekannter_kontakt` mit optionalem Grund; gespeichert wird der
 //!   kanonische Status, der Entscheider kommt aus der Admin-Session.
@@ -162,7 +162,7 @@ pub async fn candidates_handler(auth: DashboardAuthLevel, State(pool): State<PgP
     .into_response()
 }
 
-/// `POST /twitch/api/admin/scout/candidates/:login/decision`
+/// `POST /twitch/api/admin/scout/candidates/{login}/decision`
 pub async fn decision_handler(
     auth: DashboardAuthLevel,
     config: Option<Extension<DashboardAuthState>>,
@@ -218,15 +218,17 @@ mod tests {
             .connect(&dsn)
             .await
             .expect("connect test database");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("drop schema");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("create schema");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("set search path");

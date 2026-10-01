@@ -1,11 +1,27 @@
+import { useMemo, useState } from 'react';
 import { Rise } from '../../motion/Rise';
-import { Target, UserPlus, TrendingUp } from 'lucide-react';
-import { NoDataCard } from '@/components/cards/NoDataCard';
-import type { RaidRetention as RaidRetentionData } from '@/types/analytics';
+import { ChevronDown, ChevronUp, Search, Target, UserPlus, TrendingUp } from 'lucide-react';
+import { NoDataCard } from '../cards/NoDataCard';
+import { filterAndSortRaids } from '@/types/analytics';
+import type {
+  RaidRetention as RaidRetentionData,
+  RaidSortDirection,
+  RaidSortKey,
+} from '@/types/analytics';
 
 interface RaidRetentionProps {
   data: RaidRetentionData | undefined;
 }
+
+const RAID_SPALTEN: { key: RaidSortKey; label: string; align: 'left' | 'right' }[] = [
+  { key: 'toBroadcaster', label: 'Ziel-Streamer', align: 'left' },
+  { key: 'viewersSent', label: 'Gesendet', align: 'right' },
+  { key: 'chattersAt5m', label: '5m', align: 'right' },
+  { key: 'chattersAt15m', label: '15m', align: 'right' },
+  { key: 'chattersAt30m', label: '30m', align: 'right' },
+  { key: 'retention30mPct', label: 'Retention %', align: 'right' },
+  { key: 'newChatters', label: 'Neue Chatter', align: 'right' },
+];
 
 function retentionColor(pct: number): string {
   if (pct >= 50) return 'text-success';
@@ -14,6 +30,24 @@ function retentionColor(pct: number): string {
 }
 
 export function RaidRetention({ data }: RaidRetentionProps) {
+  const [suche, setSuche] = useState('');
+  const [sortKey, setSortKey] = useState<RaidSortKey>('viewersSent');
+  const [richtung, setRichtung] = useState<RaidSortDirection>('desc');
+
+  const sichtbareRaids = useMemo(
+    () => filterAndSortRaids(data?.raids ?? [], suche, sortKey, richtung),
+    [data, suche, sortKey, richtung],
+  );
+
+  const spalteWechseln = (key: RaidSortKey) => {
+    if (key === sortKey) {
+      setRichtung((r) => (r === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setRichtung(key === 'toBroadcaster' ? 'asc' : 'desc');
+  };
+
   if (!data || !data.dataAvailable) {
     return <NoDataCard message={data?.message || "Keine Raid-Retention-Daten vorhanden"} />;
   }
@@ -53,22 +87,57 @@ export function RaidRetention({ data }: RaidRetentionProps) {
           step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-6"
         >
-          <h4 className="text-sm font-medium text-text-secondary mb-4">Raid-Details</h4>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h4 className="text-sm font-medium text-text-secondary">Raid-Details</h4>
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-background/60 px-2 py-1.5 sm:w-64">
+              <Search className="h-3.5 w-3.5 shrink-0 text-text-secondary" />
+              <input
+                type="text"
+                value={suche}
+                onChange={(event) => setSuche(event.target.value)}
+                placeholder="Ziel-Streamer suchen…"
+                aria-label="Ziel-Streamer suchen"
+                className="w-full bg-transparent text-sm text-white outline-none placeholder:text-text-secondary"
+              />
+            </div>
+          </div>
+          <div className="mb-2 text-xs text-text-secondary">
+            {sichtbareRaids.length} von {raids.length} Raids
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left py-2 text-text-secondary font-medium">Ziel-Streamer</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Gesendet</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">5m</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">15m</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">30m</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Retention %</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Neue Chatter</th>
+                  {RAID_SPALTEN.map((spalte) => {
+                    const aktiv = spalte.key === sortKey;
+                    return (
+                      <th
+                        key={spalte.key}
+                        aria-sort={aktiv ? (richtung === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        className={`${spalte.align === 'left' ? 'text-left' : 'text-right'} py-2 font-medium`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => spalteWechseln(spalte.key)}
+                          className={`inline-flex items-center gap-1 transition-colors hover:text-white ${
+                            spalte.align === 'right' ? 'flex-row-reverse' : ''
+                          } ${aktiv ? 'text-primary' : 'text-text-secondary'}`}
+                        >
+                          <span>{spalte.label}</span>
+                          {aktiv &&
+                            (richtung === 'asc' ? (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ))}
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {raids.map((raid) => (
+                {sichtbareRaids.map((raid) => (
                   <tr key={raid.raidId} className="border-b border-border/50 hover:bg-background/50">
                     <td className="py-2 text-white">{raid.toBroadcaster}</td>
                     <td className="py-2 text-right text-text-secondary">{raid.viewersSent}</td>
@@ -91,6 +160,11 @@ export function RaidRetention({ data }: RaidRetentionProps) {
                 ))}
               </tbody>
             </table>
+            {sichtbareRaids.length === 0 && (
+              <div className="py-6 text-center text-sm text-text-secondary">
+                Kein Raid passt zur Suche „{suche.trim()}“.
+              </div>
+            )}
           </div>
         </Rise>
       )}

@@ -4,6 +4,8 @@
 use std::{collections::HashMap, path::Path, sync::OnceLock, time::Duration};
 
 use serde::Deserialize;
+use sqlx::PgPool;
+use tb_config::{BotConfigSnapshot, DbConfig};
 use tb_transport_twitch::{HelixClient, HelixConfig};
 use tokio::io::AsyncReadExt;
 use zeroize::{Zeroize, Zeroizing};
@@ -51,6 +53,25 @@ impl std::fmt::Debug for UplinkRuntime {
 }
 
 impl UplinkRuntime {
+    /// Bestehende FD-/Infisical-Credential bleibt im Prozess. Ausschließlich
+    /// sichere Metadaten des vorhandenen Steam-Readers verlassen diese Fassade.
+    pub async fn steam_title_context_status(
+        &self,
+        url: &str,
+        discord_id: i64,
+    ) -> Result<tb_chat::steam_lookup::CentralTitleContextStatus, &'static str> {
+        let token = self
+            .platform
+            .get("TWITCH_INTERNAL_API_TOKEN")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("Der bestehende interne Dienstzugang fehlt.")?;
+        tb_chat::steam_lookup::central_title_context_status(url, token, discord_id)
+            .await
+            .map_err(|_| {
+                "Steam-Kontext konnte nicht authentifiziert und vertragsgemäß gelesen werden."
+            })
+    }
+
     pub(crate) fn platform_value(&self, name: &str) -> Option<String> {
         self.platform
             .get(name)
@@ -75,10 +96,54 @@ pub(crate) fn platform_value(name: &str) -> Option<String> {
     runtime().ok()?.platform_value(name)
 }
 
+/// Bestehender interner Dienst-Token aus dem geschützten Infisical-FD-Pfad.
+/// Nur für lokale Dienst-zu-Dienst-Aufrufe; der Wert wird nie protokolliert.
+pub fn brain_service_token() -> Option<String> {
+    platform_value("TWITCH_INTERNAL_API_TOKEN")
+}
+
 pub fn install(runtime: UplinkRuntime) -> Result<(), &'static str> {
     RUNTIME
         .set(runtime)
         .map_err(|_| "Uplink wurde bereits eingerichtet.")
+}
+
+/// Enger Laufzeitkontext für die Clip-Kontexternte. Er nutzt ausschließlich
+/// bereits geladene Infisical-Werte und die normalen Poolzeiten der Config.
+pub struct ClipContextRuntime {
+    pub read_pool: PgPool,
+    pub write_pool: PgPool,
+    pub helix: Option<HelixClient>,
+}
+
+pub async fn clip_context_runtime(
+    snapshot: &BotConfigSnapshot,
+) -> Result<ClipContextRuntime, &'static str> {
+    let runtime = runtime()?;
+    let dsn = runtime
+        .platform_value("TWITCH_ANALYTICS_DSN")
+        .ok_or("Der Datenbankzugang für die Clip-Kontexternte fehlt in Infisical.")?;
+    let helix = runtime.helix.clone();
+
+    let database = &snapshot.settings().database;
+    let pool_config = DbConfig {
+        dsn,
+        pool_max: 2,
+        acquire_timeout: Duration::from_millis(database.acquire_timeout_ms),
+        connect_timeout: Duration::from_secs(database.connect_timeout_seconds),
+    };
+    let read_pool = tb_db::pool::connect_readonly(&pool_config)
+        .await
+        .map_err(|_| "Die lesende Datenbankverbindung für Clip-Kontext ist fehlgeschlagen.")?;
+    let write_pool = tb_db::pool::connect(&pool_config)
+        .await
+        .map_err(|_| "Die schreibende Datenbankverbindung für Clip-Kontext ist fehlgeschlagen.")?;
+
+    Ok(ClipContextRuntime {
+        read_pool,
+        write_pool,
+        helix,
+    })
 }
 
 /// Lokale Verwaltungsendpunkte ohne DNS, Zugangsdaten, Pfad oder Redirect.
@@ -138,13 +203,16 @@ pub(crate) async fn bounded_body(
 
 async fn credential(fd: u32) -> Result<Zeroizing<String>, &'static str> {
     use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use std::os::fd::BorrowedFd;
     let raw = i32::try_from(fd)
         .ok()
         .filter(|fd| *fd >= 3)
         .ok_or("Infisical-FD ist ungültig.")?;
-    let flags = fcntl(raw, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
+    let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+    let flags =
+        fcntl(&borrowed, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
     fcntl(
-        raw,
+        &borrowed,
         FcntlArg::F_SETFD(FdFlag::from_bits_retain(flags) | FdFlag::FD_CLOEXEC),
     )
     .map_err(|_| "Infisical-FD konnte nicht geschützt werden.")?;
@@ -278,6 +346,7 @@ async fn fetch(config: &UplinkConfig, token: &str) -> Result<UplinkRuntime, &'st
             "RS_RELAY_API_SECRET",
             "RS_RELAY_ADMIN_SECRET",
             "TWITCH_ANALYTICS_DSN",
+            "DEADLOCK_CENTRAL_READONLY_DSN",
             "TWITCH_CLIENT_ID",
             "TWITCH_CLIENT_SECRET",
             "DB_MASTER_KEY_V1",
@@ -789,13 +858,13 @@ mod tests {
         use nix::fcntl::{fcntl, FcntlArg, FdFlag};
         use std::os::fd::AsRawFd;
         let file = memory_credential(b"synthetic-bootstrap\n");
-        assert_eq!(fcntl(file.as_raw_fd(), FcntlArg::F_GETFD).unwrap(), 0);
+        assert_eq!(fcntl(&file, FcntlArg::F_GETFD).unwrap(), 0);
         assert_eq!(
             &*credential(file.as_raw_fd() as u32).await.unwrap(),
             "synthetic-bootstrap"
         );
         assert_ne!(
-            fcntl(file.as_raw_fd(), FcntlArg::F_GETFD).unwrap() & FdFlag::FD_CLOEXEC.bits(),
+            fcntl(&file, FcntlArg::F_GETFD).unwrap() & FdFlag::FD_CLOEXEC.bits(),
             0
         );
         for value in [

@@ -221,7 +221,7 @@ async fn save_legal(path: &Path, slug_raw: &str, body_bytes: &[u8]) -> Result<Va
 
 // ── Handler ────────────────────────────────────────────────────────────────────
 
-/// `GET /twitch/api/admin/legal/:slug` — Rechtsseite lesen (Admin).
+/// `GET /twitch/api/admin/legal/{slug}` — Rechtsseite lesen (Admin).
 pub async fn get_handler(
     auth: DashboardAuthLevel,
     AxumPath(slug): AxumPath<String>,
@@ -232,7 +232,7 @@ pub async fn get_handler(
     Ok(Json(load_legal(&legal_path(), &slug).await?))
 }
 
-/// `POST /twitch/api/admin/legal/:slug` — Rechtsseite speichern (Admin).
+/// `POST /twitch/api/admin/legal/{slug}` — Rechtsseite speichern (Admin).
 pub async fn save_handler(
     auth: DashboardAuthLevel,
     AxumPath(slug): AxumPath<String>,

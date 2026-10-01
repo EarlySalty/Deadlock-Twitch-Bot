@@ -1,0 +1,9 @@
+status: aktiv (2026-09-28)
+
+# Unabhängiges Erst-Review B
+
+Prüfe Paket B read-only auf `/home/nathanael/.worktrees/twitch-patch-receiver-20260928`, Commit `2ac90595`, Diff gegen `ecd21dfa`. Du bist nicht der Autor. Keine Änderungen, kein Commit, kein Push, keine Unter-Threads oder Unter-Agenten. Ziel und Umfang stehen in `AUFTRAG.md`, `WORKER-B.md` und `PAKETE.md` im selben Ordner. Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd`.
+
+Bewerte den Produktivpfad gegen reale Verträge: exakte kanonische deutsche Artikel-URL und `source_url`, Event-Frische 120 Sekunden, stabile IDs, bestehender Live-Deadlock-Partner schon vor Veröffentlichung, aktive Verbindung und nachgewiesenes Schreibrecht, source-only-Sendepfad, vor dem POST dauerhaft gespeicherter Versuch, unbekannter HTTP-Ausgang ohne Wiederholung, kein öffentlicher interner Endpunkt. Prüfe Ausfall, Restart und konkurrierende Instanzen. Prüfe die tatsächliche Migration `rust/migrations/20260928120000_patch_announcements.sql`: Bootstrap-Marker und historische IDs atomar, unveränderliches `observed_at`, per-ID-Status und Grants; gleiche sie read-only mit C-Commit `228d0585` auf `/home/nathanael/.worktrees/twitch-patch-feed-20260928` ab. Die C-Datei kann aktuell von ihrem eigenen Fixer geändert werden: gib bei Drift die geprüften SHAs an. A-Fixer arbeitet parallel; ziehe dessen ungeprüften Stand nicht als Beleg heran.
+
+Review zuerst den Umfang und die Fehlerklassen; belege jedes mögliche Problem mit Datei:Zeile und reproduzierbarem Szenario. Bei fehlendem PostgreSQL-Lauf trenne unbewiesene Risiken von bestätigten Defekten. Befundliste vollständig, Priorität, Urteil `fertig J/N, Fix nötig J/N` und Test-/Prüfgrenze an den Orchestrator melden. Keine echten Twitch-Nachrichten, keine Prod-Schreibzugriffe, keine Geheimnisse lesen. Keine neuen Code-Kommentare.

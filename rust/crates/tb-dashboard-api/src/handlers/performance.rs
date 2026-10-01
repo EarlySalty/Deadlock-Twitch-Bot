@@ -75,7 +75,7 @@ pub async fn monthly_stats_handler(
         return e.into_response();
     }
 
-    let months = match parse_bounded_query_int(params.months.as_deref(), "months", 12, 1, 24) {
+    let months = match parse_bounded_query_int(params.months.as_deref(), "months", 12, 1, 120) {
         Ok(m) => m,
         Err(resp) => return resp.into_response(),
     };
@@ -212,7 +212,7 @@ pub async fn weekly_stats_handler(
         return e.into_response();
     }
 
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
@@ -305,7 +305,7 @@ pub async fn hourly_heatmap_handler(
         return e.into_response();
     }
 
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
@@ -380,7 +380,7 @@ pub async fn calendar_heatmap_handler(
         return e.into_response();
     }
 
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 365, 30, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 365, 30, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
@@ -469,7 +469,7 @@ pub async fn viewer_count_timeline_handler(
         return resp;
     }
 
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 7, 1, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 7, 1, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
@@ -499,7 +499,7 @@ pub async fn viewer_count_timeline_handler(
          GROUP BY 1 ORDER BY 1"
     );
 
-    match sqlx::query(&query)
+    match sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(since)
         .bind(streamer)
         .fetch_all(&pool)
@@ -564,11 +564,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

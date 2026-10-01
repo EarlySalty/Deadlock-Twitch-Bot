@@ -28,6 +28,38 @@ pub struct KnowledgeTitle {
     pub quality_tier: Option<i32>,
 }
 
+/// Persistente Nutzerpraeferenzen des Dashboard-Titelgenerators.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TitlePreferences {
+    pub style_preference: String,
+    pub experimental_auto_set: bool,
+    pub never_words: Vec<String>,
+}
+
+pub fn normalize_never_words(words: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    words
+        .iter()
+        .map(|word| word.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|word| word.chars().take(60).collect::<String>().trim().to_string())
+        .filter(|word| !word.is_empty() && seen.insert(word.to_lowercase()))
+        .take(40)
+        .collect()
+}
+
+pub fn parse_never_words(raw: &str) -> Vec<String> {
+    normalize_never_words(&raw.lines().map(str::to_string).collect::<Vec<_>>())
+}
+
+/// Vom Streamer explizit bewertetes Beispiel fuer die Human-Feedback-Schleife.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleFeedbackItem {
+    pub primary_title: String,
+    pub feedback: String,
+    pub selected_title: Option<String>,
+    pub edited_title: Option<String>,
+}
+
 /// Löst den `twitch_login` zu einer `twitch_user_id` auf (Python
 /// `_resolve_streamer_login_for_user_id`): leerer/fehlender Treffer → `None`.
 async fn resolve_streamer_login(pool: &PgPool, streamer_id: &str) -> Option<String> {
@@ -141,6 +173,126 @@ pub async fn get_top_knowledge_titles(pool: &PgPool, limit: i64) -> Vec<Knowledg
             Vec::new()
         }
     }
+}
+
+pub async fn get_title_preferences(
+    pool: &PgPool,
+    streamer_id: &str,
+) -> Result<TitlePreferences, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, bool, String)>(
+        "SELECT style_preference, experimental_auto_set, never_words \
+         FROM title_generator_preferences WHERE twitch_user_id = $1",
+    )
+    .bind(streamer_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        Some((style_preference, experimental_auto_set, never_words)) => TitlePreferences {
+            style_preference,
+            experimental_auto_set,
+            never_words: parse_never_words(&never_words),
+        },
+        None => TitlePreferences::default(),
+    })
+}
+
+pub async fn save_title_preferences(
+    pool: &PgPool,
+    streamer_id: &str,
+    style_preference: &str,
+    experimental_auto_set: bool,
+    never_words: &[String],
+) -> Result<(), sqlx::Error> {
+    let never_words = normalize_never_words(never_words).join("\n");
+    sqlx::query(
+        "INSERT INTO title_generator_preferences \
+         (twitch_user_id, style_preference, experimental_auto_set, never_words, updated_at) \
+         VALUES ($1, $2, $3, $4, NOW()) \
+         ON CONFLICT (twitch_user_id) DO UPDATE SET \
+             style_preference = EXCLUDED.style_preference, \
+             experimental_auto_set = EXCLUDED.experimental_auto_set, \
+             never_words = EXCLUDED.never_words, updated_at = NOW()",
+    )
+    .bind(streamer_id)
+    .bind(style_preference)
+    .bind(experimental_auto_set)
+    .bind(never_words)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn insert_title_generation(
+    pool: &PgPool,
+    generation_id: &str,
+    streamer_id: &str,
+    keywords: &str,
+    primary_title: &str,
+    alternatives: &[String],
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO title_generator_feedback \
+         (generation_id, twitch_user_id, keywords, primary_title, alternatives) \
+         VALUES ($1, $2, $3, $4, $5::jsonb)",
+    )
+    .bind(generation_id)
+    .bind(streamer_id)
+    .bind(keywords)
+    .bind(primary_title)
+    .bind(serde_json::to_string(alternatives).unwrap_or_else(|_| "[]".to_string()))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn save_title_feedback(
+    pool: &PgPool,
+    streamer_id: &str,
+    generation_id: &str,
+    feedback: &str,
+    selected_title: Option<&str>,
+    edited_title: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE title_generator_feedback SET \
+             feedback = $3, selected_title = $4, edited_title = $5, feedback_at = NOW() \
+         WHERE generation_id = $1 AND twitch_user_id = $2",
+    )
+    .bind(generation_id)
+    .bind(streamer_id)
+    .bind(feedback)
+    .bind(selected_title)
+    .bind(edited_title)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn get_recent_title_feedback(
+    pool: &PgPool,
+    streamer_id: &str,
+    limit: i64,
+) -> Vec<TitleFeedbackItem> {
+    sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+        "SELECT primary_title, feedback, selected_title, edited_title \
+         FROM title_generator_feedback WHERE twitch_user_id = $1 AND feedback IS NOT NULL \
+         ORDER BY feedback_at DESC NULLS LAST, created_at DESC LIMIT $2",
+    )
+    .bind(streamer_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(
+        |(primary_title, feedback, selected_title, edited_title)| TitleFeedbackItem {
+            primary_title,
+            feedback,
+            selected_title,
+            edited_title,
+        },
+    )
+    .collect()
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -284,12 +436,16 @@ mod tests {
     }
 
     async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-        let admin = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -346,7 +502,9 @@ mod tests {
         assert!((avg - 15.0).abs() < 1e-9, "AVG(10,30,5)=15, war {avg}");
 
         // Unbekannte streamer_id → leer / 0.
-        assert!(get_streamer_title_history(&pool, "404", 30).await.is_empty());
+        assert!(get_streamer_title_history(&pool, "404", 30)
+            .await
+            .is_empty());
         assert_eq!(get_streamer_avg_viewers(&pool, "404").await, 0.0);
     }
 
@@ -419,7 +577,10 @@ mod tests {
     async fn upsert_knowledge_greatest_und_tier() {
         let pool = pool_or_skip!("t6e_title_knowledge_upsert");
         // Volle Tabelle (Minimal-Variante aus pool_in_schema hat nicht alle Spalten/UNIQUE).
-        sqlx::query("DROP TABLE title_generator_knowledge").execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE title_generator_knowledge")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE title_generator_knowledge (\
              id SERIAL PRIMARY KEY, title TEXT NOT NULL, keywords TEXT[] DEFAULT '{}', \
@@ -431,11 +592,15 @@ mod tests {
              quality_tier SMALLINT NOT NULL DEFAULT 1 CHECK (quality_tier IN (1,2,3)), \
              UNIQUE (title, game_context))",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         let kw = vec!["ranked".to_string(), "grind".to_string()];
 
         // 1. Frischer INSERT: Score 1.5, quality_tier bleibt Default 1.
-        upsert_knowledge_entry(&pool, "X", &kw, 1.2, 0.05, 1.0, 1.5, "small", "s1").await.unwrap();
+        upsert_knowledge_entry(&pool, "X", &kw, 1.2, 0.05, 1.0, 1.5, "small", "s1")
+            .await
+            .unwrap();
         let (score, tier): (f64, i32) = sqlx::query_as(
             "SELECT normalized_score::float8, quality_tier::int4 FROM title_generator_knowledge WHERE title='X'",
         ).fetch_one(&pool).await.unwrap();
@@ -443,7 +608,9 @@ mod tests {
         assert_eq!(tier, 1); // INSERT-Pfad setzt keinen Tier
 
         // 2. Konflikt mit niedrigerem Score 1.3 → GREATEST behält 1.5, Tier = CASE(1.3) = 1.
-        upsert_knowledge_entry(&pool, "X", &kw, 1.0, 0.04, 1.0, 1.3, "small", "s2").await.unwrap();
+        upsert_knowledge_entry(&pool, "X", &kw, 1.0, 0.04, 1.0, 1.3, "small", "s2")
+            .await
+            .unwrap();
         let (score2, tier2): (f64, i32) = sqlx::query_as(
             "SELECT normalized_score::float8, quality_tier::int4 FROM title_generator_knowledge WHERE title='X'",
         ).fetch_one(&pool).await.unwrap();
@@ -451,7 +618,9 @@ mod tests {
         assert_eq!(tier2, 1);
 
         // 3. Konflikt mit höherem Score 2.5 → Score 2.5, Tier = CASE(2.5) = 3.
-        upsert_knowledge_entry(&pool, "X", &kw, 2.0, 0.1, 1.0, 2.5, "large", "s3").await.unwrap();
+        upsert_knowledge_entry(&pool, "X", &kw, 2.0, 0.1, 1.0, 2.5, "large", "s3")
+            .await
+            .unwrap();
         let (score3, tier3): (f64, i32) = sqlx::query_as(
             "SELECT normalized_score::float8, quality_tier::int4 FROM title_generator_knowledge WHERE title='X'",
         ).fetch_one(&pool).await.unwrap();
@@ -460,7 +629,9 @@ mod tests {
 
         // Keine Duplikate (UNIQUE title, game_context).
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM title_generator_knowledge")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -474,10 +645,26 @@ mod tests {
              strengths TEXT, weaknesses TEXT, patterns TEXT, recommendations TEXT, raw_response JSONB)",
         )
         .execute(&pool).await.unwrap();
-        let start = chrono::DateTime::parse_from_rfc3339("2026-05-17T00:00:00+00:00").unwrap().with_timezone(&Utc);
-        let end = chrono::DateTime::parse_from_rfc3339("2026-06-14T00:00:00+00:00").unwrap().with_timezone(&Utc);
+        let start = chrono::DateTime::parse_from_rfc3339("2026-05-17T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2026-06-14T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
         let raw = serde_json::json!({"k": "v"});
-        insert_insight(&pool, "900", start, end, "stark", "schwach", "muster", "empfehlung", &raw).await.unwrap();
+        insert_insight(
+            &pool,
+            "900",
+            start,
+            end,
+            "stark",
+            "schwach",
+            "muster",
+            "empfehlung",
+            &raw,
+        )
+        .await
+        .unwrap();
         let (sid, strengths, raw_k): (String, Option<String>, Option<String>) = sqlx::query_as(
             "SELECT streamer_id, strengths, raw_response->>'k' FROM title_generator_insights WHERE streamer_id='900'",
         ).fetch_one(&pool).await.unwrap();

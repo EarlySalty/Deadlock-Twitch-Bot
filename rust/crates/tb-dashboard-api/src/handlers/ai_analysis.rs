@@ -77,12 +77,12 @@ pub async fn ai_analysis_handler(
             json!({ "error": "Analyse läuft bereits für diesen Streamer. Bitte warte bis sie abgeschlossen ist." }),
         );
     }
-    // days: parse-or-30, clamp 7..365 (Python int()-ValueError → 30).
+    // days: parse-or-30, clamp 7..3650 (Python int()-ValueError → 30).
     let days = params
         .days
         .as_deref()
         .and_then(|d| d.trim().parse::<i64>().ok())
-        .map(|d| d.clamp(7, 365))
+        .map(|d| d.clamp(7, 3650))
         .unwrap_or(30);
     // game_filter: deadlock|all, sonst all.
     let gf = params
@@ -158,7 +158,11 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
             .raw_completion("", prompt, 60000, 0.5)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(parse_ai_analysis_points_with_context(&raw, ai_model, "ai-analysis"))
+        Ok(parse_ai_analysis_points_with_context(
+            &raw,
+            ai_model,
+            "ai-analysis",
+        ))
     }
 }
 
@@ -271,11 +275,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

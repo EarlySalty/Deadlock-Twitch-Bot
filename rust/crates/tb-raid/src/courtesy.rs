@@ -42,7 +42,7 @@ pub const ENGAGED_MIN_SPAN: Duration = Duration::from_secs(3 * 60);
 pub const COURTESY_LOOKBACK_DAYS: i64 = 45;
 
 /// Gewicht des Courtesy-Anteils im Base-Score.
-pub const COURTESY_WEIGHT: f64 = 0.10;
+pub const COURTESY_WEIGHT: f64 = 0.085;
 
 /// Stärke des Shrinks: entspricht `COURTESY_PRIOR_STRENGTH` zusätzlichen
 /// Beobachtungen zum Ausgangswert. Ein einzelner Ausrutscher soll niemanden

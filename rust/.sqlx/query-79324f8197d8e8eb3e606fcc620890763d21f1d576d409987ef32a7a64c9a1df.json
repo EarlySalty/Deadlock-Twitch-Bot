@@ -6,22 +6,36 @@
       {
         "ordinal": 0,
         "name": "chatter_login!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_session_chatters",
+            "name": "chatter_login"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "chatter_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_session_chatters",
+            "name": "chatter_id"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "messages!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "last_seen_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

@@ -2,7 +2,6 @@
 
 use crate::constants::IDEMPOTENCY_KEY_HEADER;
 use axum::{
-    async_trait,
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
 };
@@ -13,7 +12,6 @@ use axum::{
 #[derive(Debug, Clone)]
 pub struct IdempotencyKey(pub Option<String>);
 
-#[async_trait]
 impl<S: Send + Sync> FromRequestParts<S> for IdempotencyKey {
     type Rejection = (StatusCode, &'static str);
 

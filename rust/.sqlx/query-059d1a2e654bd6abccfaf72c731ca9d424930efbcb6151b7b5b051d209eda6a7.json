@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO brain.hero_item_synergies(\n                  hero_id, item_id, with_item_id, wins, losses, matches, patch_tag, updated_at\n                )\n                VALUES($1, $2, $3, $4, $5, $6, $7, now())\n                ON CONFLICT(hero_id, item_id, with_item_id, patch_tag) DO UPDATE SET\n                  wins=excluded.wins,\n                  losses=excluded.losses,\n                  matches=excluded.matches,\n                  updated_at=excluded.updated_at\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "059d1a2e654bd6abccfaf72c731ca9d424930efbcb6151b7b5b051d209eda6a7"
+}

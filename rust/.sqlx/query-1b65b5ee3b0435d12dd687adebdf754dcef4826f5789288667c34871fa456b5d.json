@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "follower_delta",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_sessions",
+            "name": "follower_delta"
+          }
+        }
       }
     ],
     "parameters": {

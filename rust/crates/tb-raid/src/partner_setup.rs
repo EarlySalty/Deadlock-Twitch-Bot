@@ -513,28 +513,32 @@ async fn normalize_related_tables(
     ];
     for (idx, sql) in statements.iter().enumerate() {
         let savepoint = format!("partner_setup_norm_{idx}");
-        sqlx::query(&format!("SAVEPOINT {savepoint}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {savepoint}")))
             .execute(&mut **tx)
             .await?;
-        let result = sqlx::query(sql)
+        let result = sqlx::query(*sql)
             .bind(twitch_login)
             .bind(twitch_user_id)
             .execute(&mut **tx)
             .await;
         match result {
             Ok(_) => {
-                sqlx::query(&format!("RELEASE SAVEPOINT {savepoint}"))
-                    .execute(&mut **tx)
-                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "RELEASE SAVEPOINT {savepoint}"
+                )))
+                .execute(&mut **tx)
+                .await?;
             }
             Err(e) => {
                 tracing::warn!(
                     statement = idx,
                     "normalize_related_tables: Statement fehlgeschlagen (übersprungen): {e}"
                 );
-                sqlx::query(&format!("ROLLBACK TO SAVEPOINT {savepoint}"))
-                    .execute(&mut **tx)
-                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "ROLLBACK TO SAVEPOINT {savepoint}"
+                )))
+                .execute(&mut **tx)
+                .await?;
             }
         }
     }
@@ -632,6 +636,66 @@ pub async fn record_first_login(pool: &PgPool, twitch_user_id: &str, twitch_logi
 // promote_streamer_to_partner
 // ---------------------------------------------------------------------------
 
+/// Zusammengeführte Tags aller Sessions mit nicht-leeren Tags
+/// (`twitch_stream_sessions.tags`: JSON-Array oder Komma-Liste). `None` =
+/// keine Tags bekannt.
+async fn session_tags(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Result<Option<Vec<String>>, sqlx::Error> {
+    let user_id = twitch_user_id.trim();
+    let login = twitch_login.trim().to_lowercase();
+    if user_id.is_empty() || login.is_empty() {
+        return Ok(None);
+    }
+    let rows: Vec<(Option<String>,)> = sqlx::query_as(
+        r#"
+        SELECT tags FROM twitch_stream_sessions
+         WHERE COALESCE(tags, '') <> ''
+           AND (
+                twitch_user_id = $1
+                OR (NULLIF(twitch_user_id, '') IS NULL AND lower(streamer_login) = $2)
+           )
+        "#,
+    )
+    .bind(user_id)
+    .bind(&login)
+    .fetch_all(pool)
+    .await?;
+    let mut tags: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(raw,)| raw)
+        .flat_map(|raw| parse_session_tags(&raw))
+        .collect();
+    if tags.is_empty() {
+        return Ok(None);
+    }
+    tags.sort();
+    tags.dedup();
+    Ok(Some(tags))
+}
+
+fn parse_session_tags(raw: &str) -> Vec<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    if raw.starts_with('[') {
+        if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(raw) {
+            return items
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect();
+        }
+    }
+    raw.split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Python `promote_streamer_to_partner` (`partner_registry.py:782`) für den
 /// OAuth-Followup-Parametersatz. Läuft vollständig in der übergebenen
 /// Transaktion (Promotion + Identity-Upsert + Normalisierung + Clear-Source).
@@ -645,6 +709,11 @@ pub async fn promote_streamer_to_partner(
     if normalized_login.is_empty() || normalized_user_id.is_empty() {
         return Err(PartnerSetupError::InvalidIdentity);
     }
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('partner_signup'), hashtext($1::text))")
+        .bind(&normalized_user_id)
+        .execute(&mut **tx)
+        .await?;
 
     // Signup-Block-Guard: eigenständiger Zustand
     // (`twitch_partner_signup_denylist`), getrennt von Raid-Blacklist,
@@ -810,7 +879,7 @@ pub async fn promote_streamer_to_partner(
                 last_link_checked_at = $6,
                 next_link_check_at = $7,
                 manual_partner_opt_out = $8,
-                raid_bot_enabled = $9,
+                raid_bot_enabled = CASE WHEN raid_admin_enabled THEN $9 ELSE 0 END,
                 silent_ban = $10,
                 silent_raid = $11,
                 live_ping_role_id = $12,
@@ -869,6 +938,16 @@ pub async fn promote_streamer_to_partner(
             &effective_partnered_at
         )
         .execute(&mut **tx)
+        .await?;
+    }
+
+    if active.is_none() {
+        crate::streamer_referrals::credit_first_activation(
+            tx,
+            &normalized_user_id,
+            &normalized_login,
+            now,
+        )
         .await?;
     }
 
@@ -953,6 +1032,19 @@ pub trait ChatGreeterPort: Send + Sync {
     ) -> Result<bool, String>;
 }
 
+/// Schreibt bei Tag-Treffer den Denylist-Eintrag für den Kanal. Der Port hält
+/// die Dependency-Richtung ein (tb-analytics hängt an tb-raid, nicht
+/// umgekehrt); die Verdrahtung passiert im Bot-Binary.
+#[async_trait]
+pub trait SignupTagEnforcePort: Send + Sync {
+    async fn enforce_session_tags(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        tags: &[String],
+    ) -> Result<(), sqlx::Error>;
+}
+
 // ---------------------------------------------------------------------------
 // PartnerSetupService
 // ---------------------------------------------------------------------------
@@ -975,6 +1067,7 @@ pub struct PartnerSetupService {
     discord: Arc<dyn DiscordDirectoryPort>,
     moderator: Arc<dyn ModeratorInstallPort>,
     greeter: Arc<dyn ChatGreeterPort>,
+    signup_tag_block: Option<Arc<dyn SignupTagEnforcePort>>,
     /// Python `self._bot_id() or TWITCH_BOT_USER_ID`; None → Moderator- und
     /// Chat-Schritt entfallen (früher Return wie Python).
     bot_user_id: Option<String>,
@@ -997,10 +1090,16 @@ impl PartnerSetupService {
             discord,
             moderator,
             greeter,
+            signup_tag_block: None,
             bot_user_id,
             greeting_initial_pause: Duration::from_secs(2),
             greeting_message_pause: Duration::from_secs(1),
         }
+    }
+
+    pub fn with_signup_tag_block(mut self, port: Arc<dyn SignupTagEnforcePort>) -> Self {
+        self.signup_tag_block = Some(port);
+        self
     }
 
     /// Test-Konstruktor ohne reale Wartezeiten.
@@ -1040,6 +1139,12 @@ impl PartnerSetupService {
 
         // Promotion in eigener Transaktion — isoliert von Backfill, damit ein
         // Backfill-Fehler die Partner-Zeile nicht zurückrollt.
+        if let Some(port) = self.signup_tag_block.as_ref() {
+            if let Some(tags) = session_tags(&self.pool, twitch_user_id, twitch_login).await? {
+                port.enforce_session_tags(twitch_user_id, twitch_login, &tags)
+                    .await?;
+            }
+        }
         let promoted = {
             let mut tx = self.pool.begin().await?;
             let promoted = promote_streamer_to_partner(
@@ -1265,18 +1370,25 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
+    mod referral_test_support {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/streamer_referrals.rs"
+        ));
+    }
+
     async fn testpool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = crate::test_database::database_url()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -1294,7 +1406,7 @@ mod tests {
                 id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT,
                 require_discord_link INTEGER, last_description TEXT, last_link_ok INTEGER,
                 added_by TEXT, last_link_checked_at TEXT, next_link_check_at TEXT,
-                manual_partner_opt_out INTEGER, raid_bot_enabled INTEGER, silent_ban INTEGER,
+                manual_partner_opt_out INTEGER, raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER, silent_ban INTEGER,
                 silent_raid INTEGER, live_ping_role_id BIGINT, live_ping_enabled INTEGER,
                 partnered_at TEXT, departnered_at TEXT, status TEXT, admin_archived_at TEXT,
                 technical_pause_reason TEXT
@@ -1324,9 +1436,14 @@ mod tests {
             r#"CREATE TABLE twitch_live_state (
                 twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL
             )"#,
+            r#"CREATE TABLE twitch_stream_sessions (
+                id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL,
+                twitch_user_id TEXT, tags TEXT
+            )"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        referral_test_support::schema(&pool).await;
         Some(pool)
     }
 
@@ -1340,6 +1457,37 @@ mod tests {
             activate_partner_features: true,
             clear_source: true,
         }
+    }
+
+    #[tokio::test]
+    async fn session_tags_nimmt_id_und_login_fallback_ohne_fremde_id() {
+        let Some(pool) = testpool("ps_session_tags").await else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, tags) VALUES
+             ('beispiel', '42', 'English'),
+             ('Beispiel', NULL, 'Deutsch'),
+             ('beispiel', '', 'SoloQ'),
+             ('beispiel', '99', 'Fremd')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let tags = session_tags(&pool, "42", "BEISPIEL")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tags,
+            vec![
+                "Deutsch".to_string(),
+                "English".to_string(),
+                "SoloQ".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

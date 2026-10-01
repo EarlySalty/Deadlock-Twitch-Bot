@@ -1,391 +1,63 @@
-//! Anonymer Read-only-Chat-Sink für alle vom Scout aktuell gefundenen
-//! Deadlock-Live-Kanäle. Der Sink besitzt bewusst weder `ChatApi` noch
-//! Bot-Token oder Helix-Schreib-Handle.
-
-use std::collections::HashSet;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
-use std::time::Duration;
-
+//! Scout adapter for the shared, anonymous read-only IRC transport.
+use crate::task_supervisor::TaskSupervisor;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tb_chat::types::ChatMessageBody;
 use tb_chat::{ChatMessageEvent, ChatterTracker, CrewGuard};
-use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
 use tb_engagement::irc_message::parse_privmsg;
-use tb_monitoring::scout::ScoutChatSink;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tb_monitoring::{anonymous_chat::AnonymousChat, scout::ScoutChatSink};
 
-use crate::task_supervisor::TaskSupervisor;
-
-const IRC_HOST: &str = "irc.chat.twitch.tv";
-const IRC_PORT: u16 = 6667;
-const ANON_NICK_BASE: usize = 13_371_338;
-const CONNECT_BACKOFF: Duration = Duration::from_secs(30);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const JOIN_STAGGER: Duration = Duration::from_millis(600);
-/// Twitch erlaubt pro Chat-User höchstens 100 gleichzeitig gejointe Räume.
-/// Der anonyme Read-Pfad verteilt größere Roster deshalb auf mehrere Nicks.
-const MAX_CHANNELS_PER_CONNECTION: usize = 100;
-
-#[derive(Debug, PartialEq, Eq)]
-enum MembershipCommand {
-    Set(Vec<String>),
-    Join(Vec<String>),
-    Part(Vec<String>),
-}
-
-struct ScoutIrcMembership {
-    tx: mpsc::UnboundedSender<MembershipCommand>,
-}
-
-impl ScoutIrcMembership {
-    fn start(
-        pool: PgPool,
-        crew_guard: Option<Arc<CrewGuard>>,
-        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
-        supervisor: &TaskSupervisor,
-    ) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let tracker = Arc::new(ChatterTracker::with_persist_all_games(pool, false));
-        let shard_supervisor = supervisor.clone();
-        supervisor.spawn(
-            "scout_chat_membership_coordinator",
-            run_membership_coordinator(
-                rx,
-                tracker,
-                crew_guard,
-                crew_review_trigger,
-                shard_supervisor,
-            ),
-        );
-        Self { tx }
-    }
-
-    fn send(&self, command: MembershipCommand) {
-        if self.tx.send(command).is_err() {
-            tracing::warn!("scout-chat: IRC-Membership-Task ist beendet");
-        }
-    }
-}
-
-/// Scout-Sink mit ausschließlich anonymer IRC-Read-Membership.
 pub struct ScoutChatAdapter {
-    membership: ScoutIrcMembership,
+    membership: AnonymousChat,
 }
-
 impl ScoutChatAdapter {
-    pub fn new(
-        pool: PgPool,
-        crew_guard: Arc<CrewGuard>,
-        crew_review_trigger: Arc<dyn CrewReviewTrigger>,
-        supervisor: &TaskSupervisor,
-    ) -> Self {
-        Self::start(
-            pool,
-            Some(crew_guard),
-            Some(crew_review_trigger),
-            supervisor,
-        )
+    pub fn new(pool: PgPool, crew_guard: Arc<CrewGuard>, supervisor: &TaskSupervisor) -> Self {
+        Self::start(pool, Some(crew_guard), supervisor)
     }
-
-    pub fn storage_only(
-        pool: PgPool,
-        crew_review_trigger: Arc<dyn CrewReviewTrigger>,
-        supervisor: &TaskSupervisor,
-    ) -> Self {
-        Self::start(pool, None, Some(crew_review_trigger), supervisor)
+    pub fn storage_only(pool: PgPool, supervisor: &TaskSupervisor) -> Self {
+        Self::start(pool, None, supervisor)
     }
-
-    fn start(
-        pool: PgPool,
-        crew_guard: Option<Arc<CrewGuard>>,
-        crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
-        supervisor: &TaskSupervisor,
-    ) -> Self {
-        Self {
-            membership: ScoutIrcMembership::start(
-                pool,
-                crew_guard,
-                crew_review_trigger,
-                supervisor,
-            ),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_membership_sender(tx: mpsc::UnboundedSender<MembershipCommand>) -> Self {
-        Self {
-            membership: ScoutIrcMembership { tx },
-        }
+    fn start(pool: PgPool, guard: Option<Arc<CrewGuard>>, supervisor: &TaskSupervisor) -> Self {
+        let (membership, mut events) = AnonymousChat::start(10_000);
+        let tracker = ChatterTracker::with_persist_all_games(pool, false);
+        supervisor.spawn("scout_chat_storage", async move {
+            while let Some(event) = events.recv().await {
+                track_privmsg_inner(&tracker, guard.as_deref(), &event.line).await;
+            }
+        });
+        Self { membership }
     }
 }
-
 #[async_trait::async_trait]
 impl ScoutChatSink for ScoutChatAdapter {
     async fn set_monitored_channels(&self, logins: &[String]) {
-        self.membership
-            .send(MembershipCommand::Set(normalize_channels(logins)));
+        self.membership.set_channels(logins);
     }
-
     async fn join_channels(&self, logins: &[String]) {
-        let logins = normalize_channels(logins);
-        if !logins.is_empty() {
-            self.membership.send(MembershipCommand::Join(logins));
-        }
+        self.membership.join_channels(logins);
     }
-
     async fn part_channels(&self, logins: &[String]) {
-        let logins = normalize_channels(logins);
-        if !logins.is_empty() {
-            self.membership.send(MembershipCommand::Part(logins));
-        }
+        self.membership.part_channels(logins);
     }
-
     fn is_monitored_only(&self, _login: &str) -> bool {
         true
     }
-
     fn is_subscription_ready(&self, _login: &str) -> bool {
         true
     }
 }
 
-fn normalize_channels(logins: &[String]) -> Vec<String> {
-    let mut channels: Vec<String> = logins
-        .iter()
-        .map(|login| login.trim().trim_start_matches('#').to_lowercase())
-        .filter(|login| !login.is_empty())
-        .collect();
-    channels.sort_unstable();
-    channels.dedup();
-    channels
-}
-
-async fn run_membership_coordinator(
-    mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
-    tracker: Arc<ChatterTracker>,
-    crew_guard: Option<Arc<CrewGuard>>,
-    crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
-    supervisor: TaskSupervisor,
-) {
-    let mut channels = HashSet::new();
-    let mut shard_senders = Vec::<mpsc::UnboundedSender<MembershipCommand>>::new();
-    while let Some(command) = rx.recv().await {
-        apply_disconnected(command, &mut channels);
-        let shards = channel_shards(&channels);
-        while shard_senders.len() < shards.len() {
-            let shard_index = shard_senders.len();
-            let (shard_tx, shard_rx) = mpsc::unbounded_channel();
-            supervisor.spawn(
-                "scout_chat_membership_shard",
-                run_membership(
-                    shard_rx,
-                    Arc::clone(&tracker),
-                    crew_guard.clone(),
-                    crew_review_trigger.clone(),
-                    anonymous_nick(shard_index),
-                ),
-            );
-            shard_senders.push(shard_tx);
-        }
-        for (index, sender) in shard_senders.iter().enumerate() {
-            let assigned = shards.get(index).cloned().unwrap_or_default();
-            if sender.send(MembershipCommand::Set(assigned)).is_err() {
-                tracing::warn!(shard = index, "scout-chat: IRC-Shard ist beendet");
-            }
-        }
-    }
-}
-
-fn channel_shards(channels: &HashSet<String>) -> Vec<Vec<String>> {
-    let mut sorted: Vec<String> = channels.iter().cloned().collect();
-    sorted.sort_unstable();
-    sorted
-        .chunks(MAX_CHANNELS_PER_CONNECTION)
-        .map(<[String]>::to_vec)
-        .collect()
-}
-
-fn anonymous_nick(shard_index: usize) -> String {
-    format!("justinfan{:08}", ANON_NICK_BASE.saturating_add(shard_index))
-}
-
-async fn run_membership(
-    mut rx: mpsc::UnboundedReceiver<MembershipCommand>,
-    tracker: Arc<ChatterTracker>,
-    crew_guard: Option<Arc<CrewGuard>>,
-    crew_review_trigger: Option<Arc<dyn CrewReviewTrigger>>,
-    anonymous_nick: String,
-) {
-    let mut channels = HashSet::new();
-    loop {
-        while channels.is_empty() {
-            let Some(command) = rx.recv().await else {
-                return;
-            };
-            apply_disconnected(command, &mut channels);
-        }
-
-        match connect(&anonymous_nick).await {
-            Some((reader, writer)) => {
-                serve(
-                    reader,
-                    writer,
-                    &mut rx,
-                    &mut channels,
-                    &tracker,
-                    crew_guard.as_deref(),
-                    crew_review_trigger.as_deref(),
-                )
-                .await
-            }
-            None => {
-                tokio::select! {
-                    _ = tokio::time::sleep(CONNECT_BACKOFF) => {}
-                    command = rx.recv() => match command {
-                        Some(command) => apply_disconnected(command, &mut channels),
-                        None => return,
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn apply_disconnected(command: MembershipCommand, channels: &mut HashSet<String>) {
-    match command {
-        MembershipCommand::Set(logins) => *channels = logins.into_iter().collect(),
-        MembershipCommand::Join(logins) => {
-            add_channels(channels, logins);
-        }
-        MembershipCommand::Part(logins) => {
-            for login in logins {
-                channels.remove(&login);
-            }
-        }
-    }
-}
-
-fn add_channels(channels: &mut HashSet<String>, logins: Vec<String>) -> Vec<String> {
-    logins
-        .into_iter()
-        .filter(|login| channels.insert(login.clone()))
-        .collect()
-}
-
-async fn connect(anonymous_nick: &str) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
-    let stream = match TcpStream::connect((IRC_HOST, IRC_PORT)).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::warn!(%error, "scout-chat: IRC-Connect fehlgeschlagen");
-            return None;
-        }
-    };
-    let (read, mut write) = stream.into_split();
-    for command in [
-        format!("NICK {anonymous_nick}\r\n"),
-        "CAP REQ :twitch.tv/tags twitch.tv/commands\r\n".to_string(),
-    ] {
-        if let Err(error) = write.write_all(command.as_bytes()).await {
-            tracing::warn!(%error, "scout-chat: IRC-Handshake fehlgeschlagen");
-            return None;
-        }
-    }
-    if let Err(error) = write.flush().await {
-        tracing::warn!(%error, "scout-chat: IRC-Handshake-Flush fehlgeschlagen");
-        return None;
-    }
-
-    let mut reader = BufReader::new(read);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let read = match tokio::time::timeout(CONNECT_TIMEOUT, reader.read_line(&mut line)).await {
-            Ok(Ok(read)) => read,
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "scout-chat: IRC-Handshake-Read fehlgeschlagen");
-                return None;
-            }
-            Err(_) => {
-                tracing::warn!("scout-chat: IRC-Handshake-Timeout");
-                return None;
-            }
-        };
-        if read == 0 {
-            return None;
-        }
-        let message = line.trim_end();
-        if message.starts_with(":tmi.twitch.tv 001") {
-            tracing::info!("scout-chat: anonymer IRC-Read verbunden");
-            return Some((reader, write));
-        }
-        if message.starts_with("PING") {
-            pong(&mut write, message).await;
-        }
-    }
-}
-
-async fn serve(
-    mut reader: BufReader<OwnedReadHalf>,
-    mut writer: OwnedWriteHalf,
-    rx: &mut mpsc::UnboundedReceiver<MembershipCommand>,
-    channels: &mut HashSet<String>,
-    tracker: &ChatterTracker,
-    crew_guard: Option<&CrewGuard>,
-    crew_review_trigger: Option<&dyn CrewReviewTrigger>,
-) {
-    let mut initial: Vec<String> = channels.iter().cloned().collect();
-    initial.sort_unstable();
-    for channel in initial {
-        write_membership(&mut writer, "JOIN", &channel).await;
-        tokio::time::sleep(JOIN_STAGGER).await;
-    }
-
-    let mut line = String::new();
-    loop {
-        line.clear();
-        tokio::select! {
-            result = reader.read_line(&mut line) => match result {
-                Ok(0) => return,
-                Err(error) => {
-                    tracing::warn!(%error, "scout-chat: IRC-Read fehlgeschlagen");
-                    return;
-                }
-                Ok(_) if line.trim_end().starts_with("PING") => pong(&mut writer, line.trim_end()).await,
-                Ok(_) => track_privmsg_inner(
-                    tracker,
-                    crew_guard,
-                    crew_review_trigger,
-                    line.trim_end(),
-                ).await,
-            },
-            command = rx.recv() => match command {
-                Some(command) => apply_connected(command, channels, &mut writer).await,
-                None => return,
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 async fn track_privmsg(tracker: &ChatterTracker, crew_guard: &CrewGuard, line: &str) {
-    track_privmsg_inner(tracker, Some(crew_guard), None, line).await;
+    track_privmsg_inner(tracker, Some(crew_guard), line).await;
 }
 
 #[cfg(test)]
 async fn track_privmsg_storage_only(tracker: &ChatterTracker, line: &str) {
-    track_privmsg_inner(tracker, None, None, line).await;
+    track_privmsg_inner(tracker, None, line).await;
 }
 
-async fn track_privmsg_inner(
-    tracker: &ChatterTracker,
-    crew_guard: Option<&CrewGuard>,
-    crew_review_trigger: Option<&dyn CrewReviewTrigger>,
-    line: &str,
-) {
+async fn track_privmsg_inner(tracker: &ChatterTracker, crew_guard: Option<&CrewGuard>, line: &str) {
     let Some(parsed) = parse_privmsg(line) else {
         return;
     };
@@ -425,86 +97,9 @@ async fn track_privmsg_inner(
             .map(str::to_string),
         ..Default::default()
     };
-    if event.chatter_user_id == RICKY_TWITCH_USER_ID {
-        if let Some(trigger) = crew_review_trigger {
-            let source_message_id = event
-                .source_message_id
-                .clone()
-                .or_else(|| (!event.message_id.is_empty()).then(|| event.message_id.clone()));
-            let trigger_observe = || {
-                trigger.observe(RickyChatInput {
-                    channel_login: event.broadcaster_user_login.clone(),
-                    subject_twitch_user_id: RICKY_TWITCH_USER_ID.to_string(),
-                    source_message_id,
-                    occurred_at: chrono::Utc::now(),
-                    content: event.text().to_string(),
-                });
-            };
-            if catch_unwind(AssertUnwindSafe(trigger_observe)).is_err() {
-                tracing::warn!(
-                    channel = %event.broadcaster_user_login,
-                    chatter = %event.chatter_user_login,
-                    "scout-chat: Crew-Review-Trigger panicked"
-                );
-            }
-        }
-    }
     tracker.track(&event).await;
     if let Some(crew_guard) = crew_guard {
         crew_guard.observe(&event);
-    }
-}
-
-async fn apply_connected(
-    command: MembershipCommand,
-    channels: &mut HashSet<String>,
-    writer: &mut OwnedWriteHalf,
-) {
-    let (mut joins, mut parts) = match command {
-        MembershipCommand::Set(logins) => {
-            let next: HashSet<String> = logins.into_iter().collect();
-            let joins = next.difference(channels).cloned().collect();
-            let parts = channels.difference(&next).cloned().collect();
-            *channels = next;
-            (joins, parts)
-        }
-        MembershipCommand::Join(logins) => (add_channels(channels, logins), Vec::new()),
-        MembershipCommand::Part(logins) => {
-            let parts = logins
-                .into_iter()
-                .filter(|login| channels.remove(login))
-                .collect();
-            (Vec::new(), parts)
-        }
-    };
-    joins.sort_unstable();
-    parts.sort_unstable();
-    for channel in parts {
-        write_membership(writer, "PART", &channel).await;
-    }
-    for channel in joins {
-        write_membership(writer, "JOIN", &channel).await;
-        tokio::time::sleep(JOIN_STAGGER).await;
-    }
-}
-
-async fn write_membership(writer: &mut OwnedWriteHalf, verb: &str, channel: &str) {
-    if let Err(error) = writer
-        .write_all(format!("{verb} #{channel}\r\n").as_bytes())
-        .await
-    {
-        tracing::warn!(%error, verb, channel, "scout-chat: IRC-Membership-Write fehlgeschlagen");
-        return;
-    }
-    if let Err(error) = writer.flush().await {
-        tracing::warn!(%error, verb, channel, "scout-chat: IRC-Membership-Flush fehlgeschlagen");
-    }
-}
-
-async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
-    let reply = format!("{}\r\n", ping.replacen("PING", "PONG", 1));
-    if let Err(error) = writer.write_all(reply.as_bytes()).await {
-        tracing::warn!(%error, "scout-chat: IRC-PONG fehlgeschlagen");
     }
 }
 
@@ -515,8 +110,7 @@ mod tests {
     use std::str::FromStr;
     use tb_chat::scam_pitch::AccountAgePort;
     use tb_chat::style_score::Centroid;
-    use tb_chat::{CrewGuard, CrewJudge, CrewVerdict, ModAlerter};
-    use tb_engagement::crew_review::{CrewReviewTrigger, RickyChatInput, RICKY_TWITCH_USER_ID};
+    use tb_chat::{CrewGuard, ModAlerter};
     use tokio::time::{sleep, Duration};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -537,11 +131,13 @@ mod tests {
             .connect(dsn)
             .await
             .expect("Test-DB verbinden");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .expect("altes Test-Schema löschen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .expect("altes Test-Schema löschen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .expect("Test-Schema anlegen");
@@ -573,6 +169,8 @@ mod tests {
     }
 
     async fn seed_session(pool: &PgPool, game: &str) {
+        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS twitch_zuschauer_register (twitch_user_id TEXT PRIMARY KEY, community_probability DOUBLE PRECISION NOT NULL, computed_at TIMESTAMPTZ, unauffaellig_seit TIMESTAMPTZ, vertrauen_widerrufen_am TIMESTAMPTZ, historie_geprueft_am TIMESTAMPTZ, radar_meldung_am TIMESTAMPTZ, radar_vorherige_meldung_am TIMESTAMPTZ, radar_wiederholungen BIGINT NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS twitch_partners (twitch_user_id TEXT); CREATE TABLE IF NOT EXISTS twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT, is_on_discord INT);")
+            .execute(pool).await.expect("Kontoregister-Testtabellen");
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, game_name) VALUES (1, 'monitored', $1)",
         )
@@ -599,15 +197,6 @@ mod tests {
     const PRIVMSG: &str = "@room-id=99;user-id=42;id=m1;tmi-sent-ts=1784138400123 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #monitored :hallo welt";
     const RICKY_PRIVMSG: &str = "@room-id=99;user-id=147713656;id=m2;tmi-sent-ts=1784138400123 :helmbombenricky!helmbombenricky@helmbombenricky.tmi.twitch.tv PRIVMSG #monitored :hallo zusammen";
 
-    struct NoopJudge;
-
-    #[async_trait::async_trait]
-    impl CrewJudge for NoopJudge {
-        async fn judge(&self, _content: &str, _recent_context: &[String]) -> CrewVerdict {
-            CrewVerdict::unsure()
-        }
-    }
-
     struct FixedAccountAge;
 
     #[async_trait::async_trait]
@@ -617,152 +206,12 @@ mod tests {
         }
     }
 
-    mod scout_review_trigger {
-        use super::*;
-        use std::sync::Mutex;
-
-        const RICKY_WITH_SOURCE_ID: &str = "@room-id=99;user-id=147713656;id=irc-copy-99;source-id=origin-42;tmi-sent-ts=1784138400123 :helmbombenricky!helmbombenricky@helmbombenricky.tmi.twitch.tv PRIVMSG #monitored :hallo zusammen";
-
-        #[derive(Default)]
-        struct RecordingCrewReviewTrigger(Mutex<Vec<RickyChatInput>>);
-
-        impl CrewReviewTrigger for RecordingCrewReviewTrigger {
-            fn observe(&self, input: RickyChatInput) {
-                self.0.lock().expect("Recording-Lock").push(input);
-            }
-        }
-
-        struct PanickingCrewReviewTrigger;
-
-        impl CrewReviewTrigger for PanickingCrewReviewTrigger {
-            fn observe(&self, _input: RickyChatInput) {
-                panic!("Trigger-Test-Panik");
-            }
-        }
-
-        #[tokio::test]
-        async fn storage_only_triggert_exakte_id_direkt() {
-            let pool = pool_or_skip!("scout_review_trigger_storage_only");
-            seed_session(&pool, "Deadlock").await;
-            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
-            let trigger = RecordingCrewReviewTrigger::default();
-
-            track_privmsg_inner(&tracker, None, Some(&trigger), RICKY_WITH_SOURCE_ID).await;
-
-            {
-                let inputs = trigger.0.lock().expect("Recording-Lock");
-                assert_eq!(inputs.len(), 1);
-                assert_eq!(inputs[0].channel_login, "monitored");
-                assert_eq!(inputs[0].subject_twitch_user_id, RICKY_TWITCH_USER_ID);
-                assert_eq!(inputs[0].source_message_id.as_deref(), Some("origin-42"));
-                assert_eq!(inputs[0].content, "hallo zusammen");
-            }
-            assert_eq!(message_count(&pool).await, 1);
-        }
-
-        #[tokio::test]
-        async fn trigger_panik_wird_isoliert_und_storage_laeuft_weiter() {
-            let pool = pool_or_skip!("scout_review_trigger_panic");
-            seed_session(&pool, "Deadlock").await;
-            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
-
-            track_privmsg_inner(
-                &tracker,
-                None,
-                Some(&PanickingCrewReviewTrigger),
-                RICKY_WITH_SOURCE_ID,
-            )
-            .await;
-
-            assert_eq!(message_count(&pool).await, 1);
-        }
-
-        #[tokio::test]
-        async fn gleicher_login_mit_falscher_user_id_triggert_nicht() {
-            let pool = pool_or_skip!("scout_review_trigger_wrong_id");
-            seed_session(&pool, "Deadlock").await;
-            let tracker = ChatterTracker::with_persist_all_games(pool, false);
-            let trigger = RecordingCrewReviewTrigger::default();
-            let line = RICKY_WITH_SOURCE_ID.replace("user-id=147713656", "user-id=999999");
-
-            track_privmsg_inner(&tracker, None, Some(&trigger), &line).await;
-
-            assert!(trigger.0.lock().expect("Recording-Lock").is_empty());
-        }
-
-        #[tokio::test]
-        async fn irc_id_ist_fallback_ohne_source_id() {
-            let pool = pool_or_skip!("scout_review_trigger_id_fallback");
-            seed_session(&pool, "Deadlock").await;
-            let tracker = ChatterTracker::with_persist_all_games(pool, false);
-            let trigger = RecordingCrewReviewTrigger::default();
-            let line = RICKY_WITH_SOURCE_ID
-                .replace("id=irc-copy-99;source-id=origin-42", "id=irc-fallback-7");
-
-            track_privmsg_inner(&tracker, None, Some(&trigger), &line).await;
-
-            let inputs = trigger.0.lock().expect("Recording-Lock");
-            assert_eq!(inputs.len(), 1);
-            assert_eq!(
-                inputs[0].source_message_id.as_deref(),
-                Some("irc-fallback-7")
-            );
-        }
-
-        #[tokio::test]
-        async fn direkter_trigger_haengt_nicht_am_deadlock_storage_gate() {
-            let pool = pool_or_skip!("scout_review_trigger_storage_gate");
-            seed_session(&pool, "Arc Raiders").await;
-            let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
-            let trigger = RecordingCrewReviewTrigger::default();
-
-            track_privmsg_inner(&tracker, None, Some(&trigger), RICKY_WITH_SOURCE_ID).await;
-
-            assert_eq!(trigger.0.lock().expect("Recording-Lock").len(), 1);
-            assert_eq!(message_count(&pool).await, 0);
-        }
-    }
-
-    #[tokio::test]
-    async fn join_channels_ruft_membership_real() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let adapter = ScoutChatAdapter::with_membership_sender(tx);
-        let logins = vec!["a".to_string(), "b".to_string()];
-        adapter.join_channels(&logins).await;
-
-        assert_eq!(
-            rx.recv().await,
-            Some(MembershipCommand::Join(vec![
-                "a".to_string(),
-                "b".to_string()
-            ]))
+    #[test]
+    fn shared_transport_rejects_command_injection() {
+        assert!(
+            tb_monitoring::anonymous_chat::normalize_channels(&["x\r\nPRIVMSG #y :z".into()])
+                .is_empty()
         );
-    }
-
-    #[test]
-    fn sink_konstruktion_braucht_nur_db_pool_und_crew_guard_keine_schreib_api() {
-        let _constructor: fn(
-            sqlx::PgPool,
-            Arc<CrewGuard>,
-            Arc<dyn CrewReviewTrigger>,
-            &TaskSupervisor,
-        ) -> ScoutChatAdapter = ScoutChatAdapter::new;
-    }
-
-    #[test]
-    fn membership_sharding_verliert_bei_mehr_als_100_kanaelen_nichts() {
-        let mut channels = HashSet::new();
-        let logins: Vec<String> = (0..251).map(|index| format!("channel{index}")).collect();
-
-        apply_disconnected(MembershipCommand::Join(logins.clone()), &mut channels);
-        let shards = channel_shards(&channels);
-
-        assert_eq!(channels.len(), logins.len());
-        assert_eq!(shards.len(), 3);
-        assert!(shards
-            .iter()
-            .all(|shard| shard.len() <= MAX_CHANNELS_PER_CONNECTION));
-        assert_eq!(shards.iter().map(Vec::len).sum::<usize>(), logins.len());
     }
 
     #[tokio::test]
@@ -800,7 +249,6 @@ mod tests {
             .await;
         let guard = CrewGuard::new(
             true,
-            Arc::new(NoopJudge),
             Arc::new(ModAlerter::with_endpoint(
                 reqwest::Client::new(),
                 format!("{}/changelog", server.uri()),

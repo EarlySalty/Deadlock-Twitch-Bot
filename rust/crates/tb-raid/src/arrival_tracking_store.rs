@@ -263,23 +263,27 @@ mod tests {
     ///
     /// Hermetisch: jeder Test bekommt ein eigenes Schema, kein geteilter Zustand.
     async fn setup_db(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
+        let url = crate::test_database::database_url()
             .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
 
         let admin = sqlx::PgPool::connect(&url)
             .await
             .expect("Test-DB-Verbindung fehlgeschlagen");
 
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
 
-        let pool = sqlx::PgPool::connect(&format!("{url}?options=-c%20search_path%3D{schema}"))
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .expect("Test-DB-Verbindung konfigurieren")
+            .options([("search_path", schema)]);
+        let pool = sqlx::PgPool::connect_with(options)
             .await
             .expect("Pool mit Schema fehlgeschlagen");
 

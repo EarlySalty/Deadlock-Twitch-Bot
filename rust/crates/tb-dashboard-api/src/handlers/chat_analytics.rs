@@ -1,6 +1,6 @@
 //! Handler für `/twitch/api/v2/chat-analytics`.
 //!
-//! Auth: eingeloggt; `streamer` Pflicht, `days` (7..365, Default 30),
+//! Auth: eingeloggt; `streamer` Pflicht, `days` (7..3650, Default 30),
 //! optionaler `timezone`-Param.
 //!
 //! Plan-Grenze: kein 403. Ohne Netzwerk Plus wird `days` auf das letzte
@@ -42,7 +42,7 @@ pub async fn chat_analytics_handler(
         return crate::auth::unauthorized_v2_response();
     }
     // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_chat_analytics).
-    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
@@ -77,8 +77,13 @@ pub async fn chat_analytics_handler(
     .await
     {
         Ok(v) => crate::auth::mit_plan_hinweis(
-            Json(tb_analytics::stufe::hinweis_anhaengen(v, stufe, fenster_tage, gekuerzt))
-                .into_response(),
+            Json(tb_analytics::stufe::hinweis_anhaengen(
+                v,
+                stufe,
+                fenster_tage,
+                gekuerzt,
+            ))
+            .into_response(),
             stufe,
             fenster_tage,
             gekuerzt,
@@ -103,11 +108,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

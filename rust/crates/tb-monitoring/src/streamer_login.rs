@@ -155,7 +155,11 @@ const HISTORIE_TABELLEN: &[(&str, &str, &str)] = &[
         "channel_login",
         "channel_user_id",
     ),
-    ("twitch_scout_pitch_ledger", "streamer_login", "twitch_user_id"),
+    (
+        "twitch_scout_pitch_ledger",
+        "streamer_login",
+        "twitch_user_id",
+    ),
 ];
 
 /// Zähler pro Tabelle. Bewusst eine Liste statt fester Felder: welche Tabellen
@@ -258,9 +262,9 @@ impl StreamerLoginStore {
         }
 
         let old_login = sqlx::query_scalar::<_, String>(KNOWN_LOGIN_SQL)
-        .bind(user_id)
-        .fetch_optional(&self.pool)
-        .await?;
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?;
 
         let Some(old_login) = old_login else {
             tracing::debug!(
@@ -370,10 +374,10 @@ pub async fn rename_streamer_login(
         },
     );
     for (tabelle, login_spalte, id_spalte) in HISTORIE_TABELLEN {
-        let nachgetragen = sqlx::query(&format!(
+        let nachgetragen = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {tabelle} SET {id_spalte} = $1
               WHERE {id_spalte} IS NULL AND LOWER({login_spalte}) = LOWER($2)"
-        ))
+        )))
         .bind(user_id)
         .bind(&old_login)
         .execute(&mut *tx)
@@ -489,7 +493,9 @@ async fn update_mit_konflikt_ruecksprung(
     sqlx::query("SAVEPOINT tb_rename_tabelle")
         .execute(&mut **tx)
         .await?;
-    let mut query = sqlx::query(update).bind(user_id).bind(new_login);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(update))
+        .bind(user_id)
+        .bind(new_login);
     if let Some(old_login) = old_login {
         query = query.bind(old_login);
     }
@@ -583,8 +589,7 @@ async fn clear_stale_foreign_login(
     let extra = extra_condition
         .map(|condition| format!(" AND target.{condition}"))
         .unwrap_or_default();
-    let placeholder =
-        format!("'stale:' || COALESCE(target.{id_column}, 'unbekannt') || ':' || $2");
+    let placeholder = format!("'stale:' || COALESCE(target.{id_column}, 'unbekannt') || ':' || $2");
     let neutralize = format!(
         "UPDATE {table} target
             SET {login_column} = {placeholder}
@@ -596,7 +601,7 @@ async fn clear_stale_foreign_login(
             )
         RETURNING COALESCE(target.{id_column}, 'unbekannt')"
     );
-    let fremde_ids: Vec<String> = sqlx::query_scalar(&neutralize)
+    let fremde_ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(neutralize))
         .bind(user_id)
         .bind(new_login)
         .fetch_all(&mut **tx)

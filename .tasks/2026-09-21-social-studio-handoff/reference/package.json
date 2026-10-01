@@ -1,0 +1,27 @@
+{
+  "name": "social-studio-industrial-gold",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Industrial Gold revision of the approved Social Studio layout.",
+  "scripts": {
+    "build": "node build-css.cjs",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check src/app.js && node --check src/model.js"
+  },
+  "peerDependencies": {
+    "react": ">=18 <20",
+    "react-dom": ">=18 <20"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "tailwindcss": "4.1.10"
+  }
+}

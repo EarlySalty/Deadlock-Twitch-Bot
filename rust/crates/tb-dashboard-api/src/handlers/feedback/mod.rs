@@ -205,7 +205,7 @@ pub async fn list(
         Err(r) => return r,
     };
     let sql = format!("{VIEW} WHERE ($1::TEXT IS NULL OR f.owner_id = $1) AND ($2::BIGINT IS NULL OR f.id < $2) ORDER BY f.id DESC LIMIT 51");
-    match sqlx::query(&sql)
+    match sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(owner)
         .bind(query.before)
         .fetch_all(&pool)
@@ -234,7 +234,11 @@ pub async fn counts(
         Err(r) => return r,
     };
     let sql = format!("SELECT COUNT(*)::BIGINT AS total, COUNT(*) FILTER (WHERE {})::BIGINT AS unread FROM ({VIEW} WHERE ($1::TEXT IS NULL OR f.owner_id=$1)) q", if query.inbox { "NOT admin_read" } else { "unread" });
-    match sqlx::query(&sql).bind(owner).fetch_one(&pool).await {
+    match sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(owner)
+        .fetch_one(&pool)
+        .await
+    {
         Ok(r) => {
             private_json(json!({"total":r.get::<i64,_>("total"),"unread":r.get::<i64,_>("unread")}))
         }
@@ -262,7 +266,7 @@ pub async fn detail(
         return db_failure(e);
     }
     let sql = format!("{VIEW} WHERE f.id=$1 AND ($2::TEXT IS NULL OR f.owner_id=$2)");
-    let row = match sqlx::query(&sql)
+    let row = match sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .bind(owner)
         .fetch_optional(&mut *tx)

@@ -43,6 +43,21 @@ pub enum ShoutoutDirection {
     Received,
 }
 
+#[derive(Default)]
+struct AdBreakContext {
+    match_state: Option<&'static str>,
+    seconds_since_match_start: Option<i32>,
+    seconds_since_match_end: Option<i32>,
+    chat_msgs_last_min: Option<i32>,
+    chat_msgs_last_5min: Option<i32>,
+    viewers_before: Option<i32>,
+    raid_in_window: Option<bool>,
+    first_chatter_in_window: Option<bool>,
+    source: Option<&'static str>,
+    in_window: Option<bool>,
+    decision_id: Option<i64>,
+}
+
 impl TelemetryStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
@@ -163,19 +178,166 @@ impl TelemetryStore {
             .map(|v| v.as_bool().unwrap_or_else(|| !v.is_null()))
             .unwrap_or(false);
         let session_id = self.session_id_for(broadcaster_user_id).await;
-        sqlx::query!(
+        let ctx = self
+            .ad_break_context(broadcaster_user_id, session_id, is_automatic, now)
+            .await;
+        sqlx::query(
             "INSERT INTO twitch_ad_break_events
-                (session_id, twitch_user_id, duration_seconds, is_automatic, started_at)
-             VALUES ($1, $2, $3, $4, $5)",
-            session_id,
-            broadcaster_user_id,
-            duration_seconds,
-            is_automatic,
-            now,
+                (session_id, twitch_user_id, duration_seconds, is_automatic, started_at,
+                 match_state, seconds_since_match_start, seconds_since_match_end,
+                 chat_msgs_last_min, chat_msgs_last_5min, viewers_before,
+                 raid_in_window, first_chatter_in_window, source, in_window, decision_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
+        .bind(session_id)
+        .bind(broadcaster_user_id)
+        .bind(duration_seconds)
+        .bind(is_automatic)
+        .bind(now)
+        .bind(ctx.match_state)
+        .bind(ctx.seconds_since_match_start)
+        .bind(ctx.seconds_since_match_end)
+        .bind(ctx.chat_msgs_last_min)
+        .bind(ctx.chat_msgs_last_5min)
+        .bind(ctx.viewers_before)
+        .bind(ctx.raid_in_window)
+        .bind(ctx.first_chatter_in_window)
+        .bind(ctx.source)
+        .bind(ctx.in_window)
+        .bind(ctx.decision_id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn ad_break_context(
+        &self,
+        broadcaster_user_id: &str,
+        session_id: Option<i64>,
+        is_automatic: bool,
+        now: DateTime<Utc>,
+    ) -> AdBreakContext {
+        let mut ctx = AdBreakContext::default();
+
+        if let Ok(Some((match_active, started, ended))) = sqlx::query_as::<
+            _,
+            (bool, Option<DateTime<Utc>>, Option<DateTime<Utc>>),
+        >(
+            "SELECT match_active, match_started_at, match_ended_at \
+               FROM twitch_ad_manager_state WHERE twitch_user_id = $1",
+        )
+        .bind(broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            if match_active {
+                let secs = started
+                    .map(|s| (now - s).num_seconds().max(0))
+                    .unwrap_or(0);
+                ctx.seconds_since_match_start = Some(secs.min(i64::from(i32::MAX)) as i32);
+                ctx.match_state = Some(if secs <= 60 {
+                    "first_match_minute"
+                } else {
+                    "in_match"
+                });
+            } else if let Some(end) = ended {
+                let secs = (now - end).num_seconds().max(0);
+                if secs <= 300 {
+                    ctx.seconds_since_match_end = Some(secs.min(i64::from(i32::MAX)) as i32);
+                    ctx.match_state = Some("post_match");
+                } else {
+                    ctx.match_state = Some("queue");
+                }
+            } else {
+                ctx.match_state = Some("queue");
+            }
+        }
+
+        if let Some(sid) = session_id {
+            if let Ok((last_min, last_5min)) = sqlx::query_as::<_, (i64, i64)>(
+                "SELECT \
+                    COUNT(*) FILTER (WHERE message_ts >= $2 - INTERVAL '1 minute'), \
+                    COUNT(*) \
+                   FROM twitch_chat_messages \
+                  WHERE session_id = $1 AND message_ts < $2 \
+                    AND message_ts >= $2 - INTERVAL '5 minutes'",
+            )
+            .bind(sid)
+            .bind(now)
+            .fetch_one(&self.pool)
+            .await
+            {
+                ctx.chat_msgs_last_min = Some(last_min.min(i64::from(i32::MAX)) as i32);
+                ctx.chat_msgs_last_5min = Some(last_5min.min(i64::from(i32::MAX)) as i32);
+            }
+
+            ctx.viewers_before = sqlx::query_scalar::<_, i32>(
+                "SELECT viewer_count FROM twitch_session_viewers \
+                  WHERE session_id = $1 AND ts_utc <= $2 ORDER BY ts_utc DESC LIMIT 1",
+            )
+            .bind(sid)
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
+        }
+
+        ctx.raid_in_window = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM twitch_raid_arrival_tracking \
+                WHERE to_broadcaster_id = $1 AND detected_at < $2 \
+                  AND detected_at >= $2 - INTERVAL '10 minutes')",
+        )
+        .bind(broadcaster_user_id)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await
+        .ok();
+
+        ctx.first_chatter_in_window = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM twitch_first_message_events \
+                WHERE broadcaster_id = $1 AND event_ts < $2 \
+                  AND event_ts >= $2 - INTERVAL '5 minutes')",
+        )
+        .bind(broadcaster_user_id)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await
+        .ok();
+
+        let bot_decision = sqlx::query_as::<_, (i64, String)>(
+            "SELECT id, reason FROM twitch_ad_manager_decisions \
+              WHERE twitch_user_id = $1 AND decision = 'commercial' \
+                AND decided_at >= $2 - INTERVAL '90 seconds' \
+                AND decided_at <= $2 + INTERVAL '10 seconds' \
+              ORDER BY decided_at DESC LIMIT 1",
+        )
+        .bind(broadcaster_user_id)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((id, reason)) = bot_decision {
+            ctx.decision_id = Some(id);
+            if reason == "pulled_forward" {
+                ctx.source = Some("bot_pulled_forward");
+            } else {
+                ctx.source = Some("bot_own_block");
+            }
+            ctx.in_window = Some(matches!(
+                reason.as_str(),
+                "in_queue" | "match_start_window" | "post_match_quiet" | "quiet_chat"
+            ));
+        } else {
+            ctx.source = Some(if is_automatic { "twitch_plan" } else { "manual" });
+            ctx.in_window = ctx
+                .match_state
+                .map(|s| matches!(s, "queue" | "first_match_minute"));
+        }
+
+        ctx
     }
 
     /// channel.cheer. Events ohne Betrag werden (wie Python) verworfen.

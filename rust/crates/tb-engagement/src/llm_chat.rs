@@ -848,6 +848,20 @@ impl EngagementLlmClient {
         max_output_tokens: i64,
         temperature: f64,
     ) -> Result<String, GenerateError> {
+        self.raw_completion_with_model(system, user, max_output_tokens, temperature)
+            .await
+            .map(|(text, _)| text)
+    }
+
+    /// Wie [`Self::raw_completion`], liefert zusätzlich das tatsächlich
+    /// aufgelöste Modell für Herkunftsangaben und Persistenz.
+    pub async fn raw_completion_with_model(
+        &self,
+        system: &str,
+        user: &str,
+        max_output_tokens: i64,
+        temperature: f64,
+    ) -> Result<(String, String), GenerateError> {
         let response = self
             .call(
                 tb_llm::Request::simple(system, user)
@@ -856,7 +870,7 @@ impl EngagementLlmClient {
                     .no_ledger(),
             )
             .await?;
-        Ok(response.text)
+        Ok((response.text, response.model))
     }
 
     /// Wie [`Self::raw_completion`], verbucht aber zusätzlich den echten
@@ -1074,7 +1088,7 @@ mod tests {
         std::env::set_var("TB_LLM_MODEL_ENGAGEMENT", "accounts/fireworks/models/anders");
         let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
         clear_provider_env();
     }
 
@@ -1086,7 +1100,7 @@ mod tests {
         let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.endpoint.api_key, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
         clear_provider_env();
     }
 
@@ -1374,7 +1388,7 @@ mod tests {
         assert_eq!(resp.text.as_deref(), Some("klar, bebop ist stark"));
         assert_eq!(resp.prompt_tokens, Some(42));
         assert_eq!(resp.completion_tokens, Some(7));
-        assert_eq!(resp.model, tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(resp.model, tb_llm::selection::configured_fireworks_model());
     }
 
     #[tokio::test]
@@ -1435,7 +1449,7 @@ mod tests {
             Some("nicht-freigegebenes-modell".to_string()),
             None,
         );
-        assert_eq!(client.model(), tb_llm::selection::FIREWORKS_DEFAULT_MODEL);
+        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
 
         clear_provider_env();
     }

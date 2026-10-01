@@ -31,13 +31,13 @@
 //! | unerwartete Exception | 500 | `{"error":"internal_error","message":"failed to fetch session detail"}` |
 
 use axum::{
-    Json,
     extract::{Path, State},
     response::IntoResponse,
+    Json,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 #[cfg(test)]
 use sqlx::Row;
@@ -288,18 +288,18 @@ pub async fn session_detail_handler(
 mod tests {
     use super::*;
     use axum::{
-        Extension, Router,
         body::Body,
         extract::ConnectInfo,
         http::{Request, StatusCode},
         middleware,
         routing::get,
+        Extension, Router,
     };
     use chrono::TimeZone;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH, internal_auth, loopback_only};
+    use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
 
     // ── Infrastruktur ─────────────────────────────────────────────────────────
@@ -330,11 +330,13 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .expect("Schema anlegen");
@@ -421,7 +423,7 @@ mod tests {
         let base = INTERNAL_API_BASE_PATH;
         Router::new()
             .route(
-                &format!("{base}/sessions/:session_id"),
+                &format!("{base}/sessions/{{session_id}}"),
                 get(session_detail_handler),
             )
             .with_state(pool)
@@ -627,7 +629,7 @@ mod tests {
 
         let resp = app
             .oneshot(req(
-                &format!("{base}/sessions/{session_id}"),
+                &format!("{base}/sessions/{{session_id}}"),
                 Some("secret"),
             ))
             .await
@@ -703,7 +705,7 @@ mod tests {
 
         let resp = app
             .oneshot(req(
-                &format!("{base}/sessions/{session_id}"),
+                &format!("{base}/sessions/{{session_id}}"),
                 Some("secret"),
             ))
             .await
@@ -781,7 +783,7 @@ mod tests {
 
         let resp = app
             .oneshot(req(
-                &format!("{base}/sessions/{session_id}"),
+                &format!("{base}/sessions/{{session_id}}"),
                 Some("secret"),
             ))
             .await

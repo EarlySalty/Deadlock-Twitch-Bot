@@ -1,3 +1,5 @@
+# Global override fuer scripts/security-scan-local.sh. Der rekursive GitHub-Scan
+# braucht dieselbe Ausnahme zusaetzlich neben rust/Cargo.lock.
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"
-reason = "rsa 0.9 Marvin-Timing kommt über sqlx-mysql; Workspace baut sqlx nur mit postgres, mysql wird nie kompiliert"
+reason = "rsa 0.9 Marvin-Timing kommt ausschliesslich ueber sqlx-mysql in den Lockfile-Graph; der Workspace baut sqlx mit default-features = false und nur postgres/runtime-tokio/tls-rustls/macros/migrate/chrono, daher wird sqlx-mysql nicht kompiliert. Upstream hat weiterhin keine gepatchte rsa-Version."

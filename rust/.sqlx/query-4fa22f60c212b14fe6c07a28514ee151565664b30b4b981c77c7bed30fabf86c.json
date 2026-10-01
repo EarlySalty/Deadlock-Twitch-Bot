@@ -6,42 +6,50 @@
       {
         "ordinal": 0,
         "name": "hour!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "samples!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "avg_utilization_pct!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "max_utilization_pct!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "avg_used_slots!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "max_used_slots!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
         "name": "avg_listener_count!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "max_listener_count!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       }
     ],
     "parameters": {

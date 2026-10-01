@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "total",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_subscriptions_snapshot",
+            "name": "total"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "points",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "twitch_subscriptions_snapshot",
+            "name": "points"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "snapshot_at!",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "twitch_subscriptions_snapshot",
+            "name": "snapshot_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -313,12 +313,12 @@ pub struct AnalyticsDaysQuery {
 ///
 /// `pub`, damit jede zweite Oberfläche (MCP-Connector) dieselbe Antwort bekommt
 /// wie `GET /streamers` und nicht ihren eigenen Default mitbringt.
-pub fn target_game_name() -> String {
-    std::env::var("TWITCH_TARGET_GAME_NAME")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "Deadlock".to_string())
+pub fn target_game_name() -> Result<String, tb_config::file::FileError> {
+    Ok(tb_config::runtime::settings()?
+        .twitch
+        .target_game
+        .trim()
+        .to_string())
 }
 
 /// `GET /internal/twitch/v1/streamers`
@@ -330,7 +330,7 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    let target_game = target_game_name();
+    let target_game = target_game_name().map_err(|_| ApiError::internal())?;
     let streamers = db::list_streamers(&pool, &target_game).await.map_err(|e| {
         tracing::error!("list_streamers DB-Fehler: {e}");
         ApiError::internal()
@@ -1224,17 +1224,14 @@ async fn archive_handler_inner(
 /// discord-flag/profile tragen weder guild/channel/role im Body → bei gesetzter
 /// Allowlist schlägt die Prüfung via None ∉ Allowlist als 403 durch (deny-by-default,
 /// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
-fn enforce_discord_action_scope() -> Result<(), ApiError> {
-    use super::telemetry_routes::{
-        enforce_scope_allowlist, parse_allowlist_ids, ENV_ALLOWED_CHANNEL_IDS,
-        ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
-    };
-    for (env, key) in [
-        (ENV_ALLOWED_GUILD_IDS, "guild_id"),
-        (ENV_ALLOWED_CHANNEL_IDS, "channel_id"),
-        (ENV_ALLOWED_ROLE_IDS, "role_id"),
+fn enforce_discord_action_scope(scope: &tb_config::discord::RaidOAuth) -> Result<(), ApiError> {
+    use super::telemetry_routes::{configured_allowlist, enforce_scope_allowlist};
+    for (ids, key) in [
+        (&scope.allowed_guild_ids, "guild_id"),
+        (&scope.allowed_channel_ids, "channel_id"),
+        (&scope.allowed_role_ids, "role_id"),
     ] {
-        enforce_scope_allowlist(None, &parse_allowlist_ids(env), key)
+        enforce_scope_allowlist(None, &configured_allowlist(ids), key)
             .map_err(|_| ApiError::forbidden())?;
     }
     Ok(())
@@ -1248,6 +1245,7 @@ fn enforce_discord_action_scope() -> Result<(), ApiError> {
 /// Fehlendes Feld → 400 (Python: "is_on_discord is required")
 pub async fn discord_flag_handler(
     auth: AuthLevel,
+    Extension(scope): Extension<Option<tb_config::discord::RaidOAuth>>,
     State(pool): State<PgPool>,
     Extension(idem): Extension<IdempotencyState>,
     headers: HeaderMap,
@@ -1258,8 +1256,11 @@ pub async fn discord_flag_handler(
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
+    let Some(scope) = scope else {
+        return ApiError::internal().into_response();
+    };
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
-        discord_flag_handler_inner(&pool, &raw_login, &payload)
+        discord_flag_handler_inner(&pool, &raw_login, &payload, &scope)
     })
     .await
 }
@@ -1268,13 +1269,14 @@ async fn discord_flag_handler_inner(
     pool: &PgPool,
     raw_login: &str,
     payload: &serde_json::Value,
+    scope: &tb_config::discord::RaidOAuth,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    enforce_discord_action_scope()?;
+    enforce_discord_action_scope(scope)?;
 
     let body: DiscordFlagRequest = serde_json::from_value(payload.clone())
         .map_err(|_| ApiError::bad_request("invalid request body"))?;
@@ -1335,6 +1337,7 @@ async fn active_partner_exists(pool: &PgPool, login: &str) -> Result<bool, sqlx:
 #[allow(clippy::too_many_arguments)]
 pub async fn discord_profile_handler(
     auth: AuthLevel,
+    Extension(scope): Extension<Option<tb_config::discord::RaidOAuth>>,
     State(pool): State<PgPool>,
     Extension(helix): Extension<Arc<Option<HelixClient>>>,
     Extension(role_ext): Extension<DiscordRoleExt>,
@@ -1347,6 +1350,9 @@ pub async fn discord_profile_handler(
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
+    let Some(scope) = scope else {
+        return ApiError::internal().into_response();
+    };
     with_idempotency(&idem, &headers, &uri, "POST", &payload, || {
         discord_profile_handler_inner(
             &pool,
@@ -1354,6 +1360,7 @@ pub async fn discord_profile_handler(
             &role_ext,
             &raw_login,
             &payload,
+            &scope,
         )
     })
     .await
@@ -1365,13 +1372,14 @@ async fn discord_profile_handler_inner(
     role_ext: &DiscordRoleExt,
     raw_login: &str,
     payload: &serde_json::Value,
+    scope: &tb_config::discord::RaidOAuth,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let login = match normalize_twitch_login(raw_login) {
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    enforce_discord_action_scope()?;
+    enforce_discord_action_scope(scope)?;
 
     let body: DiscordProfileRequest = serde_json::from_value(payload.clone())
         .map_err(|_| ApiError::bad_request("invalid request body"))?;
@@ -1694,16 +1702,18 @@ mod tests {
             .await
             .expect("DB-Verbindung");
 
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
 
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");
@@ -1832,6 +1842,13 @@ mod tests {
         .await
         .expect("TRUNCATE");
 
+        mod referral_test_support {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/streamer_referrals.rs"
+            ));
+        }
+        referral_test_support::schema(&pool).await;
         pool
     }
 
@@ -1858,30 +1875,33 @@ mod tests {
         Router::new()
             .route(&format!("{base}/streamers"), get(list_handler))
             .route(&format!("{base}/streamers"), post(add_handler))
-            .route(&format!("{base}/streamers/:login"), delete(remove_handler))
             .route(
-                &format!("{base}/streamers/:login/verify"),
+                &format!("{base}/streamers/{{login}}"),
+                delete(remove_handler),
+            )
+            .route(
+                &format!("{base}/streamers/{{login}}/verify"),
                 post(verify_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/archive"),
+                &format!("{base}/streamers/{{login}}/archive"),
                 post(archive_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/disconnect-bot"),
+                &format!("{base}/streamers/{{login}}/disconnect-bot"),
                 post(disconnect_bot_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/discord-flag"),
+                &format!("{base}/streamers/{{login}}/discord-flag"),
                 post(discord_flag_handler),
             )
             .route(
-                &format!("{base}/streamers/:login/discord-profile"),
+                &format!("{base}/streamers/{{login}}/discord-profile"),
                 post(discord_profile_handler),
             )
             .route(&format!("{base}/stats"), get(stats_handler))
             .route(
-                &format!("{base}/analytics/streamer/:login"),
+                &format!("{base}/analytics/streamer/{{login}}"),
                 get(streamer_analytics_handler),
             )
             .route(
@@ -1889,10 +1909,11 @@ mod tests {
                 get(analytics_comparison_handler),
             )
             .route(
-                &format!("{base}/sessions/:session_id"),
+                &format!("{base}/sessions/{{session_id}}"),
                 get(session_detail_handler),
             )
             .with_state(pool)
+            .layer(Extension(Some(tb_config::discord::RaidOAuth::default())))
             .layer(Extension(helix))
             .layer(Extension(DiscordRoleExt(role)))
             .layer(Extension(ModeratorRemovalExt(removal)))

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, archetype, base_health FROM brain.hero_catalog WHERE hero_id=$1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "archetype",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "base_health",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bd0a8cd42650fe6a6be9bff3f90f6dd9f7ea67df683f673af347941f17069056"
+}

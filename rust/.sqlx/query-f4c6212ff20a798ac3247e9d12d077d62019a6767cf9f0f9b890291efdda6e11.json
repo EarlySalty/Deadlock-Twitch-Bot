@@ -6,7 +6,13 @@
       {
         "ordinal": 0,
         "name": "promo_message",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "streamer_plans",
+            "name": "promo_message"
+          }
+        }
       }
     ],
     "parameters": {

@@ -62,6 +62,12 @@ struct OverlayResponse {
     streamer: String,
     rank_name: Option<String>,
     badge_level: Option<i64>,
+    rank_subrank: Option<i64>,
+    rank_badge_url: Option<String>,
+    history_available: bool,
+    history_updated_at: Option<i64>,
+    history_stale: bool,
+    latest_match_at: Option<i64>,
     delta: Option<i64>,
     wins: Option<i64>,
     losses: Option<i64>,
@@ -100,16 +106,23 @@ struct RecentMatch {
 struct SteamMmrTrend {
     #[serde(default)]
     linked: Option<bool>,
-    #[serde(default, alias = "current_rank_name")]
-    rank_name: Option<String>,
-    #[serde(default)]
-    current_badge: Option<i64>,
     #[serde(default)]
     delta: Option<i64>,
 }
 
 #[derive(Deserialize)]
+struct SteamRank {
+    linked: bool,
+    rank_name: Option<String>,
+    badge_level: Option<i64>,
+}
+
+#[derive(Deserialize)]
 struct SteamMatchHistory {
+    #[serde(default)]
+    updated_at: Option<i64>,
+    #[serde(default)]
+    stale: bool,
     #[serde(default)]
     linked: Option<bool>,
     #[serde(default)]
@@ -132,11 +145,14 @@ struct SteamMatch {
     player_deaths: i64,
     #[serde(default)]
     player_assists: i64,
-    /// Deadlock-`ECitadelGameMode`-Diskriminator: 1 = Normal/Standard,
+    /// Deadlock-`ECitadelGameMode`-Diskriminator: 1 = Normal,
     /// 4 = StreetBrawl. Andere Werte (Test/Sandbox/NYC/Internal) bleiben dem
-    /// `all`-Modus vorbehalten. `match_mode` ist NICHT der Diskriminator.
+    /// `all`-Modus vorbehalten. Standard/Ranked trennt zusätzlich `match_mode`.
     #[serde(default)]
     game_mode: Option<i64>,
+    /// `ECitadelMatchMode`: 1 = Unranked, 4 = Ranked (Steam-GC/API).
+    #[serde(default)]
+    match_mode: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -398,6 +414,7 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
         }
     };
 
+    let rank_url = steam_bot_url("/rank");
     let trend_url = steam_bot_url("/player-mmr-trend");
     let matches_url = steam_bot_url("/player-matches");
     let live_url = steam_bot_url("/player-live");
@@ -406,13 +423,16 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let matches_query = [("discord_id", discord_id.as_str()), ("limit", "150")];
     let live_query = [("discord_id", discord_id.as_str())];
 
-    let (trend, matches, live, hero_icons) = tokio::join!(
+    let (rank, trend, matches, live, hero_icons) = tokio::join!(
+        fetch_steam_json::<SteamRank>(&client, &rank_url, &live_query),
         fetch_steam_json::<SteamMmrTrend>(&client, &trend_url, &trend_query),
         fetch_steam_json::<SteamMatchHistory>(&client, &matches_url, &matches_query),
         fetch_steam_json::<SteamLiveStatus>(&client, &live_url, &live_query),
         hero_icon_map(&client),
     );
 
+    let rank = rank.filter(|value| value.linked);
+    let badge = rank.as_ref().and_then(|value| value.badge_level);
     let trend = trend.filter(|value| value.linked != Some(false));
     let history = matches.filter(|value| value.linked != Some(false));
     let live = live.filter(|value| value.linked != Some(false));
@@ -425,7 +445,9 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let match_list = filter_by_mode(raw_matches, mode);
     let match_list = match_list.as_slice();
     let match_summary = summarize_matches(match_list);
-    let today = summarize_today(match_list, Utc::now());
+    let today = history
+        .as_ref()
+        .and_then(|_| summarize_today(match_list, Utc::now()));
     let kd = compute_kd(match_list);
     let mut recent = build_recent(match_list, 15);
 
@@ -443,10 +465,20 @@ async fn build_overlay_json(pool: &PgPool, login: &str, mode: &str) -> Value {
     let response = OverlayResponse {
         ok: true,
         streamer: login.to_string(),
-        rank_name: trend
+        rank_name: rank
             .as_ref()
             .and_then(|value| clean_string(&value.rank_name)),
-        badge_level: trend.as_ref().and_then(|value| value.current_badge),
+        badge_level: badge,
+        rank_subrank: badge.filter(|badge| *badge > 0).map(|badge| badge % 10),
+        rank_badge_url: rank_badge_url(badge),
+        history_available: history.is_some(),
+        history_updated_at: history.as_ref().and_then(|value| value.updated_at),
+        history_stale: history.as_ref().map(|value| value.stale).unwrap_or(false),
+        latest_match_at: match_list
+            .iter()
+            .map(|entry| entry.start_time)
+            .filter(|time| *time > 0)
+            .max(),
         delta: trend.as_ref().and_then(|value| value.delta),
         wins: match_summary.as_ref().map(|summary| summary.wins),
         losses: match_summary.as_ref().map(|summary| summary.losses),
@@ -573,11 +605,24 @@ fn clean_string(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Normalisiert den Spielmodus-Param auf `all`, `standard` oder `brawl`.
+fn rank_badge_url(badge: Option<i64>) -> Option<String> {
+    let badge = badge?;
+    let tier = badge / 10;
+    let subrank = badge % 10;
+    if !(1..=11).contains(&tier) || !(1..=6).contains(&subrank) {
+        return None;
+    }
+    Some(format!(
+        "https://api.deadlock-api.com/v1/assets/ranks/{tier}/{subrank}/image"
+    ))
+}
+
+/// Normalisiert den Spielmodus-Param auf `all`, `standard`, `ranked` oder `brawl`.
 /// Unbekanntes/leeres → `all` (keine Filterung).
 fn normalize_mode(mode: Option<&str>) -> &'static str {
     match mode.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
         Some("standard") => "standard",
+        Some("ranked") => "ranked",
         Some("brawl") => "brawl",
         _ => "all",
     }
@@ -585,12 +630,17 @@ fn normalize_mode(mode: Option<&str>) -> &'static str {
 
 /// Reduziert die Match-Liste auf den gewählten Spielmodus, BEVOR Stats berechnet
 /// werden. `brawl` → nur Street Brawl (`game_mode == Some(4)`); `standard` →
-/// alles AUSSER Street Brawl (`game_mode != Some(4)`, inkl. fehlender/unbekannter
-/// game_modes — robust gegen alte Matches); `all`/unbekannt → unverändert.
-/// Damit gilt stets `all == standard + brawl`. Wirkt nur auf match-abgeleitete
+/// Normal + Unranked; `ranked` → Normal + Ranked. Fehlende Kennungen und
+/// private Lobbys/Testmodi zählen nur unter `all` (unverändert).
+/// Kennungen: SteamDatabase/Protobufs, deadlock/citadel_gcmessages_common.proto,
+/// ECitadelGameMode und ECitadelMatchMode; öffentliche Match-History liefert Zahlen.
+/// Wirkt nur auf match-abgeleitete
 /// Stats, nicht auf rank/mmr-trend/live.
 fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
     const STREET_BRAWL: i64 = 4;
+    const NORMAL: i64 = 1;
+    const UNRANKED: i64 = 1;
+    const RANKED: i64 = 4;
     match mode {
         "brawl" => matches
             .iter()
@@ -599,7 +649,12 @@ fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
             .collect(),
         "standard" => matches
             .iter()
-            .filter(|entry| entry.game_mode != Some(STREET_BRAWL))
+            .filter(|entry| entry.game_mode == Some(NORMAL) && entry.match_mode == Some(UNRANKED))
+            .cloned()
+            .collect(),
+        "ranked" => matches
+            .iter()
+            .filter(|entry| entry.game_mode == Some(NORMAL) && entry.match_mode == Some(RANKED))
             .cloned()
             .collect(),
         _ => matches.to_vec(),
@@ -607,13 +662,15 @@ fn filter_by_mode(matches: &[SteamMatch], mode: &str) -> Vec<SteamMatch> {
 }
 
 /// Liefert die gewerteten Matches (`not_scored != true`, `match_result ∈ {0,1}`)
-/// in Eingabe-Reihenfolge (newest-first).
+/// nach Startzeit absteigend; bei gleicher Zeit bleibt die Quellreihenfolge.
 fn scored_matches(matches: &[SteamMatch]) -> Vec<&SteamMatch> {
-    matches
+    let mut scored: Vec<_> = matches
         .iter()
         .filter(|entry| entry.not_scored != Some(true))
         .filter(|entry| matches!(entry.match_result, Some(0 | 1)))
-        .collect()
+        .collect();
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.start_time));
+    scored
 }
 
 fn summarize_matches(matches: &[SteamMatch]) -> Option<MatchSummary> {
@@ -681,6 +738,7 @@ fn most_played(scored: &[&SteamMatch]) -> (Option<String>, Option<i64>) {
 
     let best = order
         .into_iter()
+        .rev()
         .max_by_key(|hero| counts.get(hero).copied().unwrap_or(0));
 
     match best {
@@ -712,7 +770,7 @@ fn summarize_today(matches: &[SteamMatch], now_utc: DateTime<Utc>) -> Option<Tod
     let mut wins = 0i64;
     let mut losses = 0i64;
     for entry in &scored {
-        if entry.start_time < cutoff {
+        if entry.start_time < cutoff || entry.start_time > now_utc.timestamp() {
             continue;
         }
         match entry.match_result {
@@ -723,11 +781,11 @@ fn summarize_today(matches: &[SteamMatch], now_utc: DateTime<Utc>) -> Option<Tod
     }
 
     let total = wins + losses;
-    if total == 0 {
-        return None;
-    }
-
-    let winrate = ((wins as f64 * 1000.0) / total as f64).round() / 10.0;
+    let winrate = if total == 0 {
+        0.0
+    } else {
+        ((wins as f64 * 1000.0) / total as f64).round() / 10.0
+    };
     Some(TodaySummary {
         wins,
         losses,
@@ -749,7 +807,7 @@ fn compute_kd(matches: &[SteamMatch]) -> Option<f64> {
     Some((kd * 100.0).round() / 100.0)
 }
 
-/// Letzte `n` gewertete Matches, newest-first (Eingabe-Reihenfolge), `n` auf 15 gecappt.
+/// Letzte `n` gewertete Matches, nach Startzeit absteigend, `n` auf 15 gecappt.
 fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
     let cap = n.min(15);
     scored_matches(matches)
@@ -768,7 +826,7 @@ fn build_recent(matches: &[SteamMatch], n: usize) -> Vec<RecentMatch> {
         .collect()
 }
 
-/// `GET /twitch/api/v2/public/overlay?streamer=<login>&mode=<all|standard|brawl>`
+/// `GET /twitch/api/v2/public/overlay?streamer=<login>&mode=<all|standard|ranked|brawl>`
 pub async fn overlay_api_handler(
     State(pool): State<PgPool>,
     Query(query): Query<OverlayQuery>,
@@ -799,714 +857,7 @@ pub async fn overlay_html_handler(
     spa::serve_dashboard_v2_index_gated(&headers, &auth, &pool).await
 }
 
-const OVERLAY_HTML: &str = r##"<!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Deadlock Overlay</title>
-  <style>
-    :root {
-      --bg-alpha: 0.85;
-      --radius: 14px;
-      --shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
-    }
-
-    html, body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      background: transparent;
-      overflow: hidden;
-      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    /* --- Themes via data-theme + CSS Custom Properties --- */
-    #overlay-card[data-theme="dark"] {
-      --bg: rgba(13, 15, 20, var(--bg-alpha));
-      --fg: #f4f7fb;
-      --muted: #9aa6b6;
-      --accent: #22d3ee;
-      --accent-2: #22d3ee;
-      --win: #34d399;
-      --loss: #fb7185;
-      --border: rgba(255, 255, 255, 0.10);
-      --accent-line: linear-gradient(90deg, var(--accent), transparent);
-    }
-
-    #overlay-card[data-theme="light"] {
-      --bg: rgba(248, 250, 253, var(--bg-alpha));
-      --fg: #0f172a;
-      --muted: #475569;
-      --accent: #0891b2;
-      --accent-2: #0891b2;
-      --win: #059669;
-      --loss: #e11d48;
-      --border: rgba(15, 23, 42, 0.12);
-      --accent-line: linear-gradient(90deg, var(--accent), transparent);
-    }
-
-    #overlay-card[data-theme="accent"] {
-      --bg: rgba(16, 12, 26, var(--bg-alpha));
-      --fg: #f6f4ff;
-      --muted: #b3a7cf;
-      --accent: #06B6D4;
-      --accent-2: #A855F7;
-      --win: #34d399;
-      --loss: #fb7185;
-      --border: rgba(255, 255, 255, 0.12);
-      --accent-line: linear-gradient(135deg, #06B6D4, #A855F7);
-    }
-
-    #overlay-card {
-      position: fixed;
-      box-sizing: border-box;
-      display: none;
-      color: var(--fg);
-      font-variant-numeric: tabular-nums;
-      letter-spacing: 0;
-    }
-
-    #overlay-card.overlay-pos-bl { left: 18px; bottom: 18px; }
-    #overlay-card.overlay-pos-br { right: 18px; bottom: 18px; }
-    #overlay-card.overlay-pos-tl { left: 18px; top: 18px; }
-    #overlay-card.overlay-pos-tr { right: 18px; top: 18px; }
-
-    #overlay-card.visible {
-      display: block;
-      animation: overlay-enter 180ms ease-out;
-    }
-
-    /* --- Box-Layout: Glassmorphism-Karte --- */
-    #overlay-card.layout-box {
-      width: 332px;
-      padding: 14px 16px;
-      border-radius: var(--radius);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
-      -webkit-backdrop-filter: blur(12px) saturate(140%);
-      backdrop-filter: blur(12px) saturate(140%);
-      position: fixed;
-      overflow: hidden;
-    }
-
-    #overlay-card.layout-box::before {
-      content: "";
-      position: absolute;
-      inset: 0 0 auto 0;
-      height: 3px;
-      background: var(--accent-line);
-      opacity: 0.9;
-    }
-
-    .ov-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .ov-name {
-      min-width: 0;
-      font-size: 17px;
-      font-weight: 700;
-      color: var(--fg);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .ov-live {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      flex: 0 0 auto;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.10em;
-      text-transform: uppercase;
-      color: var(--win);
-    }
-
-    .ov-live-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 999px;
-      background: var(--win);
-      box-shadow: 0 0 0 0 var(--win);
-      animation: ov-pulse 1.6s ease-out infinite;
-    }
-
-    .ov-head-rule {
-      height: 2px;
-      margin: 9px 0 11px;
-      border-radius: 2px;
-      background: var(--accent-line);
-      opacity: 0.75;
-    }
-
-    /* --- Stat-Raster (Box) --- */
-    .ov-grid {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: stretch;
-    }
-
-    .ov-cell {
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      padding: 2px 12px;
-      flex: 1 1 auto;
-      min-width: 0;
-      border-left: 1px solid var(--border);
-    }
-
-    .ov-cell:first-child { padding-left: 0; border-left: 0; }
-
-    .ov-label {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-
-    .ov-value {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      font-size: 17px;
-      font-weight: 700;
-      color: var(--fg);
-      white-space: nowrap;
-    }
-
-    .ov-value .ov-win { color: var(--win); }
-    .ov-value .ov-loss { color: var(--loss); }
-    .ov-delta-up { color: var(--win); font-size: 13px; }
-    .ov-delta-down { color: var(--loss); font-size: 13px; }
-
-    .ov-hero-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 120px;
-    }
-
-    .ov-sub {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--muted);
-    }
-
-    .ov-sub-kda {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--muted);
-    }
-
-    .rank-badge {
-      width: 40px;
-      height: 40px;
-      flex: 0 0 auto;
-      object-fit: contain;
-      filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
-    }
-
-    .ov-main-icon {
-      width: 24px;
-      height: 24px;
-      flex: 0 0 auto;
-      border-radius: 7px;
-      object-fit: cover;
-      background: rgba(127, 127, 127, 0.18);
-    }
-
-    /* --- Recent-Matches-Strip --- */
-    .ov-recent {
-      margin-top: 11px;
-    }
-
-    .ov-recent-label {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-
-    .ov-recent-row {
-      display: flex;
-      gap: 5px;
-      flex-wrap: wrap;
-    }
-
-    /* Hero-Kachel: abgerundetes Quadrat mit Portrait, Sieg/Niederlage als
-       dezenter farbiger Unterstrich (keine Vollfarb-Fläche). */
-    .ov-tile {
-      width: 26px;
-      height: 26px;
-      flex: 0 0 auto;
-      border-radius: 7px;
-      box-sizing: border-box;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      object-fit: cover;
-      background: rgba(127, 127, 127, 0.16);
-      border: 1px solid var(--border);
-      border-bottom-width: 2px;
-    }
-
-    .ov-tile.win { border-bottom-color: var(--win); }
-    .ov-tile.loss { border-bottom-color: var(--loss); }
-
-    /* Fallback ohne Icon: dezente Kachel mit S/N-Buchstabe in --win/--loss. */
-    .ov-tile-fallback {
-      font-size: 12px;
-      font-weight: 800;
-      line-height: 1;
-    }
-
-    .ov-tile-fallback.win { color: var(--win); }
-    .ov-tile-fallback.loss { color: var(--loss); }
-
-    /* --- Branding --- */
-    .ov-brand {
-      margin-top: 12px;
-      font-size: 9.5px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--muted);
-      opacity: 0.8;
-    }
-
-    /* --- Bar-Layout: schlanke Pille --- */
-    #overlay-card.layout-bar {
-      max-width: 640px;
-      padding: 9px 16px;
-      border-radius: 999px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
-      -webkit-backdrop-filter: blur(12px) saturate(140%);
-      backdrop-filter: blur(12px) saturate(140%);
-    }
-
-    #overlay-card.layout-bar .ov-bar {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      white-space: nowrap;
-      font-size: 14px;
-    }
-
-    .ov-seg {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-    }
-
-    .ov-seg + .ov-seg::before {
-      content: "·";
-      margin: 0 10px;
-      color: var(--muted);
-      opacity: 0.7;
-    }
-
-    .ov-seg .ov-seg-label {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-
-    .ov-seg .ov-seg-value {
-      font-weight: 700;
-      color: var(--fg);
-    }
-
-    .ov-seg .rank-badge { width: 26px; height: 26px; }
-    .ov-seg .ov-recent-row {
-      flex-wrap: nowrap;
-      gap: 4px;
-    }
-    .ov-seg .ov-recent-row .ov-tile {
-      width: 20px;
-      height: 20px;
-      border-radius: 6px;
-    }
-    .ov-seg .ov-recent-row .ov-tile-fallback { font-size: 10px; }
-
-    @keyframes overlay-enter {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes ov-pulse {
-      0% { box-shadow: 0 0 0 0 var(--win); opacity: 1; }
-      70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); opacity: 0.85; }
-      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); opacity: 1; }
-    }
-  </style>
-</head>
-<body>
-  <!-- Rang-/Hero-Bilder sind Deadlock-Spiel-Assets (© Valve), geladen über die öffentliche deadlock-api Assets-CDN; nur Asset-URLs, kein fremder Streamkit-Code. -->
-  <div id="overlay-card" aria-live="polite"></div>
-  <script>
-    const card = document.getElementById('overlay-card');
-    const params = new URLSearchParams(window.location.search);
-    const streamer = (params.get('streamer') || '').trim();
-
-    const oneOf = (key, allowed, fallback) => {
-      const value = (params.get(key) || '').trim().toLowerCase();
-      return allowed.includes(value) ? value : fallback;
-    };
-    const flag = (key, fallback) => {
-      const value = params.get(key);
-      if (value === null) return fallback;
-      return value !== '0';
-    };
-    const clampInt = (key, min, max, fallback) => {
-      const value = parseInt(params.get(key) || '', 10);
-      if (!Number.isFinite(value)) return fallback;
-      return Math.min(max, Math.max(min, value));
-    };
-
-    const theme = oneOf('theme', ['dark', 'light', 'accent'], 'dark');
-    const layout = oneOf('layout', ['box', 'bar'], 'box');
-    const mode = oneOf('mode', ['all', 'standard', 'brawl'], 'all');
-    const position = oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl');
-    const opacity = clampInt('opacity', 0, 100, 85);
-    const recentN = clampInt('recent_n', 1, 15, 10);
-
-    const flags = {
-      header: flag('header', true),
-      rank: flag('rank', true),
-      winrate: flag('winrate', true),
-      today: flag('today', true),
-      streak: flag('streak', true),
-      kd: flag('kd', true),
-      lastmatch: flag('lastmatch', false),
-      mostplayed: flag('mostplayed', false),
-      recent: flag('recent', true),
-      live: flag('live', true),
-      branding: flag('branding', true),
-    };
-
-    card.dataset.theme = theme;
-    card.classList.add(`layout-${layout}`);
-    card.classList.add(`overlay-pos-${position}`);
-    card.style.setProperty('--bg-alpha', String(opacity / 100));
-
-    let latestData = null;
-
-    const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
-    const nf1 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-    const nf2 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-    function rankBadgeUrl(badgeLevel) {
-      if (!Number.isInteger(badgeLevel)) return null;
-      const tier = Math.floor(badgeLevel / 10);
-      const sub = badgeLevel % 10;
-      if (tier < 1 || tier > 12) return null;
-
-      const base = `https://assets-bucket.deadlock-api.com/assets-api-res/images/ranks/rank${tier}`;
-      if (sub >= 1 && sub <= 6) return `${base}/badge_lg_subrank${sub}.png`;
-      if (sub === 0) return `${base}/badge_lg.png`;
-      return null;
-    }
-
-    function cleanIcon(value) {
-      return typeof value === 'string' && value.trim() ? value.trim() : null;
-    }
-
-    function hide() {
-      latestData = null;
-      card.classList.remove('visible');
-      card.replaceChildren();
-    }
-
-    function el(tag, className, text) {
-      const node = document.createElement(tag);
-      if (className) node.className = className;
-      if (text !== undefined && text !== null) node.textContent = text;
-      return node;
-    }
-
-    function fallbackTile(result) {
-      return el('span', `ov-tile ov-tile-fallback ${result}`, result === 'win' ? 'S' : 'N');
-    }
-
-    function recentRow(recent) {
-      const row = el('div', 'ov-recent-row');
-      const items = Array.isArray(recent) ? recent.slice(0, recentN) : [];
-      for (const match of items) {
-        const result = match && match.result === 'win' ? 'win' : 'loss';
-        const icon = cleanIcon(match && match.hero_icon);
-        if (icon) {
-          const image = el('img', `ov-tile ${result}`);
-          image.src = icon;
-          image.alt = '';
-          image.decoding = 'async';
-          image.loading = 'lazy';
-          image.onerror = () => image.replaceWith(fallbackTile(result));
-          row.appendChild(image);
-        } else {
-          row.appendChild(fallbackTile(result));
-        }
-      }
-      return row.childElementCount ? row : null;
-    }
-
-    function rankValueNode(data) {
-      const value = el('div', 'ov-value');
-      const badge = rankBadgeUrl(data.badge_level);
-      if (badge) {
-        const image = el('img', 'rank-badge');
-        image.src = badge;
-        image.alt = '';
-        image.decoding = 'async';
-        image.loading = 'lazy';
-        image.onerror = () => image.remove();
-        value.appendChild(image);
-      }
-      value.appendChild(el('span', 'ov-hero-name', data.rank_name));
-      if (isNumber(data.delta) && data.delta > 0) value.appendChild(el('span', 'ov-delta-up', '▲'));
-      if (isNumber(data.delta) && data.delta < 0) value.appendChild(el('span', 'ov-delta-down', '▼'));
-      return value;
-    }
-
-    // Liefert die aktiven Module als kuratierte Liste {label, build()}.
-    function activeModules(data) {
-      const mods = [];
-
-      if (flags.rank && data.rank_name) {
-        mods.push({ key: 'rank', label: 'RANG', value: () => rankValueNode(data) });
-      }
-
-      if (flags.winrate && isNumber(data.winrate) && isNumber(data.wins) && isNumber(data.losses)) {
-        mods.push({
-          key: 'winrate',
-          label: 'WINRATE',
-          value: () => {
-            const value = el('div', 'ov-value');
-            value.appendChild(el('span', null, `${nf1.format(data.winrate)} %`));
-            value.appendChild(el('span', 'ov-sub', `${data.wins}–${data.losses}`));
-            return value;
-          },
-        });
-      }
-
-      if (flags.today && isNumber(data.today_wins) && isNumber(data.today_losses)) {
-        mods.push({
-          key: 'today',
-          label: 'HEUTE',
-          value: () => {
-            const value = el('div', 'ov-value');
-            value.appendChild(el('span', 'ov-win', String(data.today_wins)));
-            value.appendChild(el('span', null, '–'));
-            value.appendChild(el('span', 'ov-loss', String(data.today_losses)));
-            return value;
-          },
-        });
-      }
-
-      if (flags.streak && isNumber(data.streak_len) && data.streak_len >= 2 &&
-          (data.streak_kind === 'win' || data.streak_kind === 'loss')) {
-        mods.push({
-          key: 'streak',
-          label: 'SERIE',
-          value: () => {
-            const value = el('div', 'ov-value');
-            const cls = data.streak_kind === 'win' ? 'ov-win' : 'ov-loss';
-            value.appendChild(el('span', cls, `${data.streak_len}×`));
-            return value;
-          },
-        });
-      }
-
-      if (flags.kd && isNumber(data.kd)) {
-        mods.push({
-          key: 'kd',
-          label: 'K/D',
-          value: () => el('div', 'ov-value', nf2.format(data.kd)),
-        });
-      }
-
-      if (flags.lastmatch && (data.last_result === 'win' || data.last_result === 'loss')) {
-        mods.push({
-          key: 'lastmatch',
-          label: 'LAST',
-          value: () => {
-            const value = el('div', 'ov-value');
-            const cls = data.last_result === 'win' ? 'ov-win' : 'ov-loss';
-            value.appendChild(el('span', cls, data.last_result === 'win' ? 'W' : 'L'));
-            if (isNumber(data.last_kills) && isNumber(data.last_deaths) && isNumber(data.last_assists)) {
-              value.appendChild(el('span', 'ov-sub-kda', `${data.last_kills}/${data.last_deaths}/${data.last_assists}`));
-            }
-            return value;
-          },
-        });
-      }
-
-      if (flags.mostplayed && data.most_played_hero) {
-        mods.push({
-          key: 'mostplayed',
-          label: 'MAIN',
-          value: () => {
-            const value = el('div', 'ov-value');
-            const icon = cleanIcon(data.most_played_icon);
-            if (icon) {
-              const image = el('img', 'ov-main-icon');
-              image.src = icon;
-              image.alt = '';
-              image.decoding = 'async';
-              image.loading = 'lazy';
-              image.onerror = () => image.remove();
-              value.appendChild(image);
-            }
-            value.appendChild(el('span', 'ov-hero-name', data.most_played_hero));
-            return value;
-          },
-        });
-      }
-
-      return mods;
-    }
-
-    function buildBox(data) {
-      const frag = document.createDocumentFragment();
-
-      if (flags.header && streamer) {
-        const head = el('div', 'ov-head');
-        head.appendChild(el('div', 'ov-name', streamer));
-        if (flags.live && data.live === true) {
-          const live = el('div', 'ov-live');
-          live.appendChild(el('span', 'ov-live-dot'));
-          const details = [];
-          if (data.hero) details.push(data.hero);
-          if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
-          live.appendChild(el('span', null, details.length ? `LIVE · ${details.join(' · ')}` : 'LIVE'));
-          head.appendChild(live);
-        }
-        frag.appendChild(head);
-        frag.appendChild(el('div', 'ov-head-rule'));
-      } else if (flags.live && data.live === true) {
-        const live = el('div', 'ov-live');
-        live.style.marginBottom = '10px';
-        live.appendChild(el('span', 'ov-live-dot'));
-        const details = [];
-        if (data.hero) details.push(data.hero);
-        if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
-        live.appendChild(el('span', null, details.length ? `LIVE · ${details.join(' · ')}` : 'LIVE'));
-        frag.appendChild(live);
-      }
-
-      const mods = activeModules(data);
-      if (mods.length) {
-        const grid = el('div', 'ov-grid');
-        for (const mod of mods) {
-          const cell = el('div', 'ov-cell');
-          cell.appendChild(el('div', 'ov-label', mod.label));
-          cell.appendChild(mod.value());
-          grid.appendChild(cell);
-        }
-        frag.appendChild(grid);
-      }
-
-      if (flags.recent) {
-        const row = recentRow(data.recent);
-        if (row) {
-          const wrap = el('div', 'ov-recent');
-          wrap.appendChild(el('div', 'ov-recent-label', 'Match-Verlauf'));
-          wrap.appendChild(row);
-          frag.appendChild(wrap);
-        }
-      }
-
-      if (flags.branding) {
-        frag.appendChild(el('div', 'ov-brand', 'powered by deutsche-deadlock-community.de'));
-      }
-
-      return frag.childElementCount ? frag : null;
-    }
-
-    function buildBar(data) {
-      const bar = el('div', 'ov-bar');
-
-      if (flags.header && streamer) {
-        const seg = el('div', 'ov-seg');
-        if (flags.live && data.live === true) seg.appendChild(el('span', 'ov-live-dot'));
-        seg.appendChild(el('span', 'ov-seg-value', streamer));
-        bar.appendChild(seg);
-      }
-
-      for (const mod of activeModules(data)) {
-        const seg = el('div', 'ov-seg');
-        seg.appendChild(el('span', 'ov-seg-label', mod.label));
-        seg.appendChild(mod.value());
-        bar.appendChild(seg);
-      }
-
-      if (flags.recent) {
-        const row = recentRow(data.recent);
-        if (row) {
-          const seg = el('div', 'ov-seg');
-          seg.appendChild(el('span', 'ov-seg-label', 'Match-Verlauf'));
-          seg.appendChild(row);
-          bar.appendChild(seg);
-        }
-      }
-
-      return bar.childElementCount ? bar : null;
-    }
-
-    function render(data) {
-      if (!data || data.ok !== true) {
-        hide();
-        return;
-      }
-      latestData = data;
-
-      const content = layout === 'bar' ? buildBar(data) : buildBox(data);
-      if (!content) {
-        hide();
-        return;
-      }
-
-      card.replaceChildren(content);
-      card.classList.add('visible');
-    }
-
-    async function poll() {
-      if (!streamer) {
-        hide();
-        return;
-      }
-      try {
-        const response = await fetch(`/twitch/api/v2/public/overlay?streamer=${encodeURIComponent(streamer)}&mode=${mode}`, { cache: 'no-store' });
-        if (!response.ok) {
-          hide();
-          return;
-        }
-        render(await response.json());
-      } catch (_) {
-        hide();
-      }
-    }
-
-    poll();
-    setInterval(poll, 20000);
-  </script>
-</body>
-</html>
-"##;
+const OVERLAY_HTML: &str = include_str!("overlay.html");
 
 #[cfg(test)]
 fn clear_overlay_cache_for_tests() {
@@ -1574,14 +925,16 @@ mod tests {
             player_deaths: deaths,
             player_assists: assists,
             game_mode: None,
+            match_mode: None,
         }
     }
 
     /// Wie `sm`, aber mit explizitem `game_mode` (Deadlock-Diskriminator,
-    /// 1 = Standard, 4 = Street Brawl).
+    /// 1 = Normal, 4 = Street Brawl) in öffentlicher Unranked-Queue.
     fn sm_mode(result: Option<i64>, game_mode: Option<i64>, hero: &str) -> SteamMatch {
         SteamMatch {
             game_mode,
+            match_mode: Some(1),
             ..sm(result, false, 0, hero, 0, 0, 0)
         }
     }
@@ -1645,12 +998,59 @@ mod tests {
     }
 
     #[test]
-    fn summarize_today_ohne_heutige_matches_ist_none() {
+    fn summarize_today_ohne_heutige_matches_ist_nullbilanz() {
         let matches = vec![
             sm(Some(1), false, BERLIN_TODAY_START_UTC - 1, "Haze", 0, 0, 0),
             sm(Some(1), true, BERLIN_TODAY_START_UTC + 5, "Haze", 0, 0, 0),
         ];
-        assert_eq!(summarize_today(&matches, now_berlin_noon()), None);
+        assert_eq!(
+            summarize_today(&matches, now_berlin_noon()),
+            Some(super::TodaySummary {
+                wins: 0,
+                losses: 0,
+                winrate: 0.0,
+                matches: 0
+            })
+        );
+    }
+
+    #[test]
+    fn serien_und_verlauf_folgen_der_zeit_statt_der_antwortreihenfolge() {
+        let matches = vec![
+            sm(Some(0), false, 100, "Haze", 0, 0, 0),
+            sm(Some(1), false, 300, "Wraith", 0, 0, 0),
+            sm(Some(1), false, 200, "Haze", 0, 0, 0),
+        ];
+        let summary = summarize_matches(&matches).unwrap();
+        assert_eq!(summary.streak_kind, "win");
+        assert_eq!(summary.streak_len, 2);
+        assert_eq!(summary.last_hero.as_deref(), Some("Wraith"));
+        assert_eq!(build_recent(&matches, 1)[0].hero.as_deref(), Some("Wraith"));
+    }
+
+    #[test]
+    fn meistgespielter_held_bei_gleichstand_ist_der_juengste() {
+        let matches = vec![
+            sm(Some(1), false, 200, "Wraith", 0, 0, 0),
+            sm(Some(1), false, 100, "Haze", 0, 0, 0),
+        ];
+        assert_eq!(
+            summarize_matches(&matches)
+                .unwrap()
+                .most_played_hero
+                .as_deref(),
+            Some("Wraith")
+        );
+    }
+
+    #[test]
+    fn rangbilder_nutzen_aktuelle_asset_api_und_keine_unbekannten_raenge() {
+        assert_eq!(
+            super::rank_badge_url(Some(76)).as_deref(),
+            Some("https://api.deadlock-api.com/v1/assets/ranks/7/6/image")
+        );
+        assert_eq!(super::rank_badge_url(Some(120)), None);
+        assert_eq!(super::rank_badge_url(Some(0)), None);
     }
 
     #[test]
@@ -1757,6 +1157,7 @@ mod tests {
         assert_eq!(normalize_mode(Some("standard")), "standard");
         assert_eq!(normalize_mode(Some("  BRAWL ")), "brawl");
         assert_eq!(normalize_mode(Some("Standard")), "standard");
+        assert_eq!(normalize_mode(Some(" Ranked ")), "ranked");
         assert_eq!(normalize_mode(Some("all")), "all");
         assert_eq!(normalize_mode(Some("unsinn")), "all");
         assert_eq!(normalize_mode(Some("")), "all");
@@ -1769,22 +1170,54 @@ mod tests {
             sm_mode(Some(1), Some(1), "Haze"),     // Standard
             sm_mode(Some(0), Some(4), "Abrams"),   // Brawl -> raus
             sm_mode(Some(1), Some(1), "Vindicta"), // Standard
-            sm_mode(Some(0), None, "Seven"),       // unbekannt -> zählt als Standard
+            sm_mode(Some(0), None, "Seven"),       // unbekannt -> raus
+            sm_mode(Some(1), Some(2), "Sandbox"),  // expliziter anderer Modus -> raus
+            SteamMatch {
+                match_mode: Some(4),
+                ..sm_mode(Some(1), Some(1), "Ranked")
+            },
+            SteamMatch {
+                match_mode: Some(2),
+                ..sm_mode(Some(1), Some(1), "Privat")
+            },
+            SteamMatch {
+                match_mode: None,
+                ..sm_mode(Some(1), Some(1), "Unbekannt")
+            },
         ];
         let filtered = filter_by_mode(&matches, "standard");
         let heroes: Vec<_> = filtered
             .iter()
             .map(|m| m.hero_name.clone().unwrap())
             .collect();
-        // Standard = alles außer Street Brawl: nur Abrams (Brawl) fällt raus.
-        assert_eq!(
-            heroes,
-            vec![
-                "Haze".to_string(),
-                "Vindicta".to_string(),
-                "Seven".to_string()
-            ]
-        );
+        // Bekannte Nichtstandard-Modi zählen nicht als Standard.
+        assert_eq!(heroes, vec!["Haze".to_string(), "Vindicta".to_string()]);
+        let ranked = filter_by_mode(&matches, "ranked");
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].hero_name.as_deref(), Some("Ranked"));
+        // Auch die reale API-Drahtform muss beide unabhängigen Kennungen erhalten.
+        for (game_mode, match_mode, expected) in [
+            (Some(1), Some(1), "standard"),
+            (Some(1), Some(4), "ranked"),
+            (Some(4), Some(1), "brawl"),
+            (Some(1), None, "all"),
+            (None, Some(4), "all"),
+            (Some(1), Some(2), "all"),
+            (Some(1), Some(99), "all"),
+            (Some(3), Some(4), "all"),
+        ] {
+            let entry: SteamMatch = serde_json::from_value(json!({
+                "game_mode": game_mode, "match_mode": match_mode
+            }))
+            .unwrap();
+            for mode in ["standard", "ranked", "brawl"] {
+                assert_eq!(
+                    filter_by_mode(std::slice::from_ref(&entry), mode).len(),
+                    usize::from(mode == expected),
+                    "{game_mode:?}/{match_mode:?}: {mode}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2069,15 +1502,17 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path setzen");
@@ -2140,6 +1575,14 @@ mod tests {
         .await
         .unwrap();
 
+        Mock::given(method("GET"))
+            .and(path("/rank"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "linked": true, "rank_name": "Oracle", "badge_level": 83
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/player-mmr-trend"))
             .and(query_param("discord_id", "4242"))
@@ -2205,7 +1648,7 @@ mod tests {
         assert_eq!(first["ok"], true);
         assert_eq!(first["streamer"], "streamerx");
         assert_eq!(first["rank_name"], "Oracle");
-        assert_eq!(first["badge_level"], 53);
+        assert_eq!(first["badge_level"], 83);
         assert_eq!(first["delta"], 3);
         assert_eq!(first["wins"], 3);
         assert_eq!(first["losses"], 1);
@@ -2230,8 +1673,8 @@ mod tests {
         assert_eq!(vindicta["hero_icon"], "https://cdn.example/vindicta.webp");
 
         mock_server.verify().await;
-        // 3 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
-        assert_eq!(mock_server.received_requests().await.unwrap().len(), 4);
+        // 4 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
+        assert_eq!(mock_server.received_requests().await.unwrap().len(), 5);
     }
 
     #[tokio::test]
@@ -2297,8 +1740,8 @@ mod tests {
         assert!(html.contains("--bg: rgba(13, 15, 20, var(--bg-alpha))"));
         // Param-Parsing + Defaults
         assert!(html.contains("oneOf('theme', ['dark', 'light', 'accent'], 'dark')"));
-        assert!(html.contains("oneOf('layout', ['box', 'bar'], 'box')"));
-        assert!(html.contains("oneOf('mode', ['all', 'standard', 'brawl'], 'all')"));
+        assert!(html.contains("oneOf('layout', ['box', 'bar', 'canvas'], 'box')"));
+        assert!(html.contains("oneOf('mode', ['all', 'standard', 'ranked', 'brawl'], 'all')"));
         assert!(html.contains("oneOf('pos', ['bl', 'br', 'tl', 'tr'], 'tl')"));
         assert!(html.contains("clampInt('opacity', 0, 100, 85)"));
         assert!(html.contains("clampInt('recent_n', 1, 15, 10)"));
@@ -2315,8 +1758,8 @@ mod tests {
         assert!(html.contains("&mode=${mode}"));
         assert!(html.contains("setInterval(poll, 20000)"));
         assert!(html.contains("Math.floor(badgeLevel / 10)"));
-        assert!(html.contains("badge_lg_subrank${sub}.png"));
-        assert!(html.contains("badge_lg.png"));
+        assert!(html.contains("api.deadlock-api.com/v1/assets/ranks/${tier}"));
+        assert!(html.contains("${base}/${sub}/image"));
         // Hero-Icons werden server-seitig aufgelöst; kein Browser-Fetch der Hero-Map mehr.
         assert!(!html.contains("/v2/heroes"));
         assert!(!html.contains("loadHeroAssets"));
@@ -2329,10 +1772,17 @@ mod tests {
         assert!(html.contains("'HEUTE'"));
         assert!(html.contains("'SERIE'"));
         assert!(html.contains("'K/D'"));
-        assert!(html.contains("'LAST'"));
-        assert!(html.contains("'MAIN'"));
-        assert!(html.contains("'Match-Verlauf'"));
-        assert!(html.contains("powered by deutsche-deadlock-community.de"));
+        assert!(html.contains("'LETZTES SPIEL'"));
+        assert!(html.contains("'LIEBLINGSHELD'"));
+        assert!(html.contains("'Letzte Spiele · neuestes links'"));
+        assert!(html.contains("Deutsche Deadlock"));
+        assert!(html.contains("brandNode()"));
+        assert!(html.contains("/brand/logo/logo-192.png"));
+        assert!(html.contains("/brand/logo/wordmark.svg"));
+        assert!(!html.contains("Spielverlauf"));
+        assert!(html.contains("hexColor('accent')"));
+        assert!(html.contains("hexColor('background')"));
+        assert!(html.contains("hexColor('text')"));
         assert!(html.contains("Intl.NumberFormat('de-DE'"));
         // Recent-Strip (Hero-Kacheln, kein Farb-Klecks) + Live-Puls
         assert!(html.contains("ov-recent-row"));
@@ -2359,6 +1809,10 @@ mod tests {
         assert!(html.contains("border-radius: 999px"));
         // Box-Layout-Container
         assert!(html.contains("#overlay-card.layout-box"));
+        // Freie OBS-Leinwand mit URL-gesteuerten Quellen
+        assert!(html.contains("#overlay-card.layout-canvas"));
+        assert!(html.contains("function canvasSource(key, label, content)"));
+        assert!(html.contains("canvasRect(source.dataset.module)"));
         // opacity wirkt auf Karten-Hintergrund via --bg-alpha
         assert!(html.contains("var(--bg-alpha)"));
         assert!(html.contains("--bg-alpha: 0.85"));

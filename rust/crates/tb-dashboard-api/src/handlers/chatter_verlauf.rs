@@ -29,7 +29,7 @@ use sqlx::{PgPool, Row};
 use tb_analytics::chatter_verlauf::LOGINS_MAX;
 use tb_http_core::{ExpectedToken, INTERNAL_TOKEN_HEADER};
 
-use crate::auth::security::require_internal;
+use crate::auth::security::{require_internal, OptionalConnectInfo};
 
 #[derive(Deserialize)]
 pub struct ChatterVerlaufQuery {
@@ -75,7 +75,7 @@ fn logins_lesen(roh: &str) -> Result<Vec<String>, usize> {
 /// laufenden Stream, 503 wenn die Auswertung nicht antwortet.
 pub async fn internal_chatter_verlauf_handler(
     State(pool): State<PgPool>,
-    connect: Option<ConnectInfo<SocketAddr>>,
+    OptionalConnectInfo(connect): OptionalConnectInfo,
     expected: Option<Extension<ExpectedToken>>,
     headers: HeaderMap,
     Query(query): Query<ChatterVerlaufQuery>,
@@ -243,7 +243,7 @@ mod tests {
         let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let schema = crate::auth::session::test_schema_name("chatter_verlauf");
         let admin = PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .ok()?;
@@ -325,7 +325,7 @@ mod tests {
         }
         let antwort = internal_chatter_verlauf_handler(
             State(pool.clone()),
-            von.map(|ip| ConnectInfo(SocketAddr::from((ip, 40000)))),
+            OptionalConnectInfo(von.map(|ip| ConnectInfo(SocketAddr::from((ip, 40000))))),
             Some(Extension(ExpectedToken("geheim".into()))),
             headers,
             Query(ChatterVerlaufQuery {

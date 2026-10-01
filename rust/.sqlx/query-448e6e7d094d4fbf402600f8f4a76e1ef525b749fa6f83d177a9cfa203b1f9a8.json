@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT hero_id FROM brain.hero_catalog WHERE lower(name)=lower($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hero_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "448e6e7d094d4fbf402600f8f4a76e1ef525b749fa6f83d177a9cfa203b1f9a8"
+}

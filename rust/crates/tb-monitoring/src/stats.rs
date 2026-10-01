@@ -65,7 +65,7 @@ impl StatsStore {
         let mut tx = self.pool.begin().await?;
         for row in rows {
             // dyn: Tabellenname ist der ausgewählte Stats-Sink (`tracked` oder `category`).
-            sqlx::query(&sql)
+            sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                 .bind(ts)
                 .bind(&row.streamer)
                 .bind(row.viewer_count)
@@ -112,7 +112,7 @@ mod tests {
             .await
             .unwrap();
         for table in ["twitch_stats_tracked", "twitch_stats_category"] {
-            sqlx::query(&format!("CREATE TABLE {table} (ts_utc timestamptz, streamer text, viewer_count int, is_partner boolean, game_name text, stream_title text, tags text, language text, twitch_user_id text)"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("CREATE TABLE {table} (ts_utc timestamptz, streamer text, viewer_count int, is_partner boolean, game_name text, stream_title text, tags text, language text, twitch_user_id text)")))
                 .execute(&pool).await.unwrap();
         }
         let store = StatsStore::new(pool.clone());
@@ -133,7 +133,7 @@ mod tests {
         store.log_tracked(Utc::now(), &[sample]).await.unwrap();
         for table in ["twitch_stats_tracked", "twitch_stats_category"] {
             let row: (String, String) =
-                sqlx::query_as(&format!("SELECT twitch_user_id, language FROM {table}"))
+                sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT twitch_user_id, language FROM {table}")))
                     .fetch_one(&pool)
                     .await
                     .unwrap();

@@ -2,16 +2,22 @@ import { fetchJson, withCookieCredentials } from './core';
 
 export const AD_DURATION_OPTIONS = [30, 60, 90, 120, 150, 180] as const;
 
-export type AdManagerStrategy = 'monitor' | 'snooze' | 'smart';
+export const BUDGET_MINUTES_MIN = 1;
+export const BUDGET_MINUTES_MAX = 8;
+export const BUDGET_MINUTES_DEFAULT = 3;
+
+export type AdManagerStrategy = 'snooze' | 'smart';
 
 export interface AdManagerSettingsInput {
   enabled: boolean;
   strategy: AdManagerStrategy;
   adDurationSeconds: number;
+  budgetMinutesPerHour: number;
   minIntervalMinutes: number;
   startupDelayMinutes: number;
   quietWindowMinutes: number;
   actionLeadSeconds: number;
+  chatNoticeBeforeAd?: boolean;
 }
 
 export interface AdManagerSettings extends AdManagerSettingsInput {
@@ -25,7 +31,7 @@ export interface AdManagerLastAction {
   at: string;
 }
 
-export type AdManagerSteamState = 'in_match' | 'in_queue' | 'out_of_game' | 'stale';
+export type AdManagerSteamState = 'in_match' | 'in_queue' | 'out_of_game' | 'stale' | 'unavailable';
 
 export interface AdManagerSteamStatus {
   linked: boolean;
@@ -33,6 +39,17 @@ export interface AdManagerSteamStatus {
   hero: string | null;
   stage: string | null;
   observedAt: string | null;
+}
+
+export type AdManagerPlanFit = 'good' | 'tight' | 'unprotectable';
+
+export interface AdManagerPlan {
+  source: 'twitch' | 'own';
+  fit: AdManagerPlanFit;
+  nextBlockAt: string | null;
+  blockSeconds: number;
+  blocksPerHour: number;
+  budgetUsedSecondsThisHour: number;
 }
 
 export interface AdManagerStatus {
@@ -47,6 +64,8 @@ export interface AdManagerStatus {
   workerHealthy: boolean;
   workerHeartbeatAt: string | null;
   lastAction: AdManagerLastAction | null;
+  plan: AdManagerPlan | null;
+  currentReason: string | null;
   scopes: {
     read: boolean;
     snooze: boolean;
@@ -58,6 +77,30 @@ export interface AdManagerStatus {
 export interface AdManagerResponse {
   settings: AdManagerSettings;
   status: AdManagerStatus;
+}
+
+export type AdManagerHistoryDecision = 'commercial' | 'snooze' | 'postpone' | 'none';
+
+export interface AdManagerHistoryEntry {
+  at: string;
+  decision: AdManagerHistoryDecision;
+  reason: string;
+  blockSeconds: number | null;
+  detail: string | null;
+}
+
+export interface AdManagerHistorySummary {
+  blocksRun: number;
+  blocksInWindow: number;
+  budgetSecondsUsed: number;
+  budgetSecondsPlanned: number;
+  postponed: number;
+}
+
+export interface AdManagerHistory {
+  sessionStartedAt: string | null;
+  summary: AdManagerHistorySummary;
+  entries: AdManagerHistoryEntry[];
 }
 
 export type AdManagerAction =
@@ -82,17 +125,22 @@ function normalizeDuration(value: number): number {
 export function normalizeAdManagerSettings(
   settings: AdManagerSettingsInput,
 ): AdManagerSettingsInput {
-  const strategy: AdManagerStrategy = ['monitor', 'snooze', 'smart'].includes(settings.strategy)
-    ? settings.strategy
-    : 'monitor';
+  const strategy: AdManagerStrategy = settings.strategy === 'snooze' ? 'snooze' : 'smart';
   return {
     enabled: Boolean(settings.enabled),
     strategy,
     adDurationSeconds: normalizeDuration(settings.adDurationSeconds),
+    budgetMinutesPerHour: clampInteger(
+      settings.budgetMinutesPerHour,
+      BUDGET_MINUTES_MIN,
+      BUDGET_MINUTES_MAX,
+      BUDGET_MINUTES_DEFAULT,
+    ),
     minIntervalMinutes: clampInteger(settings.minIntervalMinutes, 8, 180, 30),
     startupDelayMinutes: clampInteger(settings.startupDelayMinutes, 0, 180, 15),
     quietWindowMinutes: clampInteger(settings.quietWindowMinutes, 0, 60, 5),
     actionLeadSeconds: clampInteger(settings.actionLeadSeconds, 10, 300, 60),
+    chatNoticeBeforeAd: settings.chatNoticeBeforeAd !== false,
   };
 }
 
@@ -116,6 +164,10 @@ export function adManagerReauthUrl(reconnectUrl: string): string {
 
 export async function fetchAdManager(signal?: AbortSignal): Promise<AdManagerResponse> {
   return fetchJson<AdManagerResponse>(BASE, withCookieCredentials({ signal }));
+}
+
+export async function fetchAdManagerHistory(signal?: AbortSignal): Promise<AdManagerHistory> {
+  return fetchJson<AdManagerHistory>(`${BASE}/history`, withCookieCredentials({ signal }));
 }
 
 export async function saveAdManagerSettings(

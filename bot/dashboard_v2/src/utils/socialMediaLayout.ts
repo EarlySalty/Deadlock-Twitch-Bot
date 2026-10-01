@@ -95,6 +95,57 @@ export function normalizeStoredCamPosition(box: LayoutBox, mode: string): Layout
   return clampCamPositionToTarget(box);
 }
 
+function fitStackedRegion(region: LayoutBox, centerX: number, centerY: number, gameHeight: number): LayoutBox | null {
+  if (region.w < 2 || region.h < 2) return null;
+  let w: number;
+  let h: number;
+  if (region.w * gameHeight >= region.h * TARGET_WIDTH) {
+    h = region.h - (region.h % 2);
+    w = Math.floor((h * TARGET_WIDTH) / gameHeight);
+    w -= w % 2;
+  } else {
+    w = region.w - (region.w % 2);
+    h = Math.floor((w * gameHeight) / TARGET_WIDTH);
+    h -= h % 2;
+  }
+  if (w < 2 || h < 2) return null;
+  return {
+    x: Math.max(region.x, Math.min(centerX - w / 2, region.x + region.w - w)),
+    y: Math.max(region.y, Math.min(centerY - h / 2, region.y + region.h - h)),
+    w,
+    h,
+  };
+}
+
+function cropsOverlap(a: LayoutBox, b: LayoutBox): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+export function stackedGameCrop(game: LayoutBox, cam: LayoutBox, gameHeight: number): LayoutBox {
+  const centerX = game.x + Math.floor(game.w / 2);
+  const centerY = game.y + Math.floor(game.h / 2);
+  const centered = fitStackedRegion(game, centerX, centerY, gameHeight) ?? game;
+  if (!cropsOverlap(centered, cam)) return centered;
+  const gap = 8;
+  const regions: LayoutBox[] = [
+    { x: game.x, y: game.y, w: Math.max(0, cam.x - gap - game.x), h: game.h },
+    { x: Math.max(game.x, cam.x + cam.w + gap), y: game.y, w: Math.max(0, game.x + game.w - cam.x - cam.w - gap), h: game.h },
+    { x: game.x, y: game.y, w: game.w, h: Math.max(0, cam.y - gap - game.y) },
+    { x: game.x, y: Math.max(game.y, cam.y + cam.h + gap), w: game.w, h: Math.max(0, game.y + game.h - cam.y - cam.h - gap) },
+  ];
+  const score = (crop: LayoutBox) => {
+    const dx = Math.abs(crop.x + crop.w / 2 - centerX) / game.w;
+    const dy = Math.abs(crop.y + crop.h / 2 - centerY) / game.h;
+    return ((crop.w * crop.h) / (game.w * game.h)) * 0.1 - dx - dy;
+  };
+  let best: LayoutBox | null = null;
+  for (const region of regions) {
+    const crop = fitStackedRegion(region, centerX, centerY, gameHeight);
+    if (crop && !cropsOverlap(crop, cam) && (!best || score(crop) > score(best))) best = crop;
+  }
+  return best ?? centered;
+}
+
 /** Wendet eine Zeigerbewegung auf die Startbox an. Ohne Rahmenbegrenzung. */
 export function applyDrag(
   startBox: LayoutBox,

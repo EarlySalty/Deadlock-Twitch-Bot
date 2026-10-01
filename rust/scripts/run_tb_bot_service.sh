@@ -4,6 +4,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OPERATING_CONFIG='/var/lib/deadlock-twitch/config/bot.toml'
+# Vor Infisical und Hintergrundarbeit prüfen. Fehlende Datei ist ein echter
+# Rollout-Blocker; keine stillen Defaults und keine Übernahme aus ENV.
+"$ROOT_DIR/rust/target/release/tb-bot" --config "$OPERATING_CONFIG" --check-config >/dev/null
 SYSTEMD_CREDENTIAL_DIR='/run/credentials/deadlock-twitch-bot-rust.service'
 if [[ -r "$SYSTEMD_CREDENTIAL_DIR/infisical-token" ]]; then
   CREDENTIALS_DIRECTORY="$SYSTEMD_CREDENTIAL_DIR"
@@ -123,6 +127,20 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 # ops/stt-server (Default-Endpunkt 127.0.0.1:8791); es geht kein Stream-Audio
 # an einen Fremdanbieter. Sichtung: ops/learn-samples.sh
 export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
+# Kontrollierter Live-Smalltalk-Test mit dem separat per OAuth verbundenen
+# Engagement-Account. Das Wiring startet im Live-Modus genau EINE Session pro
+# Bot-Prozess; Kandidaten muessen live Deadlock spielen, Nicht-Partner sein und
+# einen in den letzten 12h bekannten Followerstand unter 50 haben. Kein Pitch/Link ist im Prompt
+# und im Ausgabefilter erlaubt. Kill-Switch: beide Variablen auf 0 setzen.
+export SMALLTALK_LOOP_ENABLED="${SMALLTALK_LOOP_ENABLED:-1}"
+export SMALLTALK_LOOP_LIVE_SEND="${SMALLTALK_LOOP_LIVE_SEND:-1}"
+# Kein permanenter Whisper-Leerlauf mehr: solange der Owner in keinem Kanal
+# aktiv ist, liefert der Lernmodus keinen Nutzen, wuerde mit dem alten Default
+# aber trotzdem den lebendigsten Partner-Stream durchgehend transkribieren.
+# Heisse Kanaele bleiben erlaubt; die Parallelitaet ist standardmaessig auf
+# einen Kanal begrenzt, damit STT Bot/DB/Medienarbeit nicht die CPU wegnimmt.
+export ENGAGEMENT_LEARN_IDLE_CHANNELS="${ENGAGEMENT_LEARN_IDLE_CHANNELS:-0}"
+export ENGAGEMENT_LEARN_MAX_CHANNELS="${ENGAGEMENT_LEARN_MAX_CHANNELS:-1}"
 # streamlink liegt im venv, nicht im System-PATH. Ohne diesen Pfad findet der
 # Capturer nichts und der Zeitstrahl bekommt nur Chat, keinen Stream-Ton.
 if [[ -x /usr/local/libexec/deadlock-streamlink ]]; then
@@ -138,4 +156,4 @@ export TB_LLM_MODEL_RICKY_CREW_REVIEW="${TB_LLM_MODEL_RICKY_CREW_REVIEW:-account
 export RUST_LOG="${RUST_LOG:-info}"
 # Bot-Token-Write-Back (ADR 0005): INFISICAL_WRITE_TOKEN wurde oben gesetzt.
 
-exec "$ROOT_DIR/rust/target/release/tb-bot"
+exec "$ROOT_DIR/rust/target/release/tb-bot" --config "$OPERATING_CONFIG" "$@"

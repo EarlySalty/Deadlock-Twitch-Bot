@@ -47,6 +47,22 @@ pub struct PlatformStatus {
     pub uses_global_fallback: bool,
 }
 
+#[derive(sqlx::FromRow)]
+struct CredentialRow {
+    id: i32,
+    platform: String,
+    streamer_login: Option<String>,
+    access_token_enc: Vec<u8>,
+    refresh_token_enc: Option<Vec<u8>>,
+    client_id: Option<String>,
+    client_secret_enc: Option<Vec<u8>>,
+    token_expires_at: Option<String>,
+    scopes: Option<String>,
+    platform_user_id: Option<String>,
+    platform_username: Option<String>,
+    enc_version: Option<i32>,
+}
+
 /// Lädt + entschlüsselt Plattform-Credentials.
 pub struct CredentialManager {
     pool: PgPool,
@@ -66,21 +82,42 @@ impl CredentialManager {
         platform: &str,
         streamer_login: Option<&str>,
     ) -> Option<SocialMediaCredentials> {
-        let row = sqlx::query!(
-            "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, \
-                    client_id, client_secret_enc, token_expires_at, scopes, \
-                    platform_user_id, platform_username, enc_version \
-             FROM social_media_platform_auth \
-             WHERE platform = $1 AND enabled = 1 AND ( \
-                   streamer_login = $2 \
-                   OR ($2 IS NOT NULL AND streamer_login IS NULL) \
-                   OR ($2 IS NULL AND streamer_login IS NULL)) \
-             ORDER BY CASE WHEN streamer_login = $2 THEN 1 ELSE 0 END DESC, \
-                      authorized_at DESC, id DESC \
-             LIMIT 1",
-            platform,
-            streamer_login
+        self.get_credentials_scoped(platform, streamer_login, None)
+            .await
+    }
+
+    /// Clipaktionen wählen nur die dauerhaft gespeicherte Twitch-ID.
+    /// Fehlende kanaleigene Bindungen werden nicht aus Namen ergänzt.
+    pub async fn get_credentials_for_id(
+        &self,
+        platform: &str,
+        twitch_user_id: Option<&str>,
+    ) -> Option<SocialMediaCredentials> {
+        if twitch_user_id
+            .is_some_and(|id| id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return None;
+        }
+        self.get_credentials_scoped(platform, None, twitch_user_id)
+            .await
+    }
+
+    async fn get_credentials_scoped(
+        &self,
+        platform: &str,
+        streamer_login: Option<&str>,
+        twitch_user_id: Option<&str>,
+    ) -> Option<SocialMediaCredentials> {
+        let row = sqlx::query_as::<_, CredentialRow>(
+            "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, client_id, client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, enc_version
+             FROM social_media_platform_auth
+             WHERE platform = $1 AND enabled = 1 AND (
+                 ($3::text IS NOT NULL AND twitch_user_id = $3)
+                 OR ($3::text IS NULL AND streamer_login = $2)
+                 OR streamer_login IS NULL)
+             ORDER BY CASE WHEN ($3::text IS NOT NULL AND twitch_user_id = $3) OR streamer_login = $2 THEN 1 ELSE 0 END DESC, authorized_at DESC, id DESC LIMIT 1",
         )
+        .bind(platform).bind(streamer_login).bind(twitch_user_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
@@ -145,21 +182,26 @@ impl CredentialManager {
     /// `get_all_platforms_status`).
     pub async fn get_all_platforms_status(
         &self,
-        streamer_login: Option<&str>,
+        twitch_user_id: Option<&str>,
     ) -> Vec<PlatformStatus> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
-            let status = match self.get_credentials(platform, streamer_login).await {
+            let status = match self.get_credentials_for_id(platform, twitch_user_id).await {
                 Some(creds) => {
                     let uses_global_fallback =
-                        streamer_login.is_some() && creds.streamer_login.is_none();
+                        twitch_user_id.is_some() && creds.streamer_login.is_none();
                     PlatformStatus {
                         platform: platform.to_string(),
                         connected: true,
                         username: creds.platform_username.clone(),
                         user_id: creds.platform_user_id.clone(),
                         expires_at: creds.expires_at.clone(),
-                        expired: token_expired(creds.expires_at.as_deref(), now_ts()),
+                        // Dashboard-Status und Refresh-Fenster sind zwei verschiedene Dinge:
+                        // YouTube stellt Access-Tokens typischerweise fuer ~1h aus. Die
+                        // Refresh-Logik darf sie innerhalb dieses Fensters proaktiv erneuern,
+                        // aber direkt nach einem erfolgreichen OAuth-Callback als
+                        // "abgelaufen" zu markieren ist falsch.
+                        expired: token_actually_expired(creds.expires_at.as_deref(), now_ts()),
                         scopes: creds.scopes.clone(),
                         uses_global_fallback,
                     }
@@ -203,6 +245,21 @@ fn token_expired(expires_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -
     }
 }
 
+/// Tatsächlicher Ablauf für die UI. Anders als [`token_expired`] enthält diese
+/// Prüfung bewusst kein 1h-Refresh-Fenster: ein frisch ausgestelltes
+/// YouTube-Token mit rund 3600 Sekunden Laufzeit ist gültig und darf im
+/// Dashboard nicht unmittelbar wieder als abgelaufen erscheinen.
+fn token_actually_expired(expires_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Some(raw) = expires_at.map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let normalized = raw.replace('Z', "+00:00");
+    match chrono::DateTime::parse_from_rfc3339(&normalized) {
+        Ok(exp) => exp.with_timezone(&chrono::Utc) <= now,
+        Err(_) => true,
+    }
+}
+
 /// Verhindert CRLF-Log-Forging (Python `_sanitize_log_value`).
 fn sanitize(value: &str) -> String {
     value.replace('\r', "\\r").replace('\n', "\\n")
@@ -225,12 +282,12 @@ mod tests {
         assert!(token_expired(None, now)); // fehlend
         assert!(token_expired(Some("   "), now)); // leer
         assert!(token_expired(Some("kaputt"), now)); // unparsebar
-                                                     // In 30min → < 1h → abgelaufen.
+                                                     // In 30min → < 1h → Refresh nötig.
         assert!(token_expired(
             Some(&(now + Duration::minutes(30)).to_rfc3339()),
             now
         ));
-        // In 2h → frisch.
+        // In 2h → kein Refresh nötig.
         assert!(!token_expired(
             Some(&(now + Duration::hours(2)).to_rfc3339()),
             now
@@ -242,6 +299,22 @@ mod tests {
         assert!(!token_expired(Some(&z), now));
     }
 
+    #[test]
+    fn platform_status_nennt_frisches_einstunden_token_nicht_abgelaufen() {
+        let now = chrono::Utc::now();
+        // Direkt nach dem OAuth-Callback sind von Googles ~3600 Sekunden
+        // Laufzeit bereits ein paar Sekunden verstrichen. Das Token ist damit
+        // im proaktiven Refresh-Fenster, aber weiterhin ganz normal gültig.
+        let frisch = (now + Duration::minutes(59)).to_rfc3339();
+        assert!(!token_actually_expired(Some(&frisch), now));
+        assert!(token_expired(Some(&frisch), now));
+
+        let vorbei = (now - Duration::seconds(1)).to_rfc3339();
+        assert!(token_actually_expired(Some(&vorbei), now));
+        assert!(token_actually_expired(None, now));
+        assert!(token_actually_expired(Some("kaputt"), now));
+    }
+
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
@@ -249,11 +322,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -269,7 +342,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE social_media_platform_auth (\
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, platform TEXT NOT NULL, \
-                streamer_login TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, \
+                streamer_login TEXT, twitch_user_id TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, \
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
@@ -365,5 +438,48 @@ mod tests {
         assert!(yt.connected);
         let tk = status.iter().find(|s| s.platform == "tiktok").unwrap();
         assert!(!tk.connected);
+    }
+    #[tokio::test]
+    async fn identity_credentials_ignore_reassigned_names_and_legacy_rows() {
+        let Some(pool) = make_pool("t_sm_creds_id").await else {
+            return;
+        };
+        let cipher = cipher();
+        seed(&pool, &cipher, "youtube", Some("old_a"), "account-a", None).await;
+        seed(
+            &pool,
+            &cipher,
+            "youtube",
+            Some("reused_login"),
+            "account-b",
+            None,
+        )
+        .await;
+        seed(&pool, &cipher, "youtube", Some("legacy"), "unbound", None).await;
+        sqlx::query("UPDATE social_media_platform_auth SET twitch_user_id = CASE streamer_login WHEN 'old_a' THEN '11' WHEN 'reused_login' THEN '22' ELSE NULL END")
+            .execute(&pool).await.unwrap();
+        let mgr = CredentialManager::new(pool, cipher);
+        assert_eq!(
+            mgr.get_credentials_for_id("youtube", Some("11"))
+                .await
+                .unwrap()
+                .access_token,
+            "account-a"
+        );
+        assert_eq!(
+            mgr.get_credentials_for_id("youtube", Some("22"))
+                .await
+                .unwrap()
+                .access_token,
+            "account-b"
+        );
+        assert!(mgr
+            .get_credentials_for_id("youtube", Some("99"))
+            .await
+            .is_none());
+        assert!(mgr
+            .get_credentials_for_id("youtube", Some("legacy"))
+            .await
+            .is_none());
     }
 }

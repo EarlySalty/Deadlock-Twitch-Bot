@@ -8,6 +8,8 @@ tb-error = { workspace = true }
 tb-config = { workspace = true }
 tb-domain = { workspace = true }
 sqlx = { workspace = true }
+# SQLx's Postgres connector uses whoami for its default peer username.
+whoami = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -15,6 +17,7 @@ tracing = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

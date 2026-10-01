@@ -106,11 +106,18 @@ pub struct OnlineAnnouncementState {
 #[derive(Clone)]
 pub struct LiveStateStore {
     pool: PgPool,
+    retry: RetryPolicy,
 }
 
 impl LiveStateStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, retry: RetryPolicy::default() }
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, config: &tb_config::reliability::TransactionRetry) -> Self {
+        self.retry = RetryPolicy::from_config(config);
+        self
     }
 
     /// Lädt den Live-State aller getrackten Logins inkl. Partner-Raid-Flag
@@ -283,7 +290,7 @@ impl LiveStateStore {
             })
             .collect();
 
-        with_write_retry(RetryPolicy::from_env(), || {
+        with_write_retry(self.retry, || {
             let pool = self.pool.clone();
             let cleanup = &cleanup;
             let valid = &valid;
@@ -628,11 +635,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();

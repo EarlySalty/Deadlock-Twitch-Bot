@@ -345,13 +345,8 @@ impl ScoutTask {
         self
     }
 
-    /// Gibt den Task zurück, wenn `TB_SCOUT_ENABLED=1` gesetzt ist.
-    ///
-    /// Der Aufrufer behält damit die Verantwortung für Supervision und Shutdown.
-    pub fn run_if_enabled(self) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
-        let enabled = std::env::var("TB_SCOUT_ENABLED")
-            .map(|v| v.trim() == "1")
-            .unwrap_or(false);
+    /// Der Aufrufer übergibt den TOML-Schalter und übernimmt die Supervision.
+    pub fn run_if_enabled(self, enabled: bool) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
         self.into_run(enabled)
     }
 
@@ -360,7 +355,7 @@ impl ScoutTask {
         enabled: bool,
     ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
         if !enabled {
-            tracing::info!("scout: Task deaktiviert (TB_SCOUT_ENABLED≠1)");
+            tracing::info!("scout: Task in der Betriebskonfiguration deaktiviert");
             return None;
         }
 

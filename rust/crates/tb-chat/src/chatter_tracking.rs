@@ -63,13 +63,13 @@ pub struct ChatterTracker {
     /// Wenn `true` (Default), wird das Target-Game-Gate (Gate 6) übersprungen
     /// und Chat aller Spiele persistiert — nötig, damit Scam-Accounts auch
     /// außerhalb von Deadlock-Sessions erfasst werden. Abschaltbar über
-    /// `TB_CHAT_PERSIST_ALL_GAMES=0` (zurück zum Deadlock-only-Verhalten).
+    /// den expliziten Konstruktor `with_persist_all_games` (Bot-TOML).
     persist_all_games: bool,
 }
 
 impl ChatterTracker {
     pub fn new(pool: PgPool) -> Self {
-        Self::with_persist_all_games(pool, persist_all_games_from_env())
+        Self::with_persist_all_games(pool, true)
     }
 
     /// Wie [`Self::new`], aber mit explizitem Game-Gate-Flag (Tests/Konfig).
@@ -436,17 +436,6 @@ impl ChatterTracker {
 // Hilfsfunktionen
 // ---------------------------------------------------------------------------
 
-/// Liest `TB_CHAT_PERSIST_ALL_GAMES` — Default `true` (Chat aller Spiele
-/// speichern). Nur `0`/`false` (case-insensitive) schaltet auf Deadlock-only.
-fn persist_all_games_from_env() -> bool {
-    std::env::var("TB_CHAT_PERSIST_ALL_GAMES")
-        .map(|v| {
-            let v = v.trim();
-            !(v == "0" || v.eq_ignore_ascii_case("false"))
-        })
-        .unwrap_or(true)
-}
-
 /// ISO-Timestamp mit Sekunden-Auflösung — exakt Python
 /// `datetime.now(UTC).isoformat(timespec="seconds")` (TEXT-Spalten!).
 fn iso_seconds(ts: &DateTime<Utc>) -> String {
@@ -583,12 +572,6 @@ mod tests {
         assert!("  !invite".trim_start().starts_with('!'));
         assert!(!"hallo !invite".trim_start().starts_with('!'));
     }
-
-    #[test]
-    fn persist_all_games_env_parsing() {
-        // Default (unset) → true; "0"/"false" → false; alles andere → true.
-        assert!(persist_all_games_from_env()); // TB_CHAT_PERSIST_ALL_GAMES nicht gesetzt
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -622,11 +605,11 @@ mod db_tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();

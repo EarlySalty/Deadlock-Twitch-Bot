@@ -6,6 +6,7 @@ import {
   saveSilentSettings,
   type SilentSettings,
 } from '@/api/silentNotifications';
+import { EditableCommandName } from './CommandNameSection';
 
 type FlagKey = keyof SilentSettings;
 
@@ -93,9 +94,7 @@ export function SilentNotificationsSection() {
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">Stille Hinweise</h2>
         <p className="text-sm text-text-secondary">
-          Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Identisch zu den
-          Chat-Befehlen <code className="text-primary">!silentban</code> /{' '}
-          <code className="text-primary">!silentraid</code> — beide Wege bleiben synchron.
+          Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.
         </p>
       </div>
 
@@ -128,6 +127,7 @@ export function SilentNotificationsSection() {
                     <div className="min-w-0">
                       <p className="text-base font-bold text-white">{title}</p>
                       <p className="text-xs text-text-secondary mt-0.5">{desc}</p>
+                      <EditableCommandName command={key === 'silent_ban' ? 'silentban' : 'silentraid'} className="mt-2" />
                     </div>
                   </div>
                   <button

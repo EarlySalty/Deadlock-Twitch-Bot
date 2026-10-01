@@ -94,7 +94,7 @@ async fn build_pool() -> sqlx::Result<PgPool> {
 /// Holt den gecachten Pool oder baut ihn beim ersten Mal. `None`, wenn der Aufbau
 /// scheitert (z. B. kein DSN, DB nicht erreichbar) — dann loggt der Aufrufer und
 /// macht best-effort weiter.
-async fn pool() -> Option<&'static PgPool> {
+pub(crate) async fn pool() -> Option<&'static PgPool> {
     POOL.get_or_try_init(build_pool).await.map_or_else(
         |err| {
             tracing::warn!(error = %err, "LLM-Usage-Ledger: Pool-Aufbau fehlgeschlagen");

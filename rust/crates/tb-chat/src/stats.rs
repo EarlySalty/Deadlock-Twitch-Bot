@@ -44,6 +44,12 @@ const DEFAULT_STEAM_BOT_LIVE_URL: &str = "http://127.0.0.1:8783/player-live";
 #[derive(Debug, Clone, Deserialize)]
 pub struct RankInfo {
     pub linked: bool,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub is_steam_friend: bool,
+    #[serde(default)]
+    pub steam_id: Option<String>,
     pub rank_name: Option<String>,
     pub subrank: Option<i64>,
     pub badge_level: Option<i64>,
@@ -196,6 +202,12 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
 
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
     match info {
+        Some(info) if info.linked && !info.is_steam_friend => format!(
+            "{name} hat Steam verknüpft, aber keiner unserer Steam-Bots ist dort als Freund verbunden — bitte die Steam-Verknüpfung im Discord erneut öffnen."
+        ),
+        Some(info) if info.linked && !info.verified => format!(
+            "{name} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt."
+        ),
         Some(info) if info.linked => match &info.rank_name {
             Some(rank) => match info.subrank {
                 Some(subrank @ 1..=6) => format!("Rang von {name}: {rank} {subrank}"),
@@ -206,7 +218,7 @@ pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
             }
         },
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -221,7 +233,7 @@ pub fn wins_reply(name: &str, info: Option<&RankInfo>) -> String {
             None => format!("{name}: Für deinen Account liegen noch keine Sieg-Daten vor."),
         },
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -242,7 +254,7 @@ pub fn winrate_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             )
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -268,7 +280,7 @@ pub fn mmr_reply(name: &str, t: Option<&MmrTrend>) -> String {
             ),
         },
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -293,7 +305,7 @@ pub fn live_reply(name: &str, s: Option<&LiveStatus>) -> String {
             }
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -316,7 +328,7 @@ pub fn lastmatch_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             format!("{name}: Letztes Spiel — {outcome} als {hero} ({k}/{d}/{a}).")
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -339,7 +351,7 @@ pub fn streak_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             }
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
@@ -373,12 +385,12 @@ pub fn mostplayed_reply(name: &str, mh: Option<&MatchHistory>) -> String {
             format!("{name}: Meistgespielt zuletzt — {hero} ({top_count} von {total} Spielen).")
         }
         _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         ),
     }
 }
 
-fn steam_bot_rank_url() -> String {
+pub(crate) fn steam_bot_rank_url() -> String {
     std::env::var("STEAM_BOT_RANK_URL")
         .ok()
         .and_then(|value| {
@@ -543,9 +555,12 @@ mod tests {
     fn rang_vorhanden() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: Some("Archon".into()),
             subrank: None,
             badge_level: Some(61),
+            steam_id: None,
             wins: None,
             losses: None,
             matches: None,
@@ -557,9 +572,12 @@ mod tests {
     fn rang_mit_subrank() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: Some("Phantom".into()),
             subrank: Some(1),
             badge_level: Some(91),
+            steam_id: None,
             wins: None,
             losses: None,
             matches: None,
@@ -571,9 +589,12 @@ mod tests {
     fn verknuepft_ohne_rang() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: None,
             subrank: None,
             badge_level: None,
+            steam_id: None,
             wins: None,
             losses: None,
             matches: None,
@@ -582,12 +603,35 @@ mod tests {
     }
 
     #[test]
+    fn verknuepft_aber_kein_steam_bot_als_freund() {
+        let info = RankInfo {
+            linked: true,
+            verified: false,
+            is_steam_friend: false,
+            rank_name: Some("Phantom".into()),
+            subrank: Some(5),
+            badge_level: Some(95),
+            steam_id: None,
+            wins: None,
+            losses: None,
+            matches: None,
+        };
+        let reply = rank_reply("denoshock", Some(&info));
+        assert!(reply.contains("Steam-Bots"));
+        assert!(reply.contains("erneut öffnen"));
+        assert!(!reply.contains("Phantom"));
+    }
+
+    #[test]
     fn nicht_verknuepft() {
         let info = RankInfo {
             linked: false,
+            verified: false,
+            is_steam_friend: false,
             rank_name: None,
             subrank: None,
             badge_level: None,
+            steam_id: None,
             wins: None,
             losses: None,
             matches: None,
@@ -600,9 +644,12 @@ mod tests {
     fn wins_reply_mit_siegen() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: None,
             subrank: None,
             badge_level: None,
+            steam_id: None,
             wins: Some(1164),
             losses: None,
             matches: None,
@@ -618,9 +665,12 @@ mod tests {
     fn wins_reply_verknuepft_ohne_stats() {
         let info = RankInfo {
             linked: true,
+            verified: true,
+            is_steam_friend: true,
             rank_name: None,
             subrank: None,
             badge_level: None,
+            steam_id: None,
             wins: None,
             losses: None,
             matches: None,
@@ -633,9 +683,12 @@ mod tests {
     fn wins_reply_nicht_verknuepft() {
         let info = RankInfo {
             linked: false,
+            verified: false,
+            is_steam_friend: false,
             rank_name: None,
             subrank: None,
             badge_level: None,
+            steam_id: None,
             wins: None,
             losses: None,
             matches: None,
@@ -784,11 +837,11 @@ mod tests {
 
         assert_eq!(
             mmr_reply("nani", Some(&info)),
-            "nani hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "nani hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
         assert_eq!(
             mmr_reply("nani", None),
-            "nani hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "nani hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
     }
 
@@ -845,11 +898,11 @@ mod tests {
 
         assert_eq!(
             live_reply("X", Some(&info)),
-            "X hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "X hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
         assert_eq!(
             live_reply("X", None),
-            "X hat noch keinen Steam-Account verknüpft — geht im Discord über die Steam-Verknüpfung."
+            "X hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
         );
     }
 

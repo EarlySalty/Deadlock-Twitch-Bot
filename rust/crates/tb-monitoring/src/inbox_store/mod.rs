@@ -68,8 +68,14 @@ impl ProcessingInboxStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
-            retry: RetryPolicy::from_env(),
+            retry: RetryPolicy::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, config: &tb_config::reliability::TransactionRetry) -> Self {
+        self.retry = RetryPolicy::from_config(config);
+        self
     }
 
     /// Legt einen Auftrag an, sofort fällig (`next_attempt_at = now`).

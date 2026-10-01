@@ -5,6 +5,9 @@
 //! Flags INTEGER, `live_ping_role_id` BIGINT; `twitch_streamer_identities`
 //! created_at/updated_at TEXT; `twitch_streamers` nur noch Identitäts-Spalten.
 
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,10 +20,17 @@ use tb_raid::partner_setup::{
     ModeratorInstallPort, PartnerSetupError, PartnerSetupService, PromotePartnerArgs,
 };
 
+mod test_database {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/database.rs"
+    ));
+}
+
 macro_rules! pool_or_skip {
     ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+        let Some(dsn) = test_database::database_url() else {
+            if test_database::required() {
                 panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
             }
             eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
@@ -36,11 +46,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(schema, false))
         .execute(&admin)
         .await
         .unwrap();
@@ -57,6 +67,13 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     pool
 }
 
+mod referral_test_support {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-support/streamer_referrals.rs"
+    ));
+}
+
 async fn apply_ddl(pool: &PgPool) {
     for ddl in [
         // Prod: alle Timestamp-Spalten TEXT, Flags INTEGER, live_ping_role_id BIGINT.
@@ -71,7 +88,7 @@ async fn apply_ddl(pool: &PgPool) {
             last_link_checked_at TEXT,
             next_link_check_at TEXT,
             manual_partner_opt_out INTEGER,
-            raid_bot_enabled INTEGER,
+            raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER,
             silent_ban INTEGER,
             silent_raid INTEGER,
             live_ping_role_id BIGINT,
@@ -155,6 +172,9 @@ async fn apply_ddl(pool: &PgPool) {
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
+    // Die produktive SQL-Funktion prüft ihre Tabellen bereits beim Anlegen.
+    // Deshalb erst installieren, wenn auch twitch_partners vorhanden ist.
+    referral_test_support::schema(pool).await;
 }
 
 fn default_args(login: &str, uid: &str) -> PromotePartnerArgs {
@@ -1086,7 +1106,10 @@ async fn signup_block_legt_keine_partner_zeile_an() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    assert!(result.signup_block.is_some(), "Block muss durchgereicht werden");
+    assert!(
+        result.signup_block.is_some(),
+        "Block muss durchgereicht werden"
+    );
     assert_eq!(result.hard_pause_reason.as_deref(), Some("signup_blocked"));
     assert!(!result.reactivated);
     assert_eq!(
@@ -1206,3 +1229,5 @@ async fn signup_block_ohne_eigenen_text_nutzt_standard() {
     assert_eq!(block.public_text(), tb_domain::SIGNUP_BLOCK_BODY);
     assert!(block.public_text().contains("repräsentieren"));
 }
+
+include!("fixtures/streamer_referral_cases.rs");

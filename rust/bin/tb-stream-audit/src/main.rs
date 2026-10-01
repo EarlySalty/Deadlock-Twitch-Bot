@@ -23,12 +23,15 @@
 //! transkribierte Streams teilten sich dieselben Kerne wie das Modell. Aufnehmen
 //! kostet fast nichts, transkribieren viel - deshalb die Trennung.
 
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tb_engagement::audio_capture::AudioCapturer;
 use tb_engagement::transcribe::OpenAiTranscriber;
+use tb_load::messung::{cpu_prozent, cpu_stand, ram_prozent};
 use tb_stream_audit::{
     archiv,
     config::Konfiguration,
@@ -49,6 +52,9 @@ const SEGMENT_SEKUNDEN: f64 = 30.0;
 
 #[tokio::main]
 async fn main() {
+    if print_build_revision() {
+        return;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1062,6 +1068,14 @@ fn helix_aus_umgebung() -> Option<HelixClient> {
     HelixClient::new(HelixConfig::new(id, secret)).ok()
 }
 
+fn helix_ausfall_text() -> String {
+    format!(
+        "Coaching-Audit: Twitch-Abfrage scheitert dauerhaft (seit mindestens \
+{MAX_STILLE_VERSUCHE} Anläufen). Laufende Aufnahmen laufen weiter, neue Sendungen werden \
+nicht erkannt."
+    )
+}
+
 /// Prueft im Takt, wer sendet, und haelt je sendendem Kanal eine eigene
 /// Aufnahmeschleife am Laufen.
 ///
@@ -1132,14 +1146,15 @@ async fn aufnahme_schleife(
             Err(fehler) => {
                 helix_fehler += 1;
                 tracing::warn!(?fehler, helix_fehler, "Live-Abfrage fehlgeschlagen");
+                // Twitch entzieht bei jedem client_credentials-Abruf die alten
+                // App-Tokens derselben Client-ID - etwa bei jedem Start des
+                // Bots. Gecachten Token verwerfen, damit der naechste Takt
+                // frisch anfragt, statt denselben 401 ewig zu wiederholen.
+                helix.invalidate_app_token().await;
                 // Ohne Live-Abfrage nimmt der Dienst nichts auf. Das sieht
                 // hinterher aus wie ein sauberer Tag, ist aber ein Ausfall.
                 if helix_fehler >= MAX_STILLE_VERSUCHE && !helix_gemeldet {
-                    let text = format!(
-                        "Coaching-Audit: Twitch-Abfrage scheitert dauerhaft (seit mindestens \
-{MAX_STILLE_VERSUCHE} Anlaeufen). Laufende Aufnahmen laufen weiter, neue Sendungen werden \
-nicht erkannt."
-                    );
+                    let text = helix_ausfall_text();
                     let (schluessel, text) =
                         match offener_hinweis(&konfiguration, "helix-ausfall").await {
                             Some(offen) => offen,
@@ -2714,7 +2729,7 @@ async fn block_auswerten(
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
-    let (modell_funde, modell_fehler) = modellfunde(&segmente).await;
+    let (modell_funde, modell_fehler, verwendete_modelle) = modellfunde(&segmente).await;
     funde.extend(modell_funde);
     // Der Abbruch der Aufnahme steht als eigenes Feld im Bericht. Frueher lief
     // er in denselben Hinweis wie ein Modellausfall: der Bericht behauptete
@@ -2743,7 +2758,7 @@ async fn block_auswerten(
         modell: transkript.model.clone(),
         transkription_lokal: tb_stream_audit::llm::ist_lokal(&stt_basis_url()),
         anbieter: endpunkt.provider.to_owned(),
-        llm_modell: endpunkt.model.clone(),
+        llm_modell: verwendete_modelle.join(", "),
         transkript_behalten: konfiguration.transkript_behalten,
         segmente: segmente.len(),
         modell_geprueft: modell_hinweis.is_none(),
@@ -2879,7 +2894,9 @@ fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
 /// Modellfunde ueber den im Bot konfigurierten Anbieter. Faellt der Aufruf aus,
 /// bleibt es bei den Regelfunden - ein Audit ohne Modell ist duenner, aber
 /// besser als keines.
-async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Option<String>) {
+async fn modellfunde(
+    segmente: &[Segment],
+) -> (Vec<tb_stream_audit::Fund>, Option<String>, Vec<String>) {
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
     if !llm::fernes_modell_erlaubt(&endpunkt.base_url) {
         return (
@@ -2889,17 +2906,20 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
                 endpunkt.provider,
                 llm::REMOTE_ERLAUBT_ENV
             )),
+            Vec::new(),
         );
     }
     if endpunkt.api_key.is_none() {
         return (
             Vec::new(),
             Some(format!("kein Schluessel fuer {}", endpunkt.provider)),
+            Vec::new(),
         );
     }
 
     let mut raus = Vec::new();
     let mut fehler_gesehen: Option<String> = None;
+    let mut verwendete_modelle = Vec::new();
     for stapel in llm::stapel(segmente) {
         let antwort = tb_llm::complete(
             llm::USE_CASE,
@@ -2914,7 +2934,12 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
         )
         .await;
         let inhalt = match antwort {
-            Ok(antwort) => antwort.text,
+            Ok(antwort) => {
+                if !verwendete_modelle.contains(&antwort.model) {
+                    verwendete_modelle.push(antwort.model);
+                }
+                antwort.text
+            }
             // Ohne Statuspruefung sieht ein 401 oder 429 aus wie kaputtes
             // JSON - und der Bericht nennt den falschen Grund.
             // Der Eingang warnt pro Versuch selbst; hier nur noch die Spur.
@@ -2954,7 +2979,7 @@ async fn modellfunde(segmente: &[Segment]) -> (Vec<tb_stream_audit::Fund>, Optio
             }
         }
     }
-    (raus, fehler_gesehen)
+    (raus, fehler_gesehen, verwendete_modelle)
 }
 
 /// Zeitgrenze des Modellschritts. Der gemeinsame Eingang nutzt einen einzigen
@@ -3266,6 +3291,16 @@ async fn offene_hinweise_senden(konfiguration: &Konfiguration) {
             }
             continue;
         }
+        if pfad
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s == "helix-ausfall.json")
+        {
+            if let Err(fehler) = tokio::fs::remove_file(&pfad).await {
+                tracing::warn!(%fehler, "Veralteten Helix-Ausfall nicht entfernbar");
+            }
+            continue;
+        }
         let Ok(roh) = tokio::fs::read_to_string(&pfad).await else {
             continue;
         };
@@ -3358,77 +3393,6 @@ async fn aufnahmen_bytes(wurzel: &Path) -> u64 {
 /// Differenz zweier `/proc/stat`-Messungen; dieser Takt ist also zugleich das
 /// Messfenster fuer die CPU.
 const LAST_TAKT_SEKUNDEN: u64 = 20;
-
-/// Summe der Ticks aus `/proc/stat` und der davon untaetige Anteil.
-///
-/// Die CPU-Auslastung ist keine Momentaufnahme, sondern der Anteil belegter
-/// Ticks zwischen zwei Messungen - deshalb der Zwischenstand.
-#[derive(Clone, Copy)]
-struct CpuStand {
-    gesamt: u64,
-    untaetig: u64,
-}
-
-/// Liest die Sammelzeile `cpu` aus `/proc/stat`. `None`, wenn die Datei fehlt
-/// oder unerwartet aussieht - dann faellt die CPU als Signal aus, RAM traegt
-/// weiter.
-fn cpu_stand() -> Option<CpuStand> {
-    let inhalt = std::fs::read_to_string("/proc/stat").ok()?;
-    let zeile = inhalt.lines().next()?;
-    let mut felder = zeile.split_whitespace();
-    if felder.next()? != "cpu" {
-        return None;
-    }
-    // Genau die acht Standardfelder, der Reihe nach:
-    // user nice system idle iowait irq softirq steal. Positionsgenau lesen -
-    // ein `filter_map` wuerde ein unparsbares Feld ueberspringen und idle/iowait
-    // von der falschen Stelle holen. `guest`/`guest_nice` bleiben aussen vor:
-    // der Kernel fuehrt sie bereits in user/nice, mitzusummieren zaehlte sie
-    // doppelt.
-    let mut werte = [0u64; 8];
-    for feld in werte.iter_mut() {
-        *feld = felder.next()?.parse().ok()?;
-    }
-    let gesamt: u64 = werte.iter().sum();
-    // idle + iowait gelten als untaetig.
-    let untaetig = werte[3] + werte[4];
-    Some(CpuStand { gesamt, untaetig })
-}
-
-/// CPU-Auslastung in Prozent zwischen zwei Messungen. `None`, wenn die Uhr
-/// nicht weitergelaufen ist (gleiche Messung).
-fn cpu_prozent(vorher: CpuStand, jetzt: CpuStand) -> Option<f32> {
-    let gesamt = jetzt.gesamt.checked_sub(vorher.gesamt)?;
-    let untaetig = jetzt.untaetig.saturating_sub(vorher.untaetig);
-    if gesamt == 0 {
-        return None;
-    }
-    let belegt = gesamt.saturating_sub(untaetig);
-    Some(belegt as f32 / gesamt as f32 * 100.0)
-}
-
-/// RAM-Auslastung in Prozent aus `/proc/meminfo`. `MemAvailable` ist der frei
-/// nutzbare Speicher inklusive rueckholbarem Cache - naeher an "voll" als das
-/// blosse `MemFree`.
-fn ram_prozent() -> Option<f32> {
-    let inhalt = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let mut gesamt = None;
-    let mut verfuegbar = None;
-    for zeile in inhalt.lines() {
-        if let Some(rest) = zeile.strip_prefix("MemTotal:") {
-            gesamt = rest.split_whitespace().next()?.parse::<u64>().ok();
-        } else if let Some(rest) = zeile.strip_prefix("MemAvailable:") {
-            verfuegbar = rest.split_whitespace().next()?.parse::<u64>().ok();
-        }
-    }
-    let gesamt = gesamt?;
-    let verfuegbar = verfuegbar?;
-    if gesamt == 0 {
-        return None;
-    }
-    let belegt = gesamt.saturating_sub(verfuegbar);
-    Some(belegt as f32 / gesamt as f32 * 100.0)
-}
 
 /// Misst CPU und RAM im Takt und setzt das Last-Gate: liegt die groessere der
 /// beiden Auslastungen lange genug ueber der Grenze, wird die Auswertung
@@ -5707,6 +5671,24 @@ mod tests {
         assert!(pfad.exists());
         // Kein Broker konfiguriert oder kontaktiert: alte Starts verlassen
         // die Warteschlange vor jedem möglichen Versand.
+        offene_hinweise_senden(&konfiguration).await;
+        assert!(!pfad.exists());
+        tokio::fs::remove_dir_all(wurzel).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ein_alter_helix_ausfall_wird_nicht_verspaetet_nachgereicht() {
+        let wurzel = test_ordner("helix-veraltet");
+        let konfiguration = test_konfiguration(&wurzel);
+        hinweis_aufheben(
+            &konfiguration,
+            "helix-ausfall",
+            "vorfall-helix-ausfall",
+            &helix_ausfall_text(),
+        )
+        .await;
+        let pfad = hinweis_ordner(&konfiguration).join("helix-ausfall.json");
+        assert!(pfad.exists());
         offene_hinweise_senden(&konfiguration).await;
         assert!(!pfad.exists());
         tokio::fs::remove_dir_all(wurzel).await.unwrap();

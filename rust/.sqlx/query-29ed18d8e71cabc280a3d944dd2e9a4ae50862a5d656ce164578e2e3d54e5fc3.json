@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_promo_pitch_log SET bewertet_at = NOW() WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "29ed18d8e71cabc280a3d944dd2e9a4ae50862a5d656ce164578e2e3d54e5fc3"
+}

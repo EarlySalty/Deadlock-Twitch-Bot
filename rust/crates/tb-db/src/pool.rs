@@ -8,6 +8,16 @@ use crate::error::DbError;
 /// Baut einen verbundenen Pool. `pool_max`/`acquire_timeout`/`connect_timeout`
 /// kommen aus der Config.
 pub async fn connect(cfg: &DbConfig) -> Result<PgPool, DbError> {
+    connect_with_mode(cfg, false).await
+}
+
+/// Baut einen Pool, dessen Verbindungen standardmäßig keine Schreibabfragen
+/// annehmen. Poolgröße und Verbindungszeiten stammen aus derselben DbConfig.
+pub async fn connect_readonly(cfg: &DbConfig) -> Result<PgPool, DbError> {
+    connect_with_mode(cfg, true).await
+}
+
+async fn connect_with_mode(cfg: &DbConfig, read_only: bool) -> Result<PgPool, DbError> {
     // sqlx 0.8 hat keinen separaten PgConnectOptions-Connect-Timeout; der
     // Pool nutzt `acquire_timeout` auch als Deadline für neue Verbindungen.
     let connection_deadline = cfg.acquire_timeout.min(cfg.connect_timeout);
@@ -32,6 +42,18 @@ pub async fn connect(cfg: &DbConfig) -> Result<PgPool, DbError> {
         .max_connections(cfg.pool_max)
         .min_connections(dauerhaft_offen)
         .acquire_timeout(connection_deadline)
+        .after_connect(move |connection, _| {
+            Box::pin(async move {
+                if read_only {
+                    sqlx::query(
+                        "SELECT set_config('default_transaction_read_only', 'on', false), set_config('statement_timeout', '20000', false)",
+                    )
+                    .execute(connection)
+                    .await?;
+                }
+                Ok(())
+            })
+        })
         .connect(&cfg.dsn)
         .await?;
     Ok(pool)

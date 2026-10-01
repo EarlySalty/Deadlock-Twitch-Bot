@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use tb_analytics::ad_manager::{
-    decide, ActionKind, AdManagerStore, DecisionAction, DecisionInput, ManagedChannel,
-    QueuedAction, COMMERCIAL_SCOPE, READ_SCOPE, SNOOZE_SCOPE,
+    ad_hint, ad_hint_text, decide, ActionKind, AdHint, AdManagerStore, DecisionAction,
+    DecisionInput, ManagedChannel, QueuedAction, COMMERCIAL_SCOPE, HINT_WINDOW_SECS, READ_SCOPE,
+    SNOOZE_SCOPE,
 };
+use tb_chat::{ChatApi, SendOutcome};
 use tb_raid::{RaidAuthStore, TokenProvider};
 use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule, HelixClient, HelixError};
 
@@ -18,6 +20,8 @@ pub fn spawn(
     helix: HelixClient,
     tokens: Arc<TokenProvider>,
     auth: RaidAuthStore,
+    chat_api: Option<Arc<dyn ChatApi>>,
+    internal_token: String,
 ) {
     let cleanup_store = AdManagerStore::new(pool.clone());
     supervisor.spawn("twitch_ad_manager_retention", async move {
@@ -34,10 +38,22 @@ pub fn spawn(
                     tracing::error!(%error,"Werbemanager: Retention-Bereinigung fehlgeschlagen")
                 }
             }
+            match cleanup_store.cleanup_old_decisions().await {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::info!(
+                        deleted,
+                        "Werbemanager: alter Entscheidungsverlauf bereinigt"
+                    )
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(%error,"Werbemanager: Verlaufs-Bereinigung fehlgeschlagen")
+                }
+            }
         }
     });
     supervisor.spawn("twitch_ad_manager", async move {
-        let store = AdManagerStore::new(pool);
+        let store = AdManagerStore::with_steam_token(pool, internal_token);
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(25));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -53,6 +69,7 @@ pub fn spawn(
                 let helix = helix.clone();
                 let tokens = tokens.clone();
                 let auth = auth.clone();
+                let chat_api = chat_api.clone();
                 let limiter = limiter.clone();
                 tasks.spawn(async move {
                     let Ok(_permit) = limiter.acquire_owned().await else { return };
@@ -61,7 +78,7 @@ pub fn spawn(
                         Ok(None) => return,
                         Err(error) => { tracing::warn!(%error,"Werbemanager: Kanal-Lease konnte nicht gesetzt werden"); return; }
                     };
-                    match process_channel(&store,&helix,&tokens,&auth,&channel).await {
+                    match process_channel(&store,&helix,&tokens,&auth,chat_api.as_ref(),&channel).await {
                         Ok(RunHealth::Healthy) => {
                             if let Err(error) = store.touch_worker(&channel.twitch_user_id, &channel.twitch_login).await {
                                 tracing::warn!(user=%channel.twitch_user_id,%error,"Werbemanager: erfolgreicher Worker-Lauf konnte nicht als gesund gespeichert werden");
@@ -97,6 +114,7 @@ async fn process_channel(
     helix: &HelixClient,
     tokens: &TokenProvider,
     auth: &RaidAuthStore,
+    chat_api: Option<&Arc<dyn ChatApi>>,
     channel: &ManagedChannel,
 ) -> Result<RunHealth, WorkerError> {
     let now = Utc::now();
@@ -192,6 +210,8 @@ async fn process_channel(
         }
         None => false,
     };
+    let mut plan_for_status: Option<tb_analytics::ad_manager::AdPlan> = None;
+    let mut hint_for_send: Option<AdHint> = None;
     let decision = if channel.settings.enabled {
         if let Some(schedule) = schedule.as_ref() {
             let Some(session) = live.active_session_id else {
@@ -208,32 +228,131 @@ async fn process_channel(
             let quiet = store
                 .quiet_messages(session, now, channel.settings.quiet_window_minutes)
                 .await?;
-            // Steam-Match-Status ist optional: ohne frische Presence entscheidet
-            // der Entscheider unverändert nach Chat-Ruhe.
-            let steam_match_state =
-                match store.steam_match_summary(&channel.twitch_login, now).await {
-                    Ok(summary) => summary.state,
-                    Err(error) => {
-                        tracing::debug!(
-                            %error,
-                            login = %channel.twitch_login,
-                            "Werbemanager: Steam-Match-Status nicht lesbar; Fallback auf Chat-Ruhe"
-                        );
-                        None
-                    }
+            let recent = store.quiet_messages(session, now, 1).await?;
+            // Missing presence is unknown, not a safe advertising window.
+            let steam_match_state = match store
+                .steam_match_summary(&channel.twitch_user_id, now)
+                .await
+            {
+                Ok(summary) => summary.state,
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        login = %channel.twitch_login,
+                        "Werbemanager: Steam-Match-Status nicht lesbar; automatische Werbestarts bleiben gesperrt"
+                    );
+                    None
+                }
+            };
+            let timing = match steam_match_state.as_ref() {
+                Some(state) => {
+                    store
+                        .record_match_transition(
+                            &channel.twitch_user_id,
+                            &channel.twitch_login,
+                            state.in_match,
+                            now,
+                        )
+                        .await?
+                }
+                None => store.match_timing(&channel.twitch_user_id).await?,
+            };
+            let next_ad_at = parse_time(schedule.next_ad_at.as_ref())?;
+            let last_ad_at = parse_time(schedule.last_ad_at.as_ref())?;
+            let planned_interval = match (next_ad_at, last_ad_at) {
+                (Some(next), Some(last)) if next > last => {
+                    i32::try_from(next.signed_duration_since(last).num_seconds()).ok()
+                }
+                _ => None,
+            };
+            let plan_fit = tb_analytics::ad_manager::assess_plan(
+                next_ad_at.is_some(),
+                planned_interval,
+                schedule.snooze_count,
+                timing.avg_match_seconds,
+                timing.avg_queue_seconds,
+            );
+            store
+                .store_plan_fit(
+                    &channel.twitch_user_id,
+                    plan_fit,
+                    live.active_session_id,
+                    now,
+                )
+                .await?;
+            let (mut budget_used, mut last_block_at) = store
+                .budget_used_this_hour(&channel.twitch_user_id, now)
+                .await?;
+            if let Some(twitch_last) = last_ad_at {
+                if twitch_last >= now - Duration::hours(1) {
+                    budget_used = budget_used.saturating_add(schedule.duration as i32);
+                    last_block_at =
+                        Some(last_block_at.map_or(twitch_last, |own| own.max(twitch_last)));
+                }
+            }
+            let retry_after_seconds = store
+                .last_commercial_retry_after(&channel.twitch_user_id)
+                .await?
+                .filter(|value| *value > 0)
+                .unwrap_or(tb_analytics::ad_manager::DEFAULT_RETRY_AFTER_SECS);
+            let plan = tb_analytics::ad_manager::plan_next_block(
+                now,
+                live.stream_started_at,
+                channel.settings.budget_minutes_per_hour,
+                budget_used,
+                last_block_at,
+                retry_after_seconds,
+            );
+            plan_for_status = Some(plan);
+            let (last_raid_at, last_raider) =
+                match store.last_incoming_raid(&channel.twitch_user_id).await? {
+                    Some((at, raider)) => (Some(at), Some(raider)),
+                    None => (None, None),
                 };
+            let (last_first_chatter_at, last_first_chatter) =
+                match store.last_first_chatter(session).await? {
+                    Some((at, login)) => (Some(at), Some(login)),
+                    None => (None, None),
+                };
+            let pull_forward_seconds = nearest_ad_length(schedule.duration as i32)
+                .unwrap_or(channel.settings.ad_duration_seconds);
             let input = DecisionInput {
                 now,
                 settings: channel.settings.clone(),
                 stream_started_at: live.stream_started_at,
-                next_ad_at: parse_time(schedule.next_ad_at.as_ref())?,
-                last_ad_at: parse_time(schedule.last_ad_at.as_ref())?,
+                next_ad_at,
+                last_ad_at,
                 snooze_count: schedule.snooze_count,
                 quiet_chat_messages: quiet,
+                recent_chat_messages: recent,
                 chat_ingest_healthy,
                 steam_match_state,
+                plan,
+                match_started_at: timing.match_started_at,
+                match_ended_at: timing.match_ended_at,
+                last_raid_at,
+                last_raider,
+                last_first_chatter_at,
+                last_first_chatter,
+                retry_after_seconds,
+                pull_forward_seconds,
+                plan_fit,
             };
-            Some(decide(&input))
+            let decision = decide(&input);
+            if decision.reason == "pulled_forward" {
+                tracing::debug!(
+                    mode = "admgr-proactive-twitch-v1",
+                    plan_fit,
+                    "Werbemanager: geplante Twitch-Werbung wird aktiv in ein gutes Fenster gezogen"
+                );
+            }
+            hint_for_send = ad_hint(
+                &input,
+                &decision,
+                Some(schedule.duration as i32),
+                HINT_WINDOW_SECS,
+            );
+            Some(decision)
         } else {
             None
         }
@@ -249,6 +368,24 @@ async fn process_channel(
             decision.as_ref(),
         )
         .await?;
+    if let Some(plan) = plan_for_status.as_ref() {
+        store.store_plan(&channel.twitch_user_id, plan).await?;
+    }
+    if let Some(decision) = decision.as_ref() {
+        let block_seconds = match decision.action {
+            DecisionAction::Commercial { duration_seconds } => Some(duration_seconds),
+            _ => None,
+        };
+        store
+            .record_decision_if_changed(
+                &channel.twitch_user_id,
+                live.active_session_id,
+                decision,
+                block_seconds,
+                now,
+            )
+            .await?;
+    }
     if write_history {
         if let Some(schedule) = schedule.as_ref() {
             store
@@ -257,10 +394,61 @@ async fn process_channel(
         }
     }
 
+    let mut suppress_pull_forward_commercial = false;
+    if let (Some(chat_api), Some(hint)) = (chat_api, hint_for_send.as_ref()) {
+        let immediate = hint.key.starts_with("pull:");
+        match store.last_hint(&channel.twitch_user_id).await {
+            Ok((last_key, last_variant)) => {
+                let already_announced = last_key.as_deref() == Some(hint.key.as_str());
+                if immediate && !already_announced {
+                    suppress_pull_forward_commercial = true;
+                }
+                if !already_announced {
+                    let (text, variant) = ad_hint_text(
+                        hint.duration_seconds,
+                        last_variant,
+                        now.timestamp_millis().unsigned_abs(),
+                        immediate,
+                    );
+                    match store
+                        .record_hint(
+                            &channel.twitch_user_id,
+                            &channel.twitch_login,
+                            &hint.key,
+                            variant,
+                            now,
+                        )
+                        .await
+                    {
+                        Ok(()) => match chat_api.send_message(&channel.twitch_user_id, &text).await
+                        {
+                            Ok(SendOutcome::Sent) => {}
+                            Ok(other) => {
+                                tracing::warn!(user=%channel.twitch_user_id, ?other, "Werbemanager: Chat-Hinweis nicht zugestellt")
+                            }
+                            Err(error) => {
+                                tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Chat-Hinweis konnte nicht gesendet werden")
+                            }
+                        },
+                        Err(error) => {
+                            tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Hinweis-Merker konnte nicht geschrieben werden")
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(user=%channel.twitch_user_id, %error, "Werbemanager: Hinweis-Merker konnte nicht gelesen werden");
+                if immediate {
+                    suppress_pull_forward_commercial = true;
+                }
+            }
+        }
+    }
+
     if let (Some(decision), Some(schedule)) = (decision.as_ref(), schedule.as_ref()) {
-        let key_time = schedule.next_ad_at.as_deref().unwrap_or("none");
         match decision.action {
             DecisionAction::Snooze => {
+                let key_time = schedule.next_ad_at.as_deref().unwrap_or("none");
                 store
                     .enqueue_automatic(
                         &channel.twitch_user_id,
@@ -271,7 +459,19 @@ async fn process_channel(
                     )
                     .await?;
             }
-            DecisionAction::Commercial { duration_seconds } => {
+            DecisionAction::Commercial { duration_seconds }
+                if !(decision.reason == "pulled_forward" && suppress_pull_forward_commercial) =>
+            {
+                let key_time = schedule
+                    .next_ad_at
+                    .clone()
+                    .or_else(|| {
+                        plan_for_status
+                            .as_ref()
+                            .and_then(|plan| plan.next_block_at)
+                            .map(|at| at.to_rfc3339())
+                    })
+                    .unwrap_or_else(|| now.to_rfc3339());
                 store
                     .enqueue_automatic(
                         &channel.twitch_user_id,
@@ -282,7 +482,8 @@ async fn process_channel(
                     )
                     .await?;
             }
-            DecisionAction::None => {}
+            DecisionAction::Commercial { .. } => {}
+            DecisionAction::Postpone | DecisionAction::None => {}
         }
     }
     if let Some(action) = store.claim_due(&channel.twitch_user_id).await? {
@@ -512,6 +713,15 @@ fn has(scopes: &[String], needle: &str) -> bool {
         .iter()
         .any(|value| value.trim().eq_ignore_ascii_case(needle))
 }
+
+fn nearest_ad_length(planned_seconds: i32) -> Option<i32> {
+    if planned_seconds <= 0 {
+        return None;
+    }
+    [30, 60, 90, 120, 150, 180]
+        .into_iter()
+        .min_by_key(|allowed| (allowed - planned_seconds).abs())
+}
 fn parse_time(value: Option<&String>) -> Result<Option<DateTime<Utc>>, WorkerError> {
     let Some(raw) = value else { return Ok(None) };
     let Some(normalized) = normalize_ad_time(raw) else {
@@ -636,7 +846,7 @@ mod tests {
             .find(".steam_match_summary")
             .expect("Steam-Lookup im Kanal-Pfad");
         let decide = process
-            .find("Some(decide(&input))")
+            .find("decide(&input)")
             .expect("Entscheidung nach dem Lookup");
         assert!(
             summary < decide,
@@ -649,7 +859,7 @@ mod tests {
         );
         assert!(
             between.contains("None"),
-            "Ohne Status läuft der Chat-Ruhe-Fallback"
+            "Ohne Status erhält der Entscheider ein unbekanntes und damit gesperrtes Werbefenster"
         );
     }
 }

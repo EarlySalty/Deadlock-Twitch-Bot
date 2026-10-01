@@ -466,6 +466,17 @@ impl PollEngine {
             );
         }
 
+        let mut live_snapshots: Vec<StreamSnapshot> = streams_by_login.values().cloned().collect();
+        for stream in &category_streams {
+            let login = stream.user_login.to_lowercase();
+            if !login.is_empty() && !streams_by_login.contains_key(&login) {
+                live_snapshots.push(stream.clone());
+            }
+        }
+        if !live_snapshots.is_empty() {
+            self.hooks.on_live_snapshots(&live_snapshots).await;
+        }
+
         self.hooks
             .after_tick(TickReport {
                 score_refreshes,
@@ -1270,11 +1281,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();

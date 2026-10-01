@@ -27,6 +27,8 @@ start_dashboard_with_uplink() {
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OPERATING_CONFIG='/var/lib/deadlock-twitch/config/bot.toml'
+"$ROOT_DIR/rust/target/release/tb-dashboard" --config "$OPERATING_CONFIG" --check-config >/dev/null
 SYSTEMD_CREDENTIAL_DIR='/run/credentials/deadlock-twitch-dashboard-rust.service'
 if [[ -r "$SYSTEMD_CREDENTIAL_DIR/infisical-token" ]]; then
   CREDENTIALS_DIRECTORY="$SYSTEMD_CREDENTIAL_DIR"
@@ -121,4 +123,4 @@ export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-}"
 start_dashboard_with_uplink \
   "$ROOT_DIR/rust/target/release/tb-dashboard" \
   '/run/credentials/deadlock-twitch-dashboard-rust.service/infisical-token' \
-  '/etc/deadlock-twitch/uplink.json' "$@"
+  '/etc/deadlock-twitch/uplink.json' --config "$OPERATING_CONFIG" "$@"

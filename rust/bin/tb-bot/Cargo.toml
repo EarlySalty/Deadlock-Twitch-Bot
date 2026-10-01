@@ -1,4 +1,5 @@
 [package]
+build = "../build_revision.rs"
 name = "tb-bot"
 version = "0.1.0"
 edition.workspace = true
@@ -12,6 +13,7 @@ name = "zuschauer-register-backfill"
 path = "src/zuschauer_register_backfill.rs"
 
 [dependencies]
+tb-effort = { workspace = true }
 tokio              = { workspace = true, features = ["signal"] }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -25,6 +27,7 @@ reqwest             = { workspace = true }
 # Ursprung der Erfolgs-Weiterleitung nach dem OAuth-Callback ausschneiden.
 url                 = { workspace = true }
 sqlx                = { workspace = true }
+whoami              = { workspace = true }
 tb-config           = { workspace = true }
 tb-crypto           = { workspace = true }
 tb-db               = { workspace = true }
@@ -42,6 +45,9 @@ tb-social-media          = { workspace = true }
 tb-analytics             = { workspace = true }
 tb-highlight             = { workspace = true }
 tb-engagement            = { workspace = true }
+# Geteiltes Last-Gate (Lastwaechter + /proc-Messung), damit der Smalltalk-Test
+# bei Server-Ueberlast pausiert, ohne die ganze Audit-Crate hereinzuziehen.
+tb-load                  = { workspace = true }
 # Nur fuer den Modell-Resolver: der Bot loest den Anbieter-Modellnamen beim
 # Start auf, statt ihn einkompiliert altern zu lassen.
 tb-llm                   = { workspace = true }

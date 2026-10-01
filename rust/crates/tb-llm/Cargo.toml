@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 default = []
-local-eval = ["dep:serde", "dep:sha2", "dep:libc"]
+local-eval = []
 
 [[bin]]
 name = "tb-local-replay"
@@ -17,9 +17,14 @@ required-features = ["local-eval"]
 # erfolgreiche Call verbucht Tokens best-effort ins
 # gemeinsame Usage-Ledger (Tabelle `llm_usage`, zentrale Postgres).
 [dependencies]
-serde = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
-libc = { version = "0.2", optional = true }
+fireworks-model-selection = { path = "../fireworks-model-selection" }
+uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }
+toml = "0.8"
+fs2 = "0.4"
+zeroize = { version = "1", features = ["serde"] }
+serde = { workspace = true }
+sha2 = { workspace = true }
+libc = "0.2"
 chrono      = { workspace = true }
 regex       = { workspace = true }
 reqwest     = { workspace = true }
@@ -33,7 +38,7 @@ tracing     = { workspace = true }
 # die Ledger-Queries sind laufzeit-geprüft (`sqlx::query`/`query_scalar`), damit
 # tb-llm keinen Compile-Time-`.sqlx`-Cache braucht und der Workspace-schema-gate
 # nicht über eine gesonderte tb-llm-Cache-Datei stolpert.
-sqlx = { version = "=0.8.6", default-features = false, features = ["postgres", "runtime-tokio"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }

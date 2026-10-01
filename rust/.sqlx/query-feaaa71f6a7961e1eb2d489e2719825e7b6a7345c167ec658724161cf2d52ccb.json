@@ -6,22 +6,41 @@
       {
         "ordinal": 0,
         "name": "rating?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_report_ratings",
+            "name": "rating"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "comment",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_report_ratings",
+            "name": "comment"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "rated_by?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_stream_report_ratings",
+            "name": "rated_by"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "updated_at?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {

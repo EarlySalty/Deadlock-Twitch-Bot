@@ -132,8 +132,8 @@ pub async fn load_active_partner(
 
 /// Upsert in `twitch_streamer_identities` — nur wenn eine `twitch_user_id`
 /// vorliegt (Python no-opt ohne user_id). Discord-Felder werden mitgeführt.
-async fn upsert_streamer_identity(
-    pool: &PgPool,
+async fn upsert_streamer_identity<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
     twitch_user_id: Option<&str>,
     twitch_login: &str,
     discord_user_id: Option<&str>,
@@ -165,7 +165,7 @@ async fn upsert_streamer_identity(
         is_on_discord,
         now
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -491,8 +491,33 @@ pub async fn promote_streamer_to_partner(
         return Ok(PromoteOutcome::Blocked(Box::new(entry)));
     }
 
+    let activation_time = chrono::Utc::now();
+    let partnered_at = activation_time.to_rfc3339();
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('partner_signup'), hashtext($1::text))")
+        .bind(normalized_user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext(LOWER($1))::bigint)")
+        .bind(&normalized_login)
+        .execute(&mut *tx)
+        .await?;
+    let conflicting_identity: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM twitch_partners WHERE LOWER(twitch_login) = LOWER($1)
+         AND twitch_user_id IS DISTINCT FROM $2)",
+    )
+    .bind(&normalized_login)
+    .bind(normalized_user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if conflicting_identity {
+        return Err(sqlx::Error::Protocol(
+            "Partner-Login gehört zu einer anderen Twitch-ID".into(),
+        ));
+    }
     upsert_streamer_identity(
-        pool,
+        &mut *tx,
         Some(normalized_user_id),
         &normalized_login,
         discord_user_id,
@@ -500,8 +525,6 @@ pub async fn promote_streamer_to_partner(
         is_on_discord,
     )
     .await?;
-
-    let partnered_at = now_iso();
 
     // Bestehenden Partner-Datensatz (egal welcher Status) reaktivieren …
     let updated = sqlx::query!(
@@ -517,7 +540,7 @@ pub async fn promote_streamer_to_partner(
             status = $5
         WHERE id = (
             SELECT id FROM twitch_partners
-             WHERE LOWER(twitch_login) = LOWER($1) OR twitch_user_id = $2
+             WHERE twitch_user_id = $2
              ORDER BY (COALESCE(status,'') = 'active') DESC, id DESC
              LIMIT 1
         )
@@ -528,11 +551,12 @@ pub async fn promote_streamer_to_partner(
         &partnered_at,
         STATUS_ACTIVE
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
     if updated > 0 {
+        tx.commit().await?;
         return Ok(PromoteOutcome::Promoted);
     }
 
@@ -555,9 +579,17 @@ pub async fn promote_streamer_to_partner(
         &partnered_at,
         STATUS_ACTIVE
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tb_raid::streamer_referrals::credit_first_activation(
+        &mut tx,
+        normalized_user_id,
+        &normalized_login,
+        activation_time,
+    )
+    .await?;
+    tx.commit().await?;
     Ok(PromoteOutcome::Promoted)
 }
 
@@ -678,7 +710,7 @@ pub async fn reactivate_partner(
             admin_archived_at = NULL,
             technical_pause_reason = NULL,
             manual_partner_opt_out = 0,
-            raid_bot_enabled = 1,
+            raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END,
             partnered_at = $2
         WHERE id = $3
         "#,
@@ -1086,13 +1118,19 @@ pub async fn clear_live_state(pool: &PgPool, login: &str) -> Result<(), sqlx::Er
 mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
+    mod test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
 
     macro_rules! db_dsn_or_skip {
         () => {
-            match std::env::var("TB_TEST_DATABASE_URL").ok() {
+            match test_database::database_url() {
                 Some(d) => d,
                 None => {
-                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                    if test_database::required() {
                         panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
@@ -1108,15 +1146,17 @@ mod tests {
             .connect(dsn)
             .await
             .expect("DB-Verbindung");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("drop schema");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("drop schema");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("create schema");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path");
@@ -1130,7 +1170,7 @@ mod tests {
                 require_discord_link INTEGER DEFAULT 0,
                 next_link_check_at TEXT,
                 manual_partner_opt_out INTEGER DEFAULT 0,
-                raid_bot_enabled INTEGER DEFAULT 0,
+                raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER DEFAULT 0,
                 silent_ban INTEGER DEFAULT 0,
                 silent_raid INTEGER DEFAULT 0,
                 live_ping_role_id BIGINT,
@@ -1185,6 +1225,13 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("DDL");
         }
+        mod referral_test_support {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/streamer_referrals.rs"
+            ));
+        }
+        referral_test_support::schema(&pool).await;
         pool
     }
 
@@ -1212,6 +1259,8 @@ mod tests {
         .await
         .expect("insert identity");
     }
+
+    include!("streamer_referral_tests.rs");
 
     #[tokio::test]
     async fn departner_setzt_status_und_disabled_raid_auth() {

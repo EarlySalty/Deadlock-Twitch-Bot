@@ -10,6 +10,10 @@
 //! `!silentraid` und die Streamer-Selbstbedienung (`silent_settings`) je Kanal
 //! toggeln — die Admin-Bulk-Variante setzt sie netzweit.
 
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
+
 use serde_json::{json, Value};
 use sqlx::{PgPool, QueryBuilder};
 
@@ -86,6 +90,10 @@ pub async fn bulk_update_partner_flags(
             qb.push(", ");
         }
         qb.push(*col).push(" = ").push_bind(*val);
+    }
+    if let Some(enabled) = flags.raid_bot_enabled {
+        // Dauerhafte Admin-Wahl separat vom technisch wirksamen Zustand.
+        qb.push(", raid_admin_enabled = ").push_bind(enabled);
     }
     qb.push(" WHERE status = 'active'");
     qb.build().execute(pool).await?;
@@ -197,13 +205,15 @@ pub async fn load_streamer_config_snapshots(
     let sql = format!(
         "SELECT \
             COUNT(*) AS total, \
-            COUNT(*) FILTER (WHERE raid_bot_enabled = 1) AS raid_bot, \
+            COUNT(*) FILTER (WHERE raid_admin_enabled) AS raid_bot, \
             COUNT(*) FILTER (WHERE COALESCE(live_ping_enabled, 1) = 1) AS live_ping, \
             COUNT(*) FILTER (WHERE silent_ban = 1) AS silent_ban, \
             COUNT(*) FILTER (WHERE silent_raid = 1) AS silent_raid \
          FROM twitch_partners WHERE {where_clause}"
     );
-    let row: (i64, i64, i64, i64, i64) = sqlx::query_as(&sql).fetch_one(pool).await?;
+    let row: (i64, i64, i64, i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .fetch_one(pool)
+        .await?;
     Ok(ConfigSnapshots {
         scope: scope.to_string(),
         total: row.0,
@@ -236,11 +246,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -256,7 +266,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE twitch_partners (\
                 twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, status TEXT, \
-                raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, \
+                raid_admin_enabled BOOLEAN NOT NULL DEFAULT TRUE, raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, \
                 silent_ban INTEGER DEFAULT 0, silent_raid INTEGER DEFAULT 0)",
         )
         .execute(&pool)
@@ -276,7 +286,7 @@ mod tests {
     }
 
     async fn seed(pool: &PgPool, uid: &str, status: &str) {
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ($1, $1, $2)")
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, raid_admin_enabled) VALUES ($1, $1, $2, FALSE)")
             .bind(uid)
             .bind(status)
             .execute(pool)
@@ -330,6 +340,57 @@ mod tests {
         assert_eq!(snap_all.total, 3);
         assert_eq!(snap_all.raid_bot_enabled_count, 2);
         assert_eq!(snap_all.raid_snapshot()["allRaidBotEnabled"], false);
+    }
+
+    #[tokio::test]
+    async fn admin_raid_wunsch_wird_gespeichert_und_unabhaengig_von_pause_gelesen() {
+        let db = test_postgres::TestPostgres::start().await;
+        sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT PRIMARY KEY, status TEXT, raid_bot_enabled INTEGER DEFAULT 0, live_ping_enabled INTEGER DEFAULT 1, silent_ban INTEGER DEFAULT 0, silent_raid INTEGER DEFAULT 0)")
+            .execute(&db.pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260913153000_admin_raid_wunsch.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_partners(twitch_user_id,status,raid_bot_enabled) VALUES ('active','active',1),('old','departnered',1)")
+            .execute(&db.pool).await.unwrap();
+        for enabled in [false, true] {
+            assert_eq!(
+                bulk_update_partner_flags(
+                    &db.pool,
+                    &PartnerFlagUpdate {
+                        raid_bot_enabled: Some(enabled),
+                        ..Default::default()
+                    }
+                )
+                .await
+                .unwrap(),
+                1
+            );
+            let rows: Vec<(String, bool, i32)> = sqlx::query_as("SELECT twitch_user_id,raid_admin_enabled,raid_bot_enabled FROM twitch_partners ORDER BY twitch_user_id")
+                .fetch_all(&db.pool).await.unwrap();
+            assert_eq!(
+                rows,
+                vec![
+                    ("active".into(), enabled, i32::from(enabled)),
+                    ("old".into(), true, 1)
+                ]
+            );
+            // Ein technischer Ausfall darf beim Neuladen nicht als neue
+            // Admin-Wahl erscheinen.
+            sqlx::query(
+                "UPDATE twitch_partners SET raid_bot_enabled=0 WHERE twitch_user_id='active'",
+            )
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            let snapshot = load_streamer_config_snapshots(&db.pool, "active")
+                .await
+                .unwrap();
+            assert_eq!(snapshot.raid_bot_enabled_count, i64::from(enabled));
+            assert_eq!(snapshot.raid_snapshot()["allRaidBotEnabled"], enabled);
+        }
     }
 
     #[tokio::test]

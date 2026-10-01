@@ -46,7 +46,7 @@ pub async fn lurker_analysis_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
+    let days = params.days.unwrap_or(30).clamp(7, 3650) as i64;
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
 
@@ -233,11 +233,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

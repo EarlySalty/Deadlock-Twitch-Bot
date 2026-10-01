@@ -6,32 +6,43 @@
       {
         "ordinal": 0,
         "name": "twitch_login!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "is_live!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "viewer_count!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "last_game?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_live_state",
+            "name": "last_game"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "dl_streams_30d!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "dl_avg_viewers_30d?",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       }
     ],
     "parameters": {

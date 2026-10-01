@@ -92,15 +92,17 @@ mod pb_recap_tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();
@@ -327,7 +329,7 @@ impl AvatarCache {
         }
     }
 
-    async fn profile_image_url(&self, login: &str) -> Option<String> {
+    pub(crate) async fn profile_image_url(&self, login: &str) -> Option<String> {
         let login = login.trim().to_lowercase();
         if login.is_empty() {
             return None;
@@ -619,7 +621,7 @@ pub async fn get_handler(
     Query(query): Query<InternalHomeQuery>,
     avatar_cache: Option<Extension<AvatarCache>>,
 ) -> Response {
-    // days parsen + clamp 1..=365 (api_v2.py:2015-2020)
+    // days parsen + clamp 1..=3650
     let days = query
         .days
         .as_deref()
@@ -627,7 +629,7 @@ pub async fn get_handler(
         .filter(|s| !s.is_empty())
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(DEFAULT_DAYS)
-        .clamp(1, 365);
+        .clamp(1, 3650);
 
     let identity = match resolve_identity(&auth, &query.streamer) {
         Ok(id) => id,
@@ -671,7 +673,9 @@ pub async fn get_handler(
     let links = super::onboarding::account_links(&pool, &resolved_user_id).await;
     let discord_connected = links.discord_status == super::onboarding::LinkStatus::Connected;
     let steam_connected = links.steam_status == super::onboarding::LinkStatus::Connected;
-    let steam_connect_url = links.discord_id.as_deref()
+    let steam_connect_url = links
+        .discord_id
+        .as_deref()
         .map(|id| format!("{}/steam/login?uid={}", steam_link_base(), id));
 
     let autoban_events = load_autoban_events(&resolved_login, since);
@@ -968,7 +972,7 @@ pub(crate) async fn access_state_block(
     "#
     );
 
-    let partner_row = match sqlx::query(&partner_sql)
+    let partner_row = match sqlx::query(sqlx::AssertSqlSafe(partner_sql))
         .bind(&normalized_login)
         .bind(&normalized_user_id)
         .fetch_optional(pool)
@@ -1478,7 +1482,9 @@ pub(crate) async fn ban_count_block(
           AND {clause}
     "#
     );
-    let mut q = sqlx::query(&count_sql).bind(since).bind(resolved_user_id);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(count_sql))
+        .bind(since)
+        .bind(resolved_user_id);
     let like_params: Vec<String> = BAN_REASON_KEYWORDS
         .iter()
         .map(|k| format!("%{k}%"))
@@ -2184,7 +2190,9 @@ async fn compute_health_score(pool: &PgPool, login: &str) -> Option<Value> {
           AND {bot_clause}
     "#
     );
-    let mut community_query = sqlx::query(&community_sql).bind(login).bind(week_ago);
+    let mut community_query = sqlx::query(sqlx::AssertSqlSafe(community_sql))
+        .bind(login)
+        .bind(week_ago);
     for bot in &bot_logins {
         community_query = community_query.bind(bot.clone());
     }
@@ -2928,11 +2936,13 @@ mod changelog_origin_tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

@@ -93,11 +93,13 @@ async fn b2_session_id_bigint_migration_repairs_integer_columns() {
         .as_nanos();
     let dbname = format!("tb_b2_{}_{}", std::process::id(), nanos);
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
-    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {dbname}")))
         .execute(&admin)
         .await
         .expect("create b2 db");
@@ -162,10 +164,12 @@ async fn b2_session_id_bigint_migration_repairs_integer_columns() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
 }
 
 #[tokio::test]
@@ -181,11 +185,13 @@ async fn exp_snapshot_migration_repairs_missing_conflict_index() {
         .as_nanos();
     let dbname = format!("tb_exp_snapshot_{}_{}", std::process::id(), nanos);
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
-    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {dbname}")))
         .execute(&admin)
         .await
         .expect("create exp snapshot db");
@@ -226,10 +232,12 @@ async fn exp_snapshot_migration_repairs_missing_conflict_index() {
     assert_eq!(rows, 1);
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
 }
 
 #[tokio::test]
@@ -245,11 +253,13 @@ async fn exp_snapshot_migration_preserves_existing_duplicates() {
         .as_nanos();
     let dbname = format!("tb_exp_duplicates_{}_{}", std::process::id(), nanos);
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
-    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {dbname}")))
         .execute(&admin)
         .await
         .expect("create exp duplicates db");
@@ -287,10 +297,12 @@ async fn exp_snapshot_migration_preserves_existing_duplicates() {
     assert_eq!(rows, 2);
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
 }
 
 /// F1-DoD: Eine frische, leere DB ist allein durch `run_migrations()` vollständig
@@ -310,11 +322,13 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
         .as_nanos();
     let dbname = format!("tb_f1_{}_{}", std::process::id(), nanos);
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
-    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {dbname}")))
         .execute(&admin)
         .await
         .expect("create fresh db");
@@ -626,10 +640,12 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
     );
 
     pool.close().await;
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
 }
 
 #[tokio::test]
@@ -697,11 +713,13 @@ async fn run_migrations_ueberlebt_angewandte_aber_fehlende_version() {
         .as_nanos();
     let dbname = format!("tb_mig_gap_{}_{}", std::process::id(), nanos);
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
-    sqlx::query(&format!("CREATE DATABASE {dbname}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {dbname}")))
         .execute(&admin)
         .await
         .expect("create db");
@@ -714,9 +732,7 @@ async fn run_migrations_ueberlebt_angewandte_aber_fehlende_version() {
         .await
         .expect("timescaledb");
 
-    tb_db::run_migrations(&pool)
-        .await
-        .expect("erste Migration");
+    tb_db::run_migrations(&pool).await.expect("erste Migration");
 
     sqlx::query(
         r#"
@@ -732,8 +748,10 @@ async fn run_migrations_ueberlebt_angewandte_aber_fehlende_version() {
         .await
         .expect("zweite Migration trotz fehlender Datei");
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
-        .execute(&admin)
-        .await
-        .ok();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .ok();
 }

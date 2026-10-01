@@ -1,6 +1,6 @@
 # LLM-Aufrufe: ein zentraler Fireworks-Connector
 
-Stand: 2026-09-01
+Stand: 2026-10-01
 
 ## Verbindliche Architektur
 
@@ -14,18 +14,11 @@ Der Eingang übernimmt HTTP-Transport, Fristen, 429-Wiederholungen, Token-Ledger
 `<think>`-Bereinigung und ein optionales Akzeptanz-Prädikat. Fachliche Crates
 bauen keine eigenen LLM-Clients und lösen keine Anbieterschlüssel selbst auf.
 
-## Freigegebener Anbieter und Modell-Lock
+## Freigegebener Anbieter und gemeinsame Auswahl
 
-- Anbieter: Fireworks
-- Basisadresse: `https://api.fireworks.ai/inference/v1`
-- Modell: `accounts/fireworks/models/deepseek-v4-flash-0731`
-- Schlüssel: `FIREWORK_API_KEY`, kompatibler Alias `FIREWORKS_API_KEY`
+Fireworks verwendet die täglich zentral geprüfte stabile DeepSeek-Flash-Familie ab V4.1. Pro und andere Anbieter sind nicht freigegeben. Alle Dienste lesen die lokale Auswahl beim nächsten Request. Der einzige tägliche Rust-Writer prüft Katalog und echte synthetische Inferenz vor Veröffentlichung; kein Bot löst Modelle separat auf.
 
-Anbieter- und Modell-Overrides sind abgeschaltet. Variablen früherer Anbieter
-werden nicht ausgewertet. Ohne Fireworks-Schlüssel schlägt
-der Connector geschlossen fehl; es gibt keinen Rückfall auf einen anderen
-Anbieter. Eine abweichende Basisadresse ist nur für lokale Mock- und
-Proxy-Tests möglich, der Modellname bleibt dabei fest.
+Der vollständige Datei-, Sicherheits- und Betriebsvertrag steht in [flash-modellauswahl.md](flash-modellauswahl.md). Ohne Fireworks-Schlüssel oder gültigen geprüften Auswahl-State schlägt der Connector geschlossen fehl. Die Basisadresse bleibt `https://api.fireworks.ai/inference/v1`; abweichende Adressen sind ausschließlich für lokale Tests möglich.
 
 ## Request-Vertrag
 

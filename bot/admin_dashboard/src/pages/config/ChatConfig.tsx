@@ -42,8 +42,8 @@ export function ChatConfig() {
   return (
     <section className="space-y-5">
       <PageHeader
-        title="Chat Config"
-        description="Moderations-Flags gesammelt steuern. Der Scope `all` erweitert den Rollout bewusst auf den gesamten verwalteten Bestand."
+        title="Chat-Moderation"
+        description="Die Chat-Moderation für die verwalteten Streamer zentral einstellen."
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -83,7 +83,7 @@ export function ChatConfig() {
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div>
                 <p className="text-white">Silent Ban setzen</p>
-                <p className="mt-1 text-xs text-text-secondary">Aktualisiert das Silent-Ban-Flag gesammelt im gewählten Scope.</p>
+                <p className="mt-1 text-xs text-text-secondary">Legt stille Bans für alle aktiven Partner fest.</p>
               </div>
               <input
                 type="checkbox"
@@ -98,7 +98,7 @@ export function ChatConfig() {
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div>
                 <p className="text-white">Silent Raid setzen</p>
-                <p className="mt-1 text-xs text-text-secondary">Aktualisiert das Silent-Raid-Flag gesammelt im gewählten Scope.</p>
+                <p className="mt-1 text-xs text-text-secondary">Legt stille Raids für alle aktiven Partner fest.</p>
               </div>
               <input
                 type="checkbox"
@@ -112,7 +112,7 @@ export function ChatConfig() {
           </div>
 
           <div className="space-y-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Scope</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Übersicht</p>
             <select
               value={scope}
               onChange={(event) => {
@@ -121,15 +121,15 @@ export function ChatConfig() {
               }}
               className="admin-input"
             >
-              <option value="active">Active Streamer</option>
-              <option value="all">All Managed Streamers</option>
+              <option value="active">Aktive Partner</option>
+              <option value="all">Alle verwalteten Streamer</option>
             </select>
             <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.03] p-4 text-sm leading-7 text-text-secondary">
               <p>
-                <span className="font-semibold text-white">Standard:</span> <code>active</code> wirkt nur auf aktive Streamer.
+                Die Auswahl bestimmt, welche Streamer in der Übersicht gezählt werden.
               </p>
               <p>
-                <span className="font-semibold text-white">All:</span> Wendet beide Moderations-Flags gesammelt auf alle verwalteten Streamer an.
+                <span className="font-semibold text-white">Speichern:</span> Änderungen gelten immer nur für aktive Partner.
               </p>
             </div>
             <button

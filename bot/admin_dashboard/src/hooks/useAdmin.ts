@@ -27,6 +27,9 @@ import {
   fetchPartnerSignupBlocks,
   addPartnerSignupBlock,
   removePartnerSignupBlock,
+  fetchPartnerSignupTagBlocks,
+  addPartnerSignupTagBlock,
+  removePartnerSignupTagBlock,
   fetchLegalPage,
   fetchPartnerAccess,
   fetchRoadmap,
@@ -44,12 +47,13 @@ import {
   toggleEngagement,
   removeStreamer,
   removeGlobalBan,
-  reloadBot,
   toggleStreamerDiscordFlag,
   toggleAffiliateActive,
   updateStreamerDiscordProfile,
   updateChatConfig,
   updatePromoConfig,
+  updatePromoTimers,
+  updateCommunityAnnouncements,
   updateRaidConfig,
   verifyStreamer,
 } from '@/api/client';
@@ -206,6 +210,36 @@ export function useRemovePartnerSignupBlock() {
   return useMutation({
     mutationFn: removePartnerSignupBlock,
     onSuccess: () => invalidatePartnerSignupBlocks(queryClient),
+  });
+}
+
+export function usePartnerSignupTagBlocks() {
+  return useQuery({
+    queryKey: ['admin-partner-signup-tag-blocks'],
+    queryFn: fetchPartnerSignupTagBlocks,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddPartnerSignupTagBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: addPartnerSignupTagBlock,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-partner-signup-tag-blocks'] });
+      // Der Backfill beim Anlegen schreibt sofort Kanal-Ausschlüsse; die
+      // Kanalliste und die Streamer-Ansichten ziehen deshalb mit.
+      invalidatePartnerSignupBlocks(queryClient);
+    },
+  });
+}
+
+export function useRemovePartnerSignupTagBlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: removePartnerSignupTagBlock,
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['admin-partner-signup-tag-blocks'] }),
   });
 }
 
@@ -441,19 +475,6 @@ export function usePartnerChatAction() {
   });
 }
 
-export function useReloadBot() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: reloadBot,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard-overview'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-system-health'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-eventsub-status'] });
-    },
-  });
-}
-
 export function useToggleAffiliateActive() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -530,6 +551,22 @@ export function useChatConfigMutation() {
       void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-streamer-detail'] });
     },
+  });
+}
+
+export function useCommunityAnnouncementsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateCommunityAnnouncements,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] }),
+  });
+}
+
+export function usePromoTimerMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updatePromoTimers,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] }),
   });
 }
 

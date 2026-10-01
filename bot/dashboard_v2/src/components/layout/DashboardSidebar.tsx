@@ -8,6 +8,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_TITLE_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   analyticsTabHref,
@@ -28,16 +29,20 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Trophy,
   type LucideIcon,
 } from 'lucide-react';
 
 export type DashboardRoute =
+  | 'category'
   | 'home'
+  | 'challenges'
   | 'analyse'
   | 'social'
   | 'uplink'
   | 'verwaltung'
   | 'overlay'
+  | 'title'
   | 'pricing'
   | 'hilfe'
   | 'feedback';
@@ -79,6 +84,7 @@ interface SidebarNavItem {
 
 export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute }) {
   const {
+    authStatus,
     displayName,
     avatarUrl,
     planName,
@@ -92,9 +98,16 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
   const shownAvatar = avatarFailed ? null : avatarUrl;
+  const canSeeChallenges = Boolean(
+    authStatus?.authenticated && authStatus.twitchUserId && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
+  );
 
   const mainNavItems: SidebarNavItem[] = [
+    ...(adminEligible && adminMode ? [{ href: '/analyse?view=category', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
     { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: activeRoute === 'home' },
+    ...(canSeeChallenges
+      ? [{ href: '/twitch/challenges', label: 'Rangliste & Erfolge', icon: Trophy, active: activeRoute === 'challenges' }]
+      : []),
     ...(canAccessAnalyticsDashboard
       ? [
           {
@@ -127,6 +140,12 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
       active: activeRoute === 'overlay',
     },
     {
+      href: PREVIEW_TITLE_ROUTE,
+      label: 'Titel-Studio',
+      icon: Sparkles,
+      active: activeRoute === 'title',
+    },
+    {
       href: PREVIEW_PRICING_ROUTE,
       label: `Plan: ${planName}`,
       icon: Sparkles,
@@ -136,8 +155,8 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   ];
 
   return (
-    <Rise as="aside" className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-0">
-      <div className="space-y-4">
+    <Rise as="aside" className="min-w-0 self-start lg:sticky lg:top-5">
+      <div className="panel-card card-glow space-y-4 rounded-2xl p-4">
         <div className="flex items-center gap-3">
           {shownAvatar ? (
             <img

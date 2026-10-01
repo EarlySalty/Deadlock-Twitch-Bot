@@ -17,38 +17,29 @@ test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzuständ
   assert.doesNotMatch(UPLINK, />OBS verbunden</);
 });
 
-test('OBS ist eine geordnete Liste aus fünf nativen Disclosures', () => {
+test('OBS ist eine geordnete Liste aus sechs nativen Disclosures', () => {
   assert.match(UPLINK, /<ol[^>]+aria-label="OBS einrichten"/);
   assert.equal((UPLINK.match(/data-obs-step=/g) ?? []).length, 1);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<details/);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<summary/);
-  // Fünf Schritte, und die Zählung im Schrittkopf zählt bis fünf. Stand dort
-  // weiter "von 4", waere der letzte Schritt der, den es laut Kopf nicht gibt.
-  assert.match(UPLINK, /Schritt \{nummer\} von 5/);
-  assert.doesNotMatch(UPLINK, /Schritt \{nummer\} von 4/);
-  for (const nummer of [1, 2, 3, 4, 5]) {
+  assert.match(UPLINK, /Schritt \{nummer\} von 6/);
+  assert.doesNotMatch(UPLINK, /Schritt \{nummer\} von 5/);
+  for (const nummer of [1, 2, 3, 4, 5, 6]) {
     assert.match(UPLINK, new RegExp(`<ObsSchritt nummer=\\{${nummer}\\}`));
   }
-  assert.match(UPLINK, /Fünf kurze Schritte/);
-  assert.doesNotMatch(UPLINK, /Vier kurze Schritte/);
-  assert.match(UPLINK, /5 Schritte/);
-  assert.doesNotMatch(UPLINK, /4 Schritte/);
+  assert.match(UPLINK, /Sechs kurze Schritte/);
+  assert.match(UPLINK, /6 Schritte/);
 });
 
-test('die vier Fensteradressen stehen als Schritt 5 in der OBS-Anleitung', () => {
-  // Vorher eine eigene Karte weit unten, an der die Anleitung vorbeilief. Die
-  // Adressen gehoeren dahin, wo OBS eingerichtet wird: hinter "Ausgabe
-  // einstellen", als letzter Schritt derselben Liste.
+test('die VOD-Einrichtung steht vor den Fensteradressen in der OBS-Anleitung', () => {
   assert.match(
     UPLINK,
-    /<ObsSchritt nummer=\{4\} titel="Ausgabe einstellen">[\s\S]*?<ObsSchritt nummer=\{5\} titel="Fenster einrichten">/,
+    /<ObsSchritt nummer=\{4\} titel="Ausgabe einstellen">[\s\S]*?<ObsSchritt nummer=\{5\} titel="Twitch-VOD-Spur freischalten" offenStart>[\s\S]*?<ObsSchritt nummer=\{6\} titel="Fenster einrichten">/,
   );
   assert.match(
     UPLINK,
-    /<ObsSchritt nummer=\{5\} titel="Fenster einrichten">[\s\S]{0,200}<DockSchrittInhalt me=\{data\} \/>/,
+    /<ObsSchritt nummer=\{6\} titel="Fenster einrichten">[\s\S]{0,200}<DockSchrittInhalt me=\{data\} \/>/,
   );
-  // Der Schritt nutzt dieselbe Aufklapp-Mechanik wie 1 bis 4, kein zweites
-  // Klappmuster daneben.
   assert.match(UPLINK, /function DockSchrittInhalt/);
 
   // Die eigene Karte ist weg, samt ihrem gespeicherten Klappzustand.
@@ -57,6 +48,19 @@ test('die vier Fensteradressen stehen als Schritt 5 in der OBS-Anleitung', () =>
   assert.doesNotMatch(UPLINK, /docksOffen/);
   assert.doesNotMatch(UPLINK, /useUplinkDisclosure\('obs-docks'/);
   assert.doesNotMatch(UPLINK, /Vier Fenster für alle Plattformen/);
+});
+
+test('die OBS-Einrichtung erklärt die benutzerdefinierte Twitch-VOD-Spur vollständig', () => {
+  assert.match(UPLINK, /EnableCustomServerVodTrack=true/);
+  assert.match(UPLINK, /%APPDATA%\\obs-studio\\user\.ini/);
+  assert.match(UPLINK, /~\/Library\/Application Support\/obs-studio\/user\.ini/);
+  assert.match(UPLINK, /~\/\.config\/obs-studio\/user\.ini/);
+  assert.match(UPLINK, /com\.obsproject\.Studio\/config\/obs-studio\/user\.ini/);
+  assert.match(UPLINK, /Keinen zweiten[\s\S]{0,120}\[General\]/);
+  assert.match(UPLINK, /Audiospur[\s\S]{0,120}>1</);
+  assert.match(UPLINK, /Twitch-VOD-Spur[\s\S]{0,120}>2</);
+  assert.match(UPLINK, /Quellen, die nicht im VOD landen sollen[\s\S]{0,100}Musik/);
+  assert.match(UPLINK, /Fehlt Spur 2, bleibt nur der Twitch-Ausgang angehalten/);
 });
 
 test('der private OBS-Schlüsselhinweis steht in einer eigenen Warnbox', () => {
@@ -151,7 +155,7 @@ test('Clipboard-Fehler hinterlassen ein fokussiertes, auswählbares Feld', () =>
 
 test('verbinden_lebt_in_der_plattform_karte', () => {
   assert.doesNotMatch(UPLINK, /data-section="plattformen-verbinden"/);
-  // Ohne "oben": der Satz steht jetzt in Schritt 5 der linken Spalte, die
+  // Ohne "oben": der Satz steht jetzt in Schritt 6 der linken Spalte, die
   // Plattform-Karten stehen daneben.
   assert.match(UPLINK, /Verbinden geht in der jeweiligen Plattform-Karte\./);
   assert.doesNotMatch(UPLINK, /Plattform-Karte oben/);
@@ -222,7 +226,7 @@ test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => 
   assert.match(UPLINK_API, /connect\/\$\{platform\}\/disconnect/);
 });
 
-test('Schritt 5 zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
+test('Schritt 6 zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
   // Vier Fenster hinter einem Zugang; die Namen sind die, die in OBS
   // eingetragen werden.
   assert.match(UPLINK_API, /titel: 'Chat', feld: 'chat'/);

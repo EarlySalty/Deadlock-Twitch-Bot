@@ -1204,11 +1204,13 @@ mod tests {
                 .await
                 .expect("connect admin test-db");
 
-            sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-                .execute(&admin)
-                .await
-                .expect("drop stale schema");
-            sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE"
+            )))
+            .execute(&admin)
+            .await
+            .expect("drop stale schema");
+            sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
                 .execute(&admin)
                 .await
                 .expect("create schema");
@@ -1250,10 +1252,13 @@ mod tests {
 
         async fn cleanup(self) {
             self.pool.close().await;
-            sqlx::query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema))
-                .execute(&self.admin)
-                .await
-                .expect("drop schema");
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP SCHEMA IF EXISTS {} CASCADE",
+                self.schema
+            )))
+            .execute(&self.admin)
+            .await
+            .expect("drop schema");
             self.admin.close().await;
         }
     }
@@ -1304,6 +1309,10 @@ mod tests {
             id: id.to_owned(),
             broadcaster_name: broadcaster_name.to_owned(),
             title: title.to_owned(),
+            url: String::new(),
+            thumbnail_url: String::new(),
+            view_count: 0,
+            created_at: String::new(),
             duration,
             game_id: game_id.to_owned(),
         }
@@ -2148,7 +2157,8 @@ mod tests {
         // Eine Geste nimmt nur die Warnung zurueck. Wuerde sie den ganzen Hinweis
         // leeren, ueberschriebe der Clipwechsel sofort die Lautstaerke-Anzeige.
         assert!(
-            html.contains("function clearWarning()") && html.contains("hint.classList.contains('warn')"),
+            html.contains("function clearWarning()")
+                && html.contains("hint.classList.contains('warn')"),
             "Warnung und kurze Rueckmeldung duerfen sich nicht gegenseitig loeschen"
         );
         assert_eq!(

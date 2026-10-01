@@ -15,8 +15,9 @@
 //!    oder mit Modus-Cookie bleibt sie Admin.
 //! 4. **None** — alles andere
 
+#[cfg(test)]
+use async_trait::async_trait;
 use axum::{
-    async_trait,
     body::Body,
     extract::FromRequestParts,
     http::{request::Parts, Extensions, HeaderMap, Request},
@@ -25,13 +26,10 @@ use axum::{
 };
 use std::net::{IpAddr, SocketAddr};
 
-/// Twitch-Session-Identität eines per OAuth eingeloggten Admins (senderauth-01).
+/// Twitch-Session-Identität des per OAuth authentifizierten Betreibers.
 ///
-/// Wird gesetzt, wenn ein Twitch-Login mit Admin-Rechten (`TWITCH_ADMIN_LOGINS`,
-/// z. B. `earlysalty`) zum `DashboardAuthLevel::Admin` promoted wird. Trägt die
-/// Session-Identität weiter, damit Handler sie für die Audit-Attribution
-/// (z. B. `enabled_by`) nutzen können — analog zu Pythons `_extract_session_user`,
-/// das `actor_id`/`actor_login` IMMER aus der Session liest, auch bei `admin`.
+/// Wird nur gesetzt, wenn die verifizierte Twitch-User-ID mit
+/// `dashboard.options.admin_twitch_user_id` übereinstimmt und der Admin-Modus aktiv ist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminActor {
     pub twitch_user_id: String,
@@ -50,9 +48,9 @@ pub struct AuthenticatedPartnerSessionId(pub String);
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
-    /// Admin-Zugang. `actor = None` für Discord-Admin (`master_dash_session`,
-    /// keine Twitch-Identität); `actor = Some(..)` für einen
-    /// per Twitch-OAuth eingeloggten Admin (Login-Promotion, senderauth-01).
+    /// Admin-Zugang. `actor = None` für interne und reine Admin-Kontexte;
+    /// `actor = Some(..)` für Twitch-OAuth und die öffentliche Master-Ansicht
+    /// mit der in der Auth-Schicht aufgelösten Twitch-Identität des Owners.
     Admin { actor: Option<AdminActor> },
     /// Gültige `twitch_dash_session`-Cookie + Partner in DB + nicht blacklisted.
     Partner {
@@ -75,6 +73,21 @@ impl DashboardAuthLevel {
     /// `true` wenn Admin.
     pub fn is_privileged(&self) -> bool {
         matches!(self, Self::Admin { .. })
+    }
+
+    /// `true` wenn diese zentral authentifizierte Twitch-Partner-Session zur konfigurierten Betreiber-ID gehört.
+    pub fn is_configured_twitch_owner(&self, configured_user_id: Option<&str>) -> bool {
+        let Some(configured_user_id) = configured_user_id.filter(|id| {
+            id.bytes().all(|byte| byte.is_ascii_digit())
+                && id.parse::<u64>().is_ok_and(|parsed| parsed > 0)
+        }) else {
+            return false;
+        };
+
+        matches!(
+            self,
+            Self::Partner { twitch_user_id, .. } if twitch_user_id.as_str() == configured_user_id
+        )
     }
 
     /// `true` wenn Admin oder Partner.
@@ -220,15 +233,8 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
     cookie_values(&parts.headers, name).into_iter().next()
 }
 
-/// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin).
-/// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
+/// Twitch-Login des Owners nur als Anzeigefallback, niemals als Berechtigungsnachweis.
 pub(crate) const DEFAULT_ADMIN_LOGIN: &str = "earlysalty";
-const TWITCH_ADMIN_LOGINS: &[&str] = &[DEFAULT_ADMIN_LOGIN];
-
-pub(crate) fn is_admin_login(login: &str) -> bool {
-    let login = login.trim().to_lowercase();
-    TWITCH_ADMIN_LOGINS.contains(&login.as_str())
-}
 
 fn admin_mode_cookie_active(parts: &Parts) -> bool {
     extract_cookie(parts, crate::handlers::auth_status::ADMIN_MODE_COOKIE) == Some("2")
@@ -255,21 +261,47 @@ fn master_session_auth(admin_dashboard: bool, admin_mode_active: bool) -> Dashbo
     DashboardAuthLevel::admin()
 }
 
-/// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
-/// nur bei aktivem Admin-Mode-Cookie, sonst bleibt auch ein admin-eligibler Login
-/// Partner.
+/// Die öffentliche Master-Ansicht behält beim Umschalten dieselbe Owner-ID.
+/// Die ID wird ausschließlich in der Auth-Schicht aufgelöst.
+fn master_owner_identity(auth: DashboardAuthLevel, user_id: String) -> DashboardAuthLevel {
+    if user_id.is_empty() || !user_id.bytes().all(|c| c.is_ascii_digit()) {
+        return DashboardAuthLevel::None;
+    }
+    match auth {
+        DashboardAuthLevel::Partner {
+            twitch_login,
+            display_name,
+            ..
+        } => DashboardAuthLevel::Partner {
+            twitch_login,
+            twitch_user_id: user_id,
+            display_name,
+        },
+        DashboardAuthLevel::Admin { .. } => DashboardAuthLevel::Admin {
+            actor: Some(AdminActor {
+                twitch_user_id: user_id,
+                twitch_login: DEFAULT_ADMIN_LOGIN.to_string(),
+            }),
+        },
+        DashboardAuthLevel::None => DashboardAuthLevel::None,
+    }
+}
+
+/// Macht eine Partner-Session nur dann zum Admin, wenn die verifizierte Twitch-ID
+/// der dauerhaft konfigurierten Betreiber-ID entspricht. Das Modus-Cookie wählt
+/// ausschließlich die Ansicht und ist selbst kein Berechtigungsnachweis.
 fn partner_or_admin(
     partner: crate::auth::session::PartnerSession,
     admin_mode_active: bool,
+    admin_twitch_user_id: Option<&str>,
 ) -> DashboardAuthLevel {
-    if partner.twitch_user_id.is_empty() || !partner.twitch_user_id.bytes().all(|c| c.is_ascii_digit()) {
+    if partner.twitch_user_id.is_empty()
+        || !partner.twitch_user_id.bytes().all(|c| c.is_ascii_digit())
+    {
         return DashboardAuthLevel::None;
     }
     let login = partner.twitch_login.trim().to_lowercase();
-    if is_admin_login(&login) && admin_mode_active {
-        // senderauth-01: Twitch-Session-Identität an den Admin durchreichen, damit
-        // Handler sie für die Audit-Attribution nutzen können (Python liest
-        // actor_id/actor_login IMMER aus der Session, auch bei auth_level='admin').
+    if admin_mode_active && admin_twitch_user_id == Some(partner.twitch_user_id.as_str()) {
         return DashboardAuthLevel::Admin {
             actor: Some(AdminActor {
                 twitch_user_id: partner.twitch_user_id,
@@ -288,7 +320,6 @@ fn partner_or_admin(
 ///
 /// Benötigt `DashboardAuthState` als Extension im Router.
 /// Ohne Extension → immer `None` (fail-closed).
-#[async_trait]
 impl<S> FromRequestParts<S> for DashboardAuthLevel
 where
     S: Send + Sync,
@@ -328,7 +359,11 @@ where
                             parts
                                 .extensions
                                 .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
-                            return Ok(partner_or_admin(partner, admin_mode_active));
+                            return Ok(partner_or_admin(
+                                partner,
+                                admin_mode_active,
+                                state.admin_twitch_user_id(),
+                            ));
                         }
                     }
                 }
@@ -351,7 +386,11 @@ where
                             .load_partner_access_session(session_id, user_agent)
                             .await
                         {
-                            return Ok(partner_or_admin(partner, admin_mode_active));
+                            return Ok(partner_or_admin(
+                                partner,
+                                admin_mode_active,
+                                state.admin_twitch_user_id(),
+                            ));
                         }
                     }
                 }
@@ -374,27 +413,50 @@ where
                     .collect();
             for session_id in admin_session_ids {
                 if let Some(config) = central_config.as_ref() {
-                    let Ok(session) = config.client.validate_session(&session_id).await else {
-                        continue;
-                    };
-                    match state.load_admin_session(&session_id).await {
-                        Ok(Some(_)) => {}
-                        Ok(None) => {
-                            if state
-                                .import_central_admin_session(
-                                    &session_id,
-                                    &session.user_id.to_string(),
-                                    &session.username,
-                                    &session.display_name,
-                                    session.expires_at,
-                                )
-                                .await
-                                .is_err()
-                            {
-                                continue;
+                    if state.central_admin_validation_cached(&session_id).await {
+                        if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
+                            continue;
+                        }
+                    } else {
+                        match config.client.validate_session(&session_id).await {
+                            Ok(session) => {
+                                match state.load_admin_session(&session_id).await {
+                                    Ok(Some(_)) => {}
+                                    Ok(None) => {
+                                        if state
+                                            .import_central_admin_session(
+                                                &session_id,
+                                                &session.user_id.to_string(),
+                                                &session.username,
+                                                &session.display_name,
+                                                session.expires_at,
+                                            )
+                                            .await
+                                            .is_err()
+                                        {
+                                            continue;
+                                        }
+                                    }
+                                    Err(_) => continue,
+                                }
+                                state.cache_central_admin_validation(&session_id).await;
+                            }
+                            Err(_) => {
+                                // Der lokale Spiegel hält das Dashboard bei einem
+                                // kurzzeitigen Broker-Ausfall verfügbar. Ungültige
+                                // oder abgelaufene lokale Sessions bleiben fail-closed.
+                                if !matches!(
+                                    state.load_admin_session(&session_id).await,
+                                    Ok(Some(_))
+                                ) {
+                                    continue;
+                                }
+                                // Auch den lokalen Fallback kurz cachen, damit bei
+                                // einem Broker-Ausfall nicht jeder parallele Tab
+                                // erneut zwei Sekunden auf denselben Timeout wartet.
+                                state.cache_central_admin_validation(&session_id).await;
                             }
                         }
-                        Err(_) => continue,
                     }
                 } else if !matches!(state.load_admin_session(&session_id).await, Ok(Some(_))) {
                     continue;
@@ -404,18 +466,9 @@ where
                     .extensions
                     .insert(AuthenticatedAdminSessionId(session_id));
                 let mut auth = master_session_auth(admin_dashboard, admin_mode_active);
-                if let DashboardAuthLevel::Partner {
-                    twitch_login,
-                    twitch_user_id,
-                    ..
-                } = &mut auth
-                {
-                    if twitch_user_id.is_empty() {
-                        *twitch_user_id = state.resolve_admin_user_id(twitch_login).await;
-                    }
-                }
-                if matches!(&auth, DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id.is_empty()) {
-                    return Ok(DashboardAuthLevel::None);
+                if !admin_dashboard {
+                    let user_id = state.admin_twitch_user_id().unwrap_or_default().to_string();
+                    auth = master_owner_identity(auth, user_id);
                 }
                 return Ok(auth);
             }
@@ -429,8 +482,16 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Clone)]
-    struct CentralSessionClient;
+    #[derive(Clone, Default)]
+    struct CentralSessionClient {
+        calls: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    }
+
+    impl CentralSessionClient {
+        fn counting(calls: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+            Self { calls: Some(calls) }
+        }
+    }
 
     #[async_trait]
     impl crate::auth::discord_admin_login::DiscordAdminOAuthClient for CentralSessionClient {
@@ -464,6 +525,9 @@ mod tests {
             crate::auth::discord_admin_login::ValidatedAdminSession,
             crate::auth::discord_admin_login::DiscordAdminOAuthError,
         > {
+            if let Some(calls) = self.calls.as_ref() {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             if session_id != "zentral-gueltig" {
                 return Err(crate::auth::discord_admin_login::DiscordAdminOAuthError);
             }
@@ -572,11 +636,24 @@ mod tests {
     #[test]
     fn partner_session_ohne_plattform_id_bleibt_unangemeldet() {
         for id in ["", "name", " 42"] {
-            let session = crate::auth::session::PartnerSession { twitch_login: "earlysalty".into(), twitch_user_id: id.into(), display_name: String::new() };
-            assert!(matches!(partner_or_admin(session, true), DashboardAuthLevel::None));
+            let session = crate::auth::session::PartnerSession {
+                twitch_login: "earlysalty".into(),
+                twitch_user_id: id.into(),
+                display_name: String::new(),
+            };
+            assert!(matches!(
+                partner_or_admin(session, true, Some("42")),
+                DashboardAuthLevel::None
+            ));
         }
-        let session = crate::auth::session::PartnerSession { twitch_login: "partner".into(), twitch_user_id: "42".into(), display_name: String::new() };
-        assert!(matches!(partner_or_admin(session, false), DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id == "42"));
+        let session = crate::auth::session::PartnerSession {
+            twitch_login: "partner".into(),
+            twitch_user_id: "42".into(),
+            display_name: String::new(),
+        };
+        assert!(
+            matches!(partner_or_admin(session, false, Some("42")), DashboardAuthLevel::Partner { twitch_user_id, .. } if twitch_user_id == "42")
+        );
     }
 
     #[test]
@@ -605,10 +682,42 @@ mod tests {
     }
 
     #[test]
-    fn is_admin_login_normalisiert() {
-        assert!(is_admin_login(" earlysalty "));
-        assert!(is_admin_login("EarlySalty"));
-        assert!(!is_admin_login("someoneelse"));
+    fn admin_promotion_uses_verified_platform_id_not_reused_login() {
+        let original = crate::auth::session::PartnerSession {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "Owner".into(),
+        };
+        assert!(matches!(
+            partner_or_admin(original, true, Some("42")),
+            DashboardAuthLevel::Admin { actor: Some(AdminActor { twitch_user_id, .. }) }
+                if twitch_user_id == "42"
+        ));
+
+        let reassigned_login = crate::auth::session::PartnerSession {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "99".into(),
+            display_name: "New account".into(),
+        };
+        assert!(matches!(
+            partner_or_admin(reassigned_login, true, Some("42")),
+            DashboardAuthLevel::Partner { twitch_user_id, .. }
+                if twitch_user_id == "99"
+        ));
+    }
+
+    #[test]
+    fn fehlende_betreiber_id_verhindert_admin_promotion() {
+        let session = crate::auth::session::PartnerSession {
+            twitch_login: "earlysalty".into(),
+            twitch_user_id: "42".into(),
+            display_name: "Owner".into(),
+        };
+        assert!(matches!(
+            partner_or_admin(session, true, None),
+            DashboardAuthLevel::Partner { twitch_user_id, .. }
+                if twitch_user_id == "42"
+        ));
     }
 
     fn local_parts(extra_header: Option<(&str, &str)>) -> Parts {
@@ -658,27 +767,32 @@ mod tests {
         assert!(!DashboardAuthLevel::None.is_privileged());
     }
 
-    async fn maybe_test_state() -> Option<(sqlx::PgPool, crate::auth::session::DashboardAuthState)>
-    {
-        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+    async fn test_state() -> (
+        crate::test_database::Database,
+        sqlx::PgPool,
+        crate::auth::session::DashboardAuthState,
+    ) {
+        let database = crate::test_database::Database::new().await;
         let schema = crate::auth::session::test_schema_name("auth_level");
-        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin_pool)
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&database.pool)
             .await
-            .ok()?;
-        admin_pool.close().await;
+            .expect("auth test schema must be created");
 
-        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
-        let opts = opts.options([("search_path", schema.as_str())]);
+        let opts = database
+            .pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .options([("search_path", schema.as_str())]);
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect_with(opts)
             .await
-            .ok()?;
+            .expect("auth test schema pool must connect");
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+            CREATE TABLE dashboard_sessions (
                 session_id   TEXT NOT NULL PRIMARY KEY,
                 session_type TEXT NOT NULL,
                 payload_enc  BYTEA NOT NULL,
@@ -689,10 +803,10 @@ mod tests {
         )
         .execute(&pool)
         .await
-        .ok()?;
+        .expect("auth dashboard_sessions table must be created");
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS twitch_partners (
+            CREATE TABLE twitch_partners (
                 id BIGINT PRIMARY KEY,
                 twitch_login TEXT NOT NULL,
                 twitch_user_id TEXT NOT NULL,
@@ -706,12 +820,12 @@ mod tests {
         )
         .execute(&pool)
         .await
-        .ok()?;
+        .expect("auth twitch_partners table must be created");
         let state = crate::auth::session::DashboardAuthState::new(
             pool.clone(),
             "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
         );
-        Some((pool, state))
+        (database, pool, state)
     }
 
     async fn ensure_partner(pool: &sqlx::PgPool, id: i64, login: &str, user_id: &str) {
@@ -757,9 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn zentrale_admin_session_ignoriert_veralteten_doppel_cookie() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         let mut parts = request_parts(Some(format!(
             "{0}=veraltet; {0}=zentral-gueltig",
             crate::auth::session::ADMIN_COOKIE_NAME
@@ -778,7 +890,7 @@ mod tests {
                 moderator_role_id: 1,
                 admin_role_ids: Vec::new(),
                 admin_guild_ids: Vec::new(),
-                client: std::sync::Arc::new(CentralSessionClient),
+                client: std::sync::Arc::new(CentralSessionClient::default()),
             });
 
         let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
@@ -805,13 +917,92 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn twitch_admin_ohne_mode_cookie_bleibt_partner() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
+    async fn zentrale_admin_session_faellt_bei_broker_fehler_auf_lokale_session_zurueck() {
+        let (_database, pool, state) = test_state().await;
+        let local = state
+            .create_admin_session("discord-fallback", "Fallback Admin")
+            .await
+            .unwrap();
+        let mut parts = request_parts(Some(format!(
+            "{}={}",
+            crate::auth::session::ADMIN_COOKIE_NAME,
+            local.session_id
+        )));
+        parts
+            .headers
+            .insert("x-dashboard-context", "admin".parse().unwrap());
+        parts.extensions.insert(state.clone());
+        parts
+            .extensions
+            .insert(crate::auth::discord_admin_login::DiscordAdminLoginConfig {
+                admin_base_url: "https://admin.test".into(),
+                cookie_secure: true,
+                cookie_domain: Some("example.com".into()),
+                owner_user_id: None,
+                moderator_role_id: 1,
+                admin_role_ids: Vec::new(),
+                admin_guild_ids: Vec::new(),
+                client: std::sync::Arc::new(CentralSessionClient::default()),
+            });
+
+        let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(auth, DashboardAuthLevel::admin());
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key(&local.session_id))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn zentrale_admin_session_wird_kurz_gecached() {
+        let (_database, pool, state) = test_state().await;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = crate::auth::discord_admin_login::DiscordAdminLoginConfig {
+            admin_base_url: "https://admin.test".into(),
+            cookie_secure: true,
+            cookie_domain: Some("example.com".into()),
+            owner_user_id: None,
+            moderator_role_id: 1,
+            admin_role_ids: Vec::new(),
+            admin_guild_ids: Vec::new(),
+            client: std::sync::Arc::new(CentralSessionClient::counting(calls.clone())),
         };
-        ensure_partner(&pool, 9062301, "earlysalty", "9062301").await;
+
+        for _ in 0..2 {
+            let mut parts = request_parts(Some(format!(
+                "{}=zentral-gueltig",
+                crate::auth::session::ADMIN_COOKIE_NAME
+            )));
+            parts
+                .headers
+                .insert("x-dashboard-context", "admin".parse().unwrap());
+            parts.extensions.insert(state.clone());
+            parts.extensions.insert(config.clone());
+            let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
+                .await
+                .unwrap();
+            assert_eq!(auth, DashboardAuthLevel::admin());
+        }
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(crate::auth::session::session_lookup_key("zentral-gueltig"))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_ohne_mode_cookie_bleibt_partner() {
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
+        ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let session = state
-            .create_partner_session("earlysalty", "9062301", "EarlySalty")
+            .create_partner_session("earlysalty", "9062302", "EarlySalty")
             .await
             .unwrap();
         let auth = extract_auth(
@@ -833,7 +1024,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062301")
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302")
             .execute(&pool)
             .await
             .unwrap();
@@ -841,9 +1032,8 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_admin_mit_mode_cookie_wird_admin_actor() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
         ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let session = state
             .create_partner_session("earlysalty", "9062302", "EarlySalty")
@@ -883,9 +1073,7 @@ mod tests {
 
     #[tokio::test]
     async fn twitch_session_schlaegt_master_session() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         ensure_partner(&pool, 9062303, "earlysalty", "9062303").await;
         let partner = state
             .create_partner_session("earlysalty", "9062303", "EarlySalty")
@@ -925,9 +1113,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_validate_bevorzugt_master_session_vor_twitch_session() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
         ensure_partner(&pool, 9062305, "earlysalty", "9062305").await;
         let partner = state
             .create_partner_session("earlysalty", "9062305", "EarlySalty")
@@ -963,10 +1149,9 @@ mod tests {
 
     #[tokio::test]
     async fn master_session_traegt_aufgeloeste_admin_user_id() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
-        ensure_partner(&pool, 1186925760, "earlysalty", "1186925760").await;
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
+        ensure_partner(&pool, 9062302, "earlysalty", "9062302").await;
         let admin = state
             .create_admin_session("discord-owner-uid", "Discord Admin")
             .await
@@ -987,7 +1172,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(twitch_login, "earlysalty");
-                assert_eq!(twitch_user_id, "1186925760");
+                assert_eq!(twitch_user_id, "9062302");
             }
             other => panic!("erwartete Partner-Master-Session, war {other:?}"),
         }
@@ -996,7 +1181,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM twitch_partners WHERE id = 1186925760")
+        sqlx::query("DELETE FROM twitch_partners WHERE id = 9062302")
             .execute(&pool)
             .await
             .unwrap();
@@ -1004,9 +1189,8 @@ mod tests {
 
     #[tokio::test]
     async fn reine_master_session_ohne_admin_kontext_wird_partner() {
-        let Some((pool, state)) = maybe_test_state().await else {
-            return;
-        };
+        let (_database, pool, state) = test_state().await;
+        let state = state.with_admin_twitch_user_id(Some("9062302".to_string()));
         let admin = state
             .create_admin_session("discord-9062304", "Discord Admin")
             .await
@@ -1022,13 +1206,32 @@ mod tests {
         .await;
         assert!(matches!(
             auth,
-            DashboardAuthLevel::Partner { ref twitch_login, .. } if twitch_login == "earlysalty"
+            DashboardAuthLevel::Partner { ref twitch_login, ref twitch_user_id, .. }
+                if twitch_login == "earlysalty" && twitch_user_id == "9062302"
         ));
         sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
             .bind(crate::auth::session::session_lookup_key(&admin.session_id))
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn settings_master_modus_behaelt_owner_id_und_sperrt_fehlende_id() {
+        for mode in [false, true] {
+            let auth = master_owner_identity(master_session_auth(false, mode), "42".into());
+            assert_eq!(auth.is_privileged(), mode);
+            assert_eq!(
+                crate::auth::streamer_scope::resolve_settings_target(&auth, &None).unwrap(),
+                ("earlysalty".into(), "42".into()),
+            );
+            for invalid in ["", " ", "keine-id"] {
+                assert_eq!(
+                    master_owner_identity(master_session_auth(false, mode), invalid.into()),
+                    DashboardAuthLevel::None
+                );
+            }
+        }
     }
 
     #[test]

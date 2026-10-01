@@ -272,7 +272,7 @@ pub async fn viewer_directory_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365);
+    let days = params.days.unwrap_or(30).clamp(1, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
     let sort = match params.sort.as_deref().unwrap_or("sessions") {
@@ -590,7 +590,7 @@ pub async fn viewer_detail_handler(
         )
             .into_response();
     }
-    let days = params.days.unwrap_or(30).clamp(1, 365);
+    let days = params.days.unwrap_or(30).clamp(1, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
     let now = Utc::now();
 
@@ -934,7 +934,7 @@ pub async fn viewer_segments_handler(
             }
             Err(resp) => return resp,
         };
-    let days = params.days.unwrap_or(30).clamp(1, 365);
+    let days = params.days.unwrap_or(30).clamp(1, 3650);
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
     let now = Utc::now();
 
@@ -1309,15 +1309,17 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();
@@ -1409,15 +1411,17 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .unwrap();

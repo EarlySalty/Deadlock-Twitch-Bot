@@ -76,19 +76,18 @@ mod tests {
     use super::*;
 
     fn test_db_url() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL")
-            .ok()
+        crate::test_database::database_url()
             .filter(|v| !v.trim().is_empty())
     }
 
     async fn setup_db(schema: &str) -> PgPool {
         let url = test_db_url().expect("TB_TEST_DATABASE_URL muss gesetzt sein");
         let admin = PgPool::connect(&url).await.expect("Test-DB-Verbindung");
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -99,7 +98,7 @@ mod tests {
             .after_connect(move |conn, _| {
                 let schema = schema_owned.clone();
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {schema}"))
+                    sqlx::query(crate::test_sql::search_path(&schema))
                         .execute(conn)
                         .await?;
                     Ok(())

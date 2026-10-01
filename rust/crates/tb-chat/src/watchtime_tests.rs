@@ -56,7 +56,7 @@ async fn watchtime_leerzustand_und_fehlende_ids_ohne_login_fallback() {
     watchtime_fixture(&database.pool).await;
     let api = MockApi::new();
     let engine = make_engine_with_pool(database.pool.clone(), api.clone());
-    let mut event = make_event("!watchtime @other", false, false);
+    let mut event = make_event("!watchtime", false, false);
     event.chatter_user_id = "unknown-id".into();
     assert!(engine.handle(&event).await);
     assert_eq!(

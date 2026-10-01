@@ -233,7 +233,7 @@ pub async fn letzte_beendete_session(
          LIMIT 1",
         crate::overview::GEISTER_FILTER
     );
-    match sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(&sql)
+    match sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>)>(sqlx::AssertSqlSafe(sql))
         .bind(&login)
         .fetch_optional(pool)
         .await

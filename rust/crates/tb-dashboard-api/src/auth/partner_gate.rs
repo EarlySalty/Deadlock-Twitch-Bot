@@ -109,6 +109,14 @@ fn path_matches_passive_allowed(path: &str) -> bool {
         || PASSIVE_ALLOWED_PREFIXES.iter().any(|p| path.starts_with(p))
 }
 
+fn request_matches_passive_allowed(path: &str, method: &Method) -> bool {
+    // The owner may still inspect a saved draft while the public page is hidden.
+    // Authentication and ownership remain in the handler; writes stay active-only.
+    path_matches_passive_allowed(path)
+        || (path == "/twitch/api/v2/streamer/profile"
+            && matches!(*method, Method::GET | Method::HEAD))
+}
+
 fn path_is_public(path: &str) -> bool {
     if path.is_empty() {
         return false;
@@ -148,7 +156,7 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
             .and_then(|v| v.to_str().ok())
             .map(|a| a.contains("application/json"))
             .unwrap_or(false);
-    let passive_allowed = path_matches_passive_allowed(&path);
+    let passive_allowed = request_matches_passive_allowed(&path, &parts.method);
 
     let auth = DashboardAuthLevel::from_request_parts(&mut parts, &())
         .await
@@ -223,6 +231,29 @@ pub async fn partner_status_gate(req: Request<Body>, next: Next) -> Response {
 mod tests {
     use super::*;
     use crate::auth::level::DashboardAuthLevel;
+
+    #[test]
+    fn partner_profiles_passive_access_is_read_only() {
+        let path = "/twitch/api/v2/streamer/profile";
+        for method in [Method::GET, Method::HEAD] {
+            assert!(request_matches_passive_allowed(path, &method), "{method}");
+        }
+        for method in [Method::PUT, Method::POST, Method::PATCH, Method::DELETE] {
+            assert!(!request_matches_passive_allowed(path, &method), "{method}");
+        }
+        assert!(
+            !path_is_public(path),
+            "Owner data still requires authentication"
+        );
+        assert!(!request_matches_passive_allowed(
+            "/twitch/api/v2/streamer/profile/other",
+            &Method::GET,
+        ));
+        assert!(!request_matches_passive_allowed(
+            "/twitch/api/v2/streamer/moderation/settings",
+            &Method::GET,
+        ));
+    }
 
     #[test]
     fn public_paths_erkannt() {

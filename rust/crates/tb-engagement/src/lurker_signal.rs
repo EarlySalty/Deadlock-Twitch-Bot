@@ -169,8 +169,8 @@ mod tests {
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true)).execute(&admin).await.unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false)).execute(&admin).await.unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();

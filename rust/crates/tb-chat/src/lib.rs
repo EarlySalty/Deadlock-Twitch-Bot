@@ -27,10 +27,12 @@ pub mod catalog;
 pub mod channel_classifier;
 pub mod channel_policy;
 pub mod chatter_tracking;
+pub mod command_names;
+mod command_target;
 pub mod commands;
-pub mod sub_reminder;
 pub mod conversation_scam;
 pub mod crew_guard;
+pub mod db_token_store;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
@@ -41,17 +43,22 @@ pub mod mention_scoring;
 pub mod moderation;
 pub mod moderation_settings;
 pub mod pipeline;
+pub mod pitch_beispiele;
+pub mod pitch_bewertung;
+pub mod player_links;
 pub mod promo_pitch;
 pub mod promos;
+mod rank_lookup;
 pub mod safe_list;
 pub mod scam_pitch;
 pub mod secret_sink;
 pub mod spam_filter;
 pub mod standard_replies;
-pub mod stats;
 pub mod stat_commands;
+pub mod stats;
 pub mod steam_lookup;
 pub mod style_score;
+pub mod sub_reminder;
 pub mod suppression_guard;
 pub mod sus_invite;
 pub mod timeout_tracking;
@@ -70,12 +77,10 @@ pub use commands::{
     RaidStatusInfo, SuperModPort,
 };
 pub use conversation_scam::{
-    ConversationScamGuard, DialogState, GuardMode, GuardSettings, LlmScamJudge, ScamJudge,
-    Verdict, VerdictKind,
+    ConversationScamGuard, DialogState, GuardMode, GuardSettings, LlmScamJudge, ScamJudge, Verdict,
+    VerdictKind,
 };
-pub use crew_guard::{
-    screen as crew_screen, CrewGuard, CrewJudge, CrewSignal, CrewVerdict, OpenAiCrewJudge,
-};
+pub use crew_guard::{screen as crew_screen, CrewGuard, CrewSignal};
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
@@ -85,19 +90,19 @@ pub use invite_question::{
     InviteQuestionVerdictKind, LlmInviteQuestionJudge, PgInviteQuestionStore,
 };
 pub use lfg_pitch::{
-    lfg_pitch_enabled_from_env, LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict,
-    LfgVerdictKind, LlmLfgJudge, LFG_PITCH_REPLY,
+    LfgJudge, LfgJudgeInput, LfgPitchResponder, LfgVerdict, LfgVerdictKind, LlmLfgJudge,
+    LFG_PITCH_REPLY,
 };
 pub use lurker_policy::{
     is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
     PASSIVE_LURKER_STATE,
 };
 pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
-pub use moderation_settings::{ModerationSettings, ModerationSettingsCache};
 pub use moderation::{
     AutoBanRequest, ChannelGuardPort, HelixChatClient, ModerationEngine, OutboundSuppressionCheck,
     OutboundSuppressionStore, TimeoutGuard,
 };
+pub use moderation_settings::{ModerationSettings, ModerationSettingsCache};
 pub use pipeline::{
     ChatPipeline, ChatPipelineParts, CrewRadarAlert, ModAlerter, PgHelixMentionResolver, ReviewLog,
     SCAM_PITCH_TIMEOUT_REASON,
@@ -123,8 +128,14 @@ pub use suppression_guard::{
 pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
-pub use types::{ChatMessageEvent, SendOutcome};
+pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
+
+pub mod streamer_voice;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

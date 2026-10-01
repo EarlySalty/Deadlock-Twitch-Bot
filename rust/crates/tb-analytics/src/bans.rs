@@ -113,15 +113,15 @@ mod tests {
         // Hermetisch: Schema zuerst verwerfen, damit Alt-Tabellen aus früheren
         // Läufen (z. B. ohne event_type) nicht via CREATE TABLE IF NOT EXISTS
         // überleben und die Query mit fehlenden Spalten brechen lassen.
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&pool)
             .await
             .expect("Schema droppen fehlgeschlagen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .expect("search_path setzen fehlgeschlagen");

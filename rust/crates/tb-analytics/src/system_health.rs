@@ -141,11 +141,11 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, true))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .expect("search_path setzen");

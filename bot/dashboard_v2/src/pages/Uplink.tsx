@@ -8,6 +8,8 @@ import {
   EyeOff,
   Loader2,
   Lock,
+  FileSearch,
+  CheckCircle2,
   UserMinus,
   UserPlus,
   Users,
@@ -29,6 +31,7 @@ import {
   rejectUplinkAdminWaitlistEntry,
   rotateUplinkDockToken,
   saveUplinkReconnectWait,
+  saveUplinkNative2kHardware,
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
@@ -40,9 +43,11 @@ import { PREVIEW_PRICING_ROUTE, PREVIEW_UPLINK_STUDIO_ROUTE } from '@/preview/ro
 import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '@/uplinkHelp';
 import { obsZugang, zielBetrieb } from '@/uplinkBetrieb';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
+import { analysiereObsLog } from '@/uplinkEncoderAnalyse';
+import type { UplinkEncoderAnalyse } from '@/uplinkEncoderAnalyse';
 
 /**
- * Inhalt von Schritt 5 der OBS-Anleitung, "Fenster einrichten".
+ * Inhalt von Schritt 6 der OBS-Anleitung, "Fenster einrichten".
  *
  * Vier Fenster, ein Zugang: Chat mit Antwortfeld, Aktivität, Stream-Infos und
  * Kanalpunkte, jeweils für alle verbundenen Plattformen zugleich. Die Adressen
@@ -255,7 +260,7 @@ function ObsSchritt({
             </span>
             <span>
               <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
-                Schritt {nummer} von 5
+                Schritt {nummer} von 6
               </span>
               <span className="block text-sm font-bold text-white">{titel}</span>
             </span>
@@ -297,17 +302,241 @@ function HilfeKapitel({ datei, label, html }: { datei: string; label: string; ht
  */
 function obsAusgabe() {
   return [
-    { feld: 'Videoencoder', wert: 'AV1 bevorzugt, H.264 ebenfalls möglich',
-      warum: 'Wähle einen Encoder, den deine OBS-Version für den benutzerdefinierten RTMPS-Dienst anbietet. Uplink prüft das tatsächlich empfangene Profil.' },
-    { feld: 'Ratensteuerung', wert: 'CBR',
-      warum: 'Plane dein Uploadbudget einschließlich Audio und Reserve. Eine Plattform-Zielbitrate ist keine automatische Vorgabe für deinen Upload.' },
+    { feld: 'Videoencoder', wert: 'Hardwareencoder passend zu deinem System',
+      warum: 'Nutze die Analyse direkt darüber. Software-AV1 über AOM/SVT wird für den Live-Uplink nicht automatisch empfohlen.' },
+    { feld: 'Ratensteuerung', wert: 'Aus der Encoder-Analyse übernehmen',
+      warum: 'AMD und NVIDIA benennen und unterstützen unterschiedliche Verfahren. Uplink zeigt nur die zum erkannten Hardwareweg passende Empfehlung.' },
     { feld: 'Auflösung und Bildrate', wert: 'Dein gewünschtes Quellprofil',
       warum: 'Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.' },
     { feld: 'Keyframe-Intervall', wert: '2 s',
       warum: 'Die endgültigen Anforderungen prüft Uplink je Plattform und Ausgabeprofil.' },
-    { feld: 'Audio', wert: 'Live-Mix und bei Bedarf eigener VOD-Mix',
-      warum: 'Beide Mischungen müssen als getrennte Spuren ankommen. Fehlenden VOD-Ton ersetzt Uplink nicht unbemerkt durch den Live-Mix.' },
+    { feld: 'Audio', wert: 'Live-Mix auf Spur 1, Twitch-VOD auf Spur 2',
+      warum: 'Die VOD-Spur wird im nächsten Schritt ausdrücklich freigeschaltet und getrennt zu Uplink gesendet.' },
   ];
+}
+
+function ObsEncoderAnalyse() {
+  const queryClient = useQueryClient();
+  const [analyse, setAnalyse] = useState<UplinkEncoderAnalyse | null>(null);
+  const [fehler, setFehler] = useState<string | null>(null);
+  const [laedt, setLaedt] = useState(false);
+  const hardwareSpeichern = useMutation({
+    mutationFn: saveUplinkNative2kHardware,
+    onSuccess: async () => {
+      setFehler(null);
+      await queryClient.invalidateQueries({ queryKey: ['uplink-native-2k-hardware'] });
+    },
+    onError: (error) => setFehler(error instanceof Error ? error.message : '2K-Hardwaredaten konnten nicht gespeichert werden.'),
+  });
+
+  async function dateiAnalysieren(datei: File) {
+    setLaedt(true);
+    setFehler(null);
+    try {
+      const text = await datei.text();
+      const ergebnis = analysiereObsLog(text);
+      if (!ergebnis.gpu && !ergebnis.hardware.av1 && !ergebnis.hardware.hevc && !ergebnis.hardware.h264) {
+        setAnalyse(null);
+        setFehler('In dieser Datei wurden keine OBS-GPU-/Encoderangaben gefunden. Nimm eine aktuelle OBS-Logdatei nach einem normalen OBS-Start.');
+        return;
+      }
+      setAnalyse(ergebnis);
+      if (ergebnis.native2kProfile) {
+        await hardwareSpeichern.mutateAsync(ergebnis.native2kProfile);
+      }
+    } catch {
+      setAnalyse(null);
+      setFehler('Die Logdatei konnte im Browser nicht gelesen werden.');
+    } finally {
+      setLaedt(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <FileSearch className="h-4 w-4 text-primary" />
+            Optimale Encoder-Einstellung analysieren
+          </div>
+          <p className="mt-1 text-xs text-text-secondary">
+            Das geht vor dem ersten Stream. OBS schreibt GPU und verfügbare Encoder bereits beim Start in die Logdatei.
+          </p>
+        </div>
+        <label className="inline-flex min-h-10 cursor-pointer items-center rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/15">
+          {laedt ? 'Analysiere…' : 'OBS-Log auswählen'}
+          <input
+            type="file"
+            accept=".txt,.log,text/plain"
+            className="sr-only"
+            disabled={laedt}
+            onChange={(ereignis) => {
+              const datei = ereignis.currentTarget.files?.[0];
+              if (datei) void dateiAnalysieren(datei);
+              ereignis.currentTarget.value = '';
+            }}
+          />
+        </label>
+      </div>
+
+      <p className="text-[11px] text-text-secondary">
+        In OBS: <Weg>Hilfe</Weg> <Weg>Logdateien</Weg> <Feld>Aktuelle Logdatei anzeigen</Feld>. Die ausgewählte Datei wird nur lokal in deinem Browser gelesen und nicht zu Uplink hochgeladen.
+      </p>
+
+      {fehler ? (
+        <div role="alert" className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          {fehler}
+        </div>
+      ) : null}
+
+      {analyse ? (
+        <div className="space-y-3 rounded-lg border border-success/35 bg-success/10 p-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            Empfehlung für dieses OBS-System
+          </div>
+          <dl className="grid gap-2 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-text-secondary">OBS-Renderadapter</dt>
+              <dd className="font-semibold text-white">{analyse.gpu ?? 'Nicht erkannt'}</dd>
+              {analyse.gpus.length > 1 ? (
+                <span className="block text-[11px] font-normal text-text-secondary">
+                  {analyse.gpus.length} Grafikadapter erkannt; die Encoderwahl berücksichtigt Multi-GPU.
+                </span>
+              ) : null}
+            </div>
+            <div>
+              <dt className="text-text-secondary">Codec</dt>
+              <dd className="font-semibold text-white">{analyse.empfehlung.codec}</dd>
+            </div>
+            <div>
+              <dt className="text-text-secondary">Videoencoder</dt>
+              <dd className="font-semibold text-white">{analyse.empfehlung.encoder}</dd>
+            </div>
+            <div>
+              <dt className="text-text-secondary">Ratensteuerung</dt>
+              <dd className="font-semibold text-white">{analyse.empfehlung.ratensteuerung}</dd>
+            </div>
+          </dl>
+          <div className="flex flex-wrap gap-1.5 text-[11px]">
+            <span className={`rounded-full border px-2 py-1 ${analyse.hardware.av1 ? 'border-success/35 text-success' : 'border-border text-text-secondary'}`}>
+              Hardware AV1 {analyse.hardware.av1 ? '✓' : '–'}
+            </span>
+            <span className={`rounded-full border px-2 py-1 ${analyse.hardware.hevc ? 'border-success/35 text-success' : 'border-border text-text-secondary'}`}>
+              Hardware HEVC {analyse.hardware.hevc ? '✓' : '–'}
+            </span>
+            <span className={`rounded-full border px-2 py-1 ${analyse.hardware.h264 ? 'border-success/35 text-success' : 'border-border text-text-secondary'}`}>
+              Hardware H.264 {analyse.hardware.h264 ? '✓' : '–'}
+            </span>
+          </div>
+          <ul className="list-disc space-y-1 pl-4 text-xs text-text-secondary">
+            {analyse.empfehlung.hinweise.map((hinweis) => <li key={hinweis}>{hinweis}</li>)}
+          </ul>
+          {analyse.native2kProfile ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2">
+              <p className="text-xs text-text-secondary">
+                CPU, RAM, Windows, GPU, PCI-ID, VRAM, Treiber sowie HEVC/H.264-Encoder wurden vollständig erkannt. Für Twitch wird nur dieses normalisierte Hardwareprofil gespeichert, nicht deine Logdatei.
+              </p>
+              <button type="button" disabled={hardwareSpeichern.isPending}
+                onClick={() => hardwareSpeichern.mutate(analyse.native2kProfile!)}
+                className="min-h-10 shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:opacity-50">
+                {hardwareSpeichern.isPending ? 'Übernehme…' : hardwareSpeichern.isSuccess ? '2K-Hardware übernommen' : 'Für Native 2K übernehmen'}
+              </button>
+            </div>
+          ) : analyse.native2kFehlendeFelder.length ? (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              Für die automatische 2K-Hardwareweitergabe fehlen in dieser OBS-Logdatei: {analyse.native2kFehlendeFelder.join(', ')}. Eine neu gestartete aktuelle OBS-Logdatei enthält diese Angaben meist vollständig.
+            </div>
+          ) : null}
+          {analyse.softwareAv1 && !analyse.hardware.av1 ? (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              Software-AV1 erkannt: AOM/SVT wird nicht als Live-Empfehlung verwendet, wenn die GPU AV1 nicht selbst encodieren kann.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Benutzerdefinierte RTMP-Dienste blenden OBS' vorhandene Twitch-VOD-Spur
+ * standardmäßig aus. Uplink kann die lokale OBS-Einstellung nicht aus der
+ * Ferne setzen. Deshalb steht der vollständige einmalige Handgriff direkt in
+ * der Einrichtung und nicht nur in einem Hilfelink.
+ */
+function ObsVodTrackEinrichtung() {
+  return (
+    <>
+      <div className="rounded-xl border border-primary/30 bg-primary/10 px-3 py-3 text-xs text-white">
+        <strong>Wenn „Twitch-VOD-Spur“ in OBS bereits sichtbar ist:</strong>{' '}
+        Überspringe die Dateiänderung und stelle unten direkt Live auf Spur 1 und VOD auf Spur 2.
+      </div>
+
+      <ol className="space-y-3 text-xs text-text-secondary">
+        <li className="space-y-1">
+          <strong className="block text-white">1. OBS vollständig beenden</strong>
+          <span>Auch das OBS-Symbol im Infobereich/Tray schließen. Sonst kann OBS die Datei beim Beenden wieder überschreiben.</span>
+        </li>
+        <li className="space-y-2">
+          <strong className="block text-white">2. Die Datei user.ini öffnen</strong>
+          <p>Unter Windows: <Feld>Win + R</Feld> drücken, <code className="font-mono text-white">%APPDATA%\obs-studio</code> eingeben und <code className="font-mono text-white">user.ini</code> mit einem Texteditor öffnen. Standardpfade:</p>
+          <dl className="grid gap-1 rounded-xl border border-border bg-background/65 px-3 py-2 font-mono text-[11px] text-white">
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">Windows</dt>
+              <dd className="break-all">%APPDATA%\obs-studio\user.ini</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">macOS</dt>
+              <dd className="break-all">~/Library/Application Support/obs-studio/user.ini</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">Linux</dt>
+              <dd className="break-all">~/.config/obs-studio/user.ini</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="font-sans font-semibold text-text-secondary">Flatpak</dt>
+              <dd className="break-all">~/.var/app/com.obsproject.Studio/config/obs-studio/user.ini</dd>
+            </div>
+          </dl>
+          <p>Bei Portable-OBS liegt <code className="font-mono text-white">user.ini</code> im verwendeten lokalen OBS-Konfigurationsordner.</p>
+        </li>
+        <li className="space-y-2">
+          <strong className="block text-white">3. Unter dem vorhandenen Abschnitt [General] diese Zeile ergänzen</strong>
+          <CopyField
+            label="OBS-Einstellung für benutzerdefinierte VOD-Spur"
+            value="EnableCustomServerVodTrack=true"
+            privat={false}
+            darfAufdecken
+            grundVerdeckt=""
+          />
+          <p className="text-warning">
+            Keinen zweiten <code className="font-mono text-white">[General]</code>-Block anlegen. Die Zeile gehört in den bereits vorhandenen Abschnitt.
+          </p>
+        </li>
+        <li className="space-y-1">
+          <strong className="block text-white">4. OBS neu starten und die beiden Streaming-Spuren auswählen</strong>
+          <p>
+            <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg> <Weg>Stream</Weg>. Setze <Feld>Audiospur</Feld> auf <strong className="text-white">1</strong>{' '}
+            und <Feld>Twitch-VOD-Spur</Feld> auf <strong className="text-white">2</strong>.
+          </p>
+        </li>
+        <li className="space-y-1">
+          <strong className="block text-white">5. Audioquellen den beiden Mischungen zuordnen</strong>
+          <p>
+            In <Feld>Erweiterte Audioeigenschaften</Feld> ist Spur 1 der Livestream. Spur 2 ist das Twitch-VOD.
+            Quellen, die nicht im VOD landen sollen – zum Beispiel Musik – bekommen nur Spur 1.
+          </p>
+        </li>
+      </ol>
+
+      <div role="note" className="rounded-xl border border-success/30 bg-success/10 px-3 py-2.5 text-xs text-white">
+        <strong>Uplink prüft das beim nächsten Stream:</strong>{' '}
+        Es müssen zwei verschiedene AAC-Spuren ankommen. Fehlt Spur 2, bleibt nur der Twitch-Ausgang angehalten; der Live-Mix wird nicht als VOD-Ersatz verwendet.
+      </div>
+    </>
+  );
 }
 
 /**
@@ -953,11 +1182,11 @@ export function UplinkPage() {
                       </div>
                       <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
                       <p className="mt-1 text-sm text-text-secondary">
-                        Fünf kurze Schritte. Die Serveradresse ist direkt in Schritt 2.
+                        Sechs kurze Schritte. Die Twitch-VOD-Spur wird ausdrücklich mit eingerichtet.
                       </p>
                     </div>
                     <span className="rounded-full border border-border bg-background/60 px-3 py-1 text-xs font-semibold text-text-secondary">
-                      5 Schritte
+                      6 Schritte
                     </span>
                   </div>
 
@@ -1000,6 +1229,7 @@ export function UplinkPage() {
                       <p className="text-xs text-text-secondary">
                         <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
                       </p>
+                      <ObsEncoderAnalyse />
                       <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
                         {obsAusgabe().map((zeile) => (
                           <div key={zeile.feld} className="grid gap-1 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
@@ -1013,14 +1243,20 @@ export function UplinkPage() {
                           </div>
                         ))}
                       </dl>
-                      <p className="mt-3 text-xs text-warning">
-                        Fehlt bei „Benutzerdefiniert“ die VOD-Tonspur, benötigt OBS eine globale Einstellung.
-                        {' '}<a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">Einrichtung der zweiten Tonspur</a>.
-                        {' '}Ein Profilimport allein aktiviert sie nicht.
+                      <p className="mt-3 text-xs text-text-secondary">
+                        Die VOD-Spur richtest du direkt im nächsten Schritt ein. Bei „Benutzerdefiniert“ blendet OBS dieses Feld sonst oft aus.
                       </p>
                     </ObsSchritt>
 
-                    <ObsSchritt nummer={5} titel="Fenster einrichten">
+                    <ObsSchritt nummer={5} titel="Twitch-VOD-Spur freischalten" offenStart>
+                      <ObsVodTrackEinrichtung />
+                      <p className="text-xs text-text-secondary">
+                        Mehr Hintergrund findest du in der{' '}
+                        <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">OBS-Hilfe zur VOD-Spur</a>.
+                      </p>
+                    </ObsSchritt>
+
+                    <ObsSchritt nummer={6} titel="Fenster einrichten">
                       <DockSchrittInhalt me={data} />
                     </ObsSchritt>
                   </ol>

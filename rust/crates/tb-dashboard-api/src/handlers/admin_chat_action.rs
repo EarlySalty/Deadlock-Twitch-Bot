@@ -18,7 +18,7 @@
 //!
 //! **Prozessgrenze:** Der eigentliche Send läuft NICHT in tb-dashboard (eigener
 //! Prozess ohne Bot-Token/Chat). Er wird über die Bot-internal-API
-//! (`POST {base}/streamers/:login/chat-action`, `X-Internal-Token`) gebrückt —
+//! (`POST {base}/streamers/{login}/chat-action`, `X-Internal-Token`) gebrückt —
 //! exakt der native Send-Pfad (`chat_action_handler` → `ChatActionAdapter`).
 
 use std::time::Duration;
@@ -375,11 +375,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

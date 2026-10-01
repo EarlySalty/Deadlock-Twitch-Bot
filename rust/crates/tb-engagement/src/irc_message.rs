@@ -1,43 +1,5 @@
-use std::collections::HashMap;
-
+pub use tb_transport_twitch::irc_message::{parse_tags, parse_privmsg, ParsedPrivmsg};
 use crate::types::IncomingMessage;
-
-/// Eine geparste IRC-PRIVMSG mit IRCv3-Tags.
-pub struct ParsedPrivmsg {
-    pub tags: HashMap<String, String>,
-    pub login: String,
-    pub channel: String,
-    pub text: String,
-}
-
-/// Parst IRCv3-Tags (`key=value;key2=value2`).
-pub fn parse_tags(raw: &str) -> HashMap<String, String> {
-    raw.split(';')
-        .filter_map(|kv| kv.split_once('='))
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect()
-}
-
-/// Zerlegt `@tags :nick!user@host PRIVMSG #channel :text`.
-pub fn parse_privmsg(line: &str) -> Option<ParsedPrivmsg> {
-    let (tags, rest) = if let Some(stripped) = line.strip_prefix('@') {
-        let (tag_part, rest) = stripped.split_once(' ')?;
-        (parse_tags(tag_part), rest)
-    } else {
-        (HashMap::new(), line)
-    };
-    let rest = rest.strip_prefix(':')?;
-    let (prefix, after) = rest.split_once(' ')?;
-    let login = prefix.split('!').next()?.to_string();
-    let after = after.strip_prefix("PRIVMSG #")?;
-    let (channel, text) = after.split_once(' ')?;
-    Some(ParsedPrivmsg {
-        tags,
-        login,
-        channel: channel.to_string(),
-        text: text.strip_prefix(':')?.to_string(),
-    })
-}
 
 /// Baut die Engagement-Nachricht und filtert leere/eigene/Bot-Nachrichten.
 pub fn build_incoming(parsed: &ParsedPrivmsg, self_login: &str) -> Option<IncomingMessage> {

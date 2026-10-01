@@ -18,9 +18,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
-use tb_analytics::chat_deep_llm::{
-    build_deep_prompt, extract_json_object, fetch_session_messages,
-};
+use tb_analytics::chat_deep_llm::{build_deep_prompt, extract_json_object, fetch_session_messages};
 use tb_engagement::llm_chat::EngagementLlmClient;
 
 /// Python setzt kein `max_tokens` (KI-Server-Default). Der Engagement-
@@ -137,11 +135,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

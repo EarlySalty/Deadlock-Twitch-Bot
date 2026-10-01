@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "status",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_raw_chat_backfill_runs",
+            "name": "status"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "note",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_raw_chat_backfill_runs",
+            "name": "note"
+          }
+        }
       }
     ],
     "parameters": {

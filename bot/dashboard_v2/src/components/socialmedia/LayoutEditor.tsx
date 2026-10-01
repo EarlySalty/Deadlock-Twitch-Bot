@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { Camera, Image as ImageIcon, Layers, Maximize2, Save, RotateCcw, EyeOff, Eye } from 'lucide-react';
+import { Camera, Image as ImageIcon, Layers, Maximize2, Save, RotateCcw, EyeOff, Eye, Frame } from 'lucide-react';
 import { useT } from '@/context/LanguageContext';
 import type { LayoutBox, LayoutPayload, LayoutMode } from '@/types/socialMedia';
 import { DEFAULT_LAYOUT, DEFAULT_SOURCE_HEIGHT, DEFAULT_SOURCE_WIDTH } from '@/types/socialMedia';
@@ -17,6 +17,7 @@ import {
   clampToFrame,
   formatBox,
   normalizeStoredCamPosition,
+  stackedGameCrop,
   withBandHeight,
 } from '@/utils/socialMediaLayout';
 
@@ -362,6 +363,73 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const t = useT();
   const bandHeight = layout.cam_position.h;
   const isStacked = mode === 'stacked';
+  const isBlurPad = mode === 'blur_pad' || !camEnabled;
+
+  if (isBlurPad) {
+    const gameAspect = layout.source.width / layout.source.height;
+    const frameAspect = TARGET_WIDTH / TARGET_HEIGHT;
+    const passtInBreite = gameAspect >= frameAspect;
+    const anzeigeBreite = passtInBreite ? TARGET_WIDTH : TARGET_HEIGHT * gameAspect;
+    const anzeigeHoehe = passtInBreite ? TARGET_WIDTH / gameAspect : TARGET_HEIGHT;
+    const breiteProzent = (anzeigeBreite / TARGET_WIDTH) * 100;
+    const hoeheProzent = (anzeigeHoehe / TARGET_HEIGHT) * 100;
+    const linksProzent = (100 - breiteProzent) / 2;
+    const obenProzent = (100 - hoeheProzent) / 2;
+
+    const background = bildUrl ? (
+      <>
+        <div className="absolute inset-0 overflow-hidden">
+          <div className="absolute inset-0" style={{ filter: 'blur(18px)', transform: 'scale(1.25)' }}>
+            <AusschnittBild
+              bildUrl={bildUrl}
+              quelle={layout.source}
+              crop={{ x: 0, y: 0, w: layout.source.width, h: layout.source.height }}
+              zielBreite={TARGET_WIDTH}
+              zielHoehe={TARGET_HEIGHT}
+            />
+          </div>
+          <div className="absolute inset-0 bg-black/25" />
+        </div>
+        <div
+          className="absolute overflow-hidden"
+          style={{
+            left: `${linksProzent}%`,
+            top: `${obenProzent}%`,
+            width: `${breiteProzent}%`,
+            height: `${hoeheProzent}%`,
+          }}
+        >
+          <AusschnittBild
+            bildUrl={bildUrl}
+            quelle={layout.source}
+            crop={{ x: 0, y: 0, w: layout.source.width, h: layout.source.height }}
+            zielBreite={anzeigeBreite}
+            zielHoehe={anzeigeHoehe}
+          />
+        </div>
+      </>
+    ) : (
+      <div className="absolute inset-0 flex items-center justify-center" style={{ background: GAME_PATTERN }}>
+        <span className="text-white/80 text-[10px] font-bold uppercase tracking-[0.16em]">
+          {t('Game mittig, Rand verschwommen')}
+        </span>
+      </div>
+    );
+
+    return (
+      <EditableFrame
+        frameWidth={TARGET_WIDTH}
+        frameHeight={TARGET_HEIGHT}
+        boxes={[]}
+        selectedBox={selectedBox}
+        onSelectBox={onSelectBox}
+        onBoxChange={onBoxChange}
+        caption={t('Hochformat · {width}×{height}', { width: TARGET_WIDTH, height: TARGET_HEIGHT })}
+        background={background}
+        style={{ borderColor: 'rgba(197, 160, 89, 0.24)' }}
+      />
+    );
+  }
 
   const boxes: FrameBox[] = [];
   if (camEnabled) {
@@ -395,11 +463,12 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const gameHoehe = isStacked && camEnabled ? TARGET_HEIGHT - bandHeight : TARGET_HEIGHT;
   const gameOben = isStacked && camEnabled ? (bandHeight / TARGET_HEIGHT) * 100 : 0;
 
+  const gameCrop = isStacked && camEnabled ? stackedGameCrop(layout.game_crop, layout.cam_crop, gameHoehe) : layout.game_crop;
   const gameFlaeche = bildUrl ? (
     <AusschnittBild
       bildUrl={bildUrl}
       quelle={layout.source}
-      crop={layout.game_crop}
+      crop={gameCrop}
       zielBreite={TARGET_WIDTH}
       zielHoehe={gameHoehe}
     />
@@ -414,6 +483,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
   const background = (
     <div className="absolute left-0 right-0 bottom-0 overflow-hidden" style={{ top: `${gameOben}%` }}>
       {gameFlaeche}
+      {isStacked && camEnabled && <div className="absolute left-0 right-0 top-0 h-[8px] bg-primary" />}
     </div>
   );
 
@@ -434,6 +504,7 @@ function TargetPreview({ layout, camEnabled, mode, selectedBox, onSelectBox, onB
 
 interface LayoutEditorProps {
   initialLayout?: LayoutPayload;
+  baselineLayout?: LayoutPayload;
   isSaving?: boolean;
   onSave: (layout: LayoutPayload) => void;
   onReset?: () => void;
@@ -463,6 +534,7 @@ function normalizeLayout(payload: LayoutPayload): LayoutPayload {
 
 export function LayoutEditor({
   initialLayout,
+  baselineLayout,
   isSaving,
   onSave,
   onReset,
@@ -472,10 +544,12 @@ export function LayoutEditor({
   geltungHinweis,
 }: LayoutEditorProps) {
   const t = useT();
-  const base = useMemo(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT), [initialLayout]);
-  const [layout, setLayout] = useState<LayoutPayload>(base);
+  const base = useMemo(() => normalizeLayout(baselineLayout ?? initialLayout ?? DEFAULT_LAYOUT), [baselineLayout, initialLayout]);
+  const [layout, setLayout] = useState<LayoutPayload>(() => normalizeLayout(initialLayout ?? DEFAULT_LAYOUT));
   const camEnabled = layout.cam_enabled;
   const mode = layout.mode;
+  const blurPad = mode === 'blur_pad';
+  const camWirksam = camEnabled && !blurPad;
   const setCamEnabled = (next: boolean) => setLayout((l) => ({ ...l, cam_enabled: next }));
   const setMode = (next: LayoutMode) => setLayout((l) => ({ ...l, mode: next }));
   const [selectedBox, setSelectedBox] = useState<BoxId | null>('game_crop');
@@ -491,18 +565,19 @@ export function LayoutEditor({
 
   // Die grosse Variante liegt nicht bei jedem Clip. Ein stiller Vorablauf klaert
   // das, bevor der Rahmen sie anzeigt; faellt sie aus, bleibt das kleine Bild.
+  const selectedImage = gewaehlterClip?.bildUrl;
   useEffect(() => {
     setGrossFehlt(false);
-    if (!gewaehlterClip) return;
-    const gross = grossesStandbild(gewaehlterClip.bildUrl);
-    if (gross === gewaehlterClip.bildUrl) return;
+    if (!selectedImage) return;
+    const gross = grossesStandbild(selectedImage);
+    if (gross === selectedImage) return;
     const probe = new Image();
     probe.onerror = () => setGrossFehlt(true);
     probe.src = gross;
     return () => {
       probe.onerror = null;
     };
-  }, [gewaehlterClip?.id, gewaehlterClip?.bildUrl]);
+  }, [selectedImage]);
 
   const bildUrl = gewaehlterClip
     ? grossFehlt
@@ -545,7 +620,7 @@ export function LayoutEditor({
       cam_crop: { ...DEFAULT_LAYOUT.cam_crop },
       cam_position: { ...DEFAULT_LAYOUT.cam_position },
       cam_enabled: true,
-      mode: 'pip',
+      mode: DEFAULT_LAYOUT.mode,
     });
   };
 
@@ -564,7 +639,7 @@ export function LayoutEditor({
               type="button"
               onClick={() => setMode('pip')}
               className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'pip' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+                mode === 'pip' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -575,11 +650,22 @@ export function LayoutEditor({
               type="button"
               onClick={() => setMode('stacked')}
               className={`px-3 py-1.5 rounded-lg transition ${
-                mode === 'stacked' ? 'bg-orange text-white shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+                mode === 'stacked' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 rotate-90" /> {t('Stacked')}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('blur_pad')}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                mode === 'blur_pad' ? 'bg-orange text-on-gold shadow-[0_4px_14px_rgba(201, 168, 106, 0.35)]' : 'text-text-secondary hover:text-white'
+              }`}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Frame className="w-3.5 h-3.5" /> {t('Blur-Rand')}
               </span>
             </button>
           </div>
@@ -587,15 +673,16 @@ export function LayoutEditor({
           {/* Cam toggle */}
           <button
             type="button"
+            disabled={blurPad}
             onClick={() => setCamEnabled(!camEnabled)}
-            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition ${
-              camEnabled
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
+              camWirksam
                 ? 'bg-accent/15 text-accent border-accent/40'
                 : 'bg-bg/60 text-text-secondary border-border hover:text-white'
             }`}
           >
-            {camEnabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            {camEnabled ? t('Cam an') : t('Cam aus')}
+            {camWirksam ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            {camWirksam ? t('Cam an') : t('Cam aus')}
           </button>
         </div>
       </div>
@@ -642,7 +729,7 @@ export function LayoutEditor({
           </div>
           <SourcePreview
             layout={layout}
-            camEnabled={camEnabled}
+            camEnabled={camWirksam}
             mode={mode}
             selectedBox={selectedBox}
             onSelectBox={setSelectedBox}
@@ -663,13 +750,13 @@ export function LayoutEditor({
             </button>
             <button
               type="button"
-              disabled={!camEnabled}
+              disabled={!camWirksam}
               onClick={() => setSelectedBox('cam_crop')}
               className={`px-2.5 py-2 rounded-lg border font-semibold uppercase tracking-[0.14em] ${
                 selectedBox === 'cam_crop'
                   ? 'border-accent/70 text-accent bg-accent/10'
                   : 'border-border text-text-secondary hover:text-white'
-              } ${!camEnabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+              } ${!camWirksam ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
               <span className="inline-flex items-center justify-center gap-1.5">
                 <Camera className="w-3 h-3" /> {t('Cam-Ausschnitt')}
@@ -691,7 +778,7 @@ export function LayoutEditor({
           <div className="mx-auto" style={{ maxWidth: 320 }}>
             <TargetPreview
               layout={layout}
-              camEnabled={camEnabled}
+              camEnabled={camWirksam}
               mode={mode}
               selectedBox={selectedBox}
               onSelectBox={setSelectedBox}
@@ -700,7 +787,9 @@ export function LayoutEditor({
             />
           </div>
           <div className="text-[11px] text-text-secondary leading-relaxed">
-            {!camEnabled
+            {blurPad
+              ? t('Blur-Rand: das Game liegt mittig, oben und unten ein verschwommener Rand. Ohne Cam.')
+              : !camWirksam
               ? t('Cam ist aus: das Game füllt das ganze Bild.')
               : mode === 'pip'
               ? t('Cam-Kachel frei ziehen und an den Ecken skalieren: {box}.', {
@@ -736,7 +825,7 @@ export function LayoutEditor({
             type="button"
             disabled={!isDirty || isSaving}
             onClick={() => onSave(layout)}
-            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-white shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 bg-orange text-on-gold shadow-[0_8px_22px_-8px_rgba(201, 168, 106, 0.6)] hover:bg-orange-hover transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Save className="w-3.5 h-3.5" />
             {isSaving ? t('Speichert…') : (saveLabel ?? t('Als Standard speichern'))}

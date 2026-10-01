@@ -119,7 +119,7 @@ pub enum ResumeStand {
 }
 
 /// Ergebnis eines vollstaendigen Shorts-Uploads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ShortsUpload {
     /// Die Video-ID bei YouTube.
     pub video_id: String,
@@ -147,7 +147,7 @@ pub struct VideoZustand {
 /// Zwischenstand waehrend des Uploads. Geht an die Fortschrittssenke, damit der
 /// Aufrufer Sitzung und Byte-Position dauerhaft festhalten kann; ohne das
 /// beginnt jeder Abbruch wieder bei null.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct UploadFortschritt {
     pub session_uri: String,
     pub offset: u64,
@@ -157,7 +157,7 @@ pub struct UploadFortschritt {
 pub type FortschrittSink = Arc<dyn Fn(UploadFortschritt) + Send + Sync>;
 
 /// Was ein erfolgreicher inline-Refresh geliefert hat.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RefreshedToken {
     pub access_token: String,
     /// Restlaufzeit in Sekunden, wie von Google gemeldet.
@@ -287,17 +287,17 @@ impl YouTubeUploader {
             ])
             .send()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         if resp.status().as_u16() != 200 {
-            let body = resp.text().await.unwrap_or_default();
             return Err(UploadError::Api(format!(
-                "YouTube token refresh failed: {body}"
+                "YouTube-Token-Refresh abgelehnt (HTTP {}).",
+                resp.status().as_u16()
             )));
         }
         let data: Value = resp
             .json()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let new_token = data
             .get("access_token")
             .and_then(Value::as_str)
@@ -368,6 +368,8 @@ impl YouTubeUploader {
                     return Ok(resp);
                 }
                 Err(fehler) => {
+                    // Die URL kann eine geheime Upload-Sitzung enthalten.
+                    let fehler = fehler.without_url();
                     if versuch + 1 < self.versuche {
                         let warte = self.wartezeit(versuch, None);
                         tracing::warn!(
@@ -448,10 +450,7 @@ impl YouTubeUploader {
     /// Fragt den Zustand eines Videos ab. `None`, wenn YouTube die Video-ID
     /// nicht mehr kennt — das Video wurde also entfernt oder abgelehnt und
     /// aus der Liste geworfen.
-    pub async fn video_status(
-        &self,
-        video_id: &str,
-    ) -> Result<Option<VideoZustand>, UploadError> {
+    pub async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
         let resp = self.get_videos("status", video_id).await?;
         if !resp.status().is_success() {
             return Err(fehler_aus_antwort(resp, "YouTube videos.list").await);
@@ -459,7 +458,7 @@ impl YouTubeUploader {
         let daten: Value = resp
             .json()
             .await
-            .map_err(|e| UploadError::Request(e.to_string()))?;
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
         let Some(item) = daten.get("items").and_then(|i| i.get(0)) else {
             return Ok(None);
         };
@@ -521,7 +520,7 @@ impl YouTubeUploader {
             let data: Value = resp
                 .json()
                 .await
-                .map_err(|e| UploadError::Request(e.to_string()))?;
+                .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
             return data["id"]
                 .as_str()
                 .map(|id| ResumeStand::Fertig(id.to_string()))
@@ -587,7 +586,7 @@ impl YouTubeUploader {
             let data: Value = resp
                 .json()
                 .await
-                .map_err(|e| UploadError::Request(e.to_string()))?;
+                .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
             return data["id"]
                 .as_str()
                 .map(|id| ChunkOutcome::Fertig(id.to_string()))
@@ -876,11 +875,12 @@ async fn fehler_aus_antwort(resp: reqwest::Response, kontext: &str) -> UploadErr
 /// nicht am Substring "quota": `uploadLimitExceeded` und `rateLimitExceeded`
 /// enthalten den gar nicht.
 fn quota_or_api(status: u16, body: String, kontext: &str) -> UploadError {
-    let kurz: String = body.chars().take(400).collect();
+    // Providertexte können die Session-URI oder Tokens wiederholen. Nur die
+    // Fehlerklasse und der HTTP-Status verlassen diese Grenze.
     if (status == 403 || status == 429) && ist_kontingent(&body) {
-        return UploadError::QuotaExceeded(kurz);
+        return UploadError::QuotaExceeded(format!("YouTube-Kontingent erreicht (HTTP {status})."));
     }
-    UploadError::Api(format!("{kontext} failed ({status}): {kurz}"))
+    UploadError::Api(format!("{kontext} fehlgeschlagen (HTTP {status})."))
 }
 
 /// Prueft die Fehlergruende im Body gegen die Kontingent-Liste. Der
@@ -1018,6 +1018,32 @@ impl PlatformUploader for YouTubeUploader {
     }
 }
 
+// Keine Debug-Ausgabe darf einen wiederverwendbaren Zugang offenlegen.
+impl std::fmt::Debug for ShortsUpload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShortsUpload")
+            .field("video_id", &self.video_id)
+            .field("session_uri", &"[redacted]")
+            .finish()
+    }
+}
+impl std::fmt::Debug for UploadFortschritt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadFortschritt")
+            .field("offset", &self.offset)
+            .field("session_uri", &"[redacted]")
+            .finish()
+    }
+}
+impl std::fmt::Debug for RefreshedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshedToken")
+            .field("expires_in", &self.expires_in)
+            .field("tokens", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,7 +1058,10 @@ mod tests {
     }
 
     async fn temp_video() -> String {
-        let p = std::env::temp_dir().join("tb_youtube_test_clip.mp4");
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p =
+            std::env::temp_dir().join(format!("tb_youtube_test_{}_{}.mp4", std::process::id(), id));
         tokio::fs::write(&p, b"fake-video-bytes").await.unwrap();
         p.to_string_lossy().into_owned()
     }
@@ -1716,5 +1745,47 @@ mod tests {
         assert_eq!(truncate_bytes("äbc", 2), "ä");
         assert_eq!(truncate_bytes("äbc", 3), "äb");
         assert_eq!(truncate_bytes("abc", 99), "abc");
+    }
+}
+
+#[cfg(test)]
+mod token_storage_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn provider_bodies_and_debug_never_expose_credentials() {
+        let sentinel = "synthetic-sensitive-session";
+        for status in [400, 403, 429, 500] {
+            let body = format!("quotaExceeded {sentinel}");
+            let error = quota_or_api(status, body, "YouTube upload");
+            assert!(!format!("{error:?}").contains(sentinel));
+            assert!(!error.to_string().contains(sentinel));
+        }
+        let progress = UploadFortschritt {
+            session_uri: sentinel.into(),
+            offset: 42,
+        };
+        let done = ShortsUpload {
+            session_uri: sentinel.into(),
+            video_id: "public-id".into(),
+        };
+        let refreshed = RefreshedToken {
+            access_token: sentinel.into(),
+            refresh_token: Some(sentinel.into()),
+            expires_in: Some(3600),
+            scope: None,
+        };
+        assert!(!format!("{progress:?} {done:?} {refreshed:?}").contains(sentinel));
+    }
+
+    #[tokio::test]
+    async fn transport_error_does_not_retain_the_session_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let up = YouTubeUploader::new("synthetic-access").with_retry(1, Duration::ZERO);
+        let uri = format!("http://127.0.0.1:{port}/synthetic-sensitive-session");
+        let error = up.resumable_offset(&uri, 512).await.unwrap_err();
+        assert!(!format!("{error:?} {error}").contains("synthetic-sensitive-session"));
     }
 }

@@ -25,9 +25,9 @@ use sqlx::PgPool;
 use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
-        export_latest_vod, export_log_description, export_log_title, format_bytes,
-        format_duration, should_export, CommandRunner, ExportTargets, TokioCommandRunner,
-        VodExportError, VodExportReport, TARGET_LOGIN,
+        export_latest_vod, export_log_description, export_log_title, format_bytes, format_duration,
+        should_export, CommandRunner, ExportTargets, TokioCommandRunner, VodExportError,
+        VodExportReport, TARGET_LOGIN,
     },
 };
 use tb_monitoring::{
@@ -46,11 +46,12 @@ use tb_transport_discord::{BrokerRelay, DiscordBackend, SendAlertEmbed, SendUser
 use tb_transport_twitch::{AddModeratorOutcome, HelixClient, RemoveModeratorOutcome};
 
 use crate::auto_raid::OfflineRaidHandler;
+use crate::flip_unraid::FlipUnraidHandler;
 use crate::offline_side_effects::OfflineSideEffects;
-use crate::raid_greeting::OutgoingRaidSink;
 use crate::partner_lookup::{
     is_target_partner, known_source, resolve_active_partner_id_by_login, PrefetchedLookups,
 };
+use crate::raid_greeting::OutgoingRaidSink;
 use crate::reauth_reminder::ReauthReminder;
 use crate::score_refresh::ScoreRefreshResolver;
 
@@ -707,6 +708,7 @@ impl OutgoingRaidObserver {
                 from_broadcaster_login: login.trim().to_lowercase(),
                 to_broadcaster_id: target_id,
                 to_broadcaster_login: target_login,
+                raid_history_id: None,
             });
         }
     }
@@ -999,7 +1001,6 @@ impl ModeratorProvisioner for HelixModeratorProvisioner {
         self.mod_setzen_ohne_pausenpruefung(broadcaster_id, login)
             .await
     }
-
 }
 
 /// Gegenstück zum [`HelixModeratorProvisioner`]: gibt die Mod-Rechte des Bots in
@@ -1189,6 +1190,7 @@ pub struct RaidEventSubHooks {
     pub side_effects: OfflineSideEffects,
     pub arrival: RaidArrivalCoordinator,
     pub guard: BlacklistRaidGuard,
+    pub flip_unraid: Arc<FlipUnraidHandler>,
     /// Lernt aus `channel.moderate`, wohin ein Raid wirklich geht.
     pub outgoing_raid: OutgoingRaidObserver,
     /// Go-Live-ReAuth-Reminder (B11); `None`, wenn kein nativer Chat-Send-Pfad
@@ -1216,6 +1218,7 @@ impl EventSubHooks for RaidEventSubHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
+        self.flip_unraid.handle_go_live(twitch_user_id, login).await;
         // Go-Live-Followup (B11): Partner mit needs_reauth einmalig im Chat
         // an die fällige Re-Authentifizierung erinnern. Best-effort, eigener
         // Dedupe-Guard — der stream.offline-Sub-Pfad bleibt davon unberührt.
@@ -1386,7 +1389,8 @@ mod outgoing_raid_tests {
             Some("spammer")
         );
         assert_eq!(
-            moderate_target(&json!({"action": "timeout", "timeout": {"user_login": "x"}})).as_deref(),
+            moderate_target(&json!({"action": "timeout", "timeout": {"user_login": "x"}}))
+                .as_deref(),
             Some("x")
         );
         // Actions ohne Nutzer-Bezug (z. B. emoteonly) liefern nichts — die
@@ -1413,7 +1417,11 @@ mod outgoing_raid_tests {
             Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
         );
 
-        observer.handle("1186925760", "earlysalty", &raid_event("dead_eye_nika", "224208315"));
+        observer.handle(
+            "1186925760",
+            "earlysalty",
+            &raid_event("dead_eye_nika", "224208315"),
+        );
 
         assert!(suppression
             .lock()
@@ -1452,7 +1460,11 @@ mod outgoing_raid_tests {
             Some(sink.clone() as Arc<dyn OutgoingRaidSink>),
         );
 
-        observer.handle("  ", "earlysalty", &raid_event("dead_eye_nika", "224208315"));
+        observer.handle(
+            "  ",
+            "earlysalty",
+            &raid_event("dead_eye_nika", "224208315"),
+        );
 
         assert!(sink.retargeted.lock().unwrap().is_empty());
     }
@@ -1595,14 +1607,15 @@ mod arrival_dedupe_tests {
     }
 
     async fn setup_db(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::PgPool::connect(&url).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(&schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(&schema, false))
             .execute(&admin)
             .await
             .unwrap();

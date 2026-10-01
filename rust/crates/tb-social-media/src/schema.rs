@@ -29,9 +29,9 @@ const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS social_media_streamer_layout (\
         streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
         layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, \
-        mode TEXT NOT NULL DEFAULT 'pip', \
+        mode TEXT NOT NULL DEFAULT 'stacked', \
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT, \
-        CONSTRAINT social_media_layout_mode_chk CHECK (mode IN ('pip', 'stacked')))",
+        CONSTRAINT social_media_layout_mode_chk CHECK (mode IN ('pip', 'stacked', 'blur_pad')))",
     // Clip-Tabelle: Social-Media-Spalten + Retention.
     "ALTER TABLE twitch_clips_social_media \
         ADD COLUMN IF NOT EXISTS layout_override_json JSONB, \
@@ -127,7 +127,7 @@ const STATEMENTS: &[&str] = &[
     // Partner-Freigabe für Social-Media-Posts (zentraler Guard).
     "CREATE TABLE IF NOT EXISTS social_media_partner_access (\
         streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
-        granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
+        twitch_user_id TEXT, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
         granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     // Analytics-Spalten (Phase 3) — neue Spalten idempotent.
     "ALTER TABLE twitch_clips_social_analytics \
@@ -146,7 +146,7 @@ const STATEMENTS: &[&str] = &[
 /// sondern wird geloggt — so bleiben unabhängige Tabellen nutzbar.
 pub async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     for stmt in STATEMENTS {
-        if let Err(error) = sqlx::query(stmt).execute(pool).await {
+        if let Err(error) = sqlx::query(*stmt).execute(pool).await {
             tracing::error!(%error, stmt = &stmt[..stmt.len().min(60)], "social-media ensure_schema: Statement fehlgeschlagen");
             return Err(error);
         }
@@ -162,22 +162,46 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         // Basistabellen (sonst scheitern FK/ALTER).
-        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, created_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_analytics (clip_id INTEGER, platform TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_clips_social_analytics (clip_id INTEGER, platform TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn ensure_schema_idempotent_und_vollstaendig() {
-        let Some(pool) = make_pool("t_sm_schema").await else { return };
+        let Some(pool) = make_pool("t_sm_schema").await else {
+            return;
+        };
         // Zweimal laufen → idempotent (kein Fehler beim zweiten Lauf).
         ensure_schema(&pool).await.unwrap();
         ensure_schema(&pool).await.unwrap();
@@ -207,10 +231,18 @@ mod tests {
 
         // Retention-Trigger gesetzt: Insert mit created_at → retention_until = +14d.
         sqlx::query("INSERT INTO twitch_clips_social_media (created_at) VALUES (NOW())")
-            .execute(&pool).await.unwrap();
-        let (created, retention): (chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>) =
-            sqlx::query_as("SELECT created_at, retention_until FROM twitch_clips_social_media LIMIT 1")
-                .fetch_one(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (created, retention): (
+            chrono::DateTime<chrono::Utc>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ) = sqlx::query_as(
+            "SELECT created_at, retention_until FROM twitch_clips_social_media LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let retention = retention.expect("retention_until vom Trigger gesetzt");
         let delta = (retention - created).num_days();
         assert_eq!(delta, 14);

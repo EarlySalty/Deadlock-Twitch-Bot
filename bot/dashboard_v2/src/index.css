@@ -20,6 +20,27 @@
   --color-bg: #0d0d0d;
   --color-background: #121212;
   --color-card: #161616;
+  --color-ui-root: rgb(9 9 11);
+  --color-ui-panel: rgb(17 17 19);
+  --color-ui-deep: rgb(15 15 18);
+  --color-ui-elevated: rgb(24 24 27);
+  --color-ui-text: rgb(244 244 245);
+  --color-ui-text-soft: rgb(212 212 216);
+  --color-ui-muted: rgb(161 161 170);
+  --color-ui-faint: rgb(113 113 122);
+  /* ui-Akzent auf den Markenmetallen: die gemeinsame Seitenleiste nutzt
+     text-ui-accent/bg-ui-accent-strong auf allen Routen, Indigo bliebe ausserhalb
+     des Studios ein Markenbruch. */
+  --color-ui-accent: var(--color-primary);
+  --color-ui-accent-strong: var(--color-accent-hover);
+  --color-ui-accent-ink: var(--color-accent-hover);
+  --color-ui-success: rgb(110 231 183);
+  --color-ui-success-soft: rgb(167 243 208);
+  --color-ui-warning: rgb(252 211 77);
+  --color-ui-danger: rgb(252 165 165);
+  --color-ui-danger-soft: rgb(254 202 202);
+  --color-ui-violet: var(--color-accent);
+  --color-ui-violet-soft: var(--color-accent-hover);
   --color-card-hover: rgb(30, 30, 30);
   --color-primary: #C5A059;
   --color-primary-hover: #E6C78F;
@@ -43,6 +64,11 @@
   --color-warning-soft: rgba(232, 163, 61, 0.15);
   --color-danger-soft: rgba(255, 90, 60, 0.15);
   --color-secondary: #9d968a;
+  --color-chart-1: #6B4E27;
+  --color-chart-2: #9C7A3C;
+  --color-chart-3: #C5A059;
+  --color-chart-4: #DDBD7A;
+  --color-chart-5: #F1D9A6;
   --color-text-primary: #f2eee6;
   --color-text-secondary: #9d968a;
   /* Tinte fuer helle Gold-/Messingflaechen. Weiss auf Gold liegt bei ~1.8:1 und ist
@@ -52,8 +78,8 @@
   --color-border-strong: rgba(239, 212, 157, 0.38);
   --color-border-hover: rgba(239, 212, 157, 0.34);
   --color-popover: #161616;
-  --font-sans: "Manrope", "Segoe UI", sans-serif;
-  --font-display: "Sora", "Manrope", sans-serif;
+  --font-sans: "Inter", "Geist", "Manrope", "Segoe UI", sans-serif;
+  --font-display: "Inter", "Geist", "Sora", "Manrope", sans-serif;
   /* KPI-Zahlen: geometrische Grotesk (Outfit) fuer markante Key-Performance-
      Werte, faellt auf die Display-Font zurueck bis der CDN-Font geladen ist. */
   --font-kpi: "Outfit", "Sora", "Manrope", sans-serif;
@@ -296,6 +322,49 @@ svg.icon-duotone {
 }
 
 /* Internal Home */
+@keyframes stream-metrics-mesh {
+  0%,
+  100% {
+    transform: translate3d(-2%, -2%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(3%, 2%, 0) scale(1.04);
+  }
+}
+
+.stream-metrics-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.stream-metrics-panel::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at 24% 30%,
+      color-mix(in srgb, var(--color-primary) 7%, transparent),
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at 78% 70%,
+      color-mix(in srgb, var(--color-accent) 6%, transparent),
+      transparent 30%
+    );
+  filter: blur(30px);
+  opacity: 0.72;
+  animation: stream-metrics-mesh 16s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-metrics-panel::before {
+    animation: none;
+  }
+}
+
 @keyframes internal-home-fade-in {
   from {
     opacity: 0;

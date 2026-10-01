@@ -6,17 +6,25 @@
       {
         "ordinal": 0,
         "name": "messages!",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "is_first_time_streamer",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_session_chatters",
+            "name": "is_first_time_streamer"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "seen_via_chatters_api!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {

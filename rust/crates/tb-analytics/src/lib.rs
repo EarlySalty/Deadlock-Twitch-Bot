@@ -13,6 +13,8 @@ pub mod affiliate_commission;
 pub mod affiliate_gutschrift;
 pub mod affiliate_pii;
 pub mod admin_config;
+pub mod promo_timers;
+pub mod community_announcements;
 pub mod admin_streamers;
 pub mod ai_analysis;
 pub mod ai_history;
@@ -41,6 +43,7 @@ pub mod network_stats;
 pub mod overview;
 pub mod partner_access;
 pub mod partner_signup_block;
+pub mod partner_signup_tag_block;
 pub mod peer_group;
 pub mod plan;
 pub mod raw_chat_status;
@@ -67,3 +70,9 @@ pub mod system_health;
 pub mod system_oauth_scopes;
 pub mod telemetry_routes;
 pub mod trial;
+
+pub mod category;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

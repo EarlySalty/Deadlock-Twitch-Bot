@@ -1,0 +1,15 @@
+status: aktiv (2026-09-28)
+
+# Fixer A: Source-only-Schutz und Fehlervertrag
+
+Lies `AUFTRAG.md`, `WORKER-A.md` und die drei A-Befunde in `REVIEW.md` im selben Ordner. Arbeite nur im sauberen Worktree `/home/nathanael/.worktrees/twitch-patch-transport-20260928` auf `feat/twitch-patch-transport-20260928`, Basis `ecd21dfa` bereits gepusht. Paket B baut parallel in einem anderen Worktree auf diesem Commit; ändere dessen Dateien nicht. Du bist der einzige schreibende Thread für A, keine Unter-Threads oder Unter-Agenten.
+
+Exakt die drei bestätigten Fälle beheben, kein Refactoring, kein globales fmt und keine neuen Code-Kommentare. Eigentum bleibt `rust/crates/tb-chat/src/{api,channel_policy,moderation,timeout_tracking}.rs` und `rust/crates/tb-transport-twitch/src/chat.rs`. `suppression_guard.rs` nur nach konkretem Beweis anfassen, dass der Patch-Sendepfad diesen Decorator nutzt; der bisherige Bot-Runtime-Pfad in `rust/bin/tb-bot/src/chat_wiring.rs:678-687` baut `ChannelPolicyChatApi<TimeoutTrackingChatApi<...>>`, ohne SuppressionGuard. Bestehende Guards nicht umgehen.
+
+1. Vor `send_source_only_message` an `inner` in `TimeoutTrackingChatApi` nach stabiler Broadcaster-ID den Login auflösen und `TimeoutGuard::is_muted` prüfen. Ohne sicheren Login oder bei aktiver Sperre ohne HTTP-POST mit explizitem Drop/Fehler aussteigen. Nicht erst nach dem Sendungsergebnis prüfen. Teste das dritte Senden nach gesetzter Sperre mit echtem Wrapper und gezähltem Inner-Call sowie einen normalen erlaubten Kanal.
+2. Fehler von `.send().await` nach möglichem POST als `HelixError::AmbiguousOutcome` klassifizieren. Keinen automatischen Retry und keinen User-Token-Fallback einführen. `moderation.rs` soll daraus eindeutig `source_only_chat_outcome_unknown` machen. Ein Test bildet angenommene Anfrage mit Verbindungsabbruch vor Antwort nach.
+3. `drop_reason.message` und HTTP-Fehlerbody vor dem Verlassen des Transport-Moduls mit der bestehenden Detailbereinigung redigieren, dann kürzen. Teste beide mit credential-artiger Fixture ohne echte Geheimnisse. Keine Rohantwort in Trace, Ergebnis oder DB-Receipt.
+
+Der unabhängige Reviewer maß die vollständige `tb-chat`-Baseline mit identischem Testbefehl und isoliertem PostgreSQL: Feature 869 bestanden, 36 fehlgeschlagen; unveränderte Basis 864 bestanden, dieselben 36 fehlgeschlagen. Die 36 sind für diesen Commit vorbestehend, nicht ungeprüft grün. Nach deinem Fix passende `cargo check`, Clippy, geänderte Dateiformatierung und Tests mit passed/failed/ignored berichten. Keine bestehende Suite abschwächen oder überspringen. Prüfe deine eigene Änderung vor Fertigmeldung mit `gate_hook.py --review`, ohne Schutz-Hooks zu umgehen. Commit und Push ausschließlich des eigenen Branches, kein Main-Merge, keine Produktivaktion oder echter Twitch-Send.
+
+Intent-Thread: `4ddc68d5-0c42-41ce-b02c-c1be909c20fd`. Bei Bump-up wörtlich: `[Bump-up] Paket A Fix: Grund: ... Erledigt: ... Worktree: /home/nathanael/.worktrees/twitch-patch-transport-20260928 Offen: ...`. Melde Commit, Belege und verbliebene Risiken.

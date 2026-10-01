@@ -55,7 +55,7 @@ pub async fn loyalty_curve_handler(
         bot_placeholders.join(", ")
     );
 
-    let mut q = sqlx::query(&sql).bind(&streamer);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&streamer);
     for bot in KNOWN_CHAT_BOTS {
         q = q.bind(*bot);
     }
@@ -119,11 +119,13 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();

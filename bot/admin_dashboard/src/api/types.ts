@@ -78,6 +78,32 @@ export interface PartnerSignupBlockRemoveResult {
   partner_pause_cleared: boolean;
 }
 
+export interface PartnerSignupTagBlockEntry {
+  tag: string;
+  display_tag: string;
+  reason: string;
+  public_message?: string | null;
+  added_by: string;
+  added_at: string;
+}
+
+export interface PartnerSignupTagBlockList {
+  items: PartnerSignupTagBlockEntry[];
+}
+
+export interface PartnerSignupTagBlockAddResult {
+  ok: boolean;
+  tag: string;
+  display_tag: string;
+  inserted: boolean;
+}
+
+export interface PartnerSignupTagBlockRemoveResult {
+  ok: boolean;
+  tag: string;
+  removed: boolean;
+}
+
 export interface StreamerRow {
   login: string;
   displayName?: string;
@@ -361,7 +387,39 @@ export interface ChatConfigSnapshot {
   raw?: Record<string, unknown>;
 }
 
+export interface PromoTimerProfile {
+  overallCooldownMinutes: number;
+  activityCooldownMinMinutes: number;
+  activityCooldownMaxMinutes: number;
+  minMessages: number;
+  newChatters: number;
+  attemptCooldownMinutes: number;
+  viewerSpikeCooldownMinutes: number;
+  pitchCooldownMinutes: number;
+  pitchMaxPerStream: number;
+}
+
+export interface PromoTimerSettings {
+  defaults: PromoTimerProfile;
+  community: PromoTimerProfile & { broadcasterId: string };
+}
+
+export interface CommunityAnnouncement {
+  text: string;
+  enabled: boolean;
+  color: 'purple' | 'blue' | 'green' | 'orange' | 'primary';
+}
+
+export interface CommunityAnnouncements {
+  revision: number;
+  enabled: boolean;
+  includeGlobalEvent: boolean;
+  entries: CommunityAnnouncement[];
+}
+
 export interface ConfigOverview {
+  communityAnnouncements?: CommunityAnnouncements;
+  timerSettings?: PromoTimerSettings;
   promo?: Record<string, unknown>;
   raids?: RaidConfigSnapshot;
   chat?: ChatConfigSnapshot;

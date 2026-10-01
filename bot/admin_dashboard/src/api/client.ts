@@ -1,3 +1,4 @@
+import type { BrainCatalog, BrainReport, BrainRequest } from '@/api/brainLab';
 import type {
   AddStreamerPayload,
   AdminActionResult,
@@ -15,6 +16,8 @@ import type {
   ChangelogEntry,
   CreateChangelogEntryPayload,
   ConfigOverview,
+  PromoTimerSettings,
+  CommunityAnnouncements,
   DatabaseStatsResponse,
   DisconnectBotResult,
   DisconnectBotUnmodOutcome,
@@ -27,6 +30,9 @@ import type {
   PartnerSignupBlockAddResult,
   PartnerSignupBlockList,
   PartnerSignupBlockRemoveResult,
+  PartnerSignupTagBlockAddResult,
+  PartnerSignupTagBlockList,
+  PartnerSignupTagBlockRemoveResult,
   InternalHomeOverview,
   LegalPageDocument,
   LegalPageSlug,
@@ -110,6 +116,30 @@ export function buildDiscordAdminLoginUrl(nextPath?: string): string {
   const next = sanitizeNextPath(nextPath || `${window.location.pathname}${window.location.search}`);
   return `/twitch/auth/discord/login?next=${encodeURIComponent(next)}`;
 }
+
+export interface OperatingOptions {
+  pool_max: number;
+  acquire_timeout_ms: number;
+  connect_timeout_seconds: number;
+}
+
+export interface OperatingConfig {
+  saved_fingerprint: string;
+  saved_revision: string;
+  options: OperatingOptions;
+  services: Array<{
+    name: string;
+    active_fingerprint: string | null;
+    restart_required: boolean | null;
+  }>;
+  activation: 'restart_required';
+}
+
+export const fetchOperatingConfig = () => admin<OperatingConfig>('/config/operating');
+export const saveOperatingConfig = (expected_revision: string, options: OperatingOptions) =>
+  postAdminJson<OperatingConfig, { expected_revision: string; options: OperatingOptions }>(
+    '/config/operating', { expected_revision, options },
+  );
 
 export function buildRaidAuthUrl(login: string): string {
   return `/twitch/raid/auth?login=${encodeURIComponent(login.trim())}`;
@@ -577,6 +607,7 @@ export async function fetchAuthStatus(): Promise<AdminAuthStatus> {
       user: {
         displayName: readString(payload, 'displayName', 'display_name', 'twitchLogin', 'login') || undefined,
         login: readString(payload, 'twitchLogin', 'login') || undefined,
+        userId: readString(payload, 'twitchUserId', 'twitch_user_id') || undefined,
         authType: readString(payload, 'authType', 'auth_type') || undefined,
       },
       permissions: coerceRecord(payload.permissions),
@@ -814,6 +845,8 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
   const csrfToken = cacheCsrfToken(readString(payload, 'csrfToken', 'csrf_token')) || undefined;
   return {
     promo: coerceRecord(payload.promo),
+    communityAnnouncements: payload.communityAnnouncements as CommunityAnnouncements | undefined,
+    timerSettings: payload.timerSettings as PromoTimerSettings | undefined,
     raids: parseRaidSnapshot(coerceRecord(payload.raids)),
     chat: parseChatSnapshot(coerceRecord(payload.chat)),
     announcements: coerceRecord(payload.announcements),
@@ -824,6 +857,14 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
 
 export function fetchGlobalBans(): Promise<GlobalBanAdminData> {
   return admin<GlobalBanAdminData>('/global-bans');
+}
+
+export function updateCommunityAnnouncements(body: CommunityAnnouncements): Promise<{ communityAnnouncements: CommunityAnnouncements }> {
+  return postAdminJson('/config/community-announcements', body);
+}
+
+export function updatePromoTimers(body: PromoTimerSettings): Promise<{ timerSettings: PromoTimerSettings }> {
+  return postAdminJson('/config/promo-timers', body);
 }
 
 export function addGlobalBan(body: { login: string; reason?: string }): Promise<{ ok: boolean }> {
@@ -863,6 +904,26 @@ export function removePartnerSignupBlock(body: {
     login: body.login,
     twitch_user_id: body.twitchUserId,
   });
+}
+
+export function fetchPartnerSignupTagBlocks(): Promise<PartnerSignupTagBlockList> {
+  return admin<PartnerSignupTagBlockList>('/partner-signup-tag-blocks');
+}
+
+export function addPartnerSignupTagBlock(body: {
+  tag: string;
+  reason?: string;
+  publicMessage?: string;
+}): Promise<PartnerSignupTagBlockAddResult> {
+  return postAdminJson('/partner-signup-tag-blocks', {
+    tag: body.tag,
+    reason: body.reason,
+    public_message: body.publicMessage,
+  });
+}
+
+export function removePartnerSignupTagBlock(tag: string): Promise<PartnerSignupTagBlockRemoveResult> {
+  return postAdminJson('/partner-signup-tag-blocks/remove', { tag });
 }
 
 export function setGlobalBanChannelEnforcement(
@@ -1219,10 +1280,6 @@ export function sendPartnerChatAction(payload: PartnerChatActionPayload) {
   });
 }
 
-export function reloadBot() {
-  return submitLegacyAction('/twitch/reload', {});
-}
-
 const DISCONNECT_UNMOD_OUTCOMES: DisconnectBotUnmodOutcome[] = [
   'removed',
   'not_moderator',
@@ -1346,4 +1403,98 @@ export async function fetchAdminResearch(login: string, days: number): Promise<R
 
 export async function fetchAdminResearchSuggestions(days: number): Promise<ResearchSuggestionsResponse> {
   return admin<ResearchSuggestionsResponse>(`/research/suggestions?days=${encodeURIComponent(days)}`);
+}
+
+export type CasterLayout = 'solo' | 'duo' | 'trio';
+export interface CasterPerson {
+  id: string;
+  name: string;
+  handle: string;
+  accountLogin?: string | null;
+  cameraUrl?: string;
+  cameraId?: string | null;
+  steamAccountId?: number | null;
+  teamId?: string | null;
+}
+export interface CasterScenePlayer {
+  displayName: string;
+  steamId64?: string | null;
+  accountId?: number | null;
+}
+export interface CasterSceneTeam {
+  id?: string | null;
+  name: string;
+  players: CasterScenePlayer[];
+}
+export interface CasterMatchContext {
+  teamA?: CasterSceneTeam | null;
+  teamB?: CasterSceneTeam | null;
+  observerAccountId?: number | null;
+}
+export interface CasterScene {
+  roster: CasterPerson[];
+  slots: Array<string | null>;
+  layout: CasterLayout;
+  matchContext: CasterMatchContext;
+}
+export interface CasterDocument { revision: number; scene: CasterScene }
+export interface CasterCamera {
+  cameraId: string;
+  ownerLogin: string;
+  label: string;
+  consentEnabled: boolean;
+  online: boolean;
+  createdAt?: string;
+  lastConnectedAt?: string | null;
+}
+export interface CreatedCasterCamera extends CasterCamera { inviteUrl: string }
+export interface CasterContextPlayer {
+  displayName: string;
+  discordId?: string | null;
+  steamId64?: string | null;
+  accountId?: number | null;
+  isBench?: boolean;
+}
+export interface CasterContextTeam {
+  id: string;
+  name: string;
+  players: CasterContextPlayer[];
+}
+export interface CasterOverlayContext {
+  available: boolean;
+  reason?: string;
+  source?: string;
+  teams: CasterContextTeam[];
+}
+export const fetchCasterOverlay = () => admin<CasterDocument>('/caster-overlay');
+export const saveCasterOverlay = (document: CasterDocument) => postAdminJson<CasterDocument, CasterDocument>('/caster-overlay', document);
+export const fetchCasterOverlayContext = () => admin<CasterOverlayContext>('/caster-overlay/context');
+export const fetchCasterCameras = async () => {
+  const result = await admin<{ items: CasterCamera[] }>('/caster-cameras');
+  return result.items ?? [];
+};
+export const createCasterCamera = (ownerLogin: string, label: string) =>
+  postAdminJson<CreatedCasterCamera, { ownerLogin: string; label: string }>('/caster-cameras', { ownerLogin, label });
+export async function revokeCasterCamera(cameraId: string): Promise<{ ok: boolean; cameraId: string }> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<{ ok: boolean; cameraId: string }>(`/caster-cameras/${encodeURIComponent(cameraId)}`, {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken },
+  });
+}
+
+
+export function fetchBrainCatalog(): Promise<BrainCatalog> {
+  return admin<BrainCatalog>('/brain/catalog', { cache: 'no-store' });
+}
+
+export async function buildBrainPlan(body: BrainRequest): Promise<BrainReport> {
+  const csrfToken = await resolveJsonCsrfToken({});
+  // The strict Rust request accepts only scenario fields, not transport tokens.
+  return admin<BrainReport>('/brain/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    cache: 'no-store',
+    body: JSON.stringify(body),
+  });
 }

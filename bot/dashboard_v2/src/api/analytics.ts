@@ -158,8 +158,8 @@ export async function fetchSessionEvents(
   return fetchApi<SessionEvent>(`/session/${sessionId}/events`);
 }
 
-export async function fetchStreamerList(): Promise<{ login: string; isPartner: boolean }[]> {
-  return fetchApi<{ login: string; isPartner: boolean }[]>('/streamers');
+export async function fetchStreamerList(): Promise<{ login: string; twitchUserId: string | null; isPartner: boolean }[]> {
+  return fetchApi<{ login: string; twitchUserId: string | null; isPartner: boolean }[]>('/streamers');
 }
 
 export async function fetchCategoryComparison(
@@ -439,7 +439,8 @@ export async function fetchViewerDirectory(
   filter: ViewerFilterType = 'all',
   search: string = '',
   page: number = 1,
-  perPage: number = 50
+  perPage: number = 50,
+  signal?: AbortSignal
 ): Promise<ViewerDirectory> {
   return fetchApi<ViewerDirectory>('/viewer-directory', {
     streamer: streamer || '',
@@ -450,7 +451,7 @@ export async function fetchViewerDirectory(
     ...(search && { search }),
     page,
     per_page: perPage,
-  });
+  }, undefined, signal);
 }
 
 export async function fetchViewerDetail(

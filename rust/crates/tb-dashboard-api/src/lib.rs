@@ -46,7 +46,7 @@ pub use handlers::pause_loop::build_pause_loop_router;
 
 use axum::{
     http::{header::HeaderName, HeaderValue},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Extension, Router,
 };
 use sqlx::PgPool;
@@ -93,12 +93,26 @@ fn security_header_layers() -> [SetResponseHeaderLayer<HeaderValue>; 5] {
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
+    build_public_router_with_brain(
+        pool,
+        handlers::self_explainer::SelfExplainerBrainRuntime::legacy(),
+    )
+}
+
+pub fn build_public_router_with_brain(
+    pool: PgPool,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
     use handlers::{
         bans, health_probe, network, network_stats, overlay, raids, self_explainer, social_media,
         streamer_comparison,
     };
 
     let public_api = Router::new()
+        .route(
+            "/twitch/api/v2/public/partner-profiles",
+            get(handlers::partner_profiles::directory_handler),
+        )
         .route("/healthz", get(health_probe::healthz_handler))
         .route("/readyz", get(health_probe::readyz_handler))
         .route("/health", get(health_probe::readyz_handler))
@@ -131,6 +145,10 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/overlay",
             get(overlay::overlay_api_handler),
         )
+        .route(
+            "/twitch/api/v2/public/caster-overlay",
+            get(crate::handlers::caster_overlay::public_handler),
+        )
         // Roadmap (public GET + admin CRUD) liegt im eigenen build_roadmap_router,
         // damit der Admin-Write den ExpectedToken-Extractor sieht (axum erlaubt
         // denselben Pfad nicht in zwei gemergten Routern).
@@ -138,13 +156,38 @@ pub fn build_public_router(pool: PgPool) -> Router {
         .layer(Extension(
             streamer_comparison::StreamerComparisonCache::default(),
         ))
+        .layer(Extension(brain_runtime))
         .layer(CorsLayer::permissive());
 
     // HTML, Login-Redirects und OAuth-Callbacks sind zwar öffentlich erreichbar,
     // aber keine browserübergreifende API. Wildcard-CORS auf diesen Antworten
     // vergrößert nur die Angriffsfläche und löste den ZAP-CORS-Fund aus.
     let public_pages = Router::new()
+        .route(
+            "/streamer/{*path}",
+            get(handlers::partner_profiles::streamer_handler),
+        )
+        .route(
+            "/twitch/profile-assets/profile.css",
+            get(handlers::partner_profiles::css_handler),
+        )
         .route("/twitch/overlay", get(overlay::overlay_html_handler))
+        .route(
+            "/twitch/caster-overlay",
+            get(crate::handlers::caster_overlay::html_handler),
+        )
+        .route(
+            "/twitch/caster-overlay/background.png",
+            get(crate::handlers::caster_overlay::background_handler),
+        )
+        .route(
+            "/twitch/caster-camera/{camera_id}",
+            get(crate::handlers::caster_overlay::camera_page_handler),
+        )
+        .route(
+            "/twitch/caster-camera/ws",
+            get(crate::handlers::caster_overlay::camera_ws_handler),
+        )
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
@@ -154,7 +197,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
             get(social_media::oauth_callback_handler),
         )
         .route(
-            "/social-media/oauth/callback/:platform",
+            "/social-media/oauth/callback/{platform}",
             get(social_media::oauth_callback_handler),
         )
         .with_state(pool);
@@ -173,14 +216,15 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         audience_demographics, auth_status, billing, category_activity, category_comparison,
         category_leaderboard, category_timings, chat_analytics, chat_content_analysis,
         chat_deep_llm, chat_hype_timeline, chat_social_graph, clip_command_settings, coaching,
-        dashboard_assistent, engagement_mode, engagement_settings, exp_analytics, feedback,
-        follower_funnel, greeting_settings, internal_home, leaderboard, loyalty_curve,
-        lurk_command_settings, lurker_analysis, lurker_tax_settings, moderation_settings,
-        monetization, onboarding, overview, performance, plattform_connect, raid_analytics,
-        raid_history, rankings, retention_curve, scam_guard_queue, scam_guard_settings,
-        session_detail, silent_settings, social_media, spa, stat_command_settings, stream_report,
-        streamer_disconnect, streamers, sub_reminder_settings, tag_analysis, tip_settings, title,
-        title_command_settings, title_performance, uplink, viewer_timeline, viewers, watch_time,
+        command_name_settings, dashboard_assistent, engagement_mode, engagement_settings,
+        exp_analytics, feedback, follower_funnel, greeting_settings, internal_home, leaderboard,
+        loyalty_curve, lurk_command_settings, lurker_analysis, lurker_tax_settings,
+        moderation_settings, monetization, onboarding, overview, performance, plattform_connect,
+        raid_analytics, raid_history, rankings, retention_curve, scam_guard_queue,
+        scam_guard_settings, session_detail, silent_settings, social_media, spa,
+        stat_command_settings, stream_report, streamer_disconnect, streamers,
+        sub_reminder_settings, tag_analysis, tip_settings, title, title_command_settings,
+        title_performance, uplink, viewer_timeline, viewers, watch_time,
     };
 
     // P2.86: Rate-Limit-Layer für die gebündelte Internal-Home-Startseite (GET +
@@ -190,6 +234,27 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
     Router::new()
+        .route(
+            "/twitch/api/v2/streamer/profile",
+            get(handlers::partner_profiles::get_handler)
+                .put(handlers::partner_profiles::put_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/twitch/api/v2/challenges/me",
+            get(handlers::challenges::me_handler),
+        )
+        .route(
+            "/twitch/api/v2/challenges/viewers",
+            get(handlers::challenges::viewers_handler),
+        )
+        .route(
+            "/twitch/api/v2/community",
+            get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(
+                RateLimitLayerConfig::new(rate_limiter.clone(), "community", 30, 60),
+                rate_limit_middleware,
+            )),
+        )
         .route(
             "/twitch/api/v2/auth-status",
             get(auth_status::auth_status_handler),
@@ -262,7 +327,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
                 .put(social_media::streamer_layout_put_handler),
         )
         .route(
-            "/social-media/api/admin/clips/:clip_db_id/layout",
+            "/social-media/api/admin/clips/{clip_db_id}/layout",
             axum::routing::put(social_media::clip_layout_put_handler),
         )
         // Vocab-CRUD (Admin): Liste/Upsert, Löschen, Seed.
@@ -275,7 +340,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(social_media::vocab_seed_handler),
         )
         .route(
-            "/social-media/api/admin/vocab/:term",
+            "/social-media/api/admin/vocab/{term}",
             axum::routing::delete(social_media::vocab_delete_handler),
         )
         // Plattform-Verbindungsstatus (verschlüsselte Credentials).
@@ -289,25 +354,25 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(social_media::admin_clips_handler),
         )
         .route(
-            "/social-media/api/admin/clips/:clip_db_id",
+            "/social-media/api/admin/clips/{clip_db_id}",
             get(social_media::admin_clip_detail_handler),
         )
         .route(
-            "/social-media/api/admin/clips/:clip_db_id/discard",
+            "/social-media/api/admin/clips/{clip_db_id}/discard",
             post(social_media::admin_clip_discard_handler),
         )
         // Approval-State + Entscheidung, Auto-Approve-Settings (Admin).
         .route(
-            "/social-media/api/admin/approval/:clip_db_id",
+            "/social-media/api/admin/approval/{clip_db_id}",
             get(social_media::approval_get_handler),
         )
         .route(
-            "/social-media/api/admin/approval/:clip_db_id/decision",
+            "/social-media/api/admin/approval/{clip_db_id}/decision",
             post(social_media::approval_decision_handler),
         )
         // Eingeplante Uploads wieder stoppen (Veto-Fenster).
         .route(
-            "/social-media/api/approval/:clip_db_id/cancel",
+            "/social-media/api/approval/{clip_db_id}/cancel",
             post(social_media::approval_cancel_handler),
         )
         // Zeitplan, Freigabe-Modus, Kategorien und Vorratsrechnung je Kanal.
@@ -317,11 +382,11 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(social_media::posting_plan_get_handler).put(social_media::posting_plan_put_handler),
         )
         .route(
-            "/social-media/api/admin/settings/posting-plan/platform/:platform",
+            "/social-media/api/admin/settings/posting-plan/platform/{platform}",
             put(social_media::posting_plan_platform_put_handler),
         )
         .route(
-            "/social-media/api/admin/settings/posting-plan/category/:category_key",
+            "/social-media/api/admin/settings/posting-plan/category/{category_key}",
             put(social_media::posting_plan_category_put_handler),
         )
         .route(
@@ -330,15 +395,23 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         // Enrichment-Detail, Clip-Analytics, Report-Liste (Admin, lesend).
         .route(
-            "/social-media/api/admin/clips/:clip_db_id/enrichment",
+            "/social-media/api/admin/clips/{clip_db_id}/enrichment",
             get(social_media::enrichment_get_handler).put(social_media::enrichment_put_handler),
         )
         .route(
-            "/social-media/api/admin/clips/:clip_db_id/enrichment/run",
+            "/social-media/api/admin/clips/{clip_db_id}/enrichment/run",
             post(social_media::enrichment_run_handler),
         )
         .route(
-            "/social-media/api/admin/analytics/clips/:clip_db_id",
+            "/social-media/api/admin/clips/{clip_db_id}/preview",
+            post(social_media::preview_request_handler).get(social_media::preview_status_handler),
+        )
+        .route(
+            "/social-media/api/admin/clips/{clip_db_id}/preview/file",
+            get(social_media::preview_file_handler),
+        )
+        .route(
+            "/social-media/api/admin/analytics/clips/{clip_db_id}",
             get(social_media::clip_analytics_get_handler),
         )
         .route(
@@ -351,11 +424,11 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         )
         // OAuth-Start + Disconnect (Auth erforderlich).
         .route(
-            "/social-media/oauth/start/:platform",
+            "/social-media/oauth/start/{platform}",
             get(social_media::oauth_start_handler),
         )
         .route(
-            "/social-media/oauth/disconnect/:platform",
+            "/social-media/oauth/disconnect/{platform}",
             post(social_media::oauth_disconnect_handler),
         )
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
@@ -399,13 +472,13 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
                 .layer(axum::extract::DefaultBodyLimit::max(24 * 1024)),
         )
         .route("/twitch/api/v2/feedback/counts", get(feedback::counts))
-        .route("/twitch/api/v2/feedback/:id", get(feedback::detail))
+        .route("/twitch/api/v2/feedback/{id}", get(feedback::detail))
         .route(
-            "/twitch/api/v2/feedback/:id/read",
+            "/twitch/api/v2/feedback/{id}/read",
             post(feedback::mark_read).layer(axum::extract::DefaultBodyLimit::max(1024)),
         )
         .route(
-            "/twitch/api/v2/feedback/:id/update",
+            "/twitch/api/v2/feedback/{id}/update",
             post(feedback::update).layer(axum::extract::DefaultBodyLimit::max(24 * 1024)),
         )
         // Streamer-Selbstbedienung: Conversation-Scam-Guard konfigurieren
@@ -426,19 +499,19 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(scam_guard_queue::queue_handler),
         )
         .route(
-            "/twitch/api/v2/streamer/scam-guard/verdicts/:id",
+            "/twitch/api/v2/streamer/scam-guard/verdicts/{id}",
             get(scam_guard_queue::detail_handler),
         )
         .route(
-            "/twitch/api/v2/streamer/scam-guard/queue/:id/ignore",
+            "/twitch/api/v2/streamer/scam-guard/queue/{id}/ignore",
             post(scam_guard_queue::ignore_handler),
         )
         .route(
-            "/twitch/api/v2/streamer/scam-guard/queue/:id/ban",
+            "/twitch/api/v2/streamer/scam-guard/queue/{id}/ban",
             post(scam_guard_enforce::ban_handler),
         )
         .route(
-            "/twitch/api/v2/streamer/scam-guard/verdicts/:id/revoke",
+            "/twitch/api/v2/streamer/scam-guard/verdicts/{id}/revoke",
             post(scam_guard_enforce::revoke_handler),
         )
         // Streamer-Selbstbedienung: Lurker-Steuer-Toggle (B9, sync zu
@@ -465,6 +538,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/streamer/stat-command-settings",
             get(stat_command_settings::get_handler).post(stat_command_settings::post_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/command-names",
+            get(command_name_settings::get_handler).post(command_name_settings::post_handler),
         )
         // Streamer-Selbstbedienung: !clip-Command-Toggle. Default aktiviert
         // (bestehendes Verhalten), Spalte streamer_plans.clip_command_enabled.
@@ -582,7 +659,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(uplink::admin_waitlist_handler),
         )
         .route(
-            "/twitch/api/v2/uplink/admin/waitlist/:streamer_id",
+            "/twitch/api/v2/uplink/admin/waitlist/{streamer_id}",
             axum::routing::delete(uplink::admin_ablehnen_handler),
         )
         .route(
@@ -593,17 +670,23 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             "/twitch/api/v2/uplink/destinations",
             get(uplink::destinations_handler).put(uplink::put_destination_handler),
         )
+        .route(
+            "/twitch/api/v2/uplink/native-2k-hardware",
+            get(uplink::native_2k_hardware_handler)
+                .put(uplink::put_native_2k_hardware_handler)
+                .delete(uplink::delete_native_2k_hardware_handler),
+        )
         .route("/twitch/api/v2/uplink/caps", get(uplink::caps_handler))
         // Uplink Multi-Chat: Verbinden laeuft ueber den bestehenden
         // Streamer-OAuth (`/twitch/raid/auth?scope_profile=uplink`), es gibt
         // also keinen eigenen Start und keinen eigenen Callback mehr. Was
         // bleibt, ist das Trennen und die neue Dock-Adresse.
         .route(
-            "/twitch/api/v2/uplink/connect/:platform/disconnect",
+            "/twitch/api/v2/uplink/connect/{platform}/disconnect",
             post(uplink::disconnect_handler),
         )
         .route(
-            "/twitch/api/v2/uplink/connect/:platform/streamkey",
+            "/twitch/api/v2/uplink/connect/{platform}/streamkey",
             post(uplink::streamkey_handler),
         )
         .route(
@@ -653,6 +736,14 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/title/insights",
             get(title::insights_handler),
+        )
+        .route(
+            "/twitch/api/v2/title/settings",
+            get(title::settings_handler).post(title::settings_update_handler),
+        )
+        .route(
+            "/twitch/api/v2/title/feedback",
+            post(title::feedback_handler),
         )
         .route(
             "/twitch/api/v2/channel/title",
@@ -708,6 +799,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
         .route(
             "/twitch/api/v2/leaderboard",
             get(leaderboard::leaderboard_handler),
+        )
+        .route(
+            "/twitch/api/v2/leaderboard/effort",
+            get(leaderboard::effort_leaderboard_handler),
         )
         .route(
             "/twitch/api/v2/follower-funnel",
@@ -840,6 +935,10 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             post(ad_manager::action_handler),
         )
         .route(
+            "/twitch/api/v2/streamer/ad-manager/history",
+            get(ad_manager::history_handler),
+        )
+        .route(
             "/twitch/api/v2/retention-curve",
             get(retention_curve::retention_curve_handler),
         )
@@ -848,11 +947,11 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(loyalty_curve::loyalty_curve_handler),
         )
         .route(
-            "/twitch/api/v2/:streamer/viewer-timeline",
+            "/twitch/api/v2/{streamer}/viewer-timeline",
             get(viewer_timeline::viewer_timeline_handler),
         )
         .route(
-            "/twitch/api/v2/:streamer/viewer-timeline/profile",
+            "/twitch/api/v2/{streamer}/viewer-timeline/profile",
             get(viewer_timeline::viewer_timeline_profile_handler),
         )
         .route(
@@ -876,16 +975,21 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(viewers::viewer_segments_handler),
         )
         .route(
-            "/twitch/api/v2/session/:id",
+            "/twitch/api/v2/session/{id}",
             get(session_detail::session_detail_handler),
         )
         .route(
-            "/twitch/api/v2/session/:id/events",
+            "/twitch/api/v2/session/{id}/events",
             get(session_detail::session_events_handler),
         )
         // SPA: Haupt-HTML + statische Assets
+        .route("/twitch/kategorie", get(handlers::category_collector::page))
+        .route(
+            "/twitch/api/v2/category-collector",
+            get(handlers::category_collector::handler),
+        )
         .route("/analyse", get(spa::analyse_handler))
-        .route("/analyse/*path", get(spa::analyse_assets_handler))
+        .route("/analyse/{*path}", get(spa::analyse_assets_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
         .layer(axum::middleware::from_fn(
@@ -948,11 +1052,19 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 
     Router::new()
         .route(
+            "/twitch/api/admin/brain/catalog",
+            get(crate::handlers::brain_lab::catalog_handler),
+        )
+        .route(
+            "/twitch/api/admin/brain/build",
+            post(crate::handlers::brain_lab::build_handler),
+        )
+        .route(
             "/twitch/api/admin/research/suggestions",
             get(admin_research::suggestions_handler),
         )
         .route(
-            "/twitch/api/admin/research/:login",
+            "/twitch/api/admin/research/{login}",
             get(admin_research::handler),
         )
         // Scout-Freigaben: Kandidatenliste (mit Erkennungs-Lauf) und
@@ -963,7 +1075,7 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
             get(admin_scout::candidates_handler),
         )
         .route(
-            "/twitch/api/admin/scout/candidates/:login/decision",
+            "/twitch/api/admin/scout/candidates/{login}/decision",
             post(admin_scout::decision_handler),
         )
         .route(
@@ -971,27 +1083,27 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
             get(admin_streamers::list_handler),
         )
         .route(
-            "/twitch/api/admin/streamers/:login",
+            "/twitch/api/admin/streamers/{login}",
             get(admin_streamers::detail_handler),
         )
         .route(
-            "/twitch/api/admin/streamers/:login/verify",
+            "/twitch/api/admin/streamers/{login}/verify",
             post(admin_streamers::verify_handler),
         )
         .route(
-            "/twitch/api/admin/streamers/:login/archive",
+            "/twitch/api/admin/streamers/{login}/archive",
             post(admin_streamers::archive_handler),
         )
         .route(
-            "/twitch/api/admin/streamers/:login/block",
+            "/twitch/api/admin/streamers/{login}/block",
             post(admin_streamers::block_handler),
         )
         .route(
-            "/twitch/api/admin/streamers/:login/disconnect-bot",
+            "/twitch/api/admin/streamers/{login}/disconnect-bot",
             post(admin_streamers::disconnect_bot_handler),
         )
         .route(
-            "/twitch/api/admin/streamers/:login/discord-flag",
+            "/twitch/api/admin/streamers/{login}/discord-flag",
             post(admin_streamers::discord_flag_handler),
         )
         // Partner-Freigabe unter dem Admin-Prefix: dieselben Handler wie
@@ -1019,13 +1131,19 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     use handlers::{
         admin_affiliate, admin_announcements, admin_audit_log, admin_billing, admin_config,
-        admin_global_ban, admin_legal, admin_partner_signup_block, admin_promo_mode, admin_roadmap,
+        admin_global_ban, admin_legal, admin_partner_signup_block, admin_partner_signup_tag_block,
+        admin_promo_mode, admin_roadmap,
     };
 
     Router::new()
         .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/operating",
+            get(handlers::admin_operating_config::get_handler)
+                .post(handlers::admin_operating_config::save_handler),
         )
         .route("/twitch/api/admin/audit-log", get(admin_audit_log::handler))
         .route(
@@ -1041,7 +1159,7 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             get(admin_affiliate::gutschriften_handler),
         )
         .route(
-            "/twitch/api/admin/affiliates/gutschriften/:gutschrift_id/pdf",
+            "/twitch/api/admin/affiliates/gutschriften/{gutschrift_id}/pdf",
             get(admin_affiliate::gutschrift_pdf_handler),
         )
         .route(
@@ -1049,19 +1167,19 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(admin_affiliate::generate_gutschriften_handler),
         )
         .route(
-            "/twitch/api/admin/affiliates/:login/gutschriften",
+            "/twitch/api/admin/affiliates/{login}/gutschriften",
             get(admin_affiliate::gutschriften_for_login_handler),
         )
         .route(
-            "/twitch/api/admin/affiliates/:login/toggle",
+            "/twitch/api/admin/affiliates/{login}/toggle",
             post(admin_affiliate::toggle_handler),
         )
         .route(
-            "/twitch/api/admin/affiliates/:login/commission-rate",
+            "/twitch/api/admin/affiliates/{login}/commission-rate",
             post(admin_affiliate::set_commission_rate_handler),
         )
         .route(
-            "/twitch/api/admin/affiliates/:login",
+            "/twitch/api/admin/affiliates/{login}",
             get(admin_affiliate::detail_handler),
         )
         .route(
@@ -1089,7 +1207,7 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(admin_global_ban::remove_handler),
         )
         .route(
-            "/twitch/api/admin/global-bans/channels/:login",
+            "/twitch/api/admin/global-bans/channels/{login}",
             post(admin_global_ban::set_channel_handler),
         )
         .route(
@@ -1102,11 +1220,38 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             post(admin_partner_signup_block::remove_handler),
         )
         .route(
+            "/twitch/api/admin/partner-signup-tag-blocks",
+            get(admin_partner_signup_tag_block::list_handler)
+                .post(admin_partner_signup_tag_block::add_handler),
+        )
+        .route(
+            "/twitch/api/admin/partner-signup-tag-blocks/remove",
+            post(admin_partner_signup_tag_block::remove_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay",
+            get(crate::handlers::caster_overlay::get_handler)
+                .post(crate::handlers::caster_overlay::save_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-overlay/context",
+            get(crate::handlers::caster_overlay::context_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-cameras",
+            get(crate::handlers::caster_overlay::list_cameras_handler)
+                .post(crate::handlers::caster_overlay::create_camera_handler),
+        )
+        .route(
+            "/twitch/api/admin/caster-cameras/{camera_id}",
+            delete(crate::handlers::caster_overlay::revoke_camera_handler),
+        )
+        .route(
             "/twitch/api/admin/roadmap",
             get(admin_roadmap::get_handler).post(admin_roadmap::save_handler),
         )
         .route(
-            "/twitch/api/admin/legal/:slug",
+            "/twitch/api/admin/legal/{slug}",
             get(admin_legal::get_handler).post(admin_legal::save_handler),
         )
         .route(
@@ -1116,6 +1261,14 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/admin/config/raids",
             post(admin_config::config_raids_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/community-announcements",
+            post(admin_config::config_community_announcements_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/promo-timers",
+            post(admin_config::config_promo_timers_handler),
         )
         .route(
             "/twitch/api/admin/config/chat",
@@ -1155,9 +1308,14 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
         RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_login", 10, 60);
     let discord_callback_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "discord_admin_callback", 20, 60);
+    let player_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "player_connect", 30, 60);
+    let player_router = handlers::player_connect::router().layer(
+        axum::middleware::from_fn_with_state(player_rl, rate_limit_middleware),
+    );
     let demo_login_rl = RateLimitLayerConfig::new(rate_limiter, "demo_login", 10, 60);
 
     Router::new()
+        .merge(player_router)
         .route(
             "/twitch/auth/login",
             get(auth_login::login_handler).layer(axum::middleware::from_fn_with_state(
@@ -1280,7 +1438,7 @@ pub fn build_affiliate_router(pool: PgPool, rate_limiter: RateLimiter) -> Router
             get(affiliate::api_gutschriften_handler),
         )
         .route(
-            "/twitch/api/affiliate/gutschriften/:gutschrift_id/pdf",
+            "/twitch/api/affiliate/gutschriften/{gutschrift_id}/pdf",
             get(affiliate::api_gutschrift_pdf_handler),
         )
         .route(
@@ -1442,7 +1600,7 @@ pub fn build_entry_admin_router() -> Router {
         .route("/dashboads", get(admin_spa::dashboard_redirect_handler))
         // Admin-SPA: Shell + Deep-Link-Fallback + Assets.
         .route("/twitch/admin", get(admin_spa::admin_index_handler))
-        .route("/twitch/admin/*path", get(admin_spa::admin_path_handler))
+        .route("/twitch/admin/{*path}", get(admin_spa::admin_path_handler))
 }
 
 /// Baut den Router für den nativen Stripe-Webhook (B2-P0).
@@ -1551,7 +1709,7 @@ pub fn build_roadmap_router(pool: PgPool, token: String) -> Router {
             get(roadmap::get_handler).post(roadmap::create_handler),
         )
         .route(
-            "/twitch/api/v2/roadmap/:id",
+            "/twitch/api/v2/roadmap/{id}",
             axum::routing::patch(roadmap::update_handler).delete(roadmap::delete_handler),
         )
         .with_state(pool)
@@ -1645,7 +1803,7 @@ pub fn build_social_media_admin_router(pool: PgPool) -> Router {
     Router::new()
         .route("/social-media-admin", get(spa::social_media_admin_handler))
         .route(
-            "/social-media-admin/*path",
+            "/social-media-admin/{*path}",
             get(spa::social_media_admin_assets_handler),
         )
         .with_state(pool)
@@ -1665,6 +1823,10 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
     use handlers::{obsolete_routes, spa};
 
     Router::new()
+        .route(
+            "/twitch/challenges",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
         .route(
             "/twitch/dashboard",
             get(spa::main_domain_spa_shell_gated_handler),
@@ -1689,13 +1851,17 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
             "/twitch/uplink/studio",
             get(spa::main_domain_spa_shell_gated_handler),
         )
+        .route(
+            "/twitch/titel",
+            get(spa::main_domain_spa_shell_gated_handler),
+        )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
             "/twitch/analyse",
             get(spa::legacy_analyse_root_redirect_handler),
         )
         .route(
-            "/twitch/analyse/*path",
+            "/twitch/analyse/{*path}",
             get(spa::legacy_analyse_path_redirect_handler),
         )
         .route(
@@ -1703,7 +1869,7 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
             get(spa::analyse_root_redirect_handler),
         )
         .route(
-            "/twitch/dashboard-v2/*path",
+            "/twitch/dashboard-v2/{*path}",
             get(spa::dashboard_v2_public_assets_handler),
         )
         .route("/twitch/partners", get(spa::analyse_root_redirect_handler))
@@ -1809,12 +1975,84 @@ pub fn build_website_router() -> Router {
             get(handlers::help_page::commands_page),
         )
         .route("/streamer/faq", get(handlers::help_page::faq_redirect))
-        .route("/streamer/*path", get(website::streamer_asset_handler))
+        // The public router dispatches /streamer/{*path} to profiles or website assets.
         .route("/website", get(website::website_root_redirect_handler))
         .route(
-            "/website/*path",
+            "/website/{*path}",
             get(website::website_path_redirect_handler),
         )
+}
+
+/// Öffentlicher monatlicher Clip-Wettbewerb. Lesen ist öffentlich, Schreiben
+/// nutzt die bestehenden Dashboard-/Discord-Sitzungen und eigene enge Rate-Limits.
+pub async fn contest_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool, sqlx::Error> {
+    use std::str::FromStr;
+    let options = sqlx::postgres::PgConnectOptions::from_str(&config.dsn)?;
+    if !options.get_host().starts_with('/') {
+        return Err(sqlx::Error::Configuration(
+            "Contest writer requires a local peer socket".into(),
+        ));
+    }
+    let options = options.username("twitchcontest").password("");
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(config.pool_max.clamp(1, 4))
+        .acquire_timeout(config.acquire_timeout.min(config.connect_timeout))
+        .connect_with(options)
+        .await
+}
+
+pub fn build_clip_contest_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
+    use handlers::{clip_contest, website};
+
+    let submit_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_submit", 6, 60);
+    let vote_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "clip_contest_vote", 20, 60);
+    let login_rl = RateLimitLayerConfig::new(rate_limiter, "clip_contest_discord_login", 10, 60);
+
+    Router::new()
+        .route("/clips", get(website::clips_page_handler))
+        .route("/clips/", get(website::clips_page_handler))
+        .route("/clips/api/current", get(clip_contest::current_handler))
+        .route("/clips/api/archive", get(clip_contest::archive_handler))
+        .route(
+            "/clips/api/admin/submissions",
+            get(clip_contest::admin_submissions_handler),
+        )
+        .route("/clips/api/session", get(clip_contest::session_handler))
+        .route(
+            "/clips/api/submit",
+            post(clip_contest::submit_handler).layer(axum::middleware::from_fn_with_state(
+                submit_rl.clone(),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/api/vote",
+            post(clip_contest::vote_handler).layer(axum::middleware::from_fn_with_state(
+                vote_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/api/admin/hide",
+            post(clip_contest::hide_handler).layer(axum::middleware::from_fn_with_state(
+                submit_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/auth/discord/login",
+            get(clip_contest::discord_login_handler).layer(axum::middleware::from_fn_with_state(
+                login_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/clips/auth/discord/callback",
+            get(clip_contest::discord_callback_handler),
+        )
+        .route("/clips/auth/logout", post(clip_contest::logout_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(4096))
+        .with_state(pool)
 }
 
 /// Zusammengeführter Router: public + auth (Login) + billing-webhook + authed +
@@ -1827,6 +2065,31 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
 
 /// Wie [`build_router`], aber mit optionalem Helix-Client fuer den OBS-Pause-Loop.
 pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixClient>) -> Router {
+    build_router_with_helix_and_brain(
+        pool,
+        token,
+        helix,
+        handlers::self_explainer::SelfExplainerBrainRuntime::legacy(),
+    )
+}
+
+pub fn build_router_with_helix_and_brain(
+    pool: PgPool,
+    token: String,
+    helix: Option<HelixClient>,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
+    build_router_with_contest_writer(pool.clone(), pool, token, helix, brain_runtime)
+}
+
+/// Production entrypoint: contest writes use a separate, narrowly scoped role.
+pub fn build_router_with_contest_writer(
+    pool: PgPool,
+    contest_writer: PgPool,
+    token: String,
+    helix: Option<HelixClient>,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
     // P2.86/133/138/140: gemeinsamer Rate-Limiter (atomares Sliding-Window auf
     // dashboard_sessions). Der Fernet-Key wird aus der Env gelesen (gleiche
     // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
@@ -1835,12 +2098,38 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
     let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
+    let challenge_settings = tb_config::runtime::settings().ok();
+    let central_pool = challenge_settings.as_ref().and_then(|settings| {
+        tb_effort::Engine::readonly_central_from_pool(&pool, &settings.challenges.central_database)
+            .map_err(|error| tracing::error!(%error, "Zentrale Community-Datenbank konnte nicht vorbereitet werden"))
+            .ok().flatten()
+    });
+    let challenge_engine = challenge_settings.and_then(|settings| {
+        tb_effort::Engine::new(
+            pool.clone(),
+            settings.challenges.clone(),
+            central_pool.clone(),
+            helix.clone(),
+        )
+        .map_err(
+            |error| tracing::error!(%error, "Partner-Challenges konnten nicht vorbereitet werden"),
+        )
+        .ok()
+    });
+    let challenge_engine = handlers::challenges::ChallengeEngine(challenge_engine);
+    let title_context = challenge_settings.map(|settings| {
+        tb_chat::steam_lookup::CoStreamRuntime::new(
+            settings.dashboard.options.steam_title_context_url.clone(),
+            token.clone(),
+            helix.clone(),
+        )
+    });
     let pause_loop_router = match helix {
         Some(helix) => build_pause_loop_router(pool.clone(), helix),
         None => handlers::pause_loop::build_unavailable_pause_loop_router(),
     };
 
-    let mut app = build_public_router(pool.clone())
+    let mut app = build_public_router_with_brain(pool.clone(), brain_runtime)
         .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
         .merge(build_partner_login_router(
@@ -1857,6 +2146,10 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))
         .merge(build_website_router())
+        .merge(build_clip_contest_router(
+            contest_writer,
+            rate_limiter.clone(),
+        ))
         .merge(handlers::discord_link::build_discord_link_router(
             pool.clone(),
         ))
@@ -1901,6 +2194,7 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
                     },
                 ),
         )
+        .layer(axum::Extension(title_context))
         .layer(CompressionLayer::new());
 
     if let Some(config) = handlers::platform_token::platform_token_config_from_runtime() {
@@ -1931,6 +2225,13 @@ pub fn build_router_with_helix(pool: PgPool, token: String, helix: Option<HelixC
         app = app.layer(Extension(config));
         tracing::info!("Uplink Multi-Chat: Twitch-Token-Weg aktiv");
     }
+
+    if let Some(central_pool) = central_pool {
+        app = app.layer(Extension(handlers::clip_contest::ContestCentralPool(
+            central_pool,
+        )));
+    }
+    app = app.layer(Extension(challenge_engine));
 
     // P2.108: globaler Default-Security-Header-Bundle auf ALLE Antworten
     // (if_not_present überschreibt keine handler-eigenen Header).
@@ -2182,6 +2483,7 @@ mod router_wiring_tests {
                 "/twitch/uplink/studio",
                 "/twitch/auth/login?next=%2Ftwitch%2Fuplink%2Fstudio",
             ),
+            ("/twitch/titel", "/twitch/auth/login?next=%2Ftwitch%2Ftitel"),
         ];
         for (pfad, ziel) in gegated {
             let resp = app

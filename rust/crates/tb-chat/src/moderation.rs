@@ -12,7 +12,7 @@
 //!
 //! Port: `bot/chat/moderation.py:1293–1903`, `bot/chat/timeout_guard.py`.
 
-use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi};
+use crate::api::{AnnouncementOutcome, BanOutcome, ChatApi, SourceOnlyPreSendCheck};
 use crate::commands::{AutobanEntry, LastAutobanStore};
 use crate::promos::OutboundSuppressionCheck as PromoSuppressionCheck;
 use crate::suppression_guard::{
@@ -153,6 +153,41 @@ impl HelixChatClient {
     ) -> Self {
         Self { helix, token_mgr }
     }
+
+    async fn send_with_parent(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        parent_message_id: Option<&str>,
+    ) -> Result<SendOutcome, String> {
+        let sender_id = self.token_mgr.bot_user_id().await;
+        for attempt in 0..2usize {
+            let token = self.token_mgr.get_valid_token(attempt > 0).await?;
+            let result = match parent_message_id {
+                Some(parent) => {
+                    self.helix
+                        .send_chat_reply(broadcaster_id, &sender_id, message, parent, &token)
+                        .await
+                }
+                None => {
+                    self.helix
+                        .send_chat_message(broadcaster_id, &sender_id, message, &token)
+                        .await
+                }
+            };
+            match result {
+                Ok(SendOutcome::HttpError { status: 401, body }) if attempt == 0 => {
+                    debug!("send_message 401, force_refresh + retry (body: {body})");
+                }
+                Ok(outcome) => return Ok(outcome),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Ok(SendOutcome::HttpError {
+            status: 401,
+            body: "nach force_refresh noch 401".to_string(),
+        })
+    }
 }
 
 #[async_trait]
@@ -164,27 +199,61 @@ impl ChatApi for HelixChatClient {
         broadcaster_id: &str,
         message: &str,
     ) -> Result<SendOutcome, String> {
-        let sender_id = self.token_mgr.bot_user_id().await;
-        for attempt in 0..2usize {
-            let force = attempt > 0;
-            let token = self.token_mgr.get_valid_token(force).await?;
-            match self
-                .helix
-                .send_chat_message(broadcaster_id, &sender_id, message, &token)
-                .await
-            {
-                Ok(SendOutcome::HttpError { status: 401, body }) if attempt == 0 => {
-                    debug!("send_message 401, force_refresh + retry (body: {body})");
-                    continue;
-                }
-                Ok(outcome) => return Ok(outcome),
-                Err(e) => return Err(e.to_string()),
-            }
+        self.send_with_parent(broadcaster_id, message, None).await
+    }
+
+    async fn send_thread_reply(
+        &self,
+        broadcaster_id: &str,
+        parent_message_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        if parent_message_id.is_empty() {
+            return Err("missing_parent_message_id".to_string());
         }
-        Ok(SendOutcome::HttpError {
-            status: 401,
-            body: "nach force_refresh noch 401".to_string(),
-        })
+        self.send_with_parent(broadcaster_id, message, Some(parent_message_id))
+            .await
+    }
+
+    async fn send_source_only_message(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, String> {
+        self.send_source_only_message_guarded(broadcaster_id, message, Box::new(|| Ok(())))
+            .await
+    }
+
+    async fn send_source_only_message_guarded(
+        &self,
+        broadcaster_id: &str,
+        message: &str,
+        pre_send_check: SourceOnlyPreSendCheck,
+    ) -> Result<SendOutcome, String> {
+        let sender_id = self.token_mgr.bot_user_id().await;
+        let is_twitch_id = |id: &str| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit());
+        if !is_twitch_id(broadcaster_id) || !is_twitch_id(&sender_id) {
+            return Err("source_only_chat_invalid_identity".to_string());
+        }
+        if message.trim().is_empty() || message.chars().count() > 500 {
+            return Err("source_only_chat_invalid_message".to_string());
+        }
+        match self
+            .helix
+            .send_source_only_chat_message_guarded(
+                broadcaster_id,
+                &sender_id,
+                message,
+                pre_send_check,
+            )
+            .await
+        {
+            Ok(outcome) => Ok(outcome),
+            Err(tb_transport_twitch::HelixError::AmbiguousOutcome { reason }) => {
+                Err(format!("source_only_chat_outcome_unknown: {reason}"))
+            }
+            Err(e) => Err(format!("source_only_chat_transport_failed: {e}")),
+        }
     }
 
     /// Sendet Whisper — 2-Attempt: 401 → force_refresh → retry.
@@ -1362,6 +1431,24 @@ impl crate::promos::OutboundSuppressionCheck for OutboundSuppressionStore {
             .await
             .is_some()
     }
+
+    async fn is_muted_checked(&self, channel_login: &str) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM twitch_outbound_chat_suppressions \
+             WHERE target_login=$1 AND source='promo' AND suppressed_until > $2)",
+        )
+        .bind(channel_login)
+        .bind(Utc::now())
+        .fetch_one(&self.pool)
+        .await
+        .inspect_err(|_| {
+            tracing::error!(
+                target_login = channel_login,
+                source = "promo",
+                "Patch announcement suppression check failed"
+            );
+        })
+    }
 }
 
 #[async_trait]
@@ -1417,6 +1504,8 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use wiremock::matchers::{body_partial_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -----------------------------------------------------------------------
     // Mock-ChatApi
@@ -1516,6 +1605,111 @@ mod tests {
     // ModerationEngine-Tests
     // -----------------------------------------------------------------------
 
+    #[tokio::test]
+    async fn source_only_without_implementation_fails_closed() {
+        let api = MockApi::with_ban_result(BanOutcome::Banned);
+        assert_eq!(
+            api.send_source_only_message("111", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_not_supported"
+        );
+        assert_eq!(api.send_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn source_only_uses_validated_bot_identity_and_rejects_invalid_input() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .and(header("Authorization", "OAuth seed-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "login": "bot",
+                "user_id": "222",
+                "scopes": ["user:bot", "user:write:chat"],
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "111",
+                "sender_id": "222",
+                "message": "Patch!",
+                "for_source_only": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(body_partial_json(
+                serde_json::json!({"message": "Patch uncertain"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string("unreadable"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut config = tb_transport_twitch::HelixConfig::new("cid", "sec");
+        config.helix_base = format!("{}/helix", server.uri());
+        config.token_url = format!("{}/oauth2/token", server.uri());
+        let helix = Arc::new(tb_transport_twitch::HelixClient::new(config).unwrap());
+        let token_mgr = Arc::new(
+            BotTokenManager::new("cid".to_string(), "sec".to_string())
+                .unwrap()
+                .with_urls(
+                    format!("{}/validate", server.uri()),
+                    format!("{}/oauth2/token", server.uri()),
+                ),
+        );
+        token_mgr
+            .initialize(Some("seed-token"), "refresh")
+            .await
+            .unwrap();
+        let api = HelixChatClient::new(helix, token_mgr);
+        assert_eq!(
+            api.send_source_only_message("111", "Patch!").await.unwrap(),
+            SendOutcome::Sent
+        );
+        assert_eq!(
+            api.send_source_only_message("111", "Patch uncertain")
+                .await
+                .unwrap(),
+            SendOutcome::HttpError {
+                status: 200,
+                body: "response_body_unreadable".into(),
+            }
+        );
+        assert_eq!(
+            api.send_source_only_message("other", "Patch!")
+                .await
+                .unwrap_err(),
+            "source_only_chat_invalid_identity"
+        );
+        assert_eq!(
+            api.send_source_only_message("111", &"x".repeat(501))
+                .await
+                .unwrap_err(),
+            "source_only_chat_invalid_message"
+        );
+        server.verify().await;
+    }
+
     async fn pg_pool_in_schema_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = match std::env::var("TB_TEST_DATABASE_URL") {
             Ok(dsn) => dsn,
@@ -1530,11 +1724,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();

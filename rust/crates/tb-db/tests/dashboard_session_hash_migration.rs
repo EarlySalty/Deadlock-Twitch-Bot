@@ -34,35 +34,35 @@ async fn migration_hashes_aktive_session_ohne_sie_zu_invalidieren() {
             .expect("Systemzeit")
             .as_nanos()
     );
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&pool)
         .await
         .expect("Testschema anlegen");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TABLE {schema}.dashboard_sessions (\
              session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL, \
              payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL, \
              expires_at DOUBLE PRECISION NOT NULL)"
-    ))
+    )))
     .execute(&pool)
     .await
     .expect("Session-Tabelle anlegen");
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TABLE {schema}.oauth_state_tokens (\
              state_token TEXT PRIMARY KEY, platform TEXT NOT NULL, pkce_verifier TEXT)"
-    ))
+    )))
     .execute(&pool)
     .await
     .expect("OAuth-State-Tabelle anlegen");
 
     let raw_session = "aktive-session-🔥";
     let rate_id = "rl:60:iphash:123:abcd";
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {schema}.dashboard_sessions \
          (session_id, session_type, payload_enc, created_at, expires_at) \
          VALUES ($1, 'twitch', $2, 1, 9999999999), \
                 ($3, 'rate_limit:dashboard_auth', $2, 1, 9999999999)"
-    ))
+    )))
     .bind(raw_session)
     .bind(b"encrypted-payload".as_slice())
     .bind(rate_id)
@@ -70,9 +70,9 @@ async fn migration_hashes_aktive_session_ohne_sie_zu_invalidieren() {
     .await
     .expect("Testdaten schreiben");
     let alter_raid_rohwert = "a".repeat(64);
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {schema}.oauth_state_tokens (state_token, platform) VALUES ($1, 'raid')"
-    ))
+    )))
     .bind(&alter_raid_rohwert)
     .execute(&pool)
     .await
@@ -88,49 +88,50 @@ async fn migration_hashes_aktive_session_ohne_sie_zu_invalidieren() {
                 "public.oauth_state_tokens",
                 &format!("{schema}.oauth_state_tokens"),
             );
-    sqlx::raw_sql(&migration)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(migration))
         .execute(&pool)
         .await
         .expect("Hash-Migration ausführen");
 
-    let stored: Vec<String> = sqlx::query_scalar(&format!(
+    let stored: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT session_id FROM {schema}.dashboard_sessions ORDER BY session_type"
-    ))
+    )))
     .fetch_all(&pool)
     .await
     .expect("migrierte IDs lesen");
     assert!(stored.contains(&lookup_key(raw_session)));
     assert!(!stored.iter().any(|value| value == raw_session));
     assert!(stored.iter().any(|value| value == rate_id));
-    let oauth_states: i64 =
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {schema}.oauth_state_tokens"))
-            .fetch_one(&pool)
-            .await
-            .expect("OAuth-Cutover prüfen");
+    let oauth_states: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) FROM {schema}.oauth_state_tokens"
+    )))
+    .fetch_one(&pool)
+    .await
+    .expect("OAuth-Cutover prüfen");
     assert_eq!(
         oauth_states, 0,
         "auch ein alter 64-Hex-Raid-Rohwert muss beim Offline-Cutover verschwinden"
     );
 
-    let active_payload: Vec<u8> = sqlx::query_scalar(&format!(
+    let active_payload: Vec<u8> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT payload_enc FROM {schema}.dashboard_sessions WHERE session_id = $1"
-    ))
+    )))
     .bind(lookup_key(raw_session))
     .fetch_one(&pool)
     .await
     .expect("aktive Session bleibt über Hash auffindbar");
     assert_eq!(active_payload, b"encrypted-payload");
 
-    let invalid = sqlx::query(&format!(
+    let invalid = sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {schema}.dashboard_sessions \
          (session_id, session_type, payload_enc, created_at, expires_at) \
          VALUES ('neuer-rohwert', 'twitch', 'x', 1, 2)"
-    ))
+    )))
     .execute(&pool)
     .await;
     assert!(invalid.is_err(), "Constraint muss neue Rohwerte abweisen");
 
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&pool)
         .await
         .expect("Testschema entfernen");

@@ -1,0 +1,6 @@
+{
+  "files": 7,
+  "passed": true,
+  "scope": "JSX syntax/transpilation, not a mounted React integration",
+  "errors": []
+}

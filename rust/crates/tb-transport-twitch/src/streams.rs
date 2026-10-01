@@ -145,6 +145,7 @@ impl HelixClient {
         for chunk in clean.chunks(100) {
             let mut params: Vec<(&str, &str)> =
                 chunk.iter().map(|value| (filter, value.as_str())).collect();
+            params.push(("first", "100"));
             if let Some(language) = language {
                 params.push(("language", language));
             }
@@ -204,6 +205,107 @@ impl HelixClient {
         }
         out.truncate(limit);
         Ok(out)
+    }
+
+    /// Complete category pagination. Repeated cursors and malformed pages are
+    /// errors, never a successful partial/empty category snapshot.
+    pub async fn get_all_streams_by_category(
+        &self,
+        game_id: &str,
+    ) -> Result<Vec<HelixStream>, HelixError> {
+        use std::collections::{HashMap, HashSet};
+        let mut found = HashMap::new();
+        let mut cursors = HashSet::new();
+        let mut after: Option<String> = None;
+        loop {
+            let mut params = vec![("game_id", game_id.to_owned()), ("first", "100".into())];
+            if let Some(cursor) = &after {
+                params.push(("after", cursor.clone()));
+            }
+            let response = self
+                .send_with_retry(self.get("/streams").await?.query(&params))
+                .await?;
+            #[derive(Deserialize)]
+            struct Page {
+                data: Vec<HelixStream>,
+                #[serde(default)]
+                pagination: Pagination,
+            }
+            let page: Page = check_status_and_json(response).await?;
+            for stream in page.data {
+                if stream.id.is_empty() || stream.user_id.is_empty() || stream.game_id != game_id {
+                    return Err(HelixError::InvalidResponse(
+                        "incomplete category stream identity",
+                    ));
+                }
+                found.insert(stream.id.clone(), stream);
+            }
+            match page.pagination.cursor.filter(|c| !c.is_empty()) {
+                None => break,
+                Some(cursor) if cursors.insert(cursor.clone()) => after = Some(cursor),
+                Some(_) => return Err(HelixError::InvalidResponse("repeated category cursor")),
+            }
+            // <= 240 requests/min even for very large categories.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        let mut result: Vec<_> = found.into_values().collect();
+        result.sort_unstable_by(|a, b| a.user_id.cmp(&b.user_id));
+        Ok(result)
+    }
+
+    /// Public profile data only, deliberately excluding email/deprecated views.
+    pub async fn get_public_profiles(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<PublicProfile>, HelixError> {
+        let mut result = Vec::new();
+        for chunk in ids.chunks(100) {
+            let params: Vec<_> = chunk.iter().map(|id| ("id", id.as_str())).collect();
+            let response = self
+                .send_with_retry(self.get("/users").await?.query(&params))
+                .await?;
+            #[derive(Deserialize)]
+            struct Page {
+                data: Vec<PublicProfile>,
+            }
+            let page: Page = check_status_and_json(response).await?;
+            result.extend(page.data);
+        }
+        Ok(result)
+    }
+
+    /// One page of public media metadata; caller persists the cursor. No media
+    /// bytes are downloaded. Videos are channel-wide, clips use a time window.
+    pub async fn public_media_page(
+        &self,
+        clips: bool,
+        user_id: &str,
+        after: Option<&str>,
+        since: &str,
+        until: &str,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>), HelixError> {
+        let endpoint = if clips { "/clips" } else { "/videos" };
+        let mut params = vec![
+            (if clips { "broadcaster_id" } else { "user_id" }, user_id),
+            ("first", "100"),
+        ];
+        if clips {
+            params.extend([("started_at", since), ("ended_at", until)]);
+        }
+        if let Some(cursor) = after {
+            params.push(("after", cursor));
+        }
+        let response = self
+            .send_with_retry(self.get(endpoint).await?.query(&params))
+            .await?;
+        #[derive(Deserialize)]
+        struct Page {
+            data: Vec<serde_json::Value>,
+            #[serde(default)]
+            pagination: Pagination,
+        }
+        let page: Page = check_status_and_json(response).await?;
+        Ok((page.data, page.pagination.cursor.filter(|c| !c.is_empty())))
     }
 
     /// game_id einer Kategorie über `/search/categories` (exakter Treffer
@@ -289,15 +391,16 @@ impl HelixClient {
         }))
     }
 
-    /// Follower-Gesamtzahl via `/channels/followers`. Best-effort: Der
-    /// `total`-Wert verlangt einen **Moderator-Token mit `moderator:read:followers`**
-    /// für genau diesen Broadcaster.
+    /// Follower-Gesamtzahl via `/channels/followers`, ohne Schätzung oder Null-Fallback.
+    /// Für die reine `total`-Zahl darf ein OAuth-User-Token ohne Moderatorrolle
+    /// im Zielkanal verwendet werden. Scope `moderator:read:followers` UND
+    /// Broadcaster-/Moderatorrolle sind für einzelne Follower-Datensätze nötig,
+    /// nicht für die Gesamtzahl (Twitch API Reference: Get Channel Followers).
     ///
     /// `user_token`:
-    /// - `Some(tok)` → Request mit diesem Bearer (Streamer- oder zentraler
-    ///   Bot-Token, der den Kanal moderiert). Liefert die echte Zahl.
-    /// - `None` → App-Token-Pfad wie bisher; Twitch antwortet ohne Scope
-    ///   401/403 und es kommt `total = None` mit Diagnosefeldern zurück.
+    /// - `Some(tok)` → offizieller User-Token-Pfad, auch für fremde Kanäle.
+    /// - `None` → historischer App-Token-Pfad, nur best effort. 401/403 oder
+    ///   fehlendes `total` bleiben `None`, niemals erfundene 0 Follower.
     ///
     /// Port: Python `twitch_api.get_followers_total(broadcaster_id, user_token=…)`.
     pub async fn get_followers_total(
@@ -396,20 +499,32 @@ impl HelixClient {
     /// Einzelstatus mit Broadcaster-Grant. Gefilterte Antworten haben null
     /// total/points; der Summensnapshot-Typ eignet sich deshalb hier nicht.
     pub async fn broadcaster_subscription_active(
-        &self, broadcaster_id: &str, viewer_id: &str, user_token: &str,
+        &self,
+        broadcaster_id: &str,
+        viewer_id: &str,
+        user_token: &str,
     ) -> Result<bool, HelixError> {
         #[derive(Deserialize)]
-        struct Subscriber { user_id: String, broadcaster_id: String }
+        struct Subscriber {
+            user_id: String,
+            broadcaster_id: String,
+        }
         #[derive(Deserialize)]
-        struct Response { data: Vec<Subscriber> }
-        let resp = self.get_with_user_token("/subscriptions", user_token)
+        struct Response {
+            data: Vec<Subscriber>,
+        }
+        let resp = self
+            .get_with_user_token("/subscriptions", user_token)
             .query(&[("broadcaster_id", broadcaster_id), ("user_id", viewer_id)])
-            .send().await?;
+            .send()
+            .await?;
         let response: Response = check_status_and_json(resp).await?;
         match response.data.as_slice() {
             [] => Ok(false),
-            [sub] if sub.user_id==viewer_id && sub.broadcaster_id==broadcaster_id => Ok(true),
-            _ => Err(HelixError::InvalidResponse("Abo-Antwort stimmt nicht mit angefragten Twitch-IDs überein")),
+            [sub] if sub.user_id == viewer_id && sub.broadcaster_id == broadcaster_id => Ok(true),
+            _ => Err(HelixError::InvalidResponse(
+                "Abo-Antwort stimmt nicht mit angefragten Twitch-IDs überein",
+            )),
         }
     }
 
@@ -818,6 +933,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streams_by_user_ids_requests_100_and_keeps_all_25_live_targets() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        let ids: Vec<String> = (1..=25).map(|id| id.to_string()).collect();
+        let data: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": format!("session-{id}"),
+                    "user_id": id,
+                    "game_id": "deadlock",
+                    "game_name": "Deadlock",
+                    "started_at": "2026-09-29T00:00:00Z"
+                })
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/helix/streams"))
+            .and(query_param("first", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": data,
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let streams = client.get_streams_by_user_ids(&ids, None).await.unwrap();
+        assert_eq!(streams.len(), 25);
+        assert_eq!(
+            streams
+                .iter()
+                .map(|stream| stream.user_id.as_str())
+                .collect::<Vec<_>>(),
+            ids.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn category_pagination_folgt_cursor_und_kappt_limit() {
         let server = MockServer::start().await;
         let client = client_with(&server).await;
@@ -999,21 +1154,44 @@ mod tests {
     #[tokio::test]
     async fn sub_reminder_status_strikt_und_null_summen() {
         for (body, expected) in [
-            (serde_json::json!({"data":[],"total":null,"points":null}),Some(false)),
-            (serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"b"}],"total":null}),Some(true)),
-            (serde_json::json!({"data":[{}]}),None),
-            (serde_json::json!({"data":null}),None),
-            (serde_json::json!({}),None),
-            (serde_json::json!({"data":[{"user_id":"other","broadcaster_id":"b"}]}),None),
-            (serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"other"}]}),None),
+            (
+                serde_json::json!({"data":[],"total":null,"points":null}),
+                Some(false),
+            ),
+            (
+                serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"b"}],"total":null}),
+                Some(true),
+            ),
+            (serde_json::json!({"data":[{}]}), None),
+            (serde_json::json!({"data":null}), None),
+            (serde_json::json!({}), None),
+            (
+                serde_json::json!({"data":[{"user_id":"other","broadcaster_id":"b"}]}),
+                None,
+            ),
+            (
+                serde_json::json!({"data":[{"user_id":"u","broadcaster_id":"other"}]}),
+                None,
+            ),
         ] {
-            let server=MockServer::start().await;
-            let client=client_with(&server).await;
-            Mock::given(method("GET")).and(path("/helix/subscriptions"))
-                .and(query_param("broadcaster_id","b")).and(query_param("user_id","u"))
-                .and(header("Authorization","Bearer user-tok"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body)).expect(1).mount(&server).await;
-            assert_eq!(client.broadcaster_subscription_active("b","u","user-tok").await.ok(),expected);
+            let server = MockServer::start().await;
+            let client = client_with(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/helix/subscriptions"))
+                .and(query_param("broadcaster_id", "b"))
+                .and(query_param("user_id", "u"))
+                .and(header("Authorization", "Bearer user-tok"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                client
+                    .broadcaster_subscription_active("b", "u", "user-tok")
+                    .await
+                    .ok(),
+                expected
+            );
         }
     }
 
@@ -1109,4 +1287,22 @@ mod tests {
         let ad = client.get_ad_schedule("42", "user-tok").await.unwrap();
         assert!(ad.is_none());
     }
+}
+
+/// Public `/users` fields, kept separate from authenticated user information.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PublicProfile {
+    pub id: String,
+    pub login: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub broadcaster_type: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub profile_image_url: String,
+    #[serde(default)]
+    pub offline_image_url: String,
 }

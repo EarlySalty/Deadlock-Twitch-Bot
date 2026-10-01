@@ -2,11 +2,12 @@ import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Outlet } from 'react-router';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { sidebarStorageKey } from '@/components/layout/sidebarState';
 import { TopBar } from '@/components/layout/TopBar';
 import { useRequireAdminAuth, toAuthErrorMessage } from '@/hooks/useAuth';
 
 export function AdminShell() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const authQuery = useRequireAdminAuth();
 
   if (authQuery.isLoading) {
@@ -34,10 +35,18 @@ export function AdminShell() {
     );
   }
 
+  // Ohne von der Auth-Schicht bestätigte Twitch-ID bleibt der Zustand nur im RAM.
+  const sidebarUserId = authQuery.data?.user?.userId;
+
   return (
     <div className="admin-shell flex">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((current) => !current)} />
-      <div className="min-h-screen flex-1 px-4 py-4 md:px-6">
+      <Sidebar
+        key={sidebarUserId ?? 'session-admin'}
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((current) => !current)}
+        storageKey={sidebarUserId ? sidebarStorageKey(sidebarUserId) : undefined}
+      />
+      <div className="min-h-screen min-w-0 flex-1 px-4 py-4 md:px-6">
         <TopBar auth={authQuery.data} />
         <main className="mx-auto mt-4 max-w-[1600px]">
           <Outlet />

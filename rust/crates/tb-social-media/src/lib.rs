@@ -4,7 +4,7 @@
 //! - `clip::repository` — sqlx-DB-Zugriff (twitch_clips_social_media, clip_fetch_history)
 //! - `clip::helix`      — Twitch Helix-API (GET /clips)
 //! - `clip::service`    — Orchestrierung eines Fetch-Laufs
-//! - `clip::task`       — Tokio-Hintergrundtask (Gate: TB_CLIP_FETCHER_ENABLED=1)
+//! - `clip::task`       — Tokio-Hintergrundtask (Freigabe durch die Bot-Konfiguration)
 //!
 //! Sowie die Anfänge der vollen Posting-Pipeline (Port von `bot/social_media/`):
 //! - `schema`      — idempotente Tabellen-Erstellung (Port von `storage.py`).
@@ -45,15 +45,19 @@
 //! den sechs Pipeline-Workern (Upload/Retention/Enrichment/Approval-Queue/
 //! Insights/Report-Dispatcher) — 1:1 zu Pythons `runtime_bootstrap`. Auto-Uploads
 //! bleiben datengetrieben über `social_media_settings` (Consent + Auto-Approve je
-//! Plattform) gegated. `start_if_enabled` (Env-Gate `TB_CLIP_FETCHER_ENABLED`)
+//! Plattform) gegated. Der Start in der Bot-Composition-Root (`bot.clip_fetcher_enabled`)
 //! bleibt als Pre-Cutover-Einstieg erhalten.
 
 pub mod analytics;
 pub mod approval;
 pub mod approval_worker;
+pub mod batch;
 pub mod clip;
 pub mod clip_analytics;
+pub mod clip_context;
+pub mod clip_context_harvest;
 pub mod clip_manager;
+pub mod clip_prep_worker;
 pub mod clip_queue;
 pub mod clip_templates;
 pub mod correction;
@@ -62,6 +66,7 @@ pub mod enrich_pipeline;
 pub mod enrichment;
 pub mod enrichment_worker;
 pub mod forms;
+mod http_security;
 pub mod insights_worker;
 pub mod layout;
 pub mod llm;
@@ -69,7 +74,9 @@ pub mod llm_dispatch;
 pub mod oauth;
 pub mod partner_access;
 pub mod posting_plan;
+pub mod preview;
 pub mod refresh_worker;
+pub mod render;
 pub mod rendering;
 pub mod report_dispatcher;
 pub mod report_writer;
@@ -79,9 +86,12 @@ pub mod scheduler;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
+pub mod subtitles;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod tiktok_recovery;
 pub mod title_gate;
+pub mod transcription;
 pub mod upload_worker;
 pub mod uploaders;
 pub mod video_processor;
@@ -89,9 +99,7 @@ pub mod vocab;
 pub mod vod_archive;
 
 pub use clip::{
-    repository::ClipRepository,
-    helix::HelixClipSource,
-    service::ClipFetchService,
+    helix::HelixClipSource, repository::ClipRepository, service::ClipFetchService,
     task::ClipFetchTask,
 };
 
@@ -102,10 +110,14 @@ use tb_transport_twitch::HelixClient;
 /// Baut alle Clip-Fetcher-Komponenten und gibt einen fertigen Task zurück.
 ///
 /// Der Task ist nach diesem Aufruf NOCH NICHT gestartet — erst
-/// `ClipFetchTask::start_if_enabled()` startet den Hintergrundloop.
+/// `ClipFetchTask::start()` startet den vom Bot freigegebenen Hintergrundloop.
 pub fn build_clip_fetch_task(pool: PgPool, helix: Arc<HelixClient>) -> ClipFetchTask {
     let repo = ClipRepository::new(pool);
     let helix_src = HelixClipSource::new(helix);
     let service = Arc::new(ClipFetchService::new(repo, helix_src));
     ClipFetchTask::new(service)
 }
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;

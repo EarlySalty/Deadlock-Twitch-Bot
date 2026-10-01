@@ -43,7 +43,7 @@ export function RaidConfig() {
     <section className="space-y-5">
       <PageHeader
         title="Raid Config"
-        description="Raid-Bot und Live-Ping gesammelt ausrollen. Der Scope `all` wendet die Änderungen bewusst auf den gesamten Bestand an."
+        description="Raid-Bot und Live-Ping für alle aktiven Partner einstellen."
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -83,7 +83,7 @@ export function RaidConfig() {
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div>
                 <p className="text-white">Raid Bot aktivieren</p>
-                <p className="mt-1 text-xs text-text-secondary">Steuert die generelle Raid-Bot-Aktivierung im gewählten Scope.</p>
+                <p className="mt-1 text-xs text-text-secondary">Schaltet den Raid-Bot für alle aktiven Partner ein oder aus.</p>
               </div>
               <input
                 type="checkbox"
@@ -98,7 +98,7 @@ export function RaidConfig() {
             <label className="flex items-center justify-between rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div>
                 <p className="text-white">Live Ping aktivieren</p>
-                <p className="mt-1 text-xs text-text-secondary">Schaltet die Live-Ping-Auslösung für den gewählten Scope gesammelt um.</p>
+                <p className="mt-1 text-xs text-text-secondary">Schaltet Live-Pings für alle aktiven Partner ein oder aus.</p>
               </div>
               <input
                 type="checkbox"
@@ -112,7 +112,7 @@ export function RaidConfig() {
           </div>
 
           <div className="space-y-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Scope</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Übersicht</p>
             <select
               value={scope}
               onChange={(event) => {
@@ -121,15 +121,15 @@ export function RaidConfig() {
               }}
               className="admin-input"
             >
-              <option value="active">Active Streamer</option>
-              <option value="all">All Managed Streamers</option>
+              <option value="active">Aktive Partner</option>
+              <option value="all">Alle verwalteten Streamer</option>
             </select>
             <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.03] p-4 text-sm leading-7 text-text-secondary">
               <p>
-                <span className="font-semibold text-white">Standard:</span> <code>active</code> wirkt nur auf aktive Streamer.
+                Die Auswahl bestimmt, welche Streamer in der Übersicht gezählt werden.
               </p>
               <p>
-                <span className="font-semibold text-white">All:</span> Rollt die beiden Flags bewusst auf den gesamten verwalteten Bestand aus.
+                <span className="font-semibold text-white">Speichern:</span> Änderungen gelten immer nur für aktive Partner.
               </p>
             </div>
             <button

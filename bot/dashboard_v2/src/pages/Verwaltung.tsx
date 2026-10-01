@@ -6,9 +6,11 @@ import { fetchInternalHome } from '@/api/home';
 import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { useAuthStatus } from '@/hooks/useAnalytics';
+import { PartnerProfile } from './PartnerProfile';
+import { PlanProvider } from '../context/PlanContext';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
-import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
+import { CommandNamesProvider } from '@/components/verwaltung/CommandNameSection';
 import { StatCommandSection } from '@/components/verwaltung/StatCommandSection';
 import { SubReminderSection } from '@/components/verwaltung/SubReminderSection';
 import { TitleCommandSection } from '@/components/verwaltung/TitleCommandSection';
@@ -378,7 +380,7 @@ export function VerwaltungPage() {
   );
 
   const chatTab = (
-    <>
+    <CommandNamesProvider>
       <GreetingSection />
       <LurkCommandSection />
       <ClipCommandSection />
@@ -386,17 +388,16 @@ export function VerwaltungPage() {
       <StatCommandSection />
       <SubReminderSection />
       <LurkerTaxSection />
-    </>
+    </CommandNamesProvider>
   );
 
   const botTab = (
-    <>
-      <AIEngagementSection />
+    <CommandNamesProvider>
       <ModerationSection />
       <ScamGuardSection />
       <SilentNotificationsSection />
       <DisconnectBotSection login={selfLogin} />
-    </>
+    </CommandNamesProvider>
   );
 
   const overlayTab = (
@@ -436,6 +437,7 @@ export function VerwaltungPage() {
 
   const tabs: VerwaltungTabDef[] = [
     { id: 'konto', label: 'Konto & Verbindungen', icon: User, render: () => kontoTab },
+    { id: 'profil', label: 'Mein Profil', icon: User, render: () => <PlanProvider plan={authStatus?.plan ?? null} isAdmin={authStatus?.isAdmin ?? false} isLocalhost={authStatus?.isLocalhost ?? false} isDemoMode={Boolean(authStatus?.demoMode)}><PartnerProfile twitchAvatarUrl={home.avatarUrl} /></PlanProvider> },
     { id: 'chat', label: 'Chat-Befehle', icon: Terminal, render: () => chatTab },
     { id: 'bot', label: 'Bot & Schutz', icon: Bot, render: () => botTab },
     { id: 'overlay', label: 'Overlay', icon: Monitor, render: () => overlayTab },

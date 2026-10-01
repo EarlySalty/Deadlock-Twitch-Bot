@@ -45,11 +45,11 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    lfg_pitch_enabled_from_env, promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline,
-    ChatPipelineParts, ChatterTracker, CrewGuard, CrewJudge, FunResponses, GlobalBanSweeper,
-    GlobalChatterBanEnforcer, InviteQuestionInviteUrlPort, InviteQuestionResponder,
-    LfgPitchResponder, LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, OpenAiCrewJudge,
-    PartnerRoster, PgHelixMentionResolver, PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
+    ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
+    InviteQuestionInviteUrlPort, InviteQuestionResponder, LfgPitchResponder,
+    LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster, PgHelixMentionResolver,
+    PgInviteQuestionStore, ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -63,6 +63,8 @@ use tb_engagement::types::IncomingMessage;
 use tb_knowledge::KnowledgeBase;
 use tb_monitoring::{ChatNotificationKind, EventSubHooks, SubscriptionManager, TelemetryStore};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
+use tb_social_media::clip::helix::HelixClipSource;
+use tb_social_media::clip_context::clip_moment_from_start;
 use tb_transport_discord::{BrokerRelay, DiscordBackend, SendRichMessage};
 use tb_transport_twitch::HelixClient;
 
@@ -74,31 +76,31 @@ use crate::task_supervisor::TaskSupervisor;
 /// Channel-Join alle 30 Minuten, connection.py).
 const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
-/// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
-const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
-
-fn knowledge_dir() -> PathBuf {
-    std::env::var("KNOWLEDGE_DIR")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("rust/knowledge"))
+fn knowledge_dir() -> Result<PathBuf, String> {
+    let snapshot =
+        tb_config::runtime::active().ok_or_else(|| "Betriebskonfiguration fehlt".to_owned())?;
+    snapshot
+        .resolve(&snapshot.settings().knowledge.directory)
+        .map_err(|e| e.to_string())
 }
 
 fn knowledge_base() -> &'static KnowledgeBase {
     static KB: OnceLock<KnowledgeBase> = OnceLock::new();
-    KB.get_or_init(|| match KnowledgeBase::load_from_dir(&knowledge_dir()) {
-        Ok(kb) => {
-            tracing::info!(
-                "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
-                kb.len()
-            );
-            kb
-        }
-        Err(error) => {
-            tracing::warn!(%error, "go-live-tipp: Wissensbasis nicht geladen");
-            KnowledgeBase::default()
+    KB.get_or_init(|| {
+        match knowledge_dir()
+            .and_then(|path| KnowledgeBase::load_from_dir(&path).map_err(|e| e.to_string()))
+        {
+            Ok(kb) => {
+                tracing::info!(
+                    "go-live-tipp: Wissensbasis geladen ({} Dokumente)",
+                    kb.len()
+                );
+                kb
+            }
+            Err(error) => {
+                tracing::warn!(%error, "go-live-tipp: Wissensbasis nicht geladen");
+                KnowledgeBase::default()
+            }
         }
     })
 }
@@ -120,15 +122,13 @@ struct ChatClipAdapter {
     helix: Arc<HelixClient>,
     token_provider: Arc<TokenProvider>,
     bot_token: Arc<BotTokenManager>,
+    pool: PgPool,
 }
 
 #[async_trait::async_trait]
 impl ClipPort for ChatClipAdapter {
-    async fn create_clip(
-        &self,
-        broadcaster_user_id: &str,
-        _broadcaster_login: &str,
-    ) -> ClipOutcome {
+    async fn create_clip(&self, broadcaster_user_id: &str, broadcaster_login: &str) -> ClipOutcome {
+        let requested_at = chrono::Utc::now();
         // Ungated + Auto-Refresh: Streamer mit deaktivierten Raids dürfen clippen,
         // und ein abgelaufener Token wird erneuert statt 401 zu produzieren.
         let access_token = match self
@@ -167,6 +167,69 @@ impl ClipPort for ChatClipAdapter {
                 if url.is_empty() {
                     ClipOutcome::Failed
                 } else {
+                    if !clip.id.is_empty() {
+                        let source = HelixClipSource::new(self.helix.clone());
+                        let mut resolved = None;
+                        for attempt in 0..4 {
+                            if attempt > 0 {
+                                tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                            }
+                            match source.fetch_clip_by_id(&clip.id, broadcaster_login).await {
+                                Ok(Some(detail))
+                                    if detail.vod_id.is_some()
+                                        && detail
+                                            .vod_offset_s
+                                            .and_then(|start| {
+                                                clip_moment_from_start(
+                                                    start,
+                                                    detail.duration_seconds,
+                                                )
+                                            })
+                                            .is_some() =>
+                                {
+                                    resolved = Some(detail);
+                                    break;
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    tracing::warn!(%error, clip_id = %clip.id, "!clip: VOD-Daten nicht abrufbar")
+                                }
+                            }
+                        }
+                        let vod_id = resolved
+                            .as_ref()
+                            .and_then(|detail| detail.vod_id.as_deref());
+                        let vod_offset_s = resolved.as_ref().and_then(|detail| detail.vod_offset_s);
+                        let moment_offset_s = resolved.as_ref().and_then(|detail| {
+                            detail.vod_offset_s.and_then(|start| {
+                                clip_moment_from_start(start, detail.duration_seconds)
+                            })
+                        });
+                        let status = if resolved.is_some() {
+                            "resolved"
+                        } else {
+                            "unavailable"
+                        };
+                        if let Err(error) = sqlx::query(
+                            "INSERT INTO twitch_clip_command_events
+                                (clip_id, streamer_login, twitch_user_id, requested_at, vod_id, vod_offset_s, moment_offset_s, resolution_status)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                             ON CONFLICT (clip_id) DO NOTHING",
+                        )
+                        .bind(&clip.id)
+                        .bind(broadcaster_login)
+                        .bind(broadcaster_user_id)
+                        .bind(requested_at)
+                        .bind(vod_id)
+                        .bind(vod_offset_s)
+                        .bind(moment_offset_s)
+                        .bind(status)
+                        .execute(&self.pool)
+                        .await
+                        {
+                            tracing::error!(%error, clip_id = %clip.id, "!clip: Zeitpunkt konnte nicht gespeichert werden");
+                        }
+                    }
                     ClipOutcome::Created { url }
                 }
             }
@@ -195,6 +258,7 @@ pub fn build_clip_port(
     cipher: Option<Arc<FieldCipher>>,
     pool: PgPool,
     bot_token: Arc<BotTokenManager>,
+    redirect_uri: &str,
 ) -> Option<Arc<dyn ClipPort>> {
     let (Some(helix), Some(cipher)) = (helix, cipher) else {
         return None;
@@ -205,12 +269,12 @@ pub fn build_clip_port(
         cipher.clone(),
         Arc::new(HelixTokenClient {
             helix: (*helix).clone(),
-            redirect_uri: std::env::var("TWITCH_RAID_REDIRECT_URI").unwrap_or_default(),
+            redirect_uri: redirect_uri.to_owned(),
         }),
         blacklist.clone(),
     );
     let token_provider = Arc::new(TokenProvider::new(
-        RaidAuthStore::new(pool, cipher),
+        RaidAuthStore::new(pool.clone(), cipher),
         refresher,
         blacklist,
     ));
@@ -218,6 +282,7 @@ pub fn build_clip_port(
         helix,
         token_provider,
         bot_token,
+        pool,
     }))
 }
 
@@ -494,9 +559,13 @@ impl ChatApiHandle {
         ))
     }
 
-    /// Bewusst abweichender Kontext, aktuell ausschließlich für den Raid-Pfad.
-    pub fn api_for_context(&self, context: PolicyContext) -> Arc<dyn ChatApi> {
-        Arc::new(ChannelPolicyChatApi::new(Arc::clone(&self.api), context))
+    /// Raid greetings remain limited to authorized partners; no blanket bypass.
+    pub fn raid_api(&self) -> Arc<dyn ChatApi> {
+        let roster: Arc<dyn PartnerRoster> = self.roster.clone();
+        Arc::new(ChannelPolicyChatApi::new(
+            Arc::clone(&self.api),
+            PolicyContext::Raid(roster),
+        ))
     }
 
     /// Live rotierter Bot-User-Token-Manager — vom `!clip`-Fallback genutzt,
@@ -511,6 +580,8 @@ impl ChatApiHandle {
 /// Promo-Loop, Global-Ban-Sweeper).
 pub struct ChatRuntime {
     pub hooks: Arc<dyn EventSubHooks>,
+    patch_api: Arc<dyn ChatApi>,
+    patch_suppression: Arc<dyn tb_chat::promos::OutboundSuppressionCheck>,
     token_manager: Arc<BotTokenManager>,
     promos: Arc<PromoEngine>,
     sweeper: Arc<GlobalBanSweeper>,
@@ -536,61 +607,113 @@ pub struct ChatRuntime {
 
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
-/// `None` = Chat bleibt aus (Python bedient weiter).
-pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<ChatApiHandle> {
-    let enabled = std::env::var("TB_CHAT_ENABLED")
-        .map(|v| v.trim() == "1")
-        .unwrap_or(false);
+/// `Ok(None)` sperrt Chat dauerhaft; vorübergehende Seed-DB-Ausfälle brechen
+/// den Dienststart ab, damit die bestehende systemd-Restart-Regel heilt.
+pub async fn try_build_api(
+    helix: Option<HelixClient>,
+    pool: PgPool,
+    enabled: bool,
+    cipher: Option<Arc<FieldCipher>>,
+) -> Result<Option<ChatApiHandle>, tb_chat::db_token_store::BootstrapError> {
     if !enabled {
-        tracing::info!(
-            "TB_CHAT_ENABLED nicht gesetzt — nativer Chat bleibt aus (Python-Chat aktiv)"
-        );
-        return None;
+        tracing::info!("Nativer Chat laut Betriebskonfiguration deaktiviert");
+        return Ok(None);
     }
 
     let Some(helix) = helix else {
         tracing::error!("TB_CHAT_ENABLED=1, aber kein HelixClient — Chat kann nicht starten");
-        return None;
+        return Ok(None);
     };
     let (Ok(client_id), Ok(client_secret)) = (
         std::env::var("TWITCH_CLIENT_ID"),
         std::env::var("TWITCH_CLIENT_SECRET"),
     ) else {
         tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_CLIENT_ID/SECRET fehlen");
-        return None;
+        return Ok(None);
     };
-    let Ok(refresh_token) = std::env::var("TWITCH_BOT_REFRESH_TOKEN") else {
-        tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_BOT_REFRESH_TOKEN fehlt");
-        return None;
+    let cipher = match cipher {
+        Some(cipher) => cipher,
+        None => {
+            tracing::error!("Bot-Zugang: Datenbank-Verschlüsselungsschlüssel fehlt");
+            return Ok(None);
+        }
     };
-
-    // Token-Boot: Access-Seed darf tot sein (Infisical-Stand), Refresh trägt.
+    let store = Arc::new(tb_chat::db_token_store::DatabaseTokenStore::new(
+        pool.clone(),
+        cipher,
+        client_id.clone(),
+    ));
+    let seeds = match store
+        .seed_and_load(tb_chat::token::load_seed_tokens())
+        .await
+    {
+        Ok(seeds) => seeds,
+        Err(reason @ tb_chat::db_token_store::BootstrapError::DatabaseUnavailable) => {
+            return Err(reason);
+        }
+        Err(reason) => {
+            tracing::error!(%reason, "Bot-Zugang aus Datenbank gesperrt");
+            return Ok(None);
+        }
+    };
+    let Some(refresh_token) = seeds.refresh_token else {
+        tracing::error!("Bot-Refresh-Token fehlt in der Datenbank");
+        return Ok(None);
+    };
     let token_manager = match BotTokenManager::new(client_id, client_secret) {
-        Ok(m) => {
-            let m = if let Some(writer) = tb_chat::InfisicalWriter::from_env() {
-                m.with_sink(Arc::new(writer))
-            } else {
-                tracing::warn!(
-                    "Bot-Token-Write-Back deaktiviert: INFISICAL_WRITE_TOKEN/Config fehlt — Env-Snapshot veraltet weiter"
-                );
-                m
-            };
-            Arc::new(m)
-        }
-        Err(e) => {
-            tracing::error!("BotTokenManager nicht initialisierbar: {e}");
-            return None;
+        Ok(manager) => Arc::new(manager.with_sink(store.clone())),
+        Err(_) => {
+            tracing::error!("BotTokenManager nicht initialisierbar");
+            return Ok(None);
         }
     };
-    let seed_access = std::env::var("TWITCH_BOT_TOKEN").ok();
+    let seed_access = seeds.access_token;
     if let Err(e) = token_manager
         .initialize(seed_access.as_deref(), &refresh_token)
         .await
     {
-        tracing::error!("Bot-Token-Boot fehlgeschlagen: {e} — nativer Chat bleibt aus");
-        return None;
+        if matches!(
+            e,
+            tb_chat::token::TokenError::PersistenceFailed
+                | tb_chat::token::TokenError::ValidationPending
+                | tb_chat::token::TokenError::ValidationExpired
+        ) {
+            tracing::error!("Bot-Token-Boot wartet auf Datenbank und Identitätsprüfung; Chat bleibt bis dahin gesperrt");
+            // Der Anbieter hat bereits rotiert. Den einzigen neuen Refresh
+            // nicht durch Verwerfen des Managers verlieren oder erneut rotieren.
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                match token_manager.access_token().await {
+                    Ok(_) => break,
+                    Err(
+                        tb_chat::token::TokenError::PersistenceFailed
+                        | tb_chat::token::TokenError::ValidationPending,
+                    ) => continue,
+                    Err(error) => {
+                        tracing::error!(%error, "Bot-Token-Boot nach Rückschreibung fehlgeschlagen");
+                        return Ok(None);
+                    }
+                }
+            }
+        } else {
+            tracing::error!("Bot-Token-Boot fehlgeschlagen: {e} — nativer Chat bleibt aus");
+            return Ok(None);
+        }
     }
     let bot_user_id = token_manager.bot_user_id().await;
+    if !store.healthy() {
+        return Err(tb_chat::db_token_store::BootstrapError::DatabaseUnavailable);
+    }
+    match store.bind_identity(&bot_user_id).await {
+        Ok(()) => {}
+        Err(reason @ tb_chat::db_token_store::BootstrapError::DatabaseUnavailable) => {
+            return Err(reason);
+        }
+        Err(reason) => {
+            tracing::error!(%reason, "Bot-Zugang konnte nicht dem richtigen Konto zugeordnet werden");
+            return Ok(None);
+        }
+    }
     let scopes = token_manager.scopes().await;
     tracing::info!(
         bot_login = %token_manager.bot_login().await,
@@ -603,6 +726,9 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<C
         "user:read:chat",
         "user:write:chat",
         "user:manage:whispers",
+        "moderator:manage:banned_users",
+        "moderator:manage:shoutouts",
+        "moderator:read:followers",
     ] {
         if !scopes.iter().any(|s| s == required) {
             tracing::warn!("Bot-Token ohne Scope {required} — Chat-Funktionen eingeschränkt");
@@ -613,21 +739,31 @@ pub async fn try_build_api(helix: Option<HelixClient>, pool: PgPool) -> Option<C
         Arc::new(helix),
         Arc::clone(&token_manager),
     ));
-    Some(ChatApiHandle {
+    Ok(Some(ChatApiHandle {
         api,
         bot_user_id,
         token_manager,
         roster: Arc::new(DbPartnerRoster { pool }),
-    })
+    }))
 }
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.
 pub struct ChatRuntimePorts {
+    pub title_context: tb_chat::steam_lookup::CoStreamRuntime,
+    pub discord_chat: tb_config::discord::DiscordChat,
     pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     pub clip_port: Option<Arc<dyn ClipPort>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
+    pub invite_channel_id: u64,
+    pub golive_tips_enabled: bool,
+    pub brain_client: tb_config::dashboard_options::BrainClientOptions,
+    pub brain_chat: tb_config::operations::BrainChatOptions,
+    pub brain_service_token: String,
+    pub chat_persist_all_games: bool,
+    pub lfg_pitch_enabled: bool,
+    pub review_log_directory: std::path::PathBuf,
     pub review_relay: Option<BrokerRelay>,
     pub member_relay: Option<BrokerRelay>,
     pub scam_notifier: Option<Arc<dyn ScamGuardNotifier>>,
@@ -643,11 +779,21 @@ pub async fn build_runtime(
     supervisor: TaskSupervisor,
 ) -> ChatRuntime {
     let ChatRuntimePorts {
+        title_context,
+        discord_chat,
         subscription_status,
         manual_raid,
         clip_port,
         bot_ban_handler,
         invite_relay,
+        invite_channel_id,
+        golive_tips_enabled,
+        brain_client,
+        brain_chat,
+        brain_service_token,
+        chat_persist_all_games,
+        lfg_pitch_enabled,
+        review_log_directory,
         review_relay,
         member_relay,
         scam_notifier,
@@ -677,6 +823,12 @@ pub async fn build_runtime(
         tracked_api,
         PolicyContext::Standard(policy_roster),
     ));
+    let zuschauer_register = member_relay.map(|relay| {
+        Arc::new(tb_chat::zuschauer_register::ZuschauerRegister::new(
+            pool.clone(),
+            Arc::new(BrokerMemberSource { relay }),
+        ))
+    });
 
     // Lern-Muster einmalig laden (Python lädt sie beim Bot-Start).
     let learned = LearnedPatterns::load(&pool).await;
@@ -724,11 +876,27 @@ pub async fn build_runtime(
     // Promo-Invite-Resolver: lazy On-Miss-Erstellung (PromoEngine) UND eager
     // Backfill beim Startup (P2.14) teilen sich denselben Resolver, damit beide
     // Pfade dieselbe Broker-/DB-Logik nutzen.
+    let voice_relay = invite_relay.clone();
     let invite_resolver = Arc::new(DbInviteResolver {
         pool: pool.clone(),
         relay: invite_relay,
-        invite_channel_id: invite_channel_id_from_env(),
+        invite_channel_id: Some(invite_channel_id),
+        fallback: discord_chat.promo_invite.clone(),
     });
+    if let Some(relay) = review_relay.clone() {
+        let pool = pool.clone();
+        supervisor.spawn("pitch_bewertung_loop", async move {
+            let quelle = BrokerReaktionsQuelle {
+                relay,
+                channel_id: PITCH_REVIEW_CHANNEL_ID,
+            };
+            let mut tick = tokio::time::interval(PITCH_BEWERTUNG_INTERVAL);
+            loop {
+                tick.tick().await;
+                tb_chat::pitch_bewertung::bewerte_offene_karten(&pool, &quelle).await;
+            }
+        });
+    }
     let pitch_review_sink: Option<Arc<dyn PitchReviewSink>> = review_relay.map(|relay| {
         Arc::new(DiscordPitchReviewSink {
             discord: Arc::new(relay),
@@ -747,7 +915,8 @@ pub async fn build_runtime(
                 Arc::clone(&token_manager) as Arc<dyn tb_chat::promos::BotScopeProvider>
             )
             .set_invite_resolver(Arc::clone(&invite_resolver) as Arc<dyn InviteResolver>)
-            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }));
+            .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() }))
+            .set_bot_user_id(bot_user_id.clone());
         if let Some(checker) = lurker_reward_checker {
             engine = engine.set_lurker_reward_checker(checker);
             tracing::info!("lurker-tax: Reward-Checker verdrahtet");
@@ -755,18 +924,16 @@ pub async fn build_runtime(
         if let Some(sink) = pitch_review_sink {
             engine = engine.set_pitch_review_sink(sink);
         }
-        if let Some(relay) = member_relay {
-            engine = engine.set_zuschauer_register(Arc::new(
-                tb_chat::zuschauer_register::ZuschauerRegister::new(
-                    pool.clone(),
-                    Arc::new(BrokerMemberSource { relay }),
-                ),
-            ));
+        if let Some(register) = zuschauer_register.clone() {
+            engine = engine.set_zuschauer_register(register);
         }
         engine
     });
 
-    let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink { pool: pool.clone() });
+    let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink {
+        pool: pool.clone(),
+        relay: invite_resolver.relay.clone(),
+    });
     let mut command_engine = CommandEngine::new(
         pool.clone(),
         Arc::clone(&api),
@@ -775,11 +942,18 @@ pub async fn build_runtime(
             pool: pool.clone(),
         }),
         Arc::clone(&discord_link),
-        Arc::new(DbInvitePort { pool: pool.clone() }),
+        Arc::new(DbInvitePort {
+            pool: pool.clone(),
+            fallback: discord_chat.promo_invite.clone(),
+        }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
-    ).set_sub_reminder(Arc::new(tb_chat::sub_reminder::SubReminder::new(
-        pool.clone(), Arc::clone(&api), subscription_status,
+    )
+    .set_title_context(title_context)
+    .set_sub_reminder(Arc::new(tb_chat::sub_reminder::SubReminder::new(
+        pool.clone(),
+        Arc::clone(&api),
+        subscription_status,
     )));
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
@@ -792,9 +966,6 @@ pub async fn build_runtime(
         Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>
     );
     let commands = Arc::new(command_engine);
-
-    let review_log_dir =
-        std::env::var("TB_CHAT_REVIEW_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
 
     // Spam-Filter halten, damit ein Hintergrund-Task die gelernten Muster
     // periodisch neu laden kann (Python-Cache-TTL 120 s). Ohne Reload griffen
@@ -816,11 +987,13 @@ pub async fn build_runtime(
     let account_age: Arc<dyn AccountAgePort> = Arc::new(HelixAccountAge {
         api: Arc::clone(&api),
     });
-    let alerter = Arc::new(ModAlerter::new(http.clone()));
-    let crew_judge: Arc<dyn CrewJudge> = Arc::new(OpenAiCrewJudge::from_env());
+    let alerter = Arc::new(ModAlerter::with_endpoint_and_channel_id(
+        http.clone(),
+        "http://localhost:8899/changelog",
+        discord_chat.moderation_alert_channel_id,
+    ));
     let scout_crew_guard = Arc::new(CrewGuard::new(
-        tb_chat::crew_guard::crew_guard_enabled(),
-        Arc::clone(&crew_judge),
+        true,
         Arc::clone(&alerter),
         pool.clone(),
         bot_user_id.clone(),
@@ -828,12 +1001,29 @@ pub async fn build_runtime(
         Arc::clone(&crew_centroid),
         true,
     ));
+    let lfg_judge: Arc<dyn tb_chat::lfg_pitch::LfgJudge> = Arc::new(LlmLfgJudge::new(
+        EngagementLlmClient::new(None, None, None, None),
+    ));
+    let brain_chat_port =
+        crate::brain_chat_wiring::build(crate::brain_chat_wiring::BrainChatBuild {
+            client: &brain_client,
+            options: &brain_chat,
+            token: &brain_service_token,
+            bot_login: &token_manager.bot_login().await,
+            bot_user_id: &bot_user_id,
+            api: Arc::clone(&api),
+            timeout_guard: Arc::clone(&timeout_guard),
+            pool: pool.clone(),
+        });
     let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
         pool: pool.clone(),
         classifier: Arc::new(ChannelClassifier::new(pool.clone())),
-        tracker: Arc::new(ChatterTracker::new(pool.clone())),
+        tracker: Arc::new(ChatterTracker::with_persist_all_games(
+            pool.clone(),
+            chat_persist_all_games,
+        )),
         global_ban: Arc::new(GlobalChatterBanEnforcer::new(pool.clone())),
         scam_pitch: Arc::new(ScamPitchDetector::new(
             Arc::clone(&api),
@@ -845,38 +1035,62 @@ pub async fn build_runtime(
         ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
         moderation,
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+        brain_chat: brain_chat_port,
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
         fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
-        standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api), pool.clone())),
+        standard_replies: Arc::new(tb_chat::StandardReplies::new(
+            Arc::clone(&api),
+            pool.clone(),
+        )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+            Arc::new(DbInviteUrlWithFallback {
+                pool: pool.clone(),
+                fallback: discord_chat.promo_invite.clone(),
+            }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
-            Arc::new(LlmInviteQuestionJudge::new(
-                EngagementLlmClient::new(None, None, None, None),
-            )),
-            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
-            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
-        )),
-        lfg_pitch: Arc::new(LfgPitchResponder::new(
-            Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
-            Arc::new(LlmLfgJudge::new(EngagementLlmClient::new(
+            Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
             ))),
-            lfg_pitch_enabled_from_env(),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
             Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
         )),
+        streamer_voice: voice_relay.map(|relay| {
+            Arc::new(tb_chat::streamer_voice::StreamerVoiceResponder::new(
+                Arc::new(StreamerVoiceResolver {
+                    pool: pool.clone(),
+                    relay,
+                }),
+                Arc::clone(&lfg_judge),
+                Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>,
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+            ))
+        }),
+        lfg_pitch: Arc::new({
+            let responder = LfgPitchResponder::new(
+                Arc::clone(&api),
+                Arc::new(DbInviteUrlWithFallback {
+                    pool: pool.clone(),
+                    fallback: discord_chat.promo_invite.clone(),
+                }),
+                Arc::clone(&lfg_judge),
+                lfg_pitch_enabled,
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+            );
+            match zuschauer_register.clone() {
+                Some(register) => responder.set_zuschauer_register(register),
+                None => responder,
+            }
+        }),
         promos: Arc::clone(&promos),
         commands,
         mention_resolver: Arc::new(PgHelixMentionResolver::new(pool.clone(), Arc::clone(&api))),
-        review_log: Arc::new(ReviewLog::new(review_log_dir)),
+        review_log: Arc::new(ReviewLog::new(review_log_directory)),
         alerter,
         account_age,
-        crew_judge,
         crew_centroid,
-        crew_review_trigger: None,
     }));
 
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
@@ -909,8 +1123,7 @@ pub async fn build_runtime(
         // Zweiter, anonymer Mitleser für Kanäle ohne `channel:bot`-Grant. Der
         // EventSub-Pfad oben sieht nur Partner-Kanäle; genau die fremden Kanäle
         // fehlen dort, in denen gelernt werden soll.
-        let learn_reader =
-            LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
+        let learn_reader = LearnIrcReader::new(pool.clone(), Arc::clone(&reaction_learning));
         supervisor.spawn("engagement_learn_irc_reader", async move {
             learn_reader.run().await;
             future::pending::<()>().await;
@@ -920,7 +1133,8 @@ pub async fn build_runtime(
     // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
     // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
     // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
-    let engagement_irc_reader = EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement));
+    let engagement_irc_reader =
+        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone());
     supervisor.spawn("engagement_irc_reader", async move {
         engagement_irc_reader.run().await;
         future::pending::<()>().await;
@@ -933,6 +1147,7 @@ pub async fn build_runtime(
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
         hooks: Arc::new(ChatHooks {
+            golive_tips_enabled,
             inner: inner_hooks,
             pipeline,
             api: Arc::clone(&api),
@@ -947,6 +1162,8 @@ pub async fn build_runtime(
             raid_greeting,
             reaction_learning,
         }),
+        patch_api: api,
+        patch_suppression: suppression,
         token_manager,
         promos,
         sweeper,
@@ -961,14 +1178,19 @@ pub async fn build_runtime(
     }
 }
 
-fn invite_channel_id_from_env() -> Option<u64> {
-    std::env::var("TWITCH_NOTIFY_CHANNEL_ID")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|&value| value > 0)
-}
-
 impl ChatRuntime {
+    pub fn patch_delivery_ports(
+        &self,
+    ) -> (
+        Arc<dyn ChatApi>,
+        Arc<dyn tb_chat::promos::OutboundSuppressionCheck>,
+    ) {
+        (
+            Arc::clone(&self.patch_api),
+            Arc::clone(&self.patch_suppression),
+        )
+    }
+
     /// Zentraler Bot-User-ID-Wert (P2.57): identisch mit dem `target_id`, den
     /// die inbound `channel.ban`-Telemetrie gegen den Bot prüft.
     pub fn bot_user_id(&self) -> String {
@@ -1306,19 +1528,32 @@ impl tb_chat::sub_reminder::SubscriptionStatus for HelixSubscriptionStatus {
     async fn active(&self, broadcaster_id: &str, viewer_id: &str) -> Option<bool> {
         let helix = self.helix.as_ref()?;
         let provider = self.token_provider.as_ref()?;
-        let token = provider.get_valid_token_unrestricted_with_scope(
-            broadcaster_id, chrono::Utc::now(), tb_chat::sub_reminder::SUB_SCOPE,
-        ).await.ok()??;
-        tokio::time::timeout(Duration::from_secs(8),
-            helix.broadcaster_subscription_active(broadcaster_id, viewer_id, &token))
-            .await.ok()?.ok()
+        let token = provider
+            .get_valid_token_unrestricted_with_scope(
+                broadcaster_id,
+                chrono::Utc::now(),
+                tb_chat::sub_reminder::SUB_SCOPE,
+            )
+            .await
+            .ok()??;
+        tokio::time::timeout(
+            Duration::from_secs(8),
+            helix.broadcaster_subscription_active(broadcaster_id, viewer_id, &token),
+        )
+        .await
+        .ok()?
+        .ok()
     }
 }
 
 pub fn build_subscription_status(
-    helix: Option<Arc<HelixClient>>, token_provider: Option<Arc<TokenProvider>>,
+    helix: Option<Arc<HelixClient>>,
+    token_provider: Option<Arc<TokenProvider>>,
 ) -> Arc<dyn tb_chat::sub_reminder::SubscriptionStatus> {
-    Arc::new(HelixSubscriptionStatus { helix, token_provider })
+    Arc::new(HelixSubscriptionStatus {
+        helix,
+        token_provider,
+    })
 }
 const LURKER_REWARD_CACHE_TTL: Duration = Duration::from_secs(60);
 
@@ -1370,7 +1605,10 @@ impl LurkerRewardChecker for HelixLurkerRewardChecker {
             }
         };
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(broadcaster_id.to_string(), (std::time::Instant::now(), exists));
+            cache.insert(
+                broadcaster_id.to_string(),
+                (std::time::Instant::now(), exists),
+            );
         }
         exists
     }
@@ -1381,10 +1619,14 @@ pub fn build_lurker_reward_checker(
     token_provider: Option<Arc<TokenProvider>>,
 ) -> Option<Arc<dyn LurkerRewardChecker>> {
     let (helix, token_provider) = (helix?, token_provider?);
-    Some(Arc::new(HelixLurkerRewardChecker::new(helix, token_provider)) as Arc<dyn LurkerRewardChecker>)
+    Some(
+        Arc::new(HelixLurkerRewardChecker::new(helix, token_provider))
+            as Arc<dyn LurkerRewardChecker>,
+    )
 }
 
 struct ChatHooks {
+    golive_tips_enabled: bool,
     inner: Arc<dyn EventSubHooks>,
     pipeline: Arc<ChatPipeline>,
     /// Go-Live-Tipp-Hook: nutzt denselben dekorierten Chat-Sendepfad wie die
@@ -1517,8 +1759,8 @@ impl ChatHooks {
         // Go-Live-Tipps sind temporär global deaktiviert (GH #565): Die Tipp-Texte
         // sind inhaltlich zu schwach ("das wusste ich schon") und werden überarbeitet.
         // Bis dahin bleibt nur der Versand gesperrt — Auswahl-/Gate-/Persistenz-Logik
-        // darunter ist unverändert. Reaktivierung ohne Rebuild via TB_GOLIVE_TIPS_ENABLED=1.
-        if std::env::var("TB_GOLIVE_TIPS_ENABLED").as_deref() != Ok("1") {
+        // darunter ist unverändert. Freigabe über bot.golive_tips_enabled in TOML.
+        if !self.golive_tips_enabled {
             return;
         }
 
@@ -2016,9 +2258,49 @@ impl AccountAgePort for HelixAccountAge {
 
 const PITCH_REVIEW_CHANNEL_ID: i64 = 1_374_364_800_817_303_632;
 const PITCH_REVIEW_GOLD: i64 = 0x00C8_A86B;
+const PITCH_BEWERTUNG_INTERVAL: Duration = Duration::from_secs(600);
 
 struct DiscordPitchReviewSink {
     discord: Arc<dyn DiscordBackend>,
+}
+
+struct BrokerReaktionsQuelle {
+    relay: BrokerRelay,
+    channel_id: i64,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::pitch_bewertung::ReaktionsQuelle for BrokerReaktionsQuelle {
+    async fn reaktionen(
+        &self,
+        message_id: &str,
+    ) -> Result<
+        Option<Vec<tb_chat::pitch_bewertung::Reaktion>>,
+        tb_chat::pitch_bewertung::ReaktionsFehler,
+    > {
+        match self
+            .relay
+            .get_message_reactions(&self.channel_id.to_string(), message_id)
+            .await
+        {
+            Ok(antwort) => {
+                if !antwort.found {
+                    return Ok(None);
+                }
+                Ok(Some(
+                    antwort
+                        .reactions
+                        .into_iter()
+                        .map(|reaktion| tb_chat::pitch_bewertung::Reaktion {
+                            emoji: reaktion.emoji,
+                            count: reaktion.count as i64,
+                        })
+                        .collect(),
+                ))
+            }
+            Err(error) => Err(tb_chat::pitch_bewertung::ReaktionsFehler(error.to_string())),
+        }
+    }
 }
 
 fn neutralize_pitch_mentions(value: &str) -> String {
@@ -2091,13 +2373,17 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         reply: &str,
         kind: PitchCardKind,
         candidate_hint: Option<&str>,
-    ) {
+    ) -> Option<i64> {
         let title = match kind {
             PitchCardKind::Anlass => "Anlass-Pitch",
             PitchCardKind::Partner => "Partner-Pitch",
         };
         let mut displays = vec![
-            format!("**{}** in `{}`", title, neutralize_pitch_codespan(channel_login)),
+            format!(
+                "**{}** in `{}`",
+                title,
+                neutralize_pitch_codespan(channel_login)
+            ),
             format!("An **{}**", neutralize_pitch_field(target_login)),
             format!("> {}", neutralize_pitch_field(trigger)),
             format!("Antwort: {}", neutralize_pitch_field(reply)),
@@ -2105,6 +2391,8 @@ impl PitchReviewSink for DiscordPitchReviewSink {
         if let Some(hint) = candidate_hint {
             displays.push(neutralize_pitch_field(hint));
         }
+        displays
+            .push("Daumen hoch oder Daumen runter als Reaktion, der Bot lernt daraus.".to_string());
         let payload = SendRichMessage {
             channel_id: PITCH_REVIEW_CHANNEL_ID,
             content: None,
@@ -2120,8 +2408,12 @@ impl PitchReviewSink for DiscordPitchReviewSink {
             allowed_role_ids: vec![],
             view_spec: None,
         };
-        if let Err(error) = self.discord.send_rich_message(payload).await {
-            tracing::warn!(%error, channel = channel_login, kind = title, "Pitch-Review-Karte fehlgeschlagen");
+        match self.discord.send_rich_message(payload).await {
+            Ok(result) => result.result.message_id.parse::<i64>().ok(),
+            Err(error) => {
+                tracing::warn!(%error, channel = channel_login, kind = title, "Pitch-Review-Karte fehlgeschlagen");
+                None
+            }
         }
     }
 }
@@ -2132,9 +2424,7 @@ struct BrokerMemberSource {
 
 #[async_trait::async_trait]
 impl tb_chat::zuschauer_register::MemberIndexSource for BrokerMemberSource {
-    async fn fetch_members(
-        &self,
-    ) -> Option<Vec<tb_chat::zuschauer_register::MemberLite>> {
+    async fn fetch_members(&self) -> Option<Vec<tb_chat::zuschauer_register::MemberLite>> {
         match self.relay.list_members().await {
             Ok(members) => Some(
                 members
@@ -2268,7 +2558,7 @@ async fn toggle_partner_flag(
          ) \
          RETURNING {flag}"
     );
-    let new_value: Option<i32> = sqlx::query_scalar(&sql)
+    let new_value: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(broadcaster_id)
         .fetch_optional(pool)
         .await
@@ -2279,10 +2569,32 @@ async fn toggle_partner_flag(
 /// !dldc/!dlde — Discord-Invite des Streamers (discord_invite.rs-SQL).
 struct DbDiscordLink {
     pool: PgPool,
+    relay: Option<BrokerRelay>,
 }
 
 #[async_trait::async_trait]
 impl DiscordLinkPort for DbDiscordLink {
+    async fn personal_discord_invite(
+        &self,
+        broadcaster_id: &str,
+        streamer_login: &str,
+        inviter_twitch_user_id: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(relay) = &self.relay else {
+            return self.discord_invite(broadcaster_id).await;
+        };
+        match relay
+            .personal_invite(streamer_login, broadcaster_id, inviter_twitch_user_id)
+            .await
+        {
+            Ok(invite) => Ok(Some(invite.invite_url)),
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Persönlicher Discord-Link nicht verfügbar; verwende Kanallink");
+                self.discord_invite(broadcaster_id).await
+            }
+        }
+    }
+
     async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String> {
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT invite_url FROM twitch_streamer_invites WHERE twitch_user_id = $1",
@@ -2298,6 +2610,7 @@ impl DiscordLinkPort for DbDiscordLink {
 /// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
 struct DbInviteUrlWithFallback {
     pool: PgPool,
+    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2314,17 +2627,14 @@ impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
         Ok(row
             .map(|(url,)| url)
             .filter(|url| !url.trim().is_empty())
-            .or_else(|| {
-                std::env::var(PROMO_DISCORD_INVITE_ENV)
-                    .ok()
-                    .filter(|url| !url.trim().is_empty())
-            }))
+            .or_else(|| self.fallback.clone()))
     }
 }
 
 /// !invite — Antwortzeile unabhängig von Streamstatus und Kategorie.
 struct DbInvitePort {
     pool: PgPool,
+    fallback: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -2345,11 +2655,7 @@ impl InvitePort for DbInvitePort {
         let invite_url = row
             .map(|(url,)| url)
             .filter(|u| !u.trim().is_empty())
-            .or_else(|| {
-                std::env::var(PROMO_DISCORD_INVITE_ENV)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-            });
+            .or_else(|| self.fallback.clone());
         let Some(invite_url) = invite_url else {
             return Ok(None);
         };
@@ -2412,6 +2718,7 @@ impl PartnerChannelCheck for DbPartnerCheck {
 /// Promo-Invite: streamer-spezifisch → Broker-Erstellung → globaler Fallback.
 struct DbInviteResolver {
     pool: PgPool,
+    fallback: Option<String>,
     relay: Option<BrokerRelay>,
     invite_channel_id: Option<u64>,
 }
@@ -2436,10 +2743,7 @@ impl InviteResolver for DbInviteResolver {
         if let Some(url) = self.create_and_store_streamer_invite(channel_login).await {
             return (url, true);
         }
-        (
-            promo_invite_fallback(std::env::var(PROMO_DISCORD_INVITE_ENV).ok().as_deref()),
-            false,
-        )
+        (promo_invite_fallback(self.fallback.as_deref()), false)
     }
 }
 
@@ -2605,6 +2909,11 @@ impl DbInviteResolver {
 /// Partner-Roster für den Global-Ban-Sweeper (global_ban_sweep.py Z. 145–197).
 struct DbPartnerRoster {
     pool: PgPool,
+}
+
+#[cfg(test)]
+pub(crate) fn patch_test_policy_roster(pool: PgPool) -> Arc<dyn PartnerRoster> {
+    Arc::new(DbPartnerRoster { pool })
 }
 
 #[async_trait::async_trait]
@@ -3091,6 +3400,7 @@ mod chat_notification_tests {
             source_broadcaster_user_id: None,
             source_broadcaster_user_login: None,
             source_message_id: None,
+            reply: None,
         }
     }
 
@@ -3128,18 +3438,23 @@ mod chat_notification_tests {
             ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone())),
             moderation,
             sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
+            brain_chat: None,
             fun: Arc::new(FunResponses::new(Arc::clone(&api_trait), false)),
-            standard_replies: Arc::new(tb_chat::StandardReplies::new(Arc::clone(&api_trait), pool.clone())),
+            standard_replies: Arc::new(tb_chat::StandardReplies::new(
+                Arc::clone(&api_trait),
+                pool.clone(),
+            )),
             invite_question: Arc::new(InviteQuestionResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
                 Arc::new(PgInviteQuestionStore::new(pool.clone())),
-                Arc::new(LlmInviteQuestionJudge::new(
-                    EngagementLlmClient::new(None, None, None, None),
-                )),
+                Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
+                    None, None, None, None,
+                ))),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
+            streamer_voice: None,
             lfg_pitch: Arc::new(LfgPitchResponder::new(
                 Arc::clone(&api_trait),
                 Arc::new(NoopDiscordLink),
@@ -3148,6 +3463,7 @@ mod chat_notification_tests {
                 ))),
                 false,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                None,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
             )),
             promos,
@@ -3167,9 +3483,7 @@ mod chat_notification_tests {
                 "http://127.0.0.1:1/changelog",
             )),
             account_age: Arc::new(NoopAccountAge),
-            crew_judge: Arc::new(OpenAiCrewJudge::from_env()),
             crew_centroid: Arc::new(Centroid::default()),
-            crew_review_trigger: None,
         })
     }
 
@@ -3180,11 +3494,13 @@ mod chat_notification_tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -3588,18 +3904,21 @@ mod db_tests {
     use std::str::FromStr;
 
     async fn setup(schema: &str) -> PgPool {
-        let url = std::env::var("TB_TEST_DATABASE_URL")
-            .expect("TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren");
+        let url = std::env::var("TB_TEST_DATABASE_URL").expect(
+            "TB_TEST_DATABASE_URL fehlt — `rust/scripts/test_db.sh up` und die URL exportieren",
+        );
         let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin)
             .await
             .unwrap();
@@ -3844,6 +4163,7 @@ mod db_tests {
             pool: pool.clone(),
             relay: None,
             invite_channel_id: None,
+            fallback: None,
         };
         let logins = resolver.partners_without_invite().await.unwrap();
         assert_eq!(logins, vec!["fresh".to_string()]);
@@ -3852,7 +4172,7 @@ mod db_tests {
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
-mod invite_test_postgres;
+pub(crate) mod invite_test_postgres;
 
 #[cfg(test)]
 mod invite_offline_tests {
@@ -3882,7 +4202,10 @@ mod invite_offline_tests {
             .execute(&pool)
             .await
             .unwrap();
-        let port = DbInvitePort { pool: pool.clone() };
+        let port = DbInvitePort {
+            pool: pool.clone(),
+            fallback: None,
+        };
         for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
             sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
                 .bind(live)
@@ -3951,6 +4274,7 @@ mod command_adapter_regressions {
             .execute(&db.pool).await.unwrap();
         let port = DbDiscordLink {
             pool: db.pool.clone(),
+            relay: None,
         };
         assert_eq!(
             port.discord_invite("own").await.unwrap().as_deref(),
@@ -3958,5 +4282,252 @@ mod command_adapter_regressions {
         );
         assert!(port.discord_invite("newname").await.unwrap().is_none());
         assert!(port.discord_invite("").await.unwrap().is_none());
+    }
+}
+
+/// Resolve the established Twitch/Discord identity by platform ID. A stale or
+/// disabled partner never causes a Discord write, even if an old chat event arrives.
+struct StreamerVoiceResolver {
+    pool: PgPool,
+    relay: BrokerRelay,
+}
+
+async fn eligible_voice_streamer_id(
+    pool: &PgPool,
+    broadcaster_id: &str,
+) -> Result<Option<u64>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "WITH normalized_identities AS (
+             SELECT twitch_user_id,
+                    CASE WHEN trimmed_discord_id ~ '^[0-9]+$'
+                         THEN NULLIF(ltrim(trimmed_discord_id, '0'), '')
+                    END AS discord_user_id
+               FROM (
+                   SELECT twitch_user_id,
+                          regexp_replace(discord_user_id, '^[[:space:]]+|[[:space:]]+$', '', 'g') AS trimmed_discord_id
+                     FROM twitch_streamer_identities
+               ) identities
+         )
+         SELECT i.discord_user_id, l.last_seen_at
+             FROM twitch_partners p
+             JOIN twitch_streamers_partner_state ps ON ps.twitch_user_id = p.twitch_user_id
+             JOIN normalized_identities i ON i.twitch_user_id = p.twitch_user_id
+             JOIN twitch_live_state l ON l.twitch_user_id = p.twitch_user_id
+             WHERE p.twitch_user_id = $1 AND ps.is_partner_active = 1
+               AND p.status = 'active'
+               AND p.departnered_at IS NULL AND p.admin_archived_at IS NULL
+               AND COALESCE(p.manual_partner_opt_out, 0) = 0
+               AND i.discord_user_id IS NOT NULL
+               AND l.is_live = 1 AND lower(l.last_game) = 'deadlock'
+               AND NOT EXISTS (
+                   SELECT 1 FROM normalized_identities other
+                    WHERE other.discord_user_id = i.discord_user_id
+                      AND other.twitch_user_id <> i.twitch_user_id
+               )",
+    )
+    .bind(broadcaster_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((Some(discord_id), Some(seen))) = row else {
+        return Ok(None);
+    };
+    let Ok(streamer_id) = discord_id.parse::<u64>() else {
+        return Ok(None);
+    };
+    if streamer_id == 0 {
+        return Ok(None);
+    }
+    let Ok(seen) = chrono::DateTime::parse_from_rfc3339(&seen) else {
+        return Ok(None);
+    };
+    let age = chrono::Utc::now().signed_duration_since(seen);
+    if age < chrono::Duration::seconds(-5) || age > chrono::Duration::minutes(5) {
+        return Ok(None);
+    }
+    Ok(Some(streamer_id))
+}
+
+#[async_trait::async_trait]
+impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
+    async fn invite_for(
+        &self,
+        broadcaster_id: &str,
+        message_id: &str,
+    ) -> Result<Option<tb_chat::streamer_voice::VoiceInvite>, String> {
+        let Some(streamer_id) = eligible_voice_streamer_id(&self.pool, broadcaster_id)
+            .await
+            .map_err(|_| "voice_identity_unavailable".to_string())?
+        else {
+            return Ok(None);
+        };
+        self.relay
+            .streamer_voice_invite(1289721245281292288, streamer_id, message_id)
+            .await
+            .map(|invite| {
+                invite.map(|invite| tb_chat::streamer_voice::VoiceInvite {
+                    url: invite.invite_url,
+                    slot_added: invite.slot_added,
+                })
+            })
+            .map_err(|_| "voice_broker_unavailable".to_string())
+    }
+}
+
+#[cfg(test)]
+mod voice_identity_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn voice_identity_braucht_aktiven_partner_eindeutige_ids_und_frisches_deadlock_live() {
+        let database = invite_test_postgres::TestPostgres::start().await;
+        let pool = &database.pool;
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, status TEXT, departnered_at TEXT, admin_archived_at TEXT, manual_partner_opt_out INTEGER);
+             CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, is_partner_active INTEGER);
+             CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT);
+             CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INTEGER, last_game TEXT, last_seen_at TEXT);
+             INSERT INTO twitch_partners VALUES ('123', 'active', NULL, NULL, 0);
+             INSERT INTO twitch_streamers_partner_state VALUES ('123', 1);
+             INSERT INTO twitch_streamer_identities VALUES ('123', '555');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_live_state VALUES ('123', 1, 'Deadlock', $1)")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            eligible_voice_streamer_id(pool, "123").await.unwrap(),
+            Some(555)
+        );
+        assert_eq!(eligible_voice_streamer_id(pool, "999").await.unwrap(), None);
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX discord_user_id_raw_unique ON twitch_streamer_identities (discord_user_id) WHERE discord_user_id IS NOT NULL AND discord_user_id <> ''")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', ' 555 ')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '0555')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', $1)")
+            .bind("\t555\t")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = ' 555 ' WHERE twitch_user_id = '123'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            eligible_voice_streamer_id(pool, "123").await.unwrap(),
+            Some(555)
+        );
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        for discord_id in ["0555", "\t555\t"] {
+            sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = $1 WHERE twitch_user_id = '123'")
+                .bind(discord_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                eligible_voice_streamer_id(pool, "123").await.unwrap(),
+                Some(555)
+            );
+            sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('999', '555')")
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+            sqlx::query("DELETE FROM twitch_streamer_identities WHERE twitch_user_id = '999'")
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = '18446744073709551615' WHERE twitch_user_id = '123'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            eligible_voice_streamer_id(pool, "123").await.unwrap(),
+            Some(u64::MAX)
+        );
+        for discord_id in ["+555", "18446744073709551616", "kein-discord-id"] {
+            sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = $1 WHERE twitch_user_id = '123'")
+                .bind(discord_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        }
+        sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id = '555' WHERE twitch_user_id = '123'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE twitch_live_state SET last_game = 'Andere Kategorie'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("UPDATE twitch_live_state SET last_game = 'Deadlock', last_seen_at = '2020-01-01T00:00:00Z'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
+        sqlx::query("UPDATE twitch_live_state SET last_seen_at = $1")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active = 0")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(eligible_voice_streamer_id(pool, "123").await.unwrap(), None);
     }
 }

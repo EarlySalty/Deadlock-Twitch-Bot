@@ -131,7 +131,8 @@ struct AnnouncementSecretPatterns {
 fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
     static PATTERNS: OnceLock<AnnouncementSecretPatterns> = OnceLock::new();
     PATTERNS.get_or_init(|| {
-        const KEYS: &str = r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
+        const KEYS: &str =
+            r"access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization";
         let compile = |p: &str| Regex::new(p).unwrap_or_else(|_| Regex::new(r"$.^").unwrap());
         AnnouncementSecretPatterns {
             header: compile(r"(?i)\b(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,;}]+)"),
@@ -150,22 +151,24 @@ fn announcement_secret_patterns() -> &'static AnnouncementSecretPatterns {
 
 fn redact_announcement_detail(raw: &str) -> String {
     let p = announcement_secret_patterns();
-    let s = p
-        .header
-        .replace_all(raw, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .bearer
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
-    let s = p
-        .quoted_kv
-        .replace_all(&s, |c: &regex::Captures| format!("{}{}", &c[1], mask_secret(&c[2])));
+    let s = p.header.replace_all(raw, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.bearer.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
+    let s = p.quoted_kv.replace_all(&s, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_secret(&c[2]))
+    });
     let s = p.kv.replace_all(&s, |c: &regex::Captures| {
         format!("{}{}{}", &c[1], &c[2], mask_secret(&c[3]))
     });
-    let s = p
-        .query
-        .replace_all(&s, |c: &regex::Captures| format!("{}={}", &c[1], mask_secret(&c[2])));
-    p.jwt.replace_all(&s, mask_secret("[jwt]").as_str()).into_owned()
+    let s = p.query.replace_all(&s, |c: &regex::Captures| {
+        format!("{}={}", &c[1], mask_secret(&c[2]))
+    });
+    p.jwt
+        .replace_all(&s, mask_secret("[jwt]").as_str())
+        .into_owned()
 }
 
 /// Drop-Reason aus der Helix-Antwort auf `POST /chat/messages`.
@@ -296,12 +299,45 @@ impl HelixClient {
         message: &str,
         user_token: &str,
     ) -> Result<SendOutcome, HelixError> {
+        self.send_chat_message_with_parent(broadcaster_id, sender_id, message, user_token, None)
+            .await
+    }
+
+    pub async fn send_chat_reply(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        reply_parent_message_id: &str,
+        user_token: &str,
+    ) -> Result<SendOutcome, HelixError> {
+        self.send_chat_message_with_parent(
+            broadcaster_id,
+            sender_id,
+            message,
+            user_token,
+            Some(reply_parent_message_id),
+        )
+        .await
+    }
+
+    async fn send_chat_message_with_parent(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        user_token: &str,
+        reply_parent_message_id: Option<&str>,
+    ) -> Result<SendOutcome, HelixError> {
         let url = format!("{}/chat/messages", self.helix_config().helix_base);
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "broadcaster_id": broadcaster_id,
             "sender_id": sender_id,
             "message": message,
         });
+        if let Some(parent) = reply_parent_message_id {
+            body["reply_parent_message_id"] = parent.into();
+        }
         let resp = self
             .http_client()
             .post(&url)
@@ -346,6 +382,96 @@ impl HelixClient {
                 })
             }
         }
+    }
+
+    pub async fn send_source_only_chat_message(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+    ) -> Result<SendOutcome, HelixError> {
+        self.send_source_only_chat_message_guarded(broadcaster_id, sender_id, message, || Ok(()))
+            .await
+    }
+
+    pub async fn send_source_only_chat_message_guarded<C>(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        pre_send_check: C,
+    ) -> Result<SendOutcome, HelixError>
+    where
+        C: FnOnce() -> Result<(), &'static str> + Send,
+    {
+        let request = self
+            .post("/chat/messages")
+            .await?
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "broadcaster_id": broadcaster_id,
+                "sender_id": sender_id,
+                "message": message,
+                "for_source_only": true,
+            }));
+        if let Err(code) = pre_send_check() {
+            return Ok(SendOutcome::Dropped {
+                code: code.to_string(),
+                message: String::new(),
+            });
+        }
+        let resp = request
+            .send()
+            .await
+            .map_err(|_| HelixError::AmbiguousOutcome {
+                reason: "source_only_chat_send_failed",
+            })?;
+
+        let status = resp.status().as_u16();
+        if status == 200 {
+            let parsed: SendMessageResponse = match resp.json().await {
+                Ok(parsed) => parsed,
+                Err(_) => {
+                    return Ok(SendOutcome::HttpError {
+                        status,
+                        body: "response_body_unreadable".to_string(),
+                    });
+                }
+            };
+            let [item] = parsed.data.as_slice() else {
+                return Ok(SendOutcome::HttpError {
+                    status,
+                    body: "response_result_missing".to_string(),
+                });
+            };
+            if item.is_sent {
+                return Ok(SendOutcome::Sent);
+            }
+            let (code, msg) = item
+                .drop_reason
+                .as_ref()
+                .map(|r| (r.code.clone(), redact_announcement_detail(&r.message)))
+                .unwrap_or_else(|| ("unknown".to_string(), String::new()));
+            return Ok(SendOutcome::Dropped {
+                code,
+                message: msg.chars().take(300).collect(),
+            });
+        }
+        if (200..300).contains(&status) {
+            return Ok(SendOutcome::HttpError {
+                status,
+                body: String::new(),
+            });
+        }
+        if status == 401 {
+            self.invalidate_app_token().await;
+        }
+        let body_text = resp.text().await.unwrap_or_default();
+        let body = redact_announcement_detail(&body_text);
+        Ok(SendOutcome::HttpError {
+            status,
+            body: body.chars().take(300).collect(),
+        })
     }
 
     /// Sendet einen Whisper via `POST /whispers`.
@@ -728,7 +854,7 @@ pub fn parse_created_at(s: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
     use crate::client::{HelixClient, HelixConfig};
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{body_json, body_partial_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Baut einen HelixClient gegen einen MockServer (ohne App-Token-Präfetch).
@@ -765,6 +891,31 @@ mod tests {
             .await;
         let result = client
             .send_chat_message("111", "bot1", "Hallo!", "bot-tok")
+            .await
+            .unwrap();
+        assert_eq!(result, SendOutcome::Sent);
+    }
+
+    #[tokio::test]
+    async fn send_chat_reply_sets_parent_message_id() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(body_json(serde_json::json!({
+                "broadcaster_id": "111",
+                "sender_id": "bot1",
+                "message": "Antwort",
+                "reply_parent_message_id": "question-123"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"message_id": "reply-123", "is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = client
+            .send_chat_reply("111", "bot1", "Antwort", "question-123", "bot-tok")
             .await
             .unwrap();
         assert_eq!(result, SendOutcome::Sent);
@@ -839,6 +990,315 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn source_only_pre_send_check_runs_after_app_token_refresh() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc, Mutex};
+        use wiremock::{Request, Respond};
+
+        struct PausedTokenRefresh {
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl Respond for PausedTokenRefresh {
+            fn respond(&self, _: &Request) -> ResponseTemplate {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "app-tok",
+                    "expires_in": 3600
+                }))
+            }
+        }
+
+        let server = MockServer::start().await;
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(PausedTokenRefresh {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let mut config = HelixConfig::new("cid", "sec");
+        config.helix_base = format!("{}/helix", server.uri());
+        config.token_url = format!("{}/oauth2/token", server.uri());
+        let client = Arc::new(HelixClient::new(config).unwrap());
+        let muted = Arc::new(AtomicBool::new(false));
+        let sending = {
+            let client = Arc::clone(&client);
+            let muted = Arc::clone(&muted);
+            tokio::spawn(async move {
+                client
+                    .send_source_only_chat_message_guarded("111", "222", "Patch!", move || {
+                        if muted.load(Ordering::SeqCst) {
+                            Err("source_only_chat_muted")
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .await
+            })
+        };
+
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+        muted.store(true, Ordering::SeqCst);
+        release_tx.send(()).unwrap();
+
+        assert_eq!(
+            sending.await.unwrap().unwrap(),
+            SendOutcome::Dropped {
+                code: "source_only_chat_muted".to_string(),
+                message: String::new(),
+            }
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_uses_app_token_and_explicit_source_flag() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .and(header("Client-Id", "cid"))
+            .and(body_partial_json(serde_json::json!({
+                "broadcaster_id": "111",
+                "sender_id": "222",
+                "message": "Patch!",
+                "for_source_only": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"message_id": "abc", "is_sent": true}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::Sent
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_200_not_sent_redacts_drop_reason() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "is_sent": false,
+                    "drop_reason": {
+                        "code": "sender_timedout",
+                        "message": "Authorization: Bearer fixture-token-123 access_token=credential-fixture-456"
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let SendOutcome::Dropped { code, message } = client
+            .send_source_only_chat_message("111", "222", "Patch!")
+            .await
+            .unwrap()
+        else {
+            panic!("expected dropped outcome")
+        };
+        assert_eq!(code, "sender_timedout");
+        assert!(!message.contains("fixture-token-123"));
+        assert!(!message.contains("credential-fixture-456"));
+        assert!(message.contains("[redacted:"));
+    }
+
+    #[tokio::test]
+    async fn source_only_http_error_redacts_body_before_truncating() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(403).set_body_string(
+                "Authorization: Bearer fixture-token-123 access_token=credential-fixture-456",
+            ))
+            .mount(&server)
+            .await;
+
+        let SendOutcome::HttpError { status, body } = client
+            .send_source_only_chat_message("111", "222", "Patch!")
+            .await
+            .unwrap()
+        else {
+            panic!("expected HTTP error outcome")
+        };
+        assert_eq!(status, 403);
+        assert!(!body.contains("fixture-token-123"));
+        assert!(!body.contains("credential-fixture-456"));
+        assert!(body.contains("[redacted:"));
+    }
+
+    #[tokio::test]
+    async fn source_only_401_does_not_retry_with_user_token() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer app-tok"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("missing grant"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::HttpError {
+                status: 401,
+                body: "missing grant".to_string()
+            }
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_post_disconnect_before_response_is_ambiguous_without_retry() {
+        use std::io::{BufRead, Read};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let token_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok",
+                "expires_in": 3600
+            })))
+            .mount(&token_server)
+            .await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let received_count = Arc::clone(&request_count);
+        let server_thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            received_count.fetch_add(1, Ordering::SeqCst);
+            let mut request = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            let mut content_length = 0;
+            loop {
+                line.clear();
+                request.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line
+                    .strip_prefix("content-length:")
+                    .or_else(|| line.strip_prefix("Content-Length:"))
+                {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut body = vec![0; content_length];
+            request.read_exact(&mut body).unwrap();
+        });
+
+        let mut config = HelixConfig::new("cid", "sec");
+        config.helix_base = format!("http://{address}/helix");
+        config.token_url = format!("{}/oauth2/token", token_server.uri());
+        let client = HelixClient::new(config).unwrap();
+
+        assert!(matches!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await,
+            Err(HelixError::AmbiguousOutcome {
+                reason: "source_only_chat_send_failed"
+            })
+        ));
+        server_thread.join().unwrap();
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn source_only_204_retains_status_without_claiming_delivery_or_retrying() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_source_only_chat_message("111", "222", "Patch!")
+                .await
+                .unwrap(),
+            SendOutcome::HttpError {
+                status: 204,
+                body: String::new(),
+            }
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_ambiguous_success_never_claims_delivery() {
+        for (status, body) in [
+            (200, "not-json"),
+            (200, r#"{"data":[]}"#),
+            (200, r#"{"data":[{"is_sent":true},{"is_sent":true}]}"#),
+        ] {
+            let server = MockServer::start().await;
+            let client = mock_client(&server).await;
+            Mock::given(method("POST"))
+                .and(path("/helix/chat/messages"))
+                .respond_with(ResponseTemplate::new(status).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let expected_reason = if body == "not-json" {
+                "response_body_unreadable"
+            } else {
+                "response_result_missing"
+            };
+            assert_eq!(
+                client
+                    .send_source_only_chat_message("111", "222", "Patch!")
+                    .await
+                    .unwrap(),
+                SendOutcome::HttpError {
+                    status: 200,
+                    body: expected_reason.to_string(),
+                }
+            );
+            server.verify().await;
+        }
+    }
+
     // -----------------------------------------------------------------------
     // send_announcement
     // -----------------------------------------------------------------------
@@ -854,12 +1314,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -871,12 +1329,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .send_announcement("111", "bot1", "msg", "blue", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .send_announcement("111", "bot1", "msg", "blue", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -888,12 +1344,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(
-            !client
-                .send_announcement("111", "bot1", "msg", "purple", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(!client
+            .send_announcement("111", "bot1", "msg", "purple", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1104,12 +1558,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
-        assert!(
-            client
-                .delete_chat_message("111", "bot1", "msg-abc", "tok")
-                .await
-                .unwrap()
-        );
+        assert!(client
+            .delete_chat_message("111", "bot1", "msg-abc", "tok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1121,12 +1573,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(
-            !client
-                .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
-                .await
-                .unwrap()
-        );
+        assert!(!client
+            .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
+            .await
+            .unwrap());
     }
 
     // -----------------------------------------------------------------------
@@ -1149,10 +1599,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let users = client
-            .get_users_created_at(&["123"], "tok")
-            .await
-            .unwrap();
+        let users = client.get_users_created_at(&["123"], "tok").await.unwrap();
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].login, "testuser");
         let dt = parse_created_at(&users[0].created_at);
@@ -1199,10 +1646,7 @@ mod tests {
         let client = mock_client(&server).await;
         Mock::given(method("GET"))
             .and(path("/helix/users"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data": []})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
             .mount(&server)
             .await;
         let user = client.get_user_by_login("nobody", "tok").await.unwrap();

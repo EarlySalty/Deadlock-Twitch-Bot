@@ -767,9 +767,14 @@ pub async fn cancel_scheduled_uploads(
     }
     let mut tx = pool.begin().await?;
 
+    sqlx::query("SELECT id FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
+        .bind(i64::from(clip_db_id))
+        .fetch_one(&mut *tx)
+        .await?;
+
     let already_running: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM twitch_clips_upload_queue \
-         WHERE clip_id = $1 AND status IN ('processing', 'completed')",
+         WHERE clip_id = $1 AND status IN ('processing', 'completed', 'inbox', 'inbox_pending')",
     )
     .bind(i64::from(clip_db_id))
     .fetch_one(&mut *tx)
@@ -845,11 +850,11 @@ async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -
         "instagram" => "uploaded_instagram",
         _ => return true,
     };
-    let row: Option<(Option<bool>, bool)> = sqlx::query_as(&format!(
+    let row: Option<(Option<bool>, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {column}, EXISTS(SELECT 1 FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status <> 'failed') \
          FROM twitch_clips_social_media WHERE id = $3 LIMIT 1"
-    ))
+    )))
     .bind(clip_db_id as i64)
     .bind(platform)
     .bind(clip_db_id as i64)
@@ -878,11 +883,11 @@ mod tests {
             .connect(&dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -1129,6 +1134,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn abbruch_meldet_tiktok_reservierung_und_postfach_als_laufend() {
+        for (schema, status) in [
+            ("t_sm_cancel_tiktok_pending", "inbox_pending"),
+            ("t_sm_cancel_tiktok_inbox", "inbox"),
+        ] {
+            let Some(pool) = make_pool(schema).await else {
+                return;
+            };
+            let clip = seed_clip(&pool).await;
+            handle_decision(
+                &pool,
+                clip,
+                "approve",
+                &["youtube".into(), "tiktok".into()],
+                None,
+            )
+            .await
+            .unwrap();
+            sqlx::query("UPDATE twitch_clips_upload_queue SET status = $1 WHERE clip_id = $2 AND platform = 'tiktok'")
+                .bind(status).bind(i64::from(clip)).execute(&pool).await.unwrap();
+            let outcome = cancel_scheduled_uploads(&pool, clip).await.unwrap();
+            assert_eq!(
+                outcome,
+                CancelOutcome {
+                    cancelled: 1,
+                    already_running: 1
+                }
+            );
+            let remaining: Vec<(String, String)> = sqlx::query_as(
+                "SELECT platform, status FROM twitch_clips_upload_queue WHERE clip_id = $1",
+            )
+            .bind(i64::from(clip))
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert_eq!(remaining, vec![("tiktok".into(), status.into())]);
+        }
+    }
+
+    #[tokio::test]
     async fn abbruch_unbekannter_clip_ist_clip_not_found() {
         let Some(pool) = make_pool("t_sm_approval_cancel_404").await else {
             return;
@@ -1157,6 +1202,7 @@ mod tests {
             "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, \
              approval_mode TEXT NOT NULL DEFAULT 'manual', \
              timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', \
+             subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, \
              updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, \
              platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, \

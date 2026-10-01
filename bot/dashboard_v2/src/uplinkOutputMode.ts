@@ -2,15 +2,18 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { UplinkDestination, UplinkDestinationSaveAck } from './api/uplink';
 import { profilText } from './uplinkBetrieb';
 
-export type UplinkTwitchOutputMode = 'single' | 'enhanced';
+export type UplinkTwitchOutputMode = 'single' | 'enhanced' | 'native_2k' | 'native_2k_av1';
 
 export const TWITCH_OUTPUT_LABEL: Record<UplinkTwitchOutputMode, string> = {
   single: 'Einzelstream',
-  enhanced: 'Enhanced Broadcasting',
+  enhanced: 'Uplink Enhanced (Upload sparen)',
+  native_2k: 'Native Twitch 2K (HEVC)',
+  native_2k_av1: 'Native 2K (AV1 Test)',
 };
 
 const bekannt = (mode: unknown): UplinkTwitchOutputMode | null =>
-  mode === 'single' || mode === 'enhanced' ? mode : null;
+  mode === 'single' || mode === 'enhanced' || mode === 'native_2k' || mode === 'native_2k_av1'
+    ? mode : null;
 
 /** Ein Entwurf überlebt Refetches; laufende Ausgabe wird nie aus dem Wunsch abgeleitet. */
 export function twitchOutputFormular(ziel: UplinkDestination | undefined, entwurf: UplinkTwitchOutputMode | null) {

@@ -131,8 +131,8 @@ impl GlobalSentiment {
             tracing::info!(msgs = lines.len(), "GlobalSentiment: zu wenig Material, skip");
             return None;
         }
-        let raw = llm
-            .raw_completion(SYS, &build_user_prompt(&lines), BUILD_MAX_TOKENS, 0.4)
+        let (raw, model) = llm
+            .raw_completion_with_model(SYS, &build_user_prompt(&lines), BUILD_MAX_TOKENS, 0.4)
             .await
             .ok()?;
         let stripped = strip_think(&raw);
@@ -140,7 +140,7 @@ impl GlobalSentiment {
         if text.is_empty() {
             return None;
         }
-        self.store(text, lines.len() as i64, llm.model()).await.ok()?;
+        self.store(text, lines.len() as i64, &model).await.ok()?;
         tracing::info!(msgs = lines.len(), chars = text.chars().count(), "GlobalSentiment: neu gebaut");
         Some(text.to_string())
     }
@@ -167,8 +167,8 @@ mod tests {
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true)).execute(&admin).await.unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false)).execute(&admin).await.unwrap();
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
@@ -195,10 +195,14 @@ mod tests {
     async fn rebuild_und_fragment_e2e() {
         let Some(pool) = make_pool("t_eng_sentiment").await else { return };
         // 8 User-Msgs über mehrere Channels.
-        let mut q = String::from("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ");
-        let vals: Vec<String> = (0..8).map(|i| format!("('ch{i}','user','nachricht ueber meta {i}')")).collect();
-        q.push_str(&vals.join(","));
-        sqlx::query(&q).execute(&pool).await.unwrap();
+        for i in 0..8 {
+            sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ($1, 'user', $2)")
+                .bind(format!("ch{i}"))
+                .bind(format!("nachricht ueber meta {i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))

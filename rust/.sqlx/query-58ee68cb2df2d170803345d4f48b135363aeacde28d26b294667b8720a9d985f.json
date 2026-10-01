@@ -6,32 +6,68 @@
       {
         "ordinal": 0,
         "name": "channel_login!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_settings",
+            "name": "channel_login"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "enabled!",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_settings",
+            "name": "enabled"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "steam_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_settings",
+            "name": "steam_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "persona_override",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_settings",
+            "name": "persona_override"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "tabu_topics",
-        "type_info": "TextArray"
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_settings",
+            "name": "tabu_topics"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "output_mode?",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_engagement_settings",
+            "name": "output_mode"
+          }
+        }
       }
     ],
     "parameters": {

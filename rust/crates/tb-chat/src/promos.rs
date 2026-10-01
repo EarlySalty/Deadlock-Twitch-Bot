@@ -39,18 +39,70 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use rand::seq::IndexedRandom;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::api::ChatApi;
 use crate::commands::{InviteReplyNotifier, PromoBlockCheck};
+use crate::lfg_pitch::RecentChatPort;
 use crate::promo_pitch::{
-    pitch_filter_reject, pitch_injection_reject, ChannelPromoContext, PartnerPitchContext,
-    PartnerPitchGen, PitchJudge, PitchJudgeInput, PitchTextGen,
+    community_value_filter_reject, finalize_occasion_reply, pitch_filter_reject,
+    pitch_injection_reject, ChannelPromoContext, PartnerPitchContext, PartnerPitchGen, PitchJudge,
+    PitchJudgeInput, PitchTextGen, PITCH_MIN_CONFIDENCE,
 };
 use crate::suppression_guard::SuppressionGuardChatApi;
 use crate::types::ChatMessageEvent;
+use tb_analytics::promo_timers::{PromoTimerPolicy, PromoTimerSettings, COMMUNITY_BROADCASTER_ID};
+
+pub fn adressat_fremd(event: &ChatMessageEvent, bot_user_id: &str) -> bool {
+    if let Some(reply) = event.reply.as_ref() {
+        let parent = reply.parent_user_id.trim();
+        if !parent.is_empty() && parent != bot_user_id {
+            return true;
+        }
+    }
+    let chatter = event.chatter_user_id.trim();
+    for fragment in &event.message.fragments {
+        if let Some(mention) = fragment.mention.as_ref() {
+            let id = mention.user_id.trim();
+            if !id.is_empty() && id != chatter && id != bot_user_id {
+                return true;
+            }
+        }
+    }
+    let text = event.text().to_lowercase();
+    for name in [
+        event.broadcaster_user_login.as_str(),
+        event.broadcaster_user_name.as_str(),
+    ] {
+        let needle = name.trim().to_lowercase();
+        if needle.chars().count() >= 3 && text_enthaelt_wort(&text, &needle) {
+            return true;
+        }
+    }
+    false
+}
+
+fn text_enthaelt_wort(haystack_lower: &str, needle_lower: &str) -> bool {
+    let hay: Vec<char> = haystack_lower.chars().collect();
+    let pat: Vec<char> = needle_lower.chars().collect();
+    if pat.is_empty() || pat.len() > hay.len() {
+        return false;
+    }
+    for start in 0..=hay.len() - pat.len() {
+        if hay[start..start + pat.len()] != pat[..] {
+            continue;
+        }
+        let left_ok = start == 0 || !hay[start - 1].is_alphanumeric();
+        let end = start + pat.len();
+        let right_ok = end == hay.len() || !hay[end].is_alphanumeric();
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
+}
 
 // ---------------------------------------------------------------------------
 // Konstanten — exakt aus bot/chat/constants.py und targeted_promo.py
@@ -68,25 +120,22 @@ const PROMO_ACTIVITY_MIN_MSGS: usize = 3;
 /// Mindest-unique Chatter im Fenster (constants.py: PROMO_ACTIVITY_MIN_CHATTERS).
 const PROMO_ACTIVITY_MIN_CHATTERS: usize = 1;
 /// Roh-Nachrichten seit letzter Promo (constants.py: PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO).
+#[cfg(test)]
 const PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO: usize = 16;
+#[cfg(test)]
+const PROMO_NEW_CHATTERS_MIN: usize = 2;
 /// Ziel-Messages/Minute für Cooldown-Interpolation (constants.py: PROMO_ACTIVITY_TARGET_MPM).
 const PROMO_ACTIVITY_TARGET_MPM: f64 = 3.0;
 /// Selber Chatter zählt max 1× alle 30s (constants.py: PROMO_ACTIVITY_CHATTER_DEDUP_SEC).
 const PROMO_ACTIVITY_CHATTER_DEDUP_SEC: u64 = 30;
 /// Minimaler Cooldown in Minuten (constants.py: _PROMO_COOLDOWN_MIN).
+#[cfg(test)]
 const PROMO_COOLDOWN_MIN_MIN: u64 = 45;
 /// Maximaler Cooldown in Minuten (constants.py: _PROMO_COOLDOWN_MAX).
+#[cfg(test)]
 const PROMO_COOLDOWN_MAX_MIN: u64 = 180;
-/// Absoluter Gesamt-Cooldown in Minuten (constants.py: PROMO_OVERALL_COOLDOWN_MIN).
-const PROMO_OVERALL_COOLDOWN_MIN: u64 = 90;
-/// Attempt-Lock-Cooldown in Minuten (constants.py: PROMO_ATTEMPT_COOLDOWN_MIN).
-const PROMO_ATTEMPT_COOLDOWN_MIN: u64 = 10;
-/// Mindest neue Chatter seit letzter Promo (constants.py: PROMO_NEW_CHATTERS_MIN).
-const PROMO_NEW_CHATTERS_MIN: usize = 2;
 /// Chatter gilt nach 2h wieder als neu (constants.py: PROMO_SEEN_CHATTER_MAX_AGE_SEC).
 const PROMO_SEEN_CHATTER_MAX_AGE_SEC: u64 = 7200;
-/// Viewer-Spike-Cooldown in Minuten (constants.py: PROMO_VIEWER_SPIKE_COOLDOWN_MIN).
-const PROMO_VIEWER_SPIKE_COOLDOWN_MIN: u64 = 60;
 /// Chat muss mind. 120s still sein für Spike-Promo (constants.py: PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC).
 const PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC: u64 = 120;
 /// Spike-Ratio ≥ 1.0 (constants.py: PROMO_VIEWER_SPIKE_MIN_RATIO, ≥1.0 erzwungen).
@@ -108,6 +157,7 @@ const PROMO_RUNTIME_PRUNE_INTERVAL_SEC: u64 = 60;
 const PITCH_JUDGE_CHATTER_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 const PITCH_JUDGE_CHANNEL_WINDOW: Duration = Duration::from_secs(60 * 60);
 const PITCH_JUDGE_CHANNEL_MAX_PER_WINDOW: usize = 30;
+const PARTNER_STREAMER_PITCH_ENABLED: bool = false;
 const PITCH_MAX_CONCURRENT: usize = 8;
 const PROMO_MAX_CONCURRENT: usize = 16;
 const PROMO_DUE_CONCURRENCY: usize = 4;
@@ -340,6 +390,10 @@ const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 pub trait OutboundSuppressionCheck: Send + Sync {
     /// True = Kanal ist aktuell stumm (Mute-Guard aktiv).
     async fn is_muted(&self, channel_login: &str) -> bool;
+
+    async fn is_muted_checked(&self, channel_login: &str) -> Result<bool, sqlx::Error> {
+        Ok(self.is_muted(channel_login).await)
+    }
 }
 
 /// Schreibseite der Outbound-Suppression — Port von
@@ -436,7 +490,7 @@ pub trait PitchReviewSink: Send + Sync {
         reply: &str,
         kind: PitchCardKind,
         candidate_hint: Option<&str>,
-    );
+    ) -> Option<i64>;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +527,8 @@ type ActivityEntry = (Instant, String);
 /// Laufzeit-State eines Kanals.
 #[derive(Clone)]
 struct ChannelState {
+    timers: PromoTimerPolicy,
+    community_channel: bool,
     /// Aktivitäts-Bucket (deque, maxlen 2048) — promos.py:730.
     activity: VecDeque<ActivityEntry>,
     /// Chatter-Dedup-Map: chatter_login → letzter dedup-Zeitstempel (30s) — promos.py:730.
@@ -503,6 +559,8 @@ struct ChannelState {
 impl ChannelState {
     fn new() -> Self {
         Self {
+            timers: PromoTimerPolicy::default(),
+            community_channel: false,
             activity: VecDeque::with_capacity(64),
             chatter_dedupe: HashMap::new(),
             last_promo_sent: None,
@@ -543,6 +601,7 @@ struct PartnerCandidate {
 }
 
 pub struct PromoEngine {
+    timer_settings: Mutex<(Option<Instant>, PromoTimerSettings)>,
     pool: PgPool,
     api: Arc<dyn ChatApi>,
     suppression: Arc<dyn OutboundSuppressionCheck>,
@@ -564,6 +623,7 @@ pub struct PromoEngine {
     send_locks: DashMap<String, Arc<Mutex<()>>>,
     channel_states: DashMap<String, Mutex<ChannelState>>,
     zuschauer_register: Option<Arc<crate::zuschauer_register::ZuschauerRegister>>,
+    bot_user_id: String,
 }
 
 /// Fallback-PartnerChannelCheck: immer true (für Tests).
@@ -598,6 +658,7 @@ impl PromoEngine {
             reward_checker: None,
             reward_gate_warned: DashMap::new(),
             plan_gate_error_warned: DashMap::new(),
+            timer_settings: Mutex::new((None, PromoTimerSettings::default())),
             invite_resolver: Arc::new(StaticInviteResolver),
             partner_check: Arc::new(AlwaysPartner),
             pitch_judge: Arc::new(crate::promo_pitch::FireworksPitchJudge),
@@ -611,7 +672,49 @@ impl PromoEngine {
             send_locks: DashMap::new(),
             channel_states: DashMap::new(),
             zuschauer_register: None,
+            bot_user_id: String::new(),
         }
+    }
+
+    /// Kanalidentität kommt vom EventSub-Event bzw. der Live-Kanalliste.
+    /// Der Cache begrenzt DB-Zugriffe und übernimmt Admin-Änderungen nach 30 s.
+    async fn prepare_channel_timers(&self, login: &str, broadcaster_id: &str) {
+        let mut cache = self.timer_settings.lock().await;
+        if cache
+            .0
+            .is_none_or(|last| last.elapsed() >= Duration::from_secs(30))
+        {
+            match tb_analytics::promo_timers::load(&self.pool).await {
+                Ok(settings) => cache.1 = settings,
+                Err(error) => {
+                    tracing::debug!(%error, "Promo-Timer nicht lesbar, behalte letzte gültige Einstellungen")
+                }
+            }
+            cache.0 = Some(Instant::now());
+        }
+        let timers = cache.1.for_broadcaster(broadcaster_id);
+        drop(cache);
+        let state_ref = self
+            .channel_states
+            .entry(login.to_string())
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
+        let mut state = state_ref.lock().await;
+        state.timers = timers;
+        state.community_channel = broadcaster_id == COMMUNITY_BROADCASTER_ID;
+    }
+
+    async fn channel_timers(&self, login: &str) -> (PromoTimerPolicy, bool) {
+        let state_ref = self
+            .channel_states
+            .entry(login.to_string())
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
+        let state = state_ref.lock().await;
+        (state.timers.clone(), state.community_channel)
+    }
+
+    pub fn set_bot_user_id(mut self, bot_user_id: impl Into<String>) -> Self {
+        self.bot_user_id = bot_user_id.into();
+        self
     }
 
     pub fn set_zuschauer_register(
@@ -743,6 +846,8 @@ impl PromoEngine {
             return;
         }
 
+        self.prepare_channel_timers(&login, &event.broadcaster_user_id)
+            .await;
         self.maybe_answer_lurker_followup(event).await;
 
         let now = Instant::now();
@@ -795,6 +900,7 @@ impl PromoEngine {
         let target_login = event.chatter_user_login.clone();
         let channel_id = event.broadcaster_user_id.clone();
 
+        self.prepare_channel_timers(&login, &channel_id).await;
         let text_len = text.chars().count();
 
         let Ok(_pitch_permit) = self.pitch_semaphore.try_acquire() else {
@@ -827,8 +933,14 @@ impl PromoEngine {
             return;
         }
 
+        if adressat_fremd(event, &self.bot_user_id) {
+            self.log_zuschauer_reject(&login, &target_user_id, "adressat_fremd", text, "anlass")
+                .await;
+            return;
+        }
+
         if let Some(candidate) = self.partner_candidate(&target_user_id).await {
-            if text_len >= 25 {
+            if PARTNER_STREAMER_PITCH_ENABLED && text_len >= 25 {
                 self.run_partner_pitch(
                     &login,
                     &channel_id,
@@ -838,6 +950,8 @@ impl PromoEngine {
                     candidate,
                 )
                 .await;
+            } else {
+                tracing::debug!(channel = %login, chatter = %target_user_id, "partner-pitch: bewusst deaktiviert");
             }
             return;
         }
@@ -857,33 +971,60 @@ impl PromoEngine {
         }
 
         let (game, title) = self.load_live_context(&login).await;
+        if !game
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("Deadlock"))
+        {
+            tracing::debug!(channel = %login, game = ?game, "anlass-pitch: kein Deadlock-Stream");
+            return;
+        }
         let recent = self.load_recent_channel_messages(&login, 8).await;
 
-        let occasion = if text_len >= 25
-            && self.pitch_user_limit_ok(&target_user_id).await
+        let occasion = if self.pitch_user_limit_ok(&target_user_id).await
             && self.pitch_channel_limit_ok(&login).await
             && self.pitch_judge_throttle_reserve(&login, &target_user_id)
         {
+            let beispiele = crate::pitch_beispiele::lade_block(
+                &self.pool,
+                crate::pitch_beispiele::PitchPfad::Anlass,
+            )
+            .await;
             let input = PitchJudgeInput {
                 trigger_text: text.to_string(),
                 game: game.clone(),
                 title: title.clone(),
                 recent_chat: recent.clone(),
                 target_login: target_login.clone(),
+                beispiele,
             };
-            self.pitch_judge
-                .decide(input)
-                .await
-                .and_then(|resp| resp.occasion.map(|occ| (occ, resp.reply)))
+            self.pitch_judge.decide(input).await.and_then(|resp| {
+                if resp.ernst_gemeint && resp.confidence >= PITCH_MIN_CONFIDENCE {
+                    resp.occasion.map(|occ| (occ, resp.reply))
+                } else {
+                    None
+                }
+            })
         } else {
             None
         };
         let Some((occasion, reply)) = occasion else {
             return;
         };
-        let resp_reply = reply;
+        let resp_reply = finalize_occasion_reply(occasion, &reply);
 
         if let Some(reason) = pitch_filter_reject(&resp_reply) {
+            self.log_anlass_reject(
+                &login,
+                &target_user_id,
+                reason.as_str(),
+                text,
+                Some(resp_reply.clone()),
+            )
+            .await;
+            return;
+        }
+
+        if let Some(reason) = community_value_filter_reject(&resp_reply) {
             self.log_anlass_reject(
                 &login,
                 &target_user_id,
@@ -957,15 +1098,19 @@ impl PromoEngine {
         drop(_guard);
 
         if let Some(sink) = self.pitch_review_sink.as_ref() {
-            sink.send_card(
-                &login,
-                &target_login,
-                text,
-                &resp_reply,
-                PitchCardKind::Anlass,
-                None,
-            )
-            .await;
+            if let Some(message_id) = sink
+                .send_card(
+                    &login,
+                    &target_login,
+                    text,
+                    &resp_reply,
+                    PitchCardKind::Anlass,
+                    None,
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
         }
     }
 
@@ -993,12 +1138,18 @@ impl PromoEngine {
 
         let (game, title) = self.load_live_context(login).await;
         let recent = self.load_recent_channel_messages(login, 8).await;
+        let beispiele = crate::pitch_beispiele::lade_block(
+            &self.pool,
+            crate::pitch_beispiele::PitchPfad::Partner,
+        )
+        .await;
         let ctx = PartnerPitchContext {
             target_login: target_login.to_string(),
             target_messages: vec![trigger.to_string()],
             game,
             title,
             recent_chat: recent,
+            beispiele,
         };
         let Some(reply) = self.partner_pitch_gen.partner_pitch(&ctx).await else {
             self.log_partner_reject(login, target_user_id, "no_text", trigger, None)
@@ -1019,8 +1170,14 @@ impl PromoEngine {
             return;
         }
         if pitch_injection_reject(&reply, target_login) {
-            self.log_partner_reject(login, target_user_id, "injection", trigger, Some(reply.clone()))
-                .await;
+            self.log_partner_reject(
+                login,
+                target_user_id,
+                "injection",
+                trigger,
+                Some(reply.clone()),
+            )
+            .await;
             return;
         }
 
@@ -1092,15 +1249,19 @@ impl PromoEngine {
                 candidate.login,
                 candidate.last_session.format("%Y-%m-%d")
             );
-            sink.send_card(
-                login,
-                target_login,
-                trigger,
-                &reply,
-                PitchCardKind::Partner,
-                Some(&hint),
-            )
-            .await;
+            if let Some(message_id) = sink
+                .send_card(
+                    login,
+                    target_login,
+                    trigger,
+                    &reply,
+                    PitchCardKind::Partner,
+                    Some(&hint),
+                )
+                .await
+            {
+                self.set_review_message_id(log_id, message_id).await;
+            }
         }
     }
 
@@ -1242,6 +1403,10 @@ impl PromoEngine {
     }
 
     async fn pitch_channel_limit_ok(&self, login: &str) -> bool {
+        let (timers, community) = self.channel_timers(login).await;
+        if community && !self.overall_promo_ready_locked(login, Instant::now()).await {
+            return false;
+        }
         let stream_start = self
             .load_stream_start(login)
             .await
@@ -1262,11 +1427,11 @@ impl PromoEngine {
                 return false;
             }
         };
-        if row.count >= 3 {
+        if row.count >= timers.pitch_max_per_stream {
             return false;
         }
         if let Some(last) = row.last {
-            if (Utc::now() - last).num_seconds() < 600 {
+            if (Utc::now() - last).num_seconds() < (timers.pitch_cooldown_minutes * 60) as i64 {
                 return false;
             }
         }
@@ -1339,6 +1504,10 @@ impl PromoEngine {
     }
 
     async fn partner_channel_limit_ok(&self, login: &str) -> bool {
+        if !self.pitch_channel_limit_ok(login).await {
+            return false;
+        }
+        let (timers, community) = self.channel_timers(login).await;
         let stream_start = self
             .load_stream_start(login)
             .await
@@ -1362,11 +1531,16 @@ impl PromoEngine {
                 return false;
             }
         };
-        if row.partner_count >= 1 {
+        let partner_limit = if community {
+            timers.pitch_max_per_stream
+        } else {
+            1
+        };
+        if row.partner_count >= partner_limit {
             return false;
         }
         if let Some(last) = row.last {
-            if (Utc::now() - last).num_seconds() < 600 {
+            if (Utc::now() - last).num_seconds() < (timers.pitch_cooldown_minutes * 60) as i64 {
                 return false;
             }
         }
@@ -1533,6 +1707,7 @@ impl PromoEngine {
         };
 
         for (login, channel_id) in &lurker_tax_channels {
+            self.prepare_channel_timers(login, channel_id).await;
             if !self
                 .partner_check
                 .is_partner_channel_for_chat_tracking(login)
@@ -1555,6 +1730,7 @@ impl PromoEngine {
 
         let mut faellig: Vec<(String, String)> = Vec::new();
         for (login, channel_id) in &live_channels {
+            self.prepare_channel_timers(login, channel_id).await;
             if self.promo_blocked_by_plan_or_flag(login).await {
                 continue;
             }
@@ -1603,6 +1779,9 @@ impl PromoEngine {
     }
 
     async fn process_due_channel(self: Arc<Self>, login: String, channel_id: String, now: Instant) {
+        // Community und alle anderen Kanäle laufen durch denselben Aktivitäts-Gate;
+        // nur die geladenen Timer-Werte unterscheiden sich. Keine Sonderlogik für
+        // den Community-Kanal (kein Senden bei ruhigem Chat trotz Overall-Timer).
         let sent = self
             .maybe_send_promo_with_stats(&login, &channel_id, now, false)
             .await;
@@ -1701,7 +1880,7 @@ impl PromoEngine {
         }
         let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
 
-        let Some(text) = self.build_promo_text(login, &invite).await else {
+        let Some((text, color)) = self.build_promo_text(login, &invite).await else {
             self.record_pitch_log(PitchLogEntry {
                 channel_login: login.to_string(),
                 target_user_id: None,
@@ -1727,7 +1906,7 @@ impl PromoEngine {
 
         let sent = self
             .api
-            .send_announcement(channel_id, &text, "purple")
+            .send_announcement(channel_id, &text, &color)
             .await
             .unwrap_or(false);
         if !sent {
@@ -1805,22 +1984,75 @@ impl PromoEngine {
         true
     }
 
-    async fn build_promo_text(&self, login: &str, invite: &str) -> Option<String> {
+    async fn build_promo_text(&self, login: &str, invite: &str) -> Option<(String, String)> {
+        let (_, community) = self.channel_timers(login).await;
+        if community {
+            // Vor jedem Versand neu laden; deaktivierte Texte haben keinen Fallback.
+            let settings = match tb_analytics::community_announcements::load(&self.pool).await {
+                Ok(settings) => settings,
+                Err(error) => {
+                    warn!(%error, "Community-Ankündigungen konnten nicht geladen werden");
+                    return None;
+                }
+            };
+            if !settings.enabled {
+                return None;
+            }
+            let mut rotation = Vec::new();
+            if settings.include_global_event {
+                if let Some(event) = self.load_global_promo_message(invite).await {
+                    rotation.push(event);
+                }
+            }
+            for entry in settings.entries.iter().filter(|entry| entry.enabled) {
+                let text = entry.text.trim().replace("{invite}", invite);
+                if text.chars().count() > 500 {
+                    warn!("Community-Ankündigung überschreitet nach Einfügen des Einladungslinks 500 Zeichen");
+                    return None;
+                }
+                rotation.push((text, entry.color.clone()));
+            }
+            if rotation.is_empty() {
+                return None;
+            }
+            // Nur erfolgreiche Sends zählen; die Position überlebt Neustarts.
+            let count = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE channel_login = $1 AND pfad = 'periodic' AND sent_at IS NOT NULL")
+                .bind(login).fetch_one(&self.pool).await;
+            return match count {
+                Ok(count) => {
+                    Some(rotation.remove(count.rem_euclid(rotation.len() as i64) as usize))
+                }
+                Err(error) => {
+                    warn!(%error, login, "Community-Themenrotation konnte nicht geladen werden");
+                    None
+                }
+            };
+        }
         if let Some(text) = self.load_global_promo_message(invite).await {
             return Some(text);
         }
 
         if let Some(text) = self.load_streamer_promo_message(login, invite).await {
-            return Some(text);
+            return Some((text, "purple".into()));
         }
 
         let (game, title) = self.load_live_context(login).await;
+        let beispiele = crate::pitch_beispiele::lade_block(
+            &self.pool,
+            crate::pitch_beispiele::PitchPfad::Periodic,
+        )
+        .await;
         let ctx = ChannelPromoContext {
             game,
             title,
             recent_chat: self.load_recent_channel_messages(login, 8).await,
+            beispiele,
         };
-        self.pitch_text_gen.channel_promo(&ctx, invite).await
+        self.pitch_text_gen
+            .channel_promo(&ctx, invite)
+            .await
+            .map(|text| (text, "purple".into()))
     }
 
     async fn load_live_context(&self, login: &str) -> (Option<String>, Option<String>) {
@@ -1846,7 +2078,7 @@ impl PromoEngine {
     /// gibt — wenn der `custom_event`-Modus aktiv ist — den formatierten
     /// Event-Text zurück (`{invite}` ersetzt). DB-/Auswertungs-Fehler → None
     /// (kein Override, fällt auf Streamer-/Pool-Promo zurück).
-    async fn load_global_promo_message(&self, invite: &str) -> Option<String> {
+    async fn load_global_promo_message(&self, invite: &str) -> Option<(String, String)> {
         let config = tb_analytics::promo_mode::load_global_promo_mode(&self.pool)
             .await
             .ok()?;
@@ -1857,7 +2089,7 @@ impl PromoEngine {
         if message.is_empty() {
             return None;
         }
-        render_promo_template(message, invite)
+        render_promo_template(message, invite).map(|text| (text, config.announcement_color))
     }
 
     /// Streamer-spezifische Promo laden (promos.py:945, streamer_plans.promo_message).
@@ -1885,6 +2117,12 @@ impl PromoEngine {
 
     /// Promo gesendet markieren (promos.py:879: `_mark_promo_sent`).
     async fn mark_promo_sent(&self, login: &str, now: Instant, reason: &str, wall_ts: f64) {
+        // Session-Viewer vor dem Lock holen (async DB-Abfrage) und mitmarkieren:
+        // get_new_chatters_in_window_inner zählt Aktivitäts-Bucket UNION
+        // Session-Viewer, also muss der Versand dieselbe Union als gesehen
+        // übernehmen. Sonst zählten API-only-Viewer bei jeder Folgewerbung erneut
+        // als neu und öffneten die new_chatters-Grenze dauerhaft.
+        let session_viewers = self.get_current_session_viewers(login).await;
         {
             let state_ref = self
                 .channel_states
@@ -1893,7 +2131,7 @@ impl PromoEngine {
             let mut state = state_ref.lock().await;
             state.last_promo_sent = Some(now);
             state.raw_msg_count_since_promo = 0;
-            self.update_seen_chatters_inner(&mut state, now);
+            self.update_seen_chatters_inner(&mut state, now, &session_viewers);
             if reason == "viewer_spike" {
                 state.last_promo_viewer_spike = Some(now);
             }
@@ -1906,14 +2144,23 @@ impl PromoEngine {
     }
 
     /// Gesehene Chatter aktualisieren (promos.py:879: `_update_seen_chatters`).
-    fn update_seen_chatters_inner(&self, state: &mut ChannelState, now: Instant) {
-        for (_, ts) in &state.activity {
-            // Chatter aus dem Aktivitäts-Bucket als gesehen markieren.
-            let _ = ts;
-        }
+    ///
+    /// Markiert dieselbe Menge, die `get_new_chatters_in_window_inner` als
+    /// potenziell "neu" zählt: Aktivitäts-Bucket UNION aktuelle Session-Viewer.
+    /// Die Session-Viewer kommen bereits normalisiert (lowercase) aus
+    /// `get_current_session_viewers`, passend zum dortigen Vergleich.
+    fn update_seen_chatters_inner(
+        &self,
+        state: &mut ChannelState,
+        now: Instant,
+        session_viewers: &HashSet<String>,
+    ) {
         let chatters: Vec<String> = state.activity.iter().map(|(_, c)| c.clone()).collect();
         for chatter in chatters {
             state.seen_chatters.insert(chatter, now);
+        }
+        for viewer in session_viewers {
+            state.seen_chatters.insert(viewer.clone(), now);
         }
     }
 
@@ -1942,7 +2189,9 @@ impl PromoEngine {
     fn overall_promo_ready_inner(&self, state: &ChannelState, now: Instant) -> bool {
         match state.last_promo_sent {
             None => true,
-            Some(last) => now.duration_since(last).as_secs() >= PROMO_OVERALL_COOLDOWN_MIN * 60,
+            Some(last) => {
+                now.duration_since(last).as_secs() >= state.timers.overall_cooldown_minutes * 60
+            }
         }
     }
 
@@ -1963,7 +2212,7 @@ impl PromoEngine {
         now: Instant,
     ) -> bool {
         // 1. Roh-Nachrichten-Minimum.
-        if state.raw_msg_count_since_promo < PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO {
+        if state.raw_msg_count_since_promo < state.timers.min_messages {
             return false;
         }
 
@@ -1992,8 +2241,10 @@ impl PromoEngine {
         let window_secs = (PROMO_ACTIVITY_WINDOW_MIN * 60) as f64;
         let msgs_per_min = (msg_count as f64) / (window_secs / 60.0);
         let ratio = (msgs_per_min / PROMO_ACTIVITY_TARGET_MPM).min(1.0);
-        let cooldown_sec = ((PROMO_COOLDOWN_MIN_MIN as f64)
-            + (1.0 - ratio) * (PROMO_COOLDOWN_MAX_MIN as f64 - PROMO_COOLDOWN_MIN_MIN as f64))
+        let cooldown_sec = ((state.timers.activity_cooldown_min_minutes as f64)
+            + (1.0 - ratio)
+                * (state.timers.activity_cooldown_max_minutes as f64
+                    - state.timers.activity_cooldown_min_minutes as f64))
             * 60.0;
 
         if let Some(last) = state.last_promo_sent {
@@ -2002,12 +2253,14 @@ impl PromoEngine {
             }
         }
 
-        // 4. Neue Chatter ≥ 2 (wenn last_sent gesetzt).
-        if state.last_promo_sent.is_some() {
+        // 4. Neue Chatter ≥ eingestellter Wert. Gilt auch für den ersten Versand:
+        //    ohne bisherige "gesehen"-Basis zählen alle aktiven Chatter als neu,
+        //    die eingestellte Schwelle bleibt so auch beim ersten Timer greifbar.
+        if state.timers.new_chatters > 0 {
             let new_chatters = self
                 .get_new_chatters_in_window_inner(login, state, now)
                 .await;
-            if new_chatters < PROMO_NEW_CHATTERS_MIN {
+            if new_chatters < state.timers.new_chatters {
                 return false;
             }
         }
@@ -2073,36 +2326,44 @@ impl PromoEngine {
     fn promo_attempt_allowed_inner(&self, state: &ChannelState, now: Instant) -> bool {
         match state.last_promo_attempt {
             None => true,
-            Some(last) => now.duration_since(last).as_secs() >= PROMO_ATTEMPT_COOLDOWN_MIN * 60,
+            Some(last) => {
+                now.duration_since(last).as_secs() >= state.timers.attempt_cooldown_minutes * 60
+            }
         }
     }
 
     /// Viewer-Spike-Promo (promos.py:1306: `_maybe_send_viewer_spike_promo`).
     async fn maybe_send_viewer_spike_promo(&self, login: &str, channel_id: &str, now: Instant) {
         // Guards (promos.py:1306).
-        let (overall_ready, has_new_raw, chat_silent, spike_cd_ok, attempt_ok) = {
+        let state_snapshot = {
             let state_ref = self
                 .channel_states
                 .entry(login.to_string())
                 .or_insert_with(|| Mutex::new(ChannelState::new()));
             let state = state_ref.lock().await;
-
-            let overall = self.overall_promo_ready_inner(&state, now);
-            let has_raw = state.raw_msg_count_since_promo > 0;
-            // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
-            // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
-            let silent = state.last_raw_chat_message_ts.is_none_or(|t| {
-                now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
-            });
-            let spike_ok = state.last_promo_viewer_spike.is_none_or(|t| {
-                now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_COOLDOWN_MIN * 60
-            });
-            let attempt = self.promo_attempt_allowed_inner(&state, now);
-
-            (overall, has_raw, silent, spike_ok, attempt)
+            state.clone()
         };
 
-        if !overall_ready || !has_new_raw || !chat_silent || !spike_cd_ok || !attempt_ok {
+        let overall_ready = self.overall_promo_ready_inner(&state_snapshot, now);
+        // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
+        // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
+        let chat_silent = state_snapshot.last_raw_chat_message_ts.is_none_or(|t| {
+            now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
+        });
+        let spike_cd_ok = state_snapshot.last_promo_viewer_spike.is_none_or(|t| {
+            now.duration_since(t).as_secs()
+                >= state_snapshot.timers.viewer_spike_cooldown_minutes * 60
+        });
+        let attempt_ok = self.promo_attempt_allowed_inner(&state_snapshot, now);
+        // Auch der Viewer-Spike-Pfad respektiert die eingestellten Chat-Grenzen
+        // (min_messages, Aktivitätsfenster, neue Chatter). Keine alternative
+        // Werbeschleife darf diese Grenzen umgehen; die frühere Schwelle "eine
+        // Roh-Nachricht" ist damit abgelöst.
+        let activity_ready = self
+            .promo_activity_ready_inner(login, &state_snapshot, now)
+            .await;
+
+        if !overall_ready || !activity_ready || !chat_silent || !spike_cd_ok || !attempt_ok {
             return;
         }
 
@@ -2269,7 +2530,11 @@ impl PromoEngine {
                 }
             }
             None => {
-                if self.reward_gate_warned.insert(login.to_string(), ()).is_none() {
+                if self
+                    .reward_gate_warned
+                    .insert(login.to_string(), ())
+                    .is_none()
+                {
                     warn!(
                         login,
                         "Lurker-Tax: kein Reward-Checker verdrahtet, Erinnerung wird nicht gesendet"
@@ -2448,7 +2713,7 @@ impl PromoEngine {
             historical_bot_clause = historical_bot_clause,
             current_bot_clause = current_bot_clause,
         );
-        let mut query = sqlx::query_as::<_, (String,)>(&sql)
+        let mut query = sqlx::query_as::<_, (String,)>(sqlx::AssertSqlSafe(sql))
             .bind(broadcaster_id)
             .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
             .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
@@ -2530,9 +2795,9 @@ impl PromoEngine {
     async fn maybe_answer_lurker_followup(&self, event: &ChatMessageEvent) {
         let lower = event.text().to_lowercase();
         let ist_nachfrage = lower.contains('?')
-            || lower.split(|c: char| !c.is_alphabetic()).any(|w| {
-                matches!(w, "wo" | "wie" | "was" | "hä" | "wat" | "wohin" | "womit")
-            });
+            || lower
+                .split(|c: char| !c.is_alphabetic())
+                .any(|w| matches!(w, "wo" | "wie" | "was" | "hä" | "wat" | "wohin" | "womit"));
         if !ist_nachfrage {
             return;
         }
@@ -3025,6 +3290,19 @@ impl PromoEngine {
         }
     }
 
+    async fn set_review_message_id(&self, id: i64, message_id: i64) {
+        if let Err(e) = sqlx::query!(
+            "UPDATE twitch_promo_pitch_log SET review_message_id = $2 WHERE id = $1",
+            id,
+            message_id,
+        )
+        .execute(&self.pool)
+        .await
+        {
+            warn!(id, "set_review_message_id fehlgeschlagen: {e}");
+        }
+    }
+
     async fn mark_pitch_log_dropped(&self, id: i64, reason: &str) {
         if let Err(e) = sqlx::query!(
             "UPDATE twitch_promo_pitch_log SET reject_reason = $2 WHERE id = $1",
@@ -3039,26 +3317,56 @@ impl PromoEngine {
     }
 
     async fn load_recent_channel_messages(&self, login: &str, n: i64) -> Vec<String> {
+        let mut messages = self
+            .load_recent_channel_messages_before(login, n, None)
+            .await;
+        messages.reverse();
+        messages
+    }
+
+    async fn load_recent_channel_messages_before(
+        &self,
+        login: &str,
+        n: i64,
+        before_message_id: Option<&str>,
+    ) -> Vec<String> {
         let known_bots: Vec<&str> = tb_analytics::bekannte_bots::KNOWN_CHAT_BOTS.to_vec();
-        let rows = sqlx::query_scalar!(
-            "SELECT content AS \"content?\" FROM twitch_chat_messages
+        let rows = sqlx::query(
+            "SELECT chatter_login, content FROM twitch_chat_messages
               WHERE LOWER(streamer_login) = LOWER($1)
                 AND message_ts >= NOW() - INTERVAL '30 minutes'
+                AND ($3::text IS NULL OR message_id IS DISTINCT FROM $3)
                 AND COALESCE(is_command, FALSE) = FALSE
                 AND COALESCE(content, '') NOT LIKE '!%'
-                AND LOWER(COALESCE(chatter_login, '')) <> ALL($3::text[])
-                AND LOWER(COALESCE(chatter_login, '')) !~ $4
+                AND LOWER(COALESCE(chatter_login, '')) <> ALL($4::text[])
+                AND LOWER(COALESCE(chatter_login, '')) !~ $5
               ORDER BY message_ts DESC
               LIMIT $2",
-            login,
-            n,
-            &known_bots as &[&str],
-            tb_analytics::bekannte_bots::ANONYM_LOGIN_REGEX_SQL,
         )
+        .bind(login)
+        .bind(n)
+        .bind(before_message_id)
+        .bind(&known_bots as &[&str])
+        .bind(tb_analytics::bekannte_bots::ANONYM_LOGIN_REGEX_SQL)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
-        rows.into_iter().flatten().collect()
+        rows.into_iter()
+            .rev()
+            .filter_map(|row| {
+                match (
+                    row.try_get::<Option<String>, _>("chatter_login")
+                        .ok()
+                        .flatten(),
+                    row.try_get::<Option<String>, _>("content").ok().flatten(),
+                ) {
+                    (Some(chatter_login), Some(content)) => {
+                        Some(format!("{chatter_login}: {content}"))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     /// Alte Cooldown-Einträge bereinigen (promos.py: `cleanup_stale_promo_cooldowns(24)`).
@@ -3111,6 +3419,14 @@ impl InviteReplyNotifier for PromoEngine {
 impl PromoBlockCheck for PromoEngine {
     async fn is_promo_blocked(&self, channel_login: &str) -> bool {
         self.promo_blocked_by_plan_or_flag(channel_login).await
+    }
+}
+
+#[async_trait]
+impl RecentChatPort for PromoEngine {
+    async fn recent_chat(&self, channel_login: &str, before_message_id: &str) -> Vec<String> {
+        self.load_recent_channel_messages_before(channel_login, 8, Some(before_message_id))
+            .await
     }
 }
 
@@ -3411,6 +3727,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn community_timer_und_admin_standard_sind_unabhaengig() {
+        let engine = make_engine_no_db();
+        let now = Instant::now();
+        let mut state = ChannelState::new();
+        state.last_promo_sent = Some(now - Duration::from_secs(21 * 60));
+        assert!(!engine.overall_promo_ready_inner(&state, now));
+        state.timers = PromoTimerSettings::default().for_broadcaster(COMMUNITY_BROADCASTER_ID);
+        assert!(engine.overall_promo_ready_inner(&state, now));
+        state.timers.overall_cooldown_minutes = 30;
+        assert!(!engine.overall_promo_ready_inner(&state, now));
+    }
+
+    #[tokio::test]
     async fn overall_ready_true_nach_90_min() {
         let engine = make_engine_no_db();
         let mut state = ChannelState::new();
@@ -3479,7 +3808,10 @@ mod tests {
         let text = engine.build_lurker_tax_text(&candidates);
         assert!(text.contains("@alice"), "Mention alice fehlt: {text}");
         assert!(text.contains("@bob"), "Mention bob fehlt: {text}");
-        assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+        assert!(
+            lurker_reminder_ok(&text),
+            "Erinnerung unvollständig: {text}"
+        );
     }
 
     #[tokio::test]
@@ -3498,7 +3830,10 @@ mod tests {
             let text = engine.build_lurker_tax_text(&["xy".to_string()]);
             assert!(text.contains("@xy"), "Erwähnung fehlt: {text}");
             assert!(text.contains("schön dass du"), "Anrede fehlt: {text}");
-            assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+            assert!(
+                lurker_reminder_ok(&text),
+                "Erinnerung unvollständig: {text}"
+            );
             gesehen.insert(text);
         }
         assert!(
@@ -3516,7 +3851,10 @@ mod tests {
             assert!(text.contains("@alice"), "erste Erwähnung fehlt: {text}");
             assert!(text.contains("@bob"), "zweite Erwähnung fehlt: {text}");
             assert!(text.contains("schön dass ihr"), "Anrede fehlt: {text}");
-            assert!(lurker_reminder_ok(&text), "Erinnerung unvollständig: {text}");
+            assert!(
+                lurker_reminder_ok(&text),
+                "Erinnerung unvollständig: {text}"
+            );
             gesehen.insert(text);
         }
         assert!(
@@ -3897,7 +4235,6 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
-    use crate::promo_pitch::TargetedPitchContext;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
@@ -3914,15 +4251,8 @@ mod db_tests {
 
     #[async_trait]
     impl PitchTextGen for FixedTextGen {
-        async fn channel_promo(
-            &self,
-            _ctx: &ChannelPromoContext,
-            invite: &str,
-        ) -> Option<String> {
+        async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             self.0.as_ref().map(|body| format!("{body} {invite}"))
-        }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.0.clone()
         }
     }
 
@@ -3932,17 +4262,9 @@ mod db_tests {
 
     #[async_trait]
     impl PitchTextGen for SlowTextGen {
-        async fn channel_promo(
-            &self,
-            _ctx: &ChannelPromoContext,
-            invite: &str,
-        ) -> Option<String> {
+        async fn channel_promo(&self, _ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
             tokio::time::sleep(self.delay).await;
             Some(format!("hallo {invite}"))
-        }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            tokio::time::sleep(self.delay).await;
-            Some("hallo".to_string())
         }
     }
 
@@ -3966,10 +4288,6 @@ mod db_tests {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Some(format!("{} {invite}", self.body))
         }
-        async fn targeted_pitch(&self, _ctx: &TargetedPitchContext) -> Option<String> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Some(self.body.clone())
-        }
     }
 
     struct MockPitchJudge {
@@ -3992,8 +4310,7 @@ mod db_tests {
             &self,
             _input: PitchJudgeInput,
         ) -> Option<crate::promo_pitch::PitchResponse> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.response.clone()
         }
     }
@@ -4015,15 +4332,25 @@ mod db_tests {
     #[async_trait]
     impl PartnerPitchGen for MockPartnerPitchGen {
         async fn partner_pitch(&self, _ctx: &PartnerPitchContext) -> Option<String> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.text.clone()
         }
     }
 
     #[derive(Default, Clone)]
     struct RecordingReviewSink {
-        cards: Arc<Mutex<Vec<(String, String, String, String, PitchCardKind, Option<String>)>>>,
+        cards: Arc<
+            Mutex<
+                Vec<(
+                    String,
+                    String,
+                    String,
+                    String,
+                    PitchCardKind,
+                    Option<String>,
+                )>,
+            >,
+        >,
     }
 
     #[async_trait]
@@ -4036,7 +4363,7 @@ mod db_tests {
             reply: &str,
             kind: PitchCardKind,
             candidate_hint: Option<&str>,
-        ) {
+        ) -> Option<i64> {
             self.cards.lock().await.push((
                 channel_login.to_string(),
                 target_login.to_string(),
@@ -4045,10 +4372,17 @@ mod db_tests {
                 kind,
                 candidate_hint.map(|h| h.to_string()),
             ));
+            Some(4242)
         }
     }
 
-    fn pitch_event(channel_id: &str, channel_login: &str, chatter_id: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+    fn pitch_event(
+        channel_id: &str,
+        channel_login: &str,
+        chatter_id: &str,
+        chatter_login: &str,
+        text: &str,
+    ) -> ChatMessageEvent {
         ChatMessageEvent {
             broadcaster_user_id: channel_id.to_string(),
             broadcaster_user_login: channel_login.to_string(),
@@ -4098,12 +4432,14 @@ mod db_tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE twitch_live_state SET active_session_id = $1 WHERE twitch_user_id = $2")
-            .bind(session_id)
-            .bind(channel_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_live_state SET active_session_id = $1 WHERE twitch_user_id = $2",
+        )
+        .bind(session_id)
+        .bind(channel_id)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     fn pitch_response(
@@ -4113,6 +4449,7 @@ mod db_tests {
         crate::promo_pitch::PitchResponse {
             occasion,
             reply: reply.to_string(),
+            ernst_gemeint: true,
             confidence: 0.9,
         }
     }
@@ -4136,11 +4473,11 @@ mod db_tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
             .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, false))
             .execute(&admin)
             .await
             .unwrap();
@@ -4229,6 +4566,7 @@ mod db_tests {
                 last_started_at TEXT,
                 is_live INTEGER DEFAULT 0,
                 last_game TEXT,
+                last_title TEXT,
                 active_session_id BIGINT,
                 last_viewer_count INTEGER DEFAULT 0
             )"#,
@@ -4332,6 +4670,9 @@ mod db_tests {
                 generated_text TEXT,
                 reject_reason TEXT,
                 sent_at TIMESTAMPTZ,
+                review_message_id BIGINT,
+                bewertung TEXT,
+                bewertet_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )"#,
             r#"CREATE TABLE twitch_chat_messages (
@@ -4358,13 +4699,338 @@ mod db_tests {
         )
     }
 
+    #[tokio::test]
+    async fn community_timer_persistenz_farbauswahl_und_sendpfad() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260912090000_promo_timer_settings.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260912204500_community_announcements.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260913193000_community_announcement_value_pitches.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_partner_channel(&pool, COMMUNITY_BROADCASTER_ID, "community-renamed").await;
+        seed_partner_channel(&pool, "other-id", "other").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = Arc::new(PromoEngine::new(
+            pool.clone(),
+            api.clone(),
+            Arc::new(NoopSuppressionCheck),
+        ));
+        engine
+            .prepare_channel_timers("community-renamed", COMMUNITY_BROADCASTER_ID)
+            .await;
+        engine.prepare_channel_timers("other", "other-id").await;
+        assert_eq!(
+            engine
+                .channel_timers("community-renamed")
+                .await
+                .0
+                .overall_cooldown_minutes,
+            20
+        );
+        assert_eq!(
+            engine
+                .channel_timers("other")
+                .await
+                .0
+                .overall_cooldown_minutes,
+            90
+        );
+        // Ohne Chat-Aktivität bleibt der eigene Timer still: die eingestellten
+        // Chat-Schwellen gelten auch für den Community-Kanal.
+        let now = Instant::now();
+        engine
+            .clone()
+            .process_due_channel(
+                "community-renamed".into(),
+                COMMUNITY_BROADCASTER_ID.into(),
+                now,
+            )
+            .await;
+        assert_eq!(
+            api.announcement_count().await,
+            0,
+            "ruhiger Chat darf keinen Timer-Spam auslösen"
+        );
+        // Erst wenn min_messages und das Aktivitätsfenster erreicht sind, sendet der Timer.
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("community-renamed".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.raw_msg_count_since_promo = 8;
+            for idx in 0..8usize {
+                state
+                    .activity
+                    .push_back((now, format!("chatter{}", idx % 2)));
+            }
+        }
+        engine
+            .clone()
+            .process_due_channel(
+                "community-renamed".into(),
+                COMMUNITY_BROADCASTER_ID.into(),
+                now,
+            )
+            .await;
+        assert_eq!(api.announcement_count().await, 1);
+        let restart = Arc::new(PromoEngine::new(
+            pool.clone(),
+            api.clone(),
+            Arc::new(NoopSuppressionCheck),
+        ));
+        restart.restore_promo_cooldowns().await;
+        restart
+            .prepare_channel_timers("community-renamed", COMMUNITY_BROADCASTER_ID)
+            .await;
+        restart
+            .clone()
+            .process_due_channel(
+                "community-renamed".into(),
+                COMMUNITY_BROADCASTER_ID.into(),
+                Instant::now(),
+            )
+            .await;
+        assert_eq!(
+            api.announcement_count().await,
+            1,
+            "Neustart darf Cooldown nicht löschen"
+        );
+        let mut settings = tb_analytics::promo_timers::load(&pool).await.unwrap();
+        settings.defaults.overall_cooldown_minutes = 60;
+        tb_analytics::promo_timers::save(&pool, &settings)
+            .await
+            .unwrap();
+        assert_eq!(
+            tb_analytics::promo_timers::load(&pool).await.unwrap(),
+            settings
+        );
+        assert_eq!(settings.community.timers.overall_cooldown_minutes, 20);
+        sqlx::raw_sql("CREATE TABLE twitch_global_promo_modes (config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', custom_message TEXT, starts_at TEXT, ends_at TEXT, is_enabled INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260912170000_announcement_color.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        tb_analytics::promo_mode::save_global_promo_mode(
+            &pool,
+            &serde_json::json!({
+                "mode":"custom_event", "custom_message":"Unser bestehender Hinweis {invite}",
+                "is_enabled":true, "announcement_color":"green"
+            }),
+            "test",
+        )
+        .await
+        .unwrap();
+        assert!(
+            engine
+                .send_promo_message("other", "other-id", Instant::now(), "test")
+                .await
+        );
+        assert_eq!(api.announcement_colors().await, vec!["purple", "green"]);
+        sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,6)")
+            .execute(&pool).await.unwrap();
+        let active_event = engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .unwrap();
+        assert!(active_event.0.starts_with("Unser bestehender Hinweis"));
+        assert_eq!(active_event.1, "green");
+        sqlx::query("UPDATE twitch_global_promo_modes SET ends_at = '2000-01-01T00:00:00+00:00'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let expired_event = engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .unwrap();
+        assert_eq!(expired_event.0, format!("Scrim ohne Gegnerteam? Bei uns kannst du gezielt andere Teams suchen, statt einzelne Leute per DM abzuklappern. {}", DEFAULT_PROMO_DISCORD_INVITE));
+        assert_eq!(expired_event.1, "purple");
+        use tb_analytics::community_announcements::{load, save, Announcement};
+        let mut config = load(&pool).await.unwrap();
+        config.include_global_event = false;
+        for entry in &mut config.entries {
+            entry.enabled = false;
+        }
+        config = save(&pool, &config).await.unwrap().unwrap();
+        assert!(
+            engine
+                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+                .await
+                .is_none(),
+            "Keine versteckten Standardtexte bei deaktivierter Rotation"
+        );
+        config.entries.push(Announcement {
+            text: "Nur unser neuer Test {invite}".into(),
+            enabled: false,
+            color: "orange".into(),
+        });
+        config = save(&pool, &config).await.unwrap().unwrap();
+        assert!(engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .is_none());
+        config.entries.last_mut().unwrap().enabled = true;
+        config = save(&pool, &config).await.unwrap().unwrap();
+        let selected = engine
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .await
+            .unwrap();
+        assert_eq!(
+            selected,
+            (
+                format!("Nur unser neuer Test {}", DEFAULT_PROMO_DISCORD_INVITE),
+                "orange".into()
+            )
+        );
+        // Tatsächlicher Sendepfad, bestehender Cooldown bleibt erhalten.
+        assert!(
+            engine
+                .send_promo_message(
+                    "community-renamed",
+                    COMMUNITY_BROADCASTER_ID,
+                    Instant::now() + Duration::from_secs(3600),
+                    "test"
+                )
+                .await
+        );
+        assert_eq!(api.announcement_colors().await.last().unwrap(), "orange");
+        config.enabled = false;
+        config.include_global_event = true;
+        save(&pool, &config).await.unwrap().unwrap();
+        sqlx::query("UPDATE twitch_global_promo_modes SET ends_at = NULL")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            engine
+                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+                .await
+                .is_none(),
+            "Kanalpause sperrt auch das globale Event"
+        );
+        assert!(
+            engine
+                .build_promo_text("other", DEFAULT_PROMO_DISCORD_INVITE)
+                .await
+                .unwrap()
+                .0
+                .starts_with("Unser bestehender Hinweis"),
+            "Andere Kanäle bleiben unverändert"
+        );
+    }
+
+    /// Regression zum Reset-Fehler: eine echte Folgewerbung ohne neuen
+    /// Teilnehmer bleibt gesperrt. Zuvor markierte der Versand nur den
+    /// Aktivitäts-Bucket als gesehen, `get_new_chatters_in_window_inner`
+    /// zählt aber Bucket UNION Session-Viewer. Dadurch zählten API-only-Viewer
+    /// bei jeder Folgewerbung erneut als neu und öffneten die new_chatters-Grenze.
+    #[tokio::test]
+    async fn folgewerbung_ohne_neuzugang_bleibt_gesperrt() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner_channel(&pool, "reg-id", "regkanal").await;
+        // Zwei API-only-Viewer an der aktiven Session: nie im Chat, nur getrackt.
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login)
+             SELECT active_session_id, 'regkanal', v
+               FROM twitch_live_state, unnest(ARRAY['viewer_b', 'viewer_c']) AS v
+              WHERE twitch_user_id = 'reg-id'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+
+        let now = Instant::now();
+        {
+            let state_ref = engine
+                .channel_states
+                .entry("regkanal".into())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            // Kleine Aktivitäts-Cooldowns, damit der Folgeversuch nicht am
+            // Cooldown, sondern an der new_chatters-Grenze hängt (der Cooldown
+            // ist getrennt getestet). new_chatters bleibt bei 2.
+            state.timers.new_chatters = 2;
+            state.timers.min_messages = PROMO_ACTIVITY_MIN_MSGS;
+            state.timers.activity_cooldown_min_minutes = 1;
+            state.timers.activity_cooldown_max_minutes = 2;
+            state.raw_msg_count_since_promo = state.timers.min_messages;
+            for _ in 0..PROMO_ACTIVITY_MIN_MSGS {
+                state.activity.push_back((now, "chatter_a".into()));
+            }
+        }
+
+        // Erste Werbung: A (Chat) plus B/C (API-Viewer) sind neu → sendebereit.
+        let snap = {
+            let state_ref = engine.channel_states.entry("regkanal".into());
+            let state = state_ref.or_insert_with(|| Mutex::new(ChannelState::new()));
+            let guard = state.lock().await;
+            guard.clone()
+        };
+        assert!(
+            engine
+                .promo_activity_ready_inner("regkanal", &snap, now)
+                .await,
+            "erste Werbung: A, B und C zählen als neu"
+        );
+        engine
+            .mark_promo_sent("regkanal", now, "chat_activity", 0.0)
+            .await;
+
+        // Etwas später chattet nur A erneut, kein neuer Teilnehmer kommt hinzu.
+        let later = now
+            .checked_add(Duration::from_secs(5 * 60))
+            .expect("Instant + 5 min");
+        {
+            let state_ref = engine.channel_states.entry("regkanal".into());
+            let state = state_ref.or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut guard = state.lock().await;
+            guard.raw_msg_count_since_promo = guard.timers.min_messages;
+            for _ in 0..PROMO_ACTIVITY_MIN_MSGS {
+                guard.activity.push_back((later, "chatter_a".into()));
+            }
+        }
+        let snap_later = {
+            let state_ref = engine.channel_states.entry("regkanal".into());
+            let state = state_ref.or_insert_with(|| Mutex::new(ChannelState::new()));
+            let guard = state.lock().await;
+            guard.clone()
+        };
+        assert!(
+            !engine
+                .promo_activity_ready_inner("regkanal", &snap_later, later)
+                .await,
+            "Folgewerbung ohne Neuzugang bleibt gesperrt: A, B und C sind bereits gesehen"
+        );
+    }
+
     struct EmptyMembers;
 
     #[async_trait::async_trait]
     impl crate::zuschauer_register::MemberIndexSource for EmptyMembers {
-        async fn fetch_members(
-            &self,
-        ) -> Option<Vec<crate::zuschauer_register::MemberLite>> {
+        async fn fetch_members(&self) -> Option<Vec<crate::zuschauer_register::MemberLite>> {
             Some(Vec::new())
         }
     }
@@ -4408,6 +5074,38 @@ mod db_tests {
         assert!(recent.iter().all(|m| !m.contains("nightbot")));
         assert!(recent.iter().all(|m| !m.contains("community freut")));
         assert!(recent.iter().all(|m| !m.contains("lurker")));
+    }
+
+    #[tokio::test]
+    async fn recent_messages_lfg_chronologisch_und_anlass_neueste_zuerst() {
+        let pool = pool_or_skip!("promo_recent_lfg_order");
+        let engine = make_engine(pool.clone());
+        for index in 1..=11 {
+            sqlx::query(
+                "INSERT INTO twitch_chat_messages
+                 (streamer_login, chatter_login, message_id, message_ts, is_command, content)
+                 VALUES ('nani', 'viewer', $1, NOW() - $2 * INTERVAL '1 minute', FALSE, $3)",
+            )
+            .bind(format!("msg-{index}"))
+            .bind(12 - index)
+            .bind(format!("Zeile {index}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(
+            engine
+                .load_recent_channel_messages_before("nani", 8, Some("msg-11"))
+                .await,
+            (3..=10)
+                .map(|index| format!("viewer: Zeile {index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            engine.load_recent_channel_messages("nani", 3).await,
+            vec!["viewer: Zeile 11", "viewer: Zeile 10", "viewer: Zeile 9"]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4909,8 +5607,10 @@ mod db_tests {
         let engine = Arc::new(make_engine(pool));
         let e1 = Arc::clone(&engine);
         let e2 = Arc::clone(&engine);
-        let t1 = tokio::spawn(async move { e1.pitch_judge_throttle_reserve("rkanal", "chatter-a") });
-        let t2 = tokio::spawn(async move { e2.pitch_judge_throttle_reserve("rkanal", "chatter-b") });
+        let t1 =
+            tokio::spawn(async move { e1.pitch_judge_throttle_reserve("rkanal", "chatter-a") });
+        let t2 =
+            tokio::spawn(async move { e2.pitch_judge_throttle_reserve("rkanal", "chatter-b") });
         let (r1, r2) = tokio::join!(t1, t2);
         assert!(r1.unwrap(), "erste Reservierung muss durchgehen");
         assert!(r2.unwrap(), "zweite Reservierung muss durchgehen");
@@ -5153,7 +5853,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt",
+            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
             .set_pitch_judge(judge.clone())
@@ -5182,7 +5882,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt, das game macht suchtig",
+            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
@@ -5218,7 +5918,160 @@ mod db_tests {
         assert!(row.1.is_some(), "sent_at muss gesetzt sein");
         assert_eq!(row.2.as_deref(), Some("game_unpopular"));
 
-        assert_eq!(sink.cards.lock().await.len(), 1, "eine Review-Karte erwartet");
+        assert_eq!(
+            sink.cards.lock().await.len(),
+            1,
+            "eine Review-Karte erwartet"
+        );
+    }
+
+    #[tokio::test]
+    async fn neuer_deadlock_zuschauer_bekommt_pitch_auch_ohne_frust_anlass() {
+        let pool = pool_or_skip!("promo_neuer_zuschauer_interesse");
+        seed_partner_channel(&pool, "c-neu", "neukanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+            "haze sieht wirklich spannend aus. im discord findest du mitspieler für gemeinsame runden",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-neu",
+            "neukanal",
+            "u-neu",
+            "Neuling",
+            "haze sieht echt wild aus",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "eine kurze substanzielle Deadlock-Nachricht ab 15 Zeichen soll den Judge erreichen"
+        );
+        let msgs = api.messages_sent().await;
+        assert_eq!(
+            msgs.len(),
+            1,
+            "neuer interessierter Zuschauer soll einen Pitch bekommen"
+        );
+        assert!(msgs[0].1.contains("discord findest du mitspieler"));
+
+        let occasion: Option<String> = sqlx::query_scalar(
+            "SELECT occasion FROM twitch_promo_pitch_log WHERE target_user_id = 'u-neu' AND sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(occasion.as_deref(), Some("newcomer_interest"));
+    }
+
+    #[tokio::test]
+    async fn persoenlicher_meta_pitch_wird_verworfen() {
+        let pool = pool_or_skip!("promo_personal_meta");
+        seed_partner_channel(&pool, "c-meta", "metakanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+            "wer bock auf deadlock hat, ist in der deutschen community gut aufgehoben",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge)
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-meta",
+            "metakanal",
+            "u-meta",
+            "Meta",
+            "deadlock sieht interessanter aus als ich dachte",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "Meta-Pitch darf nicht gesendet werden"
+        );
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT reject_reason FROM twitch_promo_pitch_log WHERE target_user_id = 'u-meta'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason.as_deref(), Some("meta_pitch"));
+    }
+
+    #[tokio::test]
+    async fn niedrige_pitch_confidence_sendet_nichts() {
+        let pool = pool_or_skip!("promo_personal_confidence");
+        seed_partner_channel(&pool, "c-conf", "confkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(
+            crate::promo_pitch::PitchResponse {
+                occasion: Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+                reply: "im discord findest du mitspieler für gemeinsame runden".to_string(),
+                confidence: 0.45,
+                ernst_gemeint: true,
+            },
+        )));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge)
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-conf",
+            "confkanal",
+            "u-conf",
+            "Conf",
+            "deadlock sieht interessanter aus als ich dachte",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "unsicherer Pitch soll schweigen"
+        );
+    }
+
+    #[tokio::test]
+    async fn persoenlicher_pitch_laeuft_nur_bei_deadlock() {
+        let pool = pool_or_skip!("promo_personal_nur_deadlock");
+        seed_partner_channel(&pool, "c-game", "gamekanal").await;
+        sqlx::query(
+            "UPDATE twitch_live_state SET last_game = 'Minecraft' WHERE twitch_user_id = 'c-game'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
+            Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
+            "spannend. im discord findest du mitspieler für gemeinsame runden",
+        ))));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
+
+        let event = pitch_event(
+            "c-game",
+            "gamekanal",
+            "u-game",
+            "Game",
+            "das sieht ja echt interessant aus heute",
+        );
+        engine.on_message_pitch(&event).await;
+
+        assert_eq!(
+            judge.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "außerhalb von Deadlock darf der persönliche Community-Judge nicht laufen"
+        );
+        assert_eq!(api.message_count().await, 0);
     }
 
     async fn seed_deadlock_candidate(pool: &PgPool, own_login: &str, chatter_id: &str) {
@@ -5234,18 +6087,16 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn partner_kandidat_bekommt_partner_pitch() {
+    async fn deadlock_streamer_bekommt_keinen_kalten_partner_pitch() {
         let pool = pool_or_skip!("promo_partner_kandidat");
         seed_partner_channel(&pool, "c-pk", "pkkanal").await;
         seed_deadlock_candidate(&pool, "kandidatlogin", "u-pk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some(
-            "stark gespielt gerade. wenn du öfter deadlock streamst, bei der deutschen deadlock community gibts ein partner netzwerk, das raidet dich wenn andere offline gehen und schützt deinen chat vor spam",
+            "dieser text darf nie erzeugt werden",
         )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
             .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
@@ -5257,22 +6108,22 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        let msgs = api.messages_sent().await;
-        assert_eq!(msgs.len(), 1, "genau ein Partner-Pitch erwartet");
-        assert!(
-            msgs[0].1.starts_with("@Kandidat "),
-            "Antwort muss die Person mit @login anreden: {}",
-            msgs[0].1
+        assert_eq!(
+            gen.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "andere Deadlock-Streamer dürfen keinen kalten Partner-Pitch bekommen"
         );
-
-        let row: (String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-            "SELECT pfad, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
+        assert_eq!(api.message_count().await, 0, "kein Partner-Pitch im Chat");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, "partner");
-        assert!(row.1.is_some(), "sent_at muss gesetzt sein");
+        assert_eq!(
+            count, 0,
+            "deaktivierter Partner-Pitch schreibt auch kein Pitch-Log"
+        );
     }
 
     #[tokio::test]
@@ -5287,7 +6138,13 @@ mod db_tests {
             .set_partner_pitch_gen(gen.clone())
             .set_zuschauer_register(test_register(pool.clone()));
 
-        let event = pitch_event("c-pkz", "pkzkanal", "u-pkz", "Kurz", "yo deadlock laeuft gut");
+        let event = pitch_event(
+            "c-pkz",
+            "pkzkanal",
+            "u-pkz",
+            "Kurz",
+            "yo deadlock laeuft gut",
+        );
         engine.on_message_pitch(&event).await;
 
         assert_eq!(
@@ -5309,19 +6166,17 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn partner_pitch_schreibt_ledger_und_review_karte() {
+    async fn deaktivierter_partner_pitch_schreibt_weder_ledger_noch_review() {
         let pool = pool_or_skip!("promo_partner_ledger_karte");
         seed_partner_channel(&pool, "c-lk", "lkkanal").await;
         seed_deadlock_candidate(&pool, "ledgerlogin", "u-lk").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some(
-            "stark gespielt gerade, wenn du öfter deadlock streamst gibts bei der community ein partner netzwerk mit raids und chat schutz",
+            "dieser text darf nie erzeugt werden",
         )));
         let sink = RecordingReviewSink::default();
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
             .set_partner_pitch_gen(gen.clone())
             .set_pitch_review_sink(Arc::new(sink.clone()));
 
@@ -5334,27 +6189,18 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        assert_eq!(api.message_count().await, 1, "genau ein Partner-Pitch erwartet");
-
-        let ledger: (String, String, String, Option<String>) = sqlx::query_as(
-            "SELECT trigger_type, judge_verdict, action, twitch_user_id FROM twitch_scout_pitch_ledger",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(ledger.0, "chat_partner_pitch");
-        assert_eq!(ledger.1, "partner_pitch");
-        assert_eq!(ledger.2, "posted");
-        assert_eq!(ledger.3.as_deref(), Some("u-lk"));
-
-        let cards = sink.cards.lock().await;
-        assert_eq!(cards.len(), 1, "eine Review-Karte erwartet");
-        assert_eq!(cards[0].4, PitchCardKind::Partner, "Karte muss als Partner markiert sein");
-        let hint = cards[0].5.as_deref().unwrap_or("");
-        assert!(
-            hint.contains("ledgerlogin"),
-            "Kandidaten-Hinweis muss den Login tragen: {hint}"
+        assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(api.message_count().await, 0);
+        let ledger_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_scout_pitch_ledger")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            ledger_count, 0,
+            "kein kalter Streamer-Outreach-Ledger-Eintrag"
         );
+        assert!(sink.cards.lock().await.is_empty(), "keine Review-Karte");
     }
 
     #[tokio::test]
@@ -5364,7 +6210,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt, das game macht suchtig",
+            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
@@ -5515,7 +6361,11 @@ mod db_tests {
             0,
             "das Tageslimit muss vor dem Generator-Aufruf greifen"
         );
-        assert_eq!(api.message_count().await, 0, "sechster Partner-Pitch am Tag blockiert");
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "sechster Partner-Pitch am Tag blockiert"
+        );
     }
 
     #[tokio::test]
@@ -5552,7 +6402,11 @@ mod db_tests {
             0,
             "Werbefrei muss den Partner-Pitch vor dem Generator abschalten"
         );
-        assert_eq!(api.message_count().await, 0, "Werbefrei: kein Partner-Pitch");
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "Werbefrei: kein Partner-Pitch"
+        );
         let count: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'partner'")
                 .fetch_one(&pool)
@@ -5562,18 +6416,16 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn partner_filter_verwirft_link() {
+    async fn deaktivierter_partner_pitch_ruft_auch_keinen_generator_mit_link_auf() {
         let pool = pool_or_skip!("promo_partner_filter_link");
         seed_partner_channel(&pool, "c-fl", "flkanal").await;
         seed_deadlock_candidate(&pool, "filterlogin", "u-fl").await;
 
         let api = Arc::new(super::tests::MockApi::default());
-        let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some(
             "stark gespielt, schau mal auf https://discord.gg/abc vorbei",
         )));
         let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
             .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
@@ -5585,15 +6437,15 @@ mod db_tests {
         );
         engine.on_message_pitch(&event).await;
 
-        assert_eq!(api.message_count().await, 0, "Link-Antwort darf nicht raus");
-        let row: (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
-            "SELECT reject_reason, sent_at FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
+        assert_eq!(gen.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(api.message_count().await, 0);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_promo_pitch_log WHERE pfad = 'partner'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0.as_deref(), Some("link"), "harter Filter muss den Grund protokollieren");
-        assert!(row.1.is_none());
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
@@ -5696,7 +6548,10 @@ mod db_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(row.0.is_some(), "harter Filter muss den Grund protokollieren");
+        assert!(
+            row.0.is_some(),
+            "harter Filter muss den Grund protokollieren"
+        );
         assert!(row.1.is_none());
     }
 
@@ -6509,11 +7364,7 @@ mod db_tests {
         engine
             .thank_lurker_tax_redeemer("u-off", "offkanal", "xy")
             .await;
-        assert_eq!(
-            api.message_count().await,
-            0,
-            "Schalter aus: kein Dank"
-        );
+        assert_eq!(api.message_count().await, 0, "Schalter aus: kein Dank");
 
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
@@ -6549,11 +7400,7 @@ mod db_tests {
         engine
             .thank_lurker_tax_redeemer("u-dank", "dankkanal", "xy")
             .await;
-        assert_eq!(
-            api.message_count().await,
-            1,
-            "erster Dank geht raus"
-        );
+        assert_eq!(api.message_count().await, 1, "erster Dank geht raus");
 
         engine
             .thank_lurker_tax_redeemer("u-dank", "dankkanal", "xy")
@@ -6565,7 +7412,12 @@ mod db_tests {
         );
     }
 
-    fn followup_event(channel_id: &str, channel_login: &str, chatter_login: &str, text: &str) -> ChatMessageEvent {
+    fn followup_event(
+        channel_id: &str,
+        channel_login: &str,
+        chatter_login: &str,
+        text: &str,
+    ) -> ChatMessageEvent {
         ChatMessageEvent {
             broadcaster_user_id: channel_id.to_string(),
             broadcaster_user_login: channel_login.to_string(),
@@ -6757,5 +7609,72 @@ mod db_tests {
             new_count, 2,
             "API-getrackte Session-Viewer zählen als neue Chatter"
         );
+    }
+}
+
+#[cfg(test)]
+mod adressat_tests {
+    use super::adressat_fremd;
+    use crate::types::{ChatMessageBody, ChatMessageEvent, ChatReply, MentionRef, MessageFragment};
+
+    fn basis(text: &str) -> ChatMessageEvent {
+        ChatMessageEvent {
+            broadcaster_user_id: "streamer_id".into(),
+            broadcaster_user_login: "marcymcwhy".into(),
+            broadcaster_user_name: "MarcyMcWhy".into(),
+            chatter_user_id: "viewer_id".into(),
+            chatter_user_login: "viewer".into(),
+            message: ChatMessageBody {
+                text: text.into(),
+                fragments: Vec::new(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn adressat_reply_an_fremden_ist_fremd() {
+        let mut event = basis("bin gerade in den ersten ranked games");
+        event.reply = Some(ChatReply {
+            parent_user_id: "streamer_id".into(),
+            parent_user_login: "marcymcwhy".into(),
+        });
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_reply_an_bot_ist_erlaubt() {
+        let mut event = basis("hey bot wie gehts dir eigentlich so");
+        event.reply = Some(ChatReply {
+            parent_user_id: "bot_id".into(),
+            parent_user_login: "ddc_bot".into(),
+        });
+        assert!(!adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_mention_auf_anderen_ist_fremd() {
+        let mut event = basis("schau mal was der gemacht hat");
+        event.message.fragments.push(MessageFragment {
+            fragment_type: "mention".into(),
+            text: "@jemand".into(),
+            mention: Some(MentionRef {
+                user_id: "anderer_id".into(),
+                user_login: "jemand".into(),
+            }),
+        });
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_broadcaster_anrede_ist_fremd() {
+        let event = basis("na marcymcwhy, schön eingeranked?");
+        assert!(adressat_fremd(&event, "bot_id"));
+    }
+
+    #[test]
+    fn adressat_normale_nachricht_ist_kein_fremd() {
+        let event = basis("solo queue ist echt die hölle heute");
+        assert!(!adressat_fremd(&event, "bot_id"));
     }
 }

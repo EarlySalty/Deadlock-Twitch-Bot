@@ -2,6 +2,9 @@
 //! Blacklist) → RaidExecutor (RaidApi-Port) → Raid-History. Stub-RaidApi +
 //! Stub-TwitchTokenClient, echte Stores gegen den Test-Container.
 
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -10,8 +13,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
-    RaidApi, RaidAuthStore, RaidExecutor, RaidHistoryStore, RaidOutcome, RaidRequest,
-    RaidTokenRefresher, RaidBlacklistStore, RefreshError, TokenBlacklistStore, TokenOwnerInfo,
+    RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidOutcome,
+    RaidRequest, RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo,
     TokenProvider, TokenResponse, TwitchTokenClient,
 };
 
@@ -33,11 +36,11 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
         .connect(dsn)
         .await
         .unwrap();
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    sqlx::query(crate::test_sql::drop_schema(schema, true))
         .execute(&admin)
         .await
         .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(crate::test_sql::create_schema(schema, false))
         .execute(&admin)
         .await
         .unwrap();
@@ -189,7 +192,12 @@ async fn gueltiger_token_startet_raid_und_schreibt_erfolg() {
     );
 
     let outcome = exec.execute(&request(), Utc::now()).await.unwrap();
-    assert_eq!(outcome, RaidOutcome::Started);
+    assert!(matches!(
+        outcome,
+        RaidOutcome::Started {
+            raid_history_id: Some(_)
+        }
+    ));
     // RaidApi mit entschlüsseltem User-Token aufgerufen.
     assert_eq!(
         api.called_with.lock().unwrap().clone(),

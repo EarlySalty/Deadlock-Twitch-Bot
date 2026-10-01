@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule};
 
+mod steam;
+
 pub const READ_SCOPE: &str = "channel:read:ads";
 pub const SNOOZE_SCOPE: &str = "channel:manage:ads";
 pub const COMMERCIAL_SCOPE: &str = "channel:edit:commercial";
@@ -16,7 +18,7 @@ pub const LIVE_STATE_MAX_AGE: Duration = Duration::minutes(5);
 /// Frische-Schranke für den Steam-Match-Status in Werbeentscheidungen. Bewusst
 /// enger als die Presence-Toleranz des Titel-Generators (600 s, siehe
 /// tb-chat/steam_lookup.rs), weil Queue-Phasen kurz sind; bei Überschreitung
-/// greift der Chat-Ruhe-Fallback.
+/// wird kein sicheres Werbefenster angenommen.
 pub const MATCH_STATUS_FRESH_SECS: i64 = 180;
 pub const UNRESOLVED_DETAIL: &str =
     "Ausgang konnte nach 15 Minuten nicht eindeutig bestätigt werden; Sperre wurde aufgehoben.";
@@ -24,10 +26,18 @@ pub const UNRESOLVED_DETAIL: &str =
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Strategy {
-    Monitor,
     Snooze,
     Smart,
 }
+
+pub const DEFAULT_RETRY_AFTER_SECS: i32 = 8 * 60;
+const RAID_LOCK_MIN: i64 = 10;
+const FIRST_CHATTER_LOCK_MIN: i64 = 5;
+const POST_MATCH_WAIT_MIN: i64 = 1;
+const PULL_FORWARD_HORIZON_MIN: i64 = 12;
+// Two 25-second worker ticks plus network margin; a 10-second setting can miss a tick.
+const MIN_ACTION_LEAD_SECS: i32 = 60;
+pub const HINT_WINDOW_SECS: i64 = 45;
 
 #[cfg(test)]
 mod tests {
@@ -81,225 +91,16 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod steam_tests {
-    use super::*;
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use std::str::FromStr;
-
-    async fn connect(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn)
-            .unwrap()
-            .options([("search_path", schema)]);
-        Some(
-            PgPoolOptions::new()
-                .max_connections(2)
-                .connect_with(opts)
-                .await
-                .unwrap(),
-        )
-    }
-
-    async fn with_tables(pool: &PgPool) {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS twitch_engagement_settings (
-                channel_login TEXT PRIMARY KEY,
-                enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                steam_id TEXT
-            )",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query("CREATE SCHEMA IF NOT EXISTS activity")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS activity.live_player_state (
-                steam_id TEXT PRIMARY KEY,
-                in_deadlock_now BOOLEAN,
-                in_match_now_strict BOOLEAN,
-                deadlock_stage TEXT,
-                deadlock_hero TEXT,
-                deadlock_party_hint TEXT,
-                deadlock_minutes INTEGER,
-                deadlock_updated_at TIMESTAMPTZ,
-                last_seen_at TIMESTAMPTZ
-            )",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    // activity.live_player_state liegt außerhalb des Test-Schemas und wird von
-    // allen Steam-Tests geteilt: Jeder Test braucht seine eigene steam_id.
-    const LOGIN: &str = "steamtest";
-
-    fn steam_id(tag: &str) -> String {
-        format!("76_561_199_{tag}")
-    }
-
-    async fn profile(pool: &PgPool, steam_id: Option<&str>) {
-        sqlx::query("DELETE FROM twitch_engagement_settings WHERE channel_login = $1")
-            .bind(LOGIN)
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO twitch_engagement_settings (channel_login, enabled, steam_id)
-             VALUES ($1, TRUE, $2)",
-        )
-        .bind(LOGIN)
-        .bind(steam_id)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    async fn presence(pool: &PgPool, steam_id: &str, in_match: bool, updated_at: Option<DateTime<Utc>>) {
-        sqlx::query("DELETE FROM activity.live_player_state WHERE steam_id = $1")
-            .bind(steam_id)
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO activity.live_player_state (
-                steam_id, in_deadlock_now, in_match_now_strict,
-                deadlock_hero, deadlock_stage, deadlock_updated_at, last_seen_at
-             )
-             VALUES ($1, TRUE, $2, 'Haze', 'laning', $3, $3)",
-        )
-        .bind(steam_id)
-        .bind(in_match)
-        .bind(updated_at)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn ohne_engagement_profil_ist_nichts_verknuepft() {
-        let Some(pool) = connect("t_adm_steam_none").await else {
-            return;
-        };
-        with_tables(&pool).await;
-        let summary = AdManagerStore::new(pool)
-            .steam_match_summary("niemand", Utc::now())
-            .await
-            .unwrap();
-        assert!(!summary.steam_linked);
-        assert!(summary.state.is_none());
-        assert!(summary.observed_at.is_none());
-    }
-
-    #[tokio::test]
-    async fn frische_presence_liefert_match_status() {
-        let Some(pool) = connect("t_adm_steam_fresh").await else {
-            return;
-        };
-        with_tables(&pool).await;
-        let id = steam_id("fresh");
-        profile(&pool, Some(&id)).await;
-        presence(&pool, &id, true, Some(Utc::now() - Duration::seconds(30))).await;
-
-        let summary = AdManagerStore::new(pool)
-            .steam_match_summary(LOGIN, Utc::now())
-            .await
-            .unwrap();
-        assert!(summary.steam_linked);
-        let state = summary.state.expect("frische Presence");
-        assert!(state.in_match);
-        assert!(state.in_deadlock);
-        assert_eq!(state.hero.as_deref(), Some("Haze"));
-        assert_eq!(state.stage.as_deref(), Some("laning"));
-    }
-
-    #[tokio::test]
-    async fn veraltete_presence_faellt_auf_fallback_zurueck_und_zeigt_das_alter() {
-        let Some(pool) = connect("t_adm_steam_stale").await else {
-            return;
-        };
-        with_tables(&pool).await;
-        let id = steam_id("stale");
-        profile(&pool, Some(&id)).await;
-        let stale = Utc::now() - Duration::seconds(MATCH_STATUS_FRESH_SECS + 60);
-        presence(&pool, &id, false, Some(stale)).await;
-
-        let summary = AdManagerStore::new(pool)
-            .steam_match_summary(LOGIN, Utc::now())
-            .await
-            .unwrap();
-        assert!(summary.steam_linked);
-        assert!(summary.state.is_none(), "veraltete Presence entscheidet nicht");
-        let observed = summary.observed_at.expect("Stale-Zeit bleibt sichtbar");
-        assert!(
-            (observed - stale).num_seconds().abs() <= 1,
-            "observed_at {observed} ~ {stale}"
-        );
-    }
-
-    #[tokio::test]
-    async fn steam_id_ohne_presence_zusaetze_ist_verknuepft_ohne_status() {
-        let Some(pool) = connect("t_adm_steam_nopresence").await else {
-            return;
-        };
-        with_tables(&pool).await;
-        profile(&pool, Some(&steam_id("nopresence"))).await;
-
-        let summary = AdManagerStore::new(pool)
-            .steam_match_summary(LOGIN, Utc::now())
-            .await
-            .unwrap();
-        assert!(summary.steam_linked);
-        assert!(summary.state.is_none());
-        assert!(summary.observed_at.is_none());
-    }
-
-    #[tokio::test]
-    async fn leerer_steam_id_eintrag_ist_nicht_verknuepft() {
-        let Some(pool) = connect("t_adm_steam_empty").await else {
-            return;
-        };
-        with_tables(&pool).await;
-        profile(&pool, Some("   ")).await;
-
-        let summary = AdManagerStore::new(pool)
-            .steam_match_summary(LOGIN, Utc::now())
-            .await
-            .unwrap();
-        assert!(!summary.steam_linked);
-        assert!(summary.state.is_none());
-    }
-}
 
 impl Strategy {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Monitor => "monitor",
             Self::Snooze => "snooze",
             Self::Smart => "smart",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "monitor" => Some(Self::Monitor),
             "snooze" => Some(Self::Snooze),
             "smart" => Some(Self::Smart),
             _ => None,
@@ -307,7 +108,6 @@ impl Strategy {
     }
     pub fn required_scopes(self) -> &'static [&'static str] {
         match self {
-            Self::Monitor => &[READ_SCOPE],
             Self::Snooze => &[READ_SCOPE, SNOOZE_SCOPE],
             Self::Smart => &[READ_SCOPE, SNOOZE_SCOPE, COMMERCIAL_SCOPE],
         }
@@ -319,29 +119,41 @@ impl Strategy {
 pub struct Settings {
     pub enabled: bool,
     pub strategy: Strategy,
+    pub budget_minutes_per_hour: i32,
     pub ad_duration_seconds: i32,
     pub min_interval_minutes: i32,
     pub startup_delay_minutes: i32,
     pub quiet_window_minutes: i32,
     pub action_lead_seconds: i32,
+    #[serde(default = "default_chat_notice_before_ad")]
+    pub chat_notice_before_ad: bool,
+}
+
+fn default_chat_notice_before_ad() -> bool {
+    true
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: false,
-            strategy: Strategy::Monitor,
+            strategy: Strategy::Smart,
+            budget_minutes_per_hour: 3,
             ad_duration_seconds: 90,
             min_interval_minutes: 30,
             startup_delay_minutes: 15,
             quiet_window_minutes: 5,
             action_lead_seconds: 60,
+            chat_notice_before_ad: true,
         }
     }
 }
 
 impl Settings {
     pub fn validate(&self) -> Result<(), &'static str> {
+        if !(1..=8).contains(&self.budget_minutes_per_hour) {
+            return Err("budgetMinutesPerHour muss zwischen 1 und 8 liegen");
+        }
         if ![30, 60, 90, 120, 150, 180].contains(&self.ad_duration_seconds) {
             return Err("adDurationSeconds ist ungültig");
         }
@@ -361,10 +173,10 @@ impl Settings {
     }
 }
 
-/// Frischer Steam-Match-Status eines Streamers. Quelle ist die vom Steam-Bot
-/// gepflegte `activity.live_player_state`, anknüpfung über die im
-/// Engagement-Profil hinterlegte Steam-ID. `in_deadlock` ist für die Anzeige
-/// (Queue oder Menü gegen anderes Spiel); die Entscheidung liest nur `in_match`.
+/// Frischer Matchstatus aus der Steam-Bot-API mit ursprünglichem Messzeitpunkt.
+/// Die Kontozuordnung wird im Twitch-System über die stabile Benutzer-ID gewählt.
+/// `in_match` schützt das Match; `in_deadlock` unterscheidet Queue und Menü von
+/// einem bestätigten Zustand außerhalb von Deadlock.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SteamMatchState {
     pub in_match: bool,
@@ -376,12 +188,103 @@ pub struct SteamMatchState {
 
 /// Steam-Anknüpfung eines Kanals samt Zustand; `state` ist nur gesetzt, solange
 /// die Presence frisch ist. Der Dashboard-Status zeigt auch den veralteten
-/// Stand, der Entscheider fällt dann auf Chat-Ruhe zurück.
+/// Stand; ohne frischen Status ist kein Werbefenster bestätigt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SteamMatchSummary {
     pub steam_linked: bool,
     pub state: Option<SteamMatchState>,
     pub observed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdPlan {
+    pub next_block_at: Option<DateTime<Utc>>,
+    pub block_seconds: i32,
+    pub blocks_per_hour: i32,
+    pub budget_used_seconds_this_hour: i32,
+}
+
+pub fn plan_next_block(
+    now: DateTime<Utc>,
+    stream_started_at: Option<DateTime<Utc>>,
+    budget_minutes_per_hour: i32,
+    budget_used_seconds_this_hour: i32,
+    last_block_at: Option<DateTime<Utc>>,
+    retry_after_seconds: i32,
+) -> AdPlan {
+    let budget_seconds = budget_minutes_per_hour.clamp(1, 8) * 60;
+    let retry = retry_after_seconds.max(1);
+
+    let count_30 = (budget_seconds / 30).max(1);
+    let period_30 = 3600 / count_30;
+    let block_seconds = if period_30 >= retry { 30 } else { 60 };
+    let desired_blocks = (budget_seconds / block_seconds).max(1);
+    let period = (3600 / desired_blocks).max(retry);
+    let blocks_per_hour = (3600 / period).max(1);
+
+    let next_block_at = if budget_used_seconds_this_hour >= budget_seconds {
+        None
+    } else {
+        Some(match last_block_at {
+            Some(last) => last + Duration::seconds(i64::from(period)),
+            None => stream_started_at.unwrap_or(now),
+        })
+    };
+
+    AdPlan {
+        next_block_at,
+        block_seconds,
+        blocks_per_hour,
+        budget_used_seconds_this_hour,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchTiming {
+    pub match_started_at: Option<DateTime<Utc>>,
+    pub match_ended_at: Option<DateTime<Utc>>,
+    pub avg_match_seconds: Option<i32>,
+    pub avg_queue_seconds: Option<i32>,
+}
+
+fn ema(prev: Option<i32>, sample: i32) -> i32 {
+    match prev {
+        Some(previous) => (previous * 3 + sample) / 4,
+        None => sample,
+    }
+}
+
+fn clamp_sample(seconds: i64, low: i64, high: i64) -> Option<i32> {
+    if seconds < low || seconds > high {
+        return None;
+    }
+    i32::try_from(seconds).ok()
+}
+
+pub fn assess_plan(
+    twitch_is_source: bool,
+    planned_interval_seconds: Option<i32>,
+    snooze_count: i64,
+    avg_match_seconds: Option<i32>,
+    avg_queue_seconds: Option<i32>,
+) -> &'static str {
+    if !twitch_is_source {
+        return "good";
+    }
+    let (Some(interval), Some(avg_match)) = (planned_interval_seconds, avg_match_seconds) else {
+        return "good";
+    };
+    if interval <= 0 || avg_match <= 0 {
+        return "good";
+    }
+    let cycle = avg_match + avg_queue_seconds.unwrap_or(0);
+    if interval >= cycle {
+        "good"
+    } else if interval >= avg_match && snooze_count > 0 {
+        "tight"
+    } else {
+        "unprotectable"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -393,152 +296,451 @@ pub struct DecisionInput {
     pub last_ad_at: Option<DateTime<Utc>>,
     pub snooze_count: i64,
     pub quiet_chat_messages: i64,
+    pub recent_chat_messages: i64,
     pub chat_ingest_healthy: bool,
     pub steam_match_state: Option<SteamMatchState>,
+    pub plan: AdPlan,
+    pub match_started_at: Option<DateTime<Utc>>,
+    pub match_ended_at: Option<DateTime<Utc>>,
+    pub last_raid_at: Option<DateTime<Utc>>,
+    pub last_raider: Option<String>,
+    pub last_first_chatter_at: Option<DateTime<Utc>>,
+    pub last_first_chatter: Option<String>,
+    pub retry_after_seconds: i32,
+    pub pull_forward_seconds: i32,
+    pub plan_fit: &'static str,
+}
+
+impl DecisionInput {
+    pub fn twitch_is_budget_source(&self) -> bool {
+        self.next_ad_at.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionAction {
     None,
+    Postpone,
     Snooze,
     Commercial { duration_seconds: i32 },
+}
+
+impl DecisionAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Postpone => "postpone",
+            Self::Snooze => "snooze",
+            Self::Commercial { .. } => "commercial",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     pub action: DecisionAction,
     pub reason: &'static str,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    pub at: String,
+    pub decision: String,
+    pub reason: String,
+    pub block_seconds: Option<i32>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySummary {
+    pub blocks_run: i64,
+    pub blocks_in_window: i64,
+    pub budget_seconds_used: i64,
+    pub budget_seconds_planned: i64,
+    pub postponed: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdManagerHistory {
+    pub session_started_at: Option<String>,
+    pub summary: HistorySummary,
+    pub entries: Vec<HistoryEntry>,
+}
+
+fn chat_is_quiet(input: &DecisionInput) -> bool {
+    if input.settings.quiet_window_minutes == 0 {
+        return true;
+    }
+    input.chat_ingest_healthy && input.quiet_chat_messages == 0
+}
+
+fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> {
+    let now = input.now;
+    match input.steam_match_state.as_ref() {
+        Some(state) if state.observed_at <= now + Duration::seconds(30)
+            && now.signed_duration_since(state.observed_at) <= Duration::seconds(MATCH_STATUS_FRESH_SECS) => {
+                if state.in_match { return Some(("in_match", None)); }
+            }
+        _ => return Some(("match_status_unknown", None)),
+    }
+    match input.stream_started_at {
+        Some(start)
+            if now
+                >= start + Duration::minutes(i64::from(input.settings.startup_delay_minutes)) => {}
+        _ => return Some(("startup_protection", None)),
+    }
+    if let Some(at) = input.last_raid_at {
+        if now >= at && now.signed_duration_since(at) < Duration::minutes(RAID_LOCK_MIN) {
+            return Some(("recent_raid", input.last_raider.clone()));
+        }
+    }
+    if let Some(at) = input.last_first_chatter_at {
+        if now >= at && now.signed_duration_since(at) < Duration::minutes(FIRST_CHATTER_LOCK_MIN) {
+            return Some(("recent_first_chatter", input.last_first_chatter.clone()));
+        }
+    }
+    None
+}
+
+fn is_overdue(input: &DecisionInput) -> bool {
+    if input.plan.blocks_per_hour <= 0 {
+        return false;
+    }
+    let half_period = i64::from(3600 / input.plan.blocks_per_hour) / 2;
+    input
+        .plan
+        .next_block_at
+        .map(|at| input.now >= at + Duration::seconds(half_period))
+        .unwrap_or(false)
+}
+
+fn twitch_cooldown_allows(input: &DecisionInput) -> bool {
+    let now = input.now;
+    let Some(last) = input.last_ad_at else {
+        return true;
+    };
+    let retry = i64::from(input.retry_after_seconds.max(1));
+    now >= last + Duration::seconds(retry)
+}
+
+fn pull_forward_window_open(input: &DecisionInput) -> bool {
+    let in_window = input
+        .steam_match_state
+        .as_ref()
+        .map(|state| state.in_deadlock && !state.in_match)
+        .unwrap_or(false);
+    if !in_window {
+        return false;
+    }
+    if let Some(ended) = input.match_ended_at {
+        let since = input.now.signed_duration_since(ended);
+        if since >= Duration::zero() && since < Duration::minutes(POST_MATCH_WAIT_MIN) {
+            return false;
+        }
+        if since >= Duration::minutes(POST_MATCH_WAIT_MIN)
+            && since < Duration::minutes(POST_MATCH_WAIT_MIN + 1)
+            && input.recent_chat_messages > 0
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn should_pull_forward(input: &DecisionInput) -> bool {
+    if !pull_forward_window_open(input) {
+        return false;
+    }
+    let now = input.now;
+    let Some(next_ad) = input.next_ad_at else {
+        return false;
+    };
+    let lead = i64::from(input.settings.action_lead_seconds.max(MIN_ACTION_LEAD_SECS));
+    let beyond_lead = next_ad > now + Duration::seconds(lead);
+    let in_reach = next_ad <= now + Duration::minutes(PULL_FORWARD_HORIZON_MIN);
+    let match_risk = input.plan_fit != "good";
+    beyond_lead && (in_reach || match_risk) && twitch_cooldown_allows(input)
 }
 
 pub fn decide(input: &DecisionInput) -> Decision {
     let none = |reason| Decision {
         action: DecisionAction::None,
         reason,
+        detail: None,
     };
+    let postpone = |reason, detail| Decision {
+        action: DecisionAction::Postpone,
+        reason,
+        detail,
+    };
+    let commercial = |reason| Decision {
+        action: DecisionAction::Commercial {
+            duration_seconds: input.plan.block_seconds,
+        },
+        reason,
+        detail: None,
+    };
+
     if !input.settings.enabled {
         return none("disabled");
     }
-    if input.settings.strategy == Strategy::Monitor {
-        return none("monitor_only");
-    }
-    let Some(next_ad) = input.next_ad_at else {
-        return none("no_next_ad");
-    };
-    if next_ad < input.now {
-        return none("ad_already_due");
-    }
-    let until = next_ad.signed_duration_since(input.now).num_seconds();
-    if until > i64::from(input.settings.action_lead_seconds) {
-        return none("outside_lead_window");
-    }
+
+    let now = input.now;
+    let twitch_ad_imminent = input
+        .next_ad_at
+        .map(|at| {
+            at > now
+                && at.signed_duration_since(now).num_seconds()
+                    <= i64::from(input.settings.action_lead_seconds.max(MIN_ACTION_LEAD_SECS))
+        })
+        .unwrap_or(false);
+
     if input.settings.strategy == Strategy::Snooze {
-        return if input.snooze_count > 0 {
-            Decision {
-                action: DecisionAction::Snooze,
-                reason: "snooze_due",
-            }
-        } else {
-            none("no_snoozes")
-        };
-    }
-    let Some(stream_started_at) = input.stream_started_at else {
-        return if input.snooze_count > 0 {
-            Decision {
-                action: DecisionAction::Snooze,
-                reason: "stream_start_unknown",
-            }
-        } else {
-            none("stream_start_unknown_no_snooze")
-        };
-    };
-    if input.now
-        < stream_started_at + Duration::minutes(i64::from(input.settings.startup_delay_minutes))
-    {
-        return if input.snooze_count > 0 {
-            Decision {
-                action: DecisionAction::Snooze,
-                reason: "startup_protection",
-            }
-        } else {
-            none("startup_protection_no_snooze")
-        };
-    }
-    // Mit frischem Steam-Match-Status entscheidet allein der Match-Zustand:
-    // im Match wird verschoben, außerhalb davon ist das Werbefenster. Ohne
-    // frischen Status gilt unverändert die Chat-Ruhe-Logik als Fallback.
-    if let Some(state) = input.steam_match_state.as_ref() {
-        if state.in_match {
+        if twitch_ad_imminent {
             return if input.snooze_count > 0 {
                 Decision {
                     action: DecisionAction::Snooze,
-                    reason: "in_match",
+                    reason: "twitch_ad_moved",
+                    detail: None,
                 }
             } else {
-                none("in_match_no_snooze")
+                none("no_snoozes")
             };
         }
-        let cooldown_ready = input
-            .last_ad_at
-            .map(|last| {
-                input.now >= last + Duration::minutes(i64::from(input.settings.min_interval_minutes))
-            })
-            .unwrap_or(true);
-        if cooldown_ready {
+        return none("cooldown");
+    }
+
+    let lock = active_lock(input);
+
+    if twitch_ad_imminent {
+        return match lock {
+            Some((reason, detail)) => {
+                let valuable = matches!(reason, "in_match" | "match_status_unknown" | "recent_raid");
+                let dense = input.plan_fit == "tight" || input.plan_fit == "unprotectable";
+                if input.snooze_count > 0 && (valuable || !dense) {
+                    Decision {
+                        action: DecisionAction::Snooze,
+                        reason: "twitch_ad_moved",
+                        detail,
+                    }
+                } else if input.snooze_count > 0 {
+                    none("twitch_plan_active")
+                } else {
+                    postpone(reason, detail)
+                }
+            }
+            None if pull_forward_window_open(input) && twitch_cooldown_allows(input) => {
+                Decision {
+                    action: DecisionAction::Commercial {
+                        duration_seconds: input.pull_forward_seconds,
+                    },
+                    reason: "pulled_forward",
+                    detail: input.next_ad_at.map(|at| at.to_rfc3339()),
+                }
+            }
+            None => none("twitch_plan_active"),
+        };
+    }
+
+    if input.twitch_is_budget_source() {
+        if let Some((reason, detail)) = lock {
+            return postpone(reason, detail);
+        }
+        if should_pull_forward(input) {
             return Decision {
                 action: DecisionAction::Commercial {
-                    duration_seconds: input.settings.ad_duration_seconds,
+                    duration_seconds: input.pull_forward_seconds,
                 },
-                reason: "in_queue",
+                reason: "pulled_forward",
+                detail: input.next_ad_at.map(|at| at.to_rfc3339()),
             };
         }
-        return if input.snooze_count > 0 {
-            Decision {
-                action: DecisionAction::Snooze,
-                reason: "in_queue_cooldown",
-            }
+        return none("twitch_plan_active");
+    }
+
+    let block_due = input
+        .plan
+        .next_block_at
+        .map(|at| now >= at)
+        .unwrap_or(false);
+    if !block_due {
+        return if input.plan.next_block_at.is_none() {
+            postpone("budget_reached", None)
         } else {
-            none("in_queue_cooldown_no_snooze")
+            none("cooldown")
         };
     }
-    if input.settings.quiet_window_minutes > 0 && !input.chat_ingest_healthy {
-        return if input.snooze_count > 0 {
-            Decision {
-                action: DecisionAction::Snooze,
-                reason: "chat_ingest_unhealthy",
-            }
-        } else {
-            none("chat_ingest_unhealthy_no_snooze")
-        };
+
+    if let Some((reason, detail)) = lock {
+        return postpone(reason, detail);
     }
-    let cooldown_ready = input
-        .last_ad_at
-        .map(|last| {
-            input.now >= last + Duration::minutes(i64::from(input.settings.min_interval_minutes))
-        })
-        .unwrap_or(true);
-    if cooldown_ready && input.quiet_chat_messages == 0 {
-        Decision {
-            action: DecisionAction::Commercial {
-                duration_seconds: input.settings.ad_duration_seconds,
-            },
-            reason: "quiet_window",
+
+    if let Some(ended) = input.match_ended_at {
+        let since = now.signed_duration_since(ended);
+        if since >= Duration::zero() && since < Duration::minutes(POST_MATCH_WAIT_MIN) {
+            return postpone("post_match_wait", None);
         }
-    } else if input.snooze_count > 0 {
-        Decision {
-            action: DecisionAction::Snooze,
-            reason: if cooldown_ready {
-                "chat_active"
+        if since >= Duration::minutes(POST_MATCH_WAIT_MIN)
+            && since < Duration::minutes(POST_MATCH_WAIT_MIN + 1)
+        {
+            return if input.recent_chat_messages > 0 {
+                postpone("post_match_chat_active", None)
             } else {
-                "commercial_cooldown"
-            },
+                commercial("post_match_quiet")
+            };
         }
-    } else {
-        none(if cooldown_ready {
-            "chat_active_no_snooze"
-        } else {
-            "cooldown_no_snooze"
-        })
     }
+
+    if let Some(state) = input.steam_match_state.as_ref() {
+        if state.in_deadlock {
+            return commercial("in_queue");
+        }
+    }
+
+    if chat_is_quiet(input) {
+        commercial("quiet_chat")
+    } else if is_overdue(input) {
+        commercial("fallback_least_bad")
+    } else {
+        postpone("cooldown", None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdHint {
+    pub key: String,
+    pub duration_seconds: Option<i32>,
+}
+
+const AD_HINT_WITH_DURATION: [&str; 6] = [
+    "Kurze Werbung in etwa 30 Sekunden, {dur} Sekunden lang, danach geht es weiter.",
+    "Gleich läuft kurz Werbung, {dur} Sekunden. Holt euch was zu trinken, bis gleich.",
+    "In einer halben Minute kommt Werbung, {dur} Sekunden, dann sind wir gleich wieder da.",
+    "Kurze Pause für die Werbung, {dur} Sekunden. Gleich geht es normal weiter.",
+    "Werbung in etwa 30 Sekunden, {dur} Sekunden lang. Bleibt dran, wir sehen uns gleich.",
+    "Gleich {dur} Sekunden Werbung. Perfekter Moment für einen Schluck, bis gleich.",
+];
+
+const AD_HINT_WITHOUT_DURATION: [&str; 6] = [
+    "Gleich kommt kurz Werbung, danach geht es normal weiter.",
+    "In etwa 30 Sekunden läuft kurz Werbung. Holt euch was zu trinken, bis gleich.",
+    "Kurze Werbung steht an. Wir sind gleich wieder da.",
+    "Kurze Pause für die Werbung. Danach geht es sofort weiter.",
+    "Werbung in etwa 30 Sekunden. Bleibt dran, dauert nicht lang.",
+    "Gleich kommt kurz Werbung. Einmal durchatmen, wir sehen uns gleich.",
+];
+
+const AD_HINT_IMMEDIATE_WITH_DURATION: [&str; 6] = [
+    "Gleich läuft kurz Werbung, {dur} Sekunden, danach geht es weiter.",
+    "Guter Moment: gleich {dur} Sekunden Werbung, dann sind wir wieder da.",
+    "Gleich kommt kurz Werbung, {dur} Sekunden. Holt euch was zu trinken, bis gleich.",
+    "Kurze Pause für die Werbung, {dur} Sekunden. Gleich geht es normal weiter.",
+    "Gleich {dur} Sekunden Werbung, wir nutzen die Pause vor dem Match.",
+    "Kurz Werbung, {dur} Sekunden, danach machen wir sofort weiter.",
+];
+
+const AD_HINT_IMMEDIATE_WITHOUT_DURATION: [&str; 6] = [
+    "Gleich läuft kurz Werbung, danach geht es normal weiter.",
+    "Guter Moment: gleich kurz Werbung, dann sind wir wieder da.",
+    "Gleich kommt kurz Werbung. Holt euch was zu trinken, bis gleich.",
+    "Kurze Pause für die Werbung. Gleich geht es normal weiter.",
+    "Gleich kurz Werbung, wir nutzen die Pause vor dem Match.",
+    "Kurz Werbung, danach machen wir sofort weiter.",
+];
+
+pub fn ad_hint(
+    input: &DecisionInput,
+    decision: &Decision,
+    twitch_ad_duration_seconds: Option<i32>,
+    window_secs: i64,
+) -> Option<AdHint> {
+    if !input.settings.enabled || !input.settings.chat_notice_before_ad {
+        return None;
+    }
+    let now = input.now;
+    let secs_until = |at: DateTime<Utc>| at.signed_duration_since(now).num_seconds();
+
+    if let Some(next_ad) = input.next_ad_at {
+        if decision.reason == "pulled_forward" {
+            return Some(AdHint {
+                key: format!("pull:{}", next_ad.to_rfc3339()),
+                duration_seconds: Some(input.pull_forward_seconds).filter(|value| *value > 0),
+            });
+        }
+        let twitch_window = window_secs.min(i64::from(input.settings.action_lead_seconds.max(MIN_ACTION_LEAD_SECS)));
+        let secs = secs_until(next_ad);
+        if secs <= 0 || secs > twitch_window {
+            return None;
+        }
+        if matches!(
+            decision.action,
+            DecisionAction::Snooze | DecisionAction::Commercial { .. }
+        ) || matches!(decision.reason, "in_match" | "match_status_unknown")
+        {
+            return None;
+        }
+        return Some(AdHint {
+            key: format!("twitch:{}", next_ad.to_rfc3339()),
+            duration_seconds: twitch_ad_duration_seconds.filter(|value| *value > 0),
+        });
+    }
+
+    let block_at = input.plan.next_block_at?;
+    let secs = secs_until(block_at);
+    let window_open = input
+        .steam_match_state
+        .as_ref()
+        .map(|state| state.in_deadlock || state.in_match)
+        .unwrap_or(false);
+    let post_match_zone = input
+        .match_ended_at
+        .map(|ended| {
+            let since = now.signed_duration_since(ended);
+            since >= Duration::zero() && since < Duration::minutes(POST_MATCH_WAIT_MIN + 1)
+        })
+        .unwrap_or(false);
+    if !window_open
+        || post_match_zone
+        || secs <= 0
+        || secs > window_secs
+        || active_lock(input).is_some()
+    {
+        return None;
+    }
+    Some(AdHint {
+        key: format!("own:{}", block_at.to_rfc3339()),
+        duration_seconds: Some(input.plan.block_seconds),
+    })
+}
+
+pub fn ad_hint_text(
+    duration_seconds: Option<i32>,
+    previous_variant: Option<i16>,
+    seed: u64,
+    immediate: bool,
+) -> (String, i16) {
+    let (with_dur, without_dur): (&[&str; 6], &[&str; 6]) = if immediate {
+        (
+            &AD_HINT_IMMEDIATE_WITH_DURATION,
+            &AD_HINT_IMMEDIATE_WITHOUT_DURATION,
+        )
+    } else {
+        (&AD_HINT_WITH_DURATION, &AD_HINT_WITHOUT_DURATION)
+    };
+    let count = with_dur.len();
+    let mut index = (seed % count as u64) as usize;
+    if Some(index as i16) == previous_variant {
+        index = (index + 1) % count;
+    }
+    let text = match duration_seconds.filter(|value| *value > 0) {
+        Some(dur) => with_dur[index].replace("{dur}", &dur.to_string()),
+        None => without_dur[index].to_string(),
+    };
+    (text, index as i16)
 }
 
 #[derive(Debug, Clone)]
@@ -640,11 +842,18 @@ pub enum EnqueueOutcome {
 #[derive(Clone)]
 pub struct AdManagerStore {
     pool: PgPool,
+    steam: steam::Client,
 }
 
 impl AdManagerStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, steam: steam::Client::new(None) }
+    }
+
+    /// Steam-Präsenz benötigt denselben internen Token wie die Runtime-API.
+    /// Ohne explizite Übergabe bleibt die Abfrage geschlossen.
+    pub fn with_steam_token(pool: PgPool, token: String) -> Self {
+        Self { pool, steam: steam::Client::new(Some(token)) }
     }
     pub fn pool(&self) -> &PgPool {
         &self.pool
@@ -668,7 +877,7 @@ impl AdManagerStore {
     }
 
     pub async fn list_channels(&self) -> Result<Vec<ManagedChannel>, sqlx::Error> {
-        let rows = sqlx::query("SELECT s.twitch_user_id,s.twitch_login,s.enabled,s.strategy,s.ad_duration_seconds,s.min_interval_minutes,s.startup_delay_minutes,s.quiet_window_minutes,s.action_lead_seconds FROM twitch_ad_manager_settings s ORDER BY s.twitch_user_id").fetch_all(&self.pool).await?;
+        let rows = sqlx::query("SELECT s.twitch_user_id,s.twitch_login,s.enabled,s.strategy,s.budget_minutes_per_hour,s.ad_duration_seconds,s.min_interval_minutes,s.startup_delay_minutes,s.quiet_window_minutes,s.action_lead_seconds,s.chat_notice_before_ad FROM twitch_ad_manager_settings s ORDER BY s.twitch_user_id").fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|r| {
                 let raw: String = r.try_get("strategy")?;
@@ -681,11 +890,13 @@ impl AdManagerStore {
                     settings: Settings {
                         enabled: r.try_get("enabled")?,
                         strategy,
+                        budget_minutes_per_hour: r.try_get("budget_minutes_per_hour")?,
                         ad_duration_seconds: r.try_get("ad_duration_seconds")?,
                         min_interval_minutes: r.try_get("min_interval_minutes")?,
                         startup_delay_minutes: r.try_get("startup_delay_minutes")?,
                         quiet_window_minutes: r.try_get("quiet_window_minutes")?,
                         action_lead_seconds: r.try_get("action_lead_seconds")?,
+                        chat_notice_before_ad: r.try_get("chat_notice_before_ad")?,
                     },
                 })
             })
@@ -710,7 +921,7 @@ impl AdManagerStore {
         &self,
         uid: &str,
     ) -> Result<Option<(Settings, DateTime<Utc>)>, sqlx::Error> {
-        let row = sqlx::query("SELECT enabled,strategy,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds,updated_at FROM twitch_ad_manager_settings WHERE twitch_user_id=$1").bind(uid).fetch_optional(&self.pool).await?;
+        let row = sqlx::query("SELECT enabled,strategy,budget_minutes_per_hour,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds,chat_notice_before_ad,updated_at FROM twitch_ad_manager_settings WHERE twitch_user_id=$1").bind(uid).fetch_optional(&self.pool).await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -721,11 +932,13 @@ impl AdManagerStore {
             Settings {
                 enabled: row.try_get("enabled")?,
                 strategy,
+                budget_minutes_per_hour: row.try_get("budget_minutes_per_hour")?,
                 ad_duration_seconds: row.try_get("ad_duration_seconds")?,
                 min_interval_minutes: row.try_get("min_interval_minutes")?,
                 startup_delay_minutes: row.try_get("startup_delay_minutes")?,
                 quiet_window_minutes: row.try_get("quiet_window_minutes")?,
                 action_lead_seconds: row.try_get("action_lead_seconds")?,
+                chat_notice_before_ad: row.try_get("chat_notice_before_ad")?,
             },
             row.try_get("updated_at")?,
         )))
@@ -738,7 +951,7 @@ impl AdManagerStore {
         settings: &Settings,
     ) -> Result<DateTime<Utc>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let row=sqlx::query("INSERT INTO twitch_ad_manager_settings(twitch_user_id,twitch_login,enabled,strategy,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,enabled=EXCLUDED.enabled,strategy=EXCLUDED.strategy,ad_duration_seconds=EXCLUDED.ad_duration_seconds,min_interval_minutes=EXCLUDED.min_interval_minutes,startup_delay_minutes=EXCLUDED.startup_delay_minutes,quiet_window_minutes=EXCLUDED.quiet_window_minutes,action_lead_seconds=EXCLUDED.action_lead_seconds,updated_at=NOW() RETURNING updated_at").bind(uid).bind(login).bind(settings.enabled).bind(settings.strategy.as_str()).bind(settings.ad_duration_seconds).bind(settings.min_interval_minutes).bind(settings.startup_delay_minutes).bind(settings.quiet_window_minutes).bind(settings.action_lead_seconds).fetch_one(&mut *tx).await?;
+        let row=sqlx::query("INSERT INTO twitch_ad_manager_settings(twitch_user_id,twitch_login,enabled,strategy,budget_minutes_per_hour,ad_duration_seconds,min_interval_minutes,startup_delay_minutes,quiet_window_minutes,action_lead_seconds,chat_notice_before_ad) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,enabled=EXCLUDED.enabled,strategy=EXCLUDED.strategy,budget_minutes_per_hour=EXCLUDED.budget_minutes_per_hour,ad_duration_seconds=EXCLUDED.ad_duration_seconds,min_interval_minutes=EXCLUDED.min_interval_minutes,startup_delay_minutes=EXCLUDED.startup_delay_minutes,quiet_window_minutes=EXCLUDED.quiet_window_minutes,action_lead_seconds=EXCLUDED.action_lead_seconds,chat_notice_before_ad=EXCLUDED.chat_notice_before_ad,updated_at=NOW() RETURNING updated_at").bind(uid).bind(login).bind(settings.enabled).bind(settings.strategy.as_str()).bind(settings.budget_minutes_per_hour).bind(settings.ad_duration_seconds).bind(settings.min_interval_minutes).bind(settings.startup_delay_minutes).bind(settings.quiet_window_minutes).bind(settings.action_lead_seconds).bind(settings.chat_notice_before_ad).fetch_one(&mut *tx).await?;
         let allowed_action = match (settings.enabled, settings.strategy) {
             (true, Strategy::Snooze) => Some("snooze"),
             (true, Strategy::Smart) => None,
@@ -817,62 +1030,352 @@ impl AdManagerStore {
         ))
     }
 
-    /// Steam-Anknüpfung eines Kanals: Die Steam-ID wird im Engagement-Profil
-    /// gepflegt, die Presence vom Steam-Bot in der zentralen
-    /// `activity.live_player_state`. Schreibend wird hier nichts angerührt;
-    /// fehlt Anknüpfung oder Presence, bleibt `steam_linked`/`state` leer und
-    /// die Entscheidung fällt auf Chat-Ruhe zurück.
+    /// The identity belongs to Twitch; Steam presence is read through Steam's API.
+    /// Callers pass the authenticated stable Twitch ID, never a display name.
     pub async fn steam_match_summary(
         &self,
-        channel_login: &str,
+        twitch_user_id: &str,
         now: DateTime<Utc>,
     ) -> Result<SteamMatchSummary, sqlx::Error> {
-        let row = sqlx::query(
-            "SELECT (tes.steam_id IS NOT NULL AND BTRIM(tes.steam_id) <> '') AS steam_linked, \
-             lps.in_deadlock_now, lps.in_match_now_strict, lps.deadlock_hero, lps.deadlock_stage, \
-             COALESCE(lps.deadlock_updated_at, lps.last_seen_at) AS observed_at \
-             FROM twitch_engagement_settings tes \
-             LEFT JOIN activity.live_player_state lps ON lps.steam_id = BTRIM(tes.steam_id) \
-             WHERE tes.channel_login = $1",
+        steam::summary(&self.pool, &self.steam, twitch_user_id, now).await
+    }
+
+    pub async fn budget_used_this_hour(
+        &self,
+        uid: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(i32, Option<DateTime<Utc>>), sqlx::Error> {
+        let row = sqlx::query("SELECT COALESCE(SUM(duration_seconds),0)::bigint AS used,MAX(completed_at) AS last FROM twitch_ad_manager_actions WHERE twitch_user_id=$1 AND action='commercial' AND status='succeeded' AND completed_at>=$2")
+            .bind(uid)
+            .bind(now - Duration::hours(1))
+            .fetch_one(&self.pool)
+            .await?;
+        let used: i64 = row.try_get("used")?;
+        let last: Option<DateTime<Utc>> = row.try_get("last")?;
+        Ok((i32::try_from(used).unwrap_or(i32::MAX), last))
+    }
+
+    pub async fn last_commercial_retry_after(&self, uid: &str) -> Result<Option<i32>, sqlx::Error> {
+        sqlx::query_scalar("SELECT retry_after_seconds FROM twitch_ad_manager_actions WHERE twitch_user_id=$1 AND action='commercial' AND status='succeeded' AND retry_after_seconds IS NOT NULL ORDER BY completed_at DESC LIMIT 1")
+            .bind(uid)
+            .fetch_optional(&self.pool)
+            .await
+            .map(Option::flatten)
+    }
+
+    pub async fn last_incoming_raid(
+        &self,
+        uid: &str,
+    ) -> Result<Option<(DateTime<Utc>, String)>, sqlx::Error> {
+        let row = sqlx::query("SELECT detected_at,from_broadcaster_login FROM twitch_raid_arrival_tracking WHERE to_broadcaster_id=$1 ORDER BY detected_at DESC LIMIT 1")
+            .bind(uid)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(row) => Some((
+                row.try_get("detected_at")?,
+                row.try_get("from_broadcaster_login")?,
+            )),
+            None => None,
+        })
+    }
+
+    pub async fn last_first_chatter(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<(DateTime<Utc>, String)>, sqlx::Error> {
+        let row = sqlx::query("SELECT first_message_at AS at,chatter_login FROM twitch_session_chatters WHERE session_id=$1 AND confirmed_first_ever ORDER BY first_message_at DESC NULLS LAST LIMIT 1")
+            .bind(session_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(row) => Some((row.try_get("at")?, row.try_get("chatter_login")?)),
+            None => None,
+        })
+    }
+
+    pub async fn record_match_transition(
+        &self,
+        uid: &str,
+        login: &str,
+        in_match: bool,
+        now: DateTime<Utc>,
+    ) -> Result<MatchTiming, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let prev = sqlx::query("SELECT match_active,match_started_at,match_ended_at,avg_match_seconds,avg_queue_seconds FROM twitch_ad_manager_state WHERE twitch_user_id=$1 FOR UPDATE")
+            .bind(uid)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let (was_active, prev_started, prev_ended, mut avg_match, mut avg_queue) =
+            match prev.as_ref() {
+                Some(row) => (
+                    row.try_get::<bool, _>("match_active")?,
+                    row.try_get::<Option<DateTime<Utc>>, _>("match_started_at")?,
+                    row.try_get::<Option<DateTime<Utc>>, _>("match_ended_at")?,
+                    row.try_get::<Option<i32>, _>("avg_match_seconds")?,
+                    row.try_get::<Option<i32>, _>("avg_queue_seconds")?,
+                ),
+                None => (false, None, None, None, None),
+            };
+        let (started, ended) = match (was_active, in_match) {
+            (false, true) => {
+                if let Some(prev_end) = prev_ended {
+                    if let Some(sample) =
+                        clamp_sample(now.signed_duration_since(prev_end).num_seconds(), 5, 1800)
+                    {
+                        avg_queue = Some(ema(avg_queue, sample));
+                    }
+                }
+                (Some(now), prev_ended)
+            }
+            (true, false) => {
+                if let Some(prev_start) = prev_started {
+                    if let Some(sample) = clamp_sample(
+                        now.signed_duration_since(prev_start).num_seconds(),
+                        60,
+                        3600,
+                    ) {
+                        avg_match = Some(ema(avg_match, sample));
+                    }
+                }
+                (prev_started, Some(now))
+            }
+            _ => (prev_started, prev_ended),
+        };
+        sqlx::query("INSERT INTO twitch_ad_manager_state(twitch_user_id,twitch_login,match_active,match_started_at,match_ended_at,avg_match_seconds,avg_queue_seconds) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,match_active=EXCLUDED.match_active,match_started_at=EXCLUDED.match_started_at,match_ended_at=EXCLUDED.match_ended_at,avg_match_seconds=EXCLUDED.avg_match_seconds,avg_queue_seconds=EXCLUDED.avg_queue_seconds,updated_at=NOW()")
+            .bind(uid).bind(login).bind(in_match).bind(started).bind(ended).bind(avg_match).bind(avg_queue)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(MatchTiming {
+            match_started_at: started,
+            match_ended_at: ended,
+            avg_match_seconds: avg_match,
+            avg_queue_seconds: avg_queue,
+        })
+    }
+
+    pub async fn match_timing(&self, uid: &str) -> Result<MatchTiming, sqlx::Error> {
+        let row = sqlx::query("SELECT match_started_at,match_ended_at,avg_match_seconds,avg_queue_seconds FROM twitch_ad_manager_state WHERE twitch_user_id=$1")
+            .bind(uid)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(row) => MatchTiming {
+                match_started_at: row.try_get("match_started_at")?,
+                match_ended_at: row.try_get("match_ended_at")?,
+                avg_match_seconds: row.try_get("avg_match_seconds")?,
+                avg_queue_seconds: row.try_get("avg_queue_seconds")?,
+            },
+            None => MatchTiming {
+                match_started_at: None,
+                match_ended_at: None,
+                avg_match_seconds: None,
+                avg_queue_seconds: None,
+            },
+        })
+    }
+
+    pub async fn store_plan_fit(
+        &self,
+        uid: &str,
+        fit: &str,
+        session_id: Option<i64>,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let previous: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT plan_fit FROM twitch_ad_manager_state WHERE twitch_user_id=$1 FOR UPDATE",
         )
-        .bind(channel_login)
+        .bind(uid)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let changed = match previous {
+            Some(value) => value.as_deref() != Some(fit),
+            None => true,
+        };
+        sqlx::query("UPDATE twitch_ad_manager_state SET plan_fit=$2,updated_at=NOW() WHERE twitch_user_id=$1")
+            .bind(uid)
+            .bind(fit)
+            .execute(&mut *tx)
+            .await?;
+        if changed {
+            sqlx::query("INSERT INTO twitch_ad_manager_decisions(twitch_user_id,session_id,decided_at,decision,reason,block_seconds,detail) VALUES($1,$2,$3,'none','plan_fit_changed',NULL,$4)")
+                .bind(uid)
+                .bind(session_id)
+                .bind(now)
+                .bind(fit)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn store_plan(&self, uid: &str, plan: &AdPlan) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE twitch_ad_manager_state SET plan_next_block_at=$2,plan_block_seconds=$3,plan_blocks_per_hour=$4,budget_used_seconds=$5,updated_at=NOW() WHERE twitch_user_id=$1")
+            .bind(uid)
+            .bind(plan.next_block_at)
+            .bind(plan.block_seconds)
+            .bind(plan.blocks_per_hour)
+            .bind(plan.budget_used_seconds_this_hour)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn last_hint(&self, uid: &str) -> Result<(Option<String>, Option<i16>), sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT last_hint_key,last_hint_variant FROM twitch_ad_manager_state WHERE twitch_user_id=$1",
+        )
+        .bind(uid)
         .fetch_optional(&self.pool)
         .await?;
-        let Some(row) = row else {
-            return Ok(SteamMatchSummary {
-                steam_linked: false,
-                state: None,
-                observed_at: None,
-            });
-        };
-        let steam_linked = row.try_get::<Option<bool>, _>("steam_linked")?.unwrap_or(false);
-        let observed_at: Option<DateTime<Utc>> = row.try_get("observed_at")?;
-        let fresh = observed_at
-            .map(|seen| {
-                now.signed_duration_since(seen)
-                    <= Duration::seconds(MATCH_STATUS_FRESH_SECS)
-                    && seen <= now + Duration::minutes(1)
-            })
+        match row {
+            Some(r) => Ok((r.try_get("last_hint_key")?, r.try_get("last_hint_variant")?)),
+            None => Ok((None, None)),
+        }
+    }
+
+    pub async fn record_hint(
+        &self,
+        uid: &str,
+        login: &str,
+        key: &str,
+        variant: i16,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO twitch_ad_manager_state(twitch_user_id,twitch_login,last_hint_key,last_hint_variant,last_hint_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,last_hint_key=EXCLUDED.last_hint_key,last_hint_variant=EXCLUDED.last_hint_variant,last_hint_at=EXCLUDED.last_hint_at,updated_at=NOW()",
+        )
+        .bind(uid)
+        .bind(login)
+        .bind(key)
+        .bind(variant)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn record_decision_if_changed(
+        &self,
+        uid: &str,
+        session_id: Option<i64>,
+        decision: &Decision,
+        block_seconds: Option<i32>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, sqlx::Error> {
+        let last = sqlx::query("SELECT decision,reason FROM twitch_ad_manager_decisions WHERE twitch_user_id=$1 ORDER BY decided_at DESC,id DESC LIMIT 1")
+            .bind(uid)
+            .fetch_optional(&self.pool)
+            .await?;
+        if let Some(row) = last {
+            let same = row.try_get::<String, _>("decision")? == decision.action.as_str()
+                && row.try_get::<String, _>("reason")? == decision.reason;
+            if same {
+                return Ok(false);
+            }
+        }
+        sqlx::query("INSERT INTO twitch_ad_manager_decisions(twitch_user_id,session_id,decided_at,decision,reason,block_seconds,detail) VALUES($1,$2,$3,$4,$5,$6,$7)")
+            .bind(uid)
+            .bind(session_id)
+            .bind(now)
+            .bind(decision.action.as_str())
+            .bind(decision.reason)
+            .bind(block_seconds)
+            .bind(decision.detail.as_deref())
+            .execute(&self.pool)
+            .await?;
+        Ok(true)
+    }
+
+    pub async fn cleanup_old_decisions(&self) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM twitch_ad_manager_decisions WHERE decided_at<NOW()-INTERVAL '30 days'",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn history(&self, uid: &str) -> Result<AdManagerHistory, sqlx::Error> {
+        let state = sqlx::query("SELECT is_live,active_session_id,stream_started_at FROM twitch_ad_manager_state WHERE twitch_user_id=$1")
+            .bind(uid)
+            .fetch_optional(&self.pool)
+            .await?;
+        let budget_minutes: i32 = sqlx::query_scalar("SELECT budget_minutes_per_hour FROM twitch_ad_manager_settings WHERE twitch_user_id=$1")
+            .bind(uid)
+            .fetch_optional(&self.pool)
+            .await?
+            .unwrap_or(Settings::default().budget_minutes_per_hour);
+
+        let live = state
+            .as_ref()
+            .and_then(|r| r.try_get::<bool, _>("is_live").ok())
             .unwrap_or(false);
-        let state = fresh
-            .then(|| {
-                Ok::<_, sqlx::Error>(SteamMatchState {
-                    in_match: row
-                        .try_get::<Option<bool>, _>("in_match_now_strict")?
-                        .unwrap_or(false),
-                    in_deadlock: row
-                        .try_get::<Option<bool>, _>("in_deadlock_now")?
-                        .unwrap_or(false),
-                    hero: row.try_get("deadlock_hero")?,
-                    stage: row.try_get("deadlock_stage")?,
-                    observed_at: observed_at.expect("fresh erfordert observed_at"),
+        let active_session = state.as_ref().and_then(|r| {
+            r.try_get::<Option<i64>, _>("active_session_id")
+                .ok()
+                .flatten()
+        });
+        let stream_started: Option<DateTime<Utc>> = state
+            .as_ref()
+            .and_then(|r| r.try_get("stream_started_at").ok())
+            .flatten();
+
+        let session_id = if live && active_session.is_some() {
+            active_session
+        } else {
+            sqlx::query_scalar("SELECT session_id FROM twitch_ad_manager_decisions WHERE twitch_user_id=$1 ORDER BY decided_at DESC,id DESC LIMIT 1")
+                .bind(uid)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten()
+        };
+
+        let summary_row = sqlx::query("SELECT COUNT(*) FILTER (WHERE decision='commercial')::bigint AS blocks_run,COUNT(*) FILTER (WHERE decision='commercial' AND reason IN ('in_queue','match_start_window','post_match_quiet'))::bigint AS blocks_in_window,COALESCE(SUM(block_seconds) FILTER (WHERE decision='commercial'),0)::bigint AS budget_used,COUNT(*) FILTER (WHERE decision='postpone')::bigint AS postponed,MIN(decided_at) AS first_at FROM twitch_ad_manager_decisions WHERE twitch_user_id=$1 AND session_id IS NOT DISTINCT FROM $2")
+            .bind(uid)
+            .bind(session_id)
+            .fetch_one(&self.pool)
+            .await?;
+        let summary = HistorySummary {
+            blocks_run: summary_row.try_get("blocks_run")?,
+            blocks_in_window: summary_row.try_get("blocks_in_window")?,
+            budget_seconds_used: summary_row.try_get("budget_used")?,
+            budget_seconds_planned: i64::from(budget_minutes) * 60,
+            postponed: summary_row.try_get("postponed")?,
+        };
+        let first_at: Option<DateTime<Utc>> = summary_row.try_get("first_at")?;
+        let session_started_at = if live && active_session.is_some() {
+            stream_started.or(first_at)
+        } else {
+            first_at
+        }
+        .map(|at| at.to_rfc3339());
+
+        let rows = sqlx::query("SELECT decided_at,decision,reason,block_seconds,detail FROM (SELECT decided_at,decision,reason,block_seconds,detail,id FROM twitch_ad_manager_decisions WHERE twitch_user_id=$1 AND session_id IS NOT DISTINCT FROM $2 ORDER BY decided_at DESC,id DESC LIMIT 200) t ORDER BY decided_at ASC,id ASC")
+            .bind(uid)
+            .bind(session_id)
+            .fetch_all(&self.pool)
+            .await?;
+        let entries = rows
+            .into_iter()
+            .map(|row| {
+                Ok::<_, sqlx::Error>(HistoryEntry {
+                    at: row.try_get::<DateTime<Utc>, _>("decided_at")?.to_rfc3339(),
+                    decision: row.try_get("decision")?,
+                    reason: row.try_get("reason")?,
+                    block_seconds: row.try_get("block_seconds")?,
+                    detail: row.try_get("detail")?,
                 })
             })
-            .transpose()?;
-        Ok(SteamMatchSummary {
-            steam_linked,
-            state,
-            observed_at,
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(AdManagerHistory {
+            session_started_at,
+            summary,
+            entries,
         })
     }
 
@@ -1156,7 +1659,7 @@ impl AdManagerStore {
             })
             .unwrap_or((None, None, None, None, None, None));
         sqlx::query("INSERT INTO twitch_ad_manager_state(twitch_user_id,twitch_login,is_live,active_session_id,stream_started_at,next_ad_at,last_ad_at,duration_seconds,preroll_free_seconds,snooze_count,snooze_refresh_at,observed_at,last_decision,last_decision_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $12 THEN NOW() ELSE NULL END,$13,$14) ON CONFLICT(twitch_user_id) DO UPDATE SET twitch_login=EXCLUDED.twitch_login,is_live=EXCLUDED.is_live,active_session_id=EXCLUDED.active_session_id,stream_started_at=EXCLUDED.stream_started_at,next_ad_at=EXCLUDED.next_ad_at,last_ad_at=EXCLUDED.last_ad_at,duration_seconds=EXCLUDED.duration_seconds,preroll_free_seconds=EXCLUDED.preroll_free_seconds,snooze_count=EXCLUDED.snooze_count,snooze_refresh_at=EXCLUDED.snooze_refresh_at,observed_at=CASE WHEN $12 THEN NOW() ELSE twitch_ad_manager_state.observed_at END,last_decision=EXCLUDED.last_decision,last_decision_reason=EXCLUDED.last_decision_reason,updated_at=NOW()")
-            .bind(uid).bind(login).bind(live.is_live).bind(live.active_session_id).bind(live.stream_started_at).bind(next).bind(last).bind(duration).bind(preroll).bind(snoozes).bind(refresh).bind(schedule.is_some()).bind(decision.map(|d|match d.action{DecisionAction::None=>"none",DecisionAction::Snooze=>"snooze",DecisionAction::Commercial{..}=>"commercial"})).bind(decision.map(|d|d.reason)).execute(&self.pool).await?;
+            .bind(uid).bind(login).bind(live.is_live).bind(live.active_session_id).bind(live.stream_started_at).bind(next).bind(last).bind(duration).bind(preroll).bind(snoozes).bind(refresh).bind(schedule.is_some()).bind(decision.map(|d|d.action.as_str())).bind(decision.map(|d|d.reason)).execute(&self.pool).await?;
         Ok(())
     }
 }

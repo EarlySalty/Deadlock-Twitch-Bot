@@ -5,6 +5,7 @@ use sqlx::PgPool;
 #[derive(Debug, sqlx::FromRow)]
 pub struct StreamerListRow {
     pub twitch_login: String,
+    pub twitch_user_id: Option<String>,
     /// `true` wenn der Streamer in `twitch_streamers_partner_state` als aktiver
     /// Partner geführt wird; `false` für reine 90-Tage-Recent-Logins.
     pub is_partner: bool,
@@ -20,8 +21,7 @@ pub struct StreamerListRow {
 /// `is_partner` ergibt sich aus der Partner-Mitgliedschaft, nicht hartkodiert.
 /// Die Rust-seitige Live-/Viewer-Sortierung bleibt erhalten.
 pub async fn active_streamers(pool: &PgPool) -> Result<Vec<StreamerListRow>, sqlx::Error> {
-    sqlx::query_as!(
-        StreamerListRow,
+    sqlx::query_as::<_, StreamerListRow>(
         r#"
         WITH partner_logins AS (
             SELECT LOWER(twitch_login) AS login
@@ -39,15 +39,18 @@ pub async fn active_streamers(pool: &PgPool) -> Result<Vec<StreamerListRow>, sql
             SELECT login FROM recent_logins
         )
         SELECT
-            COALESCE(a.login, '')              AS "twitch_login!",
-            (p.login IS NOT NULL)              AS "is_partner!",
-            COALESCE(ls.is_live, 0)            AS "is_live!",
-            COALESCE(ls.last_viewer_count, 0)  AS "viewer_count!"
+            COALESCE(a.login, '')              AS twitch_login,
+            s.twitch_user_id,
+            (p.login IS NOT NULL)              AS is_partner,
+            COALESCE(ls.is_live, 0)            AS is_live,
+            COALESCE(ls.last_viewer_count, 0)  AS viewer_count
         FROM all_logins a
         LEFT JOIN partner_logins p
                ON p.login = a.login
         LEFT JOIN twitch_live_state ls
                ON LOWER(ls.streamer_login) = a.login
+        LEFT JOIN twitch_streamers s
+               ON LOWER(s.twitch_login) = a.login
         WHERE a.login <> ''
         ORDER BY
             COALESCE(ls.is_live, 0)           DESC,
@@ -65,7 +68,18 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
 
     fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
+        mod local_test_database {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/database.rs"
+            ));
+        }
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        dsn
     }
 
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
@@ -74,14 +88,16 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(crate::test_sql::create_schema(schema, true))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(crate::test_sql::search_path(schema))
             .execute(&pool)
             .await
             .expect("search_path setzen fehlgeschlagen");
+        sqlx::query("CREATE TABLE IF NOT EXISTS twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)")
+            .execute(&pool).await.expect("DDL twitch_streamers fehlgeschlagen");
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_streamers_partner_state (
@@ -156,6 +172,8 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer_a', '11') ON CONFLICT (twitch_login) DO UPDATE SET twitch_user_id = EXCLUDED.twitch_user_id")
+            .execute(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO twitch_live_state (streamer_login, is_live, last_viewer_count) VALUES ('streamer_a', 1, 500)",
         )
@@ -168,6 +186,7 @@ mod tests {
         // keine Recent-Session → bleibt draußen.
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].twitch_login, "streamer_a");
+        assert_eq!(rows[0].twitch_user_id.as_deref(), Some("11"));
         assert!(rows[0].is_partner);
         assert_eq!(rows[0].is_live, 1);
         assert_eq!(rows[0].viewer_count, 500);
@@ -227,6 +246,10 @@ mod tests {
         assert!(
             !recent.is_partner,
             "Recent Non-Partner muss isPartner=false haben"
+        );
+        assert!(
+            recent.twitch_user_id.is_none(),
+            "Ohne Streamerdatensatz keine erfundene ID"
         );
         let partner = rows.iter().find(|r| r.twitch_login == "partner_x").unwrap();
         assert!(partner.is_partner);

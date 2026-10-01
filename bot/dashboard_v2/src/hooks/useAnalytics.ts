@@ -389,7 +389,12 @@ export function useViewerDirectory(
 ) {
   return useQuery({
     queryKey: ['viewer-directory', streamer, days, sort, order, filter, search, page, perPage],
-    queryFn: () => fetchViewerDirectory(streamer, days, sort, order, filter, search, page, perPage),
+    queryFn: ({ signal }) => fetchViewerDirectory(streamer, days, sort, order, filter, search, page, perPage, signal),
+    // Keep rows during searches/pagination, never across streamer or time-range changes.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === streamer && previousQuery.queryKey[2] === days
+        ? previousData
+        : undefined,
     staleTime: STALE_TIME,
     enabled: !!streamer,
   });

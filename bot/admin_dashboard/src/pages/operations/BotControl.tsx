@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
+import { Bot, RefreshCw, TriangleAlert } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { Toast } from '@/components/shared/Toast';
 import { StatusBadge } from '@/components/shared/StatusBadge';
-import { useConfigOverview, usePromoConfigMutation, useReloadBot } from '@/hooks/useAdmin';
+import { useConfigOverview, usePromoConfigMutation } from '@/hooks/useAdmin';
 import { coerceRecord, formatRelativeTime } from '@/utils/formatters';
 
 type ToastState = {
@@ -121,8 +121,6 @@ function renderValueWithFallback(value: string) {
 export default function BotControlPage() {
   const configQuery = useConfigOverview();
   const promoMutation = usePromoConfigMutation();
-  const reloadMutation = useReloadBot();
-  const [confirmReloadOpen, setConfirmReloadOpen] = useState(false);
   const [confirmPromoOpen, setConfirmPromoOpen] = useState(false);
   const [promoIntentEnabled, setPromoIntentEnabled] = useState<boolean | null>(null);
   const [toast, setToast] = useState<ToastState>({ open: false, tone: 'success', message: '' });
@@ -161,7 +159,6 @@ export default function BotControlPage() {
     );
   }
 
-  const reloadStateLabel = reloadMutation.isPending ? 'Reload läuft …' : configQuery.isFetching ? 'Refreshing …' : 'Idle';
   const promoStatusLabel = promoSnapshot.enabled ? 'Aktiv' : 'Inaktiv';
   const promoTimeLabel = promoSnapshot.lastUpdatedAt
     ? `${promoSnapshot.enabled ? 'Aktiv seit' : 'Inaktiv seit'} ${formatRelativeTime(promoSnapshot.lastUpdatedAt)}`
@@ -180,34 +177,6 @@ export default function BotControlPage() {
           </button>
         }
       />
-
-      <Section title="Bot Reload" hint="Lädt alle Discord-Cogs neu, hilft bei festgefahrenen Tasks">
-        <div className="space-y-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="stat-pill">Status: {reloadStateLabel}</span>
-            <StatusBadge status={reloadMutation.isPending ? 'warning' : 'ok'} />
-          </div>
-
-          <div className="rounded-[1.5rem] border border-danger/20 bg-danger/[0.04] p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="max-w-2xl">
-                <h3 className="text-lg font-semibold text-white">Reload aller Bot-Cogs</h3>
-                <p className="mt-2 text-sm leading-6 text-text-secondary">
-                  Nutze den Reload nur bei festgefahrenen Tasks oder nach kritischen Runtime-Aenderungen.
-                </p>
-              </div>
-              <button
-                className="admin-button admin-button-danger !px-5 !py-3"
-                onClick={() => setConfirmReloadOpen(true)}
-                disabled={reloadMutation.isPending}
-              >
-                <RotateCcw className="h-4 w-4" />
-                Bot jetzt reloaden
-              </button>
-            </div>
-          </div>
-        </div>
-      </Section>
 
       <Section title="Promo-Mode (Global)" hint="Steuert promotional chat-messages im Bot">
         <div className="grid gap-5 lg:grid-cols-[1.3fr_0.9fr]">
@@ -330,37 +299,6 @@ export default function BotControlPage() {
           </div>
         )}
       </Section>
-
-      <ConfirmDialog
-        open={confirmReloadOpen}
-        title="Bot reloaden?"
-        description="Der Reload stößt den Legacy-Reload für alle Cogs an. Laufende Tasks können kurz unterbrochen werden."
-        confirmLabel="Reload ausführen"
-        cancelLabel="Abbrechen"
-        tone="danger"
-        busy={reloadMutation.isPending}
-        onCancel={() => setConfirmReloadOpen(false)}
-        onConfirm={async () => {
-          try {
-            const result = await reloadMutation.mutateAsync();
-            setToast({
-              open: true,
-              tone: result.ok ? 'success' : 'error',
-              message: result.message || 'Reload ausgeführt.',
-            });
-            if (result.ok) {
-              setConfirmReloadOpen(false);
-              void configQuery.refetch();
-            }
-          } catch (error) {
-            setToast({
-              open: true,
-              tone: 'error',
-              message: error instanceof Error ? error.message : 'Reload fehlgeschlagen.',
-            });
-          }
-        }}
-      />
 
       <ConfirmDialog
         open={confirmPromoOpen}

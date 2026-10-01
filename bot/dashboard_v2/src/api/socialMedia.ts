@@ -88,6 +88,7 @@ export interface SocialMediaAccess {
 
 /** Ein Eintrag der Freigabe-Liste (Admin-Sicht). */
 export interface PartnerAccessEntry {
+  twitch_user_id: string | null;
   streamer_login: string;
   granted: boolean;
 }
@@ -102,23 +103,23 @@ export async function fetchPartnerAccessList(): Promise<PartnerAccessEntry[]> {
 }
 
 export async function setPartnerAccess(
-  streamerLogin: string,
+  twitchUserId: string,
   granted: boolean,
 ): Promise<void> {
   await fetchJson('/social-media/api/access', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ streamer_login: streamerLogin, granted }),
+    body: JSON.stringify({ twitch_user_id: twitchUserId, granted }),
   });
 }
 
-export async function fetchStreamerLayout(streamerLogin: string): Promise<StreamerLayoutResponse> {
-  const qs = buildQuery({ streamer_login: streamerLogin });
+export async function fetchStreamerLayout(twitchUserId: string | undefined): Promise<StreamerLayoutResponse> {
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<StreamerLayoutResponse>(`${ADMIN_PREFIX}/streamer-layout${qs}`);
 }
 
 export async function saveStreamerLayout(input: {
-  streamer_login: string;
+  twitch_user_id?: string;
   layout: LayoutPayload;
 }): Promise<StreamerLayoutResponse> {
   const { layout } = input;
@@ -126,7 +127,7 @@ export async function saveStreamerLayout(input: {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      streamer_login: input.streamer_login,
+      twitch_user_id: input.twitch_user_id,
       layout,
       cam_enabled: layout.cam_enabled,
       mode: layout.mode,
@@ -136,7 +137,7 @@ export async function saveStreamerLayout(input: {
 
 export interface ClipListParams {
   status?: ClipStatus | 'all';
-  streamer?: string;
+  twitch_user_id?: string;
   page?: number;
   page_size?: number;
 }
@@ -157,6 +158,7 @@ export type PlattformTermine = Partial<Record<SocialPlatform, string | null>>;
 export interface ClipPostingInfo {
   upload_errors?: PlattformFehler | null;
   scheduled_at?: PlattformTermine | null;
+  upload_states?: Partial<Record<SocialPlatform, string | null>> | null;
 }
 
 export type SocialClipMitPosting = SocialClip & ClipPostingInfo;
@@ -165,18 +167,44 @@ export interface ClipListResponseMitPosting extends Omit<ClipListResponse, 'item
   items: SocialClipMitPosting[];
 }
 
-export async function fetchClips(params: ClipListParams = {}): Promise<ClipListResponseMitPosting> {
+export async function fetchClips(params: ClipListParams = {}, signal?: AbortSignal): Promise<ClipListResponseMitPosting> {
   const qs = buildQuery({
     status: params.status && params.status !== 'all' ? params.status : undefined,
-    streamer: params.streamer,
+    twitch_user_id: params.twitch_user_id,
     page: params.page,
     page_size: params.page_size,
   });
-  return fetchJson<ClipListResponseMitPosting>(`${ADMIN_PREFIX}/clips${qs}`);
+  return fetchJson<ClipListResponseMitPosting>(`${ADMIN_PREFIX}/clips${qs}`, { signal });
 }
 
 export async function fetchClip(clipDbId: number): Promise<SocialClip> {
   return fetchJson<SocialClip>(`${ADMIN_PREFIX}/clips/${clipDbId}`);
+}
+
+export type ClipPreviewStatus = 'pending' | 'rendering' | 'ready' | 'error' | null;
+
+export interface ClipPreviewState {
+  clip_db_id: number;
+  status: ClipPreviewStatus;
+  error?: string | null;
+  ready: boolean;
+}
+
+export async function requestPreview(
+  clipDbId: number,
+): Promise<{ clip_db_id: number; status: ClipPreviewStatus }> {
+  return fetchJson<{ clip_db_id: number; status: ClipPreviewStatus }>(
+    `${ADMIN_PREFIX}/clips/${clipDbId}/preview`,
+    { method: 'POST' },
+  );
+}
+
+export async function getPreviewStatus(clipDbId: number): Promise<ClipPreviewState> {
+  return fetchJson<ClipPreviewState>(`${ADMIN_PREFIX}/clips/${clipDbId}/preview`);
+}
+
+export function previewFileUrl(clipDbId: number): string {
+  return `${ADMIN_PREFIX}/clips/${clipDbId}/preview/file`;
 }
 
 export interface ClipLayoutOverrideResponse {
@@ -212,14 +240,14 @@ export async function fetchClipAnalytics(clipDbId: number): Promise<ClipAnalytic
 }
 
 export interface ReportListParams {
-  streamer?: string;
+  twitch_user_id?: string;
   kind?: SocialMediaReportKind;
   limit?: number;
 }
 
 export async function fetchReports(params: ReportListParams = {}): Promise<{ items: SocialMediaReport[] }> {
   const qs = buildQuery({
-    streamer: params.streamer,
+    twitch_user_id: params.twitch_user_id,
     kind: params.kind,
     limit: params.limit,
   });
@@ -228,7 +256,7 @@ export async function fetchReports(params: ReportListParams = {}): Promise<{ ite
 
 export async function runReport(input: {
   kind: Extract<SocialMediaReportKind, 'streamer' | 'cross'>;
-  streamer?: string;
+  twitch_user_id?: string;
 }): Promise<SocialMediaReport> {
   return fetchJson<SocialMediaReport>(`${ADMIN_PREFIX}/reports/run`, {
     method: 'POST',
@@ -315,7 +343,7 @@ export async function cancelScheduledPost(
  * Nachschub hoert das Posting irgendwann auf, ohne dass jemand es merkt.
  */
 export async function fetchTwitchClips(
-  streamerLogin: string,
+  twitchUserId: string | undefined,
   limit = 20,
 ): Promise<{ success: boolean; clips_found: number; message?: string }> {
   return fetchJson<{ success: boolean; clips_found: number; message?: string }>(
@@ -323,7 +351,7 @@ export async function fetchTwitchClips(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ streamer: streamerLogin, limit }),
+      body: JSON.stringify({ twitch_user_id: twitchUserId, limit }),
     },
   );
 }
@@ -333,16 +361,16 @@ export async function fetchTwitchClips(
  * damit die Oberflaeche nach jeder Aenderung den neu berechneten Termin und die
  * neue Vorratsrechnung sieht, ohne zweite Abfrage.
  */
-export async function fetchPostingPlan(streamerLogin: string): Promise<PostingPlan> {
-  const qs = buildQuery({ streamer_login: streamerLogin });
+export async function fetchPostingPlan(twitchUserId: string | undefined): Promise<PostingPlan> {
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`);
 }
 
 export async function savePostingPlanSettings(
-  streamerLogin: string,
-  payload: { approval_mode?: ApprovalMode; timezone?: string },
+  twitchUserId: string | undefined,
+  payload: { approval_mode?: ApprovalMode; timezone?: string; subtitles_enabled?: boolean },
 ): Promise<PostingPlan> {
-  const qs = buildQuery({ streamer_login: streamerLogin });
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<PostingPlan>(`${ADMIN_PREFIX}/settings/posting-plan${qs}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -351,11 +379,11 @@ export async function savePostingPlanSettings(
 }
 
 export async function savePlatformSchedule(
-  streamerLogin: string,
+  twitchUserId: string | undefined,
   platform: SocialPlatform,
   payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
 ): Promise<PostingPlan> {
-  const qs = buildQuery({ streamer_login: streamerLogin });
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<PostingPlan>(
     `${ADMIN_PREFIX}/settings/posting-plan/platform/${encodeURIComponent(platform)}${qs}`,
     {
@@ -367,11 +395,11 @@ export async function savePlatformSchedule(
 }
 
 export async function saveCategoryAutoPost(
-  streamerLogin: string,
+  twitchUserId: string | undefined,
   categoryKey: string,
   autoPost: boolean,
 ): Promise<PostingPlan> {
-  const qs = buildQuery({ streamer_login: streamerLogin });
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<PostingPlan>(
     `${ADMIN_PREFIX}/settings/posting-plan/category/${encodeURIComponent(categoryKey)}${qs}`,
     {
@@ -384,20 +412,20 @@ export async function saveCategoryAutoPost(
 
 /** Das VOD-Archiv haengt am Streamer, nicht am Dashboard: immer mit Kanal. */
 export async function fetchVodArchiveSettings(
-  streamerLogin: string,
+  twitchUserId: string | undefined,
 ): Promise<VodArchiveSettings> {
-  const qs = buildQuery({ streamer_login: streamerLogin });
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive${qs}`);
 }
 
 export async function saveVodArchiveSettings(
-  streamerLogin: string,
+  twitchUserId: string | undefined,
   payload: Pick<VodArchiveSettings, 'enabled' | 'privacy'>,
 ): Promise<VodArchiveSettings> {
   return fetchJson<VodArchiveSettings>(`${ADMIN_PREFIX}/settings/vod-archive`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ streamer_login: streamerLogin, ...payload }),
+    body: JSON.stringify({ twitch_user_id: twitchUserId, ...payload }),
   });
 }
 
@@ -440,13 +468,13 @@ export async function seedVocab(): Promise<{ inserted: number; updated: number }
 
 export async function uploadClip(input: {
   file: File;
-  streamer_login: string;
+  twitch_user_id?: string;
   title?: string;
   clip_id?: string;
 }): Promise<UploadResponse> {
   const form = new FormData();
   form.append('file', input.file);
-  form.append('streamer_login', input.streamer_login);
+  if (input.twitch_user_id) form.append('twitch_user_id', input.twitch_user_id);
   if (input.title) form.append('title', input.title);
   if (input.clip_id) form.append('clip_id', input.clip_id);
 
@@ -499,21 +527,22 @@ export interface PlatformStatus {
  * OAuth fuer Kanal X weiter "nicht verbunden".
  */
 export async function fetchPlatformStatus(
-  streamer: string,
+  twitchUserId: string | undefined,
 ): Promise<{ platforms: PlatformStatus[] }> {
-  const qs = buildQuery({ streamer });
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson<{ platforms: PlatformStatus[] }>(`/social-media/api/platforms/status${qs}`);
 }
 
-export function oauthStartUrl(platform: string, streamer: string): string {
-  return `/social-media/oauth/start/${platform}?streamer=${encodeURIComponent(streamer)}`;
+export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
+  return `/social-media/oauth/start/${platform}${qs}`;
 }
 
 /**
  * Zugang eines Kanals kappen. `streamer` ist Pflicht, sonst trifft es die
  * Sammelverbindung und damit jeden Kanal.
  */
-export async function disconnectPlatform(platform: string, streamer: string): Promise<void> {
-  const qs = buildQuery({ streamer });
+export async function disconnectPlatform(platform: string, twitchUserId: string | undefined): Promise<void> {
+  const qs = buildQuery({ twitch_user_id: twitchUserId });
   await fetchJson(`/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
 }

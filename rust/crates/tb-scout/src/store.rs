@@ -151,7 +151,7 @@ pub async fn liste_offen(pool: &PgPool) -> Result<Vec<KandidatZeile>, sqlx::Erro
         v = STATUS_VORGESCHLAGEN,
         p = STATUS_PAUSIERT
     );
-    let zeilen = sqlx::query_as::<_, Zeile>(&sql)
+    let zeilen = sqlx::query_as::<_, Zeile>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?
         .into_iter()
@@ -169,7 +169,7 @@ pub async fn liste_persoenlich(pool: &PgPool) -> Result<Vec<KandidatZeile>, sqlx
          ORDER BY sessions_count DESC, avg_viewers DESC, first_seen ASC",
         p = STATUS_PERSOENLICH
     );
-    let zeilen = sqlx::query_as::<_, Zeile>(&sql)
+    let zeilen = sqlx::query_as::<_, Zeile>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?
         .into_iter()
@@ -192,7 +192,7 @@ pub async fn approved_ohne_dispatch(
          ORDER BY decided_at ASC NULLS LAST, streamer_login ASC LIMIT $1",
         a = STATUS_APPROVED
     );
-    let zeilen = sqlx::query_as::<_, Zeile>(&sql)
+    let zeilen = sqlx::query_as::<_, Zeile>(sqlx::AssertSqlSafe(sql))
         .bind(limit.max(0))
         .fetch_all(pool)
         .await?

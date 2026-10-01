@@ -6,6 +6,7 @@ import { Gutschriften } from '@/pages/billing/Gutschriften';
 import { Subscriptions } from '@/pages/billing/Subscriptions';
 import { ChatConfig } from '@/pages/config/ChatConfig';
 import { RaidConfig } from '@/pages/config/RaidConfig';
+import { OperatingConfigPage } from '@/pages/config/OperatingConfig';
 import { DatabaseStats } from '@/pages/monitoring/DatabaseStats';
 import DatabaseQueryPage from '@/pages/monitoring/DatabaseQuery';
 import { ErrorLogs } from '@/pages/monitoring/ErrorLogs';
@@ -21,7 +22,9 @@ import ResearchPage from '@/pages/community/Research';
 import AnnouncementsPage from '@/pages/content/Announcements';
 import ChangelogPage from '@/pages/content/Changelog';
 import LegalPage from '@/pages/content/Legal';
+import CasterOverlayPage from '@/pages/content/CasterOverlay';
 import RoadmapPage from '@/pages/content/Roadmap';
+import BrainBuildLab from '@/pages/content/BrainBuildLab';
 import BotControlPage from '@/pages/operations/BotControl';
 import ScopesPage from '@/pages/operations/Scopes';
 import AuditLogPage from '@/pages/money/AuditLog';
@@ -72,12 +75,15 @@ const router = createBrowserRouter(
         { path: 'community/partner-signup-blocks', element: <PartnerSignupBlocksPage /> },
         { path: 'content', element: <Navigate to="/content/announcements" replace /> },
         { path: 'content/announcements', element: <AnnouncementsPage /> },
+        { path: 'content/caster-overlay', element: <CasterOverlayPage /> },
+        { path: 'content/build-lab', element: <BrainBuildLab /> },
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },
         { path: 'content/legal', element: <LegalPage /> },
         { path: 'config', element: <Navigate to="/content/announcements" replace /> },
         { path: 'config/raids', element: <RaidConfig /> },
         { path: 'config/chat', element: <ChatConfig /> },
+        { path: 'config/operating', element: <OperatingConfigPage /> },
         { path: 'money', element: <Navigate to="/money/subscriptions" replace /> },
         { path: 'money/subscriptions', element: <Subscriptions /> },
         { path: 'money/affiliates', element: <Affiliates /> },

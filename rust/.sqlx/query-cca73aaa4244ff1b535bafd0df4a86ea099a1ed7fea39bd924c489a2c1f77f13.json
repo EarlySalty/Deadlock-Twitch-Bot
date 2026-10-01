@@ -6,32 +6,38 @@
       {
         "ordinal": 0,
         "name": "game_name!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 1,
         "name": "sessions!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "avg_v!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
         "name": "peak_v!",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
         "name": "avg_dur!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       },
       {
         "ordinal": 5,
         "name": "avg_fd!",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": "Expression"
       }
     ],
     "parameters": {

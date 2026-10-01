@@ -19,8 +19,8 @@ const APPS = [
 ];
 
 const ALLOWED_HEX = new Set([
-  // Lokale Funnel-Stufen: Kupfer und Rosenholz.
-  '#de8a6a', '#c47682',
+  // Lokale Funnel-Stufen: Kupfer und Rosenholz, gesaettigt fuer klare Stufentrennung.
+  '#d9752e', '#c93f63',
   // Warme Goldspitzen, etwas dunkler als die ursprünglichen Messing-Highlights.
   '#e6c78f', '#d6b676', '#e8cfa0',
   // Grund + Gusseisen (dashboard_v2 seit 2026-07-14 eine Stufe heller: der alte
@@ -38,6 +38,7 @@ const ALLOWED_HEX = new Set([
   // Vorher stand dort Plasma-Blau — Chrome und Status trugen dieselbe Farbe, und
   // das Neon brach neben dem Gold. Plasma ist jetzt ausschliesslich Status.
   '#c5a059', '#f1d299', '#9a7c42', '#e0be86', '#f3d9ae',
+  '#6b4e27', '#9c7a3c', '#ddbd7a', '#f1d9a6',
   // Tinte fuer Gold-/Messingflaechen (Weiss liegt dort bei 1.77:1, siehe Test unten)
   '#241a12',
   // Plasma (Status + Chart-Serien)
@@ -74,8 +75,10 @@ test('kein Hex-Wert ausserhalb der Industrial-Gold-Palette', () => {
   for (const app of APPS) {
     for (const file of sourceFiles(app)) {
       const src = readFileSync(file, 'utf8');
+      // OBS-Presets und Szenenvorschau dürfen frei gewählte Farben nutzen. Die Dashboard-Shell bleibt an die Marke gebunden.
+      const overlayPresets = file.endsWith('/components/verwaltung/OverlayBuilderSection.tsx') ? new Set(['#101114','#d6b56c','#0d0f14','#f4f7fb','#765321','#a78bfa','#f5f3ef','#161020','#17191f','#67d8f3','#101922','#f3faff','#bca1ff','#181322','#f8f3ff','#090a0d','#d8dce1']) : new Set<string>();
       for (const hex of src.match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
-        if (!ALLOWED_HEX.has(hex.toLowerCase())) strays.push(`${file}: ${hex}`);
+        if (!ALLOWED_HEX.has(hex.toLowerCase()) && !overlayPresets.has(hex.toLowerCase())) strays.push(`${file}: ${hex}`);
       }
     }
   }

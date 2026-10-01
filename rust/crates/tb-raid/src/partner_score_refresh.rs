@@ -30,11 +30,13 @@ use sqlx::PgPool;
 
 use crate::courtesy::CourtesySummary;
 use crate::courtesy_store::CourtesyStore;
+use crate::monthly_raid_boost::{combined_raid_boost_enabled, MonthlyRaidBoostStore};
 use crate::score_store::{PartnerRaidScoreUpsert, ScoreStore};
 use crate::scoring::{
     compute_base_score, compute_fairness_score, compute_final_score,
     compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
-    round_score, round_ties_to_even, NEUTRAL_SCORE, NEW_PARTNER_RAID_THRESHOLD,
+    compute_viewer_fairness_score, round_score, round_ties_to_even, NEUTRAL_SCORE,
+    NEW_PARTNER_RAID_THRESHOLD,
 };
 
 /// Lookback-Fenster für Sessions (Python `LOOKBACK_DAYS = 45`).
@@ -73,8 +75,10 @@ pub struct ExistingCache {
     pub time_pattern_score: f64,
     pub readiness_score: f64,
     pub fairness_score: f64,
+    pub viewer_fairness_score: f64,
     pub base_score: f64,
     pub final_score: f64,
+    pub raid_boost_multiplier: f64,
 }
 
 /// Gebündelte Roh-Eingaben für [`build_score_upsert`].
@@ -87,6 +91,10 @@ pub struct ScoreBuildInput {
     pub raid_timestamps: Vec<DateTime<Utc>>,
     /// (sent_30d, received_30d, received_7d) — interne Netzwerk-Metriken.
     pub internal_metrics: (i64, i64, i64),
+    /// Summe der in 30 Tagen weitergeraideten Zuschauer (from = Partner).
+    pub sent_viewers_30d: i64,
+    /// Summe der in 30 Tagen empfangenen Zuschauer (to = Partner).
+    pub received_viewers_30d: i64,
     pub raid_boost_enabled: bool,
     pub live_state: LiveState,
     pub existing_cache: Option<ExistingCache>,
@@ -186,6 +194,7 @@ pub fn build_score_upsert(
     let time_pattern_score: f64;
     let readiness_score: f64;
     let fairness_score: f64;
+    let viewer_fairness_score: f64;
     let base_score: f64;
     let final_score: f64;
 
@@ -208,7 +217,14 @@ pub fn build_score_upsert(
         readiness_score = compute_readiness_score(duration_score, time_pattern_score);
         fairness_score =
             compute_fairness_score(sent_30d, received_30d, received_7d, today_received_raids);
-        base_score = compute_base_score(readiness_score, fairness_score, input.courtesy.score);
+        viewer_fairness_score =
+            compute_viewer_fairness_score(input.sent_viewers_30d, input.received_viewers_30d);
+        base_score = compute_base_score(
+            readiness_score,
+            fairness_score,
+            input.courtesy.score,
+            viewer_fairness_score,
+        );
         final_score =
             compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
     } else if let Some(cache) = &input.existing_cache {
@@ -223,8 +239,16 @@ pub fn build_score_upsert(
         time_pattern_score = round_score(cache.time_pattern_score);
         readiness_score = round_score(cache.readiness_score);
         fairness_score = round_score(cache.fairness_score);
+        viewer_fairness_score = round_score(cache.viewer_fairness_score);
         base_score = round_score(cache.base_score);
-        final_score = round_score(cache.final_score);
+        // Historische Basis einfrieren, einen verbrauchten/abgelaufenen Boost
+        // aber nicht im Endscore konservieren.
+        final_score = if (cache.raid_boost_multiplier - raid_boost_multiplier).abs() > f64::EPSILON
+        {
+            compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier)
+        } else {
+            round_score(cache.final_score)
+        };
     } else {
         current_started_at = None;
         current_uptime_sec = 0;
@@ -237,7 +261,14 @@ pub fn build_score_upsert(
         readiness_score = compute_readiness_score(duration_score, time_pattern_score);
         fairness_score =
             compute_fairness_score(sent_30d, received_30d, received_7d, today_received_raids);
-        base_score = compute_base_score(readiness_score, fairness_score, input.courtesy.score);
+        viewer_fairness_score =
+            compute_viewer_fairness_score(input.sent_viewers_30d, input.received_viewers_30d);
+        base_score = compute_base_score(
+            readiness_score,
+            fairness_score,
+            input.courtesy.score,
+            viewer_fairness_score,
+        );
         final_score =
             compute_final_score(base_score, new_partner_multiplier, raid_boost_multiplier);
     }
@@ -258,11 +289,14 @@ pub fn build_score_upsert(
         time_pattern_score: round_score(time_pattern_score),
         readiness_score: round_score(readiness_score),
         fairness_score: round_score(fairness_score),
+        viewer_fairness_score: round_score(viewer_fairness_score),
         base_score: round_score(base_score),
         final_score: round_score(final_score),
         internal_sent_raids_30d: sent_30d.max(0) as i32,
         internal_received_raids_30d: received_30d.max(0) as i32,
         internal_received_raids_7d: received_7d.max(0) as i32,
+        sent_viewers_30d: input.sent_viewers_30d.max(0),
+        received_viewers_30d: input.received_viewers_30d.max(0),
         today_received_raids: today_received_raids as i32,
         last_computed_at: iso_utc_seconds(now_utc),
         // Courtesy hängt an der Raid-Historie, nicht am Live-Zustand: der Wert
@@ -333,6 +367,7 @@ pub struct PartnerScoreRefresher {
     pool: PgPool,
     store: ScoreStore,
     courtesy: CourtesyStore,
+    monthly_boost: MonthlyRaidBoostStore,
     boost_resolver: RaidBoostResolver,
 }
 
@@ -340,10 +375,12 @@ impl PartnerScoreRefresher {
     pub fn new(pool: PgPool) -> Self {
         let store = ScoreStore::new(pool.clone());
         let courtesy = CourtesyStore::new(pool.clone());
+        let monthly_boost = MonthlyRaidBoostStore::new(pool.clone());
         Self {
             pool,
             store,
             courtesy,
+            monthly_boost,
             boost_resolver: raid_boost_nur_spalte,
         }
     }
@@ -398,12 +435,18 @@ impl PartnerScoreRefresher {
     ) -> Result<ScoreBuildInput, sqlx::Error> {
         let sessions = self.load_sessions(&partner.twitch_login).await?;
         let raid_timestamps = self.load_raid_timestamps(&partner.twitch_user_id).await?;
-        let internal_metrics = self
+        let (sent_30d, received_30d, received_7d, sent_viewers_30d, received_viewers_30d) = self
             .load_internal_metrics(&partner.twitch_user_id, now_utc)
             .await?;
-        let raid_boost_enabled = self
+        let plan_boost_enabled = self
             .load_boost_flag(&partner.twitch_user_id, now_utc)
             .await?;
+        let seasonal_boost = self
+            .monthly_boost
+            .reconcile_partner(&partner.twitch_user_id, &partner.twitch_login, now_utc)
+            .await?;
+        let raid_boost_enabled =
+            combined_raid_boost_enabled(plan_boost_enabled, seasonal_boost.stream_boost_active);
         let live_state = self.load_live_state(&partner.twitch_user_id).await?;
         let existing_cache = self.load_existing_cache(&partner.twitch_user_id).await?;
         let courtesy = self
@@ -415,7 +458,9 @@ impl PartnerScoreRefresher {
             twitch_login: partner.twitch_login.clone(),
             sessions,
             raid_timestamps,
-            internal_metrics,
+            internal_metrics: (sent_30d, received_30d, received_7d),
+            sent_viewers_30d,
+            received_viewers_30d,
             raid_boost_enabled,
             live_state,
             existing_cache,
@@ -498,14 +543,15 @@ impl PartnerScoreRefresher {
         &self,
         user_id: &str,
         now_utc: DateTime<Utc>,
-    ) -> Result<(i64, i64, i64), sqlx::Error> {
+    ) -> Result<(i64, i64, i64, i64, i64), sqlx::Error> {
         let cutoff_30d = now_utc - chrono::Duration::days(30);
         let cutoff_7d = now_utc - chrono::Duration::days(7);
 
         // sent_30d: dieser Partner als Quelle, anderer Partner als Ziel.
-        let sent_30d: i64 = sqlx::query_scalar!(
+        let sent = sqlx::query!(
             r#"
-            SELECT COUNT(*)::bigint AS "count!"
+            SELECT COUNT(*)::bigint AS "count!",
+                   COALESCE(SUM(h.viewer_count), 0)::bigint AS "viewers!"
             FROM twitch_raid_history h
             WHERE COALESCE(h.success, FALSE) IS TRUE
               AND h.from_broadcaster_id = $1
@@ -520,10 +566,13 @@ impl PartnerScoreRefresher {
         )
         .fetch_one(&self.pool)
         .await?;
+        let sent_30d = sent.count;
+        let sent_viewers_30d = sent.viewers;
 
-        let received_30d: i64 = sqlx::query_scalar!(
+        let received = sqlx::query!(
             r#"
-            SELECT COUNT(*)::bigint AS "count!"
+            SELECT COUNT(*)::bigint AS "count!",
+                   COALESCE(SUM(h.viewer_count), 0)::bigint AS "viewers!"
             FROM twitch_raid_history h
             WHERE COALESCE(h.success, FALSE) IS TRUE
               AND h.to_broadcaster_id = $1
@@ -538,6 +587,8 @@ impl PartnerScoreRefresher {
         )
         .fetch_one(&self.pool)
         .await?;
+        let received_30d = received.count;
+        let received_viewers_30d = received.viewers;
 
         let received_7d: i64 = sqlx::query_scalar!(
             r#"
@@ -557,7 +608,13 @@ impl PartnerScoreRefresher {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok((sent_30d, received_30d, received_7d))
+        Ok((
+            sent_30d,
+            received_30d,
+            received_7d,
+            sent_viewers_30d,
+            received_viewers_30d,
+        ))
     }
 
     /// Lädt die Plan-Zeile und lässt den [`RaidBoostResolver`] entscheiden.
@@ -627,8 +684,10 @@ impl PartnerScoreRefresher {
             time_pattern_score: r.time_pattern_score,
             readiness_score: r.readiness_score,
             fairness_score: r.fairness_score,
+            viewer_fairness_score: r.viewer_fairness_score,
             base_score: r.base_score,
             final_score: r.final_score,
+            raid_boost_multiplier: r.raid_boost_multiplier,
         }))
     }
 }
@@ -645,6 +704,8 @@ mod tests {
             sessions: vec![],
             raid_timestamps: vec![],
             internal_metrics: (0, 0, 0),
+            sent_viewers_30d: 0,
+            received_viewers_30d: 0,
             raid_boost_enabled: false,
             live_state: LiveState::default(),
             existing_cache: None,
@@ -664,16 +725,21 @@ mod tests {
         assert!((upsert.duration_score - 0.5).abs() < 1e-9);
         assert!((upsert.fairness_score - 0.75).abs() < 1e-9);
         // new_partner_multiplier = 1.25 (0 Raids); courtesy = 1.0 ohne Historie;
-        // base = 0.5*0.585 + 0.75*0.315 + 1.0*0.10 = 0.62875.
+        // viewer_fairness = 0.5 ohne Zuschauer-Historie;
+        // base = 0.5*0.49725 + 0.75*0.26775 + 1.0*0.085 + 0.5*0.15 = 0.6094375.
         assert!((upsert.new_partner_multiplier - 1.25).abs() < 1e-9);
-        assert!((upsert.base_score - round_score(0.62875)).abs() < 1e-9);
-        assert!((upsert.final_score - round_score(0.62875 * 1.25)).abs() < 1e-9);
+        assert!((upsert.viewer_fairness_score - 0.5).abs() < 1e-9);
+        assert!((upsert.base_score - round_score(0.6094375)).abs() < 1e-9);
+        assert!((upsert.final_score - round_score(round_score(0.6094375) * 1.25)).abs() < 1e-9);
         assert_eq!(upsert.last_computed_at, "2026-06-21T12:00:00+00:00");
         assert!(upsert.current_started_at.is_none());
         // Ohne Etikette-Historie kein Abzug und keine Matching-Klasse.
         assert!((upsert.courtesy_score - 1.0).abs() < 1e-9);
         assert_eq!(upsert.courtesy_class, None);
         assert_eq!(upsert.courtesy_observed, 0);
+        // Ohne Zuschauer-Historie sind die Rohsummen 0.
+        assert_eq!(upsert.sent_viewers_30d, 0);
+        assert_eq!(upsert.received_viewers_30d, 0);
     }
 
     #[test]
@@ -777,17 +843,84 @@ mod tests {
             time_pattern_score: 0.6,
             readiness_score: 0.5,
             fairness_score: 0.7,
+            viewer_fairness_score: 0.66,
             base_score: 0.55,
             final_score: 0.61,
+            raid_boost_multiplier: 1.0,
         });
         let upsert = build_score_upsert(&input, now);
         assert_eq!(upsert.is_live, 0);
         assert_eq!(upsert.current_uptime_sec, 1234);
         assert!((upsert.duration_score - 0.42).abs() < 1e-9);
+        assert!((upsert.viewer_fairness_score - 0.66).abs() < 1e-9);
         assert!((upsert.final_score - 0.61).abs() < 1e-9);
         assert_eq!(
             upsert.current_started_at.as_deref(),
             Some("2026-06-20T10:00:00+00:00")
+        );
+    }
+
+    #[test]
+    fn offline_boost_wechsel_rechnet_end_score_neu_ohne_basis_zu_aendern() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 27, 0, 0, 0).unwrap();
+        for (old_boost, new_boost) in [(true, false), (false, true)] {
+            let mut input = base_input("winner");
+            input.raid_boost_enabled = new_boost;
+            input.existing_cache = Some(ExistingCache {
+                current_started_at: None,
+                current_uptime_sec: 1800,
+                duration_score: 0.42,
+                time_pattern_score: 0.6,
+                readiness_score: 0.5,
+                fairness_score: 0.7,
+                viewer_fairness_score: 0.66,
+                base_score: 0.55,
+                final_score: compute_final_score(
+                    0.55,
+                    1.25,
+                    compute_raid_boost_multiplier(old_boost),
+                ),
+                raid_boost_multiplier: compute_raid_boost_multiplier(old_boost),
+            });
+            let row = build_score_upsert(&input, now);
+            assert_eq!(row.base_score, 0.55);
+            assert_eq!(row.duration_score, 0.42);
+            assert_eq!(
+                row.final_score,
+                compute_final_score(
+                    row.base_score,
+                    row.new_partner_multiplier,
+                    compute_raid_boost_multiplier(new_boost)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn build_zuschauer_fairness_netto_geber_hebt_base_score() {
+        // Zwei sonst identische Partner, einer starker Netto-Geber von Zuschauern,
+        // der andere ohne Zuschauer-Historie. Der Geber muss oben liegen.
+        let now = Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap();
+
+        let mut geber = base_input("uid_geber");
+        geber.sent_viewers_30d = 830;
+        geber.received_viewers_30d = 82;
+        let geber_row = build_score_upsert(&geber, now);
+
+        let neutral_row = build_score_upsert(&base_input("uid_neutral"), now);
+
+        assert_eq!(geber_row.sent_viewers_30d, 830);
+        assert_eq!(geber_row.received_viewers_30d, 82);
+        assert!(
+            geber_row.viewer_fairness_score > 0.5,
+            "Netto-Geber muss über neutral liegen: {}",
+            geber_row.viewer_fairness_score
+        );
+        assert!(
+            geber_row.base_score > neutral_row.base_score,
+            "{} muss über {} liegen",
+            geber_row.base_score,
+            neutral_row.base_score
         );
     }
 }

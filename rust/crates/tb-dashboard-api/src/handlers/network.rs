@@ -199,8 +199,7 @@ async fn enrich_with(
             let mut by_login = HashMap::new();
             for streamer in streamers.iter_mut() {
                 if let Some(user) = users.get(&streamer.login) {
-                    let display =
-                        Some(user.display_name.clone()).filter(|name| !name.is_empty());
+                    let display = Some(user.display_name.clone()).filter(|name| !name.is_empty());
                     let avatar = user
                         .profile_image_url
                         .clone()
@@ -295,15 +294,17 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
-            .await
-            .expect("Schema droppen");
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .expect("Schema droppen");
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
             .execute(&pool)
             .await
             .expect("search_path setzen");
@@ -808,10 +809,7 @@ mod enrich_tests {
             let mut by_login = HashMap::new();
             by_login.insert(
                 "nani".to_string(),
-                (
-                    Some("Nani".to_string()),
-                    Some("http://x/a.png".to_string()),
-                ),
+                (Some("Nani".to_string()), Some("http://x/a.png".to_string())),
             );
             guard.good = Some(ProfileCache {
                 at: Instant::now(),

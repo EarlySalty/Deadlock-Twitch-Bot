@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
@@ -10,6 +10,12 @@ import { Monetization } from '@/pages/Monetization';
 import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
 import { Planung } from '@/pages/Planung';
+import { Community } from '@/pages/Community';
+import { Challenges } from '@/pages/Challenges';
+import { PartnerProfile } from '@/pages/PartnerProfile';
+import { CategoryCollector } from '@/pages/CategoryCollector';
+import { TitleGenerator } from '@/pages/TitleGenerator';
+import { fetchTitleStreamers } from '@/api/title';
 import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
@@ -38,6 +44,7 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_OVERLAY_ROUTE,
   PREVIEW_PRICING_ROUTE,
+  PREVIEW_TITLE_ROUTE,
   PREVIEW_UPLINK_ROUTE,
   PREVIEW_UPLINK_STUDIO_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
@@ -119,6 +126,7 @@ const queryClient = new QueryClient({
     queries: {
       retry: shouldRetryApiQuery,
       refetchOnWindowFocus: false,
+      gcTime: 30 * 60 * 1000,
     },
   },
 });
@@ -326,6 +334,12 @@ function AnalyticsDashboard() {
             <Planung streamer={streamer} days={days} initialSub={pendingSub ?? undefined} />
           )}
 
+          {activeTab === 'profile' && <PartnerProfile key={streamer || 'own'} streamer={streamer ?? undefined} />}
+
+          {activeTab === 'community' && (
+            <Community streamer={streamer} days={days} />
+          )}
+
           {activeTab === 'coaching' && (
             <WasTun streamer={streamer} days={days} initialMode={pendingMode ?? undefined} />
           )}
@@ -349,6 +363,27 @@ function AnalyticsDashboard() {
   );
 }
 
+function TitleGeneratorRoute() {
+  const { data: authStatus } = useAuthStatus();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const ownId = authStatus?.twitchUserId ?? null;
+  const streamer = authStatus?.isAdmin ? selectedId ?? ownId : ownId;
+  const directory = useQuery({ queryKey: ['title-streamer-directory'], queryFn: fetchTitleStreamers, enabled: Boolean(authStatus?.isAdmin) });
+  return (
+    <DashboardShell activeRoute="title">
+      {authStatus?.isAdmin && <div className="mx-auto max-w-4xl pt-4">
+        <label htmlFor="title-streamer" className="text-sm text-text-secondary">Twitch-Kanal</label>
+        <select id="title-streamer" value={streamer ?? ''} onChange={(event) => setSelectedId(event.target.value)} className="ml-3 rounded-lg border border-border bg-card px-3 py-2 text-white">
+          {ownId ? <option value={ownId}>Mein Kanal</option> : <option value="" disabled>Kanal auswählen</option>}
+          {directory.data?.items.filter((item) => item.twitchUserId && item.twitchUserId !== ownId).map((item) => <option key={item.twitchUserId} value={item.twitchUserId!}>{item.login}</option>)}
+        </select>
+        {directory.isError && <p role="status" className="mt-2 text-sm text-error">Die Kanalliste ist gerade nicht verfügbar.</p>}
+      </div>}
+      <TitleGenerator key={streamer} streamer={streamer} />
+    </DashboardShell>
+  );
+}
+
 function PricingRoute() {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const authenticated = !loadingAuth && authStatus?.authenticated === true;
@@ -364,8 +399,10 @@ export default function App() {
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';
+  const isChallengesRoute = path === '/twitch/challenges';
   const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
   const isOverlayBuilderRoute = path === PREVIEW_OVERLAY_ROUTE;
+  const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isUplinkStudioRoute = path === PREVIEW_UPLINK_STUDIO_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
@@ -375,6 +412,9 @@ export default function App() {
     path === '/analyse' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
+  const isCategoryRoute =
+    path === '/twitch/kategorie' ||
+    (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
     !isPreviewModeEnabled() &&
@@ -391,7 +431,9 @@ export default function App() {
       <LanguageProvider>
         <ErrorBoundary>
         <OnboardingProvider>
-          {isSocialMediaAdminRoute ? (
+          {isCategoryRoute ? (
+            <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
+          ) : isSocialMediaAdminRoute ? (
             <DashboardShell activeRoute="social">
               <SocialMediaAdminDashboard />
             </DashboardShell>
@@ -399,6 +441,8 @@ export default function App() {
             <DashboardShell activeRoute="hilfe"><EinrichtungCard help /><FeedbackBox area="Hilfe" /></DashboardShell>
           ) : isFeedbackRoute ? (
             <DashboardShell activeRoute="feedback"><FeedbackPage /></DashboardShell>
+          ) : isChallengesRoute ? (
+            <DashboardShell activeRoute="challenges"><Challenges /></DashboardShell>
           ) : isVerwaltungRoute ? (
             <DashboardShell activeRoute="verwaltung">
               <VerwaltungPage />
@@ -407,6 +451,8 @@ export default function App() {
             <DashboardShell activeRoute="overlay">
               <OverlayBuilderPage />
             </DashboardShell>
+          ) : isTitleRoute ? (
+            <TitleGeneratorRoute />
           ) : isPricingRoute ? (
             <PricingRoute />
           ) : isUplinkStudioRoute ? (

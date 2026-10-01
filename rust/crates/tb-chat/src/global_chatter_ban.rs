@@ -63,6 +63,7 @@ impl GlobalChatterBanEnforcer {
 
         // Cache-Prüfung: positiver Treffer < 300s (moderation.py Z. 736–738)
         let mut reason = None;
+        let mut loaded_from_database = false;
         if let Some(entry) = self.cache.get(&chatter_login) {
             if entry.value().0.elapsed().as_secs() < BAN_CACHE_TTL_SECS {
                 reason = Some(entry.value().1.clone());
@@ -79,7 +80,10 @@ impl GlobalChatterBanEnforcer {
                 .global_ban_reason(&chatter_login, &event.chatter_user_id)
                 .await
             {
-                Ok(Some(db_reason)) => reason = Some(db_reason),
+                Ok(Some(db_reason)) => {
+                    reason = Some(db_reason);
+                    loaded_from_database = true;
+                }
                 Ok(None) => return None,
                 Err(e) => {
                     warn!("global_chatter_ban: DB-Fehler — {}", e);
@@ -108,10 +112,13 @@ impl GlobalChatterBanEnforcer {
                 None
             }
             Ok(false) => {
-                // Positiven Treffer cachen (moderation.py Z. 744–749)
-                self.cache
-                    .insert(chatter_login, (Instant::now(), reason.clone()));
-                self.evict_if_needed();
+                // Nur ein DB-Treffer startet die TTL. Chataktivität darf einen
+                // inzwischen entfernten Ban nicht unbegrenzt im Cache halten.
+                if loaded_from_database {
+                    self.cache
+                        .insert(chatter_login, (Instant::now(), reason.clone()));
+                    self.evict_if_needed();
+                }
                 Some(reason)
             }
             Err(e) => {
@@ -228,6 +235,42 @@ impl GlobalChatterBanEnforcer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cache_treffer_verlaengert_entfernten_ban_nicht() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::query("CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT, reason TEXT)")
+            .execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chatter_global_ban VALUES ('chatter', '42', 'Testgrund')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let enforcer = GlobalChatterBanEnforcer::new(db.pool.clone());
+        let event = ChatMessageEvent {
+            chatter_user_login: "chatter".into(),
+            chatter_user_id: "42".into(),
+            ..Default::default()
+        };
+        assert!(enforcer.is_banned(&event).await);
+        let cached_at = Instant::now() - std::time::Duration::from_secs(299);
+        enforcer
+            .cache
+            .insert("chatter".into(), (cached_at, "Testgrund".into()));
+        sqlx::query("DELETE FROM twitch_chatter_global_ban")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(enforcer.is_banned(&event).await);
+        assert_eq!(enforcer.cache.get("chatter").unwrap().0, cached_at);
+        enforcer.cache.insert(
+            "chatter".into(),
+            (
+                Instant::now() - std::time::Duration::from_secs(300),
+                "Testgrund".into(),
+            ),
+        );
+        assert!(!enforcer.is_banned(&event).await);
+    }
 
     #[test]
     fn ban_cache_ttl_konstante() {

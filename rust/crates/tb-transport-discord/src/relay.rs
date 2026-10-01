@@ -21,6 +21,7 @@ const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
 const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
 const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
 const CREATE_INVITE_PATH: &str = "/internal/master/v1/discord/create-invite";
+const PERSONAL_INVITE_PATH: &str = "/internal/master/v1/twitch/personal-invite";
 const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const ROLES_PATH: &str = "/internal/master/v1/discord/roles";
@@ -69,6 +70,14 @@ pub struct InviteInfo {
     pub channel_id: u64,
     #[serde(deserialize_with = "deserialize_u64_flexible")]
     pub guild_id: u64,
+}
+
+/// Result of the channel-scoped, short-lived streamer voice invitation.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StreamerVoiceInvite {
+    pub invite_url: String,
+    pub channel_id: String,
+    pub slot_added: bool,
 }
 
 /// Reaktionszähler einer Discord-Nachricht.
@@ -202,15 +211,56 @@ where
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PersonalInvite {
+    pub invite_url: String,
+    pub personal: bool,
+}
+
 impl BrokerRelay {
     /// Erstellt einen neuen BrokerRelay aus der übergebenen Konfiguration.
     pub fn new(config: &BrokerConfig) -> Result<Self, reqwest::Error> {
-        let client = Client::builder().timeout(TIMEOUT).build()?;
+        let client = Client::builder()
+            .timeout(TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()?;
         Ok(Self {
             client: Arc::new(client),
             base_url: config.base_url.clone(),
             token: config.token.clone(),
         })
+    }
+
+    /// HTTP is permitted only for literal loopback addresses. The internal
+    /// token must never cross a plaintext network or an inherited HTTP proxy.
+    fn request_url(&self, path: &str) -> Result<reqwest::Url, DiscordError> {
+        let invalid = || DiscordError::BrokerError {
+            status: 400,
+            body: "Ungültiger Broker-Endpunkt: HTTPS oder numerischer Loopback erforderlich".into(),
+        };
+        let mut url = reqwest::Url::parse(&self.base_url).map_err(|_| invalid())?;
+        let loopback = url.host_str().is_some_and(|host| {
+            host.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        });
+        if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.path() != "/"
+            || !(path.starts_with("/internal/master/v1/discord/") || path == PERSONAL_INVITE_PATH)
+            || path.contains(['?', '#', '\\'])
+            || path.split('/').any(|part| part == "." || part == "..")
+        {
+            return Err(invalid());
+        }
+        url.set_path(path);
+        Ok(url)
     }
 
     /// Berechnet den deterministischen Idempotency-Key.
@@ -240,13 +290,13 @@ impl BrokerRelay {
         payload: &T,
         idempotency_key: &str,
     ) -> Result<reqwest::Response, DiscordError> {
-        let url = format!("{}{}", self.base_url, path);
+        let url = self.request_url(path)?;
         let mut last_err: Option<DiscordError> = None;
 
         for attempt in 0..MAX_ATTEMPTS {
             let result = self
                 .client
-                .post(&url)
+                .post(url.clone())
                 .header("X-Internal-Token", &self.token)
                 .header("X-Idempotency-Key", idempotency_key)
                 .json(payload)
@@ -349,7 +399,122 @@ impl BrokerRelay {
         Ok(())
     }
 
+    /// Resolve the streamer by Discord ID at the broker, not a channel name.
+    /// Message ID is part of the idempotency key so retries cannot add slots.
+    pub async fn streamer_voice_invite(
+        &self,
+        guild_id: u64,
+        streamer_id: u64,
+        message_id: &str,
+    ) -> Result<Option<StreamerVoiceInvite>, DiscordError> {
+        let payload = serde_json::json!({
+            "guild_id": guild_id,
+            "streamer_id": streamer_id,
+            "message_id": message_id,
+        });
+        let key = Self::idempotency_key("streamer-voice", &payload);
+        let response = self
+            .post_with_retry(
+                "/internal/master/v1/discord/streamer-voice-invite",
+                &payload,
+                &key,
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(DiscordError::BrokerError {
+                status: response.status().as_u16(),
+                body: "streamer voice unavailable".into(),
+            });
+        }
+        let envelope: BrokerEnvelope<serde_json::Value> = response.json().await?;
+        let result =
+            envelope
+                .result
+                .filter(|_| envelope.ok)
+                .ok_or_else(|| DiscordError::BrokerError {
+                    status: 502,
+                    body: "missing streamer voice result".into(),
+                })?;
+        match result.get("available").and_then(serde_json::Value::as_bool) {
+            Some(false) => Ok(None),
+            Some(true) => {
+                serde_json::from_value(result)
+                    .map(Some)
+                    .map_err(|_| DiscordError::BrokerError {
+                        status: 502,
+                        body: "invalid streamer voice result".into(),
+                    })
+            }
+            None => Err(DiscordError::BrokerError {
+                status: 502,
+                body: "invalid streamer voice status".into(),
+            }),
+        }
+    }
+
     /// Erstellt einen permanenten Discord-Invite für den angegebenen Kanal.
+    pub async fn personal_invite(
+        &self,
+        streamer_login: &str,
+        streamer_twitch_user_id: &str,
+        inviter_twitch_user_id: &str,
+    ) -> Result<PersonalInvite, DiscordError> {
+        let invalid = || DiscordError::BrokerError {
+            status: 400,
+            body: "Ungültige Twitch-Einladungsanfrage".into(),
+        };
+        if ![streamer_twitch_user_id, inviter_twitch_user_id]
+            .iter()
+            .all(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|c| c.is_ascii_digit())
+                    && id.parse::<u64>().is_ok_and(|id| id > 0)
+            })
+        {
+            return Err(invalid());
+        }
+        let url = self.request_url(PERSONAL_INVITE_PATH)?;
+        if !url.host_str().is_some_and(|host| {
+            host.trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        }) {
+            return Err(invalid());
+        }
+        let payload = serde_json::json!({
+            "streamer_login": streamer_login.trim().to_ascii_lowercase(),
+            "streamer_twitch_user_id": streamer_twitch_user_id,
+            "inviter_twitch_user_id": inviter_twitch_user_id,
+        });
+        let key = Self::idempotency_key("personal-invite", &payload);
+        let response = self
+            .post_with_retry(PERSONAL_INVITE_PATH, &payload, &key)
+            .await?;
+        if !response.status().is_success() {
+            return Err(DiscordError::BrokerError {
+                status: response.status().as_u16(),
+                body: "Persönlicher Discord-Link nicht verfügbar".into(),
+            });
+        }
+        let envelope: BrokerEnvelope<PersonalInvite> = response.json().await?;
+        envelope
+            .result
+            .filter(|result| {
+                envelope.ok
+                    && result
+                        .invite_url
+                        .strip_prefix("https://discord.gg/")
+                        .is_some_and(|code| {
+                            !code.is_empty()
+                                && code.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                        })
+            })
+            .ok_or_else(|| DiscordError::BrokerError {
+                status: 502,
+                body: "Ungültige Discord-Einladungsantwort".into(),
+            })
+    }
+
     pub async fn create_invite(
         &self,
         channel_id: u64,
@@ -369,12 +534,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<InviteInfo> = resp.json().await?;
-        envelope.result.filter(|_| envelope.ok).ok_or_else(|| {
-            DiscordError::BrokerError {
+        envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or_else(|| DiscordError::BrokerError {
                 status: 502,
                 body: "missing create-invite result".to_string(),
-            }
-        })
+            })
     }
 
     /// Legt eine Discord-Rolle über den Broker an
@@ -402,10 +568,13 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         let envelope: BrokerEnvelope<CreateRoleResponse> = resp.json().await?;
-        let parsed = envelope.result.filter(|_| envelope.ok).ok_or(DiscordError::BrokerError {
-            status: 502,
-            body: "missing create-role result".to_string(),
-        })?;
+        let parsed = envelope
+            .result
+            .filter(|_| envelope.ok)
+            .ok_or(DiscordError::BrokerError {
+                status: 502,
+                body: "missing create-role result".to_string(),
+            })?;
         Ok(parsed.role_id)
     }
 
@@ -417,10 +586,10 @@ impl BrokerRelay {
         guild_id: u64,
         name: &str,
     ) -> Result<Option<u64>, DiscordError> {
-        let url = format!("{}{}", self.base_url, ROLES_PATH);
+        let url = self.request_url(ROLES_PATH)?;
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .query(&[("guild_id", guild_id.to_string())])
             .timeout(Duration::from_secs(15))
             .send()
@@ -441,10 +610,10 @@ impl BrokerRelay {
     /// Holt alle nicht-Bot-Guild-Member vom Broker (loopback, kein Token).
     /// `GET /internal/master/v1/discord/members`
     pub async fn list_members(&self) -> Result<Vec<GuildMember>, DiscordError> {
-        let url = format!("{}{}", self.base_url, MEMBERS_PATH);
+        let url = self.request_url(MEMBERS_PATH)?;
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .timeout(Duration::from_secs(15))
             .send()
             .await
@@ -468,10 +637,10 @@ impl BrokerRelay {
         channel_id: &str,
         message_id: &str,
     ) -> Result<MessageReactions, DiscordError> {
-        let url = format!("{}{}", self.base_url, MESSAGE_REACTIONS_PATH);
+        let url = self.request_url(MESSAGE_REACTIONS_PATH)?;
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .header("X-Internal-Token", &self.token)
             .query(&[("channel_id", channel_id), ("message_id", message_id)])
             .send()
@@ -568,6 +737,7 @@ impl DiscordBackend for BrokerRelay {
 
 #[cfg(test)]
 mod tests {
+    include!("personal_invite_tests.rs");
     use super::*;
     use crate::DeleteMessage;
     use tb_config::BrokerConfig;
@@ -579,6 +749,65 @@ mod tests {
             base_url: base_url.to_string(),
             token: "test-token".to_string(),
         }
+    }
+
+    #[test]
+    fn security_broker_rejects_remote_http_and_ambiguous_origins() {
+        for base in [
+            "http://example.test",
+            "http://localhost",
+            "http://127.0.0.1.example.test",
+            "http://127.0.0.1@evil.test",
+            "http://10.0.0.1",
+            "http://[::ffff:10.0.0.1]",
+            "https://user:password@example.test",
+            "https://example.test?override=",
+            "https://example.test#fragment",
+            "https://example.test/unexpected",
+        ] {
+            let relay = BrokerRelay::new(&test_config(base)).unwrap();
+            assert!(
+                relay.request_url(SEND_PATH).is_err(),
+                "accepted unsafe origin"
+            );
+        }
+    }
+
+    #[test]
+    fn security_broker_accepts_https_and_literal_loopback_only() {
+        for base in [
+            "https://broker.example.test",
+            "http://127.0.0.1:8770",
+            "http://[::1]:8770",
+        ] {
+            let relay = BrokerRelay::new(&test_config(base)).unwrap();
+            let url = relay.request_url(SEND_PATH).unwrap();
+            assert_eq!(url.path(), SEND_PATH);
+        }
+    }
+
+    #[tokio::test]
+    async fn security_broker_does_not_forward_internal_token_on_redirect() {
+        let destination = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&destination)
+            .await;
+        let broker = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", destination.uri()))
+            .expect(1)
+            .mount(&broker)
+            .await;
+        let relay = BrokerRelay::new(&test_config(&broker.uri())).unwrap();
+        let response = relay
+            .post_with_retry(SEND_PATH, &serde_json::json!({}), "redirect-test")
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 307);
+        assert!(destination.received_requests().await.unwrap().is_empty());
     }
 
     fn sample_send_payload() -> SendRichMessage {
@@ -874,6 +1103,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streamer_voice_invite_reuses_auth_and_message_scoped_idempotency() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/streamer-voice-invite"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": {"available": true, "invite_url": "https://discord.gg/voiceTest", "channel_id": "42", "slot_added": true}
+            }))).expect(3).mount(&server).await;
+        let relay = BrokerRelay::new(&test_config(&server.uri())).expect("relay");
+        for message in ["same-message", "same-message", "another-message"] {
+            let invite = relay
+                .streamer_voice_invite(1289721245281292288, 7, message)
+                .await
+                .expect("response")
+                .expect("invite");
+            assert_eq!(invite.channel_id, "42");
+            assert!(invite.slot_added);
+        }
+        let requests = server.received_requests().await.expect("requests");
+        let key = |index: usize| {
+            requests[index]
+                .headers
+                .get("X-Idempotency-Key")
+                .expect("key")
+                .to_str()
+                .expect("text")
+        };
+        assert_eq!(key(0), key(1));
+        assert_ne!(key(0), key(2));
+        let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("json");
+        assert_eq!(payload["streamer_id"], 7);
+        assert!(payload.get("channel_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn streamer_voice_invite_never_treats_malformed_or_failed_response_as_success() {
+        for (body, absent) in [
+            (
+                serde_json::json!({"ok": true, "result": {"available": false}}),
+                true,
+            ),
+            (
+                serde_json::json!({"ok": false, "result": {"available": true}}),
+                false,
+            ),
+            (
+                serde_json::json!({"ok": true, "result": {"available": true}}),
+                false,
+            ),
+            (serde_json::json!({"ok": true, "result": {}}), false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            let relay = BrokerRelay::new(&test_config(&server.uri())).expect("relay");
+            let result = relay
+                .streamer_voice_invite(1289721245281292288, 7, "test-message")
+                .await;
+            if absent {
+                assert!(result.expect("absent").is_none());
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn add_member_role_sendet_payload() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1094,7 +1392,10 @@ mod tests {
             .await;
 
         let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
-        let invite = relay.create_invite(123, "streamer-invite:test").await.unwrap();
+        let invite = relay
+            .create_invite(123, "streamer-invite:test")
+            .await
+            .unwrap();
         assert_eq!(invite.invite_url, "https://discord.gg/abc");
         assert_eq!(invite.code, "abc");
         assert_eq!(invite.channel_id, 123);
@@ -1210,7 +1511,10 @@ mod tests {
             .await;
 
         let server = server_task.await.expect("Mock-Server");
-        assert!(result.is_ok(), "zweiter Versuch muss durchkommen: {result:?}");
+        assert!(
+            result.is_ok(),
+            "zweiter Versuch muss durchkommen: {result:?}"
+        );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
@@ -1238,7 +1542,10 @@ mod tests {
             })
             .await
             .expect_err("404 ist ein Fehler");
-        assert!(matches!(error, DiscordError::BrokerError { status: 404, .. }));
+        assert!(matches!(
+            error,
+            DiscordError::BrokerError { status: 404, .. }
+        ));
         server.verify().await;
     }
 

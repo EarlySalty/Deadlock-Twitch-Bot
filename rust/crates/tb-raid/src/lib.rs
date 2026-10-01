@@ -40,7 +40,9 @@ pub mod courtesy_store;
 pub mod deadlock_pause;
 pub mod eligibility;
 pub mod external_recruitment_store;
+pub mod flip_unraid;
 pub mod manual_suppression;
+pub mod monthly_raid_boost;
 pub mod oauth_flow;
 pub mod offline_eligibility;
 pub mod outreach_boost;
@@ -63,6 +65,7 @@ pub mod scoring;
 pub mod signal_correlation;
 pub mod signup_denylist;
 pub mod state_store;
+pub mod streamer_referrals;
 pub mod strikes_store;
 pub mod target_generation;
 pub mod target_resolution;
@@ -110,7 +113,17 @@ pub use external_recruitment_store::{
     DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,
     EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
+pub use flip_unraid::{
+    pending_within_flip_window, FlipOutcome, FlipRepeatTracker, FLIP_PAUSE_DEFAULT_SECS,
+    FLIP_REPEAT_WINDOW_DEFAULT_SECS, FLIP_WINDOW_DEFAULT_SECS,
+};
 pub use manual_suppression::ManualRaidSuppression;
+pub use monthly_raid_boost::{
+    combined_raid_boost_enabled, deadlock_seconds_for_timeline, next_monthly_close_after,
+    previous_season_window, remaining_after_stream, stream_consumes_boost, MonthlyRaidBoostStore,
+    SeasonCloseOutcome, SeasonWinner, SeasonalBoostState, MONTHLY_BOOST_STREAMS,
+    MONTHLY_BOOST_TTL_DAYS, QUALIFYING_DEADLOCK_SECONDS,
+};
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
@@ -147,7 +160,7 @@ pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
     BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES, DASHBOARD_REAUTH_SCOPE_PROFILE,
-    DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES,
+    DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES, TITLE_SCOPES, TITLE_SCOPE_PROFILE,
 };
 pub use score_store::{PartnerRaidScoreRow, PartnerRaidScoreUpsert, ScoreStore};
 pub use score_tracking_store::{ScoreTrackingStore, TrackConfirmedInput};
@@ -181,3 +194,11 @@ pub use token_refresher::{
 };
 pub use token_store::{RaidAuthStore, RaidTokens};
 pub use util::parse_iso_utc;
+
+#[cfg(test)]
+#[path = "../../../test-support/schema_sql.rs"]
+mod test_sql;
+
+#[cfg(test)]
+#[path = "../../../test-support/database.rs"]
+mod test_database;

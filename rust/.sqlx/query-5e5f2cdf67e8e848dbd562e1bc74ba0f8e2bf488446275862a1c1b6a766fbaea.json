@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE twitch_promo_pitch_log SET review_message_id = $2 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e5f2cdf67e8e848dbd562e1bc74ba0f8e2bf488446275862a1c1b6a766fbaea"
+}

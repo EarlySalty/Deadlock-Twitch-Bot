@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep the private Twitch feature roadmap up to date
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=90
+Persistent=true
+Unit=deadlock-roadmap-history.service
+
+[Install]
+WantedBy=timers.target

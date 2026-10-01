@@ -1,30 +1,13 @@
-//! Gemeinsame Testhilfen dieses Crates.
-//!
-//! Nur unter `cfg(test)` uebersetzt und deshalb kein Teil der Auslieferung.
+#[path = "../../../test-support/database.rs"]
+mod test_database;
 
-/// Test-DSN, mit Notbremse.
-///
-/// Ohne `TB_TEST_DATABASE_URL` verlassen die DB-Tests ihren Rumpf und melden
-/// gruen, ohne eine einzige Zusicherung geprueft zu haben. Fuer einen Lauf am
-/// Arbeitsplatz ist das bequem, fuer einen Lauf, der als Nachweis gilt, ist es
-/// eine Luege. `TB_TEST_REQUIRE_DB=1` macht daraus einen Abbruch.
-///
-/// Steht bewusst hier und nicht in einem der Testmodule: eine Notbremse, die
-/// nur in einer von vielen `make_pool`-Kopien haengt, schuetzt genau die Tests
-/// nicht, die noch niemand daran gehaengt hat.
-///
-/// Stand jetzt holt sich jede `make_pool`-Kopie dieses Crates ihr DSN von
-/// hier; `std::env::var("TB_TEST_DATABASE_URL")` kommt ausser in dieser Datei
-/// nicht mehr vor. Wer eine neue Kopie anlegt, haengt sie hier an, sonst sagt
-/// `TB_TEST_REQUIRE_DB=1` wieder weniger, als es verspricht.
 pub(crate) fn test_dsn() -> Option<String> {
-    match std::env::var("TB_TEST_DATABASE_URL") {
-        Ok(dsn) if !dsn.trim().is_empty() => Some(dsn),
+    match test_database::database_url() {
+        Some(dsn) if !dsn.trim().is_empty() => Some(dsn),
         _ => {
             assert!(
-                std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1"),
-                "TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt: \
-                 dieser Test haette nichts geprueft"
+                !test_database::required(),
+                "Die erforderliche isolierte Testdatenbank ist nicht konfiguriert"
             );
             None
         }

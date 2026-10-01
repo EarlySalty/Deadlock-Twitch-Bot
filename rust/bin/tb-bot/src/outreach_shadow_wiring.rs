@@ -78,11 +78,13 @@ struct OutreachConfig {
 }
 
 impl OutreachConfig {
-    fn from_env() -> Self {
-        let raw = std::env::var("OUTREACH_SHADOW_ENABLED").ok();
-        Self::from_value(raw.as_deref())
+    fn from_config(config: &tb_config::operations::BotOperations) -> Self {
+        Self {
+            enabled: config.outreach_shadow_enabled,
+        }
     }
 
+    #[cfg(test)]
     fn from_value(value: Option<&str>) -> Self {
         Self {
             enabled: value.is_some_and(|value| {
@@ -191,9 +193,10 @@ pub fn start(
     supervisor: &TaskSupervisor,
     pool: PgPool,
     broker: &BrokerConfig,
+    operating: &tb_config::operations::BotOperations,
 ) -> OutreachShadowRuntime {
     let store = OutreachShadowStore::new(pool);
-    let config = OutreachConfig::from_env();
+    let config = OutreachConfig::from_config(operating);
 
     // Die Aufbewahrungsfrist gilt unabhängig vom Kill-Switch: was einmal
     // gepostet wurde, muss auch nach dem Abschalten wieder verschwinden.
@@ -236,9 +239,19 @@ pub fn start(
     let Some(discord) = configured_discord else {
         return inactive_runtime(supervisor, store, "discord_unavailable");
     };
+    let snapshot =
+        tb_config::runtime::active().expect("Outreach startet nach der Betriebskonfiguration");
+    let yt_dlp = operating
+        .outreach_yt_dlp_binary
+        .as_ref()
+        .map(|path| {
+            snapshot
+                .resolve(path)
+                .expect("Outreachpfad wurde beim Konfigurationsstart geprüft")
+        })
+        .unwrap_or_else(|| crate::yt_dlp_path(snapshot));
     let capturer = MemoryAudioCapturer::new(
-        nonempty_env("YTDLP_BIN")
-            .unwrap_or_else(|| crate::yt_dlp_path().to_string_lossy().into_owned()),
+        yt_dlp.to_string_lossy().into_owned(),
         nonempty_env("FFMPEG_BIN").unwrap_or_else(|| "ffmpeg".to_owned()),
     );
     spawn_processor(supervisor, store.clone(), capturer, transcriber, reviewer);
@@ -331,7 +344,10 @@ async fn process_once(
             Ok(transcript) => {
                 let text = transcript.text.trim().to_owned();
                 let context = store.load_context(&session, &text, Utc::now()).await?;
-                let result = match reviewer.decide(&context.input, &context.evidence).await {
+                let reviewed = reviewer
+                    .decide_detailed(&context.input, &context.evidence)
+                    .await;
+                let result = match reviewed.decision {
                     Ok(decision) => CycleResult::Decision(decision),
                     Err(OutreachError::Decode | OutreachError::Validation) => {
                         CycleResult::ParserError
@@ -346,6 +362,8 @@ async fn process_once(
                     Some(text.clone()),
                     result,
                 );
+                event.provider = reviewed.provider;
+                event.model = reviewed.model;
                 event.static_recruitment_text =
                     static_recruitment_text(&session, context.raid_count);
                 persist_and_log(store, event, claim.claim_id).await?;

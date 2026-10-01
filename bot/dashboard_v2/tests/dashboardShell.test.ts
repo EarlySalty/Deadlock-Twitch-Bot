@@ -40,6 +40,25 @@ test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein'
   }
 });
 
+test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads', () => {
+  assert.match(
+    SIDEBAR,
+    /href: '\/analyse\?view=category'.*label: 'Deadlock weltweit'/,
+    'Die Admin-Navigation darf nicht von einer separaten /twitch/kategorie-Caddyfreigabe abhängen',
+  );
+  assert.doesNotMatch(
+    SIDEBAR,
+    /href: '\/twitch\/kategorie'.*label: 'Deadlock weltweit'/,
+    'Die Sidebar darf den extern nicht gerouteten Legacy-Pfad nicht mehr verlinken',
+  );
+  assert.match(
+    APP,
+    /const isCategoryRoute =\s*path === '\/twitch\/kategorie' \|\|\s*\(isAnalyticsRoute && new URLSearchParams\(window\.location\.search\)\.get\('view'\) === 'category'\);/,
+    'App.tsx muss die Kategorieansicht unter /analyse?view=category rendern und den Legacy-Pfad intern beibehalten',
+  );
+  assert.match(APP, /\{isCategoryRoute \? \(/);
+});
+
 test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
   for (const page of PAGES) {
     const src = read(page);
@@ -53,13 +72,26 @@ test('keine Seite setzt einen eigenen Gesamtrahmen mehr', () => {
   }
 });
 
-test('die Shell trägt Hintergrund, Gesamtbreite, Sidebar-Spalte und den Main-Slot', () => {
+test('die Shell trägt den Marken-Hintergrund, volle Breite, Sidebar-Spalte und den Main-Slot', () => {
   assert.match(SHELL, /internal-home-vibe/);
-  assert.doesNotMatch(SHELL, /mx-auto/);
-  assert.doesNotMatch(SHELL, /max-w-/);
-  assert.match(SHELL, /lg:grid-cols-\[220px_minmax\(0,1fr\)\]/);
+  assert.doesNotMatch(SHELL, /bg-ui-root|text-ui-text/);
+  assert.doesNotMatch(SHELL, /max-w-\[/);
+  assert.match(SHELL, /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
   assert.match(SHELL, /<DashboardSidebar activeRoute=\{activeRoute\} \/>/);
   assert.match(SHELL, /<main[^>]*>\{children\}<\/main>/);
+});
+
+test('Social Media nutzt dieselbe farbige Shell und Navigation wie Home und Uplink', () => {
+  assert.doesNotMatch(SHELL, /activeRoute\s*===\s*['"]social['"]/);
+  assert.doesNotMatch(SHELL, /studio-shell|social-studio/);
+  assert.doesNotMatch(SIDEBAR, /studio-navigation|studioMenuOpen|studio-shell|studio-brand/);
+  assert.equal((SHELL.match(/<DashboardSidebar /g) ?? []).length, 1);
+});
+
+test('Studio-CSS bleibt im Inhalt und definiert keinen zweiten Dashboard-Rahmen', () => {
+  const studio = read('components/socialmedia/studio.css');
+  assert.doesNotMatch(studio, /\.studio-shell|\.studio-navigation/);
+  assert.match(read('pages/SocialMediaAdmin.tsx'), /className="social-studio space-y-6"/);
 });
 
 test('der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto', () => {
@@ -146,15 +178,10 @@ test('App.tsx traegt keine AuthBadge-Zeile mehr ueber dem Analyse-Kopf', () => {
   assert.doesNotMatch(APP, /AuthBadge/);
 });
 
-test('die Sidebar-Karte richtet ihre Oberkante buendig mit den Inhaltskarten aus', () => {
-  assert.doesNotMatch(
-    SIDEBAR,
-    /lg:top-4/,
-    'Die Sticky-Sidebar darf keinen 16px-Versatz gegen die Inhaltskarten tragen',
-  );
+test('die Sidebar bleibt beim Scrollen mit ruhigem Abstand am Viewport', () => {
   assert.match(
     SIDEBAR,
-    /lg:sticky lg:top-0/,
-    'Die Sticky-Sidebar muss ihre Oberkante per lg:top-0 auf die Inhaltskarten setzen',
+    /lg:sticky lg:top-5/,
+    'Die Sticky-Sidebar soll beim Scrollen 20px Abstand zum Viewport halten',
   );
 });
