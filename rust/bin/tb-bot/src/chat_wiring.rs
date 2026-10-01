@@ -607,34 +607,35 @@ pub struct ChatRuntime {
 
 /// Phase 1: bootet den Bot-Token und baut die ChatApi, wenn `TB_CHAT_ENABLED=1`
 /// und alle Voraussetzungen (Refresh-Token, Helix-Credentials) vorhanden sind.
-/// `None` = Chat bleibt aus (Python bedient weiter).
+/// `Ok(None)` sperrt Chat dauerhaft; vorübergehende Seed-DB-Ausfälle brechen
+/// den Dienststart ab, damit die bestehende systemd-Restart-Regel heilt.
 pub async fn try_build_api(
     helix: Option<HelixClient>,
     pool: PgPool,
     enabled: bool,
     cipher: Option<Arc<FieldCipher>>,
-) -> Option<ChatApiHandle> {
+) -> Result<Option<ChatApiHandle>, tb_chat::db_token_store::BootstrapError> {
     if !enabled {
         tracing::info!("Nativer Chat laut Betriebskonfiguration deaktiviert");
-        return None;
+        return Ok(None);
     }
 
     let Some(helix) = helix else {
         tracing::error!("TB_CHAT_ENABLED=1, aber kein HelixClient — Chat kann nicht starten");
-        return None;
+        return Ok(None);
     };
     let (Ok(client_id), Ok(client_secret)) = (
         std::env::var("TWITCH_CLIENT_ID"),
         std::env::var("TWITCH_CLIENT_SECRET"),
     ) else {
         tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_CLIENT_ID/SECRET fehlen");
-        return None;
+        return Ok(None);
     };
     let cipher = match cipher {
         Some(cipher) => cipher,
         None => {
             tracing::error!("Bot-Zugang: Datenbank-Verschlüsselungsschlüssel fehlt");
-            return None;
+            return Ok(None);
         }
     };
     let store = Arc::new(tb_chat::db_token_store::DatabaseTokenStore::new(
@@ -647,20 +648,23 @@ pub async fn try_build_api(
         .await
     {
         Ok(seeds) => seeds,
+        Err(reason @ tb_chat::db_token_store::BootstrapError::DatabaseUnavailable) => {
+            return Err(reason);
+        }
         Err(reason) => {
-            tracing::error!(reason, "Bot-Zugang aus Datenbank nicht verfügbar");
-            return None;
+            tracing::error!(%reason, "Bot-Zugang aus Datenbank gesperrt");
+            return Ok(None);
         }
     };
     let Some(refresh_token) = seeds.refresh_token else {
         tracing::error!("Bot-Refresh-Token fehlt in der Datenbank");
-        return None;
+        return Ok(None);
     };
     let token_manager = match BotTokenManager::new(client_id, client_secret) {
         Ok(manager) => Arc::new(manager.with_sink(store.clone())),
         Err(_) => {
             tracing::error!("BotTokenManager nicht initialisierbar");
-            return None;
+            return Ok(None);
         }
     };
     let seed_access = seeds.access_token;
@@ -687,19 +691,19 @@ pub async fn try_build_api(
                     ) => continue,
                     Err(error) => {
                         tracing::error!(%error, "Bot-Token-Boot nach Rückschreibung fehlgeschlagen");
-                        return None;
+                        return Ok(None);
                     }
                 }
             }
         } else {
             tracing::error!("Bot-Token-Boot fehlgeschlagen: {e} — nativer Chat bleibt aus");
-            return None;
+            return Ok(None);
         }
     }
     let bot_user_id = token_manager.bot_user_id().await;
     if !store.healthy() || store.bind_identity(&bot_user_id).await.is_err() {
         tracing::error!("Bot-Zugang konnte nicht dauerhaft gespeichert oder dem richtigen Konto zugeordnet werden");
-        return None;
+        return Ok(None);
     }
     let scopes = token_manager.scopes().await;
     tracing::info!(
@@ -726,12 +730,12 @@ pub async fn try_build_api(
         Arc::new(helix),
         Arc::clone(&token_manager),
     ));
-    Some(ChatApiHandle {
+    Ok(Some(ChatApiHandle {
         api,
         bot_user_id,
         token_manager,
         roster: Arc::new(DbPartnerRoster { pool }),
-    })
+    }))
 }
 
 /// Phase 2: baut die komplette Pipeline auf der gebooteten ChatApi.

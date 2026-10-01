@@ -45,11 +45,37 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
     let make =
         |client: &str| DatabaseTokenStore::new(pool.clone(), cipher.clone(), client.to_string());
     let first = make("synthetic-client");
-    assert!(first.seed_and_load(SeedTokens::default()).await.is_err());
+    assert_eq!(
+        first
+            .seed_and_load(SeedTokens::default())
+            .await
+            .unwrap_err(),
+        BootstrapError::MissingOrRevoked
+    );
     let seeds = SeedTokens {
         access_token: Some("synthetic-access".into()),
         refresh_token: Some("synthetic-refresh".into()),
     };
+    // The exact bootstrap write fails transiently before a token manager or
+    // any provider request exists. A fresh service start can retry the seed.
+    sqlx::raw_sql("CREATE FUNCTION token_boot_outage() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic outage' USING ERRCODE='40001'; END $$; CREATE TRIGGER token_boot_outage BEFORE INSERT ON twitch_bot_tokens FOR EACH ROW EXECUTE FUNCTION token_boot_outage();")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        first.seed_and_load(seeds.clone()).await.unwrap_err(),
+        BootstrapError::DatabaseUnavailable
+    );
+    assert!(!first.healthy());
+    let seed_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_bot_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(seed_rows, 0);
+    sqlx::raw_sql(
+        "DROP TRIGGER token_boot_outage ON twitch_bot_tokens; DROP FUNCTION token_boot_outage();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     assert_eq!(first.seed_and_load(seeds.clone()).await.unwrap(), seeds);
     first.bind_identity("123").await.unwrap();
     assert!(first.bind_identity("456").await.is_err());
@@ -95,7 +121,13 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
         Arc::new(FieldCipher::from_hex_key(&"22".repeat(32), "v1").unwrap()),
         "synthetic-client".into(),
     );
-    assert!(wrong.seed_and_load(SeedTokens::default()).await.is_err());
+    assert_eq!(
+        wrong
+            .seed_and_load(SeedTokens::default())
+            .await
+            .unwrap_err(),
+        BootstrapError::Decryption
+    );
     sqlx::query("UPDATE twitch_bot_tokens SET revoked_at=now()")
         .execute(&pool)
         .await
@@ -110,10 +142,32 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
         .await
         .is_err());
     pool.close().await;
-    assert!(first.seed_and_load(SeedTokens::default()).await.is_err());
+    assert_eq!(
+        first
+            .seed_and_load(SeedTokens::default())
+            .await
+            .unwrap_err(),
+        BootstrapError::DatabaseUnavailable
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
         .execute(&admin)
         .await
         .unwrap();
     admin.close().await;
+}
+
+#[test]
+fn transient_database_classes_are_retryable_but_contract_errors_are_permanent() {
+    for code in [
+        "08006", "40001", "40P01", "57P01", "53300", "55P03", "57014",
+    ] {
+        assert!(retryable_database_code(code), "{code}");
+    }
+    for code in ["42501", "42P01", "23505", "22023"] {
+        assert!(!retryable_database_code(code), "{code}");
+    }
+    assert_eq!(
+        bootstrap_database_error(sqlx::Error::PoolClosed),
+        BootstrapError::DatabaseUnavailable
+    );
 }

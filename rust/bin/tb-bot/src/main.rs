@@ -612,7 +612,7 @@ async fn main() {
         config.bot.chat_enabled,
         runtime_cipher.as_ref().ok().cloned(),
     )
-    .await;
+    .await?;
     let smalltalk_loop = smalltalk_loop_wiring::start(
         &supervisor,
         pool.clone(),

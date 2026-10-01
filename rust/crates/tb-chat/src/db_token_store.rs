@@ -9,6 +9,53 @@ use std::sync::{
 use tb_crypto::FieldCipher;
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapError {
+    DatabaseUnavailable,
+    StorageConfiguration,
+    Encryption,
+    MissingOrRevoked,
+    Decryption,
+}
+impl std::fmt::Display for BootstrapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DatabaseUnavailable => "Bot-Token-Datenbank vorübergehend nicht verfügbar",
+            Self::StorageConfiguration => "Bot-Token-Datenbankvertrag ungültig",
+            Self::Encryption => "Bot-Token-Verschlüsselung fehlgeschlagen",
+            Self::MissingOrRevoked => "Bot-Zugang fehlt oder wurde widerrufen",
+            Self::Decryption => "Bot-Zugang nicht entschlüsselbar",
+        })
+    }
+}
+impl std::error::Error for BootstrapError {}
+fn bootstrap_database_error(error: sqlx::Error) -> BootstrapError {
+    let transient = match error {
+        sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::WorkerCrashed => true,
+        sqlx::Error::Database(error) => error
+            .code()
+            .is_some_and(|code| retryable_database_code(&code)),
+        _ => false,
+    };
+    if transient {
+        BootstrapError::DatabaseUnavailable
+    } else {
+        BootstrapError::StorageConfiguration
+    }
+}
+fn retryable_database_code(code: &str) -> bool {
+    code.starts_with("08")
+        || code.starts_with("40")
+        || matches!(
+            code,
+            "57P01" | "57P02" | "57P03" | "53300" | "55P03" | "57014"
+        )
+}
+
 pub struct DatabaseTokenStore {
     pool: PgPool,
     cipher: Arc<FieldCipher>,
@@ -39,34 +86,34 @@ impl DatabaseTokenStore {
 
     /// Nur beim ersten Cutover einen Infisical-Seed übernehmen. Ein bestehender
     /// Datensatz, insbesondere ein widerrufener, gewinnt immer vor dem Alt-Seed.
-    pub async fn seed_and_load(&self, seed: SeedTokens) -> Result<SeedTokens, &'static str> {
+    pub async fn seed_and_load(&self, seed: SeedTokens) -> Result<SeedTokens, BootstrapError> {
         if let Some(refresh) = seed.refresh_token.as_deref().filter(|v| !v.is_empty()) {
             let refresh_enc = self
                 .cipher
                 .encrypt_field(refresh, &self.aad("refresh_token"))
-                .map_err(|_| "Bot-Token-Verschlüsselung fehlgeschlagen")?;
+                .map_err(|_| BootstrapError::Encryption)?;
             let access_enc = seed
                 .access_token
                 .as_deref()
                 .map(|v| self.cipher.encrypt_field(v, &self.aad("access_token")))
                 .transpose()
-                .map_err(|_| "Bot-Token-Verschlüsselung fehlgeschlagen")?;
+                .map_err(|_| BootstrapError::Encryption)?;
             sqlx::query("INSERT INTO twitch_bot_tokens(service_name,oauth_client_id,access_token_enc,refresh_token_enc) VALUES('twitch-chat',$1,$2,$3) ON CONFLICT(service_name) DO NOTHING")
-                .bind(&self.client_id).bind(access_enc).bind(refresh_enc).execute(&self.pool).await.map_err(|_|"Bot-Token-Datenbank nicht verfügbar")?;
+                .bind(&self.client_id).bind(access_enc).bind(refresh_enc).execute(&self.pool).await.map_err(bootstrap_database_error)?;
         }
         let row=sqlx::query("SELECT access_token_enc,refresh_token_enc,revision,twitch_user_id FROM twitch_bot_tokens WHERE service_name='twitch-chat' AND oauth_client_id=$1 AND revoked_at IS NULL")
-            .bind(&self.client_id).fetch_optional(&self.pool).await.map_err(|_|"Bot-Token-Datenbank nicht verfügbar")?.ok_or("Bot-Zugang fehlt oder wurde widerrufen")?;
+            .bind(&self.client_id).fetch_optional(&self.pool).await.map_err(bootstrap_database_error)?.ok_or(BootstrapError::MissingOrRevoked)?;
         let access: Option<Vec<u8>> = row.get("access_token_enc");
         let refresh: Vec<u8> = row.get("refresh_token_enc");
         let result = SeedTokens {
             access_token: access
                 .map(|v| self.cipher.decrypt_field(&v, &self.aad("access_token")))
                 .transpose()
-                .map_err(|_| "Bot-Zugang nicht entschlüsselbar")?,
+                .map_err(|_| BootstrapError::Decryption)?,
             refresh_token: Some(
                 self.cipher
                     .decrypt_field(&refresh, &self.aad("refresh_token"))
-                    .map_err(|_| "Bot-Zugang nicht entschlüsselbar")?,
+                    .map_err(|_| BootstrapError::Decryption)?,
             ),
         };
         *self.revision.lock().await = row.get("revision");
