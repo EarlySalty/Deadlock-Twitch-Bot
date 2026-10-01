@@ -127,7 +127,7 @@ export function Header({
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
         {/* Logo & Title */}
         <div className="flex items-start gap-4">
-          <div className="p-3 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/25 border border-primary/25 shadow-lg shadow-primary/10">
+          <div className="gold-header-icon p-3 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/25 border border-primary/25 shadow-lg shadow-primary/10">
             <Activity className="w-6 h-6 text-primary" />
           </div>
           <div>
@@ -156,13 +156,13 @@ export function Header({
                   type="button"
                   onClick={() => setView(option.value)}
                   className={`relative px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
-                    view === option.value ? 'text-[#0D0806]' : 'text-text-secondary hover:text-white'
+                    view === option.value ? 'gold-ink text-[#0D0806]' : 'text-text-secondary hover:text-white'
                   }`}
                 >
                   {view === option.value && (
                     <motion.span
                       layoutId="headerViewIndicator"
-                      className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                      className="gold-surface absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
                       initial={false}
                       transition={SEGMENT_SPRING}
                     />
@@ -298,14 +298,14 @@ export function Header({
                 }}
                 className={`relative px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
                   !customRangeSelected && days === range.value
-                    ? 'text-[#0D0806]'
+                    ? 'gold-ink text-[#0D0806]'
                     : 'text-text-secondary hover:text-white'
                 }`}
               >
                 {!customRangeSelected && days === range.value && (
                   <motion.span
                     layoutId="headerRangeIndicator"
-                    className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                    className="gold-surface absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
                     initial={false}
                     transition={SEGMENT_SPRING}
                   />
@@ -317,7 +317,7 @@ export function Header({
               {customRangeSelected && (
                 <motion.span
                   layoutId="headerRangeIndicator"
-                  className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
+                  className="gold-surface absolute inset-0 rounded-lg bg-gradient-to-r from-primary to-accent shadow-lg shadow-primary/20"
                   initial={false}
                   transition={SEGMENT_SPRING}
                 />
@@ -341,11 +341,11 @@ export function Header({
                   }
                 }}
                 onBlur={uebernehmeTage}
-                className="relative z-10 w-[4.5rem] appearance-none rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold text-white placeholder:text-text-secondary/70 outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                className={`${customRangeSelected ? 'gold-ink' : ''} relative z-10 w-[4.5rem] appearance-none rounded-lg bg-transparent py-1.5 text-center text-sm font-semibold text-white placeholder:text-text-secondary/70 outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
               />
               <span
                 className={`relative z-10 pr-2 text-sm font-semibold ${
-                  customRangeSelected ? 'text-[#0D0806]' : 'text-text-secondary'
+                  customRangeSelected ? 'gold-ink text-[#0D0806]' : 'text-text-secondary'
                 }`}
               >
                 {t('Tage')}
@@ -369,7 +369,7 @@ export function Header({
                 onClick={() => setLanguage(option)}
                 className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
                   language === option
-                    ? 'bg-gradient-to-r from-primary to-accent text-[#0D0806]'
+                    ? 'gold-surface bg-gradient-to-r from-primary to-accent text-[#0D0806]'
                     : 'text-text-secondary hover:text-white'
                 }`}
               >

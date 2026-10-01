@@ -95,13 +95,13 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
               disabled={!accessible}
               aria-disabled={!accessible}
               className={`relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap ${
-                isActive ? 'text-white' : 'text-text-secondary hover:text-white'
+                isActive ? 'text-white gold-ink' : 'text-text-secondary hover:text-white'
               } ${locked ? 'opacity-50' : ''} ${!accessible ? 'cursor-not-allowed hover:text-text-secondary' : ''}`}
             >
               {isActive && (
                 <motion.div
                   layoutId="activeTab"
-                  className="absolute inset-0 rounded-xl bg-gradient-to-r from-primary/80 via-primary/75 to-accent/80"
+                  className="gold-surface absolute inset-0 rounded-xl bg-gradient-to-r from-primary/80 via-primary/75 to-accent/80"
                   style={{
                     boxShadow:
                       'inset 0 0 0 1px rgba(255,255,255,0.08), 0 8px 22px -8px rgba(197, 160, 89, 0.45), 0 4px 12px rgba(0,0,0,0.28)',

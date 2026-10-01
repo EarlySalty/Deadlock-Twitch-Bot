@@ -58,7 +58,7 @@ export default defineConfig(({ mode }) => {
       host: 'localhost',
       ...(isPreviewMode ? { port: 4175 } : {}),
       strictPort: true,
-      allowedHosts: ['localhost', '.localhost'],
+      allowedHosts: ['localhost', '.localhost', 'v50671-kde'],
     },
   }
 })

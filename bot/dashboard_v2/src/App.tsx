@@ -268,7 +268,7 @@ function AnalyticsDashboard() {
   };
 
   return (
-    <DashboardShell activeRoute="analyse" demoMode={isDemoMode}>
+    <DashboardShell activeRoute="analyse" demoMode={isDemoMode && !isPreviewModeEnabled()}>
         <PlanProvider
           plan={authStatus?.plan ?? null}
           isAdmin={authStatus?.isAdmin ?? false}
@@ -414,12 +414,13 @@ export default function App() {
     (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
-    !isPreviewModeEnabled() &&
-    !hasDemoRuntimeConfig() &&
-    !resolveEffectiveDemoMode({
-      pathname: window.location.pathname,
-      runtimeConfig: dashboardRuntimeConfig,
-    });
+    isPreviewModeEnabled() || (
+      !hasDemoRuntimeConfig() &&
+      !resolveEffectiveDemoMode({
+        pathname: window.location.pathname,
+        runtimeConfig: dashboardRuntimeConfig,
+      })
+    );
 
   return (
     <QueryClientProvider client={queryClient}>

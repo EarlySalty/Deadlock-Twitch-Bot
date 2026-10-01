@@ -478,6 +478,9 @@ function mapChangelogEntry(
 }
 
 export async function fetchInternalHome(streamer?: string | null): Promise<InternalHomeData> {
+  if (isPreviewLocalhost()) {
+    return fetchApi<InternalHomeData>('/internal-home', { ...(streamer ? { streamer } : {}) });
+  }
   const raw = await fetchApi<InternalHomeRawResponse>('/internal-home', {
     ...(streamer ? { streamer } : {}),
   });

@@ -141,11 +141,11 @@ test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
   );
 });
 
-test('App.tsx reicht die Demo-Entscheidung an die Shell durch', () => {
+test('App.tsx blendet die Sidebar im öffentlichen Demo aus und zeigt sie in der lokalen Vorschau', () => {
   assert.match(
     APP,
-    /demoMode=\{isDemoMode\}/,
-    'App.tsx muss den Demo-Zustand an DashboardShell durchreichen',
+    /demoMode=\{isDemoMode && !isPreviewModeEnabled\(\)\}/,
+    'Die lokale Vorschau muss die aktive Sidebar sichtbar machen',
   );
 });
 

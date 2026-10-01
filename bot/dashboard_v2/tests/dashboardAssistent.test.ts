@@ -45,8 +45,8 @@ test('App.tsx bindet den Assistenten innerhalb des LanguageProvider ein', () => 
   assert.ok(widget > auf && widget < zu, 'DashboardAssistent liegt nicht im LanguageProvider');
 });
 
-test('App.tsx rendert den Assistenten nur außerhalb von Demo und Preview', () => {
-  assert.match(APP, /!isPreviewModeEnabled\(\)/);
+test('App.tsx zeigt den Assistenten in der lokalen Vorschau und blendet ihn im öffentlichen Demo aus', () => {
+  assert.match(APP, /isPreviewModeEnabled\(\) \|\| \(/);
   assert.match(APP, /!hasDemoRuntimeConfig\(\)/);
   assert.match(APP, /!resolveEffectiveDemoMode\(/);
   assert.match(APP, /zeigeAssistent && <DashboardAssistent imDokumentfluss=\{isUplinkRoute\} \/>/);

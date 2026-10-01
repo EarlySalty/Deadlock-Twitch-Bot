@@ -6,19 +6,23 @@ import type {
 import type { AuthStatus } from '@/api/auth';
 import type { AdManagerResponse } from '@/api/adManager';
 import type { CatalogPlan } from '@/types/billing';
+import { getGoldDemoFixture } from './goldDemo';
 
 const NOW_ISO = '2026-04-22T09:30:00Z';
 
 const AUTH_STATUS_FIXTURE: AuthStatus = {
   authenticated: true,
-  level: 'localhost',
+  level: 'partner',
   demoMode: true,
-  isAdmin: true,
-  isLocalhost: true,
-  adminEligible: true,
-  adminMode: true,
+  isAdmin: false,
+  isLocalhost: false,
+  adminEligible: false,
+  adminMode: false,
   canViewAllStreamers: true,
   twitchLogin: 'midcore_live',
+  twitchUserId: 'demo-1',
+  partnerStatus: 'active',
+  canAccessAnalyticsDashboard: true,
   displayName: 'Local Preview Creator',
   csrfToken: 'preview-csrf-token',
   csrf_token: 'preview-csrf-token',
@@ -195,7 +199,7 @@ const INTERNAL_HOME_FIXTURE: InternalHomeData = {
     },
   ],
   changelog: {
-    canWrite: true,
+    canWrite: false,
     maxEntries: 10,
     entries: [
       {
@@ -208,6 +212,18 @@ const INTERNAL_HOME_FIXTURE: InternalHomeData = {
     ],
   },
   generatedAt: NOW_ISO,
+  healthScore: { overall: 78, trend: 5.1, sub_scores: { growth: 72, retention: 74, engagement: 85, community: 80 } },
+  lastStreamSummary: {
+    started_at: '2026-09-30T18:00:00Z', ended_at: '2026-09-30T21:10:00Z',
+    duration_seconds: 11400, avg_viewers: 142, peak_viewers: 221, follower_delta: 34, chat_messages: 1842,
+  },
+  weekComparison: {
+    current_week: { avg_viewers: 126, total_followers: 68, chat_activity: 1842, stream_hours: 12 },
+    previous_week: { avg_viewers: 112, total_followers: 54, chat_activity: 1634, stream_hours: 11 },
+    changes: { avg_viewers_pct: 12.5, followers_pct: 25.9, chat_activity_pct: 12.7, stream_hours_pct: 9.1 },
+    daily_series: { avg_viewers: [108, 116, 121, 118, 135, 142, 126], followers: [4, 8, 11, 7, 12, 18, 8], chat_activity: [180, 230, 245, 220, 290, 362, 315], stream_hours: [1, 2, 2, 1, 2, 3, 1] },
+  },
+  liveStatus: { is_live: false, viewer_count: 0, started_at: null, last_seen_at: '2026-09-30T21:10:00Z', title: null, game: 'Deadlock' },
 };
 
 const ROADMAP_FIXTURE = {
@@ -355,6 +371,8 @@ export function getPreviewApiFixture(
   endpoint: string,
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
+  const goldDemo = getGoldDemoFixture(endpoint, _params);
+  if (goldDemo !== undefined) return goldDemo;
   if (endpoint === '/auth-status') return AUTH_STATUS_FIXTURE;
   if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
   if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;

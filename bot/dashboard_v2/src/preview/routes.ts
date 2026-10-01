@@ -1,5 +1,4 @@
 const PREVIEW_MODE = import.meta.env?.MODE === 'preview';
-const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1']);
 
 export const PREVIEW_ANALYTICS_ROUTE = PREVIEW_MODE ? '/' : '/analyse';
 export const PREVIEW_HOME_ROUTE = PREVIEW_MODE ? '/dashboard' : '/twitch/dashboard';
@@ -21,11 +20,20 @@ export function analyticsTabHref(tab: string = 'overview'): string {
     search.set('tab', tab);
   }
   const query = search.toString();
-  return query ? `${PREVIEW_ANALYTICS_ROUTE}?${query}` : PREVIEW_ANALYTICS_ROUTE;
+  return withPreviewVariant(query ? `${PREVIEW_ANALYTICS_ROUTE}?${query}` : PREVIEW_ANALYTICS_ROUTE);
 }
 
 export function isPreviewLocalhost(): boolean {
-  return PREVIEW_MODE && LOCALHOST_HOSTNAMES.has(window.location.hostname);
+  return PREVIEW_MODE;
+}
+
+export function withPreviewVariant(href: string): string {
+  if (!PREVIEW_MODE) return href;
+  const variant = new URLSearchParams(window.location.search).get('gold');
+  if (!variant) return href;
+  const url = new URL(href, window.location.origin);
+  url.searchParams.set('gold', variant);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 export function getPlanCheckoutHref(planId?: string | null, isFreePlan = false, cycle: 1 | 12 = 1): string {

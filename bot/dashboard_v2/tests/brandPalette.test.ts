@@ -53,6 +53,12 @@ const ALLOWED_HEX = new Set([
   '#ffffff', '#000000',
 ]);
 
+const PREVIEW_GOLD_HEX = new Set([
+  '#ac8750', '#c4a373', '#e5d1ac', '#f6ebd4', '#d8bd87', '#b78f53', '#d1b27c', '#e2c797',
+  '#aa8e66', '#d2b996', '#e6d6be', '#f4ead8', '#e0caae', '#b7986e', '#dbc5a3', '#e8d7ba',
+  '#a18354', '#b79b71', '#c9b38e', '#e4d1ae', '#c8ad7b', '#a78955', '#c2a575', '#cbb18b', '#1a130c',
+]);
+
 /* Tailwind-Standardpaletten. Sie tragen keine Hex-Werte im Code und rutschen
    deshalb an jeder Hex-Pruefung vorbei — hier separat abgefangen. */
 const TAILWIND_PALETTES =
@@ -78,7 +84,8 @@ test('kein Hex-Wert ausserhalb der Industrial-Gold-Palette', () => {
       // OBS-Presets und Szenenvorschau dürfen frei gewählte Farben nutzen. Die Dashboard-Shell bleibt an die Marke gebunden.
       const overlayPresets = file.endsWith('/components/verwaltung/OverlayBuilderSection.tsx') ? new Set(['#101114','#d6b56c','#0d0f14','#f4f7fb','#765321','#a78bfa','#f5f3ef','#161020','#17191f','#67d8f3','#101922','#f3faff','#bca1ff','#181322','#f8f3ff','#090a0d','#d8dce1']) : new Set<string>();
       for (const hex of src.match(/#[0-9a-fA-F]{6}\b/g) ?? []) {
-        if (!ALLOWED_HEX.has(hex.toLowerCase()) && !overlayPresets.has(hex.toLowerCase())) strays.push(`${file}: ${hex}`);
+        const previewGold = file.endsWith('/preview/gold.css') && PREVIEW_GOLD_HEX.has(hex.toLowerCase());
+        if (!ALLOWED_HEX.has(hex.toLowerCase()) && !overlayPresets.has(hex.toLowerCase()) && !previewGold) strays.push(`${file}: ${hex}`);
       }
     }
   }

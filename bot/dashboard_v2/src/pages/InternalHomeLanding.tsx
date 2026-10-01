@@ -736,7 +736,7 @@ export function InternalHomeLanding() {
                 {canAccessAnalyticsDashboard ? (
                   <a
                     href={analyticsTabHref('overview')}
-                    className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold no-underline shadow-lg shadow-primary/20 transition-[transform,translate,scale] hover:-translate-y-0.5"
+                    className="gold-surface gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold no-underline shadow-lg shadow-primary/20 transition-[transform,translate,scale] hover:-translate-y-0.5"
                   >
                     {t('Zur Analyse')}
                     <ArrowRight className="h-4 w-4" />

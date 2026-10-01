@@ -95,6 +95,7 @@ export function isDemoDashboardPath(pathname: string): boolean {
   if (isPreviewModeEnabled()) {
     return (
       normalized === PREVIEW_ANALYTICS_ROUTE ||
+      normalized === '/analyse' ||
       normalized === PREVIEW_HOME_ROUTE ||
       normalized === PREVIEW_VERWALTUNG_ROUTE ||
       normalized === PREVIEW_PRICING_ROUTE

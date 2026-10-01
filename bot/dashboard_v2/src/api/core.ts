@@ -127,6 +127,9 @@ export async function fetchJson<T>(
   init: RequestInit = {},
   options: FetchJsonOptions = {}
 ): Promise<T> {
+  if (isPreviewModeEnabled() && (init.method ?? 'GET').toUpperCase() !== 'GET') {
+    throw new ApiHttpError('Diese Vorschau zeigt nur Demo-Daten. Änderungen werden nicht gespeichert.', 405);
+  }
   // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
   // haetten im Preview sonst keinen Gegenueber. Nur auf dem lokalen
   // Preview-Host, im Betrieb ist dieser Zweig tot.
@@ -135,10 +138,14 @@ export async function fetchJson<T>(
   // nirgends gibt.
   if (isPreviewLocalhost() && (init.method ?? 'GET').toUpperCase() === 'GET') {
     const pfad = typeof input === 'string' ? input : input.toString();
-    const fixture = getPreviewPathFixture(pfad.split('?')[0]);
+    const fixture = getPreviewPathFixture(new URL(pfad, window.location.origin).pathname);
     if (fixture !== undefined) {
       return structuredClone(fixture) as T;
     }
+  }
+
+  if (isPreviewModeEnabled()) {
+    throw new ApiHttpError('Für diese Ansicht sind keine Demo-Daten hinterlegt.', 404);
   }
 
   const response = await fetch(input, init);
