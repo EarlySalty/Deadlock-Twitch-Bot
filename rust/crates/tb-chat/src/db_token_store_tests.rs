@@ -59,11 +59,13 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
         .is_err());
     let stale = make("synthetic-client");
     stale.seed_and_load(SeedTokens::default()).await.unwrap();
+    assert!(first.prepare_refresh().await.is_ok());
     first
         .persist("synthetic-access-2", Some("synthetic-refresh-2"))
         .await
         .unwrap();
     assert!(stale.persist("synthetic-stale", None).await.is_err());
+    assert!(stale.prepare_refresh().await.is_err());
     let current = first.seed_and_load(seeds).await.unwrap();
     assert_eq!(
         current.refresh_token.as_deref(),
@@ -90,6 +92,7 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
         .await
         .unwrap();
     assert!(first.persist("synthetic-new", None).await.is_err());
+    assert!(first.prepare_refresh().await.is_err());
     assert!(first
         .seed_and_load(SeedTokens {
             access_token: None,
