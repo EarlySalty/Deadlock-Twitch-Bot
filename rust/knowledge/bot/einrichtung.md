@@ -3,13 +3,13 @@ title: Einrichtung
 namespace: bot
 category: setup
 audience: streamer
-last_updated: 2026-06-21
+last_updated: 2026-10-02
 source: manual
 tip_eligible: true
 tip_flags: [feature]
 time_to_value: 1
-tip_text: Schon gewusst? Im Dashboard ist alles in einer Minute eingerichtet — kein Formular, kein extra Konto.
+tip_text: Verbinde deinen Twitch-Kanal und prüfe im Dashboard die Verbindung und deine Einstellungen.
 ---
-Einfach mit dem Twitch-Konto verbinden und im Dashboard speichern — fertig. Nichts manuell einzustellen, kein extra Konto, kein Formular.
+Für die Einrichtung verbindest du dein Twitch-Konto über die Partner-Anmeldung. Prüfe danach im Dashboard die Verbindung und deine Einstellungen. Wenn du dort etwas manuell einstellen möchtest, übernimm die Änderung mit dem zugehörigen Speichern-Knopf. Twitch zeigt dir die angeforderten Rechte. Für Chat-Moderation benötigt der Bot die Moderator-Rolle im Kanal.
 
-Der Bot ist kein klassischer Befehls-/Mod-Bot wie Nightbot oder StreamElements, bei denen man Befehle und Filterlisten von Hand einrichtet. Hier läuft alles automatisch.
+Auto-Raids und die Erfassung deiner Stream-Daten laufen bei erfüllten Voraussetzungen automatisch. Kanalschalter und optionale Verbindungen stellst du im Dashboard ein. Für Uplink verbindest du die gewünschten Plattformen und richtest OBS nach der Uplink-Hilfe ein.

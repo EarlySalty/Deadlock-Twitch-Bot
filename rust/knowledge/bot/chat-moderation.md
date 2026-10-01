@@ -3,13 +3,13 @@ title: Chat-Moderation
 namespace: bot
 category: feature
 audience: streamer
-last_updated: 2026-06-21
+last_updated: 2026-10-02
 source: manual
 tip_eligible: true
 tip_flags: [feature]
 time_to_value: 2
-tip_text: Der Bot räumt die nervigen "kauf dir Viewer"-Werbebots automatisch aus deinem Chat — normale Chatter bleiben unangetastet.
+tip_text: Der Bot prüft deinen Chat auf Werbe- und Scam-Nachrichten. Mit !unban können Mods den letzten gespeicherten Auto-Ban zurücknehmen.
 ---
-Der Bot räumt automatisch die nervigen Werbe-Bots aus dem Chat, die einem „mehr Viewer oder Follower kaufen" verkaufen wollen. Er bannt nicht pauschal alles, lässt normale Chatter und Links in Ruhe, und ein versehentlicher Bann ist praktisch ausgeschlossen.
+Der Bot prüft Nachrichten auf Viewer- und Follower-Werbung sowie Scam-Muster. Dabei nutzt er Regeln, gelernte Phrasen und bei Bedarf eine KI-Bewertung. Die Moderation kann Nachrichten löschen oder Konten sperren. Dafür braucht der Bot die erforderlichen Twitch-Rechte und die Moderator-Rolle.
 
-Die Moderation läuft, sobald der Kanal verbunden ist — unabhängig vom gespielten Spiel.
+Fehlentscheidungen sind möglich. Broadcaster und Mods können den letzten gespeicherten Auto-Ban mit `!unban` oder `!uban` zurücknehmen. `!explain` erklärt einen vorhandenen Scam-Befund. Die Moderation ist unabhängig von der Spielkategorie.

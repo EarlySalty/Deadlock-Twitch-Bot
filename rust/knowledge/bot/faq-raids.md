@@ -3,18 +3,18 @@ title: Auto-Raid-Netzwerk
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-06-22
+last_updated: 2026-10-02
 source: manual
 tip_eligible: false
 ---
-Wie das automatische Raid-System funktioniert und warum es dein wichtigstes Wachstums-Tool ist.
+Wie die automatische Raid-Auswahl funktioniert.
 
 ### Was ist der Auto-Raid?
 
-Der Auto-Raid ist ein Kern-Feature von Deutsche Deadlock Community: Wenn dein Stream endet, leitet der Bot deine Zuschauer automatisch an einen passenden Live-Partner im Deadlock-Netzwerk weiter. Das passiert ohne dein Zutun — der Raid ist immer aktiv.
+Beim Ende eines Deadlock-Streams prüft der Bot, ob er deine Zuschauer an einen passenden Live-Partner weiterleiten kann. Die Einstellung, gültige Twitch-Rechte und ein geeignetes Live-Ziel müssen passen.
 
-- Du musst den Auto-Raid nicht aktivieren oder konfigurieren — er läuft automatisch.
-- Der Bot wählt intelligent den besten Raid-Partner basierend auf mehreren Kriterien.
+- Die automatische Auswahl läuft bei erfüllten Voraussetzungen. Im Dashboard kannst du den Auto-Raid abschalten.
+- Der Bot berücksichtigt mehrere Kriterien bei der Auswahl des Raid-Ziels.
 - So bleiben deine Zuschauer im Deadlock-Ökosystem und du hilfst gleichzeitig anderen Streamern.
 
 [Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
@@ -43,10 +43,10 @@ Ja. Nach dem Verbinden siehst du im Dashboard, wie dein Kanal im Netzwerk läuft
 
 ### Profitiere ich auch von Raids anderer?
 
-Ja, das Netzwerk arbeitet in beide Richtungen! Wenn andere Streamer offline gehen, können deren Zuschauer automatisch zu dir weitergeleitet werden, solange du live bist.
+Das Netzwerk arbeitet in beide Richtungen. Wenn andere Streamer offline gehen, können deren Zuschauer automatisch zu dir weitergeleitet werden, solange du live bist.
 
-- Je aktiver du im Netzwerk bist, desto mehr profitierst du von eingehenden Raids.
-- Eingehende Raids und deine Entwicklung im Netzwerk findest du später gesammelt im Dashboard.
-- Das System sorgt dafür, dass alle Partner fair berücksichtigt werden.
+- Netzwerk-Aktivität fließt in die Raid-Auswahl ein.
+- Eingehende Raids und erfasste Netzwerk-Daten findest du im Dashboard.
+- Die Auswahl berücksichtigt die Voraussetzungen und den Raid-Score; ein bestimmter Raid oder Zuschauerzuwachs ist nicht garantiert.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
