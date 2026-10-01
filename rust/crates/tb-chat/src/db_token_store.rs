@@ -107,6 +107,14 @@ mod tests;
 
 #[async_trait::async_trait]
 impl SecretSink for DatabaseTokenStore {
+    async fn prepare_refresh(&self) -> Result<(), ()> {
+        let revision = self.revision.lock().await;
+        let result = sqlx::query("UPDATE twitch_bot_tokens SET updated_at=updated_at WHERE service_name='twitch-chat' AND oauth_client_id=$1 AND revision=$2 AND revoked_at IS NULL")
+            .bind(&self.client_id).bind(*revision).execute(&self.pool).await;
+        let healthy = result.is_ok_and(|result| result.rows_affected() == 1);
+        self.healthy.store(healthy, Ordering::Release);
+        healthy.then_some(()).ok_or(())
+    }
     async fn persist_checked(
         &self,
         access_token: &str,

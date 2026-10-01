@@ -455,6 +455,11 @@ impl BotTokenManager {
     }
 
     async fn refresh_with(&self, refresh_token: &str) -> Result<(), TokenError> {
+        if let Some(sink) = &self.sink {
+            sink.prepare_refresh()
+                .await
+                .map_err(|_| TokenError::PersistenceFailed)?;
+        }
         let refresh_token = strip_oauth_prefix(refresh_token);
         let refresh_token = refresh_token.as_str();
         let resp = self
