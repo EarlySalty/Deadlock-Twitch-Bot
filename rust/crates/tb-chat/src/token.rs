@@ -625,6 +625,50 @@ mod tests {
     type PersistedTokenCall = (String, Option<String>);
 
     #[tokio::test]
+    async fn detected_database_revocation_blocks_subsequent_cached_access() {
+        struct RevokedSink(std::sync::atomic::AtomicBool);
+        #[async_trait::async_trait]
+        impl SecretSink for RevokedSink {
+            fn terminal_failure(&self) -> bool {
+                self.0.load(std::sync::atomic::Ordering::Acquire)
+            }
+            async fn prepare_refresh(&self) -> Result<(), ()> {
+                if self.terminal_failure() {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            }
+            async fn persist_bot_tokens(&self, _: &str, _: Option<&str>) {}
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(validate_ok(14000))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let sink = Arc::new(RevokedSink(std::sync::atomic::AtomicBool::new(false)));
+        let manager = manager(&server).await.with_sink(sink.clone());
+        manager
+            .initialize(Some("synthetic-cached"), "synthetic-refresh")
+            .await
+            .unwrap();
+        assert_eq!(manager.access_token().await.unwrap(), "synthetic-cached");
+        sink.0.store(true, std::sync::atomic::Ordering::Release);
+        assert!(matches!(
+            manager.force_refresh().await,
+            Err(TokenError::CredentialRejected)
+        ));
+        assert!(matches!(
+            manager.access_token().await,
+            Err(TokenError::CredentialRejected)
+        ));
+        assert!(manager.get_valid_token(false).await.is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn persisted_pending_access_expiry_rotates_saved_refresh() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
