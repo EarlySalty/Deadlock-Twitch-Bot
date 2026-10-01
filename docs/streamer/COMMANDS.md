@@ -19,6 +19,7 @@ Stand Twitch-Chat: `2026-09-09`
 | `!raid` | `!traid` | Broadcaster oder Mod | sofortigen manuellen Raid starten | Stream muss live und raid-faehig sein |
 | `!uban` | `!unban` | Broadcaster oder Mod | letzten Auto-Ban rueckgaengig machen | nutzt letzten gespeicherten Auto-Ban |
 | `!clip` | `!createclip` | jeder im Kanal | Clip aus dem aktuellen Streambuffer erstellen | braucht gueltige Auth bzw. Fallback-Token |
+| `!clipcontest` | keine | Broadcaster oder Mod | Clip aus dem eigenen Kanal fuer den Wochen-Contest im Discord einreichen | aktiver Partner, max. 3 je Tag, ohne Link der neueste Clip des laufenden Streams |
 | `!ping` | `!health`, `!status`, `!bot` | jeder im Kanal | Liveness-/Statusantwort | allgemeiner Bot-Check |
 | `!silentban` | keine | Broadcaster oder Mod | Chat-Hinweis fuer Auto-Bans toggeln | Bans laufen weiter, nur die Chat-Nachricht wird abgeschaltet |
 | `!silentraid` | keine | Broadcaster oder Mod | Chat-Hinweis fuer Raids toggeln | Raids laufen weiter, nur die Chat-Nachricht wird abgeschaltet |
@@ -42,6 +43,13 @@ Der manuelle Raid liefert je nach Zustand unterschiedliche Rueckmeldungen:
 - Nutzt bevorzugt das Broadcaster-Token.
 - Faellt notfalls auf ein Bot-Token zurueck.
 - Wenn die Twitch-Verbindung fehlt, bittet der Bot darum, sie erneut herzustellen.
+
+### `!clipcontest`
+
+- `!clipcontest <Clip-Link>` reicht einen Clip aus dem eigenen Kanal fuer den woechentlichen Clip-Contest im Discord ein; die Community stimmt dort ab.
+- Erlaubt sind nur `clips.twitch.tv/<id>` und `twitch.tv/<kanal>/clip/<id>`; der Clip muss zu diesem Kanal gehoeren.
+- Ohne Link nimmt der Bot den neuesten Clip des laufenden Streams (z. B. aus `!clip`).
+- Hoechstens 3 Einreichungen je Kanal und Tag. Gleicher Weg im Social-Studio: Knopf "Für Clip-Contest einreichen".
 
 ### `!lurkersteuer_off`
 

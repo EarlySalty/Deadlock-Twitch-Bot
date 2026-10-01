@@ -3,7 +3,7 @@ title: Twitch-Chat-Befehle
 namespace: bot
 category: faq
 audience: streamer
-last_updated: 2026-09-18
+last_updated: 2026-10-01
 source: rust/crates/tb-chat/src/catalog.rs
 tip_eligible: false
 ---
@@ -56,6 +56,7 @@ API-Ränge werden als Stand des letzten erfassten Ranked-Matches gekennzeichnet.
 - `!silentban` schaltet Chat-Hinweise zu Auto-Bans um. `!silentraid` schaltet Raid-Hinweise um. Die Aktionen selbst laufen weiter.
 - `!title <stichwörter>` oder `!titel <stichwörter>` schlägt einen Stream-Titel vor, auch offline. Der Befehl setzt den Twitch-Titel nicht automatisch. Ein vorhandener Rang und mit `--live` verfügbare Spieldaten können den Vorschlag ergänzen; sie sind keine Voraussetzung.
 - `!lurkersteuer_off` schaltet die Lurker-Erinnerung ab. Das darf nur der Broadcaster und nur bei einem Plan mit dieser Funktion.
+- `!clipcontest <Clip-Link>` reicht einen Clip aus deinem Kanal für den wöchentlichen Clip-Contest im Discord ein. Die Community stimmt dort ab, die besten drei Clips laufen im dach_lock-Stream. Es zählen nur Links wie `clips.twitch.tv/...` oder `twitch.tv/deinkanal/clip/...` aus deinem eigenen Kanal. Ohne Link nimmt der Bot den neuesten Clip aus dem laufenden Stream, zum Beispiel den von `!clip`. Pro Kanal gehen drei Einreichungen am Tag. Im Social-Studio gibt es dafür auch den Knopf „Für Clip-Contest einreichen“.
 
 ### Welche Engagement-Befehle gibt es?
 

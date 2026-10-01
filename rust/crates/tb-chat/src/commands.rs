@@ -340,6 +340,9 @@ pub struct CommandEngine {
     clip: Option<Arc<dyn ClipPort>>,
     /// Optionaler Scam-Guard-Port (`!explain` / `!unban`-overturn). `None` → inaktiv.
     scam: Option<Arc<dyn ScamGuardCommandPort>>,
+    /// Optionale Clip-Contest-Einreichung (`!clipcontest`). `None` → Hinweis,
+    /// dass die Einreichung gerade nicht verfügbar ist.
+    clip_contest: Option<Arc<crate::clip_contest_submit::ClipContestSubmitter>>,
     /// Optionaler Seam: erfolgreicher `!invite`-Reply belegt Promo-Cooldown.
     invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     /// In-memory Cooldown-Tabelle für `!invite`.
@@ -377,6 +380,7 @@ impl CommandEngine {
             autoban,
             clip: None,
             scam: None,
+            clip_contest: None,
             invite_reply_notifier: None,
             invite_cooldowns: Mutex::new(HashMap::new()),
             title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
@@ -406,6 +410,15 @@ impl CommandEngine {
     /// Konstruktor und die Tests unverändert bleiben.
     pub fn set_clip_port(mut self, clip: Arc<dyn ClipPort>) -> Self {
         self.clip = Some(clip);
+        self
+    }
+
+    /// Setzt die Clip-Contest-Einreichung (`!clipcontest`). Builder-Style.
+    pub fn set_clip_contest(
+        mut self,
+        submitter: Arc<crate::clip_contest_submit::ClipContestSubmitter>,
+    ) -> Self {
+        self.clip_contest = Some(submitter);
         self
     }
 
@@ -465,7 +478,7 @@ impl CommandEngine {
             return false;
         };
         if crate::stat_commands::StatCommand::from_chat(command).is_some()
-            || matches!(command, "!clip" | "!discord" | "!invite")
+            || matches!(command, "!clip" | "!clipcontest" | "!discord" | "!invite")
         {
             return false;
         }
@@ -621,6 +634,10 @@ impl CommandEngine {
             }
             "!clip" | "!createclip" => {
                 self.cmd_clip(event, args).await;
+                true
+            }
+            "!clipcontest" => {
+                self.cmd_clipcontest(event, args).await;
                 true
             }
             "!silentban" => {
@@ -1830,6 +1847,55 @@ impl CommandEngine {
             ClipOutcome::Failed => {
                 self.reply(event, CLIP_FAILED_REPLY).await;
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // !clipcontest: Clip für den Wochen-Contest im Discord (Paket E)
+    // -----------------------------------------------------------------------
+
+    /// Reicht einen Clip dieses Kanals für den wöchentlichen Clip-Contest im
+    /// Discord ein. Nur Broadcaster und Mods des eigenen Kanals; Shared-Chat-
+    /// Nachrichten aus anderen Kanälen werden still ignoriert. Tageslimit,
+    /// Doppelsend-Schutz und Broker-Aufruf liegen im gemeinsamen Dienst
+    /// [`crate::clip_contest_submit`].
+    async fn cmd_clipcontest(&self, event: &ChatMessageEvent, args: &str) {
+        use crate::clip_contest_submit::{chat_recht, ChatRecht, SubmitRequest, SubmitVia};
+        match chat_recht(event) {
+            ChatRecht::FremderKanal => return,
+            ChatRecht::NichtErlaubt => {
+                self.reply(event, crate::clip_contest_submit::REPLY_NOT_ALLOWED)
+                    .await;
+                return;
+            }
+            ChatRecht::Erlaubt => {}
+        }
+        let Some(submitter) = &self.clip_contest else {
+            self.reply(event, crate::clip_contest_submit::REPLY_BROKER_UNAVAILABLE)
+                .await;
+            return;
+        };
+        let clip_url = args
+            .split_whitespace()
+            .next()
+            .map(str::to_string)
+            .filter(|url| !url.is_empty());
+        let outcome = submitter
+            .submit(SubmitRequest {
+                broadcaster_id: event.broadcaster_user_id.clone(),
+                broadcaster_login: event.broadcaster_user_login.clone(),
+                submitted_by: Some(event.chatter_user_id.clone()),
+                clip_url,
+                via: SubmitVia::Chat,
+            })
+            .await;
+        tracing::info!(
+            channel = %event.broadcaster_user_login,
+            outcome = outcome.code(),
+            "!clipcontest verarbeitet"
+        );
+        if let Some(text) = outcome.reply() {
+            self.reply(event, &text).await;
         }
     }
 

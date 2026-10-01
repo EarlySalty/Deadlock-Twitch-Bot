@@ -6,6 +6,7 @@
 //! Listenbestand (Black-/Denylists, Suppression, Cooldown) und Sendedaten
 //! (first_seen, dispatched_at) — nie auf Identitätsmerkmale.
 
+pub mod community;
 pub mod detector;
 pub mod store;
 
