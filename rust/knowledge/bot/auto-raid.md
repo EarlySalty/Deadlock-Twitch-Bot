@@ -10,7 +10,7 @@ tip_flags: [feature, costream]
 time_to_value: 2
 tip_text: Nach deinem Deadlock-Stream prüft der Bot, ob er deine Zuschauer an einen passenden Live-Partner weiterleiten kann.
 ---
-Geht ein Streamer aus dem Netzwerk offline, leitet der Bot dessen Zuschauer automatisch an einen anderen Deadlock-Streamer weiter, der gerade live ist. So bleiben Zuschauer im Deadlock-Umfeld und die Streamer schieben sich gegenseitig Zuschauer zu.
+Nach deinem Deadlock-Stream kann der Bot deine Zuschauer automatisch an einen geeigneten Live-Partner im Netzwerk weiterleiten, wenn Auto-Raid aktiviert ist. Ohne geeignetes Ziel findet kein Raid statt. So bleiben Zuschauer im Deadlock-Umfeld und die Streamer schieben sich gegenseitig Zuschauer zu.
 
 Beim Raid schreibt der Bot in den Quellchat, wohin die Reise geht, und erinnert daran, im Zielchat kurz Hallo und Tschüss zu sagen.
 
@@ -22,7 +22,7 @@ Der Bot merkt sich, ob du nach deinen eigenen Raids im Zielchat auftauchst, und 
 - **Grüßer**: du sagst kurz Hallo, ein bis zwei Nachrichten
 - **Still**: du schreibst nichts
 
-Beim nächsten Raid bekommst du bevorzugt ein Ziel aus deiner eigenen Gruppe. Wer sich gern unterhält, landet bei jemandem, der das auch tut; ein kurzes Hallo trifft auf ein kurzes Hallo. Diese Zuordnung geht dem Score vor. Ist gerade kein passendes Ziel live, läuft die Auswahl wie immer über den Score, ein Raid fällt also nie aus.
+Beim nächsten Raid bekommst du bevorzugt ein Ziel aus deiner eigenen Gruppe. Wer sich gern unterhält, landet bei jemandem, der das auch tut; ein kurzes Hallo trifft auf ein kurzes Hallo. Diese Zuordnung geht dem Score vor. Ist gerade kein Ziel aus deiner Gruppe geeignet, läuft die Auswahl über den Score der übrigen geeigneten Live-Partner. Gibt es auch dort kein Ziel, findet kein Raid statt.
 
 **Grüßer und Aktive stehen im Score exakt gleich.** Ein kurzes Hallo reicht völlig, mehr ist keine Pflicht. Nur wer regelmäßig gar nichts schreibt, verliert Score und bekommt seltener Raids.
 
