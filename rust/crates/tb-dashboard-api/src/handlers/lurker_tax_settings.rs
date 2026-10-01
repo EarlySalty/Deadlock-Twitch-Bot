@@ -320,7 +320,8 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
-             plan_name TEXT DEFAULT 'free' NOT NULL, lurker_tax_enabled INTEGER DEFAULT 0 NOT NULL)",
+             plan_name TEXT DEFAULT 'free' NOT NULL, lurker_tax_enabled INTEGER DEFAULT 0 NOT NULL, \
+             lurker_pitch_enabled INTEGER DEFAULT 0 NOT NULL)",
         )
         .execute(&pool)
         .await

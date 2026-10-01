@@ -380,7 +380,7 @@ pub fn lurker_tax_title_matches(title: &str) -> bool {
 
 /// Erstansprache stiller Lurker im eigenen Kanal (Contract REQ-2). Geht nur bei
 /// `lurker_pitch_enabled = 1` live, bis zum Go des Nutzers bleibt der Schalter auf 0.
-const LURKER_PITCH_REPLY: &str = "@{chatter} du hängst ja gern hier rum :) falls du mal Mitspieler suchst: {invite} da findest du jederzeit passende Leute";
+const LURKER_PITCH_REPLY: &str = "@{chatter} suchst du noch Mitspieler? Auf unserem Discord findest du Leute zum Zocken: {invite}";
 
 /// Pitch-Text für genau eine Erstansprache (eine Person pro Send, du-Form).
 fn build_lurker_pitch_text(chatter_login: &str, invite: &str) -> String {
@@ -396,6 +396,10 @@ fn next_unpitched_lurker<'a>(
     candidates
         .iter()
         .find(|(_, identity_key)| !pitched_keys.contains(identity_key))
+}
+
+fn lurker_promo_path_enabled(tax_enabled: bool, pitch_enabled: bool, is_own_channel: bool) -> bool {
+    tax_enabled || (pitch_enabled && is_own_channel)
 }
 /// MiniMax-Timeout in Sekunden (targeted_promo.py:37: _MINIMAX_TIMEOUT_SEC).
 const MINIMAX_TIMEOUT_SEC: u64 = 5;
@@ -2547,7 +2551,7 @@ impl PromoEngine {
         let pitch_enabled = pitch_enabled.unwrap_or(0) != 0;
         let bot_user_id = self.api.bot_user_id().await;
         let is_own_channel = !bot_user_id.is_empty() && channel_id == bot_user_id;
-        if !tax_enabled && !(pitch_enabled && is_own_channel) {
+        if !lurker_promo_path_enabled(tax_enabled, pitch_enabled, is_own_channel) {
             return;
         }
         if !self.lurker_tax_is_paid_plan(channel_id).await {
@@ -3999,6 +4003,13 @@ mod tests {
             "Platzhalter nicht ersetzt"
         );
         assert!(!hat_gedankenstrich(text.as_str()), "Gedankenstrich in Pitch-Text");
+    }
+
+    #[test]
+    fn lurker_pitch_flag_triggert_unabhaengig_von_lurker_tax_nur_im_eigenen_kanal() {
+        assert!(lurker_promo_path_enabled(false, true, true));
+        assert!(!lurker_promo_path_enabled(false, true, false));
+        assert!(lurker_promo_path_enabled(true, false, false));
     }
 
     #[test]
