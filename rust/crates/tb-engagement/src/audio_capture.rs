@@ -83,7 +83,7 @@ impl AudioCapturer {
     /// `VOICE_REACTION_STREAMLINK_BIN` oder `streamlink`.
     pub fn from_env() -> Self {
         Self {
-            streamlink_bin: std::env::var("VOICE_REACTION_STREAMLINK_BIN")
+            streamlink_bin: tb_config::runtime::engagement_value("VOICE_REACTION_STREAMLINK_BIN")
                 .ok()
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| "streamlink".to_string()),

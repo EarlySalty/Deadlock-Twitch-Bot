@@ -416,7 +416,15 @@ fn spawn_last_monitor(
     gate: Arc<AtomicBool>,
 ) {
     supervisor.spawn("smalltalk_loop_last", async move {
-        let mut waechter = Lastwaechter::aus_umgebung();
+        let options = &tb_config::runtime::settings()
+            .expect("Validierte Smalltalk-Betriebskonfiguration")
+            .engagement;
+        let mut waechter = Lastwaechter::neu(
+            options.load_limit_percent,
+            options.load_release_percent.min(options.load_limit_percent),
+            options.load_window_seconds,
+            options.load_max_hold_seconds,
+        );
         let start = tokio::time::Instant::now();
         let mut voriger = cpu_stand();
         let mut tick = tokio::time::interval(LAST_TAKT);
@@ -516,7 +524,7 @@ fn spawn_transcript_capture(supervisor: &TaskSupervisor, store: SmalltalkLoopSto
                 }
             };
             if transcriber.is_none() {
-                transcriber = OpenAiTranscriber::from_env();
+                transcriber = OpenAiTranscriber::from_snapshot();
             }
             let Some(transcriber) = &transcriber else {
                 tracing::warn!(event = "smalltalk_loop.transcriber_unavailable");

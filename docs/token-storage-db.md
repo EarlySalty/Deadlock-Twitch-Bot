@@ -47,3 +47,37 @@ Produktive Datenbanken und Konten wurden für diesen Arbeitsstand nicht migriert
 5. Kontozuordnung, Entschlüsselung und Neustart-Wiederaufnahme prüfen. Erst danach alte Credential-Dateien oder Bootstrap-Kontotokens kontrolliert außer Betrieb nehmen. Die vorhandenen Dateien werden hier weder gelöscht noch als Backup verdoppelt.
 
 Ein Code-Rollback allein reicht nach einem irreversiblen Hash-Cutover nicht. Entweder die neuen Lookup-Verträge beibehalten oder gemeinsam auf einen zuvor geprüften Datenbankstand zurückgehen. Ein nicht durchgeführter Restore-Test ist keine bestätigte Rollback-Fähigkeit.
+
+## Normale Betriebsprojektion beim privaten Start
+
+Aktive Dashboard-, Auth-, Health- und Engagement-Aufrufer verwenden die einmal
+validierte `BotConfig` und denselben privaten Snapshot. Ein historischer
+Funktionsname mit `from_env` bezeichnet bei den umgestellten Aufrufern keine
+Umgebungsquelle mehr. Nicht aufgerufene Legacy-Factories und Testhilfen sind
+kein alternativer Startpfad. Die aktive LLM-Registrierung sperrt fehlende Werte;
+nur der ausdrücklich ausgenommene separate Auditstart behält seinen Altvertrag.
+
+`[engagement]` projiziert die bisherigen Capture-, Rhythmus-, Lern- und
+Lastparameter; `[vod_archive]` die bisherigen Archivparameter. Der lokale
+STT-Endpunkt kommt aus `[stt]`, sein Requestmodell bleibt `whisper-1`.
+Bestehende Remote-STT-Konfiguration verlangt ausdrücklich einen normalen
+Remote-Endpunkt und den privaten Schlüssel; der lokale Default bleibt lokal.
+Der gemeinsame Archivdeckel beträgt drei Uploads je zwölf Stunden. Ein
+optionaler `bot.obs_docks_config_path` startet nur eine ausdrücklich konfigurierte
+vorhandene Dock-Konfiguration, ohne Home-/ENV-Suche.
+
+Für den bestehenden Host sind die normalen ausführbaren Pfade
+`engagement.streamlink_binary='/usr/local/libexec/deadlock-streamlink'`,
+`engagement.ffmpeg_binary='/usr/bin/ffmpeg'`,
+`bot.yt_dlp_binary='/usr/local/bin/yt-dlp'` und dieselbe Outreach-Binary sowie
+`vod_archive.ffmpeg='/usr/bin/ffmpeg'` und `ffprobe='/usr/bin/ffprobe'`.
+Der vorhandene Streamlink-Wrapper und yt-dlp verwenden unverändert das
+rootgeschützte Tool-Venv. Seine vorhandene Gruppenberechtigung bleibt erhalten.
+Die normalen absoluten Pfade vermeiden eine Abhängigkeit vom geleerten PATH.
+
+Nicht bekannte frühere ENV-Overrides werden weder gelesen noch als identisch
+behauptet. Ohne expliziten normalen Wert gelten die dokumentierten bisherigen
+Source-Defaults; der Uploaddeckel folgt der ausdrücklichen Nutzerregel.
+Fehlende alte Dock-JSONs belegen nur die deaktivierte Konfigurationsgrenze.
+Dieser Quellenvertrag ist keine Bestätigung eines produktiven Starts oder
+bereits angewandter Migrationen.

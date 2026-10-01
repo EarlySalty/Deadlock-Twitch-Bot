@@ -110,7 +110,7 @@ impl ObsDocksConfig {
         match standard_config_pfad() {
             Some(pfad) => Self::aus_datei(&pfad),
             None => {
-                tracing::debug!("obs_docks: kein HOME bekannt, Bus bleibt aus");
+                tracing::debug!("obs_docks: kein normaler Config-Pfad gesetzt, Bus bleibt aus");
                 Self::default()
             }
         }
@@ -141,9 +141,10 @@ impl ObsDocksConfig {
 
 /// `~/.config/deadlock-twitch-bot/bot.json`.
 fn standard_config_pfad() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".config/deadlock-twitch-bot/bot.json"))
+    let snapshot = tb_config::runtime::active()?;
+    snapshot
+        .resolve(snapshot.settings().bot.obs_docks_config_path.as_ref()?)
+        .ok()
 }
 
 // ---------------------------------------------------------------------------

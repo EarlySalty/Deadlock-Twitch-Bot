@@ -391,7 +391,7 @@ pub fn mostplayed_reply(name: &str, mh: Option<&MatchHistory>) -> String {
 }
 
 pub(crate) fn steam_bot_rank_url() -> String {
-    std::env::var("STEAM_BOT_RANK_URL")
+    tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
         .ok()
         .and_then(|value| {
             let trimmed = value.trim();
@@ -405,21 +405,21 @@ pub(crate) fn steam_bot_rank_url() -> String {
 }
 
 fn steam_bot_matches_url() -> String {
-    std::env::var("STEAM_BOT_RANK_URL")
+    tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
         .ok()
         .map(|value| matches_url_from_rank(&value))
         .unwrap_or_else(|| DEFAULT_STEAM_BOT_MATCHES_URL.to_string())
 }
 
 fn steam_bot_mmr_trend_url() -> String {
-    std::env::var("STEAM_BOT_RANK_URL")
+    tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
         .ok()
         .map(|value| mmr_trend_url_from_rank(&value))
         .unwrap_or_else(|| DEFAULT_STEAM_BOT_MMR_TREND_URL.to_string())
 }
 
 fn steam_bot_live_url() -> String {
-    std::env::var("STEAM_BOT_RANK_URL")
+    tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
         .ok()
         .map(|value| live_url_from_rank(&value))
         .unwrap_or_else(|| DEFAULT_STEAM_BOT_LIVE_URL.to_string())

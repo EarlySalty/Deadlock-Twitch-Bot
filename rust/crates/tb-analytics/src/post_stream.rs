@@ -1612,11 +1612,13 @@ fn post_stream_reports_enabled_value(value: Option<&str>) -> bool {
 }
 
 pub fn post_stream_reports_enabled() -> bool {
-    post_stream_reports_enabled_value(
-        std::env::var("TWITCH_POST_STREAM_REPORTS_ENABLED")
-            .ok()
-            .as_deref(),
-    )
+    post_stream_reports_enabled_value(tb_config::runtime::settings().ok().map(|config| {
+        if config.bot.post_stream_reports_enabled {
+            "1"
+        } else {
+            "0"
+        }
+    }))
 }
 
 /// Großes v2-Report-Prompt (Python `_REPORT_V2_PROMPT_TEMPLATE`, ASCII-Umschrift

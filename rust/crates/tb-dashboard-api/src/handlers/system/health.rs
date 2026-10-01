@@ -95,9 +95,8 @@ fn analytics_identity_fields(dsn: &str) -> (String, String, String) {
 /// Lokaler Analytics-DB-Fingerprint aus dem Dashboard-DSN.
 /// `None` wenn kein DSN gesetzt ist (kein Vergleich möglich).
 fn local_analytics_fingerprint() -> Option<String> {
-    let dsn = std::env::var("TWITCH_ANALYTICS_DSN")
-        .or_else(|_| std::env::var("DATABASE_URL"))
-        .unwrap_or_default();
+    let dsn =
+        tb_config::private::service_secret("TWITCH_ANALYTICS_DSN", "dashboard").unwrap_or_default();
     if dsn.trim().is_empty() {
         return None;
     }
@@ -110,17 +109,17 @@ fn local_analytics_fingerprint() -> Option<String> {
 
 /// Basis-URL der Internal-API (gleiche Konvention wie admin_chat_action.rs).
 fn internal_base_url() -> String {
-    if let Some(explicit) = std::env::var("TWITCH_INTERNAL_API_BASE_URL")
+    if let Some(explicit) = tb_config::runtime::dashboard_value("TWITCH_INTERNAL_API_BASE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
     {
         return explicit.trim_end_matches('/').to_string();
     }
-    let host = std::env::var("TWITCH_INTERNAL_API_HOST")
+    let host = tb_config::runtime::dashboard_value("TWITCH_INTERNAL_API_HOST")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = std::env::var("TWITCH_INTERNAL_API_PORT")
+    let port = tb_config::runtime::dashboard_value("TWITCH_INTERNAL_API_PORT")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "8776".to_string());
@@ -131,9 +130,8 @@ fn internal_base_url() -> String {
 /// Fehler/Timeout → `None` (kein Mismatch-Alarm bei unerreichbarem Upstream).
 /// Ohne gesetztes Internal-Token wird kein Aufruf versucht.
 async fn fetch_internal_fingerprint() -> Option<String> {
-    let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
-        .ok()
-        .filter(|s| !s.trim().is_empty())?;
+    let token =
+        tb_config::private::value("TWITCH_INTERNAL_API_TOKEN").filter(|s| !s.trim().is_empty())?;
     let url = format!("{}/internal/twitch/v1/healthz", internal_base_url());
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))

@@ -345,10 +345,10 @@ async fn resolve_user_id(login: &str) -> Option<String> {
 /// Baut einen Helix-Client aus den Twitch-App-Credentials (`None`, wenn nicht
 /// konfiguriert).
 fn build_helix() -> Option<Arc<HelixClient>> {
-    let client_id = std::env::var("TWITCH_CLIENT_ID")
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
         .ok()
         .filter(|s| !s.is_empty())?;
-    let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+    let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET")
         .ok()
         .filter(|s| !s.is_empty())?;
     HelixClient::new(HelixConfig::new(client_id, client_secret))

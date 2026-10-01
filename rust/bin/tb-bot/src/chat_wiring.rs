@@ -297,7 +297,7 @@ async fn build_engagement_stealth(pool: PgPool) -> Option<Arc<StealthSender>> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())?;
-    let auth = SenderAuthStore::from_env(pool.clone(), cipher)?;
+    let auth = SenderAuthStore::from_snapshot(pool.clone(), cipher)?;
     auth.ensure_table().await;
     Some(Arc::new(StealthSender::new(
         Arc::new(auth),

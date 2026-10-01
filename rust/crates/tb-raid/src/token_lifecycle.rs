@@ -56,8 +56,9 @@ pub const BOT_SECTION_URL: &str = "https://deutsche-deadlock-community.de/twitch
 /// Twitch-Login des Bots, wie ihn der Streamer in seinem Chat tippt. Per Env
 /// `BOT_TWITCH_LOGIN` überschreibbar.
 pub fn bot_twitch_login() -> String {
-    std::env::var("BOT_TWITCH_LOGIN")
+    tb_config::runtime::settings()
         .ok()
+        .map(|config| config.twitch.bot_login.clone())
         .map(|v| v.trim().to_lowercase())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "deutschedeadlockcommunity".to_string())

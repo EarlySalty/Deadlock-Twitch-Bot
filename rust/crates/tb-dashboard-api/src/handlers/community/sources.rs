@@ -68,21 +68,65 @@ pub async fn player_profile(discord_id: &str) -> PlayerProfile {
     };
     // Per-identity single flight; never hold the map lock over network I/O.
     let mut cached = entry.lock().await;
-    if let Some((expires, value)) = cached.as_ref().filter(|(expires,_)| *expires > Instant::now()) {
-        let _ = expires; return value.clone();
+    if let Some((expires, value)) = cached
+        .as_ref()
+        .filter(|(expires, _)| *expires > Instant::now())
+    {
+        let _ = expires;
+        return value.clone();
     }
-    let _permit = LIMIT.get_or_init(|| Semaphore::new(4)).acquire().await.expect("community semaphore open");
-    let rank_url = std::env::var("STEAM_BOT_RANK_URL").ok().filter(|s| !s.trim().is_empty())
+    let _permit = LIMIT
+        .get_or_init(|| Semaphore::new(4))
+        .acquire()
+        .await
+        .expect("community semaphore open");
+    let rank_url = tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:8783/rank".into());
-    let base = rank_url.trim_end_matches('/').strip_suffix("/rank").unwrap_or(rank_url.trim_end_matches('/'));
+    let base = rank_url
+        .trim_end_matches('/')
+        .strip_suffix("/rank")
+        .unwrap_or(rank_url.trim_end_matches('/'));
     let matches_url = format!("{base}/player-matches");
-    let rank_fetch = async { client().get(&rank_url).query(&[("discord_id",discord_id),("cached_only","1")]).send().await?.error_for_status()?.json::<Rank>().await };
-    let matches_fetch = async { client().get(&matches_url).query(&[("discord_id",discord_id),("limit","30"),("cached_only","1")]).send().await?.error_for_status()?.json::<Matches>().await };
-    let (rank, matches): (Result<Rank,reqwest::Error>,Result<Matches,reqwest::Error>) = tokio::join!(rank_fetch,matches_fetch);
-    if rank.is_err() || matches.is_err() { tracing::debug!("Community Steam enrichment partly unavailable"); }
-    let result = project_profile(rank.ok(),matches.ok(),Utc::now().timestamp());
-    let ttl = if result.source_status == "ok" { 300 } else { 60 };
-    *cached = Some((Instant::now()+Duration::from_secs(ttl),result.clone()));
+    let rank_fetch = async {
+        client()
+            .get(&rank_url)
+            .query(&[("discord_id", discord_id), ("cached_only", "1")])
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Rank>()
+            .await
+    };
+    let matches_fetch = async {
+        client()
+            .get(&matches_url)
+            .query(&[
+                ("discord_id", discord_id),
+                ("limit", "30"),
+                ("cached_only", "1"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Matches>()
+            .await
+    };
+    let (rank, matches): (
+        Result<Rank, reqwest::Error>,
+        Result<Matches, reqwest::Error>,
+    ) = tokio::join!(rank_fetch, matches_fetch);
+    if rank.is_err() || matches.is_err() {
+        tracing::debug!("Community Steam enrichment partly unavailable");
+    }
+    let result = project_profile(rank.ok(), matches.ok(), Utc::now().timestamp());
+    let ttl = if result.source_status == "ok" {
+        300
+    } else {
+        60
+    };
+    *cached = Some((Instant::now() + Duration::from_secs(ttl), result.clone()));
     result
 }
 
@@ -136,19 +180,50 @@ fn project_directory(mut data: Directory, now: i64) -> LobbyResult {
 /// `discord_id` comes exclusively from the *viewer's* server-side identity,
 /// never from a selected streamer or a browser-supplied Discord ID.
 pub async fn lobbies(discord_id: Option<&str>) -> LobbyResult {
-    let Some(id) = discord_id.filter(|id| valid_id(id)) else { return LobbyResult::unavailable("link_required"); };
-    let token = ["MASTER_BROKER_TOKEN","MAIN_BOT_INTERNAL_TOKEN","TWITCH_INTERNAL_API_TOKEN"].iter()
-        .find_map(|key| std::env::var(key).ok().filter(|s| !s.trim().is_empty()));
-    let Some(token) = token else { return LobbyResult::unavailable("unavailable"); };
-    let Ok(config) = tb_config::runtime::settings() else { return LobbyResult::unavailable("unavailable"); };
+    let Some(id) = discord_id.filter(|id| valid_id(id)) else {
+        return LobbyResult::unavailable("link_required");
+    };
+    let token = [
+        "MASTER_BROKER_TOKEN",
+        "MAIN_BOT_INTERNAL_TOKEN",
+        "TWITCH_INTERNAL_API_TOKEN",
+    ]
+    .iter()
+    .find_map(|key| {
+        tb_config::runtime::dashboard_value(key)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    });
+    let Some(token) = token else {
+        return LobbyResult::unavailable("unavailable");
+    };
+    let Ok(config) = tb_config::runtime::settings() else {
+        return LobbyResult::unavailable("unavailable");
+    };
     let base = &config.broker.base_url;
-    let response = client().post(format!("{}/internal/master/v1/discord/community-lobbies",base.trim_end_matches('/')))
-        .header("X-Internal-Token",token).json(&serde_json::json!({"guild_id":"1289721245281292288","user_id":id})).send().await;
-    let Ok(response) = response else { return LobbyResult::unavailable("unavailable"); };
-    if response.status() == reqwest::StatusCode::FORBIDDEN { return LobbyResult::unavailable("membership_unconfirmed"); }
-    let Ok(response) = response.error_for_status() else { return LobbyResult::unavailable("unavailable"); };
+    let response = client()
+        .post(format!(
+            "{}/internal/master/v1/discord/community-lobbies",
+            base.trim_end_matches('/')
+        ))
+        .header("X-Internal-Token", token)
+        .json(&serde_json::json!({"guild_id":"1289721245281292288","user_id":id}))
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return LobbyResult::unavailable("unavailable");
+    };
+    if response.status() == reqwest::StatusCode::FORBIDDEN {
+        return LobbyResult::unavailable("membership_unconfirmed");
+    }
+    let Ok(response) = response.error_for_status() else {
+        return LobbyResult::unavailable("unavailable");
+    };
     match response.json::<Envelope>().await {
-        Ok(Envelope {ok:true,result:Some(data)}) => project_directory(data,Utc::now().timestamp()),
+        Ok(Envelope {
+            ok: true,
+            result: Some(data),
+        }) => project_directory(data, Utc::now().timestamp()),
         _ => LobbyResult::unavailable("unavailable"),
     }
 }

@@ -884,7 +884,7 @@ pub async fn context_handler(
     if let Some(error) = crate::auth::require_admin(&auth) {
         return Err(error);
     }
-    let token = std::env::var("TURNIER_INTERNAL_API_TOKEN")
+    let token = tb_config::runtime::dashboard_value("TURNIER_INTERNAL_API_TOKEN")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -894,7 +894,7 @@ pub async fn context_handler(
             Json(json!({"available":false,"reason":"turnier_token_missing","teams":[]})),
         ));
     };
-    let base = std::env::var("TURNIER_INTERNAL_API_BASE_URL")
+    let base = tb_config::runtime::dashboard_value("TURNIER_INTERNAL_API_BASE_URL")
         .ok()
         .map(|value| value.trim_end_matches('/').to_owned())
         .filter(|value| !value.is_empty())

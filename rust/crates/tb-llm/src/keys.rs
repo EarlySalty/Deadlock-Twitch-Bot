@@ -16,6 +16,10 @@ pub fn install_private_getter(get: PrivateGetter) -> Result<(), &'static str> {
         .map_err(|_| "Privater LLM-Schlüsselgetter wurde bereits installiert.")
 }
 
+pub(crate) fn runtime_value(name: &str) -> Option<Option<String>> {
+    PRIVATE.get().map(|get| get(name))
+}
+
 fn private_key(get: PrivateGetter) -> Option<String> {
     ["FIREWORK_API_KEY", "FIREWORKS_API_KEY"]
         .iter()

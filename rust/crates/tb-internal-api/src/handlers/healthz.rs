@@ -106,7 +106,7 @@ pub async fn healthz_handler(auth: AuthLevel) -> Result<impl IntoResponse, ApiEr
         return Err(ApiError::unauthorized());
     }
 
-    let dsn = std::env::var("TWITCH_ANALYTICS_DSN").unwrap_or_default();
+    let dsn = tb_config::private::service_secret("TWITCH_ANALYTICS_DSN", "bot").unwrap_or_default();
     let identity = analytics_db_identity(&dsn);
 
     Ok(Json(HealthzResponse {

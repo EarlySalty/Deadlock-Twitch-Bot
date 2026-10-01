@@ -229,7 +229,7 @@ fn lock_cache<T>(cache: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn deadlock_assets_base_url() -> String {
-    std::env::var("DEADLOCK_ASSETS_BASE")
+    tb_config::runtime::dashboard_value("DEADLOCK_ASSETS_BASE")
         .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
@@ -570,7 +570,7 @@ fn steam_bot_url(path: &str) -> String {
 }
 
 fn steam_bot_base_url() -> String {
-    std::env::var("STEAM_BOT_RANK_URL")
+    tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
         .ok()
         .and_then(|value| {
             let trimmed = value.trim().trim_end_matches('/');

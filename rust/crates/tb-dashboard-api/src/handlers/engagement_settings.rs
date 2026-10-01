@@ -456,7 +456,7 @@ async fn update_settings(
 /// `None`, wenn Krypto-Key oder App-Credentials fehlen.
 fn build_sender_store(pool: PgPool) -> Option<SenderAuthStore> {
     let cipher = Arc::new(FieldCipher::from_runtime().ok()?);
-    SenderAuthStore::from_env(pool, cipher)
+    SenderAuthStore::from_snapshot(pool, cipher)
 }
 
 /// `GET …/engagement/sender-auth` — Admin-only: erzeugt den Authorize-Link für

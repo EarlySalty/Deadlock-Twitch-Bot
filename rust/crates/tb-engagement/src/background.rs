@@ -56,7 +56,7 @@ const AI_TIMEOUT: Duration = Duration::from_secs(180);
 /// Zeitlich begrenzte Aufnahmen hängen deshalb nicht an diesem Gate, sondern an
 /// ihrem eigenen Anlass, siehe Lernmodus und Smalltalk-Testsitzung.
 fn stream_transcripts_enabled() -> bool {
-    match std::env::var("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED") {
+    match tb_config::runtime::engagement_value("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED") {
         Ok(v) => v.trim() == "1",
         Err(_) => false,
     }
@@ -294,7 +294,7 @@ pub async fn schedule_stream_transcripts(pool: PgPool) {
     loop {
         if stream_transcripts_enabled() {
             if transcriber.is_none() {
-                transcriber = OpenAiTranscriber::from_env();
+                transcriber = OpenAiTranscriber::from_snapshot();
             }
             match &transcriber {
                 Some(t) => {
@@ -404,7 +404,7 @@ pub async fn schedule_learn_capture(learn: Arc<ReactionLearning>) {
     let mut transcriber: Option<Arc<OpenAiTranscriber>> = None;
     loop {
         if transcriber.is_none() {
-            transcriber = OpenAiTranscriber::from_env().map(Arc::new);
+            transcriber = OpenAiTranscriber::from_snapshot().map(Arc::new);
         }
         match &transcriber {
             Some(t) => {

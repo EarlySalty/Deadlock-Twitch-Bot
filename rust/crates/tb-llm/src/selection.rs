@@ -59,6 +59,9 @@ fn fireworks_endpoint() -> LlmEndpoint {
 }
 
 fn nonempty_env(var: &str) -> Option<String> {
+    if let Some(value) = crate::keys::runtime_value(var) {
+        return value.filter(|value| !value.trim().is_empty());
+    }
     std::env::var(var)
         .ok()
         .filter(|value| !value.trim().is_empty())

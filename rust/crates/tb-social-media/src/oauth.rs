@@ -925,7 +925,7 @@ fn pkce_challenge(verifier: &str) -> String {
 
 /// Env-Var, leer → `None`.
 fn env_nonempty(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|v| !v.is_empty())
+    tb_config::private::secret(var).ok()
 }
 
 /// Google-Zugangsdaten. Historisch heissen sie hier `YOUTUBE_*`, gepflegt werden

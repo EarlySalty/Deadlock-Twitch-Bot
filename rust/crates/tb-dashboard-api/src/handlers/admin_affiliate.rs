@@ -41,7 +41,7 @@ fn first_of_month_utc_iso() -> String {
 
 fn env_secret(keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
-        std::env::var(key)
+        tb_config::runtime::dashboard_value(key)
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())

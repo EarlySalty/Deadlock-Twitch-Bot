@@ -21,7 +21,7 @@ pub struct StreamTranscriptSegment {
 }
 
 fn env_int(name: &str, default: i64, minimum: i64) -> i64 {
-    match std::env::var(name) {
+    match tb_config::runtime::engagement_value(name) {
         Ok(raw) if !raw.trim().is_empty() => match raw.trim().parse::<i64>() {
             Ok(v) => v.max(minimum),
             Err(_) => default,
@@ -31,7 +31,7 @@ fn env_int(name: &str, default: i64, minimum: i64) -> i64 {
 }
 
 fn env_float(name: &str, default: f64, minimum: f64) -> f64 {
-    match std::env::var(name) {
+    match tb_config::runtime::engagement_value(name) {
         Ok(raw) if !raw.trim().is_empty() => match raw.trim().parse::<f64>() {
             Ok(v) => v.max(minimum),
             Err(_) => default,
@@ -52,7 +52,7 @@ pub fn transcript_poll_interval_seconds() -> f64 {
 
 /// Capture-Qualität (`audio_only` o.ä.).
 pub fn transcript_quality() -> String {
-    std::env::var("ENGAGEMENT_TRANSCRIPT_QUALITY")
+    tb_config::runtime::engagement_value("ENGAGEMENT_TRANSCRIPT_QUALITY")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "audio_only".to_string())

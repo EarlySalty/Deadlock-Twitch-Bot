@@ -771,7 +771,7 @@ fn urlencoding_login(login: &str) -> String {
 }
 
 fn internal_api_token() -> Option<String> {
-    std::env::var("TWITCH_INTERNAL_API_TOKEN")
+    tb_config::private::secret("TWITCH_INTERNAL_API_TOKEN")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
@@ -779,7 +779,7 @@ fn internal_api_token() -> Option<String> {
 
 fn worker_internal_base_url() -> String {
     let read = |key: &str| {
-        std::env::var(key)
+        tb_config::runtime::dashboard_value(key)
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())

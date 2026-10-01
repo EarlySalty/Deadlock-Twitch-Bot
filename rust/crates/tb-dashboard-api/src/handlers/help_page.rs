@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use tb_knowledge::{ist_oeffentlich, KnowledgeBase, Namespace};
 
 fn knowledge_dir() -> PathBuf {
-    match std::env::var("KNOWLEDGE_DIR")
+    match tb_config::runtime::dashboard_value("KNOWLEDGE_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())
     {

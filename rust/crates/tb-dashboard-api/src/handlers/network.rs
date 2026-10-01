@@ -135,10 +135,10 @@ fn helix_client() -> Option<&'static HelixClient> {
     static HELIX: OnceLock<Option<HelixClient>> = OnceLock::new();
     HELIX
         .get_or_init(|| {
-            let client_id = std::env::var("TWITCH_CLIENT_ID")
+            let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
                 .ok()
                 .filter(|value| !value.is_empty())?;
-            let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+            let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET")
                 .ok()
                 .filter(|value| !value.is_empty())?;
             HelixClient::new(HelixConfig::new(client_id, client_secret)).ok()

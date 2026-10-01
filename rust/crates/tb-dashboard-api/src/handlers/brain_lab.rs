@@ -37,9 +37,9 @@ async fn brain_pool() -> Result<PgPool, Response> {
     // the central DSN already supplied by their approved secret bootstrap.
     // Neither its value nor database errors are sent to the browser/logged.
     BRAIN_POOL.get_or_try_init(|| async {
-        let dsn = std::env::var("DEADLOCK_BRAIN_READONLY_DSN").ok()
+        let dsn = tb_config::private::secret("DEADLOCK_BRAIN_READONLY_DSN").ok()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| std::env::var("DEADLOCK_CENTRAL_DSN").ok().filter(|v| !v.trim().is_empty()))
+            .or_else(|| tb_config::private::secret("DEADLOCK_CENTRAL_DSN").ok().filter(|v| !v.trim().is_empty()))
             .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "brain_not_configured",
                 "Brain ist noch nicht angebunden: Der Dashboard-Dienst benötigt einen autorisierten read-only Brain-Datenbankzugang."))?;
         let options = PgConnectOptions::from_str(&dsn)

@@ -201,7 +201,7 @@ async fn readyz_response(
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name)
+    tb_config::runtime::dashboard_value(name)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -482,9 +482,8 @@ fn analytics_identity_fields(dsn: &str) -> (String, String, String) {
 }
 
 fn local_analytics_fingerprint() -> Option<String> {
-    let dsn = std::env::var("TWITCH_ANALYTICS_DSN")
-        .or_else(|_| std::env::var("DATABASE_URL"))
-        .unwrap_or_default();
+    let dsn =
+        tb_config::private::service_secret("TWITCH_ANALYTICS_DSN", "dashboard").unwrap_or_default();
     if dsn.trim().is_empty() {
         return None;
     }

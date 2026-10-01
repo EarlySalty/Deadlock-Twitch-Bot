@@ -336,7 +336,7 @@ impl PersonaMode {
 
     /// Aktiver Modus aus der Env.
     pub fn from_env() -> Self {
-        std::env::var("ENGAGEMENT_PERSONA_MODE")
+        tb_config::runtime::engagement_value("ENGAGEMENT_PERSONA_MODE")
             .map(|v| Self::parse(&v))
             .unwrap_or_default()
     }

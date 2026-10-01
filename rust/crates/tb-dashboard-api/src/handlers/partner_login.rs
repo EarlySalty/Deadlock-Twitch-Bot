@@ -47,7 +47,7 @@ fn unix_now() -> i64 {
 
 /// HMAC-Signing-Secret aus dem Prozess-Env (Infisical). Leer/fehlend → `None`.
 fn partner_secret() -> Option<String> {
-    std::env::var("TWITCH_PARTNER_TOKEN")
+    tb_config::private::secret("TWITCH_PARTNER_TOKEN")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())

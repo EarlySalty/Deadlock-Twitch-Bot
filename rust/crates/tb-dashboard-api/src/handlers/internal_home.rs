@@ -382,7 +382,7 @@ impl AvatarCache {
 /// Community-Seite, gekoppelt an die Discord-ID). Liest `STEAM_LINK_START_BASE_URL`
 /// und schneidet einen evtl. abschließenden `/` ab.
 fn steam_link_base() -> String {
-    std::env::var("STEAM_LINK_START_BASE_URL")
+    tb_config::runtime::dashboard_value("STEAM_LINK_START_BASE_URL")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())

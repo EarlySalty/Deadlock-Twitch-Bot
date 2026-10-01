@@ -260,13 +260,14 @@ async fn set_channel_title(pool: &PgPool, user_id: &str, title: &str) -> Result<
         Ok(Some(tokens)) if !tokens.needs_reauth => tokens.access_token,
         _ => return Err(TitleSetError::ReauthRequired),
     };
-    let client_id = std::env::var("TWITCH_CLIENT_ID")
-        .or_else(|_| std::env::var("TWITCH_BOT_CLIENT_ID"))
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
+        .ok()
+        .or_else(|| tb_config::private::secret("TWITCH_BOT_CLIENT_ID").ok())
         .unwrap_or_default();
     if client_id.trim().is_empty() {
         return Err(TitleSetError::ClientUnavailable);
     }
-    let base = std::env::var("TWITCH_HELIX_BASE_URL")
+    let base = tb_config::runtime::dashboard_value("TWITCH_HELIX_BASE_URL")
         .unwrap_or_else(|_| "https://api.twitch.tv/helix".to_string());
     let response = reqwest::Client::new()
         .patch(format!("{}/channels", base.trim_end_matches('/')))

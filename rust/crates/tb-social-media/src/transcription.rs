@@ -12,7 +12,7 @@ pub struct SttTranscriber {
 
 impl SttTranscriber {
     pub fn from_default() -> Option<Self> {
-        let inner = OpenAiTranscriber::from_env()?;
+        let inner = OpenAiTranscriber::from_snapshot()?;
         if !inner.is_local() {
             tracing::warn!("Clip-Transkription: STT-Endpunkt ist nicht loopback, Stage bleibt aus");
             return None;

@@ -3490,7 +3490,7 @@ fn vod_archive_json(s: &VodArchiveSettings) -> Value {
 /// setzen, dann ist die Sichtbarkeit im Dashboard waehlbar.
 fn privacy_forced() -> bool {
     !matches!(
-        std::env::var("YOUTUBE_AUDIT_PASSED").as_deref(),
+        tb_config::runtime::dashboard_value("YOUTUBE_AUDIT_PASSED").as_deref(),
         Ok("1") | Ok("true")
     )
 }
@@ -3580,7 +3580,7 @@ pub async fn vod_archive_put_handler(
 /// Request-Header-Ableitung — gleicher Effekt: die bei den Plattformen
 /// registrierte Callback-Basis.)
 fn oauth_public_origin() -> String {
-    std::env::var("SOCIAL_MEDIA_PUBLIC_ORIGIN")
+    tb_config::runtime::dashboard_value("SOCIAL_MEDIA_PUBLIC_ORIGIN")
         .ok()
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())

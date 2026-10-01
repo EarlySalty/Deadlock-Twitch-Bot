@@ -109,14 +109,14 @@ fn dur_secs(seconds: f64) -> Duration {
 }
 
 fn env_float(name: &str, default: f64) -> f64 {
-    match std::env::var(name) {
+    match tb_config::runtime::engagement_value(name) {
         Ok(raw) if !raw.is_empty() => raw.trim().parse::<f64>().unwrap_or(default),
         _ => default,
     }
 }
 
 fn env_int(name: &str, default: usize) -> usize {
-    match std::env::var(name) {
+    match tb_config::runtime::engagement_value(name) {
         Ok(raw) if !raw.is_empty() => raw.trim().parse::<usize>().unwrap_or(default),
         _ => default,
     }

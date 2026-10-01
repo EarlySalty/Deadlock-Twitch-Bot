@@ -55,7 +55,7 @@ fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
 }
 
 fn nonempty_env(key: &str) -> Option<String> {
-    std::env::var(key)
+    tb_config::runtime::dashboard_value(key)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

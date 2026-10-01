@@ -15,6 +15,7 @@ tokio       = { workspace = true, features = ["time"] }
 tracing     = { workspace = true }
 url         = { workspace = true }
 tb-crypto   = { workspace = true }
+tb-config   = { workspace = true }
 tb-domain   = { workspace = true }
 tb-observability = { workspace = true }
 

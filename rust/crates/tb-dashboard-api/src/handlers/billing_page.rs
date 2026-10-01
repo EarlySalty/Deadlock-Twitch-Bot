@@ -43,7 +43,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use tb_analytics::billing::{
-    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, price_id_map_from_env,
+    catalog_json, find_plan, is_paid_plan_id, normalize_billing_cycle, parse_price_id_mapping,
     resolved_price_id,
 };
 use tb_analytics::plan::resolve_plan_snapshot;
@@ -51,6 +51,12 @@ use tb_analytics::stripe::StripeClient;
 use tb_analytics::stufe::{stufe_fuer_plan, Stufe};
 
 use crate::auth::level::DashboardAuthLevel;
+
+fn price_id_map_from_env() -> Vec<(String, Vec<(u32, String)>)> {
+    parse_price_id_mapping(
+        &tb_config::runtime::dashboard_value("STRIPE_PRICE_ID_MAP").unwrap_or_default(),
+    )
+}
 
 /// Default-Public-Origin für success/cancel/return-URLs, wenn keine konfiguriert
 /// ist (Pythons letzter `_billing_configured_public_origin`-Fallback).
@@ -126,8 +132,11 @@ pub fn billing_page_config_from_snapshot() -> Option<BillingPageConfig> {
 /// Leitet den Public-Origin aus den konfigurierten URLs ab (Origin-Teil) oder
 /// fällt auf den Default zurück. Spiegelt `_billing_configured_public_origin`.
 fn resolve_public_origin() -> String {
-    let from_url =
-        |key: &str| -> Option<String> { std::env::var(key).ok().and_then(|raw| origin_of(&raw)) };
+    let from_url = |key: &str| -> Option<String> {
+        tb_config::runtime::dashboard_value(key)
+            .ok()
+            .and_then(|raw| origin_of(&raw))
+    };
     from_url("STRIPE_CHECKOUT_SUCCESS_URL")
         .or_else(|| from_url("STRIPE_CHECKOUT_CANCEL_URL"))
         .or_else(|| from_url("TWITCH_BILLING_CHECKOUT_SUCCESS_URL"))
@@ -152,7 +161,7 @@ fn origin_of(raw: &str) -> Option<String> {
 /// Erster nicht-leerer Env-Wert aus einer Alias-Liste (getrimmt).
 fn non_empty_env(keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
-        std::env::var(key)
+        tb_config::runtime::dashboard_value(key)
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())

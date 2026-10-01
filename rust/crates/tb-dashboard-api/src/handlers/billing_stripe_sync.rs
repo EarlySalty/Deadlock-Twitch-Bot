@@ -339,11 +339,11 @@ fn cycle_plan_total_gross_cents(cycle_catalog: &Value, plan_id: &str) -> i64 {
 /// ist per Konstruktion `true` (eingecheckte Defaults decken alle bezahlten Pläne
 /// × {1,12} ab); `webhook_ready` aus dem Vorhandensein des Webhook-Secrets.
 fn readiness_payload(checkout_ready: bool) -> Value {
-    let webhook_ready = std::env::var("STRIPE_WEBHOOK_SECRET")
+    let webhook_ready = tb_config::runtime::dashboard_value("STRIPE_WEBHOOK_SECRET")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
-            std::env::var("TWITCH_BILLING_STRIPE_WEBHOOK_SECRET")
+            tb_config::runtime::dashboard_value("TWITCH_BILLING_STRIPE_WEBHOOK_SECRET")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })

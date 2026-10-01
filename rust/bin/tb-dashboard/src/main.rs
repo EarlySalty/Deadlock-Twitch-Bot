@@ -33,7 +33,7 @@ extern "C" {
 }
 
 fn optional_env_bool(name: &str, default: bool) -> bool {
-    match std::env::var(name) {
+    match tb_config::runtime::dashboard_value(name) {
         Ok(value) => {
             let raw = value.trim().to_lowercase();
             match raw.as_str() {
@@ -56,7 +56,7 @@ fn optional_env_bool(name: &str, default: bool) -> bool {
 }
 
 fn split_runtime_enforced() -> bool {
-    if std::env::var("TWITCH_RUNTIME_ENFORCE")
+    if tb_config::runtime::dashboard_value("TWITCH_RUNTIME_ENFORCE")
         .ok()
         .is_some_and(|v| !v.trim().is_empty())
     {
@@ -112,11 +112,11 @@ fn resolve_runtime_role(raw: &str) -> String {
 }
 
 fn runtime_role_from_env() -> String {
-    let raw = std::env::var("TWITCH_RUNTIME_ROLE")
+    let raw = tb_config::runtime::dashboard_value("TWITCH_RUNTIME_ROLE")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
-            std::env::var("TWITCH_SPLIT_RUNTIME_ROLE")
+            tb_config::runtime::dashboard_value("TWITCH_SPLIT_RUNTIME_ROLE")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })
@@ -226,7 +226,7 @@ impl Drop for RuntimePidLock {
 }
 
 fn runtime_lock_dir() -> PathBuf {
-    std::env::var("TWITCH_RUNTIME_PID_LOCK_DIR")
+    tb_config::runtime::dashboard_value("TWITCH_RUNTIME_PID_LOCK_DIR")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
@@ -401,11 +401,15 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     });
-    tb_llm::keys::install_private_getter(|name| tb_config::private::secret(name).ok())
-        .unwrap_or_else(|error| {
-            eprintln!("{error}");
-            std::process::exit(1);
-        });
+    tb_llm::keys::install_private_getter(|name| match name {
+        "TWITCH_ANALYTICS_DSN" => tb_config::private::service_secret(name, "dashboard"),
+        "FIREWORK_API_KEY" | "FIREWORKS_API_KEY" => tb_config::private::secret(name).ok(),
+        _ => None,
+    })
+    .unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1);
+    });
     tb_config::private::value("DB_MASTER_KEY_V1")
         .and_then(|key| tb_crypto::FieldCipher::install_runtime_key(key).ok())
         .unwrap_or_else(|| {
@@ -533,7 +537,7 @@ async fn main() {
     // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
     // portierte Dashboard-Routen. Ohne konfigurierte URL bleibt der Proxy
     // aus und unbekannte Pfade antworten wie bisher mit 404.
-    let fallback_url = std::env::var("TB_DASHBOARD_LEGACY_FALLBACK_URL")
+    let fallback_url = tb_config::runtime::dashboard_value("TB_DASHBOARD_LEGACY_FALLBACK_URL")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());

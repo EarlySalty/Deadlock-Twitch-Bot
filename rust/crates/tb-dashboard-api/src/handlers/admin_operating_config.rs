@@ -36,7 +36,7 @@ fn active() -> Result<&'static BotConfigSnapshot, ApiError> {
 }
 
 async fn bot_fingerprint(active: &BotConfigSnapshot) -> Option<String> {
-    let token = std::env::var("TWITCH_INTERNAL_API_TOKEN").ok()?;
+    let token = tb_config::private::secret("TWITCH_INTERNAL_API_TOKEN").ok()?;
     if token.trim().is_empty() {
         return None;
     }

@@ -79,7 +79,8 @@ struct AffiliateAccount {
 pub fn affiliate_oauth_config_from_env() -> Option<AffiliateOAuthConfig> {
     let client_id = non_empty_env(&["TWITCH_CLIENT_ID"])?;
     let client_secret = non_empty_env(&["TWITCH_CLIENT_SECRET"])?;
-    let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
+    let cookie_secure =
+        tb_config::runtime::dashboard_value("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
     let client =
         crate::auth::oauth_login::HelixOAuthClient::new(&client_id, &client_secret).ok()?;
     Some(AffiliateOAuthConfig {
@@ -92,6 +93,38 @@ pub fn affiliate_oauth_config_from_env() -> Option<AffiliateOAuthConfig> {
 pub fn affiliate_stripe_config_from_env() -> Option<AffiliateStripeConfig> {
     let connect_client_id = non_empty_env(&["STRIPE_CONNECT_CLIENT_ID"]);
     let client = non_empty_env(&["STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"])
+        .and_then(|secret| StripeClient::new(secret).ok());
+    if connect_client_id.is_none() && client.is_none() {
+        return None;
+    }
+    Some(AffiliateStripeConfig {
+        connect_client_id,
+        client,
+    })
+}
+
+pub fn affiliate_oauth_config_from_snapshot() -> Option<AffiliateOAuthConfig> {
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID").ok()?;
+    let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET").ok()?;
+    let cookie_secure = !tb_config::runtime::settings()
+        .ok()?
+        .dashboard
+        .options
+        .cookie_insecure;
+    let client =
+        crate::auth::oauth_login::HelixOAuthClient::new(&client_id, &client_secret).ok()?;
+    Some(AffiliateOAuthConfig {
+        client_id,
+        cookie_secure,
+        client: Arc::new(client),
+    })
+}
+
+pub fn affiliate_stripe_config_from_snapshot() -> Option<AffiliateStripeConfig> {
+    let connect_client_id = tb_config::private::secret("STRIPE_CONNECT_CLIENT_ID").ok();
+    let client = ["STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"]
+        .iter()
+        .find_map(|name| tb_config::private::secret(name).ok())
         .and_then(|secret| StripeClient::new(secret).ok());
     if connect_client_id.is_none() && client.is_none() {
         return None;
@@ -1145,7 +1178,9 @@ fn profile_payload(account: &AffiliateAccount, pii: &PiiPayload, readiness: Valu
 fn affiliate_oauth_config(
     config: Option<Extension<AffiliateOAuthConfig>>,
 ) -> Option<AffiliateOAuthConfig> {
-    config.map(|c| c.0).or_else(affiliate_oauth_config_from_env)
+    config
+        .map(|c| c.0)
+        .or_else(affiliate_oauth_config_from_snapshot)
 }
 
 fn affiliate_stripe_config(
@@ -1153,7 +1188,7 @@ fn affiliate_stripe_config(
 ) -> Option<AffiliateStripeConfig> {
     config
         .map(|c| c.0)
-        .or_else(affiliate_stripe_config_from_env)
+        .or_else(affiliate_stripe_config_from_snapshot)
 }
 
 fn resolve_cipher(
@@ -1273,7 +1308,7 @@ fn cookie_secure(headers: &HeaderMap, config: Option<&AffiliateOAuthConfig>) -> 
     if let Some(config) = config {
         return config.cookie_secure;
     }
-    if std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() == Ok("1") {
+    if tb_config::runtime::settings().is_ok_and(|config| config.dashboard.options.cookie_insecure) {
         return false;
     }
     header_first(headers, "x-forwarded-proto")
@@ -1331,7 +1366,7 @@ fn json_error(status: StatusCode, code: &str) -> Response {
 
 fn non_empty_env(keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
-        std::env::var(key)
+        tb_config::runtime::dashboard_value(key)
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())

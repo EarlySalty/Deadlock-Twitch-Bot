@@ -132,7 +132,7 @@ pub async fn portal_handler(
         }));
     }
 
-    let ref_code = std::env::var("TWITCH_DISCORD_REF_CODE")
+    let ref_code = tb_config::runtime::dashboard_value("TWITCH_DISCORD_REF_CODE")
         .unwrap_or_else(|_| "DE-Deadlock-Discord".to_string());
     let referral_url = if ref_code.trim().is_empty() {
         format!("https://www.twitch.tv/{login}")

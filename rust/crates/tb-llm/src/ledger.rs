@@ -65,6 +65,9 @@ static LAST_BUDGET_CHECK: Mutex<Option<Instant>> = Mutex::const_new(None);
 /// Liest den zentralen DSN: Env `TWITCH_ANALYTICS_DSN`, sonst `DATABASE_URL`.
 /// Leere/whitespace-Werte zählen als nicht gesetzt.
 fn dsn_from_env() -> Option<String> {
+    if let Some(value) = crate::keys::runtime_value(ENV_DSN_PRIMARY) {
+        return value.filter(|value| !value.trim().is_empty());
+    }
     for key in [ENV_DSN_PRIMARY, ENV_DSN_FALLBACK] {
         if let Ok(v) = std::env::var(key) {
             let trimmed = v.trim();

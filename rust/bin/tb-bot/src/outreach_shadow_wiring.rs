@@ -222,7 +222,7 @@ pub fn start(
         tracing::warn!(event = "outreach_shadow.discord_copy_missing");
         return inactive_runtime(supervisor, store, "discord_copy_missing");
     };
-    let Some(transcriber) = OpenAiTranscriber::from_env() else {
+    let Some(transcriber) = OpenAiTranscriber::from_snapshot() else {
         tracing::warn!(event = "outreach_shadow.transcriber_unavailable");
         return inactive_runtime(supervisor, store, "openai_unavailable");
     };
@@ -730,7 +730,7 @@ fn discord_error_class(error: &DiscordError) -> &'static str {
 }
 
 fn nonempty_env(name: &str) -> Option<String> {
-    std::env::var(name)
+    tb_config::runtime::engagement_value(name)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())

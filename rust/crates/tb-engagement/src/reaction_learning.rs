@@ -133,7 +133,10 @@ fn profile_user_prompt(samples: &str) -> String {
 }
 
 fn env_str(name: &str) -> Option<String> {
-    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    tb_config::runtime::engagement_value(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn env_int(name: &str, default: i64, minimum: i64) -> i64 {

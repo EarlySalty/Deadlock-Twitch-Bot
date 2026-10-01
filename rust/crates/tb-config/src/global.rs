@@ -44,6 +44,10 @@ pub struct BotConfig {
     pub knowledge: crate::shared_options::KnowledgePaths,
     #[serde(default)]
     pub media: crate::shared_options::MediaPublicOptions,
+    #[serde(default)]
+    pub vod_archive: crate::shared_options::VodArchiveOptions,
+    #[serde(default)]
+    pub engagement: crate::shared_options::EngagementOptions,
 }
 
 impl fmt::Debug for BotConfig {
@@ -57,6 +61,8 @@ impl fmt::Debug for BotConfig {
 pub struct Twitch {
     /// Öffentliche Bot-ID, kein Token. Bewusst ohne erfundenen Ersatzwert.
     pub bot_user_id: String,
+    #[serde(default = "default_bot_login")]
+    pub bot_login: String,
     /// Öffentliche Discord-Ziel-ID für bestehende Stream-Ankündigungen.
     pub notify_channel_id: String,
     pub eventsub_callback_url: String,
@@ -67,6 +73,9 @@ pub struct Twitch {
 }
 fn default_game() -> String {
     "Deadlock".to_string()
+}
+fn default_bot_login() -> String {
+    "deutschedeadlockcommunity".into()
 }
 fn default_languages() -> Vec<String> {
     ["de", "de-de", "de-at", "de-ch"]
@@ -258,7 +267,53 @@ impl Schema for BotConfig {
         if self.schema_version != SCHEMA_VERSION {
             return Err(FileError::invalid("schema_version"));
         }
+        let archive = &self.vod_archive;
+        if archive.download_dir.as_os_str().is_empty()
+            || archive.max_downloads_per_run == 0
+            || archive.max_uploads_per_run > 3
+            || archive.interval_hours < 12
+            || archive.interval_hours > 24 * 365
+            || archive.download_timeout_seconds == 0
+            || archive.keep_local_days < 0
+        {
+            return Err(FileError::invalid("vod_archive"));
+        }
+        if [
+            &self.engagement.streamlink_binary,
+            &self.engagement.ffmpeg_binary,
+            &self.engagement.persona_mode,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty() || value.chars().any(char::is_control))
+            || ![
+                self.engagement.min_pause_seconds,
+                self.engagement.burst_window_seconds,
+                self.engagement.transcript_interval_seconds,
+            ]
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+        {
+            return Err(FileError::invalid("engagement"));
+        }
         positive_id(&self.twitch.bot_user_id, "twitch.bot_user_id")?;
+        if self.twitch.bot_login.trim().is_empty()
+            || !self
+                .twitch
+                .bot_login
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(FileError::invalid("twitch.bot_login"));
+        }
+        if ![
+            self.engagement.load_limit_percent,
+            self.engagement.load_release_percent,
+        ]
+        .iter()
+        .all(|value| value.is_finite() && *value > 0.0 && *value <= 100.0)
+        {
+            return Err(FileError::invalid("engagement.load_percent"));
+        }
         positive_id(&self.twitch.notify_channel_id, "twitch.notify_channel_id")?;
         public_url(
             &self.twitch.eventsub_callback_url,

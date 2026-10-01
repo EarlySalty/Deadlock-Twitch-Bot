@@ -88,6 +88,8 @@ pub struct BotOperations {
     pub yt_dlp_binary: Option<PathBuf>,
     pub outreach_yt_dlp_binary: Option<PathBuf>,
     pub vod_export_remote_base: String,
+    pub obs_docks_config_path: Option<PathBuf>,
+    pub post_stream_reports_enabled: bool,
 }
 
 impl Default for BotOperations {
@@ -130,6 +132,8 @@ impl Default for BotOperations {
             yt_dlp_binary: None,
             outreach_yt_dlp_binary: None,
             vod_export_remote_base: "gdrive:Deadlock/Twitch-VODs".into(),
+            obs_docks_config_path: None,
+            post_stream_reports_enabled: false,
         }
     }
 }

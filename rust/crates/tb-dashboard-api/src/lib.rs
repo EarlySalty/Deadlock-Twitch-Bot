@@ -2064,7 +2064,7 @@ pub fn build_router_with_contest_writer(
     // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
     // leerem Key — die Hit-Rows sind trotzdem konsistent verschlüsselt; bei
     // DB-Fehlern ist der Limiter fail-open (siehe RateLimiter::allow).
-    let fernet_key = DashboardAuthState::fernet_key_from_env().unwrap_or_default();
+    let fernet_key = tb_config::private::secret("SESSIONS_ENCRYPTION_KEY").unwrap_or_default();
     let uplink_refresh_pool = pool.clone();
     let rate_limiter = RateLimiter::new(pool.clone(), fernet_key);
     let challenge_settings = tb_config::runtime::settings().ok();

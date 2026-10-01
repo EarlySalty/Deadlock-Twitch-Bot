@@ -23,7 +23,7 @@ pub const AI_MODEL_LLM: &str = "llm";
 /// Pentest-Schalter (Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`): jeder Env-Wert
 /// außer den „aus"-Werten deaktiviert die Ratelimits. Default (unset) = aus.
 fn pentest_disable_rate_limits() -> bool {
-    match std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS") {
+    match tb_config::runtime::dashboard_value("DDC_PENTEST_DISABLE_RATE_LIMITS") {
         Ok(v) => !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"),
         Err(_) => false,
     }

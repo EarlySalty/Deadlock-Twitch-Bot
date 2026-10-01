@@ -91,7 +91,6 @@ fn ist_ausfuehrbar(pfad: &std::path::Path) -> bool {
 
 fn yt_dlp_path(snapshot: &tb_config::BotConfigSnapshot) -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let configured = snapshot.settings().bot.yt_dlp_binary.as_ref().map(|path| {
         snapshot
             .resolve(path)
@@ -99,7 +98,7 @@ fn yt_dlp_path(snapshot: &tb_config::BotConfigSnapshot) -> std::path::PathBuf {
             .to_string_lossy()
             .into_owned()
     });
-    let pfad = resolve_yt_dlp_path(configured, &cwd, home.as_deref());
+    let pfad = resolve_yt_dlp_path(configured, &cwd, None);
     // Ohne diese Zeile beginnt die nächste Fehlersuche wieder bei "welcher Pfad
     // war es eigentlich" — das Symptom hier war genau ein toter Pfad.
     tracing::info!(pfad = %pfad.display(), "yt-dlp-Pfad aufgeloest");
@@ -488,11 +487,15 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     });
-    tb_llm::keys::install_private_getter(|name| tb_config::private::secret(name).ok())
-        .unwrap_or_else(|error| {
-            eprintln!("{error}");
-            std::process::exit(1);
-        });
+    tb_llm::keys::install_private_getter(|name| match name {
+        "TWITCH_ANALYTICS_DSN" => tb_config::private::service_secret(name, "bot"),
+        "FIREWORK_API_KEY" | "FIREWORKS_API_KEY" => tb_config::private::secret(name).ok(),
+        _ => None,
+    })
+    .unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1);
+    });
     tb_config::private::value("DB_MASTER_KEY_V1")
         .and_then(|key| FieldCipher::install_runtime_key(key).ok())
         .unwrap_or_else(|| {
@@ -1811,7 +1814,25 @@ async fn main() {
                     pool.clone(),
                     cipher.clone(),
                 );
-                let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
+                let archive = &config.vod_archive;
+                let mut vod_config = tb_vod_archive::VodArchiveConfig {
+                    download_dir: snapshot
+                        .resolve(&archive.download_dir)
+                        .expect("Validated archive directory"),
+                    max_downloads_per_run: archive.max_downloads_per_run,
+                    max_uploads_per_run: archive.max_uploads_per_run,
+                    min_free_gb: archive.min_free_gb,
+                    keep_local_days: archive.keep_local_days,
+                    rate_limit: archive.rate_limit.clone(),
+                    yt_dlp: yt_dlp_path(snapshot),
+                    ffmpeg: archive.ffmpeg.clone(),
+                    ffprobe: archive.ffprobe.clone(),
+                    download_timeout: Duration::from_secs(archive.download_timeout_seconds),
+                    interval: Duration::from_secs(archive.interval_hours * 3600),
+                    playlist_id: archive.playlist_id.clone(),
+                    category_id: archive.category_id.clone(),
+                    title_template: archive.title_template.clone(),
+                };
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
                 vod_config.yt_dlp = yt_dlp_path(snapshot);

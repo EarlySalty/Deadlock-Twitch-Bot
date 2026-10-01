@@ -505,8 +505,8 @@ pub(crate) fn is_admin_dashboard_host_request(headers: &HeaderMap) -> bool {
 /// Hostnamen gewinnt. Bei kompletter Leere → `ADMIN_DASHBOARD_HOST_DEFAULT`.
 fn configured_admin_dashboard_host() -> String {
     let env_candidates = [
-        std::env::var("TWITCH_ADMIN_PUBLIC_URL").ok(),
-        std::env::var("MASTER_DASHBOARD_PUBLIC_URL").ok(),
+        tb_config::runtime::dashboard_value("TWITCH_ADMIN_PUBLIC_URL").ok(),
+        tb_config::runtime::dashboard_value("MASTER_DASHBOARD_PUBLIC_URL").ok(),
         Some(format!("https://{ADMIN_DASHBOARD_HOST_DEFAULT}")),
     ];
     for candidate in env_candidates.into_iter().flatten() {
@@ -600,7 +600,7 @@ fn parse_url_hostname(candidate: &str) -> String {
 
 /// Dist-Wurzel des Dashboard-Builds (von `/analyse` und `/twitch/demo` geteilt).
 pub(crate) fn dist_root() -> PathBuf {
-    let base = std::env::var("DASHBOARD_V2_DIST_PATH")
+    let base = tb_config::runtime::dashboard_value("DASHBOARD_V2_DIST_PATH")
         .unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
     PathBuf::from(base)
 }

@@ -88,6 +88,33 @@ pub struct OpenAiTranscriber {
 }
 
 impl OpenAiTranscriber {
+    pub fn from_snapshot() -> Option<Self> {
+        Self::from_snapshot_with_timeout(REQUEST_TIMEOUT)
+    }
+
+    pub fn from_snapshot_with_timeout(timeout: Duration) -> Option<Self> {
+        let config = tb_config::runtime::settings().ok()?;
+        Some(Self {
+            api_key: if config.stt.remote_endpoint.is_some() {
+                tb_config::private::secret("OPENAI_API_KEY").ok()?
+            } else {
+                "local".into()
+            },
+            model: if config.stt.remote_endpoint.is_some() {
+                config.stt.remote_model.clone()
+            } else {
+                DEFAULT_MODEL.into()
+            },
+            base_url: config.stt.transcription_endpoint(),
+            ffmpeg_bin: config.engagement.ffmpeg_binary.clone(),
+            http: reqwest::Client::builder()
+                .timeout(timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok()?,
+            temp_dir: None,
+        })
+    }
     /// Erzeugt einen lokalen Whisper-Client aus bereits geprüfter Laufzeitconfig.
     /// Der Aufrufer liefert die vollständige lokale Transkriptionsadresse.
     pub fn from_local_config(

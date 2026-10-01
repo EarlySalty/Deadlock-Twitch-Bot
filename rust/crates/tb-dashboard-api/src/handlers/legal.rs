@@ -541,7 +541,7 @@ struct LegalDocument {
 }
 
 fn legal_pages_storage_path() -> std::path::PathBuf {
-    std::env::var("TB_LEGAL_PAGES_PATH")
+    tb_config::runtime::dashboard_value("TB_LEGAL_PAGES_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             std::path::PathBuf::from("data/admin_dashboard/legal_pages.json")
@@ -773,8 +773,8 @@ impl LegalGateConfig {
     /// Fallback-Namen identisch zum Python-Loader.
     fn from_env() -> Self {
         fn read(primary: &str, fallback: &str) -> String {
-            std::env::var(primary)
-                .or_else(|_| std::env::var(fallback))
+            tb_config::runtime::dashboard_value(primary)
+                .or_else(|_| tb_config::runtime::dashboard_value(fallback))
                 .unwrap_or_default()
                 .trim()
                 .to_string()

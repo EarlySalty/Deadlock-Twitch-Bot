@@ -308,7 +308,7 @@ async fn bridge_chat_action(login: &str, mode: &str, color: &str, message: &str)
 }
 
 fn nonempty_env(key: &str) -> Option<String> {
-    std::env::var(key)
+    tb_config::runtime::dashboard_value(key)
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())

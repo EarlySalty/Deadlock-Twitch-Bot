@@ -32,7 +32,7 @@ pub struct DemoLoginConfig {
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key)
+    tb_config::runtime::dashboard_value(key)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -43,7 +43,8 @@ pub fn demo_login_config_from_env() -> Option<DemoLoginConfig> {
     let password_hash = non_empty_env("TWITCH_DEMO_LOGIN_PASSWORD_HASH")?;
     let twitch_user_id = non_empty_env("TWITCH_DEMO_LOGIN_TWITCH_USER_ID")?;
     let display_name = non_empty_env("TWITCH_DEMO_LOGIN_DISPLAY_NAME").unwrap_or_default();
-    let cookie_secure = std::env::var("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
+    let cookie_secure =
+        tb_config::runtime::dashboard_value("TB_DASHBOARD_COOKIE_INSECURE").as_deref() != Ok("1");
     Some(DemoLoginConfig {
         username,
         password_hash,

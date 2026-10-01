@@ -130,10 +130,10 @@ fn require_login(login: &str) -> Result<String, ApiError> {
 /// Muster wie der Avatar-Cache in `internal_home.rs`). `None` heißt: keine
 /// Twitch-Credentials, dann bleibt nur der lokale Bestand.
 fn helix_client() -> Option<HelixClient> {
-    let client_id = std::env::var("TWITCH_CLIENT_ID")
+    let client_id = tb_config::private::secret("TWITCH_CLIENT_ID")
         .ok()
         .filter(|value| !value.is_empty());
-    let client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+    let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET")
         .ok()
         .filter(|value| !value.is_empty());
     // Beide Flags einzeln rechnen: ein hart verdrahtetes `false` meldete auch

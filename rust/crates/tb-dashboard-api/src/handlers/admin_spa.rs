@@ -154,7 +154,7 @@ fn path_should_serve_index(raw_path: &str) -> bool {
 // ── Asset-Serving (Mechanik gespiegelt von spa.rs) ────────────────────────────
 
 fn admin_dist_root() -> PathBuf {
-    let base = std::env::var("ADMIN_DASHBOARD_DIST_PATH")
+    let base = tb_config::runtime::dashboard_value("ADMIN_DASHBOARD_DIST_PATH")
         .unwrap_or_else(|_| DEFAULT_ADMIN_DIST_PATH.to_string());
     PathBuf::from(base)
 }

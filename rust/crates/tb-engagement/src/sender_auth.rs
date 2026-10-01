@@ -93,6 +93,12 @@ impl SenderAuthStore {
         Some(Self::new(pool, cipher, client_id, client_secret))
     }
 
+    pub fn from_snapshot(pool: PgPool, cipher: Arc<FieldCipher>) -> Option<Self> {
+        let client_id = tb_config::private::secret("TWITCH_CLIENT_ID").ok()?;
+        let client_secret = tb_config::private::secret("TWITCH_CLIENT_SECRET").ok()?;
+        Some(Self::new(pool, cipher, client_id, client_secret))
+    }
+
     /// Setzt den Token-Endpoint (für Tests; produktiv bleibt der Default).
     pub fn with_token_url(mut self, url: impl Into<String>) -> Self {
         self.token_url = url.into();
@@ -770,11 +776,12 @@ mod tests {
         // Scope url-encoded (Leerzeichen → +/%20), beide Scopes enthalten.
         assert!(url.contains("user%3Awrite%3Achat"));
         // Genau ein State-Token persistiert, plattform-gated.
-        let (token, platform, streamer_login): (String, String, Option<String>) =
-            sqlx::query_as("SELECT state_token, platform, streamer_login FROM oauth_state_tokens LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (token, platform, streamer_login): (String, String, Option<String>) = sqlx::query_as(
+            "SELECT state_token, platform, streamer_login FROM oauth_state_tokens LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let raw_state = url
             .split("state=")
             .nth(1)
@@ -783,7 +790,10 @@ mod tests {
         assert!(raw_state.starts_with("engsender-"));
         assert_eq!(token, tb_crypto::token_lookup_key(raw_state));
         assert_eq!(platform, "engagement_sender");
-        assert_eq!(streamer_login, None, "OAuth-State darf keinen Accountnamen hart verdrahten");
+        assert_eq!(
+            streamer_login, None,
+            "OAuth-State darf keinen Accountnamen hart verdrahten"
+        );
     }
 
     /// senderauth-03: `oauth_state_tokens.expires_at` wird durchgängig als

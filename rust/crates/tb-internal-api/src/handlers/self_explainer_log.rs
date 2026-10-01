@@ -76,7 +76,7 @@ fn broker_token() -> Option<String> {
         "MAIN_BOT_INTERNAL_TOKEN",
         "TWITCH_INTERNAL_API_TOKEN",
     ] {
-        let value = std::env::var(key).unwrap_or_default();
+        let value = tb_config::private::secret(key).unwrap_or_default();
         let value = value.trim().to_string();
         if !value.is_empty() {
             return Some(value);

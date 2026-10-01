@@ -42,7 +42,7 @@ fn estimate_cost(prompt_tokens: i64, completion_tokens: i64) -> f64 {
 }
 
 fn env_rate(var: &str, default: f64) -> f64 {
-    std::env::var(var)
+    tb_config::runtime::dashboard_value(var)
         .ok()
         .and_then(|value| value.trim().parse::<f64>().ok())
         .filter(|rate| *rate >= 0.0)

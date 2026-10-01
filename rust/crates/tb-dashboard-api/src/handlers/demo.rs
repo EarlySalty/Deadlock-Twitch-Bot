@@ -41,7 +41,7 @@ const DEMO_RUNTIME_SCRIPT: &str = concat!(
 
 /// CSP-Header-Wert für die Demo-Seiten (erlaubt Embedding durch die Community).
 fn demo_csp_value() -> String {
-    let origins = std::env::var("TWITCH_DEMO_EMBED_ORIGINS")
+    let origins = tb_config::runtime::dashboard_value("TWITCH_DEMO_EMBED_ORIGINS")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_DEMO_EMBED_ORIGIN.to_string());

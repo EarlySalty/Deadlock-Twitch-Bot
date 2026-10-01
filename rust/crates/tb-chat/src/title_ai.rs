@@ -775,7 +775,7 @@ fn title_endpoint() -> tb_llm::LlmEndpoint {
 /// Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`: Rate-Limits aus, wenn die Env-Var
 /// auf einen „wahren" Wert gesetzt ist.
 fn pentest_disable_rate_limits() -> bool {
-    std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS")
+    tb_config::runtime::dashboard_value("DDC_PENTEST_DISABLE_RATE_LIMITS")
         .map(|v| {
             !matches!(
                 v.trim().to_lowercase().as_str(),
