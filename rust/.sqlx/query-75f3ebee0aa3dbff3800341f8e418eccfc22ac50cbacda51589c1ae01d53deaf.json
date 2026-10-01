@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_platform_auth SET token_expires_at = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "75f3ebee0aa3dbff3800341f8e418eccfc22ac50cbacda51589c1ae01d53deaf"
+}

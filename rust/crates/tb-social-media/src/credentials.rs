@@ -80,48 +80,50 @@ impl CredentialManager {
     pub async fn get_credentials(
         &self,
         platform: &str,
-        streamer_login: Option<&str>,
+        twitch_user_id: Option<&str>,
     ) -> Option<SocialMediaCredentials> {
-        self.get_credentials_scoped(platform, streamer_login, None)
-            .await
+        self.get_credentials_for_id(platform, twitch_user_id).await
     }
 
-    /// Clipaktionen wählen nur die dauerhaft gespeicherte Twitch-ID.
-    /// Fehlende kanaleigene Bindungen werden nicht aus Namen ergänzt.
     pub async fn get_credentials_for_id(
         &self,
         platform: &str,
         twitch_user_id: Option<&str>,
     ) -> Option<SocialMediaCredentials> {
-        if twitch_user_id
-            .is_some_and(|id| id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
-        {
-            return None;
-        }
-        self.get_credentials_scoped(platform, None, twitch_user_id)
+        self.get_credentials_scoped(platform, twitch_user_id, true)
+            .await
+    }
+
+    pub async fn get_channel_credentials_for_id(
+        &self,
+        platform: &str,
+        twitch_user_id: &str,
+    ) -> Option<SocialMediaCredentials> {
+        self.get_credentials_scoped(platform, Some(twitch_user_id), false)
             .await
     }
 
     async fn get_credentials_scoped(
         &self,
         platform: &str,
-        streamer_login: Option<&str>,
         twitch_user_id: Option<&str>,
+        include_global: bool,
     ) -> Option<SocialMediaCredentials> {
+        if twitch_user_id
+            .is_some_and(|id| id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return None;
+        }
         let row = sqlx::query_as::<_, CredentialRow>(
             "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, client_id, client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, enc_version
              FROM social_media_platform_auth
              WHERE platform = $1 AND enabled = 1 AND (
-                 ($3::text IS NOT NULL AND twitch_user_id = $3)
-                 OR ($3::text IS NULL AND streamer_login = $2)
-                 OR streamer_login IS NULL)
-             ORDER BY CASE WHEN ($3::text IS NOT NULL AND twitch_user_id = $3) OR streamer_login = $2 THEN 1 ELSE 0 END DESC, authorized_at DESC, id DESC LIMIT 1",
+                 ($2::text IS NOT NULL AND twitch_user_id = $2)
+                 OR ($3 AND streamer_login IS NULL AND twitch_user_id IS NULL))
+             ORDER BY CASE WHEN twitch_user_id = $2 THEN 1 ELSE 0 END DESC, authorized_at DESC, id DESC LIMIT 1",
         )
-        .bind(platform).bind(streamer_login).bind(twitch_user_id)
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten()?;
+        .bind(platform).bind(twitch_user_id).bind(include_global)
+        .fetch_optional(&self.pool).await.ok().flatten()?;
 
         let id = row.id;
         let row_platform = row.platform;
@@ -140,7 +142,7 @@ impl CredentialManager {
             Err(_) => {
                 tracing::error!(
                     platform = %sanitize(platform),
-                    streamer = %sanitize(streamer_login.unwrap_or("<none>")),
+                    streamer = %sanitize(streamer_ref.unwrap_or("<none>")),
                     "Decrypt des Auth-Records fehlgeschlagen"
                 );
                 return None;
@@ -406,16 +408,17 @@ mod tests {
         )
         .await;
         seed(&pool, &c, "tiktok", Some("nani"), "nani-access", None).await;
+        sqlx::query("UPDATE social_media_platform_auth SET twitch_user_id = '42' WHERE streamer_login = 'nani'").execute(&pool).await.unwrap();
         let mgr = CredentialManager::new(pool.clone(), c);
 
         // Exakter Streamer-Treffer bevorzugt.
-        let creds = mgr.get_credentials("tiktok", Some("nani")).await.unwrap();
+        let creds = mgr.get_credentials("tiktok", Some("42")).await.unwrap();
         assert_eq!(creds.access_token, "nani-access");
         assert_eq!(creds.streamer_login.as_deref(), Some("nani"));
         assert_eq!(creds.platform_username.as_deref(), Some("theuser"));
 
         // Unbekannter Streamer → globaler Fallback.
-        let creds = mgr.get_credentials("tiktok", Some("wer")).await.unwrap();
+        let creds = mgr.get_credentials("tiktok", Some("99")).await.unwrap();
         assert_eq!(creds.access_token, "global-access");
         assert!(creds.streamer_login.is_none());
         assert_eq!(creds.refresh_token.as_deref(), Some("global-refresh"));

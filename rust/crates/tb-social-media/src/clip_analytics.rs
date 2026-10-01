@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 /// Analytics-Summary (Python-Struktur: `clips` / `queue` / `analytics`).
-pub async fn get_analytics_summary(pool: &PgPool, streamer_login: Option<&str>) -> Value {
+pub async fn get_analytics_summary(pool: &PgPool, twitch_user_id: Option<&str>) -> Value {
     // Clip-Upload-Zahlen.
     let clip_stats = sqlx::query!(
         "SELECT COUNT(*) AS \"total!\", \
@@ -18,8 +18,8 @@ pub async fn get_analytics_summary(pool: &PgPool, streamer_login: Option<&str>) 
                 SUM(CASE WHEN uploaded_youtube THEN 1 ELSE 0 END) AS youtube_uploads, \
                 SUM(CASE WHEN uploaded_instagram THEN 1 ELSE 0 END) AS instagram_uploads \
          FROM twitch_clips_social_media c \
-         WHERE ($1::text IS NULL OR c.streamer_login = $1)",
-        streamer_login
+         WHERE ($1::text IS NULL OR c.twitch_user_id = $1)",
+        twitch_user_id
     )
     .fetch_optional(pool)
     .await
@@ -39,9 +39,9 @@ pub async fn get_analytics_summary(pool: &PgPool, streamer_login: Option<&str>) 
     let queue_rows = sqlx::query!(
         "SELECT q.platform AS \"platform?\", COUNT(*) AS \"pending!\" FROM twitch_clips_upload_queue q \
          JOIN twitch_clips_social_media c ON c.id = q.clip_id \
-         WHERE q.status = 'pending' AND ($1::text IS NULL OR c.streamer_login = $1) \
+         WHERE q.status = 'pending' AND ($1::text IS NULL OR c.twitch_user_id = $1) \
          GROUP BY q.platform",
-        streamer_login
+        twitch_user_id
     )
     .fetch_all(pool)
     .await
@@ -58,9 +58,9 @@ pub async fn get_analytics_summary(pool: &PgPool, streamer_login: Option<&str>) 
          FROM twitch_clips_social_analytics a \
          JOIN twitch_clips_social_media c ON c.id = a.clip_id \
          WHERE a.synced_at > NOW() - INTERVAL '30 days' \
-           AND ($1::text IS NULL OR c.streamer_login = $1) \
+           AND ($1::text IS NULL OR c.twitch_user_id = $1) \
          GROUP BY a.platform",
-        streamer_login
+        twitch_user_id
     )
     .fetch_all(pool)
     .await
@@ -113,7 +113,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', streamer_login TEXT, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT)",
             "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, synced_at TIMESTAMPTZ)",
         ] {
@@ -139,7 +139,8 @@ mod tests {
         // Analytics: tiktok views.
         sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, views, likes, comments, shares, synced_at) VALUES ($1, 'tiktok', 100, 10, 5, 2, NOW())").bind(c1).execute(&pool).await.unwrap();
 
-        let summary = get_analytics_summary(&pool, Some("nani")).await;
+        sqlx::query("UPDATE twitch_clips_social_media SET twitch_user_id = '99' WHERE streamer_login = 'other'").execute(&pool).await.unwrap();
+        let summary = get_analytics_summary(&pool, Some("42")).await;
         assert_eq!(summary["clips"]["total"], 2);
         assert_eq!(summary["clips"]["tiktok_uploads"], 1);
         assert_eq!(summary["clips"]["youtube_uploads"], 0); // 'other' nicht gezaehlt

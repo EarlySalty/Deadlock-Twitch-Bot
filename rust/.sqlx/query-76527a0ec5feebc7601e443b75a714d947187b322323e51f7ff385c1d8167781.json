@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT description_template AS \"description_template!\", hashtags AS \"hashtags!\" FROM clip_templates_streamer WHERE twitch_user_id = $1 AND is_default LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "description_template!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "description_template"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "hashtags!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "clip_templates_streamer",
+            "name": "hashtags"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "76527a0ec5feebc7601e443b75a714d947187b322323e51f7ff385c1d8167781"
+}

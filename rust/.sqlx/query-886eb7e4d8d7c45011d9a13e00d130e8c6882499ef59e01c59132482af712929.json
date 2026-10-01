@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO social_media_streamer_settings (streamer_login, twitch_user_id, approval_mode, timezone, updated_by) SELECT twitch_login, twitch_user_id, $2, $3, 'auto_default' FROM twitch_streamers WHERE twitch_user_id = $1 ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "886eb7e4d8d7c45011d9a13e00d130e8c6882499ef59e01c59132482af712929"
+}

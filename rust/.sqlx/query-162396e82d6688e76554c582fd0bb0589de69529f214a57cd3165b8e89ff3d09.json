@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(s.subtitles_enabled, TRUE) AS \"enabled!\" FROM twitch_clips_social_media c LEFT JOIN social_media_streamer_settings s ON s.twitch_user_id = c.twitch_user_id WHERE c.id = $1 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enabled!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "162396e82d6688e76554c582fd0bb0589de69529f214a57cd3165b8e89ff3d09"
+}

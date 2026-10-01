@@ -12,7 +12,7 @@ use sqlx::PgPool;
 /// Datensatz aus `social_media_partner_access`.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct PartnerAccessEntry {
-    pub twitch_user_id: Option<String>,
+    pub twitch_user_id: String,
     pub streamer_login: String,
     pub granted: bool,
     pub granted_by: Option<String>,
@@ -70,16 +70,12 @@ pub async fn set_partner_access(
     .fetch_one(&mut *tx)
     .await?;
 
-    sqlx::query("DELETE FROM social_media_partner_access WHERE twitch_user_id = $1 AND streamer_login <> $2")
-        .bind(twitch_user_id).bind(&login).execute(&mut *tx).await?;
-
     let entry = sqlx::query_as::<_, PartnerAccessEntry>(
         "INSERT INTO social_media_partner_access (streamer_login, granted, granted_by, granted_at, twitch_user_id)
          VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
-         ON CONFLICT (streamer_login)
-         DO UPDATE SET granted = $2, granted_by = $3, granted_at = CURRENT_TIMESTAMP, twitch_user_id = $4
-         WHERE social_media_partner_access.twitch_user_id = EXCLUDED.twitch_user_id
-            OR social_media_partner_access.twitch_user_id IS NULL
+         ON CONFLICT (twitch_user_id)
+         DO UPDATE SET streamer_login = EXCLUDED.streamer_login, granted = EXCLUDED.granted,
+                       granted_by = EXCLUDED.granted_by, granted_at = EXCLUDED.granted_at
          RETURNING twitch_user_id, streamer_login, granted, granted_by, granted_at",
     )
     .bind(&login)
@@ -130,8 +126,8 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE social_media_partner_access (
-                streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE,
-                twitch_user_id TEXT,
+                streamer_login TEXT NOT NULL,
+                twitch_user_id TEXT PRIMARY KEY CHECK (twitch_user_id ~ '^[0-9]+$'),
                 granted BOOLEAN NOT NULL DEFAULT FALSE,
                 granted_by TEXT,
                 granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -184,7 +180,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted, granted_by) VALUES ('testuser', FALSE, 'admin')")
+        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted, granted_by) VALUES ('testuser', '42', FALSE, 'admin')")
             .execute(&pool)
             .await
             .unwrap();
@@ -246,16 +242,15 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        // Der kollidierende Anzeige-/FK-Schlüssel darf die alte ID nicht umhängen.
-        assert!(set_partner_access(&pool, "22", true, Some("admin"))
+        set_partner_access(&pool, "22", false, Some("admin"))
             .await
-            .is_err());
+            .unwrap();
         assert!(is_partner_id_granted(&pool, "11").await);
         assert!(!is_partner_id_granted(&pool, "22").await);
         let a = set_partner_access(&pool, "11", true, Some("admin"))
             .await
             .unwrap();
-        assert_eq!(a.twitch_user_id.as_deref(), Some("11"));
+        assert_eq!(a.twitch_user_id, "11");
         assert_eq!(a.streamer_login, "new_a");
         set_partner_access(&pool, "22", true, Some("admin"))
             .await
@@ -268,15 +263,15 @@ mod tests {
         let entries = list_partner_access(&pool).await.unwrap();
         assert!(entries
             .iter()
-            .any(|entry| entry.twitch_user_id.as_deref() == Some("11") && !entry.granted));
+            .any(|entry| entry.twitch_user_id == "11" && !entry.granted));
         assert!(entries
             .iter()
-            .any(|entry| entry.twitch_user_id.as_deref() == Some("22") && entry.granted));
+            .any(|entry| entry.twitch_user_id == "22" && entry.granted));
     }
 
     #[tokio::test]
-    async fn explicit_id_grant_can_replace_unidentified_legacy_grant_only() {
-        let Some(pool) = make_pool("t_sm_pa_legacy").await else {
+    async fn grants_require_id_and_never_resolve_login() {
+        let Some(pool) = make_pool("t_sm_pa_required_id").await else {
             return;
         };
         sqlx::query(
@@ -285,9 +280,8 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('legacy', TRUE)")
-            .execute(&pool).await.unwrap();
-        assert!(!is_partner_id_granted(&pool, "11").await);
+        assert!(sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('legacy', TRUE)")
+            .execute(&pool).await.is_err());
         assert!(set_partner_access(&pool, "legacy", true, Some("admin"))
             .await
             .is_err());
@@ -297,7 +291,8 @@ mod tests {
         let entry = set_partner_access(&pool, "11", true, Some("admin"))
             .await
             .unwrap();
-        assert_eq!(entry.twitch_user_id.as_deref(), Some("11"));
+        assert_eq!(entry.twitch_user_id, "11");
         assert!(is_partner_id_granted(&pool, "11").await);
+        assert!(!is_partner_id_granted(&pool, "legacy").await);
     }
 }

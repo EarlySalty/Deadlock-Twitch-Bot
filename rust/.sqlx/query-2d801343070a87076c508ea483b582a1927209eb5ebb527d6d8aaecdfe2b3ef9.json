@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT platform, auto_post, posts_per_week, max_posts_per_day, post_times::text AS \"post_times?\" FROM social_media_platform_schedule WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "platform"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "auto_post",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "auto_post"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "posts_per_week",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "posts_per_week"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "max_posts_per_day",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_schedule",
+            "name": "max_posts_per_day"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "post_times?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "2d801343070a87076c508ea483b582a1927209eb5ebb527d6d8aaecdfe2b3ef9"
+}

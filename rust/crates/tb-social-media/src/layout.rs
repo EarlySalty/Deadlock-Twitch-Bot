@@ -400,14 +400,14 @@ fn decode_layout_json(raw: &str) -> Option<Value> {
 }
 
 /// Default-Layout eines Streamers (`None` wenn keins gesetzt).
-pub async fn get_streamer_layout(pool: &PgPool, login: &str) -> Option<StreamerLayout> {
-    let normalized = login.trim().to_lowercase();
+pub async fn get_streamer_layout(pool: &PgPool, twitch_user_id: &str) -> Option<StreamerLayout> {
+    let normalized = twitch_user_id.trim().to_string();
     if normalized.is_empty() {
         return None;
     }
     let row = sqlx::query!(
         "SELECT layout_json::text AS \"layout_json!\", cam_enabled AS \"cam_enabled!\", mode AS \"mode!\" FROM social_media_streamer_layout \
-         WHERE LOWER(streamer_login) = $1 LIMIT 1",
+         WHERE twitch_user_id = $1 LIMIT 1",
         &normalized
     )
     .fetch_optional(pool)
@@ -425,21 +425,21 @@ pub async fn get_streamer_layout(pool: &PgPool, login: &str) -> Option<StreamerL
 /// Schreibt/aktualisiert das Default-Layout eines Streamers.
 pub async fn upsert_streamer_layout(
     pool: &PgPool,
-    login: &str,
+    twitch_user_id: &str,
     layout: &StreamerLayout,
     updated_by: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let normalized = login.trim().to_lowercase();
+    let normalized = twitch_user_id.trim().to_string();
     if normalized.is_empty() {
         return Ok(());
     }
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query!(
         "INSERT INTO social_media_streamer_layout \
-            (streamer_login, layout_json, cam_enabled, mode, updated_at, updated_by) \
-         VALUES ($1, $2::text::jsonb, $3, $4, CURRENT_TIMESTAMP, $5) \
-         ON CONFLICT (streamer_login) DO UPDATE \
-            SET layout_json = EXCLUDED.layout_json, cam_enabled = EXCLUDED.cam_enabled, \
+            (streamer_login, twitch_user_id, layout_json, cam_enabled, mode, updated_at, updated_by) \
+         SELECT twitch_login, twitch_user_id, $2::text::jsonb, $3, $4, CURRENT_TIMESTAMP, $5 FROM twitch_streamers WHERE twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL DO UPDATE \
+            SET streamer_login = EXCLUDED.streamer_login, layout_json = EXCLUDED.layout_json, cam_enabled = EXCLUDED.cam_enabled, \
                 mode = EXCLUDED.mode, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by",
         &normalized,
         serde_json::to_string(&layout.to_layout_json()).unwrap_or_else(|_| "{}".to_string()),
@@ -463,7 +463,7 @@ pub async fn get_clip_effective_layout(
                 l.layout_json::text AS streamer_layout_json, l.cam_enabled AS \"cam_enabled?\", l.mode AS \"mode?\" \
            FROM twitch_clips_social_media c \
            LEFT JOIN social_media_streamer_layout l \
-             ON LOWER(l.streamer_login) = LOWER(c.streamer_login) \
+             ON l.twitch_user_id = c.twitch_user_id \
           WHERE c.id = $1 LIMIT 1",
         clip_db_id
     )
@@ -514,7 +514,7 @@ pub async fn get_clip_stored_layout(
                 l.layout_json::text AS streamer_layout_json, l.cam_enabled AS \"cam_enabled?\", l.mode AS \"mode?\" \
            FROM twitch_clips_social_media c \
            LEFT JOIN social_media_streamer_layout l \
-             ON LOWER(l.streamer_login) = LOWER(c.streamer_login) \
+             ON l.twitch_user_id = c.twitch_user_id \
           WHERE c.id = $1 LIMIT 1",
         clip_db_id
     )
@@ -566,10 +566,16 @@ pub async fn set_clip_layout_override(
 pub async fn apply_default_layout(
     pool: &PgPool,
     clip_db_id: impl Into<i64>,
-    streamer_login: &str,
+    _streamer_login: &str,
 ) -> Result<(), sqlx::Error> {
     let clip_db_id = clip_db_id.into();
-    let layout = match get_streamer_layout(pool, streamer_login).await {
+    let id: Option<String> =
+        sqlx::query_scalar("SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip_db_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+    let layout = match get_streamer_layout(pool, id.as_deref().unwrap_or("")).await {
         Some(layout) => layout,
         None => no_layout_fallback(),
     };
@@ -863,11 +869,20 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, layout_override_json JSONB)",
-            "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', streamer_login TEXT, layout_override_json JSONB)",
+            "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('nani','42')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_identity ON social_media_streamer_layout (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -904,24 +919,19 @@ mod tests {
         let mut custom = default_streamer_layout();
         custom.cam_enabled = false;
         custom.mode = "stacked".into();
-        upsert_streamer_layout(&pool, "Nani", &custom, Some("admin"))
+        upsert_streamer_layout(&pool, "42", &custom, Some("admin"))
             .await
             .unwrap();
         // case-insensitiv lesbar.
-        let got = get_streamer_layout(&pool, "nani").await.unwrap();
+        let got = get_streamer_layout(&pool, "42").await.unwrap();
         assert!(!got.cam_enabled);
         assert_eq!(got.mode, "stacked");
         assert_eq!(got.game_crop, custom.game_crop);
         // Upsert überschreibt.
-        upsert_streamer_layout(&pool, "nani", &default_streamer_layout(), None)
+        upsert_streamer_layout(&pool, "42", &default_streamer_layout(), None)
             .await
             .unwrap();
-        assert!(
-            get_streamer_layout(&pool, "nani")
-                .await
-                .unwrap()
-                .cam_enabled
-        );
+        assert!(get_streamer_layout(&pool, "42").await.unwrap().cam_enabled);
 
         // Clip ohne Override → apply_default belegt mit Streamer-Default.
         let clip: i32 = sqlx::query_scalar(
@@ -936,7 +946,7 @@ mod tests {
 
         let mut other = default_streamer_layout();
         other.mode = "pip".into();
-        upsert_streamer_layout(&pool, "nani", &other, None)
+        upsert_streamer_layout(&pool, "42", &other, None)
             .await
             .unwrap();
         apply_default_layout(&pool, clip, "nani").await.unwrap();
@@ -979,7 +989,7 @@ mod tests {
         .await
         .unwrap();
 
-        let got = get_streamer_layout(&pool, "alt")
+        let got = get_streamer_layout(&pool, "42")
             .await
             .expect("Altlayout muss lesbar bleiben, nicht auf den Default kippen");
         assert_eq!(got.mode, "stacked");
@@ -1029,7 +1039,7 @@ mod tests {
             return;
         };
         // Streamer mit gespeichertem pip-Layout.
-        upsert_streamer_layout(&pool, "nani", &default_streamer_layout(), None)
+        upsert_streamer_layout(&pool, "42", &default_streamer_layout(), None)
             .await
             .unwrap();
         let clip: i32 = sqlx::query_scalar(
@@ -1057,7 +1067,7 @@ mod tests {
 
         // Clip ohne Streamer-Layout und ohne Override -> Fallback Center-Crop.
         let ghost: i32 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('ghost') RETURNING id",
+            "INSERT INTO twitch_clips_social_media (streamer_login, twitch_user_id) VALUES ('ghost', '99') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -1079,7 +1089,7 @@ mod tests {
             no_layout_fallback()
         );
         let clip: i32 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (streamer_login) VALUES ('ghost') RETURNING id",
+            "INSERT INTO twitch_clips_social_media (streamer_login, twitch_user_id) VALUES ('ghost', '99') RETURNING id",
         )
         .fetch_one(&pool)
         .await

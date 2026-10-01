@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO clip_last_hashtags (streamer_login, twitch_user_id, hashtags, last_used_at)\n         SELECT twitch_login, twitch_user_id, $2, CURRENT_TIMESTAMP FROM twitch_streamers WHERE twitch_user_id = $1\n         ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL\n         DO UPDATE SET streamer_login = EXCLUDED.streamer_login, hashtags = EXCLUDED.hashtags, last_used_at = EXCLUDED.last_used_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f8a2bdeb0d72efc86eb47c63e6f8a5f61aec9b513204ab07bfc7b478c6e369b"
+}

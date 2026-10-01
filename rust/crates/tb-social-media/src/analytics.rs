@@ -303,7 +303,7 @@ pub async fn get_existing_report(
     let row: Option<ReportRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {REPORT_COLUMNS} FROM social_media_reports \
           WHERE kind = $1 AND period_start = $2::timestamptz AND period_end = $3::timestamptz \
-            AND (twitch_user_id = $4 OR (streamer_login IS NULL AND $4::text IS NULL)) \
+            AND (twitch_user_id = $4 OR (twitch_user_id IS NULL AND streamer_login IS NULL AND $4::text IS NULL)) \
           ORDER BY created_at DESC, id DESC LIMIT 1"
     )))
     .bind(kind)
@@ -532,6 +532,30 @@ mod tests {
             .unwrap();
         assert_eq!(global.streamer_login, None);
         assert_eq!(global.model, None);
+
+        let missing_display =
+            insert_report(&pool, "weekly", None, Some("99"), ps, pe, "# Channel", None)
+                .await
+                .unwrap();
+        assert_eq!(
+            get_existing_report(&pool, "weekly", ps, pe, None)
+                .await
+                .unwrap()
+                .id,
+            global.id,
+        );
+        assert_eq!(
+            get_existing_report(&pool, "weekly", ps, pe, Some("99"))
+                .await
+                .unwrap()
+                .id,
+            missing_display.id,
+        );
+        sqlx::query("DELETE FROM social_media_reports WHERE id = $1")
+            .bind(missing_display.id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // list: ohne Filter beide, kind-Filter greift, streamer-Filter greift.
         assert_eq!(list_reports(&pool, None, None, 20).await.len(), 2);

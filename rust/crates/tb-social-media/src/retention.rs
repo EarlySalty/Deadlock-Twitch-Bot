@@ -21,13 +21,13 @@ const PLATFORM_UPLOAD_COLUMNS: [(&str, &str); 3] = [
 /// Plattformen, für die der Streamer (oder global) einen aktiven Auth-Record hat.
 pub async fn get_active_platforms_for_streamer(
     pool: &PgPool,
-    streamer_login: Option<&str>,
+    twitch_user_id: Option<&str>,
 ) -> HashSet<String> {
-    let login = streamer_login.unwrap_or("").trim().to_lowercase();
+    let identity = twitch_user_id.filter(|id| !id.is_empty());
     sqlx::query_scalar!(
         "SELECT DISTINCT platform FROM social_media_platform_auth \
-         WHERE enabled = 1 AND (LOWER(COALESCE(streamer_login, '')) = LOWER($1) OR streamer_login IS NULL)",
-        &login
+         WHERE enabled = 1 AND (twitch_user_id = $1 OR (streamer_login IS NULL AND twitch_user_id IS NULL))",
+        identity
     )
     .fetch_all(pool)
     .await
@@ -44,7 +44,7 @@ pub async fn is_clip_published_on_all_active_platforms(
 ) -> bool {
     let clip_db_id = clip_db_id.into();
     let row = sqlx::query!(
-        "SELECT streamer_login, COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", \
+        "SELECT twitch_user_id, COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", \
                 COALESCE(uploaded_youtube, false) AS \"uploaded_youtube!\", \
                 COALESCE(uploaded_instagram, false) AS \"uploaded_instagram!\" \
          FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
@@ -57,7 +57,7 @@ pub async fn is_clip_published_on_all_active_platforms(
     let Some(row) = row else {
         return false;
     };
-    let active = get_active_platforms_for_streamer(pool, Some(row.streamer_login.as_str())).await;
+    let active = get_active_platforms_for_streamer(pool, row.twitch_user_id.as_deref()).await;
     if active.is_empty() {
         return true;
     }
@@ -229,9 +229,9 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)")
+        sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, preview_path TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)")
+        sqlx::query("CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, preview_path TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -242,8 +242,8 @@ mod tests {
             return;
         };
         // Aktive Plattformen für 'nani': tiktok (streamer) + youtube (global).
-        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login) VALUES ('tiktok','nani'), ('youtube', NULL)").execute(&pool).await.unwrap();
-        let active = get_active_platforms_for_streamer(&pool, Some("nani")).await;
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id) VALUES ('tiktok','nani','42'), ('youtube', NULL, NULL), ('instagram', 'nani', '99')").execute(&pool).await.unwrap();
+        let active = get_active_platforms_for_streamer(&pool, Some("42")).await;
         assert!(
             active.contains("tiktok")
                 && active.contains("youtube")

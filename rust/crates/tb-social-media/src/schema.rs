@@ -27,11 +27,12 @@ const STATEMENTS: &[&str] = &[
         ON social_media_reauth_notifications(last_sent_at DESC)",
     // Streamer-Layout (PiP/Stacked, Cam-Toggle).
     "CREATE TABLE IF NOT EXISTS social_media_streamer_layout (\
-        streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
+        streamer_login TEXT NOT NULL, twitch_user_id TEXT, \
         layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, \
         mode TEXT NOT NULL DEFAULT 'stacked', \
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT, \
         CONSTRAINT social_media_layout_mode_chk CHECK (mode IN ('pip', 'stacked', 'blur_pad')))",
+    "CREATE UNIQUE INDEX IF NOT EXISTS social_media_streamer_layout_identity ON social_media_streamer_layout(twitch_user_id) WHERE twitch_user_id IS NOT NULL",
     // Clip-Tabelle: Social-Media-Spalten + Retention.
     "ALTER TABLE twitch_clips_social_media \
         ADD COLUMN IF NOT EXISTS layout_override_json JSONB, \
@@ -69,7 +70,7 @@ const STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_deadlock_vocab_canonical ON deadlock_vocab(canonical)",
     // Social-Media-Reports (Insights/Periodenberichte).
     "CREATE TABLE IF NOT EXISTS social_media_reports (\
-        id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, \
+        id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, twitch_user_id TEXT, \
         period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, \
         content_md TEXT NOT NULL, model TEXT, \
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -126,8 +127,8 @@ const STATEMENTS: &[&str] = &[
         UNIQUE (clip_id, form_key))",
     // Partner-Freigabe für Social-Media-Posts (zentraler Guard).
     "CREATE TABLE IF NOT EXISTS social_media_partner_access (\
-        streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login) ON DELETE CASCADE, \
-        twitch_user_id TEXT, granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
+        streamer_login TEXT NOT NULL, \
+        twitch_user_id TEXT PRIMARY KEY CHECK (twitch_user_id ~ '^[0-9]+$'), granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, \
         granted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     // Analytics-Spalten (Phase 3) — neue Spalten idempotent.
     "ALTER TABLE twitch_clips_social_analytics \
