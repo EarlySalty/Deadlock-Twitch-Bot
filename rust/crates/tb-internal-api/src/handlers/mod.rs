@@ -1,5 +1,6 @@
 pub mod chat_command;
 pub mod common;
+pub mod community_points;
 pub mod diagnose;
 pub mod discord_invite;
 pub mod eventsub;

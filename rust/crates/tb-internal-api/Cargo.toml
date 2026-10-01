@@ -36,6 +36,8 @@ tb-transport-twitch = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Handler-Tests laufen gegen eine frisch migrierte Wegwerf-DB.
+tb-db     = { workspace = true }
 tokio     = { workspace = true }
 tower     = { workspace = true, features = ["util"] }
 wiremock  = { workspace = true }

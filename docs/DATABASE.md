@@ -251,6 +251,28 @@ Welcher Streamer wurde mit welchem Invite eingeladen.
 ### twitch_partner_outreach
 Outreach-Log fuer Partner-Ansprache.
 
+### Community-Punkte (Community-Streamer-Brücke, Paket B)
+
+Migration `rust/migrations/20261001100000_community_points.sql`. Der tb-bot
+(`community_points_aggregation`, alle 5 Minuten) rechnet die Tageswerte
+(Tag nach Europe/Berlin) aus den Rohdaten neu und schreibt nur geänderte
+Zeilen; Logik und Regeln in `rust/crates/tb-analytics/src/community_points.rs`.
+Quellen: `twitch_viewer_presence_ticks` (Twitch-User-ID über
+`twitch_session_chatters.chatter_id` derselben Session), `twitch_chat_messages`,
+`twitch_raid_history`, `twitch_ban_events`, `twitch_chatter_global_ban`,
+`twitch_chatter_rollup`, `twitch_streamers_partner_state`.
+`updated_at` ist je Tabelle streng monoton und eindeutig (Lese-Cursor).
+
+| Tabelle | Schlüssel | Inhalt |
+|---------|-----------|--------|
+| `twitch_community_points_viewer_daily` | (`twitch_user_id`, `channel_twitch_user_id`, `day`) | `twitch_login`, `watch_minutes`, `chat_messages` (zählende Nachrichten), `points_watch` (≤ 72), `points_chat` (≤ 30), `points_discovery` (0/10), `updated_at` |
+| `twitch_community_points_streamer_daily` | (`streamer_twitch_user_id`, `day`) | `streamer_login`, `discord_user_id`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`, `updated_at` |
+| `twitch_community_points_discoveries` | (`twitch_user_id`, `channel_twitch_user_id`) | erstes Auftauchen im Partnerkanal: `day`, `first_seen_at`, `bonus_awarded` (endgültig, Grundlage des Entdecker-Bonus) |
+
+Zeilen eines neu gerechneten Tages, die nicht mehr vorkommen (z. B. später
+gebannt), werden genullt statt gelöscht, damit der Sync sie sieht.
+Rechte: `twitchbot` liest/schreibt, `twitchdash` liest.
+
 ---
 
 ## Monitoring-Snapshots

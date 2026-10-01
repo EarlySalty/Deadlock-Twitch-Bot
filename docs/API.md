@@ -250,3 +250,29 @@ Der öffentliche Vergleich enthält keine Einnahmen, Abos, Discord-IDs oder einz
 | POST | `/twitch/api/billing/checkout-session` | S | routes_mixin.py |
 | POST | `/twitch/api/billing/invoice-preview` | S | routes_mixin.py |
 | POST | `/twitch/api/billing/stripe/sync-products` | A | routes_mixin.py |
+
+## Interne Twitch-API (tb-bot, Loopback)
+
+Auth: `X-Internal-Token` + Loopback-Guard (wie alle Routen unter `/internal/twitch/v1`).
+
+### Community-Punkte (Community-Streamer-Brücke, Paket B)
+| Methode | Pfad | Datei |
+|---------|------|-------|
+| GET | `/internal/twitch/v1/community-points/viewers` | rust/crates/tb-internal-api/src/handlers/community_points.rs |
+| GET | `/internal/twitch/v1/community-points/streamers` | rust/crates/tb-internal-api/src/handlers/community_points.rs |
+
+Query: `updated_since=<RFC3339>` (optional, exklusiv), `limit=1..5000`
+(Standard 1000, sonst 400). Antwort `{"rows":[...],"next_updated_since":"...","has_more":false}`,
+sortiert nach `updated_at`, dann Schlüssel. `next_updated_since` ist das
+`updated_at` der letzten Zeile (RFC3339 UTC, Mikrosekunden wenn nötig) und
+wird unverändert als nächstes `updated_since` übergeben; bei leerer Seite
+bleibt es der übergebene Wert (ohne Wert: `null`). Zeilen sind Tageswerte und
+werden beim Lesen idempotent überschrieben.
+
+Zuschauer-Zeile: `twitch_user_id`, `twitch_login`, `channel_twitch_user_id`,
+`day` (YYYY-MM-DD, Europe/Berlin), `watch_minutes`, `chat_messages`,
+`points_watch`, `points_chat`, `points_discovery`, `updated_at`.
+
+Streamer-Zeile: `streamer_twitch_user_id`, `streamer_login`, `discord_user_id`
+(oder `null`), `day`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`,
+`updated_at`.
