@@ -1,0 +1,6 @@
+{
+  "socket": "/var/run/postgresql",
+  "port": 5432,
+  "database": "token_db_cutover_review",
+  "username": "nathanael"
+}

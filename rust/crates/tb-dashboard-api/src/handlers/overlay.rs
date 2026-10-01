@@ -913,6 +913,7 @@ mod tests {
     use super::{
         build_recent, cached_or_compute, compute_kd, filter_by_mode, normalize_mode,
         scored_matches, summarize_matches, summarize_today, OverlayCache, RecentMatch, SteamMatch,
+        TEST_OVERLAY_OPTIONS,
     };
     use chrono::TimeZone;
 
@@ -1428,37 +1429,129 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
-    fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
+    #[derive(serde::Deserialize, serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct OverlayScratchConfig {
+        socket: String,
+        port: u16,
+        database: String,
+        username: String,
     }
 
-    macro_rules! db_dsn_or_skip {
-        () => {
-            match test_dsn() {
-                Some(d) => d,
-                None => {
-                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-                    }
-                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                    return;
-                }
-            }
+    #[derive(serde::Deserialize, serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct OverlayChildConfig {
+        parent_pid: u32,
+        fixture: String,
+        scratch: OverlayScratchConfig,
+    }
+
+    // Der Parent delegiert genau diesen Test an ein env_clear-Child. Der Child
+    // erhält ausschließlich normale Config auf stdin; ohne diese Bindung ist
+    // ein direkter --exact-Aufruf ein harter Fehler vor Optionsinitialisierung.
+    fn isolated_overlay_child(fixture: &str) -> Option<OverlayScratchConfig> {
+        use std::io::{Read, Write};
+        use std::process::{Command, Stdio};
+
+        if std::env::args().any(|argument| argument == "--exact") {
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .take(4097)
+                .read_to_end(&mut bytes)
+                .expect("Normale Child-Testconfig lesen");
+            assert!(bytes.len() <= 4096, "Child-Testconfig ist zu groß");
+            let config: OverlayChildConfig = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| panic!("Normale Child-Testconfig fehlt oder ist ungültig"));
+            let process_status = std::fs::read_to_string("/proc/self/status")
+                .expect("Eigene Child-Prozessmetadaten lesen");
+            let parent_pid: u32 = process_status
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:"))
+                .expect("Child-Elternprozess fehlt")
+                .trim()
+                .parse()
+                .expect("Child-Elternprozess ist ungültig");
+            assert_eq!(config.parent_pid, parent_pid);
+            assert_eq!(config.fixture, fixture, "Child-Fixturebindung weicht ab");
+            eprintln!("overlay_fixture_child_binding_verified=true");
+            return Some(config.scratch);
+        }
+
+        let scratch =
+            serde_json::from_str(include_str!("../../test-fixtures/overlay-scratch.json"))
+                .unwrap_or_else(|_| panic!("Normale Overlay-Scratchconfig ist ungültig"));
+        let config = OverlayChildConfig {
+            parent_pid: std::process::id(),
+            fixture: fixture.to_owned(),
+            scratch,
         };
+        let bytes = serde_json::to_vec(&config).expect("Normale Child-Testconfig serialisieren");
+        let mut child = Command::new(std::env::current_exe().expect("Eigenes Testbinary auflösen"))
+            .env_clear()
+            .args([fixture, "--exact", "--test-threads=1", "--nocapture"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("Isolierten Overlay-Testchild starten");
+        let write_result = child
+            .stdin
+            .take()
+            .expect("Privater Child-Configkanal fehlt")
+            .write_all(&bytes);
+        let status = child.wait().expect("Overlay-Testchild vollständig beenden");
+        write_result.expect("Normale Child-Testconfig übertragen");
+        assert!(
+            status.success(),
+            "Isolierte Overlay-DB-Fixture fehlgeschlagen"
+        );
+        eprintln!("overlay_fixture_env_clear_child_completed=true");
+        None
     }
 
-    async fn make_pool(dsn: &str, schema: &str) -> sqlx::PgPool {
+    async fn make_pool(config: OverlayScratchConfig, schema: &str) -> (sqlx::PgPool, String) {
+        assert_eq!(config.socket, "/var/run/postgresql");
+        assert_eq!(config.port, 5432);
+        assert_eq!(config.database, "token_db_cutover_review");
+        assert_eq!(config.username, "nathanael");
+        assert!(matches!(
+            schema,
+            "api_overlay_cache" | "api_overlay_unknown"
+        ));
+        let socket = std::path::Path::new(&config.socket).join(format!(".s.PGSQL.{}", config.port));
+        use std::os::unix::fs::FileTypeExt;
+        assert!(std::fs::metadata(socket)
+            .expect("Scratch-Unixsocket fehlt")
+            .file_type()
+            .is_socket());
+        let options = sqlx::postgres::PgConnectOptions::new_without_pgpass()
+            .socket(&config.socket)
+            .port(config.port)
+            .username(&config.username)
+            .database(&config.database)
+            .ssl_mode(sqlx::postgres::PgSslMode::Disable);
         let pool = PgPoolOptions::new()
             .max_connections(1)
-            .connect(dsn)
+            .connect_with(options)
             .await
-            .unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP SCHEMA IF EXISTS {schema} CASCADE"
-        )))
-        .execute(&pool)
+            .unwrap_or_else(|_| panic!("Isolierte Scratch-Peer-Verbindung fehlgeschlagen"));
+        let identity: (String, String, bool, String, bool) = sqlx::query_as(
+            "SELECT current_database(), current_user, inet_server_addr() IS NULL, \
+             pg_get_userbyid(datdba), datistemplate FROM pg_database WHERE datname = current_database()",
+        )
+        .fetch_one(&pool)
         .await
-        .expect("Schema droppen");
+        .unwrap_or_else(|_| panic!("Read-only Scratch-Identitätsprüfung fehlgeschlagen"));
+        assert_eq!(
+            identity,
+            (
+                config.database,
+                config.username,
+                true,
+                "nathanael".into(),
+                false
+            )
+        );
+        eprintln!("overlay_scratch_nonprod_peer_preflight_passed=true");
+        let schema = format!("{schema}_{}", std::process::id());
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&pool)
             .await
@@ -1483,7 +1576,16 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL twitch_streamer_identities");
-        pool
+        (pool, schema)
+    }
+
+    async fn drop_overlay_schema(pool: sqlx::PgPool, schema: String) {
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&pool)
+            .await
+            .expect("Eigenes Overlay-Scratchschema aufräumen");
+        pool.close().await;
+        eprintln!("overlay_fixture_assertions_and_own_schema_cleanup_passed=true");
     }
 
     async fn get_json(app: axum::Router, uri: &str) -> Value {
@@ -1503,7 +1605,7 @@ mod tests {
 
     #[tokio::test]
     async fn overlay_api_cache_hit_innerhalb_ttl_nutzt_keinen_zweiten_steam_abruf() {
-        let dsn = db_dsn_or_skip!();
+        let Some(config) = isolated_overlay_child("handlers::overlay::tests::overlay_api_cache_hit_innerhalb_ttl_nutzt_keinen_zweiten_steam_abruf") else { return; };
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
         super::clear_overlay_cache_for_tests();
         super::clear_hero_icon_cache_for_tests();
@@ -1514,7 +1616,7 @@ mod tests {
             ..Default::default()
         };
         TEST_OVERLAY_OPTIONS.scope(options, async {
-        let pool = make_pool(&dsn, "api_overlay_cache").await;
+        let (pool, schema) = make_pool(config, "api_overlay_cache").await;
 
         sqlx::query(
             "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('StreamerX', 'tw1')",
@@ -1591,7 +1693,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = build_public_router(pool);
+        let app = build_public_router(pool.clone());
         let first = get_json(
             app.clone(),
             "/twitch/api/v2/public/overlay?streamer=StreamerX",
@@ -1630,12 +1732,13 @@ mod tests {
         mock_server.verify().await;
         // 4 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
         assert_eq!(mock_server.received_requests().await.unwrap().len(), 5);
+        drop_overlay_schema(pool, schema).await;
         }).await;
     }
 
     #[tokio::test]
     async fn overlay_api_unbekannter_streamer_liefert_ok_false_ohne_steam_abruf() {
-        let dsn = db_dsn_or_skip!();
+        let Some(config) = isolated_overlay_child("handlers::overlay::tests::overlay_api_unbekannter_streamer_liefert_ok_false_ohne_steam_abruf") else { return; };
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
         super::clear_overlay_cache_for_tests();
         let mock_server = MockServer::start().await;
@@ -1645,13 +1748,14 @@ mod tests {
         };
         TEST_OVERLAY_OPTIONS
             .scope(options, async {
-                let pool = make_pool(&dsn, "api_overlay_unknown").await;
+                let (pool, schema) = make_pool(config, "api_overlay_unknown").await;
 
-                let app = build_public_router(pool);
+                let app = build_public_router(pool.clone());
                 let json = get_json(app, "/twitch/api/v2/public/overlay?streamer=missing").await;
 
                 assert_eq!(json, json!({ "ok": false }));
                 assert_eq!(mock_server.received_requests().await.unwrap().len(), 0);
+                drop_overlay_schema(pool, schema).await;
             })
             .await;
     }
