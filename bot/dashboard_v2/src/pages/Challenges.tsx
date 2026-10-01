@@ -437,7 +437,11 @@ export function Challenges() {
                       : 'border-white/10 bg-white/5 text-zinc-300'
                   }`}
                 >
-                  {badge.earned ? <Trophy className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
+                  {badge.earned ? (
+                    <Trophy className="h-4 w-4" />
+                  ) : (
+                    <LockKeyhole className="h-4 w-4 text-zinc-500" />
+                  )}
                 </div>
                 <div className="min-w-0">
                   <h3 className={`font-semibold ${badge.earned ? 'text-white' : 'text-zinc-300'}`}>
