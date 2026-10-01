@@ -314,10 +314,7 @@ pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Respo
             && crate::model_resolver::allowed_fireworks_model(&endpoint.model)
             && (endpoint.base_url.trim_end_matches('/') == crate::selection::FIREWORKS_BASE_URL
                 || is_loopback_endpoint(&endpoint.base_url));
-        let title_glm = use_case == "title_ai"
-            && endpoint.provider == "zai"
-            && endpoint.model == "glm-5.3-flash";
-        !standard && !title_glm
+        !standard
     }) {
         tracing::warn!(
             use_case,
@@ -470,65 +467,8 @@ async fn call_selected_endpoint(
     if endpoint.provider != "fireworks" || is_loopback_endpoint(&endpoint.base_url) {
         return call_endpoint(endpoint, request, purpose, frist).await;
     }
-    // Vor der Auflösung ist die YAML-Mindestversion noch kein tatsächlich
-    // aufgerufenes Modell. Fehler an dieser Stelle tragen keine Modell-ID.
-    endpoint.model.clear();
-    let resolver = crate::model_resolver::global()?;
-    let operation = async {
-        // An inference request must not wait for optional ledger/cache I/O.
-        // The supervised refresh loop owns persistence and cache hydration.
-        call_with_resolver(resolver, endpoint, request, purpose, frist, None).await
-    };
-    tokio::time::timeout(frist, operation).await.map_err(|_| {
-        LlmError::Timeout("Gesamtfrist einschließlich Modellauswahl erschöpft".into())
-    })?
-}
-
-/// Dieselbe Auflösungs-/404-Strecke für Produktion und lokale Vertragstests.
-/// Die äußere Gesamtfrist umfasst Katalog, Probe, eigentlichen Call und Retry.
-pub(crate) async fn call_with_resolver(
-    resolver: &crate::model_resolver::ModelResolver,
-    endpoint: &mut LlmEndpoint,
-    request: &Request,
-    purpose: Option<&str>,
-    frist: Duration,
-    pool: Option<&sqlx::PgPool>,
-) -> Result<Response, LlmError> {
-    let key = endpoint
-        .api_key
-        .clone()
-        .ok_or_else(|| LlmError::Unavailable("Fireworks-Schlüssel fehlt".into()))?;
-    let started = Instant::now();
-    endpoint.model = resolver.resolve(&key, None, pool).await?;
-    let result = call_endpoint(
-        endpoint,
-        request,
-        purpose,
-        frist.saturating_sub(started.elapsed()),
-    )
-    .await;
-    if !matches!(
-        &result,
-        Err(LlmError::Http {
-            status: 404 | 410,
-            ..
-        })
-    ) {
-        return result;
-    }
-    let rejected = endpoint.model.clone();
-    tracing::warn!(model = %rejected, "Fireworks-Modell nicht verfügbar; einmalige Neuauflösung");
-    endpoint.model = resolver.resolve(&key, Some(&rejected), pool).await?;
-    if endpoint.model == rejected {
-        return result;
-    }
-    call_endpoint(
-        endpoint,
-        request,
-        purpose,
-        frist.saturating_sub(started.elapsed()),
-    )
-    .await
+    endpoint.model = crate::model_resolver::selected_model()?;
+    call_endpoint(endpoint, request, purpose, frist).await
 }
 
 /// Ein Anbieter, inklusive Wiederholung bei 429.
@@ -716,29 +656,68 @@ async fn send_openai_compatible(
 /// Status pruefen, Body lesen, JSON parsen.
 async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
     let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let bytes = match bounded_response(response).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let detail = "Anbieterantwort ist nicht vollständig innerhalb des Größenlimits lesbar";
+            if status.as_u16() == 429 {
+                return Err(RawError::TooManyRequests {
+                    retry_after,
+                    body: detail.into(),
+                });
+            }
+            if !status.is_success() {
+                return Err(RawError::Fehler(LlmError::Http {
+                    status: status.as_u16(),
+                    body: detail.into(),
+                }));
+            }
+            return Err(RawError::Fehler(error));
+        }
+    };
     if status.as_u16() == 429 {
-        let retry_after = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        let body = response.text().await.unwrap_or_default();
         return Err(RawError::TooManyRequests {
             retry_after,
-            body: kurz(&body),
+            body: kurz(&String::from_utf8_lossy(&bytes)),
         });
     }
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
         return Err(RawError::Fehler(LlmError::Http {
             status: status.as_u16(),
-            body: kurz(&body),
+            body: kurz(&String::from_utf8_lossy(&bytes)),
         }));
     }
-    response
-        .json::<Value>()
-        .await
-        .map_err(|error| RawError::Fehler(transport_error(&error)))
+    serde_json::from_slice(&bytes).map_err(|_| {
+        RawError::Fehler(LlmError::Unparsable(
+            "Anbieterantwort ist kein gültiges JSON".into(),
+        ))
+    })
+}
+async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
+    const MAX_RESPONSE: usize = 8 * 1024 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE as u64)
+    {
+        return Err(LlmError::Unparsable(
+            "Anbieterantwort überschreitet Größenlimit".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| transport_error(&e))? {
+        if bytes.len() + chunk.len() > MAX_RESPONSE {
+            return Err(LlmError::Unparsable(
+                "Anbieterantwort überschreitet Größenlimit".into(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Anbieter-Body auf 500 Zeichen gekuerzt: genug fuer "credit balance is too
@@ -813,6 +792,7 @@ fn http_client() -> Result<reqwest::Client, LlmError> {
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
+                .no_proxy()
                 // Keine Gesamtfrist im Client: die legt `call_endpoint` per
                 // `tokio::time::timeout` um jeden Request. Nur der
                 // Verbindungsaufbau hat eine feste Grenze.
@@ -833,6 +813,41 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    #[tokio::test]
+    async fn bounded_body_preserves_error_status_and_retry_after() {
+        for status in [200, 429, 503] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .insert_header("Retry-After", "17")
+                        .set_body_string("x".repeat(8 * 1024 * 1024 + 1)),
+                )
+                .mount(&server)
+                .await;
+            let response = reqwest::Client::new()
+                .get(server.uri())
+                .send()
+                .await
+                .unwrap();
+            let error = finish(response)
+                .await
+                .err()
+                .expect("Große Antwort muss abgewiesen werden");
+            match (status, error) {
+                (
+                    429,
+                    RawError::TooManyRequests {
+                        retry_after: Some(17),
+                        ..
+                    },
+                ) => (),
+                (503, RawError::Fehler(LlmError::Http { status: 503, .. })) => (),
+                (200, RawError::Fehler(LlmError::Unparsable(_))) => (),
+                _ => panic!("Status oder Retry-After verloren"),
+            }
+        }
+    }
 
     fn endpoint(server: &MockServer, _provider: &'static str) -> LlmEndpoint {
         LlmEndpoint {
@@ -943,7 +958,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn title_ai_darf_glm_5_3_flash_mit_low_reasoning_nutzen() {
+    async fn title_ai_weist_glm_ohne_nutzerfreigabe_ab() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -955,7 +970,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let response = complete(
+        let error = complete(
             "title_ai",
             Request::prompt("titel")
                 .denken_aus()
@@ -968,9 +983,8 @@ mod tests {
                 }),
         )
         .await
-        .expect("GLM-5.3-Flash ist nur fuer title_ai freigegeben");
-        assert_eq!(response.provider, "zai");
-        assert_eq!(response.model, "glm-5.3-flash");
+        .expect_err("GLM ist kein freigegebenes Flash-Modell");
+        assert!(matches!(error, LlmError::Unavailable(_)));
     }
 
     #[tokio::test]

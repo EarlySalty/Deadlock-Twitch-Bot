@@ -679,11 +679,7 @@ pub async fn settings_handler(
         "style_summary": derive_style_summary(&prompt_history),
         "oauth_connected": can_manage_title(&pool, &user_id).await,
         "oauth_url": TITLE_OAUTH_URL,
-        "model": if std::env::var("ZAI_API_KEY").ok().is_some_and(|v| !v.trim().is_empty()) {
-            "glm-5.3-flash"
-        } else {
-            "fallback-provider"
-        },
+        "model": tb_llm::model_resolver::resolved_fireworks_model(),
     }))
     .into_response()
 }
