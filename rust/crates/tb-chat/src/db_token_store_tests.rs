@@ -10,7 +10,7 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
     ))
     .expect("Explizite Wegwerf-DB in token-db-tests.conf angeben");
     let dsn = dsn.trim();
-    let options = PgConnectOptions::from_str(&dsn).unwrap();
+    let options = PgConnectOptions::from_str(dsn).unwrap();
     assert!(options
         .get_database()
         .is_some_and(|name| name.starts_with("token_db_")));
