@@ -25,8 +25,8 @@ Beim Ende eines Deadlock-Streams prüft der Bot, ob er deine Zuschauer an einen 
 Der Bot berücksichtigt mehrere Faktoren: Wer ist gerade live, wie viele Viewer hat der Partner, wann wurde zuletzt dorthin geraidet, und weitere Netzwerk-Kriterien. Ziel ist immer eine sinnvolle Weiterleitung, kein Zufall.
 
 - Live-Status der Partner wird in Echtzeit geprüft.
-- Cooldowns verhindern, dass immer derselbe Streamer geraidet wird.
-- Das System sorgt für faire Verteilung im gesamten Netzwerk.
+- Bei der Auswahl zählen bisherige Raids und Cooldowns, wenn andere geeignete Live-Partner zur Wahl stehen.
+- Eine gleichmäßige Verteilung der Raids ist nicht garantiert.
 
 [Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
 [FAQ](https://deutsche-deadlock-community.de/twitch/faq#raids)
