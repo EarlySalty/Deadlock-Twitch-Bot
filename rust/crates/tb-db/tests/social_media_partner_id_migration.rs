@@ -39,8 +39,13 @@ async fn backfill_preserves_unresolved_and_enforces_identity() {
          CREATE UNIQUE INDEX social_media_partner_access_identity ON social_media_partner_access(twitch_user_id) WHERE twitch_user_id IS NOT NULL;
          INSERT INTO social_media_partner_access (streamer_login, granted, granted_by) VALUES ('earlysalty', TRUE, 'admin'), ('dach_lock', TRUE, 'admin'), ('unresolved', TRUE, 'legacy');
          CREATE TABLE clip_templates_streamer (streamer_login TEXT, twitch_user_id TEXT, template_name TEXT, CONSTRAINT clip_templates_streamer_streamer_login_template_name_key UNIQUE(streamer_login, template_name));
+         INSERT INTO clip_templates_streamer VALUES ('earlysalty', NULL, 'legacy'), ('dach_lock', '77', 'pinned'), ('ambiguous', NULL, 'ambiguous'), ('unresolved', NULL, 'unresolved');
          CREATE TABLE clip_last_hashtags (streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT);
+         INSERT INTO clip_last_hashtags VALUES ('earlysalty', NULL), ('dach_lock', '77'), ('ambiguous', NULL), ('unresolved', NULL);
          CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_login), twitch_user_id TEXT);
+         INSERT INTO social_media_streamer_layout VALUES ('earlysalty', NULL), ('dach_lock', '77'), ('ambiguous', NULL), ('unresolved', NULL);
+         CREATE TABLE social_media_platform_auth (streamer_login TEXT, twitch_user_id TEXT, access_token_enc BYTEA, refresh_token_enc BYTEA);
+         INSERT INTO social_media_platform_auth VALUES ('earlysalty', NULL, decode('1122', 'hex'), decode('3344', 'hex')), ('dach_lock', '77', NULL, NULL), ('ambiguous', NULL, NULL, NULL), ('unresolved', NULL, NULL, NULL), (NULL, NULL, NULL, NULL);
          CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY);
          INSERT INTO social_media_streamer_settings VALUES ('earlysalty'), ('ambiguous');
          CREATE TABLE social_media_platform_schedule (streamer_login TEXT, platform TEXT, PRIMARY KEY(streamer_login, platform));
@@ -59,6 +64,10 @@ async fn backfill_preserves_unresolved_and_enforces_identity() {
     .await
     .unwrap();
     for table in [
+        "clip_templates_streamer",
+        "clip_last_hashtags",
+        "social_media_streamer_layout",
+        "social_media_platform_auth",
         "social_media_streamer_settings",
         "social_media_category_settings",
         "twitch_vod_archive_vods",
@@ -71,6 +80,54 @@ async fn backfill_preserves_unresolved_and_enforces_identity() {
         .unwrap();
         assert_eq!(id, "1186925760");
     }
+    for table in [
+        "clip_templates_streamer",
+        "clip_last_hashtags",
+        "social_media_streamer_layout",
+        "social_media_platform_auth",
+    ] {
+        let pinned_id: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT twitch_user_id FROM {table} WHERE streamer_login = 'dach_lock'"
+        )))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pinned_id, "77");
+        let ids: Vec<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT twitch_user_id FROM {table} WHERE streamer_login IN ('ambiguous', 'unresolved')"
+        )))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ids, [None, None]);
+        let rows: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            if table == "social_media_platform_auth" {
+                5
+            } else {
+                4
+            }
+        );
+    }
+    let preserved_auth: (String, Vec<u8>, Vec<u8>) = sqlx::query_as(
+        "SELECT streamer_login, access_token_enc, refresh_token_enc FROM social_media_platform_auth WHERE twitch_user_id = '1186925760'"
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        preserved_auth,
+        ("earlysalty".into(), vec![0x11, 0x22], vec![0x33, 0x44])
+    );
+    let global_id: Option<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM social_media_platform_auth WHERE streamer_login IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(global_id.is_none());
     assert!(sqlx::query("INSERT INTO social_media_category_settings (streamer_login, twitch_user_id, category_key) VALUES ('dach_lock', '1367527782', 'unknown')")
         .execute(&pool).await.is_err());
     let ambiguous_id: Option<String> = sqlx::query_scalar(
