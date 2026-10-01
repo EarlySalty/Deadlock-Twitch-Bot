@@ -251,11 +251,7 @@ async fn mark_partner_inactivity_flagged(
     )
     .bind(login)
     .execute(pool)
-    .await
-    .unwrap_or_else(|error| {
-        tracing::error!(%error, "Chat-Zugang vorübergehend nicht verfügbar; Dienststart wird erneut versucht");
-        std::process::exit(1);
-    });
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -616,7 +612,11 @@ async fn main() {
         config.bot.chat_enabled,
         runtime_cipher.as_ref().ok().cloned(),
     )
-    .await?;
+    .await
+    .unwrap_or_else(|error| {
+        tracing::error!(%error, "Chat-Zugang vorübergehend nicht verfügbar; Dienststart wird erneut versucht");
+        std::process::exit(1);
+    });
     let smalltalk_loop = smalltalk_loop_wiring::start(
         &supervisor,
         pool.clone(),
