@@ -326,3 +326,22 @@ BEGIN
     END IF;
 END
 $brain_chat_roles$;
+
+-- Das eigene Chat-Konto hat ausschließlich den Bot als Leser und Writer.
+-- Nach allen breiten Kompatibilitätsrechten ausführen, damit weder Dashboard
+-- noch alte Hilfsdienste die Kontoablage lesen oder verändern können.
+DO $bot_token_roles$
+DECLARE role_name text;
+BEGIN
+    IF to_regclass('public.twitch_bot_tokens') IS NOT NULL THEN
+        FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcontest'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('REVOKE ALL ON TABLE public.twitch_bot_tokens FROM %I', role_name);
+            END IF;
+        END LOOP;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+            GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_bot_tokens TO twitchbot;
+        END IF;
+    END IF;
+END
+$bot_token_roles$;
