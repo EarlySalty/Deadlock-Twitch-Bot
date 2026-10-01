@@ -532,6 +532,7 @@ async fn proxy_cast_preview(
     mut browser: WebSocket,
     upstream_url: String,
     secret: Zeroizing<String>,
+    source_id: u64,
 ) {
     use tokio_tungstenite::tungstenite::{
         Message as UpstreamMessage,
@@ -551,9 +552,31 @@ async fn proxy_cast_preview(
         return;
     };
     request.headers_mut().insert("x-relay-auth", secret);
-    let (upstream, _) = match tokio_tungstenite::connect_async(request).await {
-        Ok(connection) => connection,
+    let (upstream, _) = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(error)) => {
+            use tokio_tungstenite::tungstenite::Error as UpstreamError;
+            let (kind, upstream_status) = match &error {
+                UpstreamError::Http(response) => ("http", Some(response.status().as_u16())),
+                UpstreamError::Io(_) => ("io", None),
+                _ => ("websocket", None),
+            };
+            tracing::warn!(
+                source_id,
+                kind = kind,
+                upstream_status = ?upstream_status,
+                "Cast preview relay connection failed"
+            );
+            let _ = browser.send(BrowserMessage::Close(None)).await;
+            return;
+        }
         Err(_) => {
+            tracing::warn!(source_id, "Cast preview relay handshake timed out");
             let _ = browser.send(BrowserMessage::Close(None)).await;
             return;
         }
@@ -634,7 +657,7 @@ pub async fn cast_preview_ws_handler(
         .append_pair("streamer_id", &id.to_string());
     let upstream_url = url.to_string();
     let secret = Zeroizing::new(runtime.secret("/v1/me/cast/sources/preview").to_owned());
-    upgrade.on_upgrade(move |socket| proxy_cast_preview(socket, upstream_url, secret))
+    upgrade.on_upgrade(move |socket| proxy_cast_preview(socket, upstream_url, secret, source_id))
 }
 
 pub async fn cast_source_delete_handler(
