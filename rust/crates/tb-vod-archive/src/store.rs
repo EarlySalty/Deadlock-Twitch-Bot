@@ -563,10 +563,21 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
-    /// Wegwerf-Schema. Ohne TB_TEST_DATABASE_URL ueberspringen die Tests still,
-    /// wie im uebrigen Workspace.
+    /// Explizite Wegwerf-DB aus normaler Testkonfiguration, keine ENV.
     pub(super) async fn pool(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../token-db-tests.conf"
+        ))
+        .ok()?;
+        let dsn = dsn.trim();
+        let options = PgConnectOptions::from_str(dsn).ok()?;
+        if !options
+            .get_database()
+            .is_some_and(|name| name.starts_with("token_db_"))
+        {
+            return None;
+        }
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

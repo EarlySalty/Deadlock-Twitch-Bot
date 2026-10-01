@@ -4,8 +4,12 @@ use std::str::FromStr;
 
 #[tokio::test]
 async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
-    let dsn =
-        std::env::var("TOKEN_DB_TEST_URL").expect("Explizite Wegwerf-DB für diesen Test setzen");
+    let dsn = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../token-db-tests.conf"
+    ))
+    .expect("Explizite Wegwerf-DB in token-db-tests.conf angeben");
+    let dsn = dsn.trim();
     let options = PgConnectOptions::from_str(&dsn).unwrap();
     assert!(options
         .get_database()
