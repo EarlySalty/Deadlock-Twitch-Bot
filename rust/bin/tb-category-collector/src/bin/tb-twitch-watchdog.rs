@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{collections::HashMap, error::Error, time::Duration};
 use tokio::process::Command;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const BOT: &str = "deadlock-twitch-bot-rust.service";
@@ -20,7 +20,7 @@ const GAP_QUERY: &str = "INSERT INTO twitch_watchdog_incidents(service,started_a
         OR snapshot_at = (SELECT MAX(snapshot_at) FROM category_collection_runs WHERE snapshot_at < $2 - interval '2 days')
     ) r WHERE snapshot_at - previous_at > make_interval(secs => 3*GREATEST(poll_seconds,previous_poll))
     AND NOT EXISTS(SELECT 1 FROM twitch_watchdog_incidents i WHERE i.service=$1
-        AND i.started_at <= r.snapshot_at AND COALESCE(i.recovered_at,$2) >= r.previous_at)
+        AND i.started_at < r.snapshot_at AND COALESCE(i.recovered_at,$2) > r.previous_at)
     ON CONFLICT DO NOTHING";
 
 #[cfg(test)]
@@ -31,6 +31,12 @@ mod test_database;
 struct NotifyCredential {
     user_id: u64,
     token: String,
+}
+
+impl Drop for NotifyCredential {
+    fn drop(&mut self) {
+        self.token.zeroize();
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -104,13 +110,20 @@ async fn record(
         sqlx::query("UPDATE twitch_watchdog_incidents SET recovered_at=$2 WHERE service=$1 AND recovered_at IS NULL")
             .bind(service).bind(now).execute(pool).await?;
     } else {
-        sqlx::query("INSERT INTO twitch_watchdog_incidents(service,started_at) VALUES($1,$2) ON CONFLICT DO NOTHING")
-            .bind(service).bind(started.min(now)).execute(pool).await?;
+        sqlx::query(
+            "INSERT INTO twitch_watchdog_incidents(service,started_at)
+            SELECT $1,GREATEST($2,COALESCE(MAX(recovered_at)+interval '1 microsecond',$2))
+            FROM twitch_watchdog_incidents WHERE service=$1 ON CONFLICT DO NOTHING",
+        )
+        .bind(service)
+        .bind(started.min(now))
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
 
-async fn notify(incident: &Incident) -> Result<()> {
+async fn notify_credential() -> Result<NotifyCredential> {
     let output = tokio::time::timeout(
         Duration::from_secs(5),
         Command::new("/usr/bin/systemd-creds")
@@ -128,10 +141,16 @@ async fn notify(incident: &Incident) -> Result<()> {
     }
     let bytes = Zeroizing::new(output.stdout);
     let credential: NotifyCredential = serde_json::from_slice(&bytes)?;
-    let token = Zeroizing::new(credential.token);
-    if credential.user_id == 0 || token.trim().is_empty() || token.contains(['\r', '\n']) {
+    if credential.user_id == 0
+        || credential.token.trim().is_empty()
+        || credential.token.contains(['\r', '\n'])
+    {
         return Err("invalid notification credential".into());
     }
+    Ok(credential)
+}
+
+async fn notify(incident: &Incident, credential: &NotifyCredential) -> Result<()> {
     let content = if incident.service == COLLECTOR {
         format!("Der Deadlock-Kategoriesammler hatte seit {} einen Ausfall. Kategorie- und Chatdaten können Lücken enthalten. Bereits bestätigte Punkte und Erfolge bleiben erhalten. Bitte tb-category-collector.service prüfen.", incident.started_at)
     } else {
@@ -143,7 +162,7 @@ async fn notify(incident: &Incident) -> Result<()> {
         .timeout(Duration::from_secs(15))
         .build()?
         .post(BROKER)
-        .header("X-Internal-Token", token.as_str())
+        .header("X-Internal-Token", credential.token.as_str())
         .json(&json!({"user_id":credential.user_id,"content":content,"idempotency_key":format!("twitch-watchdog-incident-{}",incident.id)}))
         .send().await?;
     if !response.status().is_success() {
@@ -169,6 +188,12 @@ async fn main() -> Result<()> {
     let database = collector_config["database_url"]
         .as_str()
         .ok_or("collector database missing")?;
+    let notification = notify_credential().await;
+    let identity = nix::unistd::User::from_name("twitchcollector")?
+        .ok_or("collector service identity missing")?;
+    nix::unistd::setgroups(&[])?;
+    nix::unistd::setgid(identity.gid)?;
+    nix::unistd::setuid(identity.uid)?;
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(Duration::from_secs(5))
@@ -230,7 +255,11 @@ async fn main() -> Result<()> {
             .bind(now)
             .execute(&pool)
             .await?;
-        match notify(&incident).await {
+        let delivery = match &notification {
+            Ok(credential) => notify(&incident, credential).await,
+            Err(_) => Err("existing notification credential unavailable".into()),
+        };
+        match delivery {
             Ok(()) => {
                 sqlx::query("UPDATE twitch_watchdog_incidents SET notified_at=$2 WHERE id=$1")
                     .bind(incident.id)
@@ -353,7 +382,7 @@ mod tests {
             COLLECTOR,
             false,
             now + chrono::Duration::seconds(120),
-            now + chrono::Duration::seconds(120),
+            now,
         )
         .await
         .unwrap();
@@ -364,6 +393,17 @@ mod tests {
         sqlx::query("INSERT INTO category_collection_runs VALUES($1,60),($2,60)")
             .bind(now - chrono::Duration::days(5))
             .bind(now - chrono::Duration::days(1))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(GAP_QUERY)
+            .bind(COLLECTOR)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO category_collection_runs VALUES($1,60)")
+            .bind(now - chrono::Duration::hours(12))
             .execute(&pool)
             .await
             .unwrap();
@@ -386,7 +426,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(gaps, 1);
+        assert_eq!(gaps, 2);
         pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)
