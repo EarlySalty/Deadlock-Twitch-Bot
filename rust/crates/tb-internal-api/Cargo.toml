@@ -25,6 +25,8 @@ url          = { workspace = true }
 uuid         = { workspace = true }
 tb-analytics        = { workspace = true }
 tb-raid             = { workspace = true }
+# Community-Vorschläge landen als Scout-Kandidaten (Paket F).
+tb-scout            = { workspace = true }
 # Distinktivitäts-Gate für gelernte Spam-Muster (spam_filter) — ein Gate,
 # beide Schreibwege (AI-Reviewer + interner Lern-Endpoint).
 tb-chat             = { workspace = true }

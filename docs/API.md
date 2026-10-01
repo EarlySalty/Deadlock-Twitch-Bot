@@ -276,3 +276,68 @@ Zuschauer-Zeile: `twitch_user_id`, `twitch_login`, `channel_twitch_user_id`,
 Streamer-Zeile: `streamer_twitch_user_id`, `streamer_login`, `discord_user_id`
 (oder `null`), `day`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`,
 `updated_at`.
+
+### Streamer-Vorschläge aus der Community (Community-Streamer-Brücke, Paket F)
+| Methode | Pfad | Datei |
+|---------|------|-------|
+| POST | `/internal/twitch/v1/scout/community-suggestion` | rust/crates/tb-internal-api/src/handlers/scout_community.rs |
+| GET | `/internal/twitch/v1/scout/community-suggestions/outcomes` | rust/crates/tb-internal-api/src/handlers/scout_community.rs |
+
+`POST` Body `{"twitch_login":"name","suggested_by_discord_id":"123…","reason":"…","idempotency_key":"…"}`
+(`reason` optional, unbekannte Felder 400). `twitch_login` darf `@name` oder ein
+`twitch.tv/name`-Link sein. Der Login wird per Helix auf die Twitch-User-ID
+aufgelöst. Antwort 200 `{"status":"created"|"already_known"|"already_partner"|"blocked"|"not_found","twitch_user_id":"…"|null}`.
+
+- `created`: neuer Scout-Kandidat (`status = vorgeschlagen`, `source = community`), Vorschlagender ist der erste.
+- `already_known`: Kanal ist schon Kandidat (auch aus der Scout-Erkennung) oder in einer laufenden Outreach-Sperrfrist; der Vorschlag wird gezählt.
+- `already_partner`: Kanal steht in `twitch_partners` (egal welcher Status).
+- `blocked`: Raid-Blacklist, Partner-Denylist, Pitch-Blacklist, aktive Recruitment-Suppression oder globaler Bann.
+- `not_found`: Helix kennt den Login nicht (nichts gespeichert).
+
+Gleicher `idempotency_key` liefert die damalige Antwort; derselbe Schlüssel für
+einen anderen Kanal oder eine andere Person: 409 `idempotency_conflict`.
+Formfehler 400, Helix nicht verfügbar 503. Es wird nichts versendet; die
+Admin-Freigabe (`/twitch/api/admin/scout/candidates`) bleibt der einzige Weg in
+die Outreach-Kette.
+
+`GET …/outcomes?updated_since=<RFC3339>&limit=1..5000`: Cursor wie bei den
+Community-Punkten (`{"rows":[...],"next_updated_since":"…","has_more":false}`).
+Je Community-Kandidat eine Zeile: `twitch_user_id`, `twitch_login`,
+`suggested_by_discord_id` (erster Vorschlagender), `suggested_at`,
+`suggestion_count`, `candidate_status`, `is_partner_active`, `partner_since`
+(Partnerzeit aus `twitch_partners.partnered_at`, sonst Zeitpunkt der ersten
+Beobachtung; `null`, solange kein aktiver Partner), `updated_at`. Der Aufruf
+gleicht vorher den Partnerstand mit `twitch_streamers_partner_state` ab und
+stempelt geänderte Zeilen neu; eine Zeile kommt also wieder, sobald der Kanal
+aktiver Partner wird (oder es nicht mehr ist).
+
+## Clip-Contest aus Twitch (Community-Streamer-Brücke, Paket E)
+
+Streamer reichen Clips ihres Kanals für den wöchentlichen Clip-Contest im
+Discord ein. Ein Dienst für beide Wege:
+`rust/crates/tb-chat/src/clip_contest_submit.rs`.
+
+| Weg | Auslöser | Datei |
+|-----|----------|-------|
+| Chat | `!clipcontest [clip-url]` im eigenen Kanal (nur Broadcaster und Mods) | rust/crates/tb-chat/src/commands.rs |
+| Dashboard | `POST /social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
+
+Weitergabe an den Master-Broker von Deadlock-Bots über den vorhandenen
+`BrokerRelay` (Basis-URL der Betriebskonfiguration, bestehendes interne Token):
+
+`POST /internal/master/v1/clips/submit`
+`{"source":"twitch","clip_url":"https://clips.twitch.tv/<id>","streamer_twitch_user_id":"456","streamer_login":"name","submitted_by_twitch_user_id":"456","title":"...","idempotency_key":"twitch-clip-<clip_id>"}`
+mit `X-Idempotency-Key` = `idempotency_key`. Erwartet wird der Broker-Envelope
+`{"ok":true,"result":{"status":"accepted"|"duplicate"|"rejected","submission_id":123,"reason":null}}`.
+
+Regeln: Kanal aktiver Partner; Clip-URL nur `clips.twitch.tv/<slug>` oder
+`(www.|m.)twitch.tv/<kanal>/clip/<slug>`; Clip muss per Helix `GET /clips?id=`
+existieren und zum Kanal gehören; ohne URL der jüngste Clip der laufenden
+Session (`twitch_clip_command_events`, `twitch_clips_social_media`); höchstens
+3 Einreichungen je Kanal und Berliner Tag; eine laufende Einreichung desselben
+Clips wird nicht doppelt gesendet.
+
+Dashboard-Antwort `{"status":"...","message":"...","clip_url":...}`. HTTP 200
+für `accepted` und `already_in`; 422 `rejected`/`not_twitch_clip`, 404
+`clip_not_found`, 403 `foreign_clip`/`not_partner`, 429 `rate_limited`, 409
+`in_flight`, 503 `broker_unavailable`/`twitch_unavailable`/`unavailable`.

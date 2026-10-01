@@ -1294,6 +1294,11 @@ async fn main() {
                     ),
                     manual_raid: manual_raid_port.clone(),
                     clip_port,
+                    clip_contest: chat_wiring::build_clip_contest(
+                        pool.clone(),
+                        helix.as_ref().clone(),
+                        BrokerRelay::new(&settings.broker).ok(),
+                    ),
                     bot_ban_handler: Some(bot_ban_handler.clone()),
                     invite_relay: BrokerRelay::new(&settings.broker).ok(),
                     golive_tips_enabled: config.bot.golive_tips_enabled,

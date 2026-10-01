@@ -79,15 +79,19 @@ async fn pool_or_skip(schema: &str) -> Option<PgPool> {
              CONSTRAINT twitch_outbound_chat_suppressions_pkey PRIMARY KEY (target_login, source))",
         "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, \
              streamer_user_id TEXT, detected_at TIMESTAMPTZ, contacted_at TIMESTAMPTZ, \
-             status TEXT, cooldown_until TIMESTAMPTZ, raid_used_at TIMESTAMPTZ)",
+             status TEXT, cooldown_until TEXT, raid_used_at TEXT)",
         "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT)",
-        // Ziel-Tabelle wortgleich aus der Migration 20260829090000.
+        // Ziel-Tabelle wie Migration 20260829090000 plus Spalten aus 20261001110000.
         "CREATE TABLE twitch_scout_candidates (streamer_login TEXT PRIMARY KEY, \
              twitch_user_id TEXT, sessions_count INTEGER NOT NULL DEFAULT 0, \
              avg_viewers REAL NOT NULL DEFAULT 0, first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ, \
              language TEXT, deadlock_share REAL NOT NULL DEFAULT 0, \
              status TEXT NOT NULL DEFAULT 'vorgeschlagen', entscheid_grund TEXT, approver TEXT, \
-             decided_at TIMESTAMPTZ, dispatched_at TIMESTAMPTZ, visited_at TIMESTAMPTZ)",
+             decided_at TIMESTAMPTZ, dispatched_at TIMESTAMPTZ, visited_at TIMESTAMPTZ, \
+             source TEXT NOT NULL DEFAULT 'auto', suggested_by_discord_id TEXT, \
+             suggestion_reason TEXT, suggested_at TIMESTAMPTZ, \
+             suggestion_count INTEGER NOT NULL DEFAULT 0, partner_active_since TIMESTAMPTZ, \
+             community_updated_at TIMESTAMPTZ)",
     ] {
         sqlx::query(ddl)
             .execute(&pool)

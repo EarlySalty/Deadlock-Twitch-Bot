@@ -273,6 +273,48 @@ Zeilen eines neu gerechneten Tages, die nicht mehr vorkommen (z. B. später
 gebannt), werden genullt statt gelöscht, damit der Sync sie sieht.
 Rechte: `twitchbot` liest/schreibt, `twitchdash` liest.
 
+### Scout-Kandidaten und Community-Vorschläge (Community-Streamer-Brücke, Paket F)
+
+Migration `rust/migrations/20261001110000_scout_community_source.sql` (additiv).
+
+`twitch_scout_candidates` (tb-scout) bekommt:
+
+| Spalte | Inhalt |
+|--------|--------|
+| `source` | `auto` (Scout-Erkennung, Standard) oder `community` (Vorschlag aus dem Discord), CHECK |
+| `suggested_by_discord_id`, `suggestion_reason`, `suggested_at` | erster Vorschlagender, sein Grund (bis 500 Zeichen), Zeitpunkt |
+| `suggestion_count` | Zahl verschiedener Vorschlagender (auch für Scout-Kandidaten gezählt) |
+| `partner_active_since` | seit wann ein Community-Kandidat aktiver Partner ist, sonst `NULL` |
+| `community_updated_at` | streng monotoner Cursor des Ergebnis-Endpunkts (eindeutiger Teilindex für `source = 'community'`) |
+
+`twitch_scout_community_suggestions`: jeder eingegangene Vorschlag mit
+`idempotency_key` (UNIQUE), `twitch_user_id`, `twitch_login`,
+`suggested_by_discord_id`, `reason`, `result_status` (`created`,
+`already_known`, `already_partner`, `blocked`) und `created_at`. Rechte:
+`twitchbot` liest/schreibt, `twitchdash` liest.
+
+### twitch_clip_contest_forwards (Community-Streamer-Brücke, Paket E)
+
+Migration `rust/migrations/20261001105000_clip_contest_twitch_forwarding.sql`.
+Eine Zeile je Twitch-Clip, der aus dem Chat (`!clipcontest`) oder dem
+Social-Studio an den Clip-Contest im Discord weitergegeben wurde. Der Contest
+selbst liegt in der zentralen DB (Deadlock-Bots, Paket D).
+
+| Spalte | Inhalt |
+|--------|--------|
+| `clip_id` (PK) | Twitch-Clip-ID (Slug) |
+| `clip_url` | kanonisch `https://clips.twitch.tv/<clip_id>` |
+| `broadcaster_twitch_id`, `broadcaster_login` | Partnerkanal |
+| `submitted_by_twitch_id` | wer eingereicht hat (Broadcaster/Mod), Dashboard-Admin ohne |
+| `via` | `chat` oder `dashboard` |
+| `status` | `pending`, `accepted`, `duplicate`, `rejected`, `failed` |
+| `broker_submission_id`, `reason` | Antwort des Brokers |
+| `created_at`, `updated_at` | Tageslimit (3 je Kanal und Berliner Tag zählt `accepted` und laufende `pending`) und Doppelsend-Schutz (`pending` 120 s) |
+
+`failed` (Broker nicht erreichbar) und `rejected` dürfen erneut eingereicht
+werden. Rechte: `twitchbot` und `twitchdash` lesen/schreiben (der Knopf im
+Dashboard nutzt denselben Dienst).
+
 ---
 
 ## Monitoring-Snapshots

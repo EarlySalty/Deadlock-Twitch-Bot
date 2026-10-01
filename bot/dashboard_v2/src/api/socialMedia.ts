@@ -338,6 +338,40 @@ export async function cancelScheduledPost(
   );
 }
 
+/** Antwort von `POST /social-media/api/clips/{id}/clip-contest`. */
+export interface ClipContestResult {
+  /** `accepted`, `already_in`, `rejected`, `rate_limited`, `broker_unavailable` … */
+  status: string;
+  /** Fertiger deutscher Satz aus dem Backend, gleich wie die Chat-Antwort. */
+  message: string;
+  clip_url: string | null;
+  ok: boolean;
+}
+
+/**
+ * Clip für den wöchentlichen Clip-Contest im Discord einreichen. Derselbe
+ * Dienst wie der Chat-Befehl `!clipcontest`; auch Ablehnungen kommen als
+ * lesbarer Satz zurück, deshalb hier ohne `fetchJson`.
+ */
+export async function submitClipToContest(clipDbId: number): Promise<ClipContestResult> {
+  const response = await fetch(
+    `/social-media/api/clips/${clipDbId}/clip-contest`,
+    withCookieCredentials({ method: 'POST' }),
+  );
+  let data: Partial<ClipContestResult> = {};
+  try {
+    data = (await response.json()) as Partial<ClipContestResult>;
+  } catch {
+    // leerer oder kaputter Body: unten generische Meldung
+  }
+  return {
+    status: String(data.status ?? `http_${response.status}`),
+    message: String(data.message ?? 'Das klappt gerade nicht. Versuch es gleich nochmal.'),
+    clip_url: typeof data.clip_url === 'string' ? data.clip_url : null,
+    ok: response.ok,
+  };
+}
+
 /**
  * Neue Twitch-Clips einsammeln. Der Weg, den die Vorratswarnung meint: ohne
  * Nachschub hoert das Posting irgendwann auf, ohne dass jemand es merkt.
