@@ -50,6 +50,14 @@ struct ScoutKandidat {
     decided_at: Option<DateTime<Utc>>,
     visited_at: Option<DateTime<Utc>>,
     invite_url: Option<String>,
+    /// `auto` (Scout-Erkennung) oder `community` (Vorschlag aus dem Discord).
+    source: String,
+    /// Erster Vorschlagender (Discord-ID) bei Community-Vorschlägen.
+    suggested_by_discord_id: Option<String>,
+    suggestion_reason: Option<String>,
+    suggested_at: Option<DateTime<Utc>>,
+    /// Zahl verschiedener Vorschlagender aus der Community.
+    suggestion_count: i32,
 }
 
 #[derive(Serialize)]
@@ -119,6 +127,11 @@ fn zu_kandidat(zeile: &KandidatZeile, invites: &BTreeMap<String, String>) -> Sco
         decided_at: zeile.decided_at,
         visited_at: zeile.visited_at,
         invite_url: invites.get(&zeile.login).cloned(),
+        source: zeile.source.clone(),
+        suggested_by_discord_id: zeile.suggested_by_discord_id.clone(),
+        suggestion_reason: zeile.suggestion_reason.clone(),
+        suggested_at: zeile.suggested_at,
+        suggestion_count: zeile.suggestion_count,
     }
 }
 
@@ -238,7 +251,11 @@ mod tests {
              avg_viewers REAL NOT NULL DEFAULT 0, first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ, \
              language TEXT, deadlock_share REAL NOT NULL DEFAULT 0, \
              status TEXT NOT NULL DEFAULT 'vorgeschlagen', entscheid_grund TEXT, approver TEXT, \
-             decided_at TIMESTAMPTZ, dispatched_at TIMESTAMPTZ, visited_at TIMESTAMPTZ)",
+             decided_at TIMESTAMPTZ, dispatched_at TIMESTAMPTZ, visited_at TIMESTAMPTZ, \
+             source TEXT NOT NULL DEFAULT 'auto', suggested_by_discord_id TEXT, \
+             suggestion_reason TEXT, suggested_at TIMESTAMPTZ, \
+             suggestion_count INTEGER NOT NULL DEFAULT 0, partner_active_since TIMESTAMPTZ, \
+             community_updated_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_streamer_invites (streamer_login TEXT, guild_id BIGINT, \
              channel_id BIGINT, invite_code TEXT, invite_url TEXT, created_at TIMESTAMPTZ)",
             // Tabellen für den Erkennungs-Lauf im GET (Detector-Filter).
@@ -255,7 +272,7 @@ mod tests {
             "CREATE TABLE twitch_outbound_chat_suppressions (target_login TEXT NOT NULL, \
              source TEXT NOT NULL, suppressed_until TIMESTAMPTZ NOT NULL)",
             "CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, \
-             cooldown_until TIMESTAMPTZ)",
+             cooldown_until TEXT)",
             "CREATE TABLE twitch_chatter_global_ban (chatter_login TEXT, chatter_id TEXT)",
         ] {
             sqlx::query(ddl)
@@ -352,10 +369,39 @@ mod tests {
         assert_eq!(items[0]["avg_viewers"], 5.0);
         assert_eq!(items[0]["language"], "de");
         assert_eq!(items[0]["invite_url"], "https://discord.gg/einladung");
+        assert_eq!(items[0]["source"], "auto");
+        assert_eq!(items[0]["suggested_by_discord_id"], serde_json::Value::Null);
         assert_eq!(
             body["persoenlich"].as_array().expect("persoenlich").len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn get_zeigt_community_quelle_und_vorschlagenden() {
+        let Some(pool) = pool_or_skip("admin_scout_community").await else {
+            return;
+        };
+        sqlx::query(
+            "INSERT INTO twitch_scout_candidates \
+                 (streamer_login, twitch_user_id, source, suggested_by_discord_id, \
+                  suggestion_reason, suggested_at, suggestion_count) \
+             VALUES ('vorschlag', '77', 'community', '388772056717590539', 'Spielt stark', \
+                     NOW(), 2)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed community candidate");
+
+        let (status, body) = get_candidates(DashboardAuthLevel::admin(), pool).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let item = &body["items"][0];
+        assert_eq!(item["login"], "vorschlag");
+        assert_eq!(item["source"], "community");
+        assert_eq!(item["suggested_by_discord_id"], "388772056717590539");
+        assert_eq!(item["suggestion_reason"], "Spielt stark");
+        assert_eq!(item["suggestion_count"], 2);
     }
 
     #[tokio::test]

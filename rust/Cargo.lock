@@ -3900,6 +3900,7 @@ dependencies = [
  "tb-http-core",
  "tb-monitoring",
  "tb-raid",
+ "tb-scout",
  "tb-transport-twitch",
  "tempfile",
  "tokio",
@@ -4020,6 +4021,7 @@ name = "tb-scout"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde",
  "sqlx 0.9.0",
  "tb-raid",
  "tokio",

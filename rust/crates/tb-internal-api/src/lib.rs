@@ -72,7 +72,7 @@ pub fn build_internal_router(
     use handlers::{
         chat_command, community_points, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
         partner_signup_block, python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all,
-        scam_guard, self_explainer_log, session_detail, spam_learning, stats_native,
+        scam_guard, scout_community, self_explainer_log, session_detail, spam_learning, stats_native,
         streamer_analytics_native, streamer_link, streamers, telemetry_routes,
     };
 
@@ -105,6 +105,16 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/community-points/streamers"),
             get(community_points::streamers_handler),
+        )
+        // Streamer-Vorschläge aus der Discord-Community (Paket F): Kandidat im
+        // Scout, Admin-Freigabe bleibt Pflicht; Ergebnisse für den Punkte-Sync.
+        .route(
+            &format!("{base}/scout/community-suggestion"),
+            post(scout_community::suggestion_handler),
+        )
+        .route(
+            &format!("{base}/scout/community-suggestions/outcomes"),
+            get(scout_community::outcomes_handler),
         )
         .route(&format!("{base}/chat/command"), post(chat_command::handler))
         .route(&format!("{base}/globalban"), get(global_ban::list_handler))

@@ -277,6 +277,40 @@ Streamer-Zeile: `streamer_twitch_user_id`, `streamer_login`, `discord_user_id`
 (oder `null`), `day`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`,
 `updated_at`.
 
+### Streamer-Vorschläge aus der Community (Community-Streamer-Brücke, Paket F)
+| Methode | Pfad | Datei |
+|---------|------|-------|
+| POST | `/internal/twitch/v1/scout/community-suggestion` | rust/crates/tb-internal-api/src/handlers/scout_community.rs |
+| GET | `/internal/twitch/v1/scout/community-suggestions/outcomes` | rust/crates/tb-internal-api/src/handlers/scout_community.rs |
+
+`POST` Body `{"twitch_login":"name","suggested_by_discord_id":"123…","reason":"…","idempotency_key":"…"}`
+(`reason` optional, unbekannte Felder 400). `twitch_login` darf `@name` oder ein
+`twitch.tv/name`-Link sein. Der Login wird per Helix auf die Twitch-User-ID
+aufgelöst. Antwort 200 `{"status":"created"|"already_known"|"already_partner"|"blocked"|"not_found","twitch_user_id":"…"|null}`.
+
+- `created`: neuer Scout-Kandidat (`status = vorgeschlagen`, `source = community`), Vorschlagender ist der erste.
+- `already_known`: Kanal ist schon Kandidat (auch aus der Scout-Erkennung) oder in einer laufenden Outreach-Sperrfrist; der Vorschlag wird gezählt.
+- `already_partner`: Kanal steht in `twitch_partners` (egal welcher Status).
+- `blocked`: Raid-Blacklist, Partner-Denylist, Pitch-Blacklist, aktive Recruitment-Suppression oder globaler Bann.
+- `not_found`: Helix kennt den Login nicht (nichts gespeichert).
+
+Gleicher `idempotency_key` liefert die damalige Antwort; derselbe Schlüssel für
+einen anderen Kanal oder eine andere Person: 409 `idempotency_conflict`.
+Formfehler 400, Helix nicht verfügbar 503. Es wird nichts versendet; die
+Admin-Freigabe (`/twitch/api/admin/scout/candidates`) bleibt der einzige Weg in
+die Outreach-Kette.
+
+`GET …/outcomes?updated_since=<RFC3339>&limit=1..5000`: Cursor wie bei den
+Community-Punkten (`{"rows":[...],"next_updated_since":"…","has_more":false}`).
+Je Community-Kandidat eine Zeile: `twitch_user_id`, `twitch_login`,
+`suggested_by_discord_id` (erster Vorschlagender), `suggested_at`,
+`suggestion_count`, `candidate_status`, `is_partner_active`, `partner_since`
+(Partnerzeit aus `twitch_partners.partnered_at`, sonst Zeitpunkt der ersten
+Beobachtung; `null`, solange kein aktiver Partner), `updated_at`. Der Aufruf
+gleicht vorher den Partnerstand mit `twitch_streamers_partner_state` ab und
+stempelt geänderte Zeilen neu; eine Zeile kommt also wieder, sobald der Kanal
+aktiver Partner wird (oder es nicht mehr ist).
+
 ## Clip-Contest aus Twitch (Community-Streamer-Brücke, Paket E)
 
 Streamer reichen Clips ihres Kanals für den wöchentlichen Clip-Contest im

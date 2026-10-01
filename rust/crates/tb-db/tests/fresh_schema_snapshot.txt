@@ -1859,6 +1859,7 @@ twitch_scam_guard_verdicts|transcript_snapshot|text|NO|
 twitch_scam_guard_verdicts|verdict|text|NO|
 twitch_scout_candidates|approver|text|YES|
 twitch_scout_candidates|avg_viewers|real|NO|0
+twitch_scout_candidates|community_updated_at|timestamp with time zone|YES|
 twitch_scout_candidates|deadlock_share|real|NO|0
 twitch_scout_candidates|decided_at|timestamp with time zone|YES|
 twitch_scout_candidates|dispatched_at|timestamp with time zone|YES|
@@ -1866,11 +1867,25 @@ twitch_scout_candidates|entscheid_grund|text|YES|
 twitch_scout_candidates|first_seen|timestamp with time zone|YES|
 twitch_scout_candidates|language|text|YES|
 twitch_scout_candidates|last_seen|timestamp with time zone|YES|
+twitch_scout_candidates|partner_active_since|timestamp with time zone|YES|
 twitch_scout_candidates|sessions_count|integer|NO|0
+twitch_scout_candidates|source|text|NO|'auto'::text
 twitch_scout_candidates|status|text|NO|'vorgeschlagen'::text
 twitch_scout_candidates|streamer_login|text|NO|
+twitch_scout_candidates|suggested_at|timestamp with time zone|YES|
+twitch_scout_candidates|suggested_by_discord_id|text|YES|
+twitch_scout_candidates|suggestion_count|integer|NO|0
+twitch_scout_candidates|suggestion_reason|text|YES|
 twitch_scout_candidates|twitch_user_id|text|YES|
 twitch_scout_candidates|visited_at|timestamp with time zone|YES|
+twitch_scout_community_suggestions|created_at|timestamp with time zone|NO|clock_timestamp()
+twitch_scout_community_suggestions|idempotency_key|text|NO|
+twitch_scout_community_suggestions|id|bigint|NO|nextval('twitch_scout_community_suggestions_id_seq'::regclass)
+twitch_scout_community_suggestions|reason|text|YES|
+twitch_scout_community_suggestions|result_status|text|NO|
+twitch_scout_community_suggestions|suggested_by_discord_id|text|NO|
+twitch_scout_community_suggestions|twitch_login|text|NO|
+twitch_scout_community_suggestions|twitch_user_id|text|NO|
 twitch_scout_pitch_blacklist|created_at|timestamp with time zone|YES|now()
 twitch_scout_pitch_blacklist|reason|text|YES|
 twitch_scout_pitch_blacklist|streamer_login|text|NO|
