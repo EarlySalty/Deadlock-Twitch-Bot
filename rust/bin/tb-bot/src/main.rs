@@ -251,7 +251,11 @@ async fn mark_partner_inactivity_flagged(
     )
     .bind(login)
     .execute(pool)
-    .await?;
+    .await
+    .unwrap_or_else(|error| {
+        tracing::error!(%error, "Chat-Zugang vorübergehend nicht verfügbar; Dienststart wird erneut versucht");
+        std::process::exit(1);
+    });
     Ok(result.rows_affected() > 0)
 }
 

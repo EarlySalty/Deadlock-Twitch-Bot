@@ -701,9 +701,18 @@ pub async fn try_build_api(
         }
     }
     let bot_user_id = token_manager.bot_user_id().await;
-    if !store.healthy() || store.bind_identity(&bot_user_id).await.is_err() {
-        tracing::error!("Bot-Zugang konnte nicht dauerhaft gespeichert oder dem richtigen Konto zugeordnet werden");
-        return Ok(None);
+    if !store.healthy() {
+        return Err(tb_chat::db_token_store::BootstrapError::DatabaseUnavailable);
+    }
+    match store.bind_identity(&bot_user_id).await {
+        Ok(()) => {}
+        Err(reason @ tb_chat::db_token_store::BootstrapError::DatabaseUnavailable) => {
+            return Err(reason);
+        }
+        Err(reason) => {
+            tracing::error!(%reason, "Bot-Zugang konnte nicht dem richtigen Konto zugeordnet werden");
+            return Ok(None);
+        }
     }
     let scopes = token_manager.scopes().await;
     tracing::info!(

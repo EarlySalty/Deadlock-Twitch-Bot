@@ -77,8 +77,23 @@ async fn encrypted_bot_store_preserves_identity_revocation_and_rotation() {
     .await
     .unwrap();
     assert_eq!(first.seed_and_load(seeds.clone()).await.unwrap(), seeds);
+    sqlx::raw_sql("CREATE FUNCTION token_bind_outage() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic outage' USING ERRCODE='40P01'; END $$; CREATE TRIGGER token_bind_outage BEFORE UPDATE ON twitch_bot_tokens FOR EACH ROW EXECUTE FUNCTION token_bind_outage();")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        first.bind_identity("123").await.unwrap_err(),
+        BootstrapError::DatabaseUnavailable
+    );
+    sqlx::raw_sql(
+        "DROP TRIGGER token_bind_outage ON twitch_bot_tokens; DROP FUNCTION token_bind_outage();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     first.bind_identity("123").await.unwrap();
-    assert!(first.bind_identity("456").await.is_err());
+    assert_eq!(
+        first.bind_identity("456").await.unwrap_err(),
+        BootstrapError::Identity
+    );
     assert!(make("other-client")
         .seed_and_load(seeds.clone())
         .await

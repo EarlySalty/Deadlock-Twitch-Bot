@@ -16,6 +16,7 @@ pub enum BootstrapError {
     Encryption,
     MissingOrRevoked,
     Decryption,
+    Identity,
 }
 impl std::fmt::Display for BootstrapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -25,6 +26,7 @@ impl std::fmt::Display for BootstrapError {
             Self::Encryption => "Bot-Token-Verschlüsselung fehlgeschlagen",
             Self::MissingOrRevoked => "Bot-Zugang fehlt oder wurde widerrufen",
             Self::Decryption => "Bot-Zugang nicht entschlüsselbar",
+            Self::Identity => "Bot-Zugang gehört zu einem anderen Konto",
         })
     }
 }
@@ -122,14 +124,14 @@ impl DatabaseTokenStore {
         Ok(result)
     }
 
-    pub async fn bind_identity(&self, user_id: &str) -> Result<(), &'static str> {
+    pub async fn bind_identity(&self, user_id: &str) -> Result<(), BootstrapError> {
         if user_id.is_empty() || !user_id.bytes().all(|b| b.is_ascii_digit()) {
-            return Err("Ungültige Bot-Identität");
+            return Err(BootstrapError::Identity);
         }
         let n=sqlx::query("UPDATE twitch_bot_tokens SET twitch_user_id=$1 WHERE service_name='twitch-chat' AND oauth_client_id=$2 AND revoked_at IS NULL AND (twitch_user_id IS NULL OR twitch_user_id=$1)")
-            .bind(user_id).bind(&self.client_id).execute(&self.pool).await.map_err(|_|"Bot-Identität nicht speicherbar")?.rows_affected();
+            .bind(user_id).bind(&self.client_id).execute(&self.pool).await.map_err(bootstrap_database_error)?.rows_affected();
         if n != 1 {
-            return Err("Bot-Zugang gehört zu einem anderen Konto");
+            return Err(BootstrapError::Identity);
         }
         *self.identity.lock().await = Some(user_id.to_string());
         Ok(())
