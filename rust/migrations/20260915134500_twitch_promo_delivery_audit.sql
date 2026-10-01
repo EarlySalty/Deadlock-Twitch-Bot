@@ -29,6 +29,10 @@ CREATE INDEX IF NOT EXISTS idx_twitch_promo_delivery_unbound
     ON public.twitch_promo_delivery_audit (broadcaster_user_id, send_accepted_at DESC)
     WHERE twitch_message_id IS NULL;
 
+CREATE INDEX IF NOT EXISTS idx_twitch_promo_delivery_pending_alerts
+    ON public.twitch_promo_delivery_audit (deleted_at, id)
+    WHERE deleted_at IS NOT NULL AND bot_log_sent_at IS NULL;
+
 -- Delete-Events werden separat gehalten, damit ein sehr schnelles Loeschen
 -- nicht verloren geht, falls Twitch das message_delete vor dem Announcement-
 -- Notification-Event zustellt. Beim spaeteren Binden wird deleted_at nachgezogen.
