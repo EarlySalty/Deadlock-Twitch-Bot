@@ -48,6 +48,14 @@ ALTER TABLE social_media_partner_access
 
 DROP INDEX social_media_partner_access_identity;
 
+DO $$
+DECLARE target TEXT;
+BEGIN
+    FOREACH target IN ARRAY ARRAY['clip_templates_streamer', 'clip_last_hashtags', 'social_media_streamer_layout', 'social_media_platform_auth'] LOOP
+        EXECUTE FORMAT('UPDATE %I AS target SET twitch_user_id = source.twitch_user_id FROM (SELECT LOWER(twitch_login) AS login, MIN(twitch_user_id) AS twitch_user_id FROM twitch_streamers WHERE twitch_user_id ~ ''^[0-9]+$'' GROUP BY LOWER(twitch_login) HAVING COUNT(DISTINCT twitch_user_id) = 1) AS source WHERE target.twitch_user_id IS NULL AND LOWER(target.streamer_login) = source.login', target);
+    END LOOP;
+END $$;
+
 CREATE UNIQUE INDEX clip_templates_streamer_identity_name
     ON clip_templates_streamer (twitch_user_id, template_name)
     WHERE twitch_user_id IS NOT NULL;

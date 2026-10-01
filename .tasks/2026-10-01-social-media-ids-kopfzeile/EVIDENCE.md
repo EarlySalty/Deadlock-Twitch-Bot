@@ -62,13 +62,13 @@ Log-Hashes (SHA256):
 - browser-final.log: b6dce179bc8b2d3f8568624a75bc8ad4156a0d40ce336995adc17e97021e6e6b
 - frontend-build-header-final.log: 0bf883fe1de0c2543a10d51ca2e723ec5ac2b38cdbc89bd1538ca824367b5a18
 
-Migration 20261001090000, vorbereitete SHA384: c107a3f24efc7d92cd76ba72eae4db1e23cd61dadd54cd34f00e70d67b0b43e35c2f54d56dbdd12ea73854c896ecf0d0. Noch keine Produktiv-DDL.
+Migration 20261001090000 hatte vor der historischen Backfill-Ergänzung SHA384 c107a3f24efc7d92cd76ba72eae4db1e23cd61dadd54cd34f00e70d67b0b43e35c2f54d56dbdd12ea73854c896ecf0d0. Die aktuelle SHA384 steht unter Historische Backfill-Ergänzung. Noch keine Produktiv-DDL.
 
 ## Gate-Korrektur
 
 Der reguläre Lauf für 7e44af96 ergab BLOCK wegen des Login-Schlüssels im Insights-Cache. Hinzu kamen Hinweise zur VOD-Erkennung und zur fehlenden mobilen Sichtprüfung. Die Änderungen und ihre Prüfung stehen in REVIEW.md.
 
-Frontend-Build nach der Korrektur: Exit 0. Bestehende Frontend-Tests: erneut 419 bestanden und dieselben fünf Baselinefehler. Browserprüfung: Exit 0, alle 24 bestanden; Log browser-review-final.log. Rustfmt der geänderten Dateien und `git diff --check` bestehen. Die Migration und ihre SHA384 bleiben unverändert; für die Gate-Korrektur kommen keine SQL-Queries hinzu.
+Frontend-Build nach der Cache-/VOD-Korrektur: Exit 0. Bestehende Frontend-Tests: erneut 419 bestanden und dieselben fünf Baselinefehler. Browserprüfung: Exit 0, alle 24 bestanden; Log browser-review-final.log. Rustfmt der geänderten Dateien und `git diff --check` bestehen. In diesem Schritt änderte sich die Migration noch nicht; die spätere Backfill-Ergänzung ist unten belegt.
 
 Der bestätigte serielle Rust-Lauf besteht mit 300 Social-Media- und 46 VOD-Tests, Exit 0. Die neuen Prüfungen decken die Trennung des Insights-Caches nach ID, VOD-Pagination nach ID, fehlende oder fremde Besitzer-IDs, API-Fehler, wiederholte Cursor und ungültige Dauerangaben ab.
 
@@ -84,3 +84,23 @@ Neue Log-Hashes (SHA256):
 - frontend-review-tests.log: 525161db2020f42bd2567d61e1208400c0e3339d243b9c3d1c525355b088ae3a
 - vod-review-final.log: 5225c6b4e5deaf34c68e9ac84436d43c4f1960dc6dd1ace28290adfb53fca68c
 - clippy-review-final.log: 4d33c63f92f84428dfc8b69e82812058190d418fb20d6d8d99b039262aaa6dd7
+
+## Historische Backfill-Ergänzung
+
+Reguläres Gate für a0c34c308f10b9ddb13476f6ed0f26d32afc5a09: ALLOW, Exit 0. Log gate-a0c34c30.log, SHA256 6c24c18eb77a8bc9acd90652cd931806f671a491dfb23e72b3b8e51527edce06. Der Hinweis zum historischen Backfill führte zu folgender lesender Produktivprüfung:
+
+- Vorlagen und Hashtags: jeweils keine Bestandszeilen.
+- Layouts: eine Zeile ohne ID, earlysalty, eindeutig 1186925760 zugeordnet.
+- Plattformverbindungen: drei Zeilen ohne ID, TikTok und YouTube für earlysalty sowie YouTube für dach_lock. Die Prüfung las nur Plattform, Anzeigename und ID, keine Tokenbytes.
+- Frühere ID-Migration 20260802140000 ist erfolgreich eingetragen. Sie deckt spätere Legacy-Schreibvorgänge nicht ab.
+- Alle 148 Clips haben IDs; alle 16 kanalgebundenen Reports haben IDs; keine Reauth-Benachrichtigungen. In der Fetch-Historie bleiben 22853 von 56004 Zeilen ohne ID erhalten. Die Laufzeit liest Historie über IDs und übernimmt diese Altzeilen nicht in einen fremden Scope.
+
+Migration 900 füllt deshalb NULL-IDs in Vorlagen, Hashtags, Layouts und Plattformverbindungen nach. Die Integrationsprüfung mit befüllten Tabellen besteht, Exit 0. Sie prüft eindeutige Auflösung, Erhalt bereits gebundener IDs, unveränderte Tokenbytes und Anzeigenamen, globale Verbindungen ohne Kanalbindung, mehrdeutige und unauflösbare Namen sowie den Erhalt aller Zeilen. Die erneute Vollmigration auf einer vorher geleerten eigenen Testdatenbank besteht, Exit 0; der Schema-Snapshot bleibt unverändert. Clippy für alle tb-db-Targets besteht, Exit 0.
+
+Aktuelle SHA384 für Migration 20261001090000: 31cda589137ab6760c186eda16c65f4afe67fb96aedb91d6aadfbebe99430674f499f4052c704c062c148f115c25d9a8. Sie wurde nicht produktiv ausgeführt.
+
+Log-Hashes (SHA256):
+
+- migration-legacy-assets-final.log: 5f68730ac909add02a0c0714f1b74b422123533e940faa82d1370f74a2ce8df8
+- fresh-schema-legacy-assets-final.log: cc250287f8522997faeae4122cef22fdd3396fa6cc8259887e78e7f91aa61c8b
+- clippy-legacy-assets-final.log: f4531dcb23934886ba9930c2b83669b99a4d9c5de151d1bb2f52f069a46cd498
