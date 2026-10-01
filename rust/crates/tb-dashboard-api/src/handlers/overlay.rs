@@ -36,6 +36,23 @@ const HERO_ASSETS_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 static OVERLAY_CACHE: OnceLock<Mutex<OverlayCache>> = OnceLock::new();
 static HERO_ICON_CACHE: OnceLock<Mutex<HeroIconCache>> = OnceLock::new();
 
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_OVERLAY_OPTIONS: tb_config::dashboard_options::DashboardOptions;
+}
+
+fn overlay_config_value(name: &str) -> Result<String, std::env::VarError> {
+    #[cfg(test)]
+    if let Ok(value) = TEST_OVERLAY_OPTIONS.try_with(|options| match name {
+        "STEAM_BOT_RANK_URL" => Some(options.steam_rank_url.clone()),
+        "DEADLOCK_ASSETS_BASE" => Some(options.deadlock_assets_base_url.clone()),
+        _ => None,
+    }) {
+        return value.ok_or(std::env::VarError::NotPresent);
+    }
+    tb_config::runtime::dashboard_value(name)
+}
+
 #[derive(Default)]
 struct OverlayCache {
     entries: HashMap<String, CacheEntry>,
@@ -229,7 +246,7 @@ fn lock_cache<T>(cache: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn deadlock_assets_base_url() -> String {
-    tb_config::runtime::dashboard_value("DEADLOCK_ASSETS_BASE")
+    overlay_config_value("DEADLOCK_ASSETS_BASE")
         .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
@@ -570,7 +587,7 @@ fn steam_bot_url(path: &str) -> String {
 }
 
 fn steam_bot_base_url() -> String {
-    tb_config::runtime::dashboard_value("STEAM_BOT_RANK_URL")
+    overlay_config_value("STEAM_BOT_RANK_URL")
         .ok()
         .and_then(|value| {
             let trimmed = value.trim().trim_end_matches('/');
@@ -879,7 +896,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex as StdMutex, OnceLock,
     };
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
 
     use axum::body::to_bytes;
     use axum::http::{header, Request, StatusCode};
@@ -1411,72 +1428,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
-    struct EnvGuard {
-        previous: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(value: &str) -> Self {
-            let previous = std::env::var("STEAM_BOT_RANK_URL").ok();
-            std::env::set_var("STEAM_BOT_RANK_URL", value);
-            Self { previous }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = &self.previous {
-                std::env::set_var("STEAM_BOT_RANK_URL", previous);
-            } else {
-                std::env::remove_var("STEAM_BOT_RANK_URL");
-            }
-        }
-    }
-
-    struct AssetsEnvGuard {
-        previous: Option<String>,
-    }
-
-    impl AssetsEnvGuard {
-        fn set(value: &str) -> Self {
-            let previous = std::env::var("DEADLOCK_ASSETS_BASE").ok();
-            std::env::set_var("DEADLOCK_ASSETS_BASE", value);
-            Self { previous }
-        }
-    }
-
-    impl Drop for AssetsEnvGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = &self.previous {
-                std::env::set_var("DEADLOCK_ASSETS_BASE", previous);
-            } else {
-                std::env::remove_var("DEADLOCK_ASSETS_BASE");
-            }
-        }
-    }
-
-    struct DashboardDistEnvGuard {
-        previous: Option<String>,
-    }
-
-    impl DashboardDistEnvGuard {
-        fn set(value: &str) -> Self {
-            let previous = std::env::var("DASHBOARD_V2_DIST_PATH").ok();
-            std::env::set_var("DASHBOARD_V2_DIST_PATH", value);
-            Self { previous }
-        }
-    }
-
-    impl Drop for DashboardDistEnvGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = &self.previous {
-                std::env::set_var("DASHBOARD_V2_DIST_PATH", previous);
-            } else {
-                std::env::remove_var("DASHBOARD_V2_DIST_PATH");
-            }
-        }
-    }
-
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
@@ -1557,8 +1508,12 @@ mod tests {
         super::clear_overlay_cache_for_tests();
         super::clear_hero_icon_cache_for_tests();
         let mock_server = MockServer::start().await;
-        let _env = EnvGuard::set(&mock_server.uri());
-        let _assets_env = AssetsEnvGuard::set(&mock_server.uri());
+        let options = tb_config::dashboard_options::DashboardOptions {
+            steam_rank_url: mock_server.uri(),
+            deadlock_assets_base_url: mock_server.uri(),
+            ..Default::default()
+        };
+        TEST_OVERLAY_OPTIONS.scope(options, async {
         let pool = make_pool(&dsn, "api_overlay_cache").await;
 
         sqlx::query(
@@ -1675,6 +1630,7 @@ mod tests {
         mock_server.verify().await;
         // 4 Steam-Endpunkte + 1 Hero-Assets-Abruf (über beide Overlay-Calls gecacht).
         assert_eq!(mock_server.received_requests().await.unwrap().len(), 5);
+        }).await;
     }
 
     #[tokio::test]
@@ -1683,14 +1639,21 @@ mod tests {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
         super::clear_overlay_cache_for_tests();
         let mock_server = MockServer::start().await;
-        let _env = EnvGuard::set(&mock_server.uri());
-        let pool = make_pool(&dsn, "api_overlay_unknown").await;
+        let options = tb_config::dashboard_options::DashboardOptions {
+            steam_rank_url: mock_server.uri(),
+            ..Default::default()
+        };
+        TEST_OVERLAY_OPTIONS
+            .scope(options, async {
+                let pool = make_pool(&dsn, "api_overlay_unknown").await;
 
-        let app = build_public_router(pool);
-        let json = get_json(app, "/twitch/api/v2/public/overlay?streamer=missing").await;
+                let app = build_public_router(pool);
+                let json = get_json(app, "/twitch/api/v2/public/overlay?streamer=missing").await;
 
-        assert_eq!(json, json!({ "ok": false }));
-        assert_eq!(mock_server.received_requests().await.unwrap().len(), 0);
+                assert_eq!(json, json!({ "ok": false }));
+                assert_eq!(mock_server.received_requests().await.unwrap().len(), 0);
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -1850,20 +1813,6 @@ mod tests {
     #[tokio::test]
     async fn overlay_html_route_ohne_streamer_ohne_session_leitet_zum_login() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("tb_overlay_spa_index_test_{unique}"));
-        tokio::fs::create_dir_all(&root).await.unwrap();
-        tokio::fs::write(
-            root.join("index.html"),
-            r#"<!doctype html><html><head><script type="module" src="/twitch/dashboard-v2/assets/app.js"></script></head><body><div id="root"></div></body></html>"#,
-        )
-        .await
-        .unwrap();
-        let _dist_env = DashboardDistEnvGuard::set(root.to_str().unwrap());
-
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
@@ -1914,7 +1863,5 @@ mod tests {
             location.contains("/twitch/auth/login"),
             "Redirect-Ziel war {location}"
         );
-
-        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }

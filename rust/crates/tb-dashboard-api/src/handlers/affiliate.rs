@@ -1223,10 +1223,24 @@ fn build_stripe_connect_authorize_url(client_id: &str, redirect_uri: &str, state
 }
 
 fn affiliate_auth_redirect_uri() -> String {
-    if let Some(uri) = non_empty_env(&["TWITCH_AFFILIATE_AUTH_REDIRECT_URI"]) {
-        return uri;
-    }
-    format!("{}{}", public_origin(), SHARED_TWITCH_CALLBACK_PATH)
+    tb_config::runtime::settings()
+        .map(|config| affiliate_auth_redirect_uri_for_options(&config.dashboard.options))
+        .unwrap_or_else(|_| format!("{DEFAULT_PUBLIC_ORIGIN}{SHARED_TWITCH_CALLBACK_PATH}"))
+}
+
+fn affiliate_auth_redirect_uri_for_options(
+    options: &tb_config::dashboard_options::DashboardOptions,
+) -> String {
+    options
+        .affiliate_oauth_redirect_uri
+        .clone()
+        .unwrap_or_else(|| {
+            format!(
+                "{}{}",
+                public_origin_for_options(options),
+                SHARED_TWITCH_CALLBACK_PATH
+            )
+        })
 }
 
 fn affiliate_stripe_redirect_uri() -> String {
@@ -1234,13 +1248,17 @@ fn affiliate_stripe_redirect_uri() -> String {
 }
 
 fn public_origin() -> String {
-    non_empty_env(&[
-        "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
-        "TWITCH_PUBLIC_URL",
-        "PUBLIC_URL",
-    ])
-    .and_then(|value| origin_from_urlish(&value))
-    .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
+    tb_config::runtime::settings()
+        .map(|config| public_origin_for_options(&config.dashboard.options))
+        .unwrap_or_else(|_| DEFAULT_PUBLIC_ORIGIN.to_owned())
+}
+
+fn public_origin_for_options(options: &tb_config::dashboard_options::DashboardOptions) -> String {
+    options
+        .public_dashboard_url
+        .clone()
+        .and_then(|value| origin_from_urlish(&value))
+        .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
 }
 
 fn origin_from_urlish(raw: &str) -> Option<String> {
@@ -1715,44 +1733,42 @@ mod tests {
     }
 
     #[test]
-    fn redirect_uri_nutzt_secret_und_public_url_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let _auth = EnvGuard::set(
-            "TWITCH_AFFILIATE_AUTH_REDIRECT_URI",
-            "https://auth.example.test/custom/callback",
-        );
-        let _public = EnvGuard::set(
-            "TWITCH_PUBLIC_DASHBOARD_BASE_URL",
-            "https://public.example.test",
-        );
-        let _legacy_public = EnvGuard::remove("TWITCH_PUBLIC_URL");
-        let _generic_public = EnvGuard::remove("PUBLIC_URL");
+    fn redirect_uri_nutzt_normale_config() {
+        let snapshot = tb_config::BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id='11'\nnotify_channel_id='22'\neventsub_callback_url='https://example.test/callback'\n[dashboard.options]\naffiliate_oauth_redirect_uri='https://auth.example.test/custom/callback'\npublic_dashboard_url='https://public.example.test'\n",
+            std::path::Path::new("/tmp/affiliate-test/bot.toml"),
+        ).expect("normale Redirect-Fixture");
+        let options = &snapshot.settings().dashboard.options;
 
         assert_eq!(
-            affiliate_auth_redirect_uri(),
+            affiliate_auth_redirect_uri_for_options(options),
             "https://auth.example.test/custom/callback"
         );
         assert_eq!(
-            affiliate_stripe_redirect_uri(),
+            format!(
+                "{}{}",
+                public_origin_for_options(options),
+                AFFILIATE_STRIPE_CALLBACK_PATH
+            ),
             "https://public.example.test/twitch/affiliate/connect/stripe/callback"
         );
     }
 
     #[test]
     fn redirect_uri_fallback_ignoriert_request_host() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let _auth = EnvGuard::remove("TWITCH_AFFILIATE_AUTH_REDIRECT_URI");
-        let _public_dashboard = EnvGuard::remove("TWITCH_PUBLIC_DASHBOARD_BASE_URL");
-        let _legacy_public = EnvGuard::remove("TWITCH_PUBLIC_URL");
-        let _generic_public = EnvGuard::remove("PUBLIC_URL");
+        let options = tb_config::dashboard_options::DashboardOptions::default();
 
         assert_eq!(
-            affiliate_auth_redirect_uri(),
+            affiliate_auth_redirect_uri_for_options(&options),
             "https://deutsche-deadlock-community.de/callback/twitch"
         );
-        assert!(affiliate_auth_redirect_uri().ends_with("/callback/twitch"));
+        assert!(affiliate_auth_redirect_uri_for_options(&options).ends_with("/callback/twitch"));
         assert_eq!(
-            affiliate_stripe_redirect_uri(),
+            format!(
+                "{}{}",
+                public_origin_for_options(&options),
+                AFFILIATE_STRIPE_CALLBACK_PATH
+            ),
             "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
         );
     }
@@ -1763,7 +1779,11 @@ mod tests {
             return;
         };
         create_tables(&pool).await;
-        std::env::set_var("DB_MASTER_KEY_V1", "ab".repeat(32));
+        static TEST_MASTER: std::sync::Once = std::sync::Once::new();
+        TEST_MASTER.call_once(|| {
+            tb_crypto::FieldCipher::install_runtime_key(&"ab".repeat(32))
+                .expect("synthetischer einmaliger Mastercache");
+        });
         let state = state(pool.clone());
         state
             .save_affiliate_oauth_state(

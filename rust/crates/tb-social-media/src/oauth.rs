@@ -925,6 +925,10 @@ fn pkce_challenge(verifier: &str) -> String {
 
 /// Env-Var, leer → `None`.
 fn env_nonempty(var: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(value) = tests::synthetic_secret(var) {
+        return value.filter(|value| !value.trim().is_empty());
+    }
     tb_config::private::secret(var).ok()
 }
 
@@ -1019,6 +1023,44 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    std::thread_local! {
+        static SYNTHETIC_SECRETS: std::cell::RefCell<Option<std::collections::BTreeMap<String, String>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn synthetic_secret(name: &str) -> Option<Option<String>> {
+        SYNTHETIC_SECRETS.with(|values| {
+            values
+                .borrow()
+                .as_ref()
+                .map(|values| values.get(name).cloned())
+        })
+    }
+
+    struct SyntheticSecrets {
+        previous: Option<std::collections::BTreeMap<String, String>>,
+        _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+
+    impl SyntheticSecrets {
+        fn new(values: &[(&str, &str)]) -> Self {
+            let values = values
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            let previous = SYNTHETIC_SECRETS.with(|fixture| fixture.replace(Some(values)));
+            Self {
+                previous,
+                _same_thread: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl Drop for SyntheticSecrets {
+        fn drop(&mut self) {
+            SYNTHETIC_SECRETS.with(|fixture| fixture.replace(self.previous.take()));
+        }
+    }
+
     fn test_cipher() -> Arc<FieldCipher> {
         Arc::new(FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap())
     }
@@ -1047,14 +1089,9 @@ mod tests {
         assert!(decrypt_pkce(&cipher, "youtube", "lookup-key", "verifier-geheim").is_err());
     }
 
-    fn with_env<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
-        for (k, v) in vars {
-            std::env::set_var(k, v);
-        }
+    fn with_fixture<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
+        let _fixture = SyntheticSecrets::new(vars);
         f();
-        for (k, _) in vars {
-            std::env::remove_var(k);
-        }
     }
 
     /// Pool, der nie verbunden wird. Die hier geprueften Pfade sprechen nur
@@ -1090,7 +1127,7 @@ mod tests {
             "http://127.0.0.1:1".into(),
             "http://127.0.0.1:1".into(),
         );
-        let tokens = with_env_async(
+        let tokens = with_fixture_async(
             &[("TIKTOK_CLIENT_KEY", "ck"), ("TIKTOK_CLIENT_SECRET", "cs")],
             mgr.tiktok_exchange_code("code", "https://cb", "verifier"),
         )
@@ -1117,7 +1154,7 @@ mod tests {
             "http://127.0.0.1:1".into(),
             "http://127.0.0.1:1".into(),
         );
-        let result = with_env_async(
+        let result = with_fixture_async(
             &[("TIKTOK_CLIENT_KEY", "ck"), ("TIKTOK_CLIENT_SECRET", "cs")],
             mgr.tiktok_exchange_code("code", "https://cb", "verifier"),
         )
@@ -1186,7 +1223,7 @@ mod tests {
                 format!("{}/ig/token", server.uri()),
             )
             .with_instagram_graph(format!("{}/graph", server.uri()));
-        let tokens = with_env_async(
+        let tokens = with_fixture_async(
             &[
                 ("INSTAGRAM_CLIENT_ID", "cid"),
                 ("INSTAGRAM_CLIENT_SECRET", "csec"),
@@ -1222,24 +1259,18 @@ mod tests {
         assert!(neu.expires_at > Utc::now() + Duration::days(59));
     }
 
-    /// Wie `with_env`, aber fuer einen await-Punkt zwischen Setzen und Aufraeumen.
-    async fn with_env_async<T>(
+    /// Synthetische private Werte im eigenen Current-thread-Test, keine Prozessumgebung.
+    async fn with_fixture_async<T>(
         vars: &[(&str, &str)],
         future: impl std::future::Future<Output = T>,
     ) -> T {
-        for (k, v) in vars {
-            std::env::set_var(k, v);
-        }
-        let out = future.await;
-        for (k, _) in vars {
-            std::env::remove_var(k);
-        }
-        out
+        let _fixture = SyntheticSecrets::new(vars);
+        future.await
     }
 
     #[test]
     fn instagram_url_ohne_config_ist_fehler() {
-        std::env::remove_var("INSTAGRAM_CLIENT_ID");
+        let _fixture = SyntheticSecrets::new(&[]);
         assert!(matches!(
             instagram_auth_url("st", "https://cb"),
             Err(OAuthError::MissingConfig("INSTAGRAM_CLIENT_ID"))
@@ -1248,7 +1279,7 @@ mod tests {
 
     #[test]
     fn tiktok_url_enthaelt_pflichtparameter() {
-        with_env(&[("TIKTOK_CLIENT_KEY", "ck123")], || {
+        with_fixture(&[("TIKTOK_CLIENT_KEY", "ck123")], || {
             let url = tiktok_auth_url("st-1", "https://cb/x", "verifier123").unwrap();
             assert!(url.starts_with("https://www.tiktok.com/v2/auth/authorize/?"));
             assert!(url.contains("client_key=ck123"));
@@ -1348,7 +1379,7 @@ mod tests {
         let Some(pool) = make_pool("t_sm_oauth_state").await else {
             return;
         };
-        std::env::set_var("YOUTUBE_CLIENT_ID", "yt-cid");
+        let _fixture = SyntheticSecrets::new(&[("YOUTUBE_CLIENT_ID", "yt-cid")]);
         let mgr = OAuthManager::new(pool.clone(), test_cipher());
         let url = mgr
             .generate_auth_url("youtube", Some("42"), "https://cb/yt")
@@ -1384,7 +1415,6 @@ mod tests {
         assert!(verifier.starts_with(PKCE_ENC_PREFIX));
         assert!(!verifier.contains(raw_state));
         assert!(in_future);
-        std::env::remove_var("YOUTUBE_CLIENT_ID");
     }
 
     #[tokio::test]
