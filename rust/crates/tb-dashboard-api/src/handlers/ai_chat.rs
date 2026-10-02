@@ -153,7 +153,7 @@ fn parse_analysis_id(v: Option<&Value>) -> Option<i64> {
 }
 
 /// `POST /twitch/api/v2/ai/chat`  Body: `{streamer, analysis_id, message}`
-pub async fn ai_chat_handler(
+pub(crate) async fn ai_chat_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Extension(store): Extension<AiStore>,

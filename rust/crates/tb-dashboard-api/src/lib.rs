@@ -216,7 +216,6 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
 }
 
 fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_limiter: RateLimiter, ai_store: ai_store::AiStore) -> Router {
-    ai_store::start_cleanup(ai_store.pool.clone());
     use handlers::scam_guard_enforce;
     use handlers::{
         ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
