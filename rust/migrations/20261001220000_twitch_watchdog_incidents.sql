@@ -6,6 +6,7 @@ CREATE TABLE twitch_watchdog_incidents (
     notified_at timestamptz,
     warning_at timestamptz,
     last_attempt_at timestamptz,
+    delivery_error_at timestamptz,
     UNIQUE(service, started_at),
     CHECK (recovered_at IS NULL OR recovered_at >= started_at)
 );

@@ -123,6 +123,11 @@ async fn record(
     Ok(())
 }
 
+async fn first_delivery_error(pool: &PgPool, id: i64, now: DateTime<Utc>) -> Result<bool> {
+    Ok(sqlx::query("UPDATE twitch_watchdog_incidents SET delivery_error_at=$2 WHERE id=$1 AND delivery_error_at IS NULL")
+        .bind(id).bind(now).execute(pool).await?.rows_affected() == 1)
+}
+
 async fn notify_credential() -> Result<NotifyCredential> {
     let output = tokio::time::timeout(
         Duration::from_secs(5),
@@ -248,7 +253,6 @@ async fn main() -> Result<()> {
          AND (recovered_at IS NULL OR recovered_at-started_at >= make_interval(secs => CASE WHEN service=$2 THEN $3 ELSE 90 END))
          AND (last_attempt_at IS NULL OR last_attempt_at <= $1 - make_interval(secs => $4)) ORDER BY id LIMIT 2"
     ).bind(now).bind(BOT).bind(bot_delay as i32).bind(retry as i32).fetch_all(&pool).await?;
-    let mut failed = false;
     for incident in incidents {
         sqlx::query("UPDATE twitch_watchdog_incidents SET last_attempt_at=$2 WHERE id=$1")
             .bind(incident.id)
@@ -272,18 +276,16 @@ async fn main() -> Result<()> {
                 );
             }
             Err(error) => {
-                eprintln!(
-                    "Ausfallmeldung fehlgeschlagen: {}: {error}",
-                    incident.service
-                );
-                failed = true;
+                if first_delivery_error(&pool, incident.id, now).await? {
+                    eprintln!(
+                        "Ausfallmeldung fehlgeschlagen: {}: {error}",
+                        incident.service
+                    );
+                }
             }
         }
     }
     lock.commit().await?;
-    if failed {
-        return Err("notification delivery failed; existing timer retries".into());
-    }
     Ok(())
 }
 
@@ -388,6 +390,14 @@ mod tests {
         .unwrap();
         let counts: (i64,i64) = sqlx::query_as("SELECT COUNT(*),COUNT(*) FILTER(WHERE recovered_at IS NULL) FROM twitch_watchdog_incidents").fetch_one(&pool).await.unwrap();
         assert_eq!(counts, (2, 1));
+        let ids: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM twitch_watchdog_incidents ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(first_delivery_error(&pool, ids[0], now).await.unwrap());
+        assert!(!first_delivery_error(&pool, ids[0], now).await.unwrap());
+        assert!(first_delivery_error(&pool, ids[1], now).await.unwrap());
         sqlx::query("CREATE TABLE category_collection_runs(snapshot_at timestamptz PRIMARY KEY,poll_seconds integer NOT NULL)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO category_collection_runs VALUES($1,60),($2,60)")

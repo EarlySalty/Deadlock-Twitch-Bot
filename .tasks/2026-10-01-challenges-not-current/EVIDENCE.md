@@ -23,3 +23,9 @@ Sichtprüfung des echten Teilzustands:
 ![Desktop](/home/nathanael/.claude/sichtpruefung/challenges-not-current/challenges-partial-desktop.png)
 
 ![Mobil](/home/nathanael/.claude/sichtpruefung/challenges-not-current/challenges-partial-mobile.png)
+
+Abschlussübernahme 2026-10-03: Eigenanteil auf aktuelle origin/main fcc45ab1 per Cherry-pick neu aufgesetzt. Live-Journal bestätigt um 23:58 Uhr not_current; Postgres bestätigt Kategoriequelle und Engine ungesund seit 2026-10-01 06:16:50, übrige fünf Quellen aktuell gesund. Eigengate auf 1c94d6e4 ALLOW. Frische unabhängige Abnahme verlangt die Entprellung von Zustellfehlern: eigener persistenter delivery_error_at-Marker protokolliert jeden Vorfall einmal; Zustellversuche bleiben aktiv und werden nicht erneut als Main-Fehler ausgegeben. Die Migration wurde produktiv noch nie angewandt, daher ist die zusätzliche Spalte im ursprünglichen CREATE TABLE zulässig. Der PostgreSQL-Test prüft den Marker für Erstfehler, Wiederholung und einen neuen Vorfall.
+
+Dashboard-, Admin- und Website-Build erneut erfolgreich; neun Challenges-Tests erneut erfolgreich. Browserruntime meldet keine verfügbaren Browser. Erneuter bestehender Browserregressionstest fehlt wegen nicht vorhandenem playwright-core, frühere belegte Desktop-/Mobilbilder bleiben erhalten. Kein Zugriff auf Sitzungen, Cookies oder Secrets und keine Änderung der Authentifizierung.
+
+Die ergänzte Watchdog-Prüfung ist erfolgreich: /home/nathanael/.cargo/bin/cargo +1.97.1 test --manifest-path rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-challenges-not-current/rust/target -p tb-category-collector --bin tb-twitch-watchdog -j2: beide Tests bestanden, einschließlich echter PostgreSQL-Entprellung. Geänderte Watchdog-Datei mit rustfmt geprüft, git diff --check erfolgreich.
