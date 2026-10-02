@@ -337,6 +337,20 @@ const EN: Record<string, string> = {
   Upload: 'Upload',
   'Keine Vorschau': 'No preview',
   'Original ansehen': 'Watch original',
+  'Für Clip-Contest einreichen': 'Submit to clip contest',
+  'Clip ist im Wochen-Contest, die Community stimmt im Discord ab.':
+    'Clip is in the weekly contest, the community votes on Discord.',
+  'Der Clip ist schon im Wochen-Contest.': 'This clip is already in the weekly contest.',
+  'Heute sind schon 3 Clips aus diesem Kanal eingereicht. Morgen geht es weiter.':
+    'This channel already submitted 3 clips today. Try again tomorrow.',
+  'Der Discord ist gerade nicht erreichbar. Versuch es später nochmal.':
+    'Discord is not reachable right now. Please try again later.',
+  'Das klappt gerade nicht. Versuch es gleich nochmal.':
+    'That did not work right now. Please try again in a moment.',
+  'Es zählen nur Clips aus diesem Kanal.': 'Only clips from this channel count.',
+  'Diesen Clip finde ich auf Twitch nicht.': 'I cannot find this clip on Twitch.',
+  'Nur Twitch-Clips können am Wochen-Contest teilnehmen.':
+    'Only Twitch clips can join the weekly contest.',
   Twitch: 'Twitch',
   '{views} Views': '{views} views',
   'Override aktiv': 'Override active',

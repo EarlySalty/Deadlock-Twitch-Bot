@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 chrono  = { workspace = true }
+serde   = { workspace = true }
 sqlx    = { workspace = true }
 tracing = { workspace = true }
 # Nur für den bestehenden Global-Ban-Gate (`RaidBlacklistStore::is_hard_banned`,

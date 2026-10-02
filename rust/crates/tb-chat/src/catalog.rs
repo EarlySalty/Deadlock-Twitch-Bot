@@ -209,6 +209,12 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Erklärt, warum der Bot jemanden als Scam eingestuft hat.",
         },
         CommandInfo {
+            name: "!clipcontest",
+            aliases: &[],
+            group: Mod,
+            summary: "Reicht einen Clip aus diesem Kanal für den Wochen-Contest im Discord ein: !clipcontest <Clip-Link>, ohne Link den neuesten Clip des laufenden Streams (Broadcaster/Mods).",
+        },
+        CommandInfo {
             name: "!silentban",
             aliases: &[],
             group: Mod,

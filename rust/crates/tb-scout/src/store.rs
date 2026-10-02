@@ -32,49 +32,68 @@ pub struct KandidatZeile {
     pub dispatched_at: Option<DateTime<Utc>>,
     /// Erster erkannter Owner-Besuch im Kanal (Besuch-Erkennung, tb-bot-Tick).
     pub visited_at: Option<DateTime<Utc>>,
+    /// `auto` (Scout-Erkennung) oder `community` (Vorschlag aus dem Discord).
+    pub source: String,
+    /// Erster Vorschlagender (Discord-ID), nur bei Community-Vorschlägen.
+    pub suggested_by_discord_id: Option<String>,
+    pub suggestion_reason: Option<String>,
+    pub suggested_at: Option<DateTime<Utc>>,
+    /// Zahl verschiedener Vorschlagender aus der Community.
+    pub suggestion_count: i32,
 }
 
-type Zeile = (
-    String,
-    Option<String>,
-    i32,
-    f32,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-    Option<String>,
-    f32,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-);
+#[derive(sqlx::FromRow)]
+struct Zeile {
+    streamer_login: String,
+    twitch_user_id: Option<String>,
+    sessions_count: i32,
+    avg_viewers: f32,
+    first_seen: Option<DateTime<Utc>>,
+    last_seen: Option<DateTime<Utc>>,
+    language: Option<String>,
+    deadlock_share: f32,
+    status: String,
+    entscheid_grund: Option<String>,
+    approver: Option<String>,
+    decided_at: Option<DateTime<Utc>>,
+    dispatched_at: Option<DateTime<Utc>>,
+    visited_at: Option<DateTime<Utc>>,
+    source: String,
+    suggested_by_discord_id: Option<String>,
+    suggestion_reason: Option<String>,
+    suggested_at: Option<DateTime<Utc>>,
+    suggestion_count: i32,
+}
 
 impl From<Zeile> for KandidatZeile {
     fn from(z: Zeile) -> Self {
         Self {
-            login: z.0,
-            twitch_user_id: z.1,
-            sessions_count: z.2,
-            avg_viewers: z.3,
-            first_seen: z.4,
-            last_seen: z.5,
-            language: z.6,
-            deadlock_share: z.7,
-            status: z.8,
-            entscheid_grund: z.9,
-            approver: z.10,
-            decided_at: z.11,
-            dispatched_at: z.12,
-            visited_at: z.13,
+            login: z.streamer_login,
+            twitch_user_id: z.twitch_user_id,
+            sessions_count: z.sessions_count,
+            avg_viewers: z.avg_viewers,
+            first_seen: z.first_seen,
+            last_seen: z.last_seen,
+            language: z.language,
+            deadlock_share: z.deadlock_share,
+            status: z.status,
+            entscheid_grund: z.entscheid_grund,
+            approver: z.approver,
+            decided_at: z.decided_at,
+            dispatched_at: z.dispatched_at,
+            visited_at: z.visited_at,
+            source: z.source,
+            suggested_by_discord_id: z.suggested_by_discord_id,
+            suggestion_reason: z.suggestion_reason,
+            suggested_at: z.suggested_at,
+            suggestion_count: z.suggestion_count,
         }
     }
 }
 
 const SPALTEN: &str = "streamer_login, twitch_user_id, sessions_count, avg_viewers, first_seen, \
      last_seen, language, deadlock_share, status, entscheid_grund, approver, decided_at, dispatched_at, \
-     visited_at";
+     visited_at, source, suggested_by_discord_id, suggestion_reason, suggested_at, suggestion_count";
 
 /// Merkt einen Kandidaten vor. `true`, wenn geschrieben wurde (neu angelegt
 /// oder Kennzahlen einer `vorgeschlagen`-Zeile aktualisiert). Zeilen mit

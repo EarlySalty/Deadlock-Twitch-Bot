@@ -381,6 +381,12 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
             "/social-media/api/approval/{clip_db_id}/cancel",
             post(social_media::approval_cancel_handler),
         )
+        // Clip für den wöchentlichen Clip-Contest im Discord einreichen
+        // (gleicher Dienst wie der Chat-Befehl !clipcontest).
+        .route(
+            "/social-media/api/clips/{clip_db_id}/clip-contest",
+            post(social_media::submit_clip_contest_handler),
+        )
         // Zeitplan, Freigabe-Modus, Kategorien und Vorratsrechnung je Kanal.
         // Loest die frueheren globalen Auto-Approve-Flags ab.
         .route(

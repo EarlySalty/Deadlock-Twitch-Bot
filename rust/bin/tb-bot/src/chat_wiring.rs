@@ -286,6 +286,59 @@ pub fn build_clip_port(
     }))
 }
 
+/// Broker-Port der Clip-Contest-Einreichung (Paket E): derselbe
+/// `BrokerRelay` (Master-Broker, `X-Internal-Token`) wie Discord-Invites und
+/// Voice-Join, kein eigenes Secret.
+struct BrokerClipContest {
+    relay: BrokerRelay,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::clip_contest_submit::ClipContestBroker for BrokerClipContest {
+    async fn submit(
+        &self,
+        request: &tb_chat::clip_contest_submit::BrokerClipRequest,
+    ) -> Result<tb_chat::clip_contest_submit::BrokerClipResponse, String> {
+        use tb_chat::clip_contest_submit::{BrokerClipResponse, BrokerClipStatus};
+        let result = self
+            .relay
+            .submit_twitch_clip(request, &request.idempotency_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        let status = match result.status.as_str() {
+            "accepted" => BrokerClipStatus::Accepted,
+            "duplicate" => BrokerClipStatus::Duplicate,
+            "rejected" => BrokerClipStatus::Rejected,
+            other => return Err(format!("unbekannter Clip-Contest-Status {other}")),
+        };
+        Ok(BrokerClipResponse {
+            status,
+            submission_id: result.submission_id,
+            reason: result.reason,
+        })
+    }
+}
+
+/// Clip-Contest-Einreichung für `!clipcontest`. Ohne Helix-Client oder
+/// Broker-Relay bleibt der Befehl mit einem Hinweis stehen (`None`).
+pub fn build_clip_contest(
+    pool: PgPool,
+    helix: Option<HelixClient>,
+    relay: Option<BrokerRelay>,
+) -> Option<Arc<tb_chat::clip_contest_submit::ClipContestSubmitter>> {
+    let (Some(helix), Some(relay)) = (helix, relay) else {
+        tracing::warn!("!clipcontest: Helix oder Broker fehlt, Einreichung deaktiviert");
+        return None;
+    };
+    Some(Arc::new(
+        tb_chat::clip_contest_submit::ClipContestSubmitter::new(
+            pool,
+            Arc::new(tb_chat::clip_contest_submit::HelixClipLookup::new(helix)),
+            Arc::new(BrokerClipContest { relay }),
+        ),
+    ))
+}
+
 /// Baut den Engagement-Stealth-Sender (Smoke-Account) — nur mit Krypto-Key UND
 /// App-Credentials. Fehlt eins, gibt es keinen Sende-Account und die AI-Antwort
 /// wird verworfen (`None`), exakt wie Pythons Fallback. Liest den bereits live
@@ -754,6 +807,7 @@ pub struct ChatRuntimePorts {
     pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     pub clip_port: Option<Arc<dyn ClipPort>>,
+    pub clip_contest: Option<Arc<tb_chat::clip_contest_submit::ClipContestSubmitter>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
     pub invite_channel_id: u64,
@@ -784,6 +838,7 @@ pub async fn build_runtime(
         subscription_status,
         manual_raid,
         clip_port,
+        clip_contest,
         bot_ban_handler,
         invite_relay,
         invite_channel_id,
@@ -957,6 +1012,9 @@ pub async fn build_runtime(
     )));
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
+    }
+    if let Some(submitter) = clip_contest {
+        command_engine = command_engine.set_clip_contest(submitter);
     }
     command_engine = command_engine.set_scam_port(Arc::new(ScamGuardCommands::new(
         pool.clone(),

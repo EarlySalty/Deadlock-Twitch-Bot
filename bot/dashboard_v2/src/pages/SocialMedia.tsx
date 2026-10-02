@@ -23,6 +23,7 @@ import {
   Plus,
   List,
   LayoutGrid,
+  Trophy,
 } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
@@ -72,6 +73,7 @@ import {
   requestPreview,
   getPreviewStatus,
   previewFileUrl,
+  submitClipToContest,
 } from '@/api/socialMedia';
 import {
   APPROVAL_MODE_TEXTE,
@@ -2264,6 +2266,10 @@ function ClipCard({
       void queryClient.invalidateQueries({ queryKey: previewKey });
     },
   });
+  // Wochen-Contest im Discord: gleicher Dienst wie !clipcontest im Chat.
+  const contest = useMutation({
+    mutationFn: () => submitClipToContest(clip.clip_db_id),
+  });
   const rendering =
     render.isPending || preview.data?.status === 'pending' || preview.data?.status === 'rendering';
   const ready = preview.data?.status === 'ready';
@@ -2423,6 +2429,19 @@ function ClipCard({
               {fehlerZeile}
             </p>
           )}
+          {contest.data && (
+            <p
+              role={contest.data.ok ? 'status' : 'alert'}
+              className={`text-sm ${contest.data.ok ? 'text-success' : 'text-danger'}`}
+            >
+              {t(contest.data.message)}
+            </p>
+          )}
+          {contest.isError && (
+            <p role="alert" className="text-sm text-danger">
+              {t('Das klappt gerade nicht. Versuch es gleich nochmal.')}
+            </p>
+          )}
         </div>
         <div className="studio-clip-actions">
           {canDecide ? (
@@ -2507,6 +2526,17 @@ function ClipCard({
                 <Clapperboard className="h-4 w-4" />
                 {ready ? t('Vorschau neu rendern') : t('Vorschau rendern')}
               </button>
+              {clip.source_kind !== 'manual_upload' && (
+                <button
+                  type="button"
+                  disabled={contest.isPending || contest.data?.status === 'accepted'}
+                  onClick={() => runMenu(() => contest.mutate())}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+                >
+                  <Trophy className="h-4 w-4" />
+                  {t('Für Clip-Contest einreichen')}
+                </button>
+              )}
               {clip.clip_url && (
                 <a
                   href={clip.clip_url}

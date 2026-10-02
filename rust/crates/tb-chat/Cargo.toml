@@ -34,3 +34,5 @@ tokio              = { workspace = true, features = ["rt-multi-thread", "macros"
 tracing-subscriber = { workspace = true }
 wiremock           = { workspace = true }
 tempfile = "3"
+# Clip-Contest-Tests laufen gegen eine frisch migrierte Wegwerf-DB.
+tb-db    = { workspace = true }

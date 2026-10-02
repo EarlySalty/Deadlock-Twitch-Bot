@@ -72,7 +72,7 @@ const FINDE_SQL: &str = r#"WITH ticks AS (
                            AND sup.suppressed_until > NOW())
          AND NOT EXISTS (SELECT 1 FROM twitch_partner_outreach o
                          WHERE LOWER(o.streamer_login) = LOWER(s.streamer)
-                           AND o.cooldown_until > NOW())
+                           AND NULLIF(BTRIM(o.cooldown_until), '')::timestamptz > NOW())
          AND NOT EXISTS (SELECT 1 FROM twitch_scout_candidates c
                          WHERE c.streamer_login = LOWER(s.streamer)
                            AND c.status <> 'vorgeschlagen')

@@ -932,6 +932,17 @@ twitch_clip_contest_effort_outbox|occurred_at|timestamp with time zone|NO|
 twitch_clip_contest_effort_outbox|partner_twitch_user_id|text|NO|
 twitch_clip_contest_effort_outbox|source_id|text|NO|
 twitch_clip_contest_effort_outbox|streamer_login|text|NO|
+twitch_clip_contest_forwards|broadcaster_login|text|NO|
+twitch_clip_contest_forwards|broadcaster_twitch_id|text|NO|
+twitch_clip_contest_forwards|broker_submission_id|bigint|YES|
+twitch_clip_contest_forwards|clip_id|text|NO|
+twitch_clip_contest_forwards|clip_url|text|NO|
+twitch_clip_contest_forwards|created_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_forwards|reason|text|YES|
+twitch_clip_contest_forwards|status|text|NO|
+twitch_clip_contest_forwards|submitted_by_twitch_id|text|YES|
+twitch_clip_contest_forwards|updated_at|timestamp with time zone|NO|clock_timestamp()
+twitch_clip_contest_forwards|via|text|NO|
 twitch_clip_contest_hall_of_fame|contest_month|date|NO|
 twitch_clip_contest_hall_of_fame|finalized_at|timestamp with time zone|NO|clock_timestamp()
 twitch_clip_contest_hall_of_fame|rank|smallint|NO|
@@ -1112,6 +1123,30 @@ twitch_community_announcements|broadcaster_id|text|NO|
 twitch_community_announcements|revision|bigint|NO|0
 twitch_community_announcements|settings|jsonb|NO|
 twitch_community_announcements|updated_at|timestamp with time zone|NO|now()
+twitch_community_points_discoveries|bonus_awarded|boolean|NO|
+twitch_community_points_discoveries|channel_twitch_user_id|text|NO|
+twitch_community_points_discoveries|created_at|timestamp with time zone|NO|now()
+twitch_community_points_discoveries|day|date|NO|
+twitch_community_points_discoveries|first_seen_at|timestamp with time zone|NO|
+twitch_community_points_discoveries|twitch_user_id|text|NO|
+twitch_community_points_streamer_daily|day|date|NO|
+twitch_community_points_streamer_daily|discord_user_id|text|YES|
+twitch_community_points_streamer_daily|raids_to_partners|integer|NO|0
+twitch_community_points_streamer_daily|streamer_login|text|NO|''::text
+twitch_community_points_streamer_daily|streamer_twitch_user_id|text|NO|
+twitch_community_points_streamer_daily|unique_viewers|integer|NO|0
+twitch_community_points_streamer_daily|updated_at|timestamp with time zone|NO|now()
+twitch_community_points_streamer_daily|viewer_minutes|integer|NO|0
+twitch_community_points_viewer_daily|channel_twitch_user_id|text|NO|
+twitch_community_points_viewer_daily|chat_messages|integer|NO|0
+twitch_community_points_viewer_daily|day|date|NO|
+twitch_community_points_viewer_daily|points_chat|integer|NO|0
+twitch_community_points_viewer_daily|points_discovery|integer|NO|0
+twitch_community_points_viewer_daily|points_watch|integer|NO|0
+twitch_community_points_viewer_daily|twitch_login|text|NO|''::text
+twitch_community_points_viewer_daily|twitch_user_id|text|NO|
+twitch_community_points_viewer_daily|updated_at|timestamp with time zone|NO|now()
+twitch_community_points_viewer_daily|watch_minutes|integer|NO|0
 twitch_confirmed_external_recruitment_raids|confirmation_signal|text|YES|
 twitch_confirmed_external_recruitment_raids|confirmed_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_confirmed_external_recruitment_raids|from_broadcaster_id|text|YES|
@@ -1867,6 +1902,7 @@ twitch_scam_guard_verdicts|transcript_snapshot|text|NO|
 twitch_scam_guard_verdicts|verdict|text|NO|
 twitch_scout_candidates|approver|text|YES|
 twitch_scout_candidates|avg_viewers|real|NO|0
+twitch_scout_candidates|community_updated_at|timestamp with time zone|YES|
 twitch_scout_candidates|deadlock_share|real|NO|0
 twitch_scout_candidates|decided_at|timestamp with time zone|YES|
 twitch_scout_candidates|dispatched_at|timestamp with time zone|YES|
@@ -1874,11 +1910,25 @@ twitch_scout_candidates|entscheid_grund|text|YES|
 twitch_scout_candidates|first_seen|timestamp with time zone|YES|
 twitch_scout_candidates|language|text|YES|
 twitch_scout_candidates|last_seen|timestamp with time zone|YES|
+twitch_scout_candidates|partner_active_since|timestamp with time zone|YES|
 twitch_scout_candidates|sessions_count|integer|NO|0
+twitch_scout_candidates|source|text|NO|'auto'::text
 twitch_scout_candidates|status|text|NO|'vorgeschlagen'::text
 twitch_scout_candidates|streamer_login|text|NO|
+twitch_scout_candidates|suggested_at|timestamp with time zone|YES|
+twitch_scout_candidates|suggested_by_discord_id|text|YES|
+twitch_scout_candidates|suggestion_count|integer|NO|0
+twitch_scout_candidates|suggestion_reason|text|YES|
 twitch_scout_candidates|twitch_user_id|text|YES|
 twitch_scout_candidates|visited_at|timestamp with time zone|YES|
+twitch_scout_community_suggestions|created_at|timestamp with time zone|NO|clock_timestamp()
+twitch_scout_community_suggestions|idempotency_key|text|NO|
+twitch_scout_community_suggestions|id|bigint|NO|nextval('twitch_scout_community_suggestions_id_seq'::regclass)
+twitch_scout_community_suggestions|reason|text|YES|
+twitch_scout_community_suggestions|result_status|text|NO|
+twitch_scout_community_suggestions|suggested_by_discord_id|text|NO|
+twitch_scout_community_suggestions|twitch_login|text|NO|
+twitch_scout_community_suggestions|twitch_user_id|text|NO|
 twitch_scout_pitch_blacklist|created_at|timestamp with time zone|YES|now()
 twitch_scout_pitch_blacklist|reason|text|YES|
 twitch_scout_pitch_blacklist|streamer_login|text|NO|

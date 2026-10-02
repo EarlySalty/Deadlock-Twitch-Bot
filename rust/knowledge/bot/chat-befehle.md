@@ -3,7 +3,7 @@ title: Twitch-Chat-Befehle
 namespace: bot
 category: faq
 audience: public
-last_updated: 2026-09-18
+last_updated: 2026-10-02
 source: rust/crates/tb-chat/src/catalog.rs
 tip_eligible: false
 ---
@@ -30,6 +30,7 @@ Danach nutzt `!rank @deinname` diesen Account über die Deadlock API. Die Verbin
 - `!watchtime` zeigt deine hier erfasste Zuschauerzeit und den Anteil im laufenden Stream. Gezählt werden erfasste Anwesenheiten, auch mit Pausen dazwischen. Die Zahl ist keine lückenlose Messung deiner tatsächlichen Sehzeit.
 - `!rank`, `!wins`, `!winrate`, `!mmr`, `!live`, `!lastmatch`, `!streak` und `!mostplayed` zeigen Deadlock-Statistiken des Streamers. `!live` meint ein laufendes Spiel, nicht den Twitch-Livestatus.
 - `!clip` erstellt einen Clip aus dem laufenden Stream. Der Kanalschalter muss an sein und die Twitch-Verbindung passen. Die Kategorie ist egal.
+- Broadcaster und Moderatoren aktiver Partnerkanäle können mit `!clipcontest <Clip-Link>` einen Clip aus dem eigenen Kanal für den wöchentlichen Clip-Contest im Discord einreichen. Ohne Link nimmt der Bot den neuesten Clip des laufenden Streams. Pro Kanal sind drei Einreichungen je Tag möglich. Im Social-Studio gibt es dafür den Knopf „Für Clip-Contest einreichen“.
 - `!dldc` und `!dlde` zeigen den hinterlegten Discord-Link. `!invite` zeigt einen Einladungslink. `!discord` gehört bewusst nicht dem Bot, damit Creator ihren eigenen `!discord`-Command nutzen können. Diese Befehle funktionieren auch offline.
 - `!sub` zeigt den Abo-Link dieses Kanals. `!sub erinnerung an/aus/status` verwaltet deine freiwillige Abo-Erinnerung.
 - `!lurk` sagt dem Chat, dass du still weiterschaust, sofern der Kanal den Befehl eingeschaltet hat.

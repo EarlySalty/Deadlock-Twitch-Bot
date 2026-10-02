@@ -251,6 +251,70 @@ Welcher Streamer wurde mit welchem Invite eingeladen.
 ### twitch_partner_outreach
 Outreach-Log fuer Partner-Ansprache.
 
+### Community-Punkte (Community-Streamer-Brücke, Paket B)
+
+Migration `rust/migrations/20261001100000_community_points.sql`. Der tb-bot
+(`community_points_aggregation`, alle 5 Minuten) rechnet die Tageswerte
+(Tag nach Europe/Berlin) aus den Rohdaten neu und schreibt nur geänderte
+Zeilen; Logik und Regeln in `rust/crates/tb-analytics/src/community_points.rs`.
+Quellen: `twitch_viewer_presence_ticks` (Twitch-User-ID über
+`twitch_session_chatters.chatter_id` derselben Session), `twitch_chat_messages`,
+`twitch_raid_history`, `twitch_ban_events`, `twitch_chatter_global_ban`,
+`twitch_chatter_rollup`, `twitch_streamers_partner_state`.
+`updated_at` ist je Tabelle streng monoton und eindeutig (Lese-Cursor).
+
+| Tabelle | Schlüssel | Inhalt |
+|---------|-----------|--------|
+| `twitch_community_points_viewer_daily` | (`twitch_user_id`, `channel_twitch_user_id`, `day`) | `twitch_login`, `watch_minutes`, `chat_messages` (zählende Nachrichten), `points_watch` (≤ 72), `points_chat` (≤ 30), `points_discovery` (0/10), `updated_at` |
+| `twitch_community_points_streamer_daily` | (`streamer_twitch_user_id`, `day`) | `streamer_login`, `discord_user_id`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`, `updated_at` |
+| `twitch_community_points_discoveries` | (`twitch_user_id`, `channel_twitch_user_id`) | erstes Auftauchen im Partnerkanal: `day`, `first_seen_at`, `bonus_awarded` (endgültig, Grundlage des Entdecker-Bonus) |
+
+Zeilen eines neu gerechneten Tages, die nicht mehr vorkommen (z. B. später
+gebannt), werden genullt statt gelöscht, damit der Sync sie sieht.
+Rechte: `twitchbot` liest/schreibt, `twitchdash` liest.
+
+### Scout-Kandidaten und Community-Vorschläge (Community-Streamer-Brücke, Paket F)
+
+Migration `rust/migrations/20261001110000_scout_community_source.sql` (additiv).
+
+`twitch_scout_candidates` (tb-scout) bekommt:
+
+| Spalte | Inhalt |
+|--------|--------|
+| `source` | `auto` (Scout-Erkennung, Standard) oder `community` (Vorschlag aus dem Discord), CHECK |
+| `suggested_by_discord_id`, `suggestion_reason`, `suggested_at` | erster Vorschlagender, sein Grund (bis 500 Zeichen), Zeitpunkt |
+| `suggestion_count` | Zahl verschiedener Vorschlagender (auch für Scout-Kandidaten gezählt) |
+| `partner_active_since` | seit wann ein Community-Kandidat aktiver Partner ist, sonst `NULL` |
+| `community_updated_at` | streng monotoner Cursor des Ergebnis-Endpunkts (eindeutiger Teilindex für `source = 'community'`) |
+
+`twitch_scout_community_suggestions`: jeder eingegangene Vorschlag mit
+`idempotency_key` (UNIQUE), `twitch_user_id`, `twitch_login`,
+`suggested_by_discord_id`, `reason`, `result_status` (`created`,
+`already_known`, `already_partner`, `blocked`) und `created_at`. Rechte:
+`twitchbot` liest/schreibt, `twitchdash` liest.
+
+### twitch_clip_contest_forwards (Community-Streamer-Brücke, Paket E)
+
+Migration `rust/migrations/20261001105000_clip_contest_twitch_forwarding.sql`.
+Eine Zeile je Twitch-Clip, der aus dem Chat (`!clipcontest`) oder dem
+Social-Studio an den Clip-Contest im Discord weitergegeben wurde. Der Contest
+selbst liegt in der zentralen DB (Deadlock-Bots, Paket D).
+
+| Spalte | Inhalt |
+|--------|--------|
+| `clip_id` (PK) | Twitch-Clip-ID (Slug) |
+| `clip_url` | kanonisch `https://clips.twitch.tv/<clip_id>` |
+| `broadcaster_twitch_id`, `broadcaster_login` | Partnerkanal |
+| `submitted_by_twitch_id` | wer eingereicht hat (Broadcaster/Mod), Dashboard-Admin ohne |
+| `via` | `chat` oder `dashboard` |
+| `status` | `pending`, `accepted`, `duplicate`, `rejected`, `failed` |
+| `broker_submission_id`, `reason` | Antwort des Brokers |
+| `created_at`, `updated_at` | Tageslimit (3 je Kanal und Berliner Tag zählt `accepted` und laufende `pending`) und Doppelsend-Schutz (`pending` 120 s) |
+
+`failed` (Broker nicht erreichbar) und `rejected` dürfen erneut eingereicht
+werden. Rechte: `twitchbot` und `twitchdash` lesen/schreiben (der Knopf im
+Dashboard nutzt denselben Dienst).
+
 ---
 
 ## Monitoring-Snapshots
