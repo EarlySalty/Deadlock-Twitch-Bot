@@ -357,3 +357,42 @@ BEGIN
     END IF;
 END
 $watchdog_roles$;
+
+-- Der Analyse-Schreiber bleibt unabhängig von den breiten Legacy-Kompatibilitätsrechten.
+DO $analysis_writer$
+DECLARE membership record; role_name text; table_name text;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchanalysis') THEN
+        CREATE ROLE twitchanalysis LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+    END IF;
+    ALTER ROLE twitchanalysis LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+        NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+    ALTER ROLE twitchanalysis RESET ALL;
+    FOR membership IN
+        SELECT granted.rolname AS granted_role, members.rolname AS member_role
+        FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid
+        JOIN pg_roles members ON members.oid=m.member
+        WHERE members.rolname='twitchanalysis' OR granted.rolname='twitchanalysis'
+    LOOP
+        EXECUTE format('REVOKE %I FROM %I',membership.granted_role,membership.member_role);
+    END LOOP;
+    GRANT CONNECT ON DATABASE twitch_analytics TO twitchanalysis;
+    GRANT USAGE ON SCHEMA public TO twitchanalysis;
+    REVOKE CREATE ON SCHEMA public FROM twitchanalysis;
+    REVOKE ALL ON ALL TABLES IN SCHEMA public FROM twitchanalysis;
+    REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM twitchanalysis;
+    FOREACH table_name IN ARRAY ARRAY['twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations'] LOOP
+        IF to_regclass('public.'||table_name) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC',table_name);
+            FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcontest','twitchcollector'] LOOP
+                IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
+                    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM %I',table_name,role_name);
+                END IF;
+            END LOOP;
+            EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE public.%I TO twitchanalysis',table_name);
+        END IF;
+    END LOOP;
+END
+$analysis_writer$;
+ALTER ROLE twitchanalysis IN DATABASE twitch_analytics SET search_path=public,pg_catalog;

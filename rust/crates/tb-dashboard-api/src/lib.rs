@@ -6,6 +6,7 @@
 
 pub mod admin_audit;
 pub mod ai_state;
+pub(crate) mod ai_store;
 pub mod auth;
 pub mod handlers;
 pub mod obs;
@@ -210,6 +211,12 @@ pub fn build_public_router_with_brain(
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimiter) -> Router {
+    let ai_store = ai_store::AiStore::new(&pool);
+    build_authed_router_with_analysis_store(pool, token, rate_limiter, ai_store)
+}
+
+fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_limiter: RateLimiter, ai_store: ai_store::AiStore) -> Router {
+    ai_store::start_cleanup(ai_store.pool.clone());
     use handlers::scam_guard_enforce;
     use handlers::{
         ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
@@ -870,6 +877,7 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
             get(ai_analysis::ai_analysis_handler),
         )
         .route("/twitch/api/v2/ai/chat", post(ai_chat::ai_chat_handler))
+        .layer(axum::Extension(ai_store))
         .route(
             "/twitch/api/v2/dashboard/assistent/ask",
             post(dashboard_assistent::ask),
@@ -1961,6 +1969,21 @@ pub async fn contest_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool,
         .await
 }
 
+/// Der Analyse-Schreibzugang verwendet ausschließlich den lokalen Peer-Socket.
+pub async fn analysis_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool, sqlx::Error> {
+    use std::str::FromStr;
+    let options = sqlx::postgres::PgConnectOptions::from_str(&config.dsn)?;
+    if !options.get_host().starts_with('/') || options.get_database() != Some("twitch_analytics") {
+        return Err(sqlx::Error::Configuration("Analyse-Schreibzugang benötigt den lokalen Peer-Socket und twitch_analytics".into()));
+    }
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .min_connections(0)
+        .acquire_timeout(config.acquire_timeout.min(config.connect_timeout))
+        .connect_with(options.username("twitchanalysis").password(""))
+        .await
+}
+
 pub fn build_clip_contest_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
     use handlers::{clip_contest, website};
 
@@ -2050,6 +2073,18 @@ pub fn build_router_with_contest_writer(
     helix: Option<HelixClient>,
     brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
 ) -> Router {
+    build_router_with_analysis_writer(pool.clone(), contest_writer, pool, token, helix, brain_runtime)
+}
+
+/// Produktiver Einstieg mit getrennten Schreibrollen für Wettbewerb und Analyse.
+pub fn build_router_with_analysis_writer(
+    pool: PgPool,
+    contest_writer: PgPool,
+    analysis_writer: PgPool,
+    token: String,
+    helix: Option<HelixClient>,
+    brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
+) -> Router {
     // P2.86/133/138/140: gemeinsamer Rate-Limiter (atomares Sliding-Window auf
     // dashboard_sessions). Der Fernet-Key wird aus der Env gelesen (gleiche
     // Quelle wie die Session-Verschlüsselung). Fehlt er, läuft der Limiter mit
@@ -2118,10 +2153,11 @@ pub fn build_router_with_contest_writer(
         .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_billing_page_router(pool.clone()))
         .merge(build_admin_legacy_forms_router(pool.clone()))
-        .merge(build_authed_router(
+        .merge(build_authed_router_with_analysis_store(
             pool.clone(),
             token.clone(),
             rate_limiter,
+            ai_store::AiStore::new(&analysis_writer),
         ))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
