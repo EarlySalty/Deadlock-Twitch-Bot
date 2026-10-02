@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use sqlx::{pool::PoolConnection, postgres::PgPoolOptions, Connection, PgPool, Postgres};
 use uuid::Uuid;
+use std::sync::Arc;
 use crate::ai_state::{ChatSession, AI_MODEL_LLM, AI_MODEL_OPUS,
     CHAT_SESSION_RETENTION_HOURS, LLM_HOURLY_FOLLOW_UP_LIMIT, OPUS_SESSION_FOLLOW_UP_LIMIT};
 
@@ -26,6 +27,7 @@ pub enum StoreError {
 pub struct AiStore {
     pub pool: PgPool,
     pub lock_pool: PgPool,
+    _cleanup: Arc<CleanupTask>,
 }
 impl AiStore {
     pub fn new(pool: &PgPool) -> Self {
@@ -33,7 +35,7 @@ impl AiStore {
             .acquire_timeout(std::time::Duration::from_secs(2))
             .idle_timeout(std::time::Duration::from_secs(60))
             .connect_lazy_with(pool.connect_options().as_ref().clone());
-        Self { pool: pool.clone(), lock_pool }
+        Self { pool: pool.clone(), lock_pool, _cleanup: Arc::new(CleanupTask::new(pool.clone())) }
     }
     pub async fn reserve(&self, user_id: &str, analysis_id: i64) -> Result<ReservedTurn, StoreError> {
         reserve(&self.pool, &self.lock_pool, user_id, analysis_id).await
@@ -65,10 +67,21 @@ pub struct ReservedTurn {
     user_id: String,
 }
 
-/// Abgelaufene Chats werden auch ohne neue HTTP-Anfragen entfernt.
-/// Jeder Router besitzt einen eigenen, mit seinem Pool endenden Aufräumlauf.
-pub fn start_cleanup(pool: PgPool) {
-    tokio::spawn(async move {
+/// Der letzte Storebesitzer beendet den Aufräumtask. Der Task selbst besitzt
+/// nur seinen Poolclone und hält diesen Wächter nicht am Leben.
+struct CleanupTask {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for CleanupTask {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl CleanupTask {
+    fn new(pool: PgPool) -> Self {
+        let handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         let mut last_warning: Option<std::time::Instant> = None;
         let mut repetitions: u64 = 0;
@@ -85,11 +98,17 @@ pub fn start_cleanup(pool: PgPool) {
                 }
             }
         }
-    });
+        });
+        Self { handle }
+    }
 }
 
 pub async fn cleanup(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    // Taskabbruch darf weder eine laufende SQL-Anfrage noch deren Transaktion
+    // im Pool zurücklassen. Das Schließen beendet beides auch serverseitig.
+    let mut connection = pool.acquire().await?;
+    connection.close_on_drop();
+    let mut tx = connection.begin().await?;
     sqlx::query("DELETE FROM twitch_ai_chat_sessions WHERE expires_at <= clock_timestamp()")
         .execute(&mut *tx).await?;
     // Bei einem toten Backend ist das Anbieterergebnis unbekannt. Keine Erstattung.
@@ -384,6 +403,61 @@ mod tests {
         let response = crate::auth::streamer_scope::resolve_analysis_target(&db.pool, &auth, Some("kanal"))
             .await.unwrap_err();
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn cleanup_endet_erst_mit_dem_letzten_storebesitzer() {
+        let db = database().await;
+        let store = AiStore::new(&db.pool);
+        let task = store._cleanup.handle.abort_handle();
+        let clone = store.clone();
+        drop(store);
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished(), "Ein Storeclone hält den Aufräumtask am Leben");
+        drop(clone);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !task.is_finished() { tokio::task::yield_now().await; }
+        }).await.expect("Der letzte Besitzer beendet den Aufräumtask");
+        assert!(!db.pool.is_closed(), "Ein fremder Poolbesitzer bleibt unverändert");
+    }
+
+    #[tokio::test]
+    async fn cleanup_abbruch_schliesst_blockiertes_backend_und_rollt_zurueck() {
+        let db = database().await;
+        sqlx::query("INSERT INTO twitch_ai_chat_sessions
+            (twitch_user_id, analysis_id, session_json, created_at, expires_at)
+            VALUES ('42', 7, '{}'::jsonb, statement_timestamp() - interval '25 hours', statement_timestamp() - interval '1 hour')")
+            .execute(&db.pool).await.unwrap();
+        let mut blocker = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT * FROM twitch_ai_chat_sessions FOR UPDATE")
+            .execute(&mut *blocker).await.unwrap();
+        let writer = PgPoolOptions::new().max_connections(2).min_connections(0)
+            .connect_lazy_with(db.pool.connect_options().as_ref().clone().application_name("ai-cleanup-cancel-test"));
+        let store = AiStore::new(&writer);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                    WHERE application_name = 'ai-cleanup-cancel-test' AND wait_event_type = 'Lock')")
+                    .fetch_one(&db.pool).await.unwrap();
+                if blocked { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.expect("Der Aufräumtask muss tatsächlich auf dem gesperrten DELETE warten");
+        drop(store);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let active: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                    WHERE application_name = 'ai-cleanup-cancel-test')")
+                    .fetch_one(&db.pool).await.unwrap();
+                if !active { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.expect("Abbruch muss das wartende Backend schließen");
+        blocker.rollback().await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_ai_chat_sessions")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(rows, 1, "Der abgebrochene DELETE wurde nicht bestätigt");
+        writer.close().await;
     }
 
 }

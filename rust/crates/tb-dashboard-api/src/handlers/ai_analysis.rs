@@ -48,7 +48,7 @@ fn json_err(status: StatusCode, body: Value) -> Response {
 }
 
 /// `GET /twitch/api/v2/ai/analysis?streamer=&days=&game_filter=&user_context=`
-pub async fn ai_analysis_handler(
+pub(crate) async fn ai_analysis_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Extension(store): Extension<AiStore>,
