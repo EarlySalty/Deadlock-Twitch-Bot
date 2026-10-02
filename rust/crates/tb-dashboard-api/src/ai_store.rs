@@ -118,7 +118,7 @@ pub async fn cleanup(pool: &PgPool) -> Result<(), sqlx::Error> {
         AND l.objsubid = 1 AND l.classid = ((r.lock_key >> 32) & 4294967295)::oid
         AND l.objid = (r.lock_key & 4294967295)::oid)")
         .execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM twitch_ai_chat_reservations WHERE state = 'unknown' AND capacity_expires_at <= clock_timestamp()")
+    sqlx::query("DELETE FROM twitch_ai_chat_reservations WHERE state <> 'running' AND capacity_expires_at <= clock_timestamp()")
         .execute(&mut *tx).await?;
     sqlx::query("DELETE FROM twitch_ai_chat_hourly h WHERE window_start <= clock_timestamp() - interval '1 hour'
         AND NOT EXISTS (SELECT 1 FROM twitch_ai_chat_reservations r WHERE r.twitch_user_id = h.twitch_user_id AND r.model_kind = 'llm' AND r.state = 'running')")
@@ -241,7 +241,20 @@ impl ReservedTurn {
         let state: Option<String> = sqlx::query_scalar("SELECT state FROM twitch_ai_chat_reservations
             WHERE operation_id = $1 AND twitch_user_id = $2 AND analysis_id = $3 FOR UPDATE")
             .bind(self.operation_id).bind(&self.user_id).bind(self.session.analysis_id).fetch_optional(&mut *tx).await?;
-        let mut session = load_in(&mut tx, &self.user_id, self.session.analysis_id).await?;
+        let mut session = match load_in(&mut tx, &self.user_id, self.session.analysis_id).await {
+            Ok(session) => session,
+            Err(StoreError::NotFound) => {
+                // Eine späte Antwort stellt weder die Unterhaltung wieder her
+                // noch erstattet sie die noch gültige Reservierung.
+                sqlx::query("UPDATE twitch_ai_chat_reservations SET state = 'unknown'
+                    WHERE operation_id = $1 AND twitch_user_id = $2 AND analysis_id = $3 AND state = 'running'")
+                    .bind(self.operation_id).bind(&self.user_id).bind(self.session.analysis_id)
+                    .execute(&mut *tx).await?;
+                tx.commit().await?;
+                return Err(StoreError::NotFound);
+            }
+            Err(error) => return Err(error),
+        };
         if state.as_deref() == Some("done") {
             let remaining = remaining_in(&mut tx, &self.user_id, &session).await?;
             tx.commit().await?;
@@ -257,7 +270,14 @@ impl ReservedTurn {
         let updated = sqlx::query("UPDATE twitch_ai_chat_sessions SET history = history || $3::text::jsonb,
             follow_up_count = follow_up_count + 1 WHERE twitch_user_id = $1 AND analysis_id = $2 AND expires_at > clock_timestamp()")
             .bind(&self.user_id).bind(session.analysis_id).bind(entries.to_string()).execute(&mut *tx).await?;
-        if updated.rows_affected() != 1 { return Err(StoreError::NotFound); }
+        if updated.rows_affected() != 1 {
+            sqlx::query("UPDATE twitch_ai_chat_reservations SET state = 'unknown'
+                WHERE operation_id = $1 AND twitch_user_id = $2 AND analysis_id = $3 AND state = 'running'")
+                .bind(self.operation_id).bind(&self.user_id).bind(session.analysis_id)
+                .execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Err(StoreError::NotFound);
+        }
         if session.model == AI_MODEL_LLM {
             sqlx::query("INSERT INTO twitch_ai_chat_hourly (twitch_user_id, window_start, consumed) VALUES ($1, $2, 1)
                 ON CONFLICT (twitch_user_id) DO UPDATE SET
@@ -458,6 +478,92 @@ mod tests {
             .fetch_one(&db.pool).await.unwrap();
         assert_eq!(rows, 1, "Der abgebrochene DELETE wurde nicht bestätigt");
         writer.close().await;
+    }
+
+    async fn prepare_last_hourly_slot(store: &AiStore) {
+        session(store, 7, AI_MODEL_LLM).await;
+        session(store, 8, AI_MODEL_LLM).await;
+        sqlx::query("INSERT INTO twitch_ai_chat_hourly (twitch_user_id, window_start, consumed)
+            VALUES ('42', clock_timestamp(), 9)").execute(&store.pool).await.unwrap();
+    }
+
+    async fn expire_original_session(pool: &PgPool) {
+        sqlx::query("UPDATE twitch_ai_chat_sessions SET created_at = statement_timestamp() - interval '25 hours',
+            expires_at = statement_timestamp() - interval '1 hour' WHERE analysis_id = 7")
+            .execute(pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sessionablauf_erstattet_keine_gueltige_unbekannte_stundenreserve() {
+        let db = database().await;
+        let store = AiStore::new(&db.pool);
+        prepare_last_hourly_slot(&store).await;
+        let turn = store.reserve("42", 7).await.unwrap();
+        let operation_id = turn.operation_id;
+        let expires: DateTime<Utc> = sqlx::query_scalar("SELECT capacity_expires_at FROM twitch_ai_chat_reservations WHERE operation_id = $1")
+            .bind(operation_id).fetch_one(&db.pool).await.unwrap();
+        turn.fail(false).await.unwrap();
+        expire_original_session(&db.pool).await;
+        cleanup(&db.pool).await.unwrap();
+        let chats: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_ai_chat_sessions WHERE analysis_id = 7")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(chats, 0, "Originalkontext und Verlauf müssen gelöscht sein");
+        let reservation: (String, DateTime<Utc>) = sqlx::query_as("SELECT state, capacity_expires_at FROM twitch_ai_chat_reservations WHERE operation_id = $1")
+            .bind(operation_id).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(reservation, ("unknown".into(), expires));
+        assert!(matches!(AiStore::new(&db.pool).reserve("42", 8).await, Err(StoreError::Limit { .. })));
+        sqlx::query("UPDATE twitch_ai_chat_reservations SET capacity_expires_at = statement_timestamp() - interval '1 second'")
+            .execute(&db.pool).await.unwrap();
+        sqlx::query("UPDATE twitch_ai_chat_hourly SET window_start = statement_timestamp() - interval '2 hours'")
+            .execute(&db.pool).await.unwrap();
+        store.reserve("42", 8).await.unwrap().fail(true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn laufende_spaete_antwort_stellt_keinen_chat_wieder_her_und_zaehlt_nicht_doppelt() {
+        let db = database().await;
+        let store = AiStore::new(&db.pool);
+        prepare_last_hourly_slot(&store).await;
+        let mut turn = store.reserve("42", 7).await.unwrap();
+        let operation_id = turn.operation_id;
+        expire_original_session(&db.pool).await;
+        cleanup(&db.pool).await.unwrap();
+        let before: (String, DateTime<Utc>) = sqlx::query_as("SELECT state, capacity_expires_at FROM twitch_ai_chat_reservations WHERE operation_id = $1")
+            .bind(operation_id).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(before.0, "running");
+        assert!(matches!(turn.complete("Späte Frage", "Späte Antwort").await, Err(StoreError::NotFound)));
+        assert!(matches!(turn.complete("Späte Frage", "Späte Antwort").await, Err(StoreError::NotFound)));
+        let after: (String, DateTime<Utc>) = sqlx::query_as("SELECT state, capacity_expires_at FROM twitch_ai_chat_reservations WHERE operation_id = $1")
+            .bind(operation_id).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(after, ("unknown".into(), before.1));
+        let confirmed: i64 = sqlx::query_scalar("SELECT consumed FROM twitch_ai_chat_hourly WHERE twitch_user_id = '42'")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(confirmed, 9);
+        let chats: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_ai_chat_sessions WHERE analysis_id = 7")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(chats, 0);
+        assert!(matches!(store.reserve("42", 8).await, Err(StoreError::Limit { .. })));
+        turn.fail(false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn abgeschlossene_und_abgelehnte_metadaten_werden_nach_eigener_frist_entfernt() {
+        let db = database().await;
+        let store = AiStore::new(&db.pool);
+        session(&store, 7, AI_MODEL_LLM).await;
+        let mut turn = store.reserve("42", 7).await.unwrap();
+        turn.complete("Frage", "Antwort").await.unwrap();
+        turn.guard.connection.close().await.unwrap();
+        store.reserve("42", 7).await.unwrap().fail(true).await.unwrap();
+        sqlx::query("UPDATE twitch_ai_chat_reservations SET capacity_expires_at = statement_timestamp() - interval '1 second'")
+            .execute(&db.pool).await.unwrap();
+        cleanup(&db.pool).await.unwrap();
+        let metadata: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_ai_chat_reservations")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(metadata, 0);
+        let count: i64 = sqlx::query_scalar("SELECT follow_up_count FROM twitch_ai_chat_sessions WHERE analysis_id = 7")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(count, 1);
     }
 
 }
