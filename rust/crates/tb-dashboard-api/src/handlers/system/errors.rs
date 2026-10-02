@@ -87,7 +87,7 @@ pub async fn errors_handler(
 
     let entries = load_error_log_entries();
     let total = entries.len() as i64;
-    let start = ((page - 1) * page_size).min(total);
+    let start = (page - 1).saturating_mul(page_size).min(total);
     let end = (start + page_size).min(total);
     let has_more = end < total;
     let slice = &entries[start as usize..end as usize];
@@ -327,6 +327,19 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn groesste_seite_liefert_leere_liste_statt_panik() {
+        let response = errors_handler(
+            DashboardAuthLevel::admin(),
+            Query(ErrorsParams { page: i64::MAX, page_size: 100 }),
+        ).await.unwrap().into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["entries"], json!([]));
+        assert_eq!(value["hasMore"], false);
+        assert_eq!(value["page"], i64::MAX);
+    }
 
     #[test]
     fn parst_error_zeile_im_standardformat() {

@@ -1160,6 +1160,22 @@ async fn persist_cancelled_subscription(
 
 #[cfg(test)]
 mod tests {
+
+    mod local_test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
+
+    fn konfigurierte_testdatenbank() -> Option<String> {
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        dsn
+    }
     use super::*;
 
     fn partner(login: &str, uid: &str) -> DashboardAuthLevel {
@@ -1667,7 +1683,7 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = konfigurierte_testdatenbank()?;
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

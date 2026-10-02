@@ -953,12 +953,28 @@ pub async fn load_affiliate_detail(
 
 #[cfg(test)]
 mod tests {
+
+    mod local_test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
+
+    fn konfigurierte_testdatenbank() -> Option<String> {
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        dsn
+    }
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
     async fn connect(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = konfigurierte_testdatenbank()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)

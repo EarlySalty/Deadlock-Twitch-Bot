@@ -96,26 +96,42 @@ pub async fn error_log_entries(
 
 #[cfg(test)]
 mod tests {
+
+    mod local_test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
+
+    fn konfigurierte_testdatenbank() -> Option<String> {
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        dsn
+    }
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 
     fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
+        konfigurierte_testdatenbank()
     }
 
     /// Gibt die DSN zurück oder bricht den Test ab.
-    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    /// Bei verpflichtender Datenbank führt fehlende Konfiguration zum Fehler.
     macro_rules! db_dsn_or_skip {
         () => {
             match test_dsn() {
                 Some(d) => d,
                 None => {
-                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                    if local_test_database::required() {
                         panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                            "Die erforderliche isolierte Testdatenbank fehlt"
                         );
                     }
-                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    eprintln!("SKIP: Keine isolierte Testdatenbank konfiguriert");
                     return;
                 }
             }
