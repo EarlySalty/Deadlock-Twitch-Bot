@@ -472,6 +472,49 @@ fn bot_betriebsschalter_aktivieren_nichts_neues_und_migration_bleibt_je_dienst()
 }
 
 #[test]
+fn community_aggregationstakt_kommt_aus_validierter_bot_toml() {
+    assert_eq!(
+        parse(VALID)
+            .unwrap()
+            .settings()
+            .bot
+            .community_points_aggregation_interval_seconds,
+        300
+    );
+    for seconds in [1, 120, 300, 3600] {
+        let snapshot = parse(&format!(
+            "{VALID}\n[bot]\ncommunity_points_aggregation_interval_seconds={seconds}\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            snapshot
+                .settings()
+                .bot
+                .community_points_aggregation_interval_seconds,
+            seconds
+        );
+    }
+    for seconds in ["0", "3601", "9223372036854775807"] {
+        let error = parse(&format!(
+            "{VALID}\n[bot]\ncommunity_points_aggregation_interval_seconds={seconds}\n"
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::InvalidValue);
+        assert_eq!(
+            error.field,
+            Some("bot.community_points_aggregation_interval_seconds")
+        );
+    }
+    for seconds in ["-1", "1.5", "'300'", "true", "18446744073709551616"] {
+        let error = parse(&format!(
+            "{VALID}\n[bot]\ncommunity_points_aggregation_interval_seconds={seconds}\n"
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::InvalidDocument);
+    }
+}
+
+#[test]
 fn bot_listener_kollisionen_und_raid_zeitgrenzen_vor_dem_start_abweisen() {
     for fields in [
         "mcp_host='0.0.0.0'",

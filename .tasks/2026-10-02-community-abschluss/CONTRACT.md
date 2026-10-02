@@ -8,6 +8,15 @@ Discord-ID und Twitch-User-ID sind die Schlüssel. Logins dienen der Anzeige. Ha
 
 ## Punkte-Tageswerte
 
+Der Aggregationstakt stammt aus der vorhandenen Bot-TOML und der beim Dienststart validierten Momentaufnahme:
+
+```toml
+[bot]
+community_points_aggregation_interval_seconds = 300
+```
+
+Der Wert ist eine ganze Sekundenzahl von 1 bis 3600. Fehlt das Feld, bleibt der bisherige Standard von 300 Sekunden. Null, negative Werte, Bruchteile, Strings und Werte oberhalb der Grenze scheitern vor dem Aufgabenstart. Die Einstellung verändert ausschließlich den Ausführungstakt; fachliche Punkte- und Tagesregeln bleiben bestehen. Die bestehende TOML wird über den vorhandenen absoluten `--config`-Pfad geladen. Secrets bleiben im vorhandenen Infisical-/Credential-/FD-Zugang.
+
 Twitch liefert `GET /internal/twitch/v1/community-points/viewers` und `GET /internal/twitch/v1/community-points/streamers`. Authentifizierung: `X-Internal-Token` und Loopbackprüfung. Query: optionales `updated_since` als exklusiver RFC3339-Cursor und `limit` von 1 bis 5000, Standard 1000. Antwort: `rows`, `next_updated_since` als String oder null, `has_more` als Boolean.
 
 Zuschauerzeile: `twitch_user_id`, `twitch_login`, `channel_twitch_user_id`, `day`, `watch_minutes`, `chat_messages`, `points_watch`, `points_chat`, `points_discovery`, `updated_at`.

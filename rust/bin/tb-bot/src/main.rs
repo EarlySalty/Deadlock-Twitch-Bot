@@ -2047,9 +2047,12 @@ async fn main() {
 
     irc_lurker_wiring::spawn_irc_lurker(&supervisor, pool.clone(), irc_lurker_tracker);
 
-    // Community-Punkte (Community-Streamer-Brücke, Paket B): Tageswerte alle
-    // 5 Minuten idempotent aus Presence-Ticks, Chat und Raids neu berechnen.
-    community_points_wiring::spawn_community_points_aggregation(&supervisor, pool.clone());
+    // Community-Tageswerte im validierten Bot-TOML-Takt idempotent neu berechnen.
+    community_points_wiring::spawn_community_points_aggregation(
+        &supervisor,
+        pool.clone(),
+        config.bot.community_points_aggregation_interval_seconds,
+    );
 
     let addr = SocketAddr::new(config.internal_api.host, port);
     let token = settings.internal_api.token.clone();

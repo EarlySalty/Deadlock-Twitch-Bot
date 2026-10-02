@@ -1,18 +1,22 @@
 //! Periodischer Aggregationslauf der Community-Punkte (Community-Streamer-
-//! Brücke, Paket B). Rechnet alle 5 Minuten die Tageswerte (heute, kurz nach
-//! Mitternacht und beim Start auch gestern) aus den Rohdaten neu; die Logik
+//! Brücke, Paket B). Rechnet im geprüften Bot-TOML-Takt die Tageswerte aus den
+//! Rohdaten neu (heute, kurz nach Mitternacht und beim Start auch gestern); die Logik
 //! liegt in `tb_analytics::community_points`, hier nur Takt und Logging.
 
 use std::time::Duration;
 
 use sqlx::PgPool;
-use tb_analytics::community_points::{run_aggregation, AGGREGATION_INTERVAL_SECS};
+use tb_analytics::community_points::run_aggregation;
 
 use crate::task_supervisor::TaskSupervisor;
 
-pub fn spawn_community_points_aggregation(supervisor: &TaskSupervisor, pool: PgPool) {
+pub fn spawn_community_points_aggregation(
+    supervisor: &TaskSupervisor,
+    pool: PgPool,
+    aggregation_interval_seconds: u64,
+) {
     supervisor.spawn("community_points_aggregation", async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(AGGREGATION_INTERVAL_SECS));
+        let mut tick = tokio::time::interval(Duration::from_secs(aggregation_interval_seconds));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut first_run = true;
         loop {

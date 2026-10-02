@@ -67,6 +67,8 @@ pub struct BotOperations {
     pub brain_client: BrainClientOptions,
     pub brain_chat: BrainChatOptions,
     pub chat_persist_all_games: bool,
+    /// Takt für ersetzbare Community-Tageswerte, in Sekunden.
+    pub community_points_aggregation_interval_seconds: u64,
     pub lfg_pitch_enabled: bool,
     pub golive_tips_enabled: bool,
     pub irc_lurker_enabled: bool,
@@ -109,6 +111,7 @@ impl Default for BotOperations {
             brain_client: BrainClientOptions::default(),
             brain_chat: BrainChatOptions::default(),
             chat_persist_all_games: true,
+            community_points_aggregation_interval_seconds: 300,
             lfg_pitch_enabled: true,
             golive_tips_enabled: false,
             irc_lurker_enabled: false,
@@ -143,6 +146,12 @@ impl BotOperations {
             "bot.brain_client.timeout_ms",
         )?;
         self.brain_chat.validate()?;
+        range(
+            self.community_points_aggregation_interval_seconds,
+            1,
+            3600,
+            "bot.community_points_aggregation_interval_seconds",
+        )?;
         if self.runtime_role.len() > 64 || self.runtime_role.chars().any(char::is_control) {
             return Err(FileError::invalid("bot.runtime_role"));
         }
