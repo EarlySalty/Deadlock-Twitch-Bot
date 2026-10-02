@@ -2,7 +2,7 @@
 title: Einrichtung
 namespace: bot
 category: setup
-audience: streamer
+audience: public
 last_updated: 2026-10-02
 source: manual
 tip_eligible: true

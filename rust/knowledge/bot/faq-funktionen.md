@@ -2,7 +2,7 @@
 title: Was macht der Bot eigentlich?
 namespace: bot
 category: faq
-audience: streamer
+audience: public
 last_updated: 2026-10-02
 source: manual
 tip_eligible: false
@@ -23,7 +23,7 @@ Uplink nimmt deinen OBS-Stream entgegen und schickt ihn an die verbundenen Platt
 
 ### Moderiert der Bot meinen Chat?
 
-Der Bot prüft Nachrichten auf Werbe- und Scam-Signale. Die Moderation arbeitet unabhängig von der Spielkategorie. Sie braucht die erforderlichen Twitch-Rechte und die Moderator-Rolle. Regeln, gelernte Phrasen und bei Bedarf eine KI-Bewertung helfen bei der Erkennung.
+Der Bot prüft Nachrichten auf Werbe- und Scam-Signale. Die Moderation arbeitet unabhängig von der Spielkategorie. Sie braucht die erforderlichen Twitch-Rechte und die Moderator-Rolle.
 
 Fehlentscheidungen sind möglich. Broadcaster und Mods können den letzten gespeicherten Auto-Ban mit `!unban` oder `!uban` zurücknehmen. `!explain` erklärt einen vorhandenen Scam-Befund.
 

@@ -2,7 +2,7 @@
 title: Discord-Go-Live-Posts
 namespace: bot
 category: feature
-audience: streamer
+audience: public
 last_updated: 2026-10-02
 source: manual
 tip_eligible: true

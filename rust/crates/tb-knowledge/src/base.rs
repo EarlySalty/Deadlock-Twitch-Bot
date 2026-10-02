@@ -75,16 +75,13 @@ impl KnowledgeBase {
     /// Deterministische lexikalische Selektion (kein RAG). Score je Doc =
     /// gewichtete Treffer der Frage-Tokens in Titel/Kategorie/tip_flags/Body.
     ///
-    /// `audience: None` heisst **oeffentlich**, nicht "alles". Die Aufrufer
-    /// sitzen ueberwiegend an ungeschuetzten Oberflaechen (Hilfeseite,
-    /// Self-Explainer, `!help` im Twitch-Chat), und ein Doc mit eigener
-    /// Zielgruppe traegt Anweisungen oder Interna. Wer wirklich alles braucht,
-    /// nennt seine Zielgruppe ausdruecklich.
+    /// Alle Aufrufer erhalten ausschließlich freigegebene Nutzerhilfe.
+    /// Eine Zielgruppenangabe ist keine Berechtigung für interne Dokumente.
     pub fn select(
         &self,
         query: &str,
         namespace: Namespace,
-        audience: Option<&str>,
+        _audience: Option<&str>,
         k: usize,
     ) -> Vec<&KnowledgeDoc> {
         let tokens = tokenize(query);
@@ -95,10 +92,7 @@ impl KnowledgeBase {
             .docs
             .iter()
             .filter(|d| d.namespace == namespace)
-            .filter(|d| match audience {
-                Some(a) => d.audience.is_empty() || d.audience == a,
-                None => ist_oeffentlich(&d.audience),
-            })
+            .filter(|d| ist_oeffentlich(&d.audience))
             .map(|d| (score_doc(d, &tokens), d))
             .filter(|(s, _)| *s > 0)
             .collect();
@@ -154,17 +148,17 @@ mod select_tests {
 
     fn kb() -> KnowledgeBase {
         let raids = parse_doc(
-            "---\ntitle: Auto-Raid\nnamespace: bot\ncategory: feature\ntime_to_value: 2\n---\nGeht ein Streamer offline, raidet der Bot dessen Zuschauer automatisch weiter.",
+            "---\ntitle: Auto-Raid\nnamespace: bot\naudience: public\ncategory: feature\ntime_to_value: 2\n---\nGeht ein Streamer offline, raidet der Bot dessen Zuschauer automatisch weiter.",
             "auto-raid",
         )
         .unwrap();
         let setup = parse_doc(
-            "---\ntitle: Einrichtung\nnamespace: bot\ncategory: setup\ntime_to_value: 1\n---\nMit dem Twitch-Konto verbinden und im Dashboard speichern.",
+            "---\ntitle: Einrichtung\nnamespace: bot\naudience: public\ncategory: setup\ntime_to_value: 1\n---\nMit dem Twitch-Konto verbinden und im Dashboard speichern.",
             "einrichtung",
         )
         .unwrap();
         let dl = parse_doc(
-            "---\ntitle: Held\nnamespace: deadlock\n---\nEin Deadlock-Thema.",
+            "---\ntitle: Held\nnamespace: deadlock\naudience: viewer\n---\nEin Deadlock-Thema.",
             "held",
         )
         .unwrap();
@@ -224,9 +218,9 @@ mod select_tests {
         );
         assert!(!hits.is_empty(), "die oeffentlichen Docs fehlen dafuer");
 
-        // Wer die Zielgruppe ausdruecklich nennt, bekommt sie weiterhin.
+        // Eine frei gesetzte Zielgruppe ersetzt keine interne Berechtigung.
         let intern = kb.select("raidet", Namespace::Bot, Some("concierge"), 8);
-        assert!(intern.iter().any(|d| d.slug == "interne-anweisung"));
+        assert!(intern.iter().all(|d| d.slug != "interne-anweisung"));
     }
 
     #[test]
@@ -239,17 +233,17 @@ mod select_tests {
     #[test]
     fn eligible_tips_filtert_korrekt() {
         let a = parse_doc(
-            "---\ntitle: A\nnamespace: bot\ntip_eligible: true\ntip_text: Tipp A\n---\nx",
+            "---\ntitle: A\nnamespace: bot\naudience: public\ntip_eligible: true\ntip_text: Tipp A\n---\nx",
             "a",
         )
         .unwrap();
         let b = parse_doc(
-            "---\ntitle: B\nnamespace: bot\ntip_eligible: false\n---\nx",
+            "---\ntitle: B\nnamespace: bot\naudience: public\ntip_eligible: false\n---\nx",
             "b",
         )
         .unwrap();
         let c = parse_doc(
-            "---\ntitle: C\nnamespace: bot\ntip_eligible: true\n---\nx",
+            "---\ntitle: C\nnamespace: bot\naudience: public\ntip_eligible: true\n---\nx",
             "c",
         )
         .unwrap();

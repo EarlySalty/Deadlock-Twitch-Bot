@@ -19,6 +19,32 @@ fn produktive_basis_laedt() {
 }
 
 #[test]
+fn keine_internen_mechanismen_in_hilfe_tipps_oder_grounding() {
+    let kb =
+        KnowledgeBase::load_from_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"))
+            .unwrap();
+    for audience in [None, Some("streamer"), Some("intern"), Some("concierge")] {
+        let hits = kb.select("Raid Score Mechanik", Namespace::Bot, audience, 100);
+        assert!(hits
+            .iter()
+            .all(|doc| tb_knowledge::ist_oeffentlich(&doc.audience)));
+    }
+    assert!(kb
+        .eligible_tips()
+        .iter()
+        .all(|doc| tb_knowledge::ist_oeffentlich(&doc.audience)));
+    let all: Vec<_> = kb.docs().iter().collect();
+    let grounding = tb_knowledge::assemble_grounding(&all);
+    assert!(!grounding.facts.contains("NICHT_FREIGEGEBENE"));
+    assert!(!grounding.facts.contains("INTERNER_STREAMER"));
+    assert!(!grounding.facts.contains("GEHEIMES_INTERNES_WISSEN"));
+    assert!(!grounding
+        .sources
+        .iter()
+        .any(|title| title.contains("Interne")));
+}
+
+#[test]
 fn raid_frage_findet_auto_raid() {
     let kb = KnowledgeBase::load_from_dir(&knowledge_root()).unwrap();
     let hits = kb.select(

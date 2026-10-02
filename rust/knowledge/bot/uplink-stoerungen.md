@@ -2,7 +2,7 @@
 title: "Uplink: Störungen"
 namespace: bot
 category: setup
-audience: streamer
+audience: public
 last_updated: 2026-09-08
 source: Uplink-Dashboard
 tip_eligible: false

@@ -1,6 +1,6 @@
 //! Baut aus selektierten Dokumenten den Grounding-Block + die Pflicht-Quellen.
 
-use crate::doc::KnowledgeDoc;
+use crate::doc::{ist_oeffentlich, KnowledgeDoc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grounding {
@@ -11,7 +11,7 @@ pub struct Grounding {
 pub fn assemble_grounding(docs: &[&KnowledgeDoc]) -> Grounding {
     let mut facts = String::new();
     let mut sources: Vec<String> = Vec::new();
-    for d in docs {
+    for d in docs.iter().filter(|d| ist_oeffentlich(&d.audience)) {
         if !facts.is_empty() {
             facts.push_str("\n\n");
         }
@@ -34,12 +34,12 @@ mod tests {
     #[test]
     fn baut_fakten_und_quellen() {
         let a = parse_doc(
-            "---\ntitle: Auto-Raid\nnamespace: bot\n---\nRaidet weiter.",
+            "---\ntitle: Auto-Raid\nnamespace: bot\naudience: public\n---\nRaidet weiter.",
             "auto-raid",
         )
         .unwrap();
         let b = parse_doc(
-            "---\ntitle: Einrichtung\nnamespace: bot\n---\nTwitch verbinden.",
+            "---\ntitle: Einrichtung\nnamespace: bot\naudience: public\n---\nTwitch verbinden.",
             "einrichtung",
         )
         .unwrap();

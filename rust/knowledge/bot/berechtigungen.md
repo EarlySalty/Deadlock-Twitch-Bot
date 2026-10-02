@@ -2,7 +2,7 @@
 title: Berechtigungen und Moderator-Rolle
 namespace: bot
 category: sicherheit
-audience: streamer
+audience: public
 last_updated: 2026-09-01
 source: code-audit
 tip_eligible: false
