@@ -338,6 +338,7 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
   for (const width of [320, 390, 768, 1024, 1920, 2560]) {
     await page.setViewportSize({ width, height: 900 });
     await assertNoOverflow(page, width);
+    if (width === 390) await capture(page, { path: path.join(ARTIFACTS, 'challenges-390-mobile.png'), fullPage: true });
   }
 
   for (const [status, message] of [
