@@ -205,8 +205,14 @@ chmod -R go-w "$dest"
 # bricht den Deploy wegen `set -e` ab statt einen halbfertigen Release zu starten.
 systemctl start deadlock-twitch-migrate.service
 
-# Separate local writer identity; no membership in the read-only dashboard role.
-/bin/bash "$dest/ops/systemd/install-twitch-contest-peer"
+# Der Peerinstaller stammt aus demselben geprüften Gitarchiv wie die Rollenmatrix.
+# Die feste SHA-Adresse vermeidet Änderungen am current-Link während des Aufrufs.
+peer_installer="/opt/deadlock/twitch/releases/$sha/ops/systemd/install-twitch-contest-peer"
+if [[ ! -f "$peer_installer" || -L "$peer_installer" ]]; then
+  echo "Geprüfter Peerinstaller fehlt im Release: $peer_installer" >&2
+  exit 1
+fi
+/bin/bash "$peer_installer"
 
 for target in "${restart_targets[@]}"; do
   case "$target" in
