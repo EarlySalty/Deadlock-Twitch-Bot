@@ -1100,7 +1100,7 @@ async fn active_customer_record(
             COALESCE(stripe_subscription_id, '') AS "stripe_subscription_id!"
         FROM twitch_billing_subscriptions
         WHERE (
-                  LOWER(COALESCE(customer_reference, '')) = $1
+                  ($1 <> '' AND LOWER(COALESCE(customer_reference, '')) = $1)
                OR ($2 <> '' AND LOWER(COALESCE(customer_reference, '')) = $2)
                OR ($3 <> '' AND LOWER(COALESCE(customer_reference, '')) = $3)
               )
@@ -1650,6 +1650,19 @@ mod tests {
     }
 
     // ── Cancel + Katalog (DB — skip ohne TB_TEST_DATABASE_URL) ──────────────
+
+    #[tokio::test]
+    async fn leerer_login_waehlt_keine_fremde_abrechnung() {
+        let Some(pool) = pool_or_skip("billing_empty_login").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, status, updated_at) VALUES ('sub_fremd', 'cus_fremd', '', 'active', '2026-10-03'), ('sub_eigen', 'cus_eigen', '42', 'active', '2026-10-02')")
+            .execute(&pool).await.unwrap();
+        let record = active_customer_record(&pool, "  ", "42", "42")
+            .await.unwrap().unwrap();
+        assert_eq!(record.stripe_customer_id, "cus_eigen");
+        assert!(active_customer_record(&pool, "", "", "").await.unwrap().is_none());
+    }
 
     use sqlx::postgres::PgPoolOptions;
 

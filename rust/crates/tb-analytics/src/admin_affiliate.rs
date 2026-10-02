@@ -430,7 +430,7 @@ const GUTSCHRIFT_G_COLUMNS: &str = "\
     g.commission_ids AS commission_ids, g.affiliate_ust_status AS affiliate_ust_status, \
     g.email_error AS email_error, g.pdf_generated_at AS pdf_generated_at, \
     g.email_sent_at AS email_sent_at, g.created_at AS created_at, \
-    (CASE WHEN g.pdf_blob IS NOT NULL THEN 1 ELSE NULL END)::bigint AS has_pdf";
+    (CASE WHEN octet_length(g.pdf_blob) > 0 THEN 1 ELSE NULL END)::bigint AS has_pdf";
 
 const GUTSCHRIFT_ACCOUNT_COLUMNS: &str =
     "a.display_name AS display_name, a.is_active::bigint AS is_active";
@@ -1105,6 +1105,11 @@ mod tests {
         assert_eq!(g["period_label"], "Juni 2026");
         assert_eq!(g["status"], "emailed");
         assert_eq!(g["has_pdf"], true);
+        sqlx::query("UPDATE affiliate_gutschriften SET pdf_blob = decode('', 'hex')")
+            .execute(&pool).await.unwrap();
+        let leer = load_affiliate_gutschriften(&pool).await.unwrap();
+        assert_eq!(leer["gutschriften"][0]["has_pdf"], false);
+        assert!(load_gutschrift_pdf(&pool, g["id"].as_i64().unwrap()).await.unwrap().is_none());
         assert_eq!(g["commission_count"], 2);
         assert_eq!(g["commission_ids"], json!([10, 11]));
         assert!(g["note_text"].as_str().unwrap().contains("§ 19"));
