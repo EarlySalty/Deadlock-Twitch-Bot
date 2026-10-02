@@ -8,12 +8,13 @@ import { chromium } from 'playwright-core';
 import { createServer } from 'vite';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const REPO = fileURLToPath(new URL('../../../', import.meta.url));
-const ARTIFACTS = process.env.CHALLENGES_ARTIFACTS ?? path.join(REPO, 'docs', 'screenshots', 'challenges');
+const ARTIFACTS = '/home/nathanael/.claude/sichtpruefung/challenges-20261003';
+const TEST_AVATAR = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" fill="#392519"/><circle cx="24" cy="18" r="9" fill="#c5a059"/><path d="M8 48v-7a16 16 0 0 1 32 0v7" fill="#c5a059"/></svg>');
 let questAssignmentStatus = 'assigned';
 let ownRank = 14;
 let emptyRecruiters = false;
 let categoryComplete = true;
+let lowLevel = false;
 
 const AUTH = {
   authenticated: true,
@@ -54,6 +55,7 @@ const AUTH = {
 
 const CHALLENGES_ME = {
   twitch_user_id: '123456',
+  referral_url: 'https://discord.gg/challenges-test-referral',
   next_reset_at: '2026-10-04T22:00:00Z',
   generated_at: '2026-09-27T00:15:00Z',
   timezone: 'Europe/Berlin',
@@ -79,6 +81,8 @@ const CHALLENGES_ME = {
     { key: 'team_player', name: 'Teamplayer', progress: 12, tiers: [{ target: 10, unlocked: true }, { target: 50, unlocked: false }, { target: 150, unlocked: false }] },
     { key: 'duo', name: 'Duo', progress: 6, tiers: [{ target: 5, unlocked: true }, { target: 25, unlocked: false }] },
     { key: 'stamina', name: 'Ausdauer', progress: 7, tiers: [{ target: 4, unlocked: true }, { target: 12, unlocked: false }, { target: 26, unlocked: false }] },
+    { key: 'talent_scout', name: 'Talent Scout', progress: 2, tiers: [{ target: 1, unlocked: true }, { target: 3, unlocked: false }] },
+    { key: 'clip_hunter', name: 'Clip Hunter', progress: 3, tiers: [{ target: 1, unlocked: true }, { target: 5, unlocked: false }] },
   ],
   with_us: {
     people_brought_in_who_stayed: 18,
@@ -98,9 +102,9 @@ const CHALLENGE_VIEWERS = {
   generated_at: '2026-09-27T00:15:00Z',
   streamer: 'test_partner',
   recruiters: [
-    { twitch_user_id: 'v1', display_name: 'ViewerAlpha', qualified_invites: 7 },
-    { twitch_user_id: 'v2', display_name: 'ViewerBeta', qualified_invites: 4 },
-    { twitch_user_id: 'v3', display_name: 'ViewerGamma', qualified_invites: 2 },
+    { twitch_user_id: 'v1', avatar_url: TEST_AVATAR, display_name: 'ViewerAlpha', qualified_invites: 7 },
+    { twitch_user_id: 'v2', avatar_url: TEST_AVATAR, display_name: 'ViewerBeta', qualified_invites: 4 },
+    { twitch_user_id: 'v3', avatar_url: TEST_AVATAR, display_name: 'ViewerGamma', qualified_invites: 2 },
   ],
 };
 
@@ -108,6 +112,7 @@ const EFFORT_LEADERBOARD = {
   month: '2026-09',
   entries: Array.from({ length: 10 }, (_, index) => ({
     rank: index + 1,
+    avatar_url: TEST_AVATAR,
     twitch_login: index === 0 ? 'partner_gold' : `partner_${index + 1}`,
     points: 186 - index * 11,
     raid_boost: index === 0,
@@ -115,6 +120,7 @@ const EFFORT_LEADERBOARD = {
   })),
   own_position: {
     rank: 14,
+    avatar_url: TEST_AVATAR,
     twitch_login: 'test_partner',
     points: 62,
     raid_boost: false,
@@ -131,6 +137,7 @@ const VIEWER_LEADERBOARD = {
       count: 10,
       entries: Array.from({ length: 10 }, (_, index) => ({
         rank: index + 1,
+        avatar_url: TEST_AVATAR,
         streamer: `partner_${index + 1}`,
         avg_viewers: 220 - index * 12,
         max_viewers: 300 - index * 10,
@@ -138,6 +145,7 @@ const VIEWER_LEADERBOARD = {
       })),
       own_position: {
         rank: 14,
+        avatar_url: TEST_AVATAR,
         streamer: 'test_partner',
         avg_viewers: 74.3,
         max_viewers: 121,
@@ -154,9 +162,10 @@ function payloadFor(pathname) {
     return { twitchLogin: 'test_partner', displayName: 'Test Partner', avatarUrl: null };
   }
   if (pathname.endsWith('/challenges/me')) {
+    const me = lowLevel ? { ...CHALLENGES_ME, level: { level: 1, total_points: 5, current_threshold: 0, next_threshold: 50 }, next_goal: { missing_points: 45, fastest_route: 'Noch 1 geworbener Partner' } } : CHALLENGES_ME;
     return questAssignmentStatus !== 'assigned'
-      ? { ...CHALLENGES_ME, quests: [], quest_assignment_status: questAssignmentStatus }
-      : { ...CHALLENGES_ME, category_data_complete: categoryComplete,
+      ? { ...me, quests: [], quest_assignment_status: questAssignmentStatus }
+      : { ...me, category_data_complete: categoryComplete,
           streak: { ...CHALLENGES_ME.streak, data_complete: categoryComplete },
           quests: CHALLENGES_ME.quests.map(quest => ({ ...quest,
             data_complete: quest.key !== 'stream_above_average' || categoryComplete })),
@@ -236,8 +245,8 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
   });
   t.after(async () => browser.close());
 
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 } });
-  // Layout checks must not depend on an external font stylesheet being reachable.
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  // Die Layoutprüfung benötigt keine externe Schriftdatei.
   await context.route('https://fonts.googleapis.com/**', route => route.fulfill({
     status: 200, contentType: 'text/css', body: '',
   }));
@@ -247,144 +256,136 @@ test('Challenges Seite ist auf Desktop und Mobil bedienbar', { timeout: 120_000 
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', error => consoleErrors.push(error.message));
-
   const port = server.httpServer.address().port;
-  await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
-  await page.getByText('Noch 6 weitere aktive Einladungen bis Level 5.').waitFor();
-  await page.getByRole('heading', { name: 'Diese Woche', exact: true }).waitFor();
-  await page.getByText('Deine Werber').waitFor();
-
-  const sidebar = page.locator('a[href="/twitch/challenges"]');
-  await expectVisible(sidebar);
-  await sidebar.click();
-  await page.waitForLoadState('networkidle');
-
+  const pageUrl = `http://127.0.0.1:${port}/twitch/challenges`;
   const main = page.getByRole('main');
-  const banner = main.locator('section').first();
-  assert.ok((await banner.boundingBox()).height <= 100, 'Zielbanner bleibt kompakt.');
-  const locked = main.locator('article').filter({ has: page.getByRole('heading', { name: 'Recruiter 2', exact: true }) });
-  for (const text of [locked.locator('h3'), locked.locator('p')]) {
-    const rgb = await text.evaluate(el => {
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 1;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#161616';
-      ctx.fillRect(0, 0, 1, 1);
-      ctx.fillStyle = getComputedStyle(el).color;
-      ctx.fillRect(0, 0, 1, 1);
-      return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
-    });
-    assert.ok(rgb.every(channel => channel >= 200), 'Gesperrter Text bleibt gut lesbar und hell.');
-    assert.ok(await text.evaluate(el => el.classList.contains('text-zinc-300')));
-  }
-  assert.ok(await locked.evaluate(el => el.classList.contains('border-white/10')));
-  assert.equal(await locked.locator('svg.lucide-lock-keyhole').count(), 1);
-  const stats = main.locator('article').filter({ hasText: /Leute, die geblieben sind|Stunden mit der Community|Raids erhalten/ });
-  assert.equal(await stats.count(), 3);
-  for (const card of await stats.all()) {
-    assert.ok((await card.boundingBox()).height <= 80, 'Kennzahlkachel ohne unnötigen Leerraum.');
-  }
-  const level = main.locator('article').filter({ has: page.getByRole('heading', { name: '740 Punkte' }) });
-  const levelBox = await level.boundingBox();
-  const lastStatBox = await stats.last().boundingBox();
-  assert.ok(Math.abs(levelBox.y + levelBox.height - lastStatBox.y - lastStatBox.height) < 2);
-  const streamQuest = main.locator('article').filter({ hasText: 'Streame diese Woche mindestens 30 Minuten' });
-  assert.equal(await streamQuest.getByText('0 / 30', { exact: true }).evaluate(el => getComputedStyle(el).color), 'rgb(197, 160, 89)');
-
-  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
-  await page.getByText('Raid Boost').waitFor();
-  await page.getByText('Deine Position').waitFor();
-  await page.getByRole('main').getByText('test_partner', { exact: true }).waitFor();
-  await expectOwnRow(page, 14);
-
+  const reload = async () => {
+    await page.goto(pageUrl, { waitUntil: 'networkidle' });
+    await main.getByRole('heading', { name: 'Diese Woche', exact: true }).waitFor();
+  };
   await mkdir(ARTIFACTS, { recursive: true });
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-desktop.png'), fullPage: true });
+  await reload();
 
-  await page.getByRole('button', { name: 'Zuschauer (30 Tage)' }).click();
-  await page.getByText('74,3 Ø').waitFor();
-  await expectOwnRow(page, 14);
-  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-mobile.png'), fullPage: true });
-  for (const width of [320, 390, 768, 1024, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `Kein horizontaler Overflow bei ${width}px.`);
+  for (const [width, height] of [[1920, 1080], [2560, 1440]]) {
+    await page.setViewportSize({ width, height });
+    for (const name of ['Werber', 'Teamspieler', 'Duo', 'Ausdauer', 'Talentscout', 'Clipjäger']) {
+      const card = main.locator('article').filter({ has: page.getByRole('heading', { name, exact: true }) });
+      assert.equal(await card.count(), 1, `Eine Karte für ${name}.`);
+      assert.equal(await card.getByText(/Stufe [123]/).count(), ['Duo', 'Talentscout', 'Clipjäger'].includes(name) ? 2 : 3, 'Alle vom Server gelieferten Stufen bleiben sichtbar.');
+    }
+    assert.equal(await main.getByText(/Wegen einer Datenlücke/).count(), 0);
+    const clips = main.locator('article').filter({ has: page.getByRole('heading', { name: 'Clipjäger', exact: true }) });
+    await clips.getByText('3 / 5', { exact: true }).waitFor();
+    const achievements = main.locator('article[data-achievement]');
+    const positions = await achievements.evaluateAll(cards => cards.map(card => card.getBoundingClientRect().y));
+    assert.equal(positions[3], positions[4], 'Die letzte Erfolgsreihe ist gefüllt.');
+    assert.equal(positions[4], positions[5], 'Sechs Kategorien bilden zwei vollständige Reihen.');
+    const levelProgress = main.getByRole('progressbar', { name: 'Fortschritt zum nächsten Level', exact: true });
+    assert.equal(await levelProgress.getAttribute('aria-valuenow'), '340');
+    assert.equal(await levelProgress.getAttribute('aria-valuemax'), '600');
+    const level = main.locator('article').filter({ has: page.getByRole('heading', { name: '740 Punkte', exact: true }) });
+    assert.ok((await level.boundingBox()).height < 220, 'Level-Karte bleibt kompakt.');
+    await expectLeaderboard(page, 14);
+    for (const avatar of await main.locator('img').all()) { await avatar.scrollIntoViewIfNeeded(); await avatar.evaluate(image => image.decode()); }
+    assert.equal(await main.locator('img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0)), true, 'Avatare sind geladen.');
+    const viewersTab = main.getByRole('button', { name: 'Zuschauer (30 Tage)', exact: true });
+    const effortTab = main.getByRole('button', { name: 'Einsatz (Monat)', exact: true });
+    assert.ok(await viewersTab.getAttribute('title'), 'Zuschauer-Tab erklärt den Zeitraum.');
+    assert.ok(await effortTab.getAttribute('title'), 'Einsatz-Tab erklärt die Wertung.');
+    assert.ok(await main.getByText('Ø Zuschauer pro Stream', { exact: true }).count(), 'Zuschauer-Wert ist erklärt.');
+    await assertNoOverflow(page, width);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await capture(page, { path: path.join(ARTIFACTS, `challenges-${width}-zuschauer.png`), fullPage: true });
+    await capture(page, { path: path.join(ARTIFACTS, `challenges-${width}-oben.png`) });
+    await main.getByRole('heading', { name: 'Deine Werber', exact: true }).scrollIntoViewIfNeeded();
+    await capture(page, { path: path.join(ARTIFACTS, `challenges-${width}-werber-ausschnitt.png`) });
+    const content = main.locator('.challenges-page');
+    assert.equal(await content.evaluate(element => getComputedStyle(element).maxWidth), 'none', 'Inhalt erhält keine maximale Breite.');
+    assert.ok(await content.evaluate(element => parseFloat(getComputedStyle(element).paddingBottom) >= 96), 'Unterer Abstand lässt Platz für die Hilfe.');
+    await effortTab.click();
+    await main.getByText('Raid Boost', { exact: true }).waitFor();
+    await expectLeaderboard(page, 14);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await capture(page, { path: path.join(ARTIFACTS, `challenges-${width}-einsatz.png`), fullPage: true });
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await capture(page, { path: path.join(ARTIFACTS, `challenges-${width}-unten.png`) });
+    const lastRow = main.locator('[data-rank]').last();
+    const help = page.getByRole('button', { name: 'Hilfe bekommen', exact: true });
+    const rowBox = await lastRow.boundingBox();
+    const helpBox = await help.boundingBox();
+    assert.ok(rowBox.y + rowBox.height <= helpBox.y, 'Hilfe-Button überdeckt die letzte Ranglistenzeile nicht.');
+    await viewersTab.click();
   }
 
   emptyRecruiters = true;
   for (const rank of [4, 1]) {
     ownRank = rank;
-    await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
-    await main.getByText('test_partner', { exact: true }).waitFor();
-    await expectOwnRow(page, rank);
-    assert.equal(await main.getByText('Deine Position', { exact: true }).count(), 0, 'Eigener Eintrag in den Top 10 wird nicht doppelt angeheftet.');
-    const emptyState = main.getByText('Noch niemand hat über deinen Link aktive Leute gebracht.', { exact: true }).locator('..');
-    assert.ok((await emptyState.boundingBox()).height <= 76, 'Leerer Werber-Bereich bleibt kompakt.');
-    await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
-    await expectOwnRow(page, rank);
-    await page.screenshot({ path: path.join(ARTIFACTS, `challenges-own-rank-${rank}.png`), fullPage: true });
+    await reload();
+    await expectLeaderboard(page, rank);
+    assert.equal(await main.getByText('Deine Position', { exact: true }).count(), 0, 'Eigener Eintrag wird in den Top 10 nicht doppelt angeheftet.');
+    const copy = main.getByRole('button', { name: 'Kopieren', exact: true });
+    await copy.click();
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    assert.ok(clipboard.startsWith('https://'), 'Kopieren liefert einen vollständigen Empfehlungslink.');
+    assert.equal(clipboard, CHALLENGES_ME.referral_url, 'Kopieren erhält den vom Server gelieferten Link unverändert.');
+    await capture(page, { path: path.join(ARTIFACTS, `challenges-leere-werber-rang-${rank}.png`), fullPage: true });
+    await main.getByRole('button', { name: 'Einsatz (Monat)', exact: true }).click();
+    await expectLeaderboard(page, rank);
   }
   ownRank = 14;
   emptyRecruiters = false;
+  await reload();
+  for (const width of [320, 390, 768, 1024, 1920, 2560]) {
+    await page.setViewportSize({ width, height: 900 });
+    await assertNoOverflow(page, width);
+  }
 
-  questAssignmentStatus = 'no_reachable_quests';
-  await page.setViewportSize({ width: 1440, height: 1200 });
-  await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
-  await page.getByRole('status').getByText('Diese Woche ist gerade keine Aufgabe für dich erreichbar.').waitFor();
-  await page.getByText('Bringe 1 neue aktive Person in den Discord', { exact: true }).waitFor({ state: 'detached' });
-  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
-  await page.getByText('Deine Position').waitFor();
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-no-quests-desktop.png'), fullPage: true });
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-no-quests-mobile.png'), fullPage: true });
-
-  questAssignmentStatus = 'pending';
-  await page.setViewportSize({ width: 1440, height: 1200 });
-  await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
-  await page.getByRole('status').getByText('Deine Wochenaufgaben werden gerade vorbereitet.').waitFor();
-  await page.getByText('Diese Woche ist gerade keine Aufgabe für dich erreichbar.', { exact: true }).waitFor({ state: 'detached' });
-  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
-  await page.getByText('Deine Position').waitFor();
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-pending-desktop.png'), fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-pending-mobile.png'), fullPage: true });
-
+  for (const [status, message] of [
+    ['no_reachable_quests', 'Diese Woche ist gerade keine Aufgabe für dich erreichbar.'],
+    ['pending', 'Deine Wochenaufgaben werden gerade vorbereitet.'],
+  ]) {
+    questAssignmentStatus = status;
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await reload();
+    await main.getByRole('status').getByText(message, { exact: true }).waitFor();
+    assert.equal(await main.getByText('Bringe 1 neue aktive Person in den Discord', { exact: true }).count(), 0);
+  }
   categoryComplete = false;
   questAssignmentStatus = 'assigned';
-  await page.setViewportSize({ width: 1440, height: 1200 });
-  await page.goto(`http://127.0.0.1:${port}/twitch/challenges`, { waitUntil: 'networkidle' });
-  await page.getByRole('status').getByText(/Wegen einer Datenlücke/).waitFor();
-  await page.getByText('Wertung ausgesetzt', { exact: true }).waitFor();
-  assert.equal(await page.getByRole('heading', { name: 'Rangliste und Erfolge konnten nicht geladen werden' }).count(), 0);
-  await page.getByRole('button', { name: 'Einsatz (Monat)' }).click();
-  await page.getByText('Deine Position').waitFor();
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-partial-desktop.png'), fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-  await page.screenshot({ path: path.join(ARTIFACTS, 'challenges-partial-mobile.png'), fullPage: true });
+  await reload();
+  assert.equal(await main.getByText(/Wegen einer Datenlücke|Deine Punkte und Erfolge bleiben erhalten/).count(), 0, 'Der Datenlückenbanner bleibt auch bei unvollständigen Daten entfernt.');
+  await main.getByText('Wertung ausgesetzt', { exact: true }).waitFor();
+  await expectLeaderboard(page, 14);
+  lowLevel = true;
+  categoryComplete = true;
+  await reload();
+  await main.getByRole('heading', { name: '5 Punkte', exact: true }).waitFor();
+  await main.getByText('Noch 1 geworbener Partner bis Level 2.', { exact: true }).waitFor();
+  await main.getByText('Punkte für Level 2', { exact: true }).waitFor();
+  const lowProgress = main.getByRole('progressbar', { name: 'Fortschritt zum nächsten Level', exact: true });
+  assert.equal(await lowProgress.getAttribute('aria-valuenow'), '5');
+  assert.equal(await lowProgress.getAttribute('aria-valuemax'), '50');
+  await capture(page, { path: path.join(ARTIFACTS, 'challenges-level-1.png'), fullPage: true, animations: 'disabled' });
   assert.deepEqual(consoleErrors, []);
   await context.close();
 });
 
-async function expectVisible(locator) {
-  await locator.waitFor({ state: 'visible' });
-  assert.equal(await locator.isVisible(), true);
+async function assertNoOverflow(page, width) {
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `Kein horizontaler Overflow bei ${width}px.`);
 }
 
-async function expectOwnRow(page, rank) {
-  const ownBadge = page.getByRole('main').getByText('Du', { exact: true });
+async function expectLeaderboard(page, rank) {
+  const main = page.getByRole('main');
+  const ownBadge = main.getByText('DU', { exact: true });
   assert.equal(await ownBadge.count(), 1);
-  const row = ownBadge.locator('xpath=../../..');
-  assert.ok(await row.evaluate(el => el.classList.contains('border-amber-500/50')));
-  assert.ok(await row.evaluate(el => el.classList.contains('bg-amber-500/15')));
-  assert.equal(await row.evaluate(el => getComputedStyle(el).paddingTop), '8px');
-  assert.equal(await row.evaluate(el => getComputedStyle(el).paddingBottom), '8px');
-  if (rank === 1) {
-    assert.equal(await row.locator('svg[aria-label="Platz 1"]').count(), 1);
-  } else {
-    assert.equal(await row.getByText(`#${rank}`, { exact: true }).count(), 1);
+  const row = ownBadge.locator('xpath=ancestor::*[@data-rank][1]');
+  assert.equal(await row.getAttribute('data-rank'), String(rank));
+  for (const place of [1, 2, 3]) {
+    assert.equal(await main.locator(`svg[aria-label="Platz ${place}"]`).count(), 1, `Platz ${place} ist ausgezeichnet.`);
   }
+}
+
+async function capture(page, options) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.screenshot({ ...options, animations: 'disabled' });
 }

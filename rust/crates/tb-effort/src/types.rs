@@ -83,6 +83,7 @@ pub struct MeResponse {
     pub generated_at: DateTime<Utc>,
     pub timezone: &'static str,
     pub streamer: String,
+    pub referral_url: Option<String>,
     pub quests: Vec<QuestResponse>,
     pub quest_assignment_status: QuestAssignmentStatus,
     pub streak: StreakResponse,
@@ -97,6 +98,7 @@ pub struct MeResponse {
 pub struct ViewerRecruiter {
     pub twitch_user_id: String,
     pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     pub qualified_invites: i64,
 }
 

@@ -399,6 +399,24 @@ impl Engine {
         let (level, next_goal) = self.level(id, now, &quests).await?;
         let with_us = self.with_us(id).await?;
         let season = self.season(id, now).await?;
+        let referral_url = match sqlx::query_scalar::<_, String>(
+            "SELECT invite_url FROM twitch_streamer_invites \
+             WHERE twitch_user_id=$1 ORDER BY invite_url LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(url) => url,
+            Err(error) => {
+                tracing::debug!(%error, "Empfehlungslink konnte nicht geladen werden");
+                tb_observability::warning_budget::warn(
+                    "challenges_referral_url",
+                    "Empfehlungslink konnte nicht geladen werden",
+                );
+                None
+            }
+        };
         Ok(MeResponse {
             category_data_complete,
             twitch_user_id: id.into(),
@@ -407,6 +425,7 @@ impl Engine {
             generated_at: now,
             timezone: "Europe/Berlin",
             streamer: partner.login,
+            referral_url,
             quests,
             quest_assignment_status,
             streak,
@@ -433,13 +452,15 @@ impl Engine {
                 .await
                 .map_err(|_| Error::Source("helix_profiles"))?;
             for (twitch_user_id, qualified_invites) in rows {
-                let display_name = profiles
-                    .iter()
-                    .find(|p| p.id == twitch_user_id)
-                    .map(|p| p.display_name.clone());
+                let profile = profiles.iter().find(|p| p.id == twitch_user_id);
+                let display_name = profile.map(|p| p.display_name.clone());
+                let avatar_url = profile
+                    .map(|p| p.profile_image_url.clone())
+                    .filter(|url| !url.is_empty());
                 recruiters.push(ViewerRecruiter {
                     twitch_user_id,
                     display_name,
+                    avatar_url,
                     qualified_invites,
                 });
             }

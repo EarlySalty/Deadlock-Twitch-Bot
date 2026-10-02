@@ -58,6 +58,7 @@ export interface ChallengeSeason {
 export type ChallengeAssignmentStatus = 'pending' | 'assigned' | 'no_reachable_quests';
 
 export interface ChallengesMe {
+  referral_url?: string | null;
   category_data_complete?: boolean;
   twitch_user_id: string;
   next_reset_at: string;
@@ -78,6 +79,7 @@ export interface ViewerRecruiter {
   twitch_user_id: string;
   display_name: string | null;
   qualified_invites: number;
+  avatar_url?: string | null;
 }
 
 export interface ChallengeViewers {
@@ -88,6 +90,7 @@ export interface ChallengeViewers {
 
 export interface EffortLeaderboardEntry {
   rank: number;
+  avatar_url?: string | null;
   twitch_login: string;
   points: number;
   raid_boost: boolean;
@@ -103,6 +106,7 @@ export interface EffortLeaderboard {
 
 export interface ViewerLeaderboardEntry {
   rank: number;
+  avatar_url?: string | null;
   streamer: string;
   avg_viewers: number;
   max_viewers: number;
@@ -136,4 +140,12 @@ export function fetchEffortLeaderboard(): Promise<EffortLeaderboard> {
 
 export function fetchViewerLeaderboard(limit = 10): Promise<ViewerLeaderboard> {
   return fetchApi<ViewerLeaderboard>('/leaderboard', { limit });
+}
+
+export interface NetworkStreamerAvatar {
+  login: string;
+  avatar_url?: string | null;
+}
+export function fetchNetworkAvatars(): Promise<{ streamers: NetworkStreamerAvatar[] }> {
+  return fetchApi<{ streamers: NetworkStreamerAvatar[] }>('/public/network');
 }
