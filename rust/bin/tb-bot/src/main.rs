@@ -861,6 +861,7 @@ async fn main() {
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
     let chat_subscription_reconcile = Arc::new(tokio::sync::Notify::new());
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
+    let raid_ad_vorlauf = Arc::new(tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf::new(pool.clone()));
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
     let vod_export = helix.as_ref().clone().and_then(|helix_client| {
@@ -1028,7 +1029,7 @@ async fn main() {
                 token_provider.clone(),
                 RaidHistoryStore::new(pool.clone()),
                 RaidBlacklistStore::new(pool.clone()),
-            );
+            ).with_ad_protection(Arc::new(ad_manager_wiring::RaidAdProtectionAdapter(raid_ad_vorlauf.clone())));
             let sink = Arc::new(RaidArrivalSinkImpl::new(
                 pool.clone(),
                 pending.clone(),
@@ -1210,7 +1211,7 @@ async fn main() {
                 Arc::new(flip_unraid::HelixSourceRaidCanceller::new(
                     token_provider.clone(),
                     helix_client.clone(),
-                )),
+                ).with_ad_vorlauf(raid_ad_vorlauf.clone())),
                 chat_api_handle.as_ref().map(|h| h.api()),
                 &config.bot,
             ));
@@ -1223,7 +1224,7 @@ async fn main() {
                 RaidBlacklistStore::new(pool.clone()),
                 token_provider,
                 helix_client,
-            );
+            ).with_ad_vorlauf(raid_ad_vorlauf.clone());
             manual_raid_port = Some(Arc::new(ManualRaidAdapter {
                 handler: offline.clone(),
             }));
@@ -1618,6 +1619,7 @@ async fn main() {
                 raid_auth,
                 ad_manager_chat_api.clone(),
                 settings.internal_api.token.clone(),
+                raid_ad_vorlauf.clone(),
             ),
             None => tracing::error!(
                 "Werbemanager wurde nicht gestartet: Broadcaster-Tokenzugriff fehlt"

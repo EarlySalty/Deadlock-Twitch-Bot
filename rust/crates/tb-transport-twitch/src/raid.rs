@@ -7,6 +7,12 @@ use crate::client::{HelixClient, HelixError};
 /// Ergebnis einer Raid-API-Operation (Python: `(success, error_message)`).
 pub type RaidApiResult = Result<(), String>;
 
+#[derive(Debug)]
+pub enum RaidStartOutcome {
+    Started,
+    Rejected { status: u16, message: String },
+}
+
 impl HelixClient {
     /// Startet einen Raid `from → to` (`POST /raids`). 200 = Erfolg.
     /// `user_token` ist der Access-Token des Quell-Broadcasters.
@@ -16,6 +22,18 @@ impl HelixClient {
         to_broadcaster_id: &str,
         user_token: &str,
     ) -> Result<RaidApiResult, HelixError> {
+        Ok(match self.start_raid_with_status(from_broadcaster_id, to_broadcaster_id, user_token).await? {
+            RaidStartOutcome::Started => Ok(()),
+            RaidStartOutcome::Rejected { message, .. } => Err(message),
+        })
+    }
+
+    pub async fn start_raid_with_status(
+        &self,
+        from_broadcaster_id: &str,
+        to_broadcaster_id: &str,
+        user_token: &str,
+    ) -> Result<RaidStartOutcome, HelixError> {
         let resp = self
             .post_with_user_token("/raids", user_token)
             .query(&[
@@ -25,7 +43,7 @@ impl HelixClient {
             .send()
             .await?;
         if resp.status().as_u16() == 200 {
-            Ok(Ok(()))
+            Ok(RaidStartOutcome::Started)
         } else {
             let status = resp.status().as_u16();
             let body = match resp.text().await {
@@ -36,7 +54,10 @@ impl HelixClient {
                 }
             };
             let snippet: String = body.chars().take(200).collect();
-            Ok(Err(format!("Raid API failed: HTTP {status}: {snippet}")))
+            Ok(RaidStartOutcome::Rejected {
+                status,
+                message: format!("Raid API failed: HTTP {status}: {snippet}"),
+            })
         }
     }
 
@@ -121,6 +142,21 @@ mod tests {
             .await;
         let result = client.start_raid("1", "2", "user-tok").await.unwrap();
         assert!(result.unwrap_err().contains("HTTP 429"));
+    }
+
+    #[tokio::test]
+    async fn strukturierter_start_erhaelt_http_status_ohne_zweiten_versand() {
+        for status in [400, 408, 429, 500] {
+            let server = MockServer::start().await;
+            let client = client_with(&server).await;
+            Mock::given(method("POST")).and(path("/helix/raids"))
+                .respond_with(ResponseTemplate::new(status)).expect(1)
+                .mount(&server).await;
+            match client.start_raid_with_status("1", "2", "user-tok").await.unwrap() {
+                super::RaidStartOutcome::Rejected { status: actual, .. } => assert_eq!(actual, status),
+                super::RaidStartOutcome::Started => panic!("HTTP-Fehler darf keinen Erfolg melden"),
+            }
+        }
     }
 
     #[tokio::test]

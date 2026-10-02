@@ -22,6 +22,25 @@ pub struct HelixRaidApi {
 
 #[async_trait::async_trait]
 impl RaidApi for HelixRaidApi {
+    async fn start_raid_classified(
+        &self, from_id: &str, to_id: &str, token: &str,
+    ) -> Result<(), tb_raid::raid_executor::RaidStartError> {
+        use tb_transport_twitch::raid::RaidStartOutcome;
+        use tb_raid::raid_executor::RaidStartError;
+        match self.helix.start_raid_with_status(from_id, to_id, token).await {
+            Ok(RaidStartOutcome::Started) => Ok(()),
+            Ok(RaidStartOutcome::Rejected { status, message }) => Err(RaidStartError {
+                message,
+                // 408, 5xx und unbekannte Antworten können einen gestarteten
+                // Countdown verdecken. Der Vorlauf bleibt dann kurz bestehen.
+                definitive_rejection: matches!(status, 400 | 401 | 403 | 404 | 409 | 422 | 429),
+            }),
+            Err(error) => Err(RaidStartError {
+                message: format!("Raid API request failed: {error}"),
+                definitive_rejection: false,
+            }),
+        }
+    }
     async fn start_raid(
         &self,
         from_broadcaster_id: &str,
