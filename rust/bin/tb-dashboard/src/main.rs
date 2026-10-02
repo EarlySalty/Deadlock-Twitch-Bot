@@ -447,6 +447,12 @@ async fn main() {
             std::process::exit(1);
         });
     spawn_clip_contest_finalize_loop(contest_writer.clone());
+    let analysis_writer = tb_dashboard_api::analysis_writer_pool(&settings.db)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::error!("Analyse-Unterhaltungen: Schreibzugang konnte nicht aufgebaut werden");
+            std::process::exit(1);
+        });
     let pause_loop_helix = pause_loop_helix_client_from_env();
     let brain_token = if config.dashboard.options.brain_client.mode
         == tb_config::dashboard_options::BrainClientMode::Legacy
@@ -460,9 +466,10 @@ async fn main() {
             &config.dashboard.options.brain_client,
             brain_token.as_deref(),
         );
-    let mut app = tb_dashboard_api::build_router_with_contest_writer(
+    let mut app = tb_dashboard_api::build_router_with_analysis_writer(
         pool.clone(),
         contest_writer,
+        analysis_writer,
         token,
         pause_loop_helix,
         brain_runtime,
