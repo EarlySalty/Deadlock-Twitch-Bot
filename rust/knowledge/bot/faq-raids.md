@@ -2,7 +2,7 @@
 title: Auto-Raid-Netzwerk
 namespace: bot
 category: faq
-audience: streamer
+audience: public
 last_updated: 2026-10-02
 source: manual
 tip_eligible: false
@@ -20,16 +20,11 @@ Beim Ende eines Deadlock-Streams prüft der Bot, ob er deine Zuschauer an einen 
 [Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
-### Wie funktioniert die Raid-Auswahl?
+### Wie wird das Ziel ausgewählt?
 
-Der Bot berücksichtigt mehrere Faktoren: Wer ist gerade live, wie viele Viewer hat der Partner, wann wurde zuletzt dorthin geraidet, und weitere Netzwerk-Kriterien. Ziel ist immer eine sinnvolle Weiterleitung, kein Zufall.
+Der Bot sucht einen geeigneten Live-Partner im Deadlock-Netzwerk. Wenn kein Ziel die Voraussetzungen erfüllt, findet kein Raid statt. Ein bestimmtes Ziel oder eine gleichmäßige Verteilung der Raids sind nicht garantiert.
 
-- Live-Status der Partner wird in Echtzeit geprüft.
-- Bei der Auswahl zählen bisherige Raids und Cooldowns, wenn andere geeignete Live-Partner zur Wahl stehen.
-- Eine gleichmäßige Verteilung der Raids ist nicht garantiert.
-
-[Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
-[FAQ](https://deutsche-deadlock-community.de/twitch/faq#raids)
+[Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
 ### Kann ich sehen, wen ich geraidet habe?
 
@@ -45,8 +40,7 @@ Ja. Nach dem Verbinden siehst du im Dashboard, wie dein Kanal im Netzwerk läuft
 
 Das Netzwerk arbeitet in beide Richtungen. Wenn andere Streamer offline gehen, können deren Zuschauer automatisch zu dir weitergeleitet werden, solange du live bist.
 
-- Netzwerk-Aktivität fließt in die Raid-Auswahl ein.
 - Eingehende Raids und erfasste Netzwerk-Daten findest du im Dashboard.
-- Die Auswahl berücksichtigt die Voraussetzungen und den Raid-Score; ein bestimmter Raid oder Zuschauerzuwachs ist nicht garantiert.
+-  ein bestimmter Raid oder Zuschauerzuwachs ist nicht garantiert.
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)

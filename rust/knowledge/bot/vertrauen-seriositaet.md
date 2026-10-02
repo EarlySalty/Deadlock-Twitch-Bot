@@ -2,7 +2,7 @@
 title: Vertrauen und Seriosität
 namespace: bot
 category: trust
-audience: streamer
+audience: public
 last_updated: 2026-06-21
 source: manual
 tip_eligible: false

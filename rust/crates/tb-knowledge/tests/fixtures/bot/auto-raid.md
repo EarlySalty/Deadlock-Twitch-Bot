@@ -2,7 +2,7 @@
 title: Auto-Raid
 namespace: bot
 category: feature
-audience: streamer
+audience: public
 tip_eligible: true
 tip_flags: [feature]
 time_to_value: 2

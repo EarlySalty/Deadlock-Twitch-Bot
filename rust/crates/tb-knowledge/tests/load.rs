@@ -9,9 +9,9 @@ fn fixtures() -> std::path::PathBuf {
 #[test]
 fn laedt_beide_namespaces() {
     let kb = KnowledgeBase::load_from_dir(&fixtures()).expect("lädt");
-    // Drei Streamer-Docs plus nur-concierge.md, das die Zielgruppen-Filterung
-    // der oeffentlichen Hilfeseite abdeckt.
-    assert_eq!(kb.len(), 4);
+    // Auch interne und nicht freigegebene Dokumente laden. Erst die
+    // Zugriffsprüfung entscheidet, was die Nutzerhilfe verwenden darf.
+    assert_eq!(kb.len(), 6);
     let bot = kb
         .docs()
         .iter()
@@ -22,7 +22,7 @@ fn laedt_beide_namespaces() {
         .iter()
         .filter(|d| d.namespace == Namespace::Deadlock)
         .count();
-    assert_eq!(bot, 3);
+    assert_eq!(bot, 5);
     assert_eq!(dl, 1);
 }
 

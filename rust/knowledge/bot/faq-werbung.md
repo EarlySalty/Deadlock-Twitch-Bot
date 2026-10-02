@@ -2,7 +2,7 @@
 title: Chat-Werbung des Bots
 namespace: bot
 category: faq
-audience: streamer
+audience: public
 last_updated: 2026-10-02
 source: manual
 tip_eligible: false
@@ -21,34 +21,11 @@ Zwei Formen, beide nur rund um den Community-Discord, keine externen Sponsoren u
 
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
 
-### Wen spricht der Bot persönlich auf die Community an?
+### Wann kann der Bot auf die Community hinweisen?
 
-Wenn der Bot direkt auf einen einzelnen Zuschauer eingeht, dann nur bei jemandem, der nach dem Zuschauer-Register erstmals im getrackten Partnernetz auftaucht und nach allem, was der Bot weiß, noch nicht zur Community gehört. Zusätzlich muss der aktuelle Stream als Deadlock-Stream erkannt sein und die Nachricht genug Inhalt für einen natürlich passenden Nutzen liefern. Der Bot sagt dem Zuschauer nie, dass er als neu erkannt oder getrackt wurde. Wer im Discord bekannt ist, in einem Partnerkanal schon früher auftauchte oder bereits einen persönlichen Community-Hinweis bekommen hat, wird nicht noch einmal angesprochen. Die Kanalbetreiber selbst, Moderatoren, andere Bots, Streamer und Partner der Community bleiben außen vor.
+Der Bot kann passend zum Gespräch auf die Community hinweisen. Persönliche Antworten richten sich an neue Deadlock-Zuschauer. Stammgäste sollen nicht wiederholt angesprochen werden. Die periodische Einladung richtet sich an den gesamten Chat.
 
-- Gilt für jede persönliche Community-Antwort an einen einzelnen Zuschauer.
-- Nur echte Neulinge, die frisch in einem Partnerkanal schreiben.
-- Wer im Discord dabei ist oder schon länger mitliest, wird nicht persönlich angesprochen.
-- Pro Person höchstens ein persönlicher Community-Hinweis, unabhängig vom Anlass.
-- Kanalbetreiber, Moderatoren, andere Bots, Streamer und Partner nie.
-- Erkennt der Bot jemanden nicht sicher als Neuling, spricht er ihn nicht persönlich an.
-- Die periodische Einladung ist davon unabhängig: sie ist eine normale Nachricht an den ganzen Chat und richtet sich nicht an eine einzelne Person.
-
-### Werden andere Deadlock-Streamer im Chat als Partner angeworben?
-
-Nein. Der Bot macht keinen kalten Partner-Pitch an andere Deadlock-Streamer, nur weil sie in einem Partnerkanal schreiben oder selbst streamen. Das wirkte zu vertrieblich und ist bewusst deaktiviert. Streamer können das Partner-Netzwerk weiterhin selbst über Website, Discord oder `!invite` finden, aber der Chat-Bot spricht sie nicht ungefragt darauf an.
-
-- Streaming-Status allein löst keinen Partner-Pitch aus.
-- Keine ungefragte Raid-Netzwerk-Werbung an andere Deadlock-Streamer.
-- Periodische Community-Hinweise dürfen stattdessen konkrete, allgemein belegte Leistungen nennen, etwa Deadlock-Patchnotes auf Deutsch, kostenloses Coaching oder Scam-/Fake-Server-Schutz.
-
-### Wann genau wird das gepostet?
-
-Die persönliche Discord-Antwort greift nur, wenn der Partnerstream läuft, Deadlock als aktuelles Spiel erkannt ist, der Zuschauer das Neulings-Gate besteht und seine Nachricht mindestens 15 Zeichen hat. Der Sprachmodell-Judge muss außerdem mit mindestens 0,70 Sicherheit einen natürlich passenden konkreten Nutzen erkennen; bei Unsicherheit schweigt der Bot. Eine Person bekommt insgesamt höchstens einen persönlichen Community-Hinweis. Die periodische Einladung braucht eine gewisse Chat-Aktivität und hat eigene Abstände, damit nichts spammt.
-
-- Persönliche Pitches sind für echte neue Deadlock-Zuschauer gedacht, nicht für Stammgäste oder zufälligen Smalltalk.
-- Ein persönlicher Pitch muss einen konkreten Vorteil enthalten, der auch ohne die Wörter Discord oder Community noch interessant bleibt. Reine Community-Floskeln und Broschürensprache werden technisch verworfen.
-- Feste Grenzen und Drosseln verhindern wiederholte Ansprache.
-- Bei aktiven Sonder-Events kann der Bot in der periodischen Einladung stattdessen einen Aktions-Text einblenden.
+Der Bot wirbt andere Streamer nicht ungefragt als Partner an. Streamer können das Netzwerk über die Website, Discord oder `!invite` kennenlernen.
 
 ### Wie schalte ich die Chat-Werbung komplett ab?
 

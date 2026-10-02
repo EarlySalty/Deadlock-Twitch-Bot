@@ -2,7 +2,7 @@
 title: Auto-Raid
 namespace: bot
 category: feature
-audience: streamer
+audience: public
 last_updated: 2026-10-02
 source: manual
 tip_eligible: true
@@ -14,26 +14,8 @@ Nach deinem Deadlock-Stream kann der Bot deine Zuschauer automatisch an einen ge
 
 Beim Raid schreibt der Bot in den Quellchat, wohin die Reise geht, und erinnert daran, im Zielchat kurz Hallo und Tschüss zu sagen.
 
-## Wer wohin geraidet wird
+## Einstellungen und Hinweise
 
-Der Bot merkt sich, ob du nach deinen eigenen Raids im Zielchat auftauchst, und sortiert dich in eine von drei Gruppen ein:
+Im Dashboard kannst du Auto-Raid abschalten. Manuelle Raids bleiben möglich. Ein bestimmtes Ziel, eine feste Reihenfolge oder zusätzlicher Zuschauerzuwachs sind nicht garantiert.
 
-- **Aktiv**: du unterhältst dich kurz, drei Nachrichten oder zwei über ein paar Minuten
-- **Grüßer**: du sagst kurz Hallo, ein bis zwei Nachrichten
-- **Still**: du schreibst nichts
-
-Beim nächsten Raid bekommst du bevorzugt ein Ziel aus deiner eigenen Gruppe. Wer sich gern unterhält, landet bei jemandem, der das auch tut; ein kurzes Hallo trifft auf ein kurzes Hallo. Diese Zuordnung geht dem Score vor. Ist gerade kein Ziel aus deiner Gruppe geeignet, läuft die Auswahl über den Score der übrigen geeigneten Live-Partner. Gibt es auch dort kein Ziel, findet kein Raid statt.
-
-**Grüßer und Aktive stehen im Score exakt gleich.** Ein kurzes Hallo reicht völlig, mehr ist keine Pflicht. Nur wer regelmäßig gar nichts schreibt, verliert Score und bekommt seltener Raids.
-
-Gemessen wird über 45 Tage, und einzelne Aussetzer fallen kaum ins Gewicht: Wer neun von zehn Raids begrüßt, steht praktisch unverändert da. Wenn der Bot nicht mitlesen konnte oder der Zielstream währenddessen endete, zählt der Raid gar nicht, weder für dich noch gegen dich.
-
-## Die Erinnerung
-
-Eine Whisper bekommst du nur, wenn du auch sonst nicht schreibst, und höchstens einmal pro Woche. Wer normalerweise grüßt und es einmal vergisst, hört nichts davon.
-
-## Zweit-Accounts
-
-Streamst du auf mehreren Kanälen, können die verknüpft werden. Dann zählt eine Begrüßung von jedem deiner Accounts, und Erinnerungen gehen immer an deinen Hauptaccount. Melde dich, wenn du einen zweiten Kanal eingetragen haben möchtest.
-
-Raids passieren nur, wenn Deadlock gestreamt wird. Manuelle Raids bleiben jederzeit möglich.
+Streamst du auf mehreren Kanälen, melde dich beim Support zur Verknüpfung deiner Accounts.

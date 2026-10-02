@@ -235,6 +235,10 @@ mod tests {
         )
         .unwrap();
         let html = render_help(&kb);
+        assert!(!html.contains("NICHT_FREIGEGEBENE_RAID_MECHANIK"));
+        assert!(!html.contains("INTERNER_STREAMER_RAID_SCORE"));
+        assert!(!html.contains("ohne-freigabe"));
+        assert!(!html.contains("streamer-intern"));
         assert!(
             !html.contains("GEHEIMES_INTERNES_WISSEN"),
             "Concierge-Doc auf der oeffentlichen Seite: {html}"
@@ -247,9 +251,9 @@ mod tests {
     }
 
     #[test]
-    fn nur_streamer_und_leere_zielgruppe_sind_oeffentlich() {
-        assert!(ist_oeffentlich(""));
-        assert!(ist_oeffentlich("streamer"));
+    fn nur_explizit_freigegebene_hilfe_ist_oeffentlich() {
+        assert!(!ist_oeffentlich(""));
+        assert!(!ist_oeffentlich("streamer"));
         assert!(ist_oeffentlich("public"));
         // Groesste Reichweite: der Deadlock-Namespace nutzt es fuer Wissen,
         // das im Chat an jeden geht.
@@ -306,7 +310,10 @@ mod tests {
     /// Struktur nicht anfassen.
     #[test]
     fn branding_laesst_die_struktur_unangetastet() {
-        let html = page("Bot-Befehle", "<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>");
+        let html = page(
+            "Bot-Befehle",
+            "<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>",
+        );
 
         assert!(html.contains("<h1>Bot-Befehle</h1>"));
         assert!(html.contains("<h2>Gruppe</h2><ul><li><code>!raid</code></li></ul>"));

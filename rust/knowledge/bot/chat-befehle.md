@@ -2,7 +2,7 @@
 title: Twitch-Chat-Befehle
 namespace: bot
 category: faq
-audience: streamer
+audience: public
 last_updated: 2026-09-18
 source: rust/crates/tb-chat/src/catalog.rs
 tip_eligible: false
