@@ -19,20 +19,20 @@ CREATE TABLE twitch_ai_chat_hourly (
 );
 CREATE TABLE twitch_ai_chat_reservations (
     operation_id UUID PRIMARY KEY,
-    twitch_user_id TEXT NOT NULL,
+    twitch_user_id TEXT NOT NULL CHECK (twitch_user_id ~ '^[0-9]+$'),
     analysis_id BIGINT NOT NULL,
     model_kind TEXT NOT NULL CHECK (model_kind IN ('llm', 'opus')),
     state TEXT NOT NULL CHECK (state IN ('running', 'unknown', 'done', 'failed')),
     backend_pid INTEGER NOT NULL,
     lock_key BIGINT NOT NULL,
-    capacity_expires_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (twitch_user_id, analysis_id)
-        REFERENCES twitch_ai_chat_sessions(twitch_user_id, analysis_id) ON DELETE CASCADE
+    -- Kontingentmetadaten überleben die Unterhaltung bis zur eigenen Frist.
+    -- Ein Session-FK mit Löschkaskade würde gültige Stundenreserven erstatten.
+    capacity_expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX twitch_ai_chat_reservations_capacity
     ON twitch_ai_chat_reservations(twitch_user_id, state, capacity_expires_at);
 CREATE INDEX twitch_ai_chat_reservations_session ON twitch_ai_chat_reservations(twitch_user_id, analysis_id);
-CREATE INDEX twitch_ai_chat_reservations_expiry ON twitch_ai_chat_reservations(capacity_expires_at) WHERE state = 'unknown';
+CREATE INDEX twitch_ai_chat_reservations_expiry ON twitch_ai_chat_reservations(capacity_expires_at) WHERE state <> 'running';
 CREATE INDEX twitch_ai_chat_reservations_running ON twitch_ai_chat_reservations(backend_pid) WHERE state = 'running';
 CREATE INDEX twitch_ai_chat_hourly_expiry ON twitch_ai_chat_hourly(window_start);
 DO $$
