@@ -15,7 +15,6 @@ fn dashboard_defaults_preserve_security_and_disabled_optional_features() {
     assert!(options.runtime_role.is_empty());
     assert!(!options.cookie_insecure);
     assert!(!options.noauth_readiness);
-    assert!(!options.pentest_disable_rate_limits);
     assert!(options.oauth_redirect_uri.is_none());
     assert!(options.demo_login_twitch_user_id.is_none());
     assert!(options.stripe_price_ids.is_empty());
@@ -23,6 +22,10 @@ fn dashboard_defaults_preserve_security_and_disabled_optional_features() {
         snapshot.resolve(&options.legal_pages_path).unwrap(),
         Path::new("/config/data/admin_dashboard/legal_pages.json")
     );
+}
+#[test]
+fn pentest_bypass_konfiguration_wird_abgelehnt() {
+    assert!(snapshot("[dashboard.options]\npentest_disable_rate_limits=true\n").is_err());
 }
 #[test]
 fn typed_stripe_ids_roundtrip_without_changing_prices() {

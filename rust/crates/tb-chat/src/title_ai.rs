@@ -772,19 +772,6 @@ fn title_endpoint() -> tb_llm::LlmEndpoint {
     tb_llm::endpoint_for(USE_CASE)
 }
 
-/// Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`: Rate-Limits aus, wenn die Env-Var
-/// auf einen „wahren" Wert gesetzt ist.
-fn pentest_disable_rate_limits() -> bool {
-    std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS")
-        .map(|v| {
-            !matches!(
-                v.trim().to_lowercase().as_str(),
-                "" | "0" | "false" | "no" | "off"
-            )
-        })
-        .unwrap_or(false)
-}
-
 /// Ein Titel- oder Insight-Aufruf ueber den gemeinsamen Eingang.
 ///
 /// Der Titel-Pfad haengt am Twitch-Dashboard und laeuft in Stosszeiten in
@@ -935,11 +922,9 @@ pub async fn generate_title_personalized(
     never_words: &[String],
     source: &str,
 ) -> Result<TitleResult, GenerateTitleError> {
-    if !pentest_disable_rate_limits() {
-        rate_limiter
-            .check_and_record(streamer_id, source)
-            .map_err(GenerateTitleError::RateLimit)?;
-    }
+    rate_limiter
+        .check_and_record(streamer_id, source)
+        .map_err(GenerateTitleError::RateLimit)?;
     let endpoint = title_endpoint();
     let api_key = endpoint
         .api_key

@@ -78,7 +78,7 @@ pub struct SubscriptionState {
     pub quantity: i32,
     pub current_period_start: Option<String>,
     pub current_period_end: Option<String>,
-    pub cancel_at_period_end: bool,
+    pub cancel_at_period_end: Option<bool>,
     pub canceled_at: Option<String>,
     pub ended_at: Option<String>,
     pub last_event_id: String,
@@ -226,10 +226,7 @@ pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
         quantity,
         current_period_start: epoch_to_iso(sub, "current_period_start"),
         current_period_end: epoch_to_iso(sub, "current_period_end"),
-        cancel_at_period_end: sub
-            .get("cancel_at_period_end")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        cancel_at_period_end: sub.get("cancel_at_period_end").and_then(Value::as_bool),
         canceled_at: epoch_to_iso(sub, "canceled_at"),
         ended_at: epoch_to_iso(sub, "ended_at"),
         last_event_id: String::new(),
@@ -273,7 +270,6 @@ fn checkout_subscription_state_from_event(
             .and_then(|q| i32::try_from(q).ok())
             .filter(|q| *q >= 1)
             .unwrap_or(1),
-        cancel_at_period_end: false,
         last_event_id: event_id.to_string(),
         ..SubscriptionState::default()
     };
@@ -413,15 +409,18 @@ async fn upsert_subscription_state(
         .current_period_end
         .clone()
         .or(existing.current_period_end);
-    // cancel_at_period_end: Event setzt immer explizit (bool); Python merget nur
-    // bei None — die Subscription-/Checkout-Pfade liefern aber stets einen Wert.
-    let final_cancel = i32::from(state.cancel_at_period_end);
+    // Dünne Rechnungs- und Checkout-Events ändern eine geplante Kündigung nicht.
+    let final_cancel = state
+        .cancel_at_period_end
+        .map(i32::from)
+        .or(existing.cancel_at_period_end)
+        .unwrap_or(0);
     let final_canceled_at = state.canceled_at.clone().or(existing.canceled_at);
     let final_ended_at = state.ended_at.clone().or(existing.ended_at);
     let final_last_event_id = merge(&state.last_event_id, &existing.last_event_id);
     let updated_at = Utc::now().to_rfc3339();
 
-    sqlx::query!(
+    sqlx::query(
         r#"INSERT INTO twitch_billing_subscriptions (
                stripe_subscription_id, stripe_customer_id, customer_reference, status,
                plan_id, cycle_months, quantity, current_period_start, current_period_end,
@@ -436,26 +435,27 @@ async fn upsert_subscription_state(
                quantity = EXCLUDED.quantity,
                current_period_start = EXCLUDED.current_period_start,
                current_period_end = EXCLUDED.current_period_end,
-               cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+               cancel_at_period_end = COALESCE($15, twitch_billing_subscriptions.cancel_at_period_end),
                canceled_at = EXCLUDED.canceled_at,
                ended_at = EXCLUDED.ended_at,
                last_event_id = EXCLUDED.last_event_id,
                updated_at = EXCLUDED.updated_at"#,
-        sub_id,
-        final_customer_id,
-        final_customer_reference,
-        &final_status,
-        final_plan_id,
-        final_cycle_months,
-        final_quantity,
-        final_period_start,
-        final_period_end,
-        final_cancel,
-        final_canceled_at,
-        final_ended_at,
-        final_last_event_id,
-        &updated_at
     )
+    .bind(sub_id)
+    .bind(final_customer_id)
+    .bind(final_customer_reference)
+    .bind(&final_status)
+    .bind(final_plan_id)
+    .bind(final_cycle_months)
+    .bind(final_quantity)
+    .bind(final_period_start)
+    .bind(final_period_end)
+    .bind(final_cancel)
+    .bind(final_canceled_at)
+    .bind(final_ended_at)
+    .bind(final_last_event_id)
+    .bind(&updated_at)
+    .bind(state.cancel_at_period_end.map(i32::from))
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -687,8 +687,8 @@ pub async fn refresh_partner_raid_score_for_login(
     // Entitlement-Katalog kennt nur tb-analytics. Ohne ihn zaehlt allein der
     // Handschalter `raid_boost_enabled`, und ein frisch gekaufter oder
     // geschenkter Plan mit `raid.priority` bliebe hier ohne Boost.
-    let refresher =
-        PartnerScoreRefresher::new(pool.clone()).with_boost_resolver(crate::plan::raid_boost_active);
+    let refresher = PartnerScoreRefresher::new(pool.clone())
+        .with_boost_resolver(crate::plan::raid_boost_active);
     refresher.refresh_for_ids(&[user_id], Utc::now()).await?;
     Ok(())
 }
@@ -881,7 +881,7 @@ mod tests {
         assert_eq!(state.plan_id, "raid_boost");
         assert_eq!(state.cycle_months, 1);
         assert_eq!(state.quantity, 1);
-        assert!(state.cancel_at_period_end);
+        assert_eq!(state.cancel_at_period_end, Some(true));
         assert!(state.current_period_start.is_some());
         assert!(state.current_period_end.is_some());
     }
@@ -973,7 +973,18 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        mod local_test_database {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-support/database.rs"
+            ));
+        }
+        let dsn = local_test_database::database_url();
+        assert!(
+            dsn.is_some() || !local_test_database::required(),
+            "Isolierte Testdatenbank fehlt"
+        );
+        let dsn = dsn?;
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -1253,6 +1264,7 @@ mod tests {
         // Vorab volles Abo.
         let active = json!({
             "id": "sub_inv", "customer": "c", "status": "active",
+            "cancel_at_period_end": true,
             "metadata": { "customer_reference": "l", "plan_id": "raid_boost" },
             "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
         });
@@ -1281,6 +1293,140 @@ mod tests {
             row.1.as_deref(),
             Some("raid_boost"),
             "dünnes Event darf plan_id nicht löschen"
+        );
+        let cancellation: i32 = sqlx::query_scalar(
+            "SELECT cancel_at_period_end FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_inv'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            cancellation, 1,
+            "Fehlgeschlagene Rechnung erhält die Kündigung"
+        );
+
+        let mut tx = pool.acquire().await.unwrap();
+        apply_event(&mut tx, "e3", "invoice.payment_succeeded", &invoice, None)
+            .await
+            .unwrap();
+        let cancellation: i32 = sqlx::query_scalar(
+            "SELECT cancel_at_period_end FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_inv'",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(cancellation, 1, "Bezahlte Rechnung erhält die Kündigung");
+
+        let mut resumed = active;
+        resumed["cancel_at_period_end"] = json!(false);
+        apply_event(
+            &mut tx,
+            "e4",
+            "customer.subscription.updated",
+            &resumed,
+            None,
+        )
+        .await
+        .unwrap();
+        let cancellation: i32 = sqlx::query_scalar(
+            "SELECT cancel_at_period_end FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_inv'",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(
+            cancellation, 0,
+            "Explizite Rücknahme der Kündigung bleibt möglich"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoice_erhaelt_parallel_gesetzte_kuendigung() {
+        let schema = "wh_invoice_parallel_cancel";
+        let Some(pool) = pool_or_skip(schema).await else {
+            return;
+        };
+        let state = SubscriptionState {
+            stripe_subscription_id: "sub_parallel".into(),
+            status: "active".into(),
+            cancel_at_period_end: Some(false),
+            ..SubscriptionState::default()
+        };
+        let mut connection = pool.acquire().await.unwrap();
+        upsert_subscription_state(&mut connection, &state)
+            .await
+            .unwrap();
+        drop(connection);
+
+        let options = pool.connect_options().as_ref().clone();
+        let invoice_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::search_path(schema))
+            .execute(&invoice_pool)
+            .await
+            .unwrap();
+        let invoice_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&invoice_pool)
+            .await
+            .unwrap();
+
+        let mut subscription_tx = pool.begin().await.unwrap();
+        sqlx::query(
+            "SELECT 1 FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_parallel' FOR UPDATE",
+        )
+        .execute(&mut *subscription_tx)
+        .await
+        .unwrap();
+
+        // Die Rechnung liest den alten Stand und wartet anschließend am UPSERT.
+        let invoice = tokio::spawn(async move {
+            let mut connection = invoice_pool.acquire().await.unwrap();
+            let state = SubscriptionState {
+                stripe_subscription_id: "sub_parallel".into(),
+                status: "active".into(),
+                ..SubscriptionState::default()
+            };
+            upsert_subscription_state(&mut connection, &state)
+                .await
+                .unwrap();
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let blocked: bool =
+                    sqlx::query_scalar("SELECT cardinality(pg_blocking_pids($1)) > 0")
+                        .bind(invoice_pid)
+                        .fetch_one(&mut *subscription_tx)
+                        .await
+                        .unwrap();
+                if blocked {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Rechnung muss am gesperrten Abo warten");
+
+        sqlx::query(
+            "UPDATE twitch_billing_subscriptions SET cancel_at_period_end = 1 WHERE stripe_subscription_id = 'sub_parallel'",
+        )
+        .execute(&mut *subscription_tx)
+        .await
+        .unwrap();
+        subscription_tx.commit().await.unwrap();
+        invoice.await.unwrap();
+        let cancellation: i32 = sqlx::query_scalar(
+            "SELECT cancel_at_period_end FROM twitch_billing_subscriptions WHERE stripe_subscription_id = 'sub_parallel'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            cancellation, 1,
+            "Parallel gesetzte Kündigung bleibt erhalten"
         );
     }
 

@@ -20,15 +20,6 @@ pub const CHAT_SESSION_RETENTION_HOURS: i64 = 24;
 pub const AI_MODEL_OPUS: &str = "opus";
 pub const AI_MODEL_LLM: &str = "llm";
 
-/// Pentest-Schalter (Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`): jeder Env-Wert
-/// außer den „aus"-Werten deaktiviert die Ratelimits. Default (unset) = aus.
-fn pentest_disable_rate_limits() -> bool {
-    match std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS") {
-        Ok(v) => !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"),
-        Err(_) => false,
-    }
-}
-
 /// Eine Folgechat-Session (Python `_chat_sessions[key]`).
 #[derive(Clone)]
 pub struct ChatSession {
@@ -96,9 +87,6 @@ impl AiState {
         follow_up_count: i64,
         now: DateTime<Utc>,
     ) -> (i64, Option<i64>) {
-        if pentest_disable_rate_limits() {
-            return (1_000_000_000, None);
-        }
         if model == AI_MODEL_OPUS {
             return ((OPUS_SESSION_FOLLOW_UP_LIMIT - follow_up_count).max(0), None);
         }
@@ -132,10 +120,6 @@ impl AiState {
             s.history.push(json!({ "role": "assistant", "content": reply, "timestamp": now_iso }));
         }
 
-        if pentest_disable_rate_limits() {
-            let fc = self.sessions.get(key).map(|s| s.follow_up_count).unwrap_or(0);
-            return self.remaining_follow_ups(streamer, &model, fc, now);
-        }
         if model == AI_MODEL_OPUS {
             if let Some(s) = self.sessions.get_mut(key) {
                 s.follow_up_count += 1;
