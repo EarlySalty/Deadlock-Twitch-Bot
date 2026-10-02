@@ -345,3 +345,15 @@ BEGIN
     END IF;
 END
 $bot_token_roles$;
+
+DO $watchdog_roles$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchcollector')
+        AND to_regclass('public.twitch_watchdog_incidents') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_watchdog_incidents TO twitchcollector;
+        IF to_regclass('public.twitch_watchdog_incidents_id_seq') IS NOT NULL THEN
+            GRANT USAGE, SELECT ON SEQUENCE public.twitch_watchdog_incidents_id_seq TO twitchcollector;
+        END IF;
+    END IF;
+END
+$watchdog_roles$;
