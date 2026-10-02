@@ -414,3 +414,198 @@ async fn ergebnisse_melden_partnerschaft_mit_stabilem_cursor() {
         json!({"rows": [], "next_updated_since": cursor, "has_more": false})
     );
 }
+
+#[tokio::test]
+async fn replay_bleibt_nach_umbenennung_neuvergabe_und_helix_ausfall_gebunden() {
+    let Some(pool) = migrated_pool("tb_scout_cs_replay").await else {
+        return;
+    };
+    let (_server, helix) = helix_mock(&[("1001", "neuling")]).await;
+    let r = router(pool.clone(), Some(helix));
+    let original = call(&r, suggest("neuling", DISCORD_A, "replay-k1")).await;
+    assert_eq!(original.1["status"], "created");
+    sqlx::query("UPDATE twitch_scout_candidates SET streamer_login = 'umbenannt' WHERE twitch_user_id = '1001'")
+        .execute(&pool).await.unwrap();
+    // Gleiche ursprüngliche Anfrage: selbst ohne Helix die ursprüngliche ID.
+    let offline = router(pool.clone(), None);
+    assert_eq!(
+        call(&offline, suggest("neuling", DISCORD_A, "replay-k1")).await,
+        original
+    );
+    // Der alte Login gehört jetzt einem anderen Konto. Beim Replay kein Lookup.
+    let (server, helix) = helix_mock(&[("9999", "neuling")]).await;
+    let reassigned = router(pool.clone(), Some(helix));
+    assert_eq!(
+        call(&reassigned, suggest("neuling", DISCORD_A, "replay-k1")).await,
+        original
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+    // Fremde Person und veränderte Anfrage erhalten keine fremde Antwort.
+    for (login, discord) in [("neuling", DISCORD_B), ("umbenannt", DISCORD_A)] {
+        let (status, value) = call(&offline, suggest(login, discord, "replay-k1")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(value["error"], "idempotency_conflict");
+        assert!(value.get("twitch_user_id").is_none());
+    }
+    let (_, value) = call(
+        &offline,
+        post(
+            json!({"twitch_login":"neuling", "suggested_by_discord_id":DISCORD_A,
+        "reason":"Anderer Grund", "idempotency_key":"replay-k1"}),
+            Some(TOKEN),
+            "127.0.0.1:5000",
+        ),
+    )
+    .await;
+    assert_eq!(value["error"], "idempotency_conflict");
+    let (status, _) = call(
+        &offline,
+        post(
+            json!({"twitch_login":"neuling", "suggested_by_discord_id":DISCORD_A,
+        "idempotency_key":"replay-k1"}),
+            None,
+            "127.0.0.1:5000",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn alle_guardpfade_unterscheiden_konten_mit_gleichem_login() {
+    let Some(pool) = migrated_pool("tb_scout_cs_ids").await else {
+        return;
+    };
+    sqlx::raw_sql("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('9101','partner_alt','archived');
+        INSERT INTO twitch_raid_blacklist (target_id,target_login) VALUES ('9102','raid_alt');
+        INSERT INTO twitch_partner_signup_denylist (twitch_user_id,twitch_login,reason,added_by) VALUES ('9103','signup_alt','test','admin');
+        INSERT INTO twitch_scout_pitch_blacklist (streamer_login,twitch_user_id) VALUES ('pitch_alt','9104');
+        INSERT INTO twitch_chatter_global_ban (chatter_login,chatter_id) VALUES ('ban_alt','9105');
+        INSERT INTO twitch_outbound_chat_suppressions (target_login,target_id,source,reason_code,suppressed_until) VALUES ('suppression_alt','9106','recruitment','test',NOW()+INTERVAL '1 day');
+        INSERT INTO twitch_scout_candidates (streamer_login,twitch_user_id,status) VALUES ('kandidat_alt','9107','approved');
+        INSERT INTO twitch_partner_outreach (streamer_login,streamer_user_id,detected_at,cooldown_until) VALUES ('outreach_alt','9108',NOW()::text,(NOW()+INTERVAL '1 day')::text);")
+        .execute(&pool).await.unwrap();
+    let users = [
+        ("8101", "partner_alt"),
+        ("8102", "raid_alt"),
+        ("8103", "signup_alt"),
+        ("8104", "pitch_alt"),
+        ("8105", "ban_alt"),
+        ("8106", "suppression_alt"),
+        ("8107", "kandidat_alt"),
+        ("8108", "outreach_alt"),
+    ];
+    let (_server, helix) = helix_mock(&users).await;
+    let r = router(pool.clone(), Some(helix));
+    for (_, login) in users {
+        let (status, value) = call(&r, suggest(login, DISCORD_A, &format!("new-{login}"))).await;
+        if login == "kandidat_alt" {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(value["error"], "identity_unresolved");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{login}: {value}");
+            assert_eq!(value["status"], "created", "{login}");
+        }
+    }
+    for (i, erwarteter_status) in [
+        "already_partner",
+        "blocked",
+        "blocked",
+        "blocked",
+        "blocked",
+        "blocked",
+        "already_known",
+        "already_known",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let result = tb_scout::community::vorschlag_einreichen(
+            &pool,
+            &VorschlagEingabe {
+                twitch_user_id: format!("{}", 9101 + i),
+                twitch_login: format!("altkonto_neu{i}"),
+                discord_id: DISCORD_B.into(),
+                grund: None,
+                idempotency_key: format!("old-id-{i}"),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.as_str(), erwarteter_status, "Guard {i}");
+    }
+    // Gleiche ID unter neuem Login übernimmt die ID-gebundene Entscheidung.
+    let (_server, helix) = helix_mock(&[("9102", "raid_neu"), ("9107", "kandidat_neu")]).await;
+    let r = router(pool.clone(), Some(helix));
+    assert_eq!(
+        call(&r, suggest("raid_neu", DISCORD_A, "rename-raid"))
+            .await
+            .1["status"],
+        "blocked"
+    );
+    assert_eq!(
+        call(&r, suggest("kandidat_neu", DISCORD_A, "rename-candidate"))
+            .await
+            .1["status"],
+        "already_known"
+    );
+    let candidate:(String,String,i32) = sqlx::query_as("SELECT twitch_user_id,status,suggestion_count FROM twitch_scout_candidates WHERE streamer_login='kandidat_alt'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(candidate, ("9107".into(), "approved".into(), 2));
+    // Ohne gespeicherte Konto-ID muss zuerst die zuständige Auflösung erfolgen.
+    sqlx::query(
+        "INSERT INTO twitch_scout_pitch_blacklist (streamer_login) VALUES ('unaufgeloest')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (_server, helix) = helix_mock(&[("8110", "unaufgeloest")]).await;
+    let r = router(pool, Some(helix));
+    assert_eq!(
+        call(&r, suggest("unaufgeloest", DISCORD_A, "missing-id"))
+            .await
+            .1["error"],
+        "identity_unresolved"
+    );
+}
+
+#[tokio::test]
+async fn outcome_cursor_hat_eindeutige_mikrosekunden_und_verliert_keine_zeile() {
+    let Some(pool) = migrated_pool("tb_scout_cs_cursor").await else {
+        return;
+    };
+    for i in 0..25 {
+        tb_scout::community::vorschlag_einreichen(
+            &pool,
+            &VorschlagEingabe {
+                twitch_user_id: format!("{}", 6000 + i),
+                twitch_login: format!("kanal{i}"),
+                discord_id: DISCORD_A.into(),
+                grund: None,
+                idempotency_key: format!("cursor-{i}"),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let stamps:(i64,i64)=sqlx::query_as("SELECT COUNT(*),COUNT(DISTINCT community_updated_at) FROM twitch_scout_candidates WHERE source='community'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(stamps, (25, 25));
+    let mut since = None;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let page = liste_ergebnisse(&pool, since, 7).await.unwrap();
+        for row in page.rows {
+            assert!(seen.insert(row.twitch_user_id));
+        }
+        since = page.next_updated_since.as_deref().map(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        });
+        if !page.has_more {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 25);
+}

@@ -691,3 +691,45 @@ async fn cursor_ist_stabil_und_eindeutig() {
     dedup.dedup();
     assert_eq!(dedup.len(), 25, "keine Zeile doppelt oder verloren");
 }
+
+#[tokio::test]
+async fn streamer_cursor_verliert_bei_gleichzeitigem_tageslauf_keine_zeile() {
+    let Some(pool) = db::migrated_pool("tb_cp_streamer_cursor").await else {
+        return;
+    };
+    for i in 0..25_i64 {
+        let id = format!("{}", 5000 + i);
+        let login = format!("kanal{i}");
+        sqlx::query("INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) VALUES ($1,$2,'active')")
+            .bind(&id).bind(&login).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_stream_sessions(id,streamer_login,started_at,twitch_user_id) VALUES ($1,$2,'2026-10-01 06:00Z',$3)")
+            .bind(i+10).bind(&login).bind(&id).execute(&pool).await.unwrap();
+        ticks(&pool, i + 10, "viewer", "1000", "2026-10-01T08:00:00Z", 12).await;
+    }
+    aggregate_day(&pool, day("2026-10-01"), ts("2026-10-01T20:00:00Z"))
+        .await
+        .unwrap();
+    let stamps: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*),COUNT(DISTINCT updated_at) FROM twitch_community_points_streamer_daily",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stamps, (25, 25));
+    let mut since = None;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let page = list_streamer_points(&pool, since, 7).await.unwrap();
+        for row in page.rows {
+            assert!(seen.insert(row.streamer_twitch_user_id));
+        }
+        since = page
+            .next_updated_since
+            .as_deref()
+            .map(|s| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc));
+        if !page.has_more {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 25);
+}

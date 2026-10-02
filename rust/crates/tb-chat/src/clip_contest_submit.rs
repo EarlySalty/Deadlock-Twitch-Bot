@@ -41,7 +41,7 @@ pub const MAX_TITLE_CHARS: usize = 200;
 pub const IDEMPOTENCY_PREFIX: &str = "twitch-clip-";
 
 pub const REPLY_ACCEPTED: &str = "Clip ist im Wochen-Contest, die Community stimmt im Discord ab.";
-pub const REPLY_ALREADY_IN: &str = "Der Clip ist schon im Wochen-Contest.";
+pub const REPLY_ALREADY_IN: &str = "Der Clip wurde bereits eingereicht und wird nicht erneut gesendet.";
 pub const REPLY_BROKER_UNAVAILABLE: &str =
     "Der Discord ist gerade nicht erreichbar. Versuch es später nochmal.";
 pub const REPLY_HELP: &str =

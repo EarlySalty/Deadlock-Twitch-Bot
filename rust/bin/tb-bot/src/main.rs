@@ -2153,6 +2153,11 @@ async fn main() {
         )),
     );
 
+    let clip_contest = chat_wiring::build_clip_contest(
+        pool.clone(),
+        helix.as_ref().clone(),
+        BrokerRelay::new(&settings.broker).ok(),
+    );
     let app = build_internal_router(
         pool,
         token,
@@ -2168,7 +2173,10 @@ async fn main() {
         scam_enforce,
         bulk_reauth,
         legacy_proxy,
-    );
+    )
+    .layer(axum::Extension(tb_internal_api::ClipContestExt(
+        clip_contest,
+    )));
 
     tracing::info!(%runtime_role, port, "Internal-API Runtime-Härtung vor Dienststart bestanden");
 

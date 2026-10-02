@@ -59,7 +59,7 @@ tb-raid       = { workspace = true }
 tb-scout      = { workspace = true }
 tb-social-media = { workspace = true }
 tb-transport-twitch = { workspace = true }
-# Clip-Contest-Einreichung: derselbe Master-Broker-Client wie im tb-bot.
+# Bestehende Discord-Integrationen des Dashboards.
 tb-transport-discord = { workspace = true }
 
 [dev-dependencies]

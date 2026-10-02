@@ -7,7 +7,7 @@
 -- status:
 --   pending    Einreichung läuft gerade (Claim vor dem Broker-Aufruf)
 --   accepted   Broker hat angenommen
---   duplicate  Clip steht schon im Wochenfenster (auch aus dem Discord)
+--   duplicate  Clip wurde bereits eingereicht (auch aus dem Discord)
 --   rejected   Broker hat abgelehnt (reason vom Broker)
 --   failed     Broker nicht erreichbar; ein neuer Versuch ist erlaubt
 CREATE TABLE IF NOT EXISTS twitch_clip_contest_forwards (
@@ -32,9 +32,9 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
         GRANT SELECT, INSERT, UPDATE ON twitch_clip_contest_forwards TO twitchbot;
     END IF;
-    -- Das Dashboard reicht über denselben Dienst ein (Knopf im Social-Studio).
+    -- Das Dashboard liest; Einreichungen schreibt die authentifizierte Bot-API.
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchdash') THEN
-        GRANT SELECT, INSERT, UPDATE ON twitch_clip_contest_forwards TO twitchdash;
+        GRANT SELECT ON twitch_clip_contest_forwards TO twitchdash;
     END IF;
 END
 $$;

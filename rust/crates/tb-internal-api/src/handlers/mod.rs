@@ -1,4 +1,5 @@
 pub mod chat_command;
+pub mod clip_contest;
 pub mod common;
 pub mod community_points;
 pub mod diagnose;

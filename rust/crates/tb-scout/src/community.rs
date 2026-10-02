@@ -207,6 +207,8 @@ pub struct VorschlagEingabe {
 pub enum VorschlagFehler {
     /// Schlüssel schon für einen anderen Kanal oder eine andere Person benutzt.
     Konflikt,
+    /// Ein Login lässt sich nicht eindeutig dem gespeicherten Konto zuordnen.
+    IdentitaetUngeklaert,
     Db(sqlx::Error),
 }
 
@@ -241,35 +243,31 @@ async fn naechster_stempel(
 async fn listenstand(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
-    login: &str,
 ) -> Result<Listenstand, sqlx::Error> {
     let (partner, gesperrt, kandidat, outreach_sperrfrist): (bool, bool, bool, bool) =
         sqlx::query_as(
             "SELECT
                EXISTS (SELECT 1 FROM twitch_partners p
-                        WHERE p.twitch_user_id = $1 OR LOWER(p.twitch_login) = $2),
+                        WHERE p.twitch_user_id = $1),
                EXISTS (SELECT 1 FROM twitch_raid_blacklist b
-                        WHERE (NULLIF(b.target_id, '') = $1) OR LOWER(b.target_login) = $2)
+                        WHERE b.target_id = $1)
                OR EXISTS (SELECT 1 FROM twitch_partner_signup_denylist d
-                        WHERE d.twitch_user_id = $1 OR LOWER(d.twitch_login) = $2)
+                        WHERE d.twitch_user_id = $1)
                OR EXISTS (SELECT 1 FROM twitch_scout_pitch_blacklist pb
-                        WHERE LOWER(pb.streamer_login) = $2
-                           OR NULLIF(pb.twitch_user_id, '') = $1)
+                        WHERE pb.twitch_user_id = $1)
                OR EXISTS (SELECT 1 FROM twitch_chatter_global_ban gb
-                        WHERE (NULLIF(gb.chatter_id, '') IS NOT NULL AND gb.chatter_id = $1)
-                           OR LOWER(gb.chatter_login) = $2)
+                        WHERE gb.chatter_id = $1)
                OR EXISTS (SELECT 1 FROM twitch_outbound_chat_suppressions sup
-                        WHERE (LOWER(sup.target_login) = $2 OR NULLIF(sup.target_id, '') = $1)
+                        WHERE sup.target_id = $1
                           AND sup.source = 'recruitment'
                           AND sup.suppressed_until > NOW()),
                EXISTS (SELECT 1 FROM twitch_scout_candidates c
-                        WHERE c.streamer_login = $2 OR c.twitch_user_id = $1),
+                        WHERE c.twitch_user_id = $1),
                EXISTS (SELECT 1 FROM twitch_partner_outreach o
-                        WHERE (LOWER(o.streamer_login) = $2 OR o.streamer_user_id = $1)
+                        WHERE o.streamer_user_id = $1
                           AND NULLIF(BTRIM(o.cooldown_until), '')::timestamptz > NOW())",
         )
         .bind(user_id)
-        .bind(login)
         .fetch_one(&mut **tx)
         .await?;
     Ok(Listenstand {
@@ -278,6 +276,45 @@ async fn listenstand(
         kandidat,
         outreach_sperrfrist,
     })
+}
+
+/// Liefert einen gespeicherten Vorschlag erst nach Prüfung seiner Anfragebindung.
+/// Eine neue Twitch-Auflösung wird beim Replay nicht benötigt.
+pub async fn vorschlag_wiederholen(
+    pool: &PgPool,
+    key: &str,
+    login: &str,
+    discord_id: &str,
+    grund: Option<&str>,
+) -> Result<Option<(VorschlagStatus, String)>, VorschlagFehler> {
+    let grund = normalisiere_grund(grund);
+    vorschlag_wiederholen_mit_executor(pool, key, login, discord_id, grund.as_deref()).await
+}
+
+async fn vorschlag_wiederholen_mit_executor<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    key: &str,
+    login: &str,
+    discord_id: &str,
+    grund: Option<&str>,
+) -> Result<Option<(VorschlagStatus, String)>, VorschlagFehler> {
+    let gespeichert: Option<(String, String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT twitch_user_id, twitch_login, suggested_by_discord_id, reason, result_status
+           FROM twitch_scout_community_suggestions WHERE idempotency_key = $1",
+    )
+    .bind(key)
+    .fetch_optional(executor)
+    .await?;
+    let Some((user_id, bisher_login, bisher_von, bisher_grund, status)) = gespeichert else {
+        return Ok(None);
+    };
+    if bisher_login != login || bisher_von != discord_id || bisher_grund.as_deref() != grund {
+        return Err(VorschlagFehler::Konflikt);
+    }
+    let status = VorschlagStatus::parse(&status).ok_or_else(|| {
+        VorschlagFehler::Db(sqlx::Error::Protocol("Unbekannter Vorschlagsstatus".into()))
+    })?;
+    Ok(Some((status, user_id)))
 }
 
 /// Legt einen Community-Vorschlag ab. Idempotent über `idempotency_key`:
@@ -293,21 +330,51 @@ pub async fn vorschlag_einreichen(
     let mut tx = pool.begin().await?;
     lock(&mut tx).await?;
 
-    let bisher: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT twitch_user_id, suggested_by_discord_id, result_status
-           FROM twitch_scout_community_suggestions WHERE idempotency_key = $1",
+    if let Some((status, bisher_id)) = vorschlag_wiederholen_mit_executor(
+        &mut *tx,
+        &eingabe.idempotency_key,
+        &login,
+        &eingabe.discord_id,
+        grund.as_deref(),
     )
-    .bind(&eingabe.idempotency_key)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some((bisher_id, bisher_von, status)) = bisher {
-        if bisher_id != user_id || bisher_von != eingabe.discord_id {
+    .await?
+    {
+        if bisher_id != user_id {
             return Err(VorschlagFehler::Konflikt);
         }
-        return Ok(VorschlagStatus::parse(&status).unwrap_or(VorschlagStatus::AlreadyKnown));
+        return Ok(status);
     }
 
-    let stand = listenstand(&mut tx, user_id, &login).await?;
+    // Historische Listen ohne Konto-ID brauchen zuerst eine eigene Auflösung.
+    // Der Vorschlagspfad verändert weder ihre Identität noch Entscheidungen.
+    let ungeklaert: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM (
+                 SELECT twitch_login AS login, twitch_user_id AS id FROM twitch_partners
+                 UNION ALL SELECT target_login, target_id FROM twitch_raid_blacklist
+                 UNION ALL SELECT twitch_login, twitch_user_id FROM twitch_partner_signup_denylist
+                 UNION ALL SELECT streamer_login, twitch_user_id FROM twitch_scout_pitch_blacklist
+                 UNION ALL SELECT chatter_login, chatter_id FROM twitch_chatter_global_ban
+                 UNION ALL SELECT target_login, target_id FROM twitch_outbound_chat_suppressions
+                     WHERE source = 'recruitment' AND suppressed_until > NOW()
+                 UNION ALL SELECT streamer_login, twitch_user_id FROM twitch_scout_candidates
+                 UNION ALL SELECT streamer_login, streamer_user_id FROM twitch_partner_outreach
+                     WHERE NULLIF(BTRIM(cooldown_until), '')::timestamptz > NOW()
+             ) ids WHERE LOWER(login) = $1 AND NULLIF(BTRIM(id), '') IS NULL
+         ) OR EXISTS (
+             SELECT 1 FROM twitch_scout_candidates
+              WHERE streamer_login = $1 AND twitch_user_id <> $2
+         )",
+    )
+    .bind(&login)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if ungeklaert {
+        return Err(VorschlagFehler::IdentitaetUngeklaert);
+    }
+
+    let stand = listenstand(&mut tx, user_id).await?;
     let status = status_aus_listen(stand);
 
     sqlx::query(
@@ -351,15 +418,14 @@ pub async fn vorschlag_einreichen(
                 "UPDATE twitch_scout_candidates c
                     SET suggestion_count = n.anzahl,
                         community_updated_at = CASE WHEN c.source = 'community'
-                                                    THEN $3 ELSE c.community_updated_at END
+                                                    THEN $2 ELSE c.community_updated_at END
                    FROM (SELECT COUNT(DISTINCT suggested_by_discord_id)::int AS anzahl
                            FROM twitch_scout_community_suggestions
-                          WHERE twitch_user_id = $2
+                          WHERE twitch_user_id = $1
                             AND result_status IN ('created', 'already_known')) n
-                  WHERE (c.streamer_login = $1 OR c.twitch_user_id = $2)
+                  WHERE c.twitch_user_id = $1
                     AND c.suggestion_count <> n.anzahl",
             )
-            .bind(&login)
             .bind(user_id)
             .bind(stempel)
             .execute(&mut *tx)

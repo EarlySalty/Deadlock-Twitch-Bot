@@ -27,7 +27,8 @@ use sqlx::PgPool;
 use tb_http_core::ApiError;
 use tb_scout::community::{
     gueltige_discord_id, gueltiger_idempotency_key, liste_ergebnisse, normalisiere_vorschlag_login,
-    vorschlag_einreichen, VorschlagEingabe, VorschlagFehler, VorschlagStatus,
+    vorschlag_einreichen, vorschlag_wiederholen, VorschlagEingabe, VorschlagFehler,
+    VorschlagStatus,
 };
 use tb_transport_twitch::HelixClient;
 
@@ -98,6 +99,19 @@ pub async fn suggestion_handler(
             "twitch_login, suggested_by_discord_id oder idempotency_key ungültig",
         );
     };
+    match vorschlag_wiederholen(
+        &pool,
+        &eingabe.idempotency_key,
+        &eingabe.login,
+        &eingabe.discord_id,
+        eingabe.reason.as_deref(),
+    )
+    .await
+    {
+        Ok(Some((status, user_id))) => return antwort(status, Some(&user_id)),
+        Ok(None) => {}
+        Err(error) => return vorschlag_fehler(error),
+    }
     let Some(helix) = helix.as_ref().as_ref() else {
         return fehler(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -118,7 +132,7 @@ pub async fn suggestion_handler(
             );
         }
     };
-    let Some((user_id, user_login)) =
+    let Some((user_id, _user_login)) =
         user.filter(|(id, login)| !id.is_empty() && !login.is_empty())
     else {
         return antwort(VorschlagStatus::NotFound, None);
@@ -127,7 +141,7 @@ pub async fn suggestion_handler(
         &pool,
         &VorschlagEingabe {
             twitch_user_id: user_id.clone(),
-            twitch_login: user_login,
+            twitch_login: eingabe.login,
             discord_id: eingabe.discord_id,
             grund: eingabe.reason,
             idempotency_key: eingabe.idempotency_key,
@@ -143,12 +157,23 @@ pub async fn suggestion_handler(
             );
             antwort(status, Some(&user_id))
         }
-        Err(VorschlagFehler::Konflikt) => fehler(
+        Err(error) => vorschlag_fehler(error),
+    }
+}
+
+fn vorschlag_fehler(error: VorschlagFehler) -> Response {
+    match error {
+        VorschlagFehler::Konflikt => fehler(
             StatusCode::CONFLICT,
             "idempotency_conflict",
             "idempotency_key wurde schon für einen anderen Vorschlag benutzt",
         ),
-        Err(VorschlagFehler::Db(error)) => {
+        VorschlagFehler::IdentitaetUngeklaert => fehler(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "identity_unresolved",
+            "Die gespeicherte Kanalidentität muss zuerst geprüft werden",
+        ),
+        VorschlagFehler::Db(error) => {
             tracing::error!(%error, "Community-Vorschlag konnte nicht gespeichert werden");
             ApiError::internal().into_response()
         }

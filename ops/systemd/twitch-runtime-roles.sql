@@ -414,3 +414,26 @@ BEGIN
     END IF;
 END
 $raid_ad_vorlauf_roles$;
+
+-- Communitywerte schreibt die Bot-API. Das Dashboard liest die Tageswerte,
+-- Vorschläge und Einreichungsstände auch nach erneutem Aufbau der Rollenmatrix.
+DO $community_leserechte$
+DECLARE
+    community_table text;
+BEGIN
+    FOREACH community_table IN ARRAY ARRAY[
+        'twitch_community_points_viewer_daily',
+        'twitch_community_points_streamer_daily',
+        'twitch_clip_contest_forwards',
+        'twitch_scout_community_suggestions'
+    ] LOOP
+        IF to_regclass(format('public.%I', community_table)) IS NOT NULL THEN
+            EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.%I FROM twitchdash', community_table);
+            EXECUTE format('GRANT SELECT ON TABLE public.%I TO twitchdash', community_table);
+        END IF;
+    END LOOP;
+    IF to_regclass('public.twitch_scout_community_suggestions_id_seq') IS NOT NULL THEN
+        REVOKE USAGE, UPDATE ON SEQUENCE public.twitch_scout_community_suggestions_id_seq FROM twitchdash;
+    END IF;
+END
+$community_leserechte$;

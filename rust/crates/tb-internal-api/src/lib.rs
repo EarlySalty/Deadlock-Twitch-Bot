@@ -21,6 +21,7 @@ use tb_monitoring::EventSubDispatcher;
 use tb_transport_twitch::HelixClient;
 use tower_http::trace::TraceLayer;
 
+pub use handlers::clip_contest::ClipContestExt;
 pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
 pub use handlers::patch_announcement::{
@@ -70,10 +71,11 @@ pub fn build_internal_router(
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
-        chat_command, community_points, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
-        partner_signup_block, python_stubs, raid, raid_blacklist, raid_oauth as oauth, reauth_all,
-        scam_guard, scout_community, self_explainer_log, session_detail, spam_learning, stats_native,
-        streamer_analytics_native, streamer_link, streamers, telemetry_routes,
+        chat_command, community_points, diagnose, discord_invite, eventsub, global_ban, healthz,
+        market_share, partner_signup_block, python_stubs, raid, raid_blacklist,
+        raid_oauth as oauth, reauth_all, scam_guard, scout_community, self_explainer_log,
+        session_detail, spam_learning, stats_native, streamer_analytics_native, streamer_link,
+        streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -95,6 +97,10 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/streamer-invites"),
             get(discord_invite::list_all_handler),
+        )
+        .route(
+            &format!("{base}/clips/contest/submit"),
+            post(handlers::clip_contest::submit_handler),
         )
         // Community-Punkte (Paket B der Community-Streamer-Brücke): reine
         // Lese-Endpunkte für den Sync in Deadlock-Bots, Cursor `updated_since`.
