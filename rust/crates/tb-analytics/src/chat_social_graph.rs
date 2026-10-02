@@ -94,6 +94,7 @@ pub async fn load_chat_social_graph_payload(
             .as_i64()
             .unwrap_or(0)
             .cmp(&a["score"].as_i64().unwrap_or(0))
+            .then_with(|| a["login"].as_str().cmp(&b["login"].as_str()))
     });
     hubs.truncate(20);
 
@@ -107,6 +108,8 @@ pub async fn load_chat_social_graph_payload(
             .as_i64()
             .unwrap_or(0)
             .cmp(&a["count"].as_i64().unwrap_or(0))
+            .then_with(|| a["from"].as_str().cmp(&b["from"].as_str()))
+            .then_with(|| a["to"].as_str().cmp(&b["to"].as_str()))
     });
     pairs.truncate(20);
 
@@ -230,5 +233,28 @@ mod tests {
         assert_eq!(v["mentionDistribution"]["mentionedOnce"], 2);
         assert_eq!(v["mentionDistribution"]["mentioned2to5"], 1);
         assert_eq!(v["rawChatStatus"]["available"], true);
+    }
+
+    #[tokio::test]
+    async fn gleiche_scores_ergeben_stabile_top_zwanzig() {
+        let Some(pool) = make_pool("t_csg_equal_scores").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW())")
+            .execute(&pool).await.unwrap();
+        for nummer in (0..25).rev() {
+            let login = format!("user{nummer:02}");
+            sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, message_ts) VALUES (1,'nani',$1,'@ziel',NOW())")
+                .bind(login).execute(&pool).await.unwrap();
+        }
+        let v = load_chat_social_graph_payload(&pool, "nani", 30).await.unwrap();
+        assert_eq!(v["hubs"].as_array().unwrap().len(), 20);
+        assert_eq!(v["hubs"][0]["login"], "ziel");
+        for nummer in 0..19 {
+            assert_eq!(v["hubs"][nummer + 1]["login"], format!("user{nummer:02}"));
+        }
+        for nummer in 0..20 {
+            assert_eq!(v["topPairs"][nummer]["from"], format!("user{nummer:02}"));
+        }
     }
 }

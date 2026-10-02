@@ -35,7 +35,7 @@ pub async fn error_log_entries(
 ) -> Result<ErrorLogPage, sqlx::Error> {
     let page_size = page_size.clamp(1, 100);
     let page = page.max(1);
-    let offset = (page - 1) * page_size;
+    let offset = (page - 1).saturating_mul(page_size);
 
     let total_result: Result<(i64,), sqlx::Error> =
         sqlx::query_as("SELECT COUNT(*) FROM twitch_admin_error_log")
@@ -53,9 +53,9 @@ pub async fn error_log_entries(
         Err(e) => return Err(e),
     };
 
-    if total == 0 {
+    if offset >= total {
         return Ok(ErrorLogPage {
-            total: 0,
+            total,
             entries: vec![],
         });
     }
@@ -203,5 +203,9 @@ mod tests {
         let page2 = error_log_entries(&pool, 2, 3).await.unwrap();
         assert_eq!(page2.total, 5);
         assert_eq!(page2.entries.len(), 2);
+
+        let letzte = error_log_entries(&pool, i64::MAX, 100).await.unwrap();
+        assert_eq!(letzte.total, 5);
+        assert!(letzte.entries.is_empty());
     }
 }
