@@ -126,7 +126,7 @@ export RICKY_SHADOW_REVIEW_SEGMENT_SECONDS="${RICKY_SHADOW_REVIEW_SEGMENT_SECOND
 # speist Stil und Reaktionsprofil daraus. Transkribiert wird LOKAL gegen
 # ops/stt-server (Default-Endpunkt 127.0.0.1:8791); es geht kein Stream-Audio
 # an einen Fremdanbieter. Sichtung: ops/learn-samples.sh
-export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-1}"
+export ENGAGEMENT_LEARN_ENABLED="${ENGAGEMENT_LEARN_ENABLED:-0}"
 # Kontrollierter Live-Smalltalk-Test mit dem separat per OAuth verbundenen
 # Engagement-Account. Das Wiring startet im Live-Modus genau EINE Session pro
 # Bot-Prozess; Kandidaten muessen live Deadlock spielen, Nicht-Partner sein und
