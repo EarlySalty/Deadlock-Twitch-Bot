@@ -114,9 +114,9 @@ async fn producer_prueft_auth_identitaet_helix_und_dauerhaften_drift_replay() {
     };
     sqlx::raw_sql("INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) VALUES ('456','authentischer_partner','active'),('457','inaktiv','archived');
         INSERT INTO twitch_clips_social_media(id,clip_id,clip_url,streamer_login,twitch_user_id,created_at) VALUES
-        (1,'OwnClip','https://clips.twitch.tv/OwnClip','falscher_client_login','456',NOW()::text),
-        (2,'WrongHelix','https://clips.twitch.tv/WrongHelix','falscher_client_login','456',NOW()::text),
-        (3,'InactiveClip','https://clips.twitch.tv/InactiveClip','inaktiv','457',NOW()::text);")
+        (1,'OwnClip','https://clips.twitch.tv/OwnClip','falscher_client_login','456',NOW()),
+        (2,'WrongHelix','https://clips.twitch.tv/WrongHelix','falscher_client_login','456',NOW()),
+        (3,'InactiveClip','https://clips.twitch.tv/InactiveClip','inaktiv','457',NOW());")
         .execute(&pool).await.unwrap();
     let broker = Arc::new(Broker(AtomicUsize::new(0)));
     let submitter = Arc::new(ClipContestSubmitter::new(
