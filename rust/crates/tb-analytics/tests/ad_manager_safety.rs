@@ -30,6 +30,7 @@ fn input() -> DecisionInput {
         match_ended_at: None,
         last_raid_at: None,
         last_raider: None,
+        announced_raid_until: None,
         last_first_chatter_at: None,
         last_first_chatter: None,
         retry_after_seconds: 480,

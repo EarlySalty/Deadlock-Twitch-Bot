@@ -10,6 +10,7 @@ use sqlx::{PgPool, Row};
 use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule};
 
 mod steam;
+pub mod raid_vorlauf;
 
 pub const READ_SCOPE: &str = "channel:read:ads";
 pub const SNOOZE_SCOPE: &str = "channel:manage:ads";
@@ -304,6 +305,7 @@ pub struct DecisionInput {
     pub match_ended_at: Option<DateTime<Utc>>,
     pub last_raid_at: Option<DateTime<Utc>>,
     pub last_raider: Option<String>,
+    pub announced_raid_until: Option<DateTime<Utc>>,
     pub last_first_chatter_at: Option<DateTime<Utc>>,
     pub last_first_chatter: Option<String>,
     pub retry_after_seconds: i32,
@@ -380,6 +382,9 @@ fn chat_is_quiet(input: &DecisionInput) -> bool {
 
 fn active_lock(input: &DecisionInput) -> Option<(&'static str, Option<String>)> {
     let now = input.now;
+    if input.announced_raid_until.is_some_and(|until| until > now) {
+        return Some(("announced_raid", None));
+    }
     match input.steam_match_state.as_ref() {
         Some(state) if state.observed_at <= now + Duration::seconds(30)
             && now.signed_duration_since(state.observed_at) <= Duration::seconds(MATCH_STATUS_FRESH_SECS) => {
@@ -519,7 +524,7 @@ pub fn decide(input: &DecisionInput) -> Decision {
     if twitch_ad_imminent {
         return match lock {
             Some((reason, detail)) => {
-                let valuable = matches!(reason, "in_match" | "match_status_unknown" | "recent_raid");
+                let valuable = matches!(reason, "in_match" | "match_status_unknown" | "recent_raid" | "announced_raid");
                 let dense = input.plan_fit == "tight" || input.plan_fit == "unprotectable";
                 if input.snooze_count > 0 && (valuable || !dense) {
                     Decision {
@@ -843,17 +848,42 @@ pub enum EnqueueOutcome {
 pub struct AdManagerStore {
     pool: PgPool,
     steam: steam::Client,
+    raid_vorlauf: Option<std::sync::Arc<raid_vorlauf::RaidAdVorlauf>>,
 }
 
 impl AdManagerStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, steam: steam::Client::new(None) }
+        Self { pool, steam: steam::Client::new(None), raid_vorlauf: None }
     }
 
     /// Steam-Präsenz benötigt denselben internen Token wie die Runtime-API.
     /// Ohne explizite Übergabe bleibt die Abfrage geschlossen.
     pub fn with_steam_token(pool: PgPool, token: String) -> Self {
-        Self { pool, steam: steam::Client::new(Some(token)) }
+        Self { pool, steam: steam::Client::new(Some(token)), raid_vorlauf: None }
+    }
+    pub fn with_raid_vorlauf(mut self, vorlauf: std::sync::Arc<raid_vorlauf::RaidAdVorlauf>) -> Self {
+        self.raid_vorlauf = Some(vorlauf);
+        self
+    }
+
+    pub async fn announced_raid_until(&self, uid: &str, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+        match &self.raid_vorlauf {
+            Some(vorlauf) => match vorlauf.active_until(uid, now).await {
+                Ok(until) => Ok(until),
+                Err(_) => {
+                    vorlauf.warn_limited(uid, "Dauerhafter Raid-Vorlauf ist nicht lesbar");
+                    Ok(vorlauf.local_until(uid, now))
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
+    pub fn local_announced_raid_until(&self, uid: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.raid_vorlauf.as_ref().and_then(|vorlauf| vorlauf.local_until(uid, now))
+    }
+    pub fn warn_raid_protection(&self, uid: &str, reason: &'static str) {
+        if let Some(vorlauf) = &self.raid_vorlauf { vorlauf.warn_limited(uid, reason); }
     }
     pub fn pool(&self) -> &PgPool {
         &self.pool

@@ -14,6 +14,44 @@ use tb_transport_twitch::{streams::normalize_ad_time, AdSchedule, HelixClient, H
 
 use crate::task_supervisor::TaskSupervisor;
 
+use tb_analytics::ad_manager::raid_vorlauf::{Attempt, RaidAdVorlauf};
+
+pub struct RaidAdProtectionAdapter(pub Arc<RaidAdVorlauf>);
+
+impl RaidAdProtectionAdapter {
+    pub(crate) fn cancel_source_before(&self, from_id: String, cutoff: DateTime<Utc>) {
+        let vorlauf = self.0.clone();
+        tokio::spawn(async move {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), vorlauf.cancel_source_before(&from_id, cutoff)).await {
+                Ok(Ok(())) => {}
+                _ => vorlauf.warn_limited(&from_id, "Bestätigter Raid-Abbruch konnte nicht dauerhaft gespeichert werden"),
+            }
+        });
+    }
+
+    pub(crate) fn persist(&self, attempt: Attempt) {
+        let vorlauf = self.0.clone();
+        tokio::spawn(async move {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), vorlauf.persist(&attempt)).await {
+                Ok(Ok(())) => {}
+                _ => vorlauf.warn_limited(&attempt.to_id, "Vorlauf konnte nicht dauerhaft gespeichert werden"),
+            }
+        });
+    }
+}
+
+impl tb_raid::raid_executor::RaidAdProtection for RaidAdProtectionAdapter {
+    fn announce(&self, attempt_id: &str, from_id: &str, to_id: &str) {
+        self.persist(self.0.announce(attempt_id, from_id, to_id, Utc::now()));
+    }
+    fn complete(&self, attempt_id: &str, started: Option<bool>) {
+        let Some(started) = started else { return; };
+        if let Some(attempt) = self.0.complete(attempt_id, started, Utc::now()) {
+            self.persist(attempt);
+        }
+    }
+}
+
 pub fn spawn(
     supervisor: &TaskSupervisor,
     pool: sqlx::PgPool,
@@ -22,13 +60,18 @@ pub fn spawn(
     auth: RaidAuthStore,
     chat_api: Option<Arc<dyn ChatApi>>,
     internal_token: String,
+    raid_vorlauf: Arc<RaidAdVorlauf>,
 ) {
     let cleanup_store = AdManagerStore::new(pool.clone());
+    let cleanup_vorlauf = raid_vorlauf.clone();
     supervisor.spawn("twitch_ad_manager_retention", async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
+            if cleanup_vorlauf.cleanup().await.is_err() {
+                cleanup_vorlauf.warn_limited("", "Abgelaufener Raid-Vorlauf konnte nicht bereinigt werden");
+            }
             match cleanup_store.cleanup_completed_actions().await {
                 Ok(deleted) if deleted > 0 => {
                     tracing::info!(deleted, "Werbemanager: alte Aktionshistorie bereinigt")
@@ -53,11 +96,14 @@ pub fn spawn(
         }
     });
     supervisor.spawn("twitch_ad_manager", async move {
-        let store = AdManagerStore::with_steam_token(pool, internal_token);
+        let store = AdManagerStore::with_steam_token(pool, internal_token).with_raid_vorlauf(raid_vorlauf.clone());
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(25));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = raid_vorlauf.wake.notified() => {}
+            }
             let channels = match store.list_channels().await {
                 Ok(value) => value,
                 Err(error) => { tracing::error!(%error, "Werbemanager: Kanäle konnten nicht geladen werden"); continue; }
@@ -147,6 +193,12 @@ async fn process_channel(
         return Ok(RunHealth::Healthy);
     }
     let scopes = auth.get_scopes(&channel.twitch_user_id).await?;
+    let announced = if channel.settings.enabled {
+        store.announced_raid_until(&channel.twitch_user_id, now).await?.is_some()
+    } else { false };
+    if announced && (!has(&scopes, READ_SCOPE) || !has(&scopes, SNOOZE_SCOPE)) {
+        store.warn_raid_protection(&channel.twitch_user_id, "Twitch-Rechte für das Verschieben der Werbung fehlen");
+    }
     if !has(&scopes, READ_SCOPE) {
         store
             .upsert_state(
@@ -173,6 +225,9 @@ async fn process_channel(
         .get_valid_token_unrestricted(&channel.twitch_user_id, now)
         .await?
     else {
+        if announced {
+            store.warn_raid_protection(&channel.twitch_user_id, "Twitch-Verbindung für den Werbeschutz fehlt");
+        }
         store
             .upsert_state(
                 &channel.twitch_user_id,
@@ -198,6 +253,9 @@ async fn process_channel(
     let schedule = helix
         .get_ad_schedule(&channel.twitch_user_id, &token)
         .await?;
+    if announced && schedule.as_ref().is_some_and(|value| value.snooze_count <= 0) {
+        store.warn_raid_protection(&channel.twitch_user_id, "Keine Twitch-Werbepause zum Verschieben verfügbar");
+    }
     if let Some(current) = schedule.as_ref() {
         validate_schedule_times(current)?;
         reconcile_unknown(store, &channel.twitch_user_id, current).await?;
@@ -332,6 +390,7 @@ async fn process_channel(
                 match_ended_at: timing.match_ended_at,
                 last_raid_at,
                 last_raider,
+                announced_raid_until: store.announced_raid_until(&channel.twitch_user_id, now).await?,
                 last_first_chatter_at,
                 last_first_chatter,
                 retry_after_seconds,
@@ -505,6 +564,7 @@ async fn process_channel(
             &scopes,
             schedule.as_ref(),
             now,
+            channel.settings.enabled,
             action,
         )
         .await?;
@@ -519,6 +579,7 @@ async fn execute(
     scopes: &[String],
     schedule: Option<&AdSchedule>,
     now: DateTime<Utc>,
+    raid_protection_enabled: bool,
     action: QueuedAction,
 ) -> Result<(), WorkerError> {
     let Some(schedule) = schedule else {
@@ -590,10 +651,24 @@ async fn execute(
             }
         }
     }
+    if raid_protection_enabled && action.action == ActionKind::Commercial
+        && store.announced_raid_until(&action.twitch_user_id, Utc::now()).await?.is_some()
+    {
+        store.finish_action(&action, "cancelled", Some("Angekündigter Raid: Werbung wird zurückgestellt."), None).await?;
+        return Ok(());
+    }
     // Ab hier darf ein Prozessabbruch niemals zum zweiten POST führen.
     store
         .mark_unknown_before_send(&action, schedule, now)
         .await?;
+    // Der Vorlauf kann während des vorherigen DB-Writes beginnen. Diese letzte
+    // Prüfung ist lokal und hält niemals einen Lock über einen Twitch-Aufruf.
+    if raid_protection_enabled && action.action == ActionKind::Commercial
+        && store.local_announced_raid_until(&action.twitch_user_id, Utc::now()).is_some()
+    {
+        store.finish_action(&action, "cancelled", Some("Angekündigter Raid: Werbung wird zurückgestellt."), None).await?;
+        return Ok(());
+    }
     let result = match action.action {
         ActionKind::Snooze => helix
             .snooze_next_ad(&action.twitch_user_id, token)
@@ -621,6 +696,11 @@ async fn execute(
                 (outcome.message, retry_after)
             }),
     };
+    if result.is_err() && raid_protection_enabled && action.action == ActionKind::Snooze
+        && store.announced_raid_until(&action.twitch_user_id, Utc::now()).await?.is_some()
+    {
+        store.warn_raid_protection(&action.twitch_user_id, "Twitch konnte die Werbung vor dem Raid nicht verschieben");
+    }
     match result {
         Ok((detail, retry_after)) => {
             store

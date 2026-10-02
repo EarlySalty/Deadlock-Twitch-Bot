@@ -357,3 +357,21 @@ BEGIN
     END IF;
 END
 $watchdog_roles$;
+
+-- Der Raid-Werbevorlauf gehört ausschließlich zum Bot-Schreibpfad.
+DO $raid_ad_vorlauf_roles$
+DECLARE role_name text;
+BEGIN
+    IF to_regclass('public.twitch_raid_ad_vorlauf') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.twitch_raid_ad_vorlauf FROM PUBLIC;
+        FOREACH role_name IN ARRAY ARRAY['twitchdash','twitchlegacy','twitchcontest','twitchcollector'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+                EXECUTE format('REVOKE ALL ON TABLE public.twitch_raid_ad_vorlauf FROM %I', role_name);
+            END IF;
+        END LOOP;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+            GRANT SELECT, INSERT, UPDATE, DELETE ON public.twitch_raid_ad_vorlauf TO twitchbot;
+        END IF;
+    END IF;
+END
+$raid_ad_vorlauf_roles$;

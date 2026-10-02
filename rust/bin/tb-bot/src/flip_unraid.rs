@@ -36,6 +36,7 @@ pub trait SourceRaidCanceller: Send + Sync {
 pub struct HelixSourceRaidCanceller {
     token_provider: Arc<TokenProvider>,
     helix: HelixClient,
+    ad_vorlauf: Option<Arc<tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf>>,
 }
 
 impl HelixSourceRaidCanceller {
@@ -43,8 +44,15 @@ impl HelixSourceRaidCanceller {
         Self {
             token_provider,
             helix,
+            ad_vorlauf: None,
         }
     }
+
+    pub fn with_ad_vorlauf(mut self, registry: Arc<tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf>) -> Self {
+        self.ad_vorlauf = Some(registry);
+        self
+    }
+
 }
 
 #[async_trait::async_trait]
@@ -65,8 +73,23 @@ impl SourceRaidCanceller for HelixSourceRaidCanceller {
                 return false;
             }
         };
+        let cancel_cutoff = Utc::now();
+        let attempts = self.ad_vorlauf.as_ref()
+            .map(|registry| registry.source_attempt_ids(source_id, cancel_cutoff))
+            .unwrap_or_default();
         match self.helix.cancel_raid(source_id, &token).await {
-            Ok(Ok(())) => true,
+            Ok(Ok(())) => {
+                if let Some(registry) = &self.ad_vorlauf {
+                    crate::ad_manager_wiring::RaidAdProtectionAdapter(registry.clone())
+                        .cancel_source_before(source_id.to_owned(), cancel_cutoff);
+                    for id in attempts {
+                        if let Some(attempt) = registry.complete(&id, false, Utc::now()) {
+                            crate::ad_manager_wiring::RaidAdProtectionAdapter(registry.clone()).persist(attempt);
+                        }
+                    }
+                }
+                true
+            },
             Ok(Err(api_error)) => {
                 tracing::warn!(source_id, %api_error, "Auto-Unraid abgelehnt");
                 false

@@ -22,6 +22,26 @@ pub trait RaidApi: Send + Sync {
         to_broadcaster_id: &str,
         user_token: &str,
     ) -> Result<(), String>;
+
+    async fn start_raid_classified(
+        &self, from_id: &str, to_id: &str, token: &str,
+    ) -> Result<(), RaidStartError> {
+        self.start_raid(from_id, to_id, token).await.map_err(|message| RaidStartError {
+            message, definitive_rejection: false,
+        })
+    }
+}
+
+pub struct RaidStartError {
+    pub message: String,
+    pub definitive_rejection: bool,
+}
+
+/// Best-effort-Vorlauf ohne I/O im Raidpfad. Implementierungen dürfen hier
+/// niemals auf Datenbank, Werbe-API oder einen Worker warten.
+pub trait RaidAdProtection: Send + Sync {
+    fn announce(&self, attempt_id: &str, from_id: &str, to_id: &str);
+    fn complete(&self, attempt_id: &str, started: Option<bool>);
 }
 
 /// Eingabe für einen Raid-Versuch.
@@ -50,6 +70,7 @@ pub struct RaidExecutor {
     token_provider: Arc<TokenProvider>,
     history: RaidHistoryStore,
     hard_bans: RaidBlacklistStore,
+    ad_protection: Option<Arc<dyn RaidAdProtection>>,
 }
 
 impl RaidExecutor {
@@ -64,7 +85,13 @@ impl RaidExecutor {
             token_provider,
             history,
             hard_bans,
+            ad_protection: None,
         }
+    }
+
+    pub fn with_ad_protection(mut self, protection: Arc<dyn RaidAdProtection>) -> Self {
+        self.ad_protection = Some(protection);
+        self
     }
 
     /// Führt einen Raid aus. Schreibt in JEDEM Pfad (kein Token / API-Fehler /
@@ -115,11 +142,24 @@ impl RaidExecutor {
             return Ok(RaidOutcome::Failed(error));
         };
 
-        match self
+        let attempt_id = tb_crypto::random_urlsafe_token(16);
+        if let Some(protection) = &self.ad_protection {
+            protection.announce(&attempt_id, &req.from_broadcaster_id, &req.to_broadcaster_id);
+        }
+        let result = self
             .api
-            .start_raid(&req.from_broadcaster_id, &req.to_broadcaster_id, &token)
-            .await
-        {
+            .start_raid_classified(&req.from_broadcaster_id, &req.to_broadcaster_id, &token)
+            .await;
+        if let Some(protection) = &self.ad_protection {
+            let started = match &result {
+                Ok(()) => Some(true),
+                Err(error) if error.definitive_rejection => Some(false),
+                Err(_) => None,
+            };
+            protection.complete(&attempt_id, started);
+        }
+        let result = result.map_err(|error| error.message);
+        match result {
             Ok(()) => {
                 let raid_history_id = match self.record(req, true, None).await {
                     Ok(id) => Some(id),
@@ -163,5 +203,25 @@ impl RaidExecutor {
                 candidates_count: req.candidates_count,
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod protection_tests {
+    use super::*;
+
+    struct UnknownApi;
+    #[async_trait::async_trait]
+    impl RaidApi for UnknownApi {
+        async fn start_raid(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Err("Timeout nach möglichem Versand".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn bestehende_portimplementierung_behaelt_unbekannten_ausgang() {
+        let error = UnknownApi.start_raid_classified("1", "2", "test").await.err().unwrap();
+        assert!(!error.definitive_rejection);
+        assert_eq!(error.message, "Timeout nach möglichem Versand");
     }
 }

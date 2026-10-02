@@ -722,6 +722,7 @@ pub struct BlacklistRaidGuard {
     blacklist: RaidBlacklistStore,
     token_provider: Arc<TokenProvider>,
     helix: HelixClient,
+    ad_vorlauf: Option<Arc<tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf>>,
 }
 
 impl BlacklistRaidGuard {
@@ -734,8 +735,15 @@ impl BlacklistRaidGuard {
             blacklist,
             token_provider,
             helix,
+            ad_vorlauf: None,
         }
     }
+
+    pub fn with_ad_vorlauf(mut self, registry: Arc<tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf>) -> Self {
+        self.ad_vorlauf = Some(registry);
+        self
+    }
+
 
     pub async fn handle(&self, broadcaster_id: &str, login: &str, event: &Value) {
         if !event_str(event, "action").eq_ignore_ascii_case("raid") {
@@ -803,8 +811,23 @@ impl BlacklistRaidGuard {
                 return false;
             }
         };
+        let cancel_cutoff = Utc::now();
+        let attempts = self.ad_vorlauf.as_ref()
+            .map(|registry| registry.source_attempt_ids(broadcaster_id, cancel_cutoff))
+            .unwrap_or_default();
         match self.helix.cancel_raid(broadcaster_id, &token).await {
-            Ok(Ok(())) => true,
+            Ok(Ok(())) => {
+                if let Some(registry) = &self.ad_vorlauf {
+                    crate::ad_manager_wiring::RaidAdProtectionAdapter(registry.clone())
+                        .cancel_source_before(broadcaster_id.to_owned(), cancel_cutoff);
+                    for id in attempts {
+                        if let Some(attempt) = registry.complete(&id, false, Utc::now()) {
+                            crate::ad_manager_wiring::RaidAdProtectionAdapter(registry.clone()).persist(attempt);
+                        }
+                    }
+                }
+                true
+            },
             Ok(Err(api_error)) => {
                 tracing::warn!(broadcaster_id, %api_error, "Cancel-Raid abgelehnt");
                 false

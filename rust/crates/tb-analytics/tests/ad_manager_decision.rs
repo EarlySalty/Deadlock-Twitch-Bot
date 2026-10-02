@@ -51,6 +51,7 @@ fn base(strategy: Strategy) -> DecisionInput {
         match_ended_at: None,
         last_raid_at: None,
         last_raider: None,
+        announced_raid_until: None,
         last_first_chatter_at: None,
         last_first_chatter: None,
         retry_after_seconds: 480,
@@ -595,4 +596,21 @@ fn kein_hinweis_direkt_nach_matchende() {
     input.match_ended_at = Some(now() - Duration::seconds(30));
     let decision = decide(&input);
     assert_eq!(ad_hint(&input, &decision, None, HINT_WINDOW_SECS), None);
+}
+
+#[test]
+fn angekuendigter_raid_sperrt_eigene_werbung_und_verschiebt_twitch_pause() {
+    let mut input = base(Strategy::Smart);
+    input.announced_raid_until = Some(now() + Duration::minutes(2));
+    assert_eq!(decide(&input).action, DecisionAction::Postpone);
+    assert_eq!(decide(&input).reason, "announced_raid");
+    input.next_ad_at = Some(now() + Duration::seconds(25));
+    assert_eq!(decide(&input).action, DecisionAction::Snooze);
+    input.snooze_count = 0;
+    assert_eq!(decide(&input).action, DecisionAction::Postpone);
+    input.announced_raid_until = Some(now());
+    assert_ne!(decide(&input).reason, "announced_raid");
+    input.announced_raid_until = Some(now() + Duration::minutes(2));
+    input.settings.enabled = false;
+    assert_eq!(decide(&input).action, DecisionAction::None);
 }
