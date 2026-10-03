@@ -773,6 +773,7 @@ async fn historische_rohänderung_bleibt_bei_punktedeckel_hinter_cursor_sichtbar
         .unwrap();
     let before = list_viewer_points(pool, None, 100).await.unwrap();
     assert_eq!(before.rows[0].points_watch, 72);
+    assert_eq!(before.rows[0].watch_minutes, 360);
     let since = ts(before.next_updated_since.as_deref().unwrap());
     ticks(pool, 1, "viewer", "111", "2026-10-01T14:00:00Z", 10).await;
     let days = run_aggregation(pool, ts("2026-10-03T20:00:00Z"), false)
@@ -785,7 +786,7 @@ async fn historische_rohänderung_bleibt_bei_punktedeckel_hinter_cursor_sichtbar
     let after = list_viewer_points(pool, Some(since), 100).await.unwrap();
     assert_eq!(after.rows.len(), 1);
     assert_eq!(after.rows[0].points_watch, 72);
-    assert_eq!(after.rows[0].watch_minutes, before.rows[0].watch_minutes);
+    assert_eq!(after.rows[0].watch_minutes, 365);
     let new = viewer_activity_since(
         pool,
         "111",
@@ -818,6 +819,250 @@ async fn historische_rohänderung_bleibt_bei_punktedeckel_hinter_cursor_sichtbar
     .unwrap()
     .rows
     .is_empty());
+}
+
+#[tokio::test]
+async fn historische_mitternachtsänderungen_korrigieren_chat_und_präsenz_im_folgetag() {
+    let db = db::migrated_pool("tb_cp_dirty_midnight").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    sqlx::query("UPDATE twitch_stream_sessions SET ended_at='2026-10-01 22:01:15Z' WHERE id=1")
+        .execute(pool)
+        .await
+        .unwrap();
+    ticks(pool, 1, "viewer", "111", "2026-10-01T22:00:10Z", 1).await;
+    ticks(pool, 1, "zweite_person", "222", "2026-10-01T21:59:30Z", 1).await;
+    ticks(pool, 1, "zweite_person", "222", "2026-10-01T22:00:45Z", 1).await;
+    sqlx::raw_sql("INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,content) VALUES
+        (1,'alpha','viewer','111','2026-10-01 21:59:30Z','Nachricht über die Tagesgrenze hinweg'),
+        (1,'alpha','viewer','111','2026-10-01 22:01:00Z','Nachricht über die Tagesgrenze hinweg');")
+        .execute(pool).await.unwrap();
+    let previous = day("2026-10-01");
+    let following = day("2026-10-02");
+    let now = ts("2026-10-04T12:00:00Z");
+    aggregate_day(pool, previous, now).await.unwrap();
+    aggregate_day(pool, following, now).await.unwrap();
+    let before = list_viewer_points(pool, None, 100).await.unwrap();
+    let get = |rows: &[ViewerPointsRow], id: &str| {
+        rows.iter()
+            .find(|row| row.day == "2026-10-02" && row.twitch_user_id == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(get(&before.rows, "111").chat_messages, 0);
+    assert_eq!(get(&before.rows, "222").watch_minutes, 1);
+    let consent = berlin_day_bounds(following).0;
+    assert_eq!(
+        viewer_activity_since(pool, "222", following, consent, now)
+            .await
+            .unwrap()
+            .rows[0]
+            .watch_minutes,
+        0,
+        "Alte Intervalle vor Consent dürfen nicht erneut zählen"
+    );
+    let mut cursor = ts(before.next_updated_since.as_deref().unwrap());
+
+    // Erst löschen, dann erneut einfügen und schließlich den Zeitstempel verschieben.
+    for operation in ["delete", "insert", "update"] {
+        match operation {
+            "delete" => {
+                sqlx::raw_sql(
+                    "DELETE FROM twitch_chat_messages WHERE message_ts='2026-10-01 21:59:30Z';
+                    DELETE FROM twitch_viewer_presence_ticks WHERE tick_at='2026-10-01 21:59:30Z';",
+                )
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+            "insert" => {
+                sqlx::query("INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,content)
+                    VALUES (1,'alpha','viewer','111','2026-10-01 21:59:30Z','Nachricht über die Tagesgrenze hinweg')")
+                    .execute(pool).await.unwrap();
+                ticks(pool, 1, "zweite_person", "222", "2026-10-01T21:59:30Z", 1).await;
+            }
+            "update" => {
+                sqlx::raw_sql("UPDATE twitch_chat_messages SET message_ts='2026-09-30 21:59:30Z' WHERE message_ts='2026-10-01 21:59:30Z';
+                    UPDATE twitch_viewer_presence_ticks SET tick_at='2026-09-30 21:59:30Z' WHERE tick_at='2026-10-01 21:59:30Z';")
+                    .execute(pool).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let marked: Vec<NaiveDate> =
+            sqlx::query_scalar("SELECT day FROM twitch_community_points_dirty_days ORDER BY day")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert!(marked.contains(&previous));
+        assert!(
+            marked.contains(&following),
+            "Der Folgetag fehlt bei {operation}"
+        );
+        let days = run_aggregation(pool, now, false).await.unwrap();
+        assert!(days.iter().any(|(marked, _)| *marked == following));
+        let after = list_viewer_points(pool, Some(cursor), 100).await.unwrap();
+        let restored = operation == "insert";
+        assert_eq!(
+            get(&after.rows, "111").chat_messages,
+            if restored { 0 } else { 1 }
+        );
+        assert_eq!(
+            get(&after.rows, "222").watch_minutes,
+            if restored { 1 } else { 0 }
+        );
+        assert_eq!(
+            viewer_activity_since(pool, "222", following, consent, now)
+                .await
+                .unwrap()
+                .rows[0]
+                .watch_minutes,
+            0
+        );
+        cursor = ts(after.next_updated_since.as_deref().unwrap());
+    }
+}
+
+async fn wait_for_dirty_day_fixture_lock(pool: &PgPool, query: Option<&str>) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = if let Some(query) = query {
+            sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                WHERE datname=current_database() AND wait_event_type='Lock' AND query=$1)",
+            )
+            .bind(query)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        } else {
+            sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks
+                WHERE locktype='advisory' AND objid::bigint=74103 AND NOT granted)",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        if waiting {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Erwarteter echter Dirty-Day-Wartezustand fehlt"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+const DIRTY_DAY_RACE_INSERT: &str = "INSERT INTO twitch_viewer_presence_ticks
+    (session_id,streamer_login,viewer_login,tick_at,viewer_twitch_user_id)
+    VALUES (1,'alpha','viewer','2026-10-01 08:05Z','111')";
+
+async fn dirty_day_write_race(aggregation_first: bool) {
+    let db = db::migrated_pool_with_max_connections("tb_cp_dirty_race", 5).await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    ticks(pool, 1, "viewer", "111", "2026-10-01T08:00:00Z", 10).await;
+    let d = day("2026-10-01");
+    let now = ts("2026-10-03T12:00:00Z");
+    aggregate_day(pool, d, now).await.unwrap();
+    let before = list_viewer_points(pool, None, 100).await.unwrap();
+    assert_eq!(before.rows[0].watch_minutes, 5);
+    let cursor = ts(before.next_updated_since.as_deref().unwrap());
+    sqlx::query("INSERT INTO twitch_community_points_dirty_days(day) VALUES ($1)")
+        .bind(d)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE FUNCTION dirty_day_fixture_pause() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN PERFORM pg_advisory_xact_lock(74103); RETURN NULL; END $$;",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let trigger = if aggregation_first {
+        "CREATE TRIGGER fixture_pause_dirty AFTER DELETE ON twitch_community_points_dirty_days
+         FOR EACH ROW EXECUTE FUNCTION dirty_day_fixture_pause()"
+    } else {
+        // AFTER-Trigger laufen nach Namen; die Markerzeile ist vor dieser Pause gesperrt.
+        "CREATE TRIGGER z_fixture_pause_dirty AFTER INSERT ON twitch_viewer_presence_ticks
+         FOR EACH ROW EXECUTE FUNCTION dirty_day_fixture_pause()"
+    };
+    sqlx::raw_sql(trigger).execute(pool).await.unwrap();
+    let mut pause = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(74103)")
+        .execute(&mut *pause)
+        .await
+        .unwrap();
+    let first_pool = (*pool).clone();
+    let first = tokio::spawn(async move {
+        if aggregation_first {
+            aggregate_day(&first_pool, d, now).await.unwrap();
+        } else {
+            sqlx::query(DIRTY_DAY_RACE_INSERT)
+                .execute(&first_pool)
+                .await
+                .unwrap();
+        }
+    });
+    wait_for_dirty_day_fixture_lock(pool, None).await;
+    let second_pool = (*pool).clone();
+    let second = tokio::spawn(async move {
+        if aggregation_first {
+            sqlx::query(DIRTY_DAY_RACE_INSERT)
+                .execute(&second_pool)
+                .await
+                .unwrap();
+        } else {
+            aggregate_day(&second_pool, d, now).await.unwrap();
+        }
+    });
+    wait_for_dirty_day_fixture_lock(
+        pool,
+        Some(if aggregation_first {
+            DIRTY_DAY_RACE_INSERT
+        } else {
+            "DELETE FROM twitch_community_points_dirty_days WHERE day=$1"
+        }),
+    )
+    .await;
+    pause.commit().await.unwrap();
+    first.await.unwrap();
+    second.await.unwrap();
+    let pending: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM twitch_community_points_dirty_days WHERE day=$1)",
+    )
+    .bind(d)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let intermediate = list_viewer_points(pool, Some(cursor), 100).await.unwrap();
+    assert_eq!(intermediate.rows.len(), 1);
+    assert_eq!(pending, aggregation_first);
+    assert_eq!(
+        intermediate.rows[0].watch_minutes,
+        if aggregation_first { 5 } else { 6 }
+    );
+    run_aggregation(pool, now, false).await.unwrap();
+    let after = list_viewer_points(pool, Some(cursor), 100).await.unwrap();
+    assert_eq!(after.rows.len(), 1);
+    assert_eq!(after.rows[0].watch_minutes, 6);
+    assert_eq!(after.rows[0].points_watch, 1);
+    assert_eq!(
+        aggregate_day(pool, d, now).await.unwrap(),
+        DayWriteStats::default()
+    );
+}
+
+#[tokio::test]
+async fn historische_rohänderung_vor_aggregation_geht_nicht_verloren() {
+    dirty_day_write_race(false).await;
+}
+
+#[tokio::test]
+async fn historische_rohänderung_nach_aggregation_bleibt_markiert() {
+    dirty_day_write_race(true).await;
 }
 
 #[tokio::test]
